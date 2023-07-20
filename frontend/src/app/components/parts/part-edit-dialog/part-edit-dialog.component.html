@@ -1,0 +1,59 @@
+<div id='partEditForm'>
+    <form (ngSubmit)='onSubmit()' novalidate [formGroup]="partEditForm" *ngIf='!loading'>
+        <div class='full-width'>
+            <div class='mat-headline'>{{title}}</div>
+            <div class='flex-grow'></div>
+            <button mat-icon-button (click)='close()'>
+                <mat-icon>close</mat-icon>
+            </button>
+        </div>
+
+        <ng-container>
+            <mat-form-field class='full-width'>
+                <input matInput placeholder="Name" formControlName='name' [(ngModel)]='part.name' required />
+            </mat-form-field>
+            <mat-form-field class='full-width'>
+                <textarea matInput placeholder="Description" formControlName='description'
+                    [(ngModel)]='part.description' required>
+          </textarea>
+            </mat-form-field>
+            <mat-form-field class='full-width'>
+                <input matInput placeholder="Vendor" formControlName='vendor' [(ngModel)]='part.vendor' required />
+            </mat-form-field>
+            <mat-form-field class='full-width'>
+                <input matInput placeholder="Link" formControlName='link' [(ngModel)]='part.link' />
+            </mat-form-field>
+        </ng-container>
+        <div class='full-width'>
+            <div class='half-width'>
+                <div class='flex-column' style='height:100%'>
+                    <div class='flex-grow'></div>
+                    <mat-checkbox class="example-margin" color='primary' formControlName='internalPart'
+                        [(ngModel)]='part.internalPart'>Internal Part
+                    </mat-checkbox>
+                    <div class='flex-grow'></div>
+                </div>
+            </div>
+            <mat-form-field class='half-width'>
+                <input matInput placeholder="Min Order Qty" formControlName='minimumOrderQuantity'
+                    [(ngModel)]='part.minimumOrderQuantity' />
+            </mat-form-field>
+        </div>
+        <br>
+
+        <div class='full-width'>
+            <button mat-mini-fab color='warn' (click)='deletePart()'>
+                <mat-icon>delete</mat-icon>
+            </button>
+            <div class='flex-grow'></div>
+
+            <button *ngIf='!newPart' mat-raised-button color='accent' type='submit' [disabled]="!partEditForm.valid"
+                color="primary" (click)="updatePart()" [disabled]='partEditForm.pristine'>Update</button>
+
+            <div *ngIf='newPart'>
+                <button mat-raised-button color='accent' (click)='createPart()'
+                    [disabled]="!partEditForm.valid">Create</button>
+            </div>
+        </div>
+    </form>
+</div>
