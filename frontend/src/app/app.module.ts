@@ -43,21 +43,28 @@ import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { InventoryService } from './services/inventory/inventory.service';
 import { PartEditDialogComponent } from './components/parts/part-edit-dialog/part-edit-dialog.component';
 import { LogInDialogComponent } from './components/common/log-in-dialog/log-in-dialog.component';
-const routes = [{
-  path: '',
-  component: HomeComponent
-},
-{
-  path: 'locations',
-  component: LocationsLandingPageComponent,
-  // canActivate: [AuthGuard]
-},
-{
-  path: 'parts',
-  component: PartsLandingPageComponent,
-  // canActivate: [AuthGuard]
-},
+import {
+  SocialLoginModule,
+  SocialAuthServiceConfig,
+  GoogleLoginProvider,
+  GoogleSigninButtonModule,
+} from '@abacritt/angularx-social-login';
 
+const routes = [
+  {
+    path: '',
+    component: HomeComponent,
+  },
+  {
+    path: 'locations',
+    component: LocationsLandingPageComponent,
+    // canActivate: [AuthGuard]
+  },
+  {
+    path: 'parts',
+    component: PartsLandingPageComponent,
+    // canActivate: [AuthGuard]
+  },
 ];
 
 @NgModule({
@@ -102,8 +109,9 @@ const routes = [{
     MatProgressSpinnerModule,
     MatDatepickerModule,
     MatTreeModule,
-    MatAutocompleteModule
-
+    MatAutocompleteModule,
+    SocialLoginModule,
+    GoogleSigninButtonModule,
   ],
   providers: [
     AuthService,
@@ -111,12 +119,29 @@ const routes = [{
     {
       provide: HTTP_INTERCEPTORS,
       useClass: AuthInterceptorService,
-      multi: true
-    }
+      multi: true,
+    },
+    {
+      provide: 'SocialAuthServiceConfig',
+      useValue: {
+        autoLogin: false,
+        providers: [
+          {
+            id: GoogleLoginProvider.PROVIDER_ID,
+            provider: new GoogleLoginProvider(
+              '362771948073-476s8fum8t8fnjgdj16bg9knjmgdgkfd.apps.googleusercontent.com'
+            ),
+          },
+        ],
+        onError: (err) => {
+          console.error('Google', err);
+        },
+      } as SocialAuthServiceConfig,
+    },
   ],
   bootstrap: [AppComponent],
   entryComponents: [
     // LogInDialogComponent,
-  ]
+  ],
 })
-export class AppModule { }
+export class AppModule {}

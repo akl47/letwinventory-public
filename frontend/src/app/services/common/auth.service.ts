@@ -1,30 +1,17 @@
-import {
-  Injectable
-} from '@angular/core';
-import {
-  Router
-} from '@angular/router';
-import {
-  HttpClient
-} from '@angular/common/http';
-import {
-  Observable,
-  throwError
-} from 'rxjs';
-import {
-  BASE_URL, NAME_KEY, TOKEN_KEY
-} from '../../app.config';
+import { Injectable } from '@angular/core';
+import { Router } from '@angular/router';
+import { HttpClient } from '@angular/common/http';
+import { Observable, throwError } from 'rxjs';
+import { BASE_URL, NAME_KEY, TOKEN_KEY } from '../../app.config';
 import { catchError } from 'rxjs/operators';
 import { MatSnackBar } from '@angular/material/snack-bar';
 @Injectable()
-
 export class AuthService {
-
   constructor(
     private http: HttpClient,
     private router: Router,
     private snack: MatSnackBar
-  ) { }
+  ) {}
 
   get displayName() {
     return localStorage.getItem(NAME_KEY);
@@ -39,11 +26,21 @@ export class AuthService {
   }
 
   login(loginData: any) {
-    return this.http.post(BASE_URL + '/auth/user/login', loginData).pipe(catchError(this.handleError.bind(this)));
+    return this.http
+      .post(BASE_URL + '/auth/user/login', loginData)
+      .pipe(catchError(this.handleError.bind(this)));
+  }
+
+  googleLogin(loginData: any) {
+    return this.http
+      .post(BASE_URL + '/auth/user/google', loginData)
+      .pipe(catchError(this.handleError.bind(this)));
   }
 
   checkAuth(): Observable<boolean> {
-    return this.http.get<boolean>(BASE_URL + '/auth/user/checkToken').pipe(catchError(this.handleError.bind(this)));
+    return this.http
+      .get<boolean>(BASE_URL + '/auth/user/checkToken')
+      .pipe(catchError(this.handleError.bind(this)));
   }
 
   logout() {
@@ -62,18 +59,17 @@ export class AuthService {
   }
 
   handleError(error: any) {
-    console.log(error.error.errorMessage)
-    let message
+    console.log(error.error.errorMessage);
+    let message;
     if (typeof error.error.errorMessage != 'undefined') {
-      message = error.error.errorMessage
+      message = error.error.errorMessage;
     } else {
-      message = error.message
+      message = error.message;
     }
     this.snack.open(message, '', {
-      duration: 5000
-    })
-    console.error(error)
-    return throwError(error)
+      duration: 5000,
+    });
+    console.error(error);
+    return throwError(error);
   }
-
 }

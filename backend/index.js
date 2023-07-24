@@ -1,13 +1,18 @@
-const express = require('express');
+const express = require("express");
 const app = express();
 const bodyParser = require("body-parser");
+const fs = require("fs");
+const https = require("https");
+const path = require("path");
+const dotenv = require("dotenv");
+
+dotenv.config({ path: path.join(__dirname, "../.env") });
+
 const port = process.env.BACKEND_PORT;
-const fs = require('fs');
-const https = require('https');
-const cors = require('cors');
-global.db = require('./models');
-global.RestError = require('./util/RestError');
-global._ = require('lodash');
+const cors = require("cors");
+global.db = require("./models");
+global.RestError = require("./util/RestError");
+global._ = require("lodash");
 
 app.use(cors());
 
@@ -27,9 +32,12 @@ app.use(bodyParser.json({ type: "application/vnd.api+json" }));
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "*");
-  res.header("Access-Control-Allow-Headers", "Origin,X-Requested-With,Content-Type,Accept,Authorization");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin,X-Requested-With,Content-Type,Accept,Authorization"
+  );
   next();
-})
+});
 
 // app.use((error, req, res, next) => {
 //   console.log("Handling Error")
@@ -37,13 +45,12 @@ app.use((req, res, next) => {
 //   res.json({ message: error.message })
 // })
 
-app.use('/api', require('./api'))
+app.use("/api", require("./api"));
 
-
-app.use(require('./util/errorHandler'))
+app.use(require("./util/errorHandler"));
 
 app.listen(port, () => {
   db.sequelize.sync().then(() => {
     console.log(`Server listening on the port:${port}`);
-  })
+  });
 });
