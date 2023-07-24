@@ -9,7 +9,7 @@ frontend/dist
 # Only exists if Bazel was run
 /bazel-out
 
-backend/config
+backend/config/config.json
 
 # dependencies
 node_modules
