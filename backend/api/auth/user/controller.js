@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 const db = require("../../../models");
-
+const { OAuth2Client } = require("google-auth-library");
 /**
  * @param {string} req.body.username
  * @param {string} req.body.password
@@ -118,6 +118,38 @@ exports.updateUser = (req, res, next) => {
   }
 };
 
-exports.loginWithGoogle = (req, res, next) => {
-  console.log("here", req.body);
+const doGoogleLogin = async (credentials) => {
+  const { idToken, id: googleId } = credentials;
+  const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+  const audience = [process.env.GOOGLE_CLIENT_ID];
+  try {
+    const ticket = await client.verifyIdToken({
+      idToken,
+      audience,
+    });
+    const payload = ticket.getPayload();
+    const { aud, sub, name, email } = payload;
+    // Aud claim
+    if (!audience.includes(aud)) {
+      throw new Error("Invalid Google verification.");
+    }
+
+    // Success, sub is the verified users google id
+    if (googleId !== sub) throw new Error("Verification with Google failed.");
+    const user = {
+      id: sub,
+      displayName: name,
+      email,
+    };
+
+    user.token = jwt.sign(user, process.env.JWT_SECRET);
+    return user;
+  } catch (error) {
+    throw error;
+  }
+};
+
+exports.loginWithGoogle = async (req, res) => {
+  const user = await doGoogleLogin(req.body);
+  res.json({ user });
 };

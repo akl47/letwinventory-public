@@ -4,6 +4,7 @@ const bodyParser = require("body-parser");
 const fs = require("fs");
 const https = require("https");
 const path = require("path");
+const passport = require("./auth/passport");
 const dotenv = require("dotenv");
 
 dotenv.config({ path: path.join(__dirname, "../.env") });
@@ -26,7 +27,7 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.text());
 app.use(bodyParser.json({ type: "application/vnd.api+json" }));
-
+app.use(passport.initialize());
 // HEADERS
 
 app.use((req, res, next) => {

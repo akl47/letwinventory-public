@@ -36,11 +36,10 @@ export class LogInDialogComponent implements OnInit {
     this.createFormControls();
     this.createForm();
     this.authService.authState.subscribe((user) => {
-      console.log(user);
-      const { email, firstName, lastName, idToken, id } = user;
       this.auth.googleLogin(user).subscribe(
         (data) => {
-          console.log(data);
+          const { user } = data;
+          this.auth.authenticate(user);
         },
         (error) => {
           console.log(error);
