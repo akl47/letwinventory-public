@@ -121,16 +121,18 @@ exports.updateUser = (req, res, next) => {
 const doGoogleLogin = async (credentials) => {
   const { idToken, id: googleId } = credentials;
   const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-  const audience = [process.env.GOOGLE_CLIENT_ID];
+  const requiredAudience = [process.env.GOOGLE_CLIENT_ID];
   try {
     const ticket = await client.verifyIdToken({
       idToken,
-      audience,
+      requiredAudience,
     });
     const payload = ticket.getPayload();
     const { aud, sub, name, email } = payload;
+    console.log(payload)
+    console.log(requiredAudience)
     // Aud claim
-    if (!audience.includes(aud)) {
+    if (!requiredAudience.includes(aud)) {
       throw new Error("Invalid Google verification.");
     }
 
@@ -145,6 +147,7 @@ const doGoogleLogin = async (credentials) => {
     user.token = jwt.sign(user, process.env.JWT_SECRET);
     return user;
   } catch (error) {
+    console.log("Error")
     throw error;
   }
 };

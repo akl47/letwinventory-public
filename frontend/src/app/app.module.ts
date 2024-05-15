@@ -141,7 +141,7 @@ const routes = [
   ],
   bootstrap: [AppComponent],
   entryComponents: [
-    // LogInDialogComponent,
+    LogInDialogComponent,
   ],
 })
-export class AppModule {}
+export class AppModule { }
