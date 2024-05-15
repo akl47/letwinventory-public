@@ -40,6 +40,7 @@ export class LogInDialogComponent implements OnInit {
         (data) => {
           const { user } = data;
           this.auth.authenticate(user);
+          this.dialogRef.close();
         },
         (error) => {
           console.log(error);
