@@ -22,7 +22,7 @@ export class LogInDialogComponent implements OnInit {
     public dialogRef: MatDialogRef<LogInDialogComponent>,
     private snack: MatSnackBar,
     private authService: SocialAuthService
-  ) {}
+  ) { }
 
   user = new User();
   loggedIn: boolean;
@@ -94,9 +94,5 @@ export class LogInDialogComponent implements OnInit {
     );
   }
 
-  getAccessToken(): void {
-    this.authService
-      .getAccessToken(GoogleLoginProvider.PROVIDER_ID)
-      .then((accessToken) => (this.accessToken = accessToken));
-  }
+
 }

@@ -128,22 +128,14 @@ const doGoogleLogin = async (credentials) => {
       requiredAudience,
     });
     const payload = ticket.getPayload();
-    const { aud, sub, name, email } = payload;
-    console.log(payload)
-    console.log(requiredAudience)
-    // Aud claim
-    if (!requiredAudience.includes(aud)) {
-      throw new Error("Invalid Google verification.");
-    }
-
-    // Success, sub is the verified users google id
-    if (googleId !== sub) throw new Error("Verification with Google failed.");
+    const { sub, name, email } = payload;
     const user = {
       id: sub,
       displayName: name,
-      email,
+      email: email,
+      photo_url: payload.picture,
     };
-
+    console.log("Google User: ", user);
     user.token = jwt.sign(user, process.env.JWT_SECRET);
     return user;
   } catch (error) {

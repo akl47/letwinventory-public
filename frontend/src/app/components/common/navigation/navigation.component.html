@@ -22,5 +22,7 @@
     <!--Right Aligned-->
     <!-- <button *ngIf="auth.isAuthenticated" mat-button routerLink="/user">Welcome {{auth.displayName}}</button>
     <button *ngIf="auth.isAuthenticated" mat-button (click)="auth.logout()">Log Out</button> -->
-    <button mat-button (click)='goToGoogleAuthURL()'>Log In</button>
+    <!-- <button mat-button (click)='goToGoogleAuthURL()'>Log In</button>
+     -->
+    <asl-google-signin-button type="standard" size="medium"></asl-google-signin-button>
 </mat-toolbar>

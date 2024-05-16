@@ -4,8 +4,10 @@ const controller = require("./controller");
 const checkToken = require("../../../middleware/checkToken.js");
 
 router.post("/login", controller.logIn);
-
+// router.post("/google/callback", controller.googleCallback);
 router.post("/google", controller.loginWithGoogle);
+
+
 
 router.get("/checkToken", controller.checkToken);
 

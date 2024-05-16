@@ -2,48 +2,21 @@
   <div class="mat-headline">Log In</div>
   <div>
     <mat-form-field class="full-width">
-      <input
-        matInput
-        placeholder="Username"
-        name="username"
-        [(ngModel)]="user.username"
-        formControlName="username"
-        required
-      />
-      <mat-error *ngIf="username.hasError('required')"
-        >Name is <strong>required</strong></mat-error
-      >
+      <input matInput placeholder="Username" name="username" [(ngModel)]="user.username" formControlName="username"
+        required />
+      <mat-error *ngIf="username.hasError('required')">Name is <strong>required</strong></mat-error>
     </mat-form-field>
   </div>
   <div>
     <mat-form-field class="full-width">
-      <input
-        matInput
-        placeholder="Password"
-        name="password"
-        [(ngModel)]="user.password"
-        formControlName="password"
-        type="password"
-        required
-      />
-      <mat-error *ngIf="password.hasError('required')"
-        >Password is <strong>required</strong></mat-error
-      >
-      <mat-error *ngIf="password.hasError('incorrect')"
-        >Username/Password is incorrect</mat-error
-      >
+      <input matInput placeholder="Password" name="password" [(ngModel)]="user.password" formControlName="password"
+        type="password" required />
+      <mat-error *ngIf="password.hasError('required')">Password is <strong>required</strong></mat-error>
+      <mat-error *ngIf="password.hasError('incorrect')">Username/Password is incorrect</mat-error>
     </mat-form-field>
   </div>
-  <button
-    mat-raised-button
-    color="accent"
-    type="submit"
-    [disabled]="!logInForm.valid"
-  >
+  <button mat-raised-button color="accent" type="submit" [disabled]="!logInForm.valid">
     Log In
   </button>
-  <asl-google-signin-button
-    type="standard"
-    size="medium"
-  ></asl-google-signin-button>
+
 </form>

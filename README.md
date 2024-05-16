@@ -8,11 +8,11 @@ Steps for setting up:
 
 1. Clone the repo
 1. `cd frontend`
-1. `npn install --legacy-peer-deps`
+1. `npm install --legacy-peer-deps`
 1. `cd ../backend`
 1. `npm install`
 1. `cd ..`
-1. `cp backend/config/config.json.example backend/config.json`
+1. `cp backend/config/config.json.example backend/config/config.json`
 1. `cp .env.example .env`
 1. `sudo docker compose up`
 1. go to http://localhost:5050

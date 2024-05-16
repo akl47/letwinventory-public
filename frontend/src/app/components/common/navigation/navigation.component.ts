@@ -3,6 +3,7 @@ import { AuthService } from 'src/app/services/common/auth.service';
 import { MatDialog } from '@angular/material/dialog'
 import { MoveBarcodeDialogComponent } from '../move-barcode-dialog/move-barcode-dialog.component';
 import { LogInDialogComponent } from '../../common/log-in-dialog/log-in-dialog.component'
+import { GoogleLoginProvider, SocialAuthService } from '@abacritt/angularx-social-login';
 
 @Component({
   selector: 'app-navigation',
@@ -10,18 +11,34 @@ import { LogInDialogComponent } from '../../common/log-in-dialog/log-in-dialog.c
   styleUrls: ['./navigation.component.scss']
 })
 export class NavigationComponent {
+  private accessToken = '';
 
   constructor(
     public auth: AuthService,
-    public dialog: MatDialog
+    private authService: SocialAuthService,
+    public dialog: MatDialog,
   ) {
 
+
   }
-  goToGoogleAuthURL() {
-    const dialogRef = this.dialog.open(LogInDialogComponent, {
-      width: '15.625em',
-      data: {}
+  ngOnInit() {
+    this.authService.authState.subscribe((user) => {
+      this.auth.googleLogin(user).subscribe(
+        (data) => {
+          const { user } = data;
+          console.log(user)
+          this.auth.authenticate(user);
+        },
+        (error) => {
+          console.log(error);
+        }
+      );
     });
+  }
+  getAccessToken(): void {
+    this.authService
+      .getAccessToken(GoogleLoginProvider.PROVIDER_ID)
+      .then((accessToken) => (this.accessToken = accessToken));
   }
 
   moveBarcode(): void {
