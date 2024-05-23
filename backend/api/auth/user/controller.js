@@ -128,7 +128,7 @@ const doGoogleLogin = async (credentials) => {
       requiredAudience,
     });
     const payload = ticket.getPayload();
-    const { sub, name, email } = payload;
+    console.log("Google Payload: ", payload);
     const user = {
       id: sub,
       displayName: name,

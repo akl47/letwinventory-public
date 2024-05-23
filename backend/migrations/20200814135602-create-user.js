@@ -2,22 +2,11 @@
 module.exports = {
   up: async (queryInterface, DataTypes) => {
     await queryInterface.createTable('Users', {
-      id: {
-        allowNull: false,
-        autoIncrement: true,
-        primaryKey: true,
-        type: DataTypes.INTEGER
-      },
-      username: {
+      googleID: {
         type: DataTypes.STRING(100),
         allowNull: false,
         unique: true,
-        validate: {
-            len: {
-                args: [1, 100],
-                msg: 'Username must have between 1 and 100 characters'
-            }
-        }
+        primaryKey: true,
       },
       displayName: {
         type: DataTypes.STRING(100),
@@ -29,14 +18,14 @@ module.exports = {
         allowNull: false,
         unique: true,
         validate: {
-            isEmail: {
-                msg: 'Not a valid Email'
-            }
+          isEmail: {
+            msg: 'Not a valid Email'
+          }
         }
       },
-      password: {
-        type: DataTypes.STRING,
-        allowNull: false
+      photoURL: {
+        type: DataTypes.TEXT,
+        allowNull: true,
       },
       activeFlag: {
         type: DataTypes.BOOLEAN,

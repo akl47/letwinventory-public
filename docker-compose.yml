@@ -15,6 +15,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL}
     volumes:
       - ./backend:/usr/src
       - ./backend/node_modules:/usr/src/node_modules # Remove this if you have pure JS dependencies
@@ -38,7 +39,7 @@ services:
     environment:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
-      GOOGLE_OAUTH_REDIRECT_URL: ${GOOGLE_OAUTH_REDIRECT_URL}
+      GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL}
   letwinventory-postgres:
     image: postgres:13
     volumes:
