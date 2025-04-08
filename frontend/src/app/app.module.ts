@@ -47,8 +47,8 @@ import {
   SocialLoginModule,
   SocialAuthServiceConfig,
   GoogleLoginProvider,
-  GoogleSigninButtonModule,
 } from '@abacritt/angularx-social-login';
+import { GoogleSigninButtonComponent } from './components/common/google-signin-button/google-signin-button.component';
 
 const routes = [
   {
@@ -84,6 +84,7 @@ const routes = [
     BarcodeDisplayDialogComponent,
     PartEditDialogComponent,
     LogInDialogComponent,
+    GoogleSigninButtonComponent,
   ],
   imports: [
     RouterModule.forRoot(routes),
@@ -111,7 +112,6 @@ const routes = [
     MatTreeModule,
     MatAutocompleteModule,
     SocialLoginModule,
-    GoogleSigninButtonModule,
   ],
   providers: [
     AuthService,

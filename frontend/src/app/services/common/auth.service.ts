@@ -33,7 +33,8 @@ export class AuthService {
 
   googleLogin(loginData: any) {
     return this.http
-      .post(BASE_URL + '/auth/user/google', loginData)
+      // .get(BASE_URL + '/auth/google', loginData)
+      .get(BASE_URL + '/')
       .pipe(catchError(this.handleError.bind(this)));
   }
 

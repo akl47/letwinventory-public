@@ -5,10 +5,11 @@ module.exports = (req,res,next) => {
     if(_.isString(req.headers.authorization)) {
         jwt.verify(req.headers.authorization,process.env.JWT_SECRET,(err,jwtUser)=>{
           if(_.isNull(err)) {
+            console.log(jwtUser)
             db.User.findOne({
-              attributes: ['id', 'username','displayName','email'],
+              attributes: ['googleID','displayName','email'],
               where:{
-                id:jwtUser.id,
+                googleID:jwtUser.id,
                 activeFlag:true
               }
             }).then(dbUser=>{

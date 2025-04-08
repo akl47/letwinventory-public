@@ -1,65 +1,80 @@
 const jwt = require("jsonwebtoken");
 const db = require("../../../models");
 const { OAuth2Client } = require("google-auth-library");
-/**
- * @param {string} req.body.username
- * @param {string} req.body.password
- * @returns {json} resutns display name and json web token
- */
+const passport = require("../../../auth/passport");
+// /**
+//  * @param {string} req.body.username
+//  * @param {string} req.body.password
+//  * @returns {json} resutns display name and json web token
+//  */
 
-exports.logIn = (req, res, next) => {
-  if (_.isString(req.body.username) && _.isString(req.body.password)) {
-    db.User.findOne({
-      where: {
-        username: req.body.username,
-        activeFlag: true,
-      },
-    })
-      .then((user) => {
-        if (_.isObject(user)) {
-          if (user.authenticate(req.body.password)) {
-            req.user = {
-              id: user.dataValues.id,
-              username: user.dataValues.username,
-              displayName: user.dataValues.displayName,
-            };
-            req.user.token = jwt.sign(req.user, process.env.JWT_SECRET);
-            console.log(user);
-            res.json(req.user);
-          } else {
-            next(new RestError("Username or /password is incorrect", 403));
-          }
-        } else {
-          next(new RestError("/Username or password is incorrect", 403));
-        }
-      })
-      .catch((err) => {
-        console.log(err);
-      });
-  } else {
-    next(new RestError("Request is missing username or password", 400));
-  }
-};
+// exports.logIn = (req, res, next) => {
+//   if (_.isString(req.body.username) && _.isString(req.body.password)) {
+//     db.User.findOne({
+//       where: {
+//         username: req.body.username,
+//         activeFlag: true,
+//       },
+//     })
+//       .then((user) => {
+//         if (_.isObject(user)) {
+//           if (user.authenticate(req.body.password)) {
+//             req.user = {
+//               id: user.dataValues.id,
+//               username: user.dataValues.username,
+//               displayName: user.dataValues.displayName,
+//             };
+//             req.user.token = jwt.sign(req.user, process.env.JWT_SECRET);
+//             console.log(user);
+//             res.json(req.user);
+//           } else {
+//             next(new RestError("Username or password is incorrect", 403));
+//           }
+//         } else {
+//           next(new RestError("Username or password is incorrect", 403));
+//         }
+//       })
+//       .catch((err) => {
+//         console.log(err);
+//       });
+//   } else {
+//     next(new RestError("Request is missing username or password", 400));
+//   }
+// };
+
+
+exports.googleCallback = (req, res, next) => {
+  console.log("-----GOOGLE CALLBACK-----");
+  console.log(req.body);
+  res.send("Hello World");
+}
 
 /**
- * @param {string} req.body.token
+ * @param {string} req.headers.authorization
  * @returns {boolean} true if the token is valid
  */
-exports.checkToken = (req, res, next) => {
-  if (_.isString(req.headers.authorization)) {
-    jwt.verify(
-      req.headers.authorization,
-      process.env.JWT_SECRET,
-      (err, data) => {
-        if (_.isNull(err)) {
-          res.send(true);
-        } else {
-          res.send(false);
-        }
+exports.checkToken = async (req, res, next) => {
+  try {
+    if (!req.headers.authorization) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
+
+    const token = req.headers.authorization.replace('Bearer ', '');
+    const decoded = await passport.verifyToken(token);
+    
+    res.json({
+      valid: true,
+      user: {
+        id: decoded.id,
+        displayName: decoded.displayName,
+        email: decoded.email
       }
-    );
-  } else {
-    res.send(false);
+    });
+  } catch (error) {
+    res.status(401).json({ 
+      valid: false,
+      error: error.message 
+    });
   }
 };
 
@@ -119,32 +134,35 @@ exports.updateUser = (req, res, next) => {
 };
 
 const doGoogleLogin = async (credentials) => {
-  const { idToken, id: googleId } = credentials;
-  const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-  const requiredAudience = [process.env.GOOGLE_CLIENT_ID];
+  console.log("-----DO GOOGLE LOGIN-----");
+  console.log("Credentials: ", credentials);
+
+  const { idToken } = credentials;
+  if (!idToken) {
+    throw new RestError('Missing ID token', 400);
+  }
+
   try {
-    const ticket = await client.verifyIdToken({
-      idToken,
-      requiredAudience,
-    });
-    const payload = ticket.getPayload();
-    console.log("Google Payload: ", payload);
-    const user = {
-      id: sub,
-      displayName: name,
-      email: email,
-      photo_url: payload.picture,
+    const decoded = await passport.verifyToken(idToken);
+    return {
+      id: decoded.id,
+      displayName: decoded.displayName,
+      email: decoded.email,
+      photo_url: decoded.photo_url,
+      token: idToken
     };
-    console.log("Google User: ", user);
-    user.token = jwt.sign(user, process.env.JWT_SECRET);
-    return user;
   } catch (error) {
-    console.log("Error")
-    throw error;
+    throw new RestError('Google authentication failed: ' + error.message, 401);
   }
 };
 
-exports.loginWithGoogle = async (req, res) => {
-  const user = await doGoogleLogin(req.body);
-  res.json({ user });
+exports.loginWithGoogle = async (req, res, next) => {
+  try {
+    console.log("-----LOGIN WITH GOOGLE-----");
+    // console.log("Request Body: ", req.body);
+    const user = await doGoogleLogin(req.body);
+    res.json({ user });
+  } catch (error) {
+    next(error);
+  }
 };

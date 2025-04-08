@@ -48,6 +48,9 @@ app.use((req, res, next) => {
 
 app.use("/api", require("./api"));
 
+// GOOGLE OAUTH ROUTES
+app.use("/auth/google", require("./api/auth/google/routes"));
+
 app.use(require("./util/errorHandler"));
 
 app.listen(port, () => {

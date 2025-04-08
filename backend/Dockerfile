@@ -8,14 +8,13 @@ WORKDIR /usr/src
 COPY ./package.json .
 RUN npm install
 
+# Install bcrypt with proper build flags
+RUN npm install bcrypt
+
 RUN npm i -g sequelize-cli
 
 # Bundle app source
 COPY . .
-
-RUN npm i -s brcypt
-
-
 
 # Exports
 EXPOSE 3000
