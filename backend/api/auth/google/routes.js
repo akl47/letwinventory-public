@@ -1,24 +1,13 @@
-const express = require('express');
-const router = express.Router();
-const passport = require('../../../auth/passport');
+const router = require("express").Router();
+const controller = require("./controller");
+const { verifyToken } = require("../../../auth/passport");
 
-// Initiate Google OAuth flow
-router.get('/',
-  passport.authenticate('google', {
-    scope: ['openid', 'profile', 'email']
-  })
-);
+// Google OAuth routes
+router.get("/", controller.initiateLogin);
+router.get("/callback", controller.handleCallback);
 
-// Handle Google OAuth callback
-router.get('/callback',
-  passport.authenticate('google', {
-    failureRedirect: '/login',
-    session: false
-  }),
-  (req, res) => {
-    // Successful authentication, redirect to frontend with token
-    res.redirect(`${process.env.FRONTEND_URL}/auth/callback?token=${req.user.token}`);
-  }
-);
+// Protected routes
+router.post("/logout", verifyToken, controller.logout);
+router.get("/me", verifyToken, controller.getCurrentUser);
 
-module.exports = router; 
+module.exports = router;

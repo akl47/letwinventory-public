@@ -1,50 +1,35 @@
-import { Component } from '@angular/core';
-import { AuthService } from 'src/app/services/common/auth.service';
-import { MatDialog } from '@angular/material/dialog'
-import { MoveBarcodeDialogComponent } from '../move-barcode-dialog/move-barcode-dialog.component';
-import { LogInDialogComponent } from '../../common/log-in-dialog/log-in-dialog.component'
-import { GoogleLoginProvider, SocialAuthService } from '@abacritt/angularx-social-login';
+import { Component, OnInit } from '@angular/core';
+import { GoogleAuthService } from '../../../services/google-auth.service';
+import { MatDialog } from '@angular/material/dialog';
+import { Router } from '@angular/router';
 
 @Component({
   selector: 'app-navigation',
   templateUrl: './navigation.component.html',
   styleUrls: ['./navigation.component.scss']
 })
-export class NavigationComponent {
-  private accessToken = '';
+export class NavigationComponent implements OnInit {
+  isAuthenticated = false;
+  user: any = null;
 
   constructor(
-    public auth: AuthService,
-    private authService: SocialAuthService,
-    public dialog: MatDialog,
-  ) {
+    private googleAuth: GoogleAuthService,
+    private dialog: MatDialog,
+    private router: Router
+  ) {}
 
-
-  }
   ngOnInit() {
-    this.authService.authState.subscribe((user) => {
-      this.auth.googleLogin(user).subscribe(
-        (data) => {
-          const { user } = data;
-          console.log(user)
-          this.auth.authenticate(user);
-        },
-        (error) => {
-          console.log(error);
-        }
-      );
+    this.googleAuth.user$.subscribe(user => {
+      this.user = user;
+      this.isAuthenticated = !!user;
     });
-  }
-  getAccessToken(): void {
-    this.authService
-      .getAccessToken(GoogleLoginProvider.PROVIDER_ID)
-      .then((accessToken) => (this.accessToken = accessToken));
   }
 
-  moveBarcode(): void {
-    const dialogRef = this.dialog.open(MoveBarcodeDialogComponent, {
-      autoFocus: false,
-      data: {}
-    });
+  login() {
+    window.location.href = 'http://localhost:3000/api/auth/google';
+  }
+
+  logout() {
+    this.googleAuth.logout();
   }
 }

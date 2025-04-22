@@ -15,9 +15,8 @@
     "jsonwebtoken": "^9.0.0",
     "moment": "^2.27.0",
     "mysql2": "^3.3.3",
-    "passport": "^0.6.0",
+    "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
-    "passport-token-google2": "^0.1.4",
     "pg": "^8.2.1",
     "pg-escape": "^0.2.0",
     "sequelize": "^6.11.0"

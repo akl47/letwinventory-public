@@ -1,9 +1,0 @@
-<img id='barcode_image' [src]="'http://api.labelary.com/v1/printers/8dpmm/labels/3x1/0/'+barcodeZPL"
-    *ngIf="!!barcodeZPL">
-<div class='full-width'>
-
-    <button mat-raised-button color='accent' (click)='printBarcode()' [disabled]='true'>Print</button>
-    <div class='flex-grow'></div>
-    <button mat-raised-button color='primary' (click)='moveBarcode()' [disabled]='true'>Move</button>
-
-</div>

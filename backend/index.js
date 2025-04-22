@@ -1,21 +1,23 @@
 const express = require("express");
 const app = express();
 const bodyParser = require("body-parser");
-const fs = require("fs");
-const https = require("https");
 const path = require("path");
-const passport = require("./auth/passport");
 const dotenv = require("dotenv");
+const cors = require("cors");
+const { passport } = require("./auth/passport");
 
 dotenv.config({ path: path.join(__dirname, "../.env") });
 
 const port = process.env.BACKEND_PORT;
-const cors = require("cors");
 global.db = require("./models");
 global.RestError = require("./util/RestError");
 global._ = require("lodash");
 
-app.use(cors());
+// CORS configuration
+app.use(cors({
+  origin: process.env.FRONTEND_URL,
+  credentials: true
+}));
 
 app.use((req, res, next) => {
   console.log("Request URL:", req.method, req.url);
@@ -27,29 +29,20 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.text());
 app.use(bodyParser.json({ type: "application/vnd.api+json" }));
-app.use(passport.initialize());
-// HEADERS
 
+// HEADERS
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "*");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin,X-Requested-With,Content-Type,Accept,Authorization"
-  );
+  res.header("Access-Control-Allow-Origin", process.env.FRONTEND_URL);
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  res.header("Access-Control-Allow-Credentials", "true");
   next();
 });
 
-// app.use((error, req, res, next) => {
-//   console.log("Handling Error")
-//   res.status(error.status || 500)
-//   res.json({ message: error.message })
-// })
+// Initialize Passport
+app.use(passport.initialize());
 
 app.use("/api", require("./api"));
-
-// GOOGLE OAUTH ROUTES
-app.use("/auth/google", require("./api/auth/google/routes"));
 
 app.use(require("./util/errorHandler"));
 

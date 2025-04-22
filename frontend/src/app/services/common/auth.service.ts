@@ -25,12 +25,6 @@ export class AuthService {
     return localStorage.getItem(TOKEN_KEY);
   }
 
-  login(loginData: any) {
-    return this.http
-      .post(BASE_URL + '/auth/user/login', loginData)
-      .pipe(catchError(this.handleError.bind(this)));
-  }
-
   googleLogin(loginData: any) {
     return this.http
       // .get(BASE_URL + '/auth/google', loginData)

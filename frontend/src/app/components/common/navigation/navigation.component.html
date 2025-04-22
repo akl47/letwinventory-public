@@ -12,17 +12,9 @@
         </div>
     </button>
     <!--Add Additional Pages Here-->
-    <button mat-button routerLink="/locations"><mat-icon>place</mat-icon>
-        Locations</button>
-    <button mat-button routerLink="/parts"><mat-icon>miscellaneous_services</mat-icon>
-        Parts</button>
-    <button mat-button (click)="moveBarcode()"><mat-icon>open_with</mat-icon>
-        Move</button>
     <span style="flex: 1 1 auto"></span>
     <!--Right Aligned-->
     <!-- <button *ngIf="auth.isAuthenticated" mat-button routerLink="/user">Welcome {{auth.displayName}}</button>
     <button *ngIf="auth.isAuthenticated" mat-button (click)="auth.logout()">Log Out</button> -->
-    <!-- <button mat-button (click)='goToGoogleAuthURL()'>Log In</button>
-     -->
-    <!-- <google-signin-button></google-signin-button> -->
+    <button mat-button (click)='login()'>Log In</button>
 </mat-toolbar>

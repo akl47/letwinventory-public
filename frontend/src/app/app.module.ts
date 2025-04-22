@@ -9,14 +9,6 @@ import { HomeComponent } from './components/home/home.component';
 
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatButtonModule } from '@angular/material/button';
-import { BarcodeDisplayDialogComponent } from './components/common/barcode-display-dialog/barcode-display-dialog.component';
-import { LocationEditDialogComponent } from './components/locations/location-edit-dialog/location-edit-dialog.component';
-import { LocationsLandingPageComponent } from './components/locations/locations-landing-page/locations-landing-page.component';
-import { PartsLandingPageComponent } from './components/parts/parts-landing-page/parts-landing-page.component';
-import { PartsTableComponent } from './components/parts/parts-table/parts-table.component';
-import { ViewTraceDialogComponent } from './components/trace/view-trace-dialog/view-trace-dialog.component';
-import { BarcodeTagComponent } from './components/common/barcode-tag/barcode-tag.component';
-import { MoveBarcodeDialogComponent } from './components/common/move-barcode-dialog/move-barcode-dialog.component';
 import { MatIconModule } from '@angular/material/icon';
 import { MatCardModule } from '@angular/material/card';
 import { MatDialogModule } from '@angular/material/dialog';
@@ -40,31 +32,13 @@ import { MatTreeModule } from '@angular/material/tree';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatDatepickerModule } from '@angular/material/datepicker';
 import { MatAutocompleteModule } from '@angular/material/autocomplete';
-import { InventoryService } from './services/inventory/inventory.service';
-import { PartEditDialogComponent } from './components/parts/part-edit-dialog/part-edit-dialog.component';
-import { LogInDialogComponent } from './components/common/log-in-dialog/log-in-dialog.component';
-import {
-  SocialLoginModule,
-  SocialAuthServiceConfig,
-  GoogleLoginProvider,
-} from '@abacritt/angularx-social-login';
-import { GoogleSigninButtonComponent } from './components/common/google-signin-button/google-signin-button.component';
+import { LoginComponent } from './components/auth/login/login.component';
 
 const routes = [
   {
     path: '',
     component: HomeComponent,
-  },
-  {
-    path: 'locations',
-    component: LocationsLandingPageComponent,
-    // canActivate: [AuthGuard]
-  },
-  {
-    path: 'parts',
-    component: PartsLandingPageComponent,
-    // canActivate: [AuthGuard]
-  },
+  }
 ];
 
 @NgModule({
@@ -72,19 +46,7 @@ const routes = [
     AppComponent,
     NavigationComponent,
     HomeComponent,
-    BarcodeDisplayDialogComponent,
-    LocationEditDialogComponent,
-    LocationsLandingPageComponent,
-    PartsLandingPageComponent,
-    PartsTableComponent,
-    ViewTraceDialogComponent,
-    BarcodeTagComponent,
-    MoveBarcodeDialogComponent,
-    LocationEditDialogComponent,
-    BarcodeDisplayDialogComponent,
-    PartEditDialogComponent,
-    LogInDialogComponent,
-    GoogleSigninButtonComponent,
+    LoginComponent
   ],
   imports: [
     RouterModule.forRoot(routes),
@@ -111,37 +73,11 @@ const routes = [
     MatDatepickerModule,
     MatTreeModule,
     MatAutocompleteModule,
-    SocialLoginModule,
   ],
   providers: [
     AuthService,
-    InventoryService,
-    {
-      provide: HTTP_INTERCEPTORS,
-      useClass: AuthInterceptorService,
-      multi: true,
-    },
-    {
-      provide: 'SocialAuthServiceConfig',
-      useValue: {
-        autoLogin: false,
-        providers: [
-          {
-            id: GoogleLoginProvider.PROVIDER_ID,
-            provider: new GoogleLoginProvider(
-              '362771948073-476s8fum8t8fnjgdj16bg9knjmgdgkfd.apps.googleusercontent.com'
-            ),
-          },
-        ],
-        onError: (err) => {
-          console.error('Google', err);
-        },
-      } as SocialAuthServiceConfig,
-    },
   ],
   bootstrap: [AppComponent],
-  entryComponents: [
-    LogInDialogComponent,
-  ],
+  entryComponents: [],
 })
 export class AppModule { }
