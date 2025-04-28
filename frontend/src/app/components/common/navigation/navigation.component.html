@@ -14,7 +14,8 @@
     <!--Add Additional Pages Here-->
     <span style="flex: 1 1 auto"></span>
     <!--Right Aligned-->
-    <!-- <button *ngIf="auth.isAuthenticated" mat-button routerLink="/user">Welcome {{auth.displayName}}</button>
-    <button *ngIf="auth.isAuthenticated" mat-button (click)="auth.logout()">Log Out</button> -->
-    <button mat-button (click)='login()'>Log In</button>
+    <button *ngIf="!auth.isAuthenticated" mat-button (click)='login()'>Log In</button>
+    <button *ngIf="auth.isAuthenticated" mat-button routerLink="/user">Welcome {{auth.displayName}}</button>
+    <button *ngIf="auth.isAuthenticated" mat-button (click)="auth.logout()">Log Out</button>
+
 </mat-toolbar>

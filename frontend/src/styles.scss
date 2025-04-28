@@ -34,29 +34,3 @@
 .flex-grow {
     flex-grow: 1;
 }
-
-/* width */
-::-webkit-scrollbar {
-    width: .5em;
-}
-
-/* Track */
-::-webkit-scrollbar-track {
-    border-radius: .1em;
-}
-
-/* Handle */
-::-webkit-scrollbar-thumb {
-    background: #222222;
-    border-radius: .1em;
-}
-
-/* Handle on hover */
-::-webkit-scrollbar-thumb:hover {
-    background: #333333;
-}
-
-#page-title {
-    font-size: 2em;
-    text-align: center;
-}

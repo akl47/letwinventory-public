@@ -1,12 +1,16 @@
 import { Injectable } from '@angular/core';
 import { Router } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
-import { Observable, throwError } from 'rxjs';
+import { Observable, throwError, BehaviorSubject } from 'rxjs';
 import { BASE_URL, NAME_KEY, TOKEN_KEY } from '../../app.config';
 import { catchError } from 'rxjs/operators';
 import { MatSnackBar } from '@angular/material/snack-bar';
+
 @Injectable()
 export class AuthService {
+  private displayNameSubject = new BehaviorSubject<string | null>(localStorage.getItem(NAME_KEY));
+  displayName$ = this.displayNameSubject.asObservable();
+
   constructor(
     private http: HttpClient,
     private router: Router,
@@ -14,7 +18,7 @@ export class AuthService {
   ) {}
 
   get displayName() {
-    return localStorage.getItem(NAME_KEY);
+    return this.displayNameSubject.value;
   }
 
   get isAuthenticated() {
@@ -41,6 +45,7 @@ export class AuthService {
   logout() {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(NAME_KEY);
+    this.displayNameSubject.next(null);
     this.router.navigate(['/']);
   }
 
@@ -50,6 +55,7 @@ export class AuthService {
     }
     localStorage.setItem(TOKEN_KEY, authResponse.token);
     localStorage.setItem(NAME_KEY, authResponse.displayName);
+    this.displayNameSubject.next(authResponse.displayName);
     this.router.navigate(['/']);
   }
 

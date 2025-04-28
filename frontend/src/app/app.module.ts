@@ -32,7 +32,6 @@ import { MatTreeModule } from '@angular/material/tree';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatDatepickerModule } from '@angular/material/datepicker';
 import { MatAutocompleteModule } from '@angular/material/autocomplete';
-import { LoginComponent } from './components/auth/login/login.component';
 
 const routes = [
   {
@@ -46,7 +45,6 @@ const routes = [
     AppComponent,
     NavigationComponent,
     HomeComponent,
-    LoginComponent
   ],
   imports: [
     RouterModule.forRoot(routes),

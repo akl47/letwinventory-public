@@ -1,7 +1,7 @@
 import { Component, OnInit } from '@angular/core';
-import { GoogleAuthService } from '../../../services/google-auth.service';
 import { MatDialog } from '@angular/material/dialog';
 import { Router } from '@angular/router';
+import { AuthService } from 'src/app/services/common/auth.service';
 
 @Component({
   selector: 'app-navigation',
@@ -13,16 +13,13 @@ export class NavigationComponent implements OnInit {
   user: any = null;
 
   constructor(
-    private googleAuth: GoogleAuthService,
+    public auth: AuthService,
     private dialog: MatDialog,
     private router: Router
   ) {}
 
   ngOnInit() {
-    this.googleAuth.user$.subscribe(user => {
-      this.user = user;
-      this.isAuthenticated = !!user;
-    });
+
   }
 
   login() {
@@ -30,6 +27,5 @@ export class NavigationComponent implements OnInit {
   }
 
   logout() {
-    this.googleAuth.logout();
   }
 }

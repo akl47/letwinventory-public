@@ -2,13 +2,18 @@
 const {
   Model
 } = require('sequelize');
-var bcrypt = require('bcrypt')
 
 module.exports = (sequelize, DataTypes) => {
   class User extends Model {
     static associate(models) { }
   };
   User.init({
+    id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      autoIncrement: true,
+      primaryKey: true
+    },
     googleID: {
       type: DataTypes.STRING(100),
       allowNull: false,
@@ -33,7 +38,6 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       allowNull: true,
     },
-
     activeFlag: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

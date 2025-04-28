@@ -2,11 +2,16 @@
 module.exports = {
   up: async (queryInterface, DataTypes) => {
     await queryInterface.createTable('Users', {
+      id: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        autoIncrement: true,
+        primaryKey: true
+      },
       googleID: {
         type: DataTypes.STRING(100),
         allowNull: false,
-        unique: true,
-        primaryKey: true,
+        unique: true
       },
       displayName: {
         type: DataTypes.STRING(100),
