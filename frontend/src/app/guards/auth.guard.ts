@@ -12,6 +12,8 @@ import {
 import {
   AuthService
 } from '../services/common/auth.service';
+import { CookieService } from '../services/common/cookie.service';
+import { BASE_URL, NAME_KEY, TOKEN_KEY } from '../../app/app.config'
 
 @Injectable({
   providedIn: 'root'
@@ -19,11 +21,9 @@ import {
 export class AuthGuard implements CanActivate {
 
   constructor(
-    private authService: AuthService
+    private authService: AuthService,
+    private cookieService: CookieService
   ) { }
-
-  NAME_KEY = 'name';
-  TOKEN_KEY = 'token';
 
   canActivate(
     next: ActivatedRouteSnapshot,
@@ -32,8 +32,8 @@ export class AuthGuard implements CanActivate {
       this.authService.checkAuth().subscribe(
         data => {
           if (!data) {
-            localStorage.removeItem(this.TOKEN_KEY);
-            localStorage.removeItem(this.NAME_KEY);
+            this.cookieService.deleteCookie(TOKEN_KEY);
+            this.cookieService.deleteCookie(NAME_KEY);
           }
           resolve(data);
         },

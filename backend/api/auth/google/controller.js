@@ -64,11 +64,11 @@ exports.handleCallback = (req, res, next) => {
 
         // Set token in cookie and redirect to frontend
         res.cookie('auth_token', token, {
-          httpOnly: true,
+          httpOnly: false,
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
           maxAge: 3600000 // 1 hour
-        }).cookie('name', user.displayName, {
+        }).cookie('name', encodeURI(user.displayName), {
           httpOnly: false, // Allow frontend to read the name
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',

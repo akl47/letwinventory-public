@@ -5,28 +5,37 @@ import { Observable, throwError, BehaviorSubject } from 'rxjs';
 import { BASE_URL, NAME_KEY, TOKEN_KEY } from '../../app.config';
 import { catchError } from 'rxjs/operators';
 import { MatSnackBar } from '@angular/material/snack-bar';
+import { CookieService } from './cookie.service';
 
 @Injectable()
 export class AuthService {
-  private displayNameSubject = new BehaviorSubject<string | null>(localStorage.getItem(NAME_KEY));
+  private displayNameSubject = new BehaviorSubject<string | null>(
+    this.cookieService.getCookie(NAME_KEY) ?
+      decodeURIComponent(this.cookieService.getCookie(NAME_KEY)!) :
+      null
+  );
   displayName$ = this.displayNameSubject.asObservable();
+
+  private isAuthenticatedSubject = new BehaviorSubject<boolean>(!!this.cookieService.getCookie(TOKEN_KEY));
+  isAuthenticated$ = this.isAuthenticatedSubject.asObservable();
 
   constructor(
     private http: HttpClient,
     private router: Router,
-    private snack: MatSnackBar
-  ) {}
+    private snack: MatSnackBar,
+    private cookieService: CookieService
+  ) { }
 
   get displayName() {
     return this.displayNameSubject.value;
   }
 
   get isAuthenticated() {
-    return !!localStorage.getItem(TOKEN_KEY);
+    return this.isAuthenticatedSubject.value;
   }
 
   get getToken() {
-    return localStorage.getItem(TOKEN_KEY);
+    return this.cookieService.getCookie(TOKEN_KEY);
   }
 
   googleLogin(loginData: any) {
@@ -43,9 +52,10 @@ export class AuthService {
   }
 
   logout() {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(NAME_KEY);
+    this.cookieService.deleteCookie(TOKEN_KEY);
+    this.cookieService.deleteCookie(NAME_KEY);
     this.displayNameSubject.next(null);
+    this.isAuthenticatedSubject.next(false);
     this.router.navigate(['/']);
   }
 
@@ -53,24 +63,25 @@ export class AuthService {
     if (!authResponse.token) {
       return;
     }
-    localStorage.setItem(TOKEN_KEY, authResponse.token);
-    localStorage.setItem(NAME_KEY, authResponse.displayName);
-    this.displayNameSubject.next(authResponse.displayName);
+    this.cookieService.setCookie(TOKEN_KEY, authResponse.token);
+    this.cookieService.setCookie(NAME_KEY, authResponse.displayName);
+    this.displayNameSubject.next(decodeURIComponent(authResponse.displayName));
+    this.isAuthenticatedSubject.next(true);
     this.router.navigate(['/']);
   }
 
-  handleError(error: any) {
-    console.log(error.error.errorMessage);
-    let message;
-    if (typeof error.error.errorMessage != 'undefined') {
-      message = error.error.errorMessage;
+  private handleError(error: any) {
+    let errorMessage = '';
+    if (error.error instanceof ErrorEvent) {
+      errorMessage = error.error.message;
     } else {
-      message = error.message;
+      errorMessage = `Error Code: ${error.status}\nMessage: ${error.message}`;
     }
-    this.snack.open(message, '', {
+    this.snack.open(errorMessage, 'Close', {
       duration: 5000,
     });
-    console.error(error);
-    return throwError(error);
+    return throwError(() => {
+      return errorMessage;
+    });
   }
 }

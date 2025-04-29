@@ -16,7 +16,11 @@ export class NavigationComponent implements OnInit {
     public auth: AuthService,
     private dialog: MatDialog,
     private router: Router
-  ) {}
+  ) {
+    this.auth.isAuthenticated$.subscribe(
+      isAuth => this.isAuthenticated = isAuth
+    );
+  }
 
   ngOnInit() {
 
