@@ -20,6 +20,7 @@ export class AuthInterceptorService implements HttpInterceptor {
 
   intercept(req: HttpRequest<any>, next: HttpHandler): Observable<HttpEvent<any>> {
     if (this.auth.isAuthenticated) {
+      console.log("Authenticated:", this.auth.getToken)
       const authReq = req.clone({
         headers: req.headers.set('Authorization', this.auth.getToken || '')
       });

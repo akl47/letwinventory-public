@@ -27,7 +27,7 @@ export class AuthService {
   ) { }
 
   get displayName() {
-    return this.displayNameSubject.value;
+    return decodeURI(this.displayNameSubject.value);
   }
 
   get isAuthenticated() {
@@ -47,7 +47,7 @@ export class AuthService {
 
   checkAuth(): Observable<boolean> {
     return this.http
-      .get<boolean>(BASE_URL + '/auth/user/checkToken')
+      .get<boolean>(BASE_URL + '/api/auth/user/checkToken')
       .pipe(catchError(this.handleError.bind(this)));
   }
 

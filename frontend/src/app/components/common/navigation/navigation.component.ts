@@ -2,6 +2,7 @@ import { Component, OnInit } from '@angular/core';
 import { MatDialog } from '@angular/material/dialog';
 import { Router } from '@angular/router';
 import { AuthService } from 'src/app/services/common/auth.service';
+import { ThemeService } from '../../../services/common/theme.service';
 
 @Component({
   selector: 'app-navigation',
@@ -15,7 +16,8 @@ export class NavigationComponent implements OnInit {
   constructor(
     public auth: AuthService,
     private dialog: MatDialog,
-    private router: Router
+    private router: Router,
+    public themeService: ThemeService
   ) {
     this.auth.isAuthenticated$.subscribe(
       isAuth => this.isAuthenticated = isAuth

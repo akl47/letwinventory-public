@@ -7,9 +7,9 @@ module.exports = (req,res,next) => {
           if(_.isNull(err)) {
             console.log(jwtUser)
             db.User.findOne({
-              attributes: ['googleID','displayName','email'],
+              attributes: ['id','displayName','email'],
               where:{
-                googleID:jwtUser.id,
+                id:jwtUser.id,
                 activeFlag:true
               }
             }).then(dbUser=>{

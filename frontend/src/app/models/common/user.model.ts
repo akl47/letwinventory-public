@@ -1,7 +1,10 @@
-export class User {
-  username?: string;
-  displayName?: string;
-  password?: string;
-  email?: string;
-  token?: string;
+export interface User {
+  id: number;
+  displayName: string;
+  email: string;
+  googleID?: string;
+  photoURL?: string;
+  activeFlag?: boolean;
+  createdAt?: Date;
+  updatedAt?: Date;
 }

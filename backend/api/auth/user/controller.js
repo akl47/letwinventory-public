@@ -43,16 +43,6 @@ const passport = require("../../../auth/passport");
 // };
 
 
-exports.googleCallback = (req, res, next) => {
-  console.log("-----GOOGLE CALLBACK-----");
-  console.log(req.body);
-  res.send("Hello World");
-}
-
-/**
- * @param {string} req.headers.authorization
- * @returns {boolean} true if the token is valid
- */
 exports.checkToken = async (req, res, next) => {
   try {
     if (!req.headers.authorization) {
@@ -60,20 +50,36 @@ exports.checkToken = async (req, res, next) => {
     }
 
     const token = req.headers.authorization.replace('Bearer ', '');
-    const decoded = await passport.verifyToken(token);
     
+    // Verify the token using jwt directly
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Find the user in the database
+    const user = await db.User.findOne({
+      where: {
+        id: decoded.id,
+        activeFlag: true
+      },
+      attributes: ['id', 'displayName', 'email']
+    });
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
     res.json({
       valid: true,
       user: {
-        id: decoded.id,
-        displayName: decoded.displayName,
-        email: decoded.email
+        id: user.id,
+        displayName: user.displayName,
+        email: user.email
       }
     });
   } catch (error) {
-    res.status(401).json({ 
+    console.log("Token verification error:", error);
+    res.status(401).json({
       valid: false,
-      error: error.message 
+      error: 'Invalid token'
     });
   }
 };
@@ -89,47 +95,52 @@ exports.getUser = (req, res, next) => {
  * @param {number} req.params.id id to update, must match token id
  * @returns {json} returns updated user object
  */
-exports.updateUser = (req, res, next) => {
-  if (req.user.id == req.params.id) {
-    db.User.update(req.body, {
+exports.updateUser = async (req, res, next) => {
+  try {
+    // Get the token from the authorization header
+    const token = req.headers.authorization.replace('Bearer ', '');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Only update displayName
+    const [updated] = await db.User.update(
+      { displayName: req.body.displayName },
+      {
+        where: {
+          id: decoded.id,
+          activeFlag: true
+        },
+        returning: true
+      }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Fetch the updated user
+    const user = await db.User.findOne({
       where: {
-        id: req.user.id,
-        activeFlag: true,
+        id: decoded.id,
+        activeFlag: true
       },
-      individualHooks: true,
-    })
-      .then((updated) => {
-        db.User.findOne({
-          attributes: ["id", "username", "displayName"],
-          where: {
-            id: req.user.id,
-            activeFlag: true,
-          },
-        })
-          .then((user) => {
-            if (_.isNull(user)) {
-              next(new RestError("Error finding user in database", 500));
-            } else {
-              req.user = {
-                id: user.dataValues.id,
-                username: user.dataValues.username,
-                displayName: user.dataValues.displayName,
-              };
-              req.user.token = jwt.sign(req.user, process.env.JWT_SECRET);
-              res.json(req.user);
-            }
-          })
-          .catch((error) => {
-            next(
-              new RestError("Error finding user in database. " + error, 500)
-            );
-          });
-      })
-      .catch((error) => {
-        next(new RestError("Error Updating User. " + error, 400));
-      });
-  } else {
-    next(new RestError("Request user.id does not match token user.id", 400));
+      attributes: ['id', 'displayName', 'email']
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      valid: true,
+      user: {
+        id: user.id,
+        displayName: user.displayName,
+        email: user.email
+      }
+    });
+  } catch (error) {
+    console.error('Error updating user:', error);
+    res.status(500).json({ error: 'Error updating user' });
   }
 };
 

@@ -1,4 +1,82 @@
-/* You can add global styles to this file, and also import other style files */
+@use '@angular/material' as mat;
+
+// Define custom palettes
+$primary-palette: mat.define-palette(mat.$indigo-palette);
+$accent-palette: mat.define-palette(mat.$pink-palette, A200, A100, A400);
+$warn-palette: mat.define-palette(mat.$red-palette);
+
+// Light theme
+$light-theme: mat.define-light-theme((
+  color: (
+    primary: $primary-palette,
+    accent: $accent-palette,
+    warn: $warn-palette,
+  ),
+  typography: mat.define-typography-config(),
+  density: 0,
+));
+
+// Dark theme
+$dark-theme: mat.define-dark-theme((
+  color: (
+    primary: $primary-palette,
+    accent: $accent-palette,
+    warn: $warn-palette,
+  ),
+  typography: mat.define-typography-config(),
+  density: 0,
+));
+
+// Apply light theme by default
+@include mat.all-component-themes($light-theme);
+
+// Dark theme class
+.dark-theme {
+  @include mat.all-component-themes($dark-theme);
+  
+  // Custom dark theme styles
+  background-color: #303030;
+  color: #ffffff;
+
+  .mat-card {
+    background-color: #424242;
+    color: #ffffff;
+  }
+
+  .mat-form-field-label {
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .mat-input-element {
+    color: #ffffff;
+  }
+
+  .mat-form-field-underline {
+    background-color: rgba(255, 255, 255, 0.7);
+  }
+}
+
+// Light theme class
+.light-theme {
+  @include mat.all-component-themes($light-theme);
+  
+  // Custom light theme styles
+  background-color: #fafafa;
+  color: rgba(0, 0, 0, 0.87);
+
+  .mat-card {
+    background-color: #ffffff;
+    color: rgba(0, 0, 0, 0.87);
+  }
+}
+
+// Global styles
+html, body {
+  height: 100%;
+  margin: 0;
+  font-family: Roboto, "Helvetica Neue", sans-serif;
+}
+
 @import "~@angular/material/prebuilt-themes/indigo-pink.css";
 
 * {

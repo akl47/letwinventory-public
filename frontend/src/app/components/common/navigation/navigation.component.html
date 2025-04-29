@@ -18,4 +18,7 @@
     <button *ngIf="auth.isAuthenticated" mat-button routerLink="/user">Welcome {{auth.displayName}}</button>
     <button *ngIf="auth.isAuthenticated" mat-button (click)="auth.logout()">Log Out</button>
 
+    <button mat-icon-button (click)="themeService.toggleTheme()" matTooltip="Toggle theme">
+        <mat-icon>{{ (themeService.isDarkTheme$ | async) ? 'light_mode' : 'dark_mode' }}</mat-icon>
+    </button>
 </mat-toolbar>
