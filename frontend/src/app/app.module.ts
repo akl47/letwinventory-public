@@ -35,6 +35,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { UserComponent } from './components/common/user/user.component';
 import { UserService } from './services/common/user.service';
 import { AuthGuard } from './guards/auth.guard';
+import { TaskListViewComponent } from './components/common/task-list-view/task-list-view.component';
 
 const routes = [
   {
@@ -44,6 +45,11 @@ const routes = [
   {
     path: 'user',
     component: UserComponent,
+    canActivate: [AuthGuard],
+  },
+  {
+    path: 'tasks',
+    component: TaskListViewComponent,
     canActivate: [AuthGuard],
   }
 ];

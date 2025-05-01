@@ -1,0 +1,133 @@
+@use '@angular/material' as mat;
+
+.task-board {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  min-height: calc(100vh - 2rem);
+  overflow-x: auto;
+}
+
+.task-column {
+  flex: 1;
+  min-width: 300px;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  height: fit-content;
+  max-height: calc(100vh - 2rem);
+
+  mat-card-header {
+    padding-bottom: 0.5rem;
+  }
+
+  mat-card-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+
+    .task-count {
+      background-color: mat.get-color-from-palette(mat.$gray-palette, 200);
+      padding: 0.25rem 0.5rem;
+      border-radius: 12px;
+      font-size: 0.875rem;
+      color: mat.get-color-from-palette(mat.$gray-palette, 700);
+    }
+  }
+
+  mat-card-content {
+    flex: 1;
+    padding: 0;
+    overflow-y: auto;
+  }
+}
+
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  min-height: 100px;
+}
+
+.task-card {
+  cursor: move;
+  transition: box-shadow 0.2s ease-in-out;
+
+  &:hover {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  &.cdk-drag-preview {
+    box-shadow: 0 5px 10px rgba(0, 0, 0, 0.2);
+  }
+
+  &.cdk-drag-placeholder {
+    opacity: 0.3;
+  }
+
+  &.cdk-drag-animating {
+    transition: transform 250ms cubic-bezier(0, 0, 0.2, 1);
+  }
+
+  mat-card-header {
+    padding-bottom: 0.5rem;
+  }
+
+  mat-card-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1rem;
+    margin: 0;
+
+    .priority-icon {
+      font-size: 1rem;
+      width: 1rem;
+      height: 1rem;
+    }
+  }
+
+  mat-card-content {
+    padding: 0 1rem;
+  }
+
+  .task-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+
+    mat-chip-listbox {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .task-due-date {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      color: mat.get-color-from-palette(mat.$gray-palette, 600);
+      font-size: 0.75rem;
+
+      mat-icon {
+        font-size: 1rem;
+        width: 1rem;
+        height: 1rem;
+      }
+    }
+  }
+
+  mat-card-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0.5rem;
+  }
+}
+
+.task-list.cdk-drop-list-dragging .task-card:not(.cdk-drag-placeholder) {
+  transition: transform 250ms cubic-bezier(0, 0, 0.2, 1);
+} 

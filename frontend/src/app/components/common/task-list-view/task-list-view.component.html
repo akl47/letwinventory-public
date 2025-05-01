@@ -1,0 +1,52 @@
+<div class="task-board" cdkDropListGroup>
+  <mat-card class="task-column" *ngFor="let taskList of taskLists">
+    <mat-card-header>
+      <mat-card-title>
+        {{ taskList.name }}
+        <span class="task-count">{{ getTasksByList(taskList.id).length }}</span>
+      </mat-card-title>
+    </mat-card-header>
+    <mat-card-content>
+      <div class="task-list" 
+           cdkDropList
+           [cdkDropListData]="getTasksByList(taskList.id)"
+           (cdkDropListDropped)="onTaskDrop($event, taskList.id)">
+        <mat-card class="task-card" 
+                  *ngFor="let task of getTasksByList(taskList.id)" 
+                  cdkDrag
+                  [matTooltip]="task.description">
+          <mat-card-header>
+            <mat-card-title>
+              <mat-icon [color]="getPriorityColor(task)" class="priority-icon">fiber_manual_record</mat-icon>
+              {{ task.name }}
+            </mat-card-title>
+          </mat-card-header>
+          <mat-card-content>
+            <div class="task-meta">
+              <mat-chip-listbox>
+                <mat-chip [color]="getStatusColor(task)" selected>
+                  {{ getTaskStatus(task) }}
+                </mat-chip>
+                <mat-chip *ngIf="task.timeEstimate" color="primary" selected>
+                  {{ task.timeEstimate }}h
+                </mat-chip>
+              </mat-chip-listbox>
+              <div class="task-due-date" *ngIf="task.dueDate">
+                <mat-icon>event</mat-icon>
+                {{ task.dueDate | date }}
+              </div>
+            </div>
+          </mat-card-content>
+          <mat-card-actions>
+            <button mat-icon-button color="primary">
+              <mat-icon>edit</mat-icon>
+            </button>
+            <button mat-icon-button color="warn">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </mat-card-actions>
+        </mat-card>
+      </div>
+    </mat-card-content>
+  </mat-card>
+</div> 

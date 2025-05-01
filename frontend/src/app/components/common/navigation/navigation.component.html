@@ -12,6 +12,7 @@
         </div>
     </button>
     <!--Add Additional Pages Here-->
+    <button *ngIf="auth.isAuthenticated" mat-button routerLink="/tasks">Tasks</button>
     <span style="flex: 1 1 auto"></span>
     <!--Right Aligned-->
     <button *ngIf="!auth.isAuthenticated" mat-button (click)='login()'>Log In</button>
