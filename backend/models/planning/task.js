@@ -10,7 +10,14 @@ module.exports = (sequelize, DataTypes) => {
      * The `models/index` file will call this method automatically.
      */
     static associate(models) {
-      // define association here
+      Task.belongsTo(models.User, {
+        foreignKey: 'ownerUserID',
+        as: 'owner'
+      });
+      Task.belongsTo(models.Project, {
+        foreignKey: 'projectID',
+        as: 'project'
+      });
     }
   };
   Task.init({
@@ -19,6 +26,10 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       autoIncrement: true,
       primaryKey: true
+    },
+    ownerUserID: {
+      type: DataTypes.INTEGER,
+      allowNull: false
     },
     projectID: {
       type: DataTypes.INTEGER,

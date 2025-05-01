@@ -1,14 +1,19 @@
-const express = require('express');
-const router = express.Router();
+var router = require('express').Router();
+var fs = require('fs');
 
-const authRoutes = require('./auth/auth.routes');
-const projectRoutes = require('./project/project.routes');
-const taskListRoutes = require('./tasklist/tasklist.routes');
-const taskRoutes = require('./task/task.routes');
-
-router.use('/auth', authRoutes);
-router.use('/projects', projectRoutes);
-router.use('/tasklists', taskListRoutes);
-router.use('/tasks', taskRoutes);
+fs.readdirSync(__dirname)
+    .filter(group=>{
+        return(group.indexOf('.')===-1);
+    })
+    .forEach(group=>{
+        fs.readdirSync(__dirname+'/'+group)
+        .filter(folder=>{
+            return(folder.indexOf('.')===-1);
+        })
+        .forEach(folder=>{
+            console.log('/'+group+'/'+folder)
+            router.use('/'+group+'/'+folder,require('./'+group+'/'+folder+'/routes'))  
+        })  
+    })
 
 module.exports = router;

@@ -2,6 +2,7 @@ export interface Task {
     id: number;
     projectID: number;
     taskListID: number;
+    ownerUserID: number;
     name: string;
     description?: string;
     doneFlag: boolean;
@@ -12,6 +13,12 @@ export interface Task {
     activeFlag: boolean;
     createdAt: Date;
     updatedAt: Date;
+    owner?: {
+        id: number;
+        displayName: string;
+        email: string;
+        photoURL: string;
+    };
 }
 
 export interface TaskList {

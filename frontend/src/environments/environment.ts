@@ -4,7 +4,7 @@
 
 export const environment = {
   production: false,
-  apiUrl: 'http://localhost:3000',
+  apiUrl: 'http://localhost:3000/api',
   frontendUrl: 'http://localhost:4200',
   googleClientId: '104155707229-leq2vf5j8mbbtbj2fovtaegp1nl6argk.apps.googleusercontent.com'
 };

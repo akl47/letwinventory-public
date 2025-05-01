@@ -1,9 +1,12 @@
-const { Task } = require('../../models/common/task');
+const { Task, User } = require('../../../models');
 const { Op } = require('sequelize');
 
 exports.createTask = async (req, res) => {
     try {
-        const task = await Task.create(req.body);
+        const task = await Task.create({
+            ...req.body,
+            ownerUserID: req.user.id // Set the owner to the current user
+        });
         res.status(201).json(task);
     } catch (error) {
         res.status(400).json({ error: error.message });
@@ -24,7 +27,12 @@ exports.getAllTasks = async (req, res) => {
 
         const tasks = await Task.findAll({
             where,
-            order: [['createdAt', 'DESC']]
+            order: [['createdAt', 'DESC']],
+            include: [{
+                model: User,
+                as: 'owner',
+                attributes: ['id', 'displayName', 'email', 'photoURL']
+            }]
         });
         res.json(tasks);
     } catch (error) {
@@ -34,7 +42,13 @@ exports.getAllTasks = async (req, res) => {
 
 exports.getTaskById = async (req, res) => {
     try {
-        const task = await Task.findByPk(req.params.id);
+        const task = await Task.findByPk(req.params.id, {
+            include: [{
+                model: User,
+                as: 'owner',
+                attributes: ['id', 'displayName', 'email', 'photoURL']
+            }]
+        });
         if (!task) {
             return res.status(404).json({ error: 'Task not found' });
         }

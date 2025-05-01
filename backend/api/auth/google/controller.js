@@ -47,8 +47,6 @@ exports.handleCallback = (req, res, next) => {
           photoURL: profile.photos[0].value
         }
       });
-      console.log("Profile:",profile)
-      console.log("USER: ",user)
       if(user.activeFlag) {
         // Generate JWT token
         const token = jwt.sign(

@@ -1,0 +1,34 @@
+@use '@angular/material' as mat;
+
+.pomodoro-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+  padding: 0.5em 1em;
+  background-color: mat.get-color-from-palette(mat.$gray-palette, 50);
+  border-bottom: 1px solid mat.get-color-from-palette(mat.$gray-palette, 200);
+}
+
+.timer-controls {
+  display: flex;
+  justify-content: center;
+  gap: 1em;
+}
+
+.timer-display {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 1em;
+  font-size: 2em;
+  font-weight: 500;
+}
+
+.timer-actions {
+  display: flex;
+  gap: 0.5em;
+}
+
+mat-progress-bar {
+  height: 0.25em;
+} 

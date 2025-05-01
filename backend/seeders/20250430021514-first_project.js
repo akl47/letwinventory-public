@@ -1,12 +1,16 @@
 'use strict';
 
 module.exports = {
-  up: (queryInterface, Sequelize) => {
+  up: async (queryInterface, Sequelize) => {
+    const { User } = require('../models');
+    const user = await User.findOne({ where: { email: 'alexanderletwin@gmail.com' }, attributes: ['id'], raw: true });
+    
     return queryInterface.bulkInsert('Projects', [
       {
-        tagColorHex:"ff0000",
+        ownerUserID: user.id,
+        tagColorHex: "ff0000",
         name: "letwinventory",
-        shortName:"INV",
+        shortName: "INV",
       }
     ]);
   },

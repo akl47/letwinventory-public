@@ -35,7 +35,9 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { UserComponent } from './components/common/user/user.component';
 import { UserService } from './services/common/user.service';
 import { AuthGuard } from './guards/auth.guard';
-import { TaskListViewComponent } from './components/common/task-list-view/task-list-view.component';
+import { TaskListViewComponent } from './components/planning/task-list-view/task-list-view.component';
+import { PomodoroBarComponent } from './components/common/pomodoro-bar/pomodoro-bar.component';
+import { MatProgressBarModule } from '@angular/material/progress-bar';
 
 const routes = [
   {
@@ -58,6 +60,7 @@ const routes = [
   declarations: [
     AppComponent,
     NavigationComponent,
+    PomodoroBarComponent,
     HomeComponent,
     UserComponent,
   ],
@@ -88,6 +91,7 @@ const routes = [
     MatTreeModule,
     MatAutocompleteModule,
     MatFormFieldModule,
+    MatProgressBarModule,
   ],
   providers: [
     AuthService,

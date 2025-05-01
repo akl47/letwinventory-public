@@ -1,4 +1,4 @@
-const { TaskList } = require('../../models/common/tasklist');
+const { TaskList } = require('../../../models');
 const { Op } = require('sequelize');
 
 exports.createTaskList = async (req, res) => {

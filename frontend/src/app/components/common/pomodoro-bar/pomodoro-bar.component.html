@@ -1,0 +1,36 @@
+<div class="pomodoro-bar">
+  <div class="timer-controls">
+    <button mat-button 
+            [color]="mode === 'pomodoro' ? 'primary' : ''"
+            (click)="switchMode('pomodoro')">
+      Pomodoro
+    </button>
+    <button mat-button 
+            [color]="mode === 'shortBreak' ? 'primary' : ''"
+            (click)="switchMode('shortBreak')">
+      Short Break
+    </button>
+    <button mat-button 
+            [color]="mode === 'longBreak' ? 'primary' : ''"
+            (click)="switchMode('longBreak')">
+      Long Break
+    </button>
+  </div>
+
+  <div class="timer-display">
+    <span class="time">{{ formattedTime }}</span>
+    <div class="timer-actions">
+      <button mat-icon-button (click)="resetTimer()">
+        <mat-icon>refresh</mat-icon>
+      </button>
+      <button mat-icon-button (click)="toggleTimer()">
+        <mat-icon>{{ isRunning ? 'pause' : 'play_arrow' }}</mat-icon>
+      </button>
+    </div>
+  </div>
+
+  <mat-progress-bar 
+    [value]="progress"
+    [color]="mode === 'pomodoro' ? 'primary' : 'accent'">
+  </mat-progress-bar>
+</div> 

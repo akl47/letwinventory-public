@@ -10,7 +10,10 @@ module.exports = (sequelize, DataTypes) => {
      * The `models/index` file will call this method automatically.
      */
     static associate(models) {
-      // define association here
+      Project.belongsTo(models.User, {
+        foreignKey: 'ownerUserID',
+        as: 'owner'
+      });
     }
   };
   Project.init({
@@ -19,6 +22,10 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       autoIncrement: true,
       primaryKey: true
+    },
+    ownerUserID: {
+      type: DataTypes.INTEGER,
+      allowNull: false
     },
     parentProjectID: {
       type: DataTypes.INTEGER,

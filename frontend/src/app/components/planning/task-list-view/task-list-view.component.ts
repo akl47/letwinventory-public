@@ -7,6 +7,10 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatButtonModule } from '@angular/material/button';
 import { DragDropModule } from '@angular/cdk/drag-drop';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { PlanningService } from '../../../services/planning/planning.service';
+import { catchError, forkJoin, of } from 'rxjs';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { TaskCardComponent } from '../task-card/task-card.component';
 
 @Component({
     selector: 'app-task-list-view',
@@ -20,52 +24,52 @@ import { MatTooltipModule } from '@angular/material/tooltip';
         MatIconModule,
         MatButtonModule,
         DragDropModule,
-        MatTooltipModule
+        MatTooltipModule,
+        MatProgressSpinnerModule,
+        TaskCardComponent
     ]
 })
 export class TaskListViewComponent implements OnInit {
     tasks: Task[] = [];
     taskLists: TaskList[] = [];
+    loading = true;
+    error: string | null = null;
 
-    constructor() { }
+    constructor(private planningService: PlanningService) { }
 
     ngOnInit(): void {
-        // TODO: Replace with actual task data from a service
-        this.tasks = [
-            {
-                id: 1,
-                projectID: 1,
-                taskListID: 1,
-                name: 'Implement user authentication',
-                description: 'Add login and registration functionality',
-                doneFlag: false,
-                completeWithChildren: false,
-                taskTypeEnum: TaskType.NORMAL,
-                activeFlag: true,
-                createdAt: new Date(),
-                updatedAt: new Date()
-            },
-            {
-                id: 2,
-                projectID: 1,
-                taskListID: 2,
-                name: 'Design database schema',
-                description: 'Create ERD for the application',
-                doneFlag: false,
-                completeWithChildren: false,
-                taskTypeEnum: TaskType.NORMAL,
-                activeFlag: true,
-                createdAt: new Date(),
-                updatedAt: new Date()
-            }
-        ];
+        this.loadData();
+    }
 
-        this.taskLists = [
-            { id: 1, name: 'To Do', activeFlag: true, createdAt: new Date(), updatedAt: new Date() },
-            { id: 2, name: 'In Progress', activeFlag: true, createdAt: new Date(), updatedAt: new Date() },
-            { id: 3, name: 'Review', activeFlag: true, createdAt: new Date(), updatedAt: new Date() },
-            { id: 4, name: 'Done', activeFlag: true, createdAt: new Date(), updatedAt: new Date() }
-        ];
+    loadData(): void {
+        this.loading = true;
+        this.error = null;
+
+        forkJoin({
+            tasks: this.planningService.getAllTasks().pipe(
+                catchError(error => {
+                    console.error('Error loading tasks:', error);
+                    return of([]);
+                })
+            ),
+            taskLists: this.planningService.getAllTaskLists().pipe(
+                catchError(error => {
+                    console.error('Error loading task lists:', error);
+                    return of([]);
+                })
+            )
+        }).subscribe({
+            next: ({ tasks, taskLists }) => {
+                this.tasks = tasks;
+                this.taskLists = taskLists;
+                this.loading = false;
+            },
+            error: (error) => {
+                console.error('Error loading data:', error);
+                this.error = 'Failed to load tasks and task lists';
+                this.loading = false;
+            }
+        });
     }
 
     getTasksByList(taskListId: number): Task[] {
@@ -73,8 +77,21 @@ export class TaskListViewComponent implements OnInit {
     }
 
     onTaskDrop(event: any, targetTaskListId: number) {
-        // TODO: Implement drag and drop functionality
-        console.log('Task dropped in list:', targetTaskListId);
+        const taskId = event.item.data.id;
+        this.planningService.moveTask(taskId, targetTaskListId).subscribe({
+            next: (updatedTask) => {
+                // Update the task in the local array
+                const index = this.tasks.findIndex(t => t.id === taskId);
+                if (index !== -1) {
+                    this.tasks[index] = updatedTask;
+                }
+            },
+            error: (error) => {
+                console.error('Error moving task:', error);
+                // Reload all tasks to ensure consistency
+                this.loadData();
+            }
+        });
     }
 
     getTaskStatus(task: Task): TaskStatus {
