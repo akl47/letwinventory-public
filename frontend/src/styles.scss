@@ -27,10 +27,10 @@ $dark-theme: mat.define-dark-theme((
   density: 0,
 ));
 
-// Apply light theme by default
-@include mat.all-component-themes($light-theme);
+// Apply dark theme by default
+@include mat.all-component-themes($dark-theme);
 
-// Dark theme class
+// Dark theme class (default)
 .dark-theme {
   @include mat.all-component-themes($dark-theme);
   
@@ -75,6 +75,8 @@ html, body {
   height: 100%;
   margin: 0;
   font-family: Roboto, "Helvetica Neue", sans-serif;
+  background-color: #303030;
+  color: #ffffff;
 }
 
 @import "~@angular/material/prebuilt-themes/indigo-pink.css";

@@ -24,8 +24,6 @@ exports.initiateLogin = (req, res, next) => {
 };
 
 exports.handleCallback = (req, res, next) => {
-  console.log("REQ:",req)
-  console.log("EOR")
   passport.authenticate('google', { session: false }, async (err, profile, info) => {
     if (err) {
       console.error('Authentication error:', err);

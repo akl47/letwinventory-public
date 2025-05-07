@@ -1,4 +1,4 @@
-<div [class.alternative]="otherTheme">
+<div [class.dark-theme]="isDarkTheme" [class.light-theme]="!isDarkTheme">
   <app-navigation></app-navigation>
   <app-pomodoro-bar></app-pomodoro-bar>
   <div id='doc-body'>

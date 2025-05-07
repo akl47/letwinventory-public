@@ -7,9 +7,10 @@ import { Component } from '@angular/core';
 })
 export class AppComponent {
   title = 'Letwin.co';
-  otherTheme = false;
+  isDarkTheme = true;
 
-  swapTheme() {
-    this.otherTheme = !this.otherTheme;
+  toggleTheme() {
+    this.isDarkTheme = !this.isDarkTheme;
+    document.body.classList.toggle('light-theme');
   }
 }
