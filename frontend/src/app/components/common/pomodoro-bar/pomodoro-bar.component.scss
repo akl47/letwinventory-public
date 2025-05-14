@@ -1,5 +1,31 @@
 @use '@angular/material' as mat;
 
+:host {
+    display: block;
+    height: 100%;
+}
+
+mat-toolbar {
+    padding: 0;
+    height: 100%;
+    position: relative;
+}
+
+.bg-progress-bar {
+    height: 100%;
+    background-color: green;
+    display: flex;
+    align-items: center;
+    padding: 0 1rem;
+    transition: width 0.3s ease;
+}
+
+.time-display {
+    color: white;
+    font-size: 1.2rem;
+    font-weight: 500;
+}
+
 .pomodoro-bar {
   display: flex;
   flex-direction: column;
