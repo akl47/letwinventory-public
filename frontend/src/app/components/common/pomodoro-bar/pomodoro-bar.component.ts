@@ -109,7 +109,6 @@ export class PomodoroBarComponent implements OnInit, OnDestroy {
         //Calculate the progress
         this.progress = 100-(this.timeLeft/this.getDurationForMode())*100
 
-        console.log(this.timeLeft)
         // Check if timer completed
         if (this.timeLeft === 1 ) {
             this.handleTimerComplete();
@@ -134,7 +133,6 @@ export class PomodoroBarComponent implements OnInit, OnDestroy {
             const options = {
                 body: this.mode === 'pomodoro' ? 'Take a short break.' : 'Start your next pomodoro session.',
                 silent: true,
-                requireInteraction: true
             };
             new Notification(title, options);
         }
