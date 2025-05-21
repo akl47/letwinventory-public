@@ -11,19 +11,59 @@ mat-toolbar {
     position: relative;
 }
 
-.bg-progress-bar {
-    height: 100%;
-    background-color: green;
+.pomodoro-toolbar {
+    position: relative;
     display: flex;
+    justify-content: center;
     align-items: center;
-    padding: 0 1rem;
-    transition: width 0.3s ease;
+    overflow: hidden;
+    transition: all 0.3s ease;
+
+    &.hidden {
+        height: 0px !important;
+        min-height: 0px !important;
+        padding: 0;
+    }
+
+    &.compact {
+        height: 3px !important;
+        min-height: 3px !important;
+        padding: 0;
+    }
 }
 
 .time-display {
     color: white;
     font-size: 1.2rem;
     font-weight: 500;
+}
+
+.progress-bar-controlls {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 1em;
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+.bg-progress-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    z-index: 1;
+    background-color: green;
+    // box-shadow: 0 0 15px 0px rgba(0,128,0,0.75);
+    // clip-path: inset(0 -15px 0 0);
+    display: flex;
+    align-items: center;
+    // padding: 0 1rem;
+    transition: width 0.3s ease;
 }
 
 .pomodoro-bar {
@@ -57,4 +97,14 @@ mat-toolbar {
 
 mat-progress-bar {
   height: 0.25em;
+}
+
+.control-buttons {
+    display: flex;
+    gap: 0.5em;
+    align-items: center;
+
+    button {
+        color: white;
+    }
 } 

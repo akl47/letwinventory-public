@@ -3,6 +3,7 @@ import { MatDialog } from '@angular/material/dialog';
 import { Router } from '@angular/router';
 import { AuthService } from 'src/app/services/common/auth.service';
 import { ThemeService } from '../../../services/common/theme.service';
+import { PomodoroBarService } from 'src/app/services/pomodoro-bar.service';
 
 @Component({
   selector: 'app-navigation',
@@ -17,7 +18,8 @@ export class NavigationComponent implements OnInit {
     public auth: AuthService,
     private dialog: MatDialog,
     private router: Router,
-    public themeService: ThemeService
+    public themeService: ThemeService,
+    private pomodoroBarService: PomodoroBarService
   ) {
     this.auth.isAuthenticated$.subscribe(
       isAuth => this.isAuthenticated = isAuth
@@ -33,5 +35,9 @@ export class NavigationComponent implements OnInit {
   }
 
   logout() {
+  }
+
+  togglePomodoro() {
+    this.pomodoroBarService.toggleCompact();
   }
 }
