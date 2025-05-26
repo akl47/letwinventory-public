@@ -14,7 +14,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatCardModule } from '@angular/material/card';
 import { MatDialogModule } from '@angular/material/dialog';
 import { AuthService } from './services/common/auth.service';
-import { HTTP_INTERCEPTORS } from '@angular/common/http';
+import { HTTP_INTERCEPTORS, provideHttpClient, withInterceptorsFromDi } from '@angular/common/http';
 import { MatInputModule } from '@angular/material/input';
 import { AuthInterceptorService } from './services/common/auth-interceptor.service';
 import { FormsModule, ReactiveFormsModule } from '@angular/forms';
@@ -56,52 +56,46 @@ const routes = [
   }
 ];
 
-@NgModule({
-  declarations: [
-    AppComponent,
-    NavigationComponent,
-    PomodoroBarComponent,
-    HomeComponent,
-    UserComponent,
-  ],
-  imports: [
-    BrowserModule,
-    BrowserAnimationsModule,
-    RouterModule.forRoot(routes),
-    AppRoutingModule,
-    MatToolbarModule,
-    MatButtonModule,
-    MatIconModule,
-    MatCardModule,
-    MatDialogModule,
-    MatInputModule,
-    MatSnackBarModule,
-    FormsModule,
-    HttpClientModule,
-    ReactiveFormsModule,
-    MatExpansionModule,
-    MatTableModule,
-    MatPaginatorModule,
-    MatSelectModule,
-    MatSlideToggleModule,
-    MatTooltipModule,
-    MatCheckboxModule,
-    MatProgressSpinnerModule,
-    MatDatepickerModule,
-    MatTreeModule,
-    MatAutocompleteModule,
-    MatFormFieldModule,
-    MatProgressBarModule,
-  ],
-  providers: [
-    AuthService,
-    UserService,
-    {
-      provide: HTTP_INTERCEPTORS,
-      useClass: AuthInterceptorService,
-      multi: true
-    }
-  ],
-  bootstrap: [AppComponent]
-})
+@NgModule({ declarations: [
+        AppComponent,
+        NavigationComponent,
+        PomodoroBarComponent,
+        HomeComponent,
+        UserComponent,
+    ],
+    bootstrap: [AppComponent], imports: [BrowserModule,
+        BrowserAnimationsModule,
+        RouterModule.forRoot(routes),
+        AppRoutingModule,
+        MatToolbarModule,
+        MatButtonModule,
+        MatIconModule,
+        MatCardModule,
+        MatDialogModule,
+        MatInputModule,
+        MatSnackBarModule,
+        FormsModule,
+        ReactiveFormsModule,
+        MatExpansionModule,
+        MatTableModule,
+        MatPaginatorModule,
+        MatSelectModule,
+        MatSlideToggleModule,
+        MatTooltipModule,
+        MatCheckboxModule,
+        MatProgressSpinnerModule,
+        MatDatepickerModule,
+        MatTreeModule,
+        MatAutocompleteModule,
+        MatFormFieldModule,
+        MatProgressBarModule], providers: [
+        AuthService,
+        UserService,
+        {
+            provide: HTTP_INTERCEPTORS,
+            useClass: AuthInterceptorService,
+            multi: true
+        },
+        provideHttpClient(withInterceptorsFromDi())
+    ] })
 export class AppModule { }

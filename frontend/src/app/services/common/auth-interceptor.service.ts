@@ -1,12 +1,7 @@
 import {
   Injectable
 } from '@angular/core';
-import {
-  HttpInterceptor,
-  HttpHandler,
-  HttpEvent,
-  HttpRequest
-} from '@angular/common/http';
+import { HttpInterceptor, HttpHandler, HttpEvent, HttpRequest } from '@angular/common/http';
 import {
   AuthService
 } from './auth.service';
