@@ -11,6 +11,8 @@ import { PlanningService } from '../../../services/planning/planning.service';
 import { catchError, forkJoin, of } from 'rxjs';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { TaskCardComponent } from '../task-card/task-card.component';
+import { MatDialog } from '@angular/material/dialog';
+import { TaskDetailsDialogComponent } from '../task-details-dialog/task-details-dialog.component';
 
 @Component({
     selector: 'app-task-list-view',
@@ -35,10 +37,17 @@ export class TaskListViewComponent implements OnInit {
     loading = true;
     error: string | null = null;
 
-    constructor(private planningService: PlanningService) { }
+    constructor(
+        private planningService: PlanningService,
+        private dialog: MatDialog
+    ) { }
 
     ngOnInit(): void {
         this.loadData();
+        // Subscribe to task updates
+        this.planningService.taskUpdated$.subscribe(() => {
+            this.loadData();
+        });
     }
 
     loadData(): void {
@@ -77,6 +86,11 @@ export class TaskListViewComponent implements OnInit {
     }
 
     onTaskDrop(event: any, targetTaskListId: number) {
+        if (!event?.item?.data?.id) {
+            console.error('Invalid drag and drop event data:', event);
+            return;
+        }
+
         const taskId = event.item.data.id;
         this.planningService.moveTask(taskId, targetTaskListId).subscribe({
             next: (updatedTask) => {
@@ -132,5 +146,12 @@ export class TaskListViewComponent implements OnInit {
             default:
                 return 'accent';
         }
+    }
+
+    openTaskDetails(task: Task): void {
+        this.dialog.open(TaskDetailsDialogComponent, {
+            data: { task },
+            width: '600px'
+        });
     }
 } 

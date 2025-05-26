@@ -1,15 +1,18 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { Observable, Subject } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { Task, TaskList, TaskType } from '../../models/common/task.model';
+import { Project } from '../../models/common/project.model';
 
 @Injectable({
     providedIn: 'root'
 })
 export class PlanningService {
     private apiUrl = `${environment.apiUrl}/planning`;
+    private taskUpdated = new Subject<void>();
 
+    taskUpdated$ = this.taskUpdated.asObservable();
 
     constructor(private http: HttpClient) { }
 
@@ -43,5 +46,19 @@ export class PlanningService {
 
     moveTask(taskId: number, taskListId: number): Observable<Task> {
         return this.http.put<Task>(`${this.apiUrl}/task/${taskId}/move`, { taskListId });
+    }
+
+    // Project Methods
+    getProject(projectId: number): Observable<Project> {
+        return this.http.get<Project>(`${this.apiUrl}/project/${projectId}`);
+    }
+
+    getAllProjects(): Observable<Project[]> {
+        return this.http.get<Project[]>(`${this.apiUrl}/project`);
+    }
+
+    // Notify subscribers that a task has been updated
+    notifyTaskUpdated(): void {
+        this.taskUpdated.next();
     }
 } 

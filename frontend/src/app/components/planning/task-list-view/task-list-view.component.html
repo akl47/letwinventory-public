@@ -29,7 +29,11 @@
         <app-task-card 
           *ngFor="let task of getTasksByList(taskList.id)" 
           [task]="task"
-          cdkDrag>
+          [cdkDragData]="task"
+          cdkDrag
+          (click)="openTaskDetails(task)"
+          class="task-card"
+          [class.cursor-pointer]="true">
         </app-task-card>
       </div>
       <div class="add-card-container">
