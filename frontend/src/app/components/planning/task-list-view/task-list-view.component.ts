@@ -18,7 +18,6 @@ import { TaskDetailsDialogComponent } from '../task-details-dialog/task-details-
     selector: 'app-task-list-view',
     templateUrl: './task-list-view.component.html',
     styleUrls: ['./task-list-view.component.scss'],
-    standalone: true,
     imports: [
         CommonModule,
         MatCardModule,

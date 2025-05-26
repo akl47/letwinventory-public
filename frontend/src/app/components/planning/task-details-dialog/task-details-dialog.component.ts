@@ -17,7 +17,6 @@ import { MatMenuModule } from '@angular/material/menu';
     selector: 'app-task-details-dialog',
     templateUrl: './task-details-dialog.component.html',
     styleUrls: ['./task-details-dialog.component.scss'],
-    standalone: true,
     imports: [
         CommonModule,
         MatDialogModule,

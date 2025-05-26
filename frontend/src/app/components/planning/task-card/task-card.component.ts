@@ -11,7 +11,6 @@ import { Task, TaskPriority, TaskStatus, TaskType } from '../../../models/common
     selector: 'app-task-card',
     templateUrl: './task-card.component.html',
     styleUrls: ['./task-card.component.scss'],
-    standalone: true,
     imports: [
         CommonModule,
         MatCardModule,

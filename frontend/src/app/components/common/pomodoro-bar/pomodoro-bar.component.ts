@@ -8,6 +8,7 @@ import { AuthService } from '../../../services/common/auth.service';
     selector: 'app-pomodoro-bar',
     templateUrl: './pomodoro-bar.component.html',
     styleUrls: ['./pomodoro-bar.component.scss'],
+    standalone: false
 })
 export class PomodoroBarComponent implements OnInit, OnDestroy {
     private timer: any;
