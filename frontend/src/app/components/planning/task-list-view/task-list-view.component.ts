@@ -28,7 +28,8 @@ import { TaskDetailsDialogComponent } from '../task-details-dialog/task-details-
         MatTooltipModule,
         MatProgressSpinnerModule,
         TaskCardComponent
-    ]
+    ],
+    standalone: true
 })
 export class TaskListViewComponent implements OnInit {
     tasks: Task[] = [];

@@ -28,7 +28,8 @@ import { MatMenuModule } from '@angular/material/menu';
         MatSelectModule,
         FormsModule,
         MatMenuModule
-    ]
+    ],
+    standalone: true
 })
 export class TaskDetailsDialogComponent implements OnInit {
     public readonly TaskType = TaskType; // Make the enum available in the template

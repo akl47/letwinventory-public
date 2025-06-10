@@ -18,7 +18,8 @@ import { Task, TaskPriority, TaskStatus, TaskType } from '../../../models/common
         MatIconModule,
         MatButtonModule,
         MatTooltipModule
-    ]
+    ],
+    standalone: true
 })
 export class TaskCardComponent {
     @Input() task!: Task;

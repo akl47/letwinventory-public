@@ -1,116 +1,83 @@
 @use '@angular/material' as mat;
+@include mat.core();
 
-// Define custom palettes
-$primary-palette: mat.m2-define-palette(mat.$m2-indigo-palette);
-$accent-palette: mat.m2-define-palette(mat.$m2-pink-palette, A200, A100, A400);
-$warn-palette: mat.m2-define-palette(mat.$m2-red-palette);
+$letwinventory-theme-primary: mat.m2-define-palette(mat.$m2-indigo-palette);
+$letwinventory-theme-accent: mat.m2-define-palette(mat.$m2-indigo-palette);
+$letwinventory-theme-warn: mat.m2-define-palette(mat.$m2-red-palette);
 
-// Light theme
-$light-theme: mat.m2-define-light-theme((
+$letwinventory-theme: mat.m2-define-light-theme((
   color: (
-    primary: $primary-palette,
-    accent: $accent-palette,
-    warn: $warn-palette,
-  ),
-  typography: mat.m2-define-typography-config(),
-  density: 0,
+    primary: $letwinventory-theme-primary,
+    accent: $letwinventory-theme-accent,
+    warn: $letwinventory-theme-warn,
+  )
 ));
 
-// Dark theme
-$dark-theme: mat.m2-define-dark-theme((
-  color: (
-    primary: $primary-palette,
-    accent: $accent-palette,
-    warn: $warn-palette,
-  ),
-  typography: mat.m2-define-typography-config(),
-  density: 0,
-));
-
-// Apply dark theme by default
-@include mat.all-component-themes($dark-theme);
-
-// Dark theme class (default)
-.dark-theme {
-  @include mat.all-component-themes($dark-theme);
-  
-  // Custom dark theme styles
-  background-color: #303030;
-  color: #ffffff;
-
-  .mat-card {
-    background-color: #424242;
-    color: #ffffff;
-  }
-
-  .mat-form-field-label {
-    color: rgba(255, 255, 255, 0.7);
-  }
-
-  .mat-input-element {
-    color: #ffffff;
-  }
-
-  .mat-form-field-underline {
-    background-color: rgba(255, 255, 255, 0.7);
-  }
-}
-
-// Light theme class
-.light-theme {
-  @include mat.all-component-themes($light-theme);
-  
-  // Custom light theme styles
-  background-color: #fafafa;
-  color: rgba(0, 0, 0, 0.87);
-
-  .mat-card {
-    background-color: #ffffff;
-    color: rgba(0, 0, 0, 0.87);
-  }
-}
+@include mat.all-component-themes($letwinventory-theme);
 
 // Global styles
 html, body {
   height: 100%;
   margin: 0;
   font-family: Roboto, "Helvetica Neue", sans-serif;
+}
+
+* {
+  font-family: 'Roboto', sans-serif;
+  box-sizing: border-box;
+}
+
+// Light theme (default)
+body {
+  background-color: #fafafa;
+  color: rgba(0, 0, 0, 0.87);
+}
+
+// Dark theme
+body.dark-theme {
   background-color: #303030;
   color: #ffffff;
 }
 
-@import "@angular/material/prebuilt-themes/indigo-pink.css";
-
-* {
-    font-family: 'Roboto', sans-serif;
-}
-
-@media only screen and (max-width: 800px) {
-    body {
-        font-size: 2vmin
-    }
-}
-
+// Utility classes
 .full-width {
-    width: 100%;
-    display: flex;
+  width: 100%;
+  display: flex;
 }
 
 .half-width {
-    width: 50%;
+  width: 50%;
 }
 
 .flex-row {
-    display: flex;
-    flex-direction: row;
-    width: 100%;
+  display: flex;
+  flex-direction: row;
+  width: 100%;
 }
 
 .flex-column {
-    display: flex;
-    flex-direction: column;
+  display: flex;
+  flex-direction: column;
 }
 
 .flex-grow {
-    flex-grow: 1;
+  flex-grow: 1;
+}
+
+// Responsive adjustments
+@media (max-width: 600px) {
+  .half-width {
+    width: 100%;
+  }
+  
+  .mat-mdc-card {
+    margin: 0.5rem;
+    padding: 0.5rem;
+  }
+}
+
+@media only screen and (max-width: 800px) {
+  body {
+    font-size: 2vmin;
+  }
 }
