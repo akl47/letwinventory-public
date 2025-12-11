@@ -12,16 +12,12 @@
         </div>
     </button>
     <!--Add Additional Pages Here-->
-    <button *ngIf="auth.isAuthenticated" mat-button routerLink="/tasks">Tasks</button>
+    <button *ngIf="auth.isAuthenticated" mat-button routerLink="/tasks">Plan</button>
     <span style="flex: 1 1 auto"></span>
     <!--Right Aligned-->
     <button *ngIf="!auth.isAuthenticated" mat-button (click)='login()'>Log In</button>
     <button *ngIf="auth.isAuthenticated" mat-button routerLink="/user">Welcome {{auth.displayName}}</button>
     <button *ngIf="auth.isAuthenticated" mat-button (click)="auth.logout()">Log Out</button>
-
-    <button mat-icon-button (click)="themeService.toggleTheme()" matTooltip="Toggle theme">
-        <mat-icon>{{ (themeService.isDarkTheme$ | async) ? 'light_mode' : 'dark_mode' }}</mat-icon>
-    </button>
     <button *ngIf="auth.isAuthenticated" mat-icon-button (click)="togglePomodoro()" matTooltip="Toggle Pomodoro">
         <mat-icon>timer</mat-icon>
     </button>
