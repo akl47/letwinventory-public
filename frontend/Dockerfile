@@ -1,15 +1,15 @@
 FROM node:24-alpine
 
-WORKDIR /usr/src/
-COPY package*.json ./
+WORKDIR /app
 
-# Install Angular CLI and dependencies
+# Install Angular CLI globally
 RUN npm install -g @angular/cli
-RUN npm install
 
-# Copy the rest of the application
-COPY . .
+# We expect the host to mount the volume with package.json after generation
+# But for the initial build context, we might not have it yet. 
+# This is a dev container, so we'll rely on the volume mount.
 
 EXPOSE 4200
 
-CMD ["npm", "start"]
+# Poll for changes is often needed in Docker on Windows
+CMD ["ng", "serve", "--host", "0.0.0.0", "--poll", "2000"]
