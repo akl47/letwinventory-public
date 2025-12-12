@@ -5,9 +5,11 @@ WORKDIR /app
 # Install Angular CLI globally
 RUN npm install -g @angular/cli
 
-# We expect the host to mount the volume with package.json after generation
-# But for the initial build context, we might not have it yet. 
-# This is a dev container, so we'll rely on the volume mount.
+COPY package*.json ./
+
+RUN npm install
+
+COPY . .
 
 EXPOSE 4200
 
