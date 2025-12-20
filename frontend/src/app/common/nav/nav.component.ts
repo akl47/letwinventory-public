@@ -5,12 +5,13 @@ import { MatListModule } from '@angular/material/list';
 import { MatIconModule } from '@angular/material/icon';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatButtonModule } from '@angular/material/button';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { DOCUMENT } from '@angular/common';
 
 @Component({
     selector: 'app-nav',
     templateUrl: './nav.component.html',
-    styleUrl: './nav.component.css',
+    styleUrl: './nav.component.scss',
     changeDetection: ChangeDetectionStrategy.OnPush,
     imports: [
         RouterOutlet,
@@ -21,14 +22,15 @@ import { DOCUMENT } from '@angular/common';
         MatIconModule,
         MatToolbarModule,
         MatButtonModule,
+        MatTooltipModule,
     ],
 })
 export class NavComponent {
     private readonly document = inject(DOCUMENT);
-    protected readonly isSidenavOpen = signal(true);
+    protected readonly isSidenavCollapsed = signal(false);
 
     toggleSidenav() {
-        this.isSidenavOpen.update((open) => !open);
+        this.isSidenavCollapsed.update((collapsed) => !collapsed);
     }
 
     login() {
