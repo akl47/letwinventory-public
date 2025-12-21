@@ -18,6 +18,10 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'projectID',
         as: 'project'
       });
+      Task.belongsTo(models.TaskList, {
+        foreignKey: 'taskListID',
+        as: 'taskList'
+      });
     }
   };
   Task.init({
@@ -70,6 +74,13 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM('normal', 'tracking', 'critical_path'),
       allowNull: false,
       defaultValue: 'normal'
+    },
+    rank: {
+      type: DataTypes.STRING, // Using string for Lexorank-like or simple distinct double sorting if needed, but simple float/int works too. Let's use DOUBLE for easier mid-insertion. 
+      // Actually, plan said INTEGER. Let's stick to INTEGER for simplicity and re-index on move for now. 
+      type: DataTypes.DOUBLE,
+      allowNull: false,
+      defaultValue: 0
     },
     activeFlag: {
       type: DataTypes.BOOLEAN,

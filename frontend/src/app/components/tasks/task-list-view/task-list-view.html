@@ -1,0 +1,22 @@
+<div class="board-container">
+    <div class="board-wrapper">
+        @if (taskLists$ | async; as taskLists) {
+        @for(list of taskLists; track list.id) {
+        <app-task-list [taskList]="list" [connectedLists]="(connectedListIds$ | async) || []"></app-task-list>
+        }
+        } @else {
+        <div class="loading-wrapper">
+            @for(i of [1,2,3]; track i) {
+            <div class="loading-placeholder">
+                <div class="loading-header"></div>
+                <div class="loading-content">
+                    <div class="loading-item"></div>
+                    <div class="loading-item"></div>
+                    <div class="loading-item"></div>
+                </div>
+            </div>
+            }
+        </div>
+        }
+    </div>
+</div>

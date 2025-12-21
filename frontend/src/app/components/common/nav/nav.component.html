@@ -11,13 +11,20 @@
             <a mat-list-item routerLink="/page1" routerLinkActive="active-link" matTooltip="Page 1"
                 matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
                 <mat-icon matListItemIcon>home</mat-icon>
-                <span matListItemTitle>Page 1</span>
+                <span matListItemTitle>Home</span>
             </a>
-            <a mat-list-item routerLink="/page2" routerLinkActive="active-link" matTooltip="Page 2"
+            <a mat-list-item routerLink="/tasks" routerLinkActive="active-link" matTooltip="Tasks"
+                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
+                <mat-icon matListItemIcon>checkbox</mat-icon>
+                <span matListItemTitle>Tasks</span>
+            </a>
+            @if (isAuthenticated()) {
+            <a mat-list-item routerLink="/page3" routerLinkActive="active-link" matTooltip="Page 3"
                 matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
                 <mat-icon matListItemIcon>info</mat-icon>
-                <span matListItemTitle>Page 2</span>
+                <span matListItemTitle>Page 3</span>
             </a>
+            }
         </mat-nav-list>
     </mat-sidenav>
 
@@ -28,10 +35,18 @@
             </button>
             <span class="title-text">Letwinventory</span>
             <span class="spacer"></span>
+            @if (isAuthenticated()) {
+            <span class="user-name">{{ currentUser()?.displayName }}</span>
+            <button mat-button (click)="logout()" aria-label="Logout">
+                <mat-icon>logout</mat-icon>
+                Logout
+            </button>
+            } @else {
             <button mat-button (click)="login()" aria-label="Login with Google">
                 <mat-icon>login</mat-icon>
                 Login
             </button>
+            }
         </mat-toolbar>
         <main class="content">
             <router-outlet />

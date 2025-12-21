@@ -1,0 +1,11 @@
+<div class="task-card" (click)="openDialog()">
+    <div class="task-title">{{ task.name }}</div>
+    @if (task.timeEstimate) {
+    <div class="meta-info">
+        <span class="time-estimate-badge">
+            <i class="material-icons icon-xs">schedule</i>
+            {{ task.timeEstimate }}h
+        </span>
+    </div>
+    }
+</div>

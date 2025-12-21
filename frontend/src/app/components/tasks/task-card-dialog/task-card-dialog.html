@@ -1,0 +1,156 @@
+<div class="trello-dialog">
+    <!-- Header -->
+    <div class="dialog-header">
+        <div class="header-icon">
+            <i class="material-icons">credit_card</i>
+        </div>
+        <div class="header-content">
+            <h2 class="task-title">{{ task.name }}</h2>
+            <p class="task-list-info">in list <span class="list-name">Task List</span></p>
+        </div>
+        <button class="close-btn" mat-icon-button mat-dialog-close>
+            <i class="material-icons">close</i>
+        </button>
+    </div>
+
+    <!-- Main Content -->
+    <div class="dialog-body">
+        <!-- Left Column - Main Content -->
+        <div class="main-content">
+            <!-- Labels Section -->
+            <div class="section labels-section">
+                <h3 class="section-title">Labels</h3>
+                <div class="labels-container">
+                    @switch (task.taskTypeEnum) {
+                    @case ('normal') {
+                    <span class="label label-blue">Normal</span>
+                    }
+                    @case ('tracking') {
+                    <span class="label label-yellow">Tracking</span>
+                    }
+                    @case ('critical_path') {
+                    <span class="label label-red">Critical Path</span>
+                    }
+                    }
+                    @if (task.doneFlag) {
+                    <span class="label label-green">Complete</span>
+                    }
+                </div>
+            </div>
+
+            <!-- Due Date Section -->
+            @if (task.dueDate) {
+            <div class="section due-date-section">
+                <h3 class="section-title">Due Date</h3>
+                <div class="due-date-badge" [class.overdue]="isOverdue()">
+                    <input type="checkbox" [checked]="task.doneFlag" disabled />
+                    <span class="date-text">{{ task.dueDate | date:'MMM d, yyyy' }}</span>
+                    @if (isOverdue() && !task.doneFlag) {
+                    <span class="overdue-badge">Overdue</span>
+                    }
+                    @if (task.doneFlag) {
+                    <span class="complete-badge">Complete</span>
+                    }
+                </div>
+            </div>
+            }
+
+            <!-- Description Section -->
+            <div class="section description-section">
+                <div class="section-header">
+                    <i class="material-icons">subject</i>
+                    <h3 class="section-title">Description</h3>
+                </div>
+                @if (task.description) {
+                <div class="description-content">
+                    <p>{{ task.description }}</p>
+                </div>
+                } @else {
+                <div class="description-placeholder">
+                    <p>Add a more detailed description...</p>
+                </div>
+                }
+            </div>
+
+            <!-- Activity Section -->
+            <div class="section activity-section">
+                <div class="section-header">
+                    <i class="material-icons">format_list_bulleted</i>
+                    <h3 class="section-title">Activity</h3>
+                </div>
+                <div class="activity-input">
+                    <div class="avatar-placeholder">
+                        <i class="material-icons">person</i>
+                    </div>
+                    <input type="text" placeholder="Write a comment..." class="comment-input" disabled />
+                </div>
+                <div class="activity-item">
+                    <div class="avatar-placeholder">
+                        <i class="material-icons">person</i>
+                    </div>
+                    <div class="activity-content">
+                        <span class="activity-text">Task created</span>
+                        <span class="activity-time">{{ task.createdAt | date:'MMM d, yyyy' }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column - Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-section">
+                <h4 class="sidebar-section-title">Add to card</h4>
+                <button class="sidebar-btn" disabled>
+                    <i class="material-icons">person</i>
+                    Members
+                </button>
+                <button class="sidebar-btn" disabled>
+                    <i class="material-icons">label</i>
+                    Labels
+                </button>
+                <button class="sidebar-btn" disabled>
+                    <i class="material-icons">check_box</i>
+                    Checklist
+                </button>
+                <button class="sidebar-btn" disabled>
+                    <i class="material-icons">schedule</i>
+                    Dates
+                </button>
+                <button class="sidebar-btn" disabled>
+                    <i class="material-icons">attachment</i>
+                    Attachment
+                </button>
+            </div>
+
+            @if (task.timeEstimate) {
+            <div class="sidebar-section">
+                <h4 class="sidebar-section-title">Time Estimate</h4>
+                <div class="time-estimate-display">
+                    <i class="material-icons">hourglass_empty</i>
+                    <span>{{ task.timeEstimate }}h</span>
+                </div>
+            </div>
+            }
+
+            <div class="sidebar-section">
+                <h4 class="sidebar-section-title">Actions</h4>
+                <button class="sidebar-btn" disabled>
+                    <i class="material-icons">arrow_forward</i>
+                    Move
+                </button>
+                <button class="sidebar-btn" disabled>
+                    <i class="material-icons">content_copy</i>
+                    Copy
+                </button>
+                <button class="sidebar-btn" disabled>
+                    <i class="material-icons">archive</i>
+                    Archive
+                </button>
+                <button class="sidebar-btn" disabled>
+                    <i class="material-icons">share</i>
+                    Share
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

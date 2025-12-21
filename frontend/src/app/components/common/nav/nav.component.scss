@@ -128,18 +128,26 @@
   font-weight: 500;
 }
 
-/* Main content area */
+/* Main content area - Disable default scroll */
 .sidenav-content {
   display: flex;
   flex-direction: column;
   background-color: var(--mat-sys-surface);
+  overflow: hidden;
+  /* Prevent body scroll */
 }
 
-/* Content padding */
+/* Content padding - Enable inner scroll */
 .content {
   flex: 1;
   padding: 24px;
   background-color: var(--mat-sys-surface);
+  overflow: hidden;
+  /* Disable page scroll, let children scroll */
+  position: relative;
+  display: flex;
+  /* Ensure children can flex to fill height */
+  flex-direction: column;
 }
 
 /* Top app bar - M3 styling */
@@ -159,9 +167,16 @@
   flex: 1 1 auto;
 }
 
-/* Login button styling */
+/* Login/Logout button styling */
 .nav-header button {
   color: var(--mat-sys-primary);
+}
+
+/* User name display */
+.nav-header .user-name {
+  font: var(--mat-sys-label-large);
+  color: var(--mat-sys-on-surface);
+  margin-right: 8px;
 }
 
 /* Section divider */

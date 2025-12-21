@@ -60,6 +60,11 @@ module.exports = {
         allowNull: false,
         defaultValue: "normal"
       },
+      rank: {
+        type: Sequelize.DOUBLE,
+        allowNull: false,
+        defaultValue: 0
+      },
       activeFlag: {
         type: Sequelize.BOOLEAN,
         defaultValue: true,

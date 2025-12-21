@@ -1,15 +1,22 @@
 import { Routes } from '@angular/router';
+import { authGuard } from './guards/auth.guard';
 
 export const routes: Routes = [
-    { path: '', redirectTo: 'page1', pathMatch: 'full' },
+    { path: '', redirectTo: 'home', pathMatch: 'full' },
     {
         path: 'page1',
         loadComponent: () =>
-            import('./pages/page1/page1.component').then((m) => m.Page1Component),
+            import('./components/pages/page1/page1.component').then((m) => m.Page1Component),
     },
     {
-        path: 'page2',
+        path: 'tasks',
         loadComponent: () =>
-            import('./pages/page2/page2.component').then((m) => m.Page2Component),
+            import('./components/tasks/task-list-view/task-list-view').then((m) => m.TaskListViewComponent),
+    },
+    {
+        path: 'page3',
+        loadComponent: () =>
+            import('./components/pages/page3/page3.component').then((m) => m.Page3Component),
+        canActivate: [authGuard],
     },
 ];

@@ -1,4 +1,4 @@
-const { TaskList } = require('../../../models');
+const { Task, TaskList } = require('../../../models');
 const { Op } = require('sequelize');
 
 exports.createTaskList = async (req, res) => {
@@ -14,7 +14,16 @@ exports.getAllTaskLists = async (req, res) => {
     try {
         const taskLists = await TaskList.findAll({
             where: { activeFlag: true },
-            order: [['createdAt', 'ASC']]
+            include: [{
+                model: Task,
+                as: 'tasks',
+                where: { activeFlag: true },
+                required: false
+            }],
+            order: [
+                ['createdAt', 'ASC'],
+                [{ model: Task, as: 'tasks' }, 'rank', 'ASC'] // Order tasks by rank
+            ]
         });
         res.json(taskLists);
     } catch (error) {
