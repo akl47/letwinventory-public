@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { Observable, Subject } from 'rxjs';
 import { TaskList } from '../models/task-list.model';
 import { Task } from '../models/task.model';
 
@@ -9,8 +9,14 @@ import { Task } from '../models/task.model';
 })
 export class TaskService {
     private apiUrl = 'http://localhost:3000/api/planning/tasklist';
+    private refreshTaskListsSubject = new Subject<void>();
+    refreshTaskLists$ = this.refreshTaskListsSubject.asObservable();
 
     constructor(private http: HttpClient) { }
+
+    triggerRefresh(): void {
+        this.refreshTaskListsSubject.next();
+    }
 
     getTaskLists(): Observable<TaskList[]> {
         const token = localStorage.getItem('auth_token');
@@ -33,5 +39,21 @@ export class TaskService {
             'Authorization': `Bearer ${token}`
         });
         return this.http.put<Task>(`http://localhost:3000/api/planning/task/${taskId}/move`, { taskListId, newIndex }, { headers });
+    }
+
+    updateTask(taskId: number, updates: Partial<Task>): Observable<Task> {
+        const token = localStorage.getItem('auth_token');
+        const headers = new HttpHeaders({
+            'Authorization': `Bearer ${token}`
+        });
+        return this.http.put<Task>(`http://localhost:3000/api/planning/task/${taskId}`, updates, { headers });
+    }
+
+    getTask(taskId: number): Observable<Task> {
+        const token = localStorage.getItem('auth_token');
+        const headers = new HttpHeaders({
+            'Authorization': `Bearer ${token}`
+        });
+        return this.http.get<Task>(`http://localhost:3000/api/planning/task/${taskId}`, { headers });
     }
 }

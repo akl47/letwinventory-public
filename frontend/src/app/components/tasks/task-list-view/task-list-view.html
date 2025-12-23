@@ -1,3 +1,5 @@
+<app-sub-toolbar (toggleHistory)="toggleHistory()"></app-sub-toolbar>
+<app-history-drawer [isOpen]="isHistoryOpen()" (close)="toggleHistory()"></app-history-drawer>
 <div class="board-container">
     <div class="board-wrapper">
         @if (taskLists$ | async; as taskLists) {

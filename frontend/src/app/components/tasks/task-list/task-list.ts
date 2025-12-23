@@ -66,8 +66,6 @@ export class TaskListComponent {
     const newTask: Partial<Task> = {
       name: this.newTaskName,
       taskListID: this.taskList.id,
-      projectID: 1, // Default project ID
-      taskTypeEnum: 'normal',
       activeFlag: true
     };
 
@@ -77,6 +75,7 @@ export class TaskListComponent {
           this.taskList.tasks = [];
         }
         this.taskList.tasks.push(createdTask);
+        this.taskService.triggerRefresh();
         this.cancelAddingTask();
       },
       error: (err) => {

@@ -9,7 +9,9 @@
         [cdkDropListConnectedTo]="connectedLists" (cdkDropListDropped)="drop($event)">
 
         @for(task of taskList.tasks; track task.id) {
+        @if (!task.doneFlag) {
         <app-task-card [task]="task" cdkDrag></app-task-card>
+        }
         }
 
         @if (isAddingTask()) {

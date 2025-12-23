@@ -2,11 +2,24 @@
     <!-- Header -->
     <div class="dialog-header">
         <div class="header-icon">
-            <i class="material-icons">credit_card</i>
+            <input type="checkbox" class="header-checkbox" [checked]="task.doneFlag" (change)="toggleComplete()" />
         </div>
         <div class="header-content">
-            <h2 class="task-title">{{ task.name }}</h2>
-            <p class="task-list-info">in list <span class="list-name">Task List</span></p>
+            <h2 class="task-title" [class.completed]="task.doneFlag">{{ task.name }}</h2>
+            <p class="task-list-info">in list <span class="list-name clickable-text" [matMenuTriggerFor]="listMenu">{{
+                    currentListName() }}</span></p>
+
+            <mat-menu #listMenu="matMenu" class="list-selection-menu">
+                <div class="menu-header">Move to list</div>
+                @for (list of taskLists(); track list.id) {
+                <button mat-menu-item (click)="moveToList(list)" [class.selected]="list.id === task.taskListID">
+                    {{ list.name }}
+                    @if (list.id === task.taskListID) {
+                    <i class="material-icons check-icon">check</i>
+                    }
+                </button>
+                }
+            </mat-menu>
         </div>
         <button class="close-btn" mat-icon-button mat-dialog-close>
             <i class="material-icons">close</i>
@@ -19,22 +32,65 @@
         <div class="main-content">
             <!-- Labels Section -->
             <div class="section labels-section">
-                <h3 class="section-title">Labels</h3>
                 <div class="labels-container">
-                    @switch (task.taskTypeEnum) {
-                    @case ('normal') {
-                    <span class="label label-blue">Normal</span>
-                    }
-                    @case ('tracking') {
-                    <span class="label label-yellow">Tracking</span>
-                    }
-                    @case ('critical_path') {
-                    <span class="label label-red">Critical Path</span>
-                    }
-                    }
-                    @if (task.doneFlag) {
-                    <span class="label label-green">Complete</span>
-                    }
+                    <!-- Task Type Label with Dropdown -->
+                    <span class="label clickable-label" [ngClass]="{
+                            'label-blue': task.taskTypeEnum === 'normal',
+                            'label-yellow': task.taskTypeEnum === 'tracking',
+                            'label-red': task.taskTypeEnum === 'critical_path'
+                          }" [matMenuTriggerFor]="labelMenu">
+                        @switch (task.taskTypeEnum) {
+                        @case ('normal') { Normal }
+                        @case ('tracking') { Tracking }
+                        @case ('critical_path') { Critical Path }
+                        }
+                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+                    </span>
+
+                    <!-- Label Dropdown Menu -->
+                    <mat-menu #labelMenu="matMenu" class="label-menu">
+                        @for (option of labelOptions; track option.value) {
+                        <button mat-menu-item (click)="selectLabel(option)"
+                            [class.selected]="task.taskTypeEnum === option.value">
+                            <span class="menu-label" [ngClass]="option.colorClass">
+                                {{ option.label }}
+                            </span>
+                            @if (task.taskTypeEnum === option.value) {
+                            <i class="material-icons check-icon">check</i>
+                            }
+                        </button>
+                        }
+                    </mat-menu>
+
+
+                    <!-- Project Tag with Dropdown -->
+                    <span class="label project-label clickable-label"
+                        [style.background-color]="currentProject() ? '#' + currentProject()?.tagColorHex : '#454f59'"
+                        [matMenuTriggerFor]="projectMenu">
+                        {{ currentProject() ? currentProject()?.name : 'Add Project' }}
+                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+                    </span>
+
+                    <mat-menu #projectMenu="matMenu" class="project-menu">
+                        <div class="menu-header">Change Project</div>
+                        <button mat-menu-item (click)="selectProject(null)" [class.selected]="!task.projectID">
+                            <span class="project-dot none-dot"></span>
+                            None
+                            @if (!task.projectID) {
+                            <i class="material-icons check-icon">check</i>
+                            }
+                        </button>
+                        @for (project of projects(); track project.id) {
+                        <button mat-menu-item (click)="selectProject(project)"
+                            [class.selected]="project.id === task.projectID">
+                            <span class="project-dot" [style.background-color]="'#' + project.tagColorHex"></span>
+                            {{ project.name }}
+                            @if (project.id === task.projectID) {
+                            <i class="material-icons check-icon">check</i>
+                            }
+                        </button>
+                        }
+                    </mat-menu>
                 </div>
             </div>
 
@@ -47,9 +103,6 @@
                     <span class="date-text">{{ task.dueDate | date:'MMM d, yyyy' }}</span>
                     @if (isOverdue() && !task.doneFlag) {
                     <span class="overdue-badge">Overdue</span>
-                    }
-                    @if (task.doneFlag) {
-                    <span class="complete-badge">Complete</span>
                     }
                 </div>
             </div>
@@ -70,86 +123,6 @@
                     <p>Add a more detailed description...</p>
                 </div>
                 }
-            </div>
-
-            <!-- Activity Section -->
-            <div class="section activity-section">
-                <div class="section-header">
-                    <i class="material-icons">format_list_bulleted</i>
-                    <h3 class="section-title">Activity</h3>
-                </div>
-                <div class="activity-input">
-                    <div class="avatar-placeholder">
-                        <i class="material-icons">person</i>
-                    </div>
-                    <input type="text" placeholder="Write a comment..." class="comment-input" disabled />
-                </div>
-                <div class="activity-item">
-                    <div class="avatar-placeholder">
-                        <i class="material-icons">person</i>
-                    </div>
-                    <div class="activity-content">
-                        <span class="activity-text">Task created</span>
-                        <span class="activity-time">{{ task.createdAt | date:'MMM d, yyyy' }}</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Right Column - Sidebar -->
-        <div class="sidebar">
-            <div class="sidebar-section">
-                <h4 class="sidebar-section-title">Add to card</h4>
-                <button class="sidebar-btn" disabled>
-                    <i class="material-icons">person</i>
-                    Members
-                </button>
-                <button class="sidebar-btn" disabled>
-                    <i class="material-icons">label</i>
-                    Labels
-                </button>
-                <button class="sidebar-btn" disabled>
-                    <i class="material-icons">check_box</i>
-                    Checklist
-                </button>
-                <button class="sidebar-btn" disabled>
-                    <i class="material-icons">schedule</i>
-                    Dates
-                </button>
-                <button class="sidebar-btn" disabled>
-                    <i class="material-icons">attachment</i>
-                    Attachment
-                </button>
-            </div>
-
-            @if (task.timeEstimate) {
-            <div class="sidebar-section">
-                <h4 class="sidebar-section-title">Time Estimate</h4>
-                <div class="time-estimate-display">
-                    <i class="material-icons">hourglass_empty</i>
-                    <span>{{ task.timeEstimate }}h</span>
-                </div>
-            </div>
-            }
-
-            <div class="sidebar-section">
-                <h4 class="sidebar-section-title">Actions</h4>
-                <button class="sidebar-btn" disabled>
-                    <i class="material-icons">arrow_forward</i>
-                    Move
-                </button>
-                <button class="sidebar-btn" disabled>
-                    <i class="material-icons">content_copy</i>
-                    Copy
-                </button>
-                <button class="sidebar-btn" disabled>
-                    <i class="material-icons">archive</i>
-                    Archive
-                </button>
-                <button class="sidebar-btn" disabled>
-                    <i class="material-icons">share</i>
-                    Share
-                </button>
             </div>
         </div>
     </div>

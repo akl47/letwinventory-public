@@ -33,7 +33,7 @@
 .loading-placeholder {
     width: 20rem;
     /* w-80 */
-    background-color: #f3f4f6;
+    background-color: rgba(255, 255, 255, .1);
     /* bg-gray-100 */
     border-radius: 0.5rem;
     height: 24rem;
@@ -44,7 +44,8 @@
 
 .loading-header {
     height: 1.5rem;
-    background-color: #d1d5db;
+
+    background-color: rgba(255, 255, 255, .1);
     /* bg-gray-300 */
     border-radius: 0.25rem;
     width: 50%;
@@ -59,7 +60,7 @@
 
 .loading-item {
     height: 5rem;
-    background-color: #e5e7eb;
+    background-color: rgba(255, 255, 255, .1);
     /* bg-gray-200 */
     border-radius: 0.25rem;
 }

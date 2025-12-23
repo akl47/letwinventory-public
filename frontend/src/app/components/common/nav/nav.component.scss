@@ -140,7 +140,7 @@
 /* Content padding - Enable inner scroll */
 .content {
   flex: 1;
-  padding: 24px;
+  padding: 0;
   background-color: var(--mat-sys-surface);
   overflow: hidden;
   /* Disable page scroll, let children scroll */

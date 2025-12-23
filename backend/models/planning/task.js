@@ -37,8 +37,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     projectID: {
       type: DataTypes.INTEGER,
-      allowNull: false,
-      defaultValue: 1
+      allowNull: true,
     },
     taskListID: {
       type: DataTypes.INTEGER,

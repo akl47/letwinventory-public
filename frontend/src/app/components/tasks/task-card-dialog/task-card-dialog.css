@@ -18,10 +18,17 @@
 .header-icon {
     color: rgba(255, 255, 255, 0.6);
     padding-top: 4px;
+    display: flex;
+    align-items: center;
 }
 
-.header-icon .material-icons {
-    font-size: 24px;
+.header-checkbox {
+    width: 24px;
+    height: 24px;
+    cursor: pointer;
+    accent-color: #579dff;
+    margin: 0;
+    border-radius: 4px;
 }
 
 .header-content {
@@ -32,10 +39,17 @@
 .task-title {
     margin: 0;
     font-size: 20px;
-    font-weight: 600;
+    font-weight: 500;
     color: #b6c2cf;
     line-height: 1.4;
     word-wrap: break-word;
+    transition: all 0.2s ease;
+}
+
+.task-title.completed {
+    text-decoration: line-through;
+    color: #8c9bab;
+    opacity: 0.8;
 }
 
 .task-list-info {
@@ -47,6 +61,7 @@
 .list-name {
     text-decoration: underline;
     cursor: pointer;
+    transition: color 0.2s ease;
 }
 
 .list-name:hover {
@@ -104,7 +119,7 @@
 
 .section-title {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: rgba(255, 255, 255, 0.6);
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -130,7 +145,7 @@
     padding: 4px 12px;
     border-radius: 4px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: #1d2125;
 }
 
@@ -148,6 +163,47 @@
 
 .label-green {
     background-color: #4bce97;
+}
+
+/* Clickable Label Styles */
+.clickable-label {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    transition: filter 0.15s ease, transform 0.15s ease;
+}
+
+.clickable-label:hover {
+    filter: brightness(1.1);
+    transform: translateY(-1px);
+}
+
+.clickable-label:active {
+    transform: translateY(0);
+}
+
+.dropdown-icon {
+    font-size: 18px !important;
+    margin-left: -4px;
+    margin-right: -6px;
+}
+
+/* Label Menu Styles */
+.menu-label {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #1d2125;
+    min-width: 80px;
+    text-align: center;
+}
+
+.check-icon {
+    font-size: 18px;
+    color: #4bce97;
+    margin-left: auto;
 }
 
 /* Due Date */
@@ -186,7 +242,7 @@
     padding: 2px 6px;
     border-radius: 3px;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .complete-badge {
@@ -195,7 +251,7 @@
     padding: 2px 6px;
     border-radius: 3px;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 /* Description */
@@ -310,7 +366,7 @@
 
 .sidebar-section-title {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: rgba(255, 255, 255, 0.6);
     margin: 0 0 8px;
 }
@@ -378,4 +434,71 @@
 
 .trello-dialog::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.3);
+}
+
+/* List Selection Menu */
+::ng-deep .list-selection-menu.mat-mdc-menu-panel {
+    background-color: #282e33 !important;
+    border: 1px solid #454f59 !important;
+    min-width: 240px !important;
+}
+
+.menu-header {
+    padding: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #9fadbc;
+    text-align: center;
+    border-bottom: 1px solid #454f59;
+    margin-bottom: 8px;
+}
+
+::ng-deep .list-selection-menu .mat-mdc-menu-item {
+    color: #b6c2cf !important;
+    min-height: 40px !important;
+}
+
+::ng-deep .list-selection-menu .mat-mdc-menu-item:hover {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+::ng-deep .list-selection-menu .mat-mdc-menu-item.selected {
+    color: #579dff !important;
+}
+
+/* Project Label and Menu */
+.project-label {
+    background-color: #454f59;
+    color: #fff;
+}
+
+::ng-deep .project-menu.mat-mdc-menu-panel {
+    background-color: #282e33 !important;
+    border: 1px solid #454f59 !important;
+    min-width: 200px !important;
+}
+
+.project-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 8px;
+}
+
+.none-dot {
+    background-color: transparent;
+    border: 1px dashed rgba(255, 255, 255, 0.3);
+}
+
+::ng-deep .project-menu .mat-mdc-menu-item {
+    color: #b6c2cf !important;
+}
+
+::ng-deep .project-menu .mat-mdc-menu-item:hover {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+::ng-deep .project-menu .mat-mdc-menu-item.selected {
+    color: #579dff !important;
 }

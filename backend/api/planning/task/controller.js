@@ -1,4 +1,4 @@
-const { Task, User } = require('../../../models');
+const { Task, User, TaskHistory, TaskList } = require('../../../models');
 const { Op } = require('sequelize');
 
 exports.createTask = async (req, res) => {
@@ -14,6 +14,15 @@ exports.createTask = async (req, res) => {
             rank: newRank,
             ownerUserID: req.user.id // Set the owner to the current user
         });
+
+        await TaskHistory.create({
+            taskID: task.id,
+            userID: req.user.id,
+            actionID: 5,
+            fromID: 0,
+            toID: task.taskListID
+        });
+
         res.status(201).json(task);
     } catch (error) {
         res.status(400).json({ error: error.message });
@@ -76,7 +85,44 @@ exports.updateTask = async (req, res) => {
         if (!task) {
             return res.status(404).json({ error: 'Task not found' });
         }
+        const oldData = { ...task.get() };
         await task.update(req.body);
+
+        // Tracked Actions:
+        // 2: ADD_TO_PROJECT
+        if (req.body.projectID !== undefined && req.body.projectID !== oldData.projectID) {
+            await TaskHistory.create({
+                taskID: task.id,
+                userID: req.user.id,
+                actionID: 2,
+                fromID: oldData.projectID || 0,
+                toID: req.body.projectID || 0
+            });
+        }
+
+        // 3: ADD_PRIORITY
+        if (req.body.taskTypeEnum !== undefined && req.body.taskTypeEnum !== oldData.taskTypeEnum) {
+            const priorityMap = { 'normal': 0, 'tracking': 1, 'critical_path': 2 };
+            await TaskHistory.create({
+                taskID: task.id,
+                userID: req.user.id,
+                actionID: 3,
+                fromID: priorityMap[oldData.taskTypeEnum] ?? 0,
+                toID: priorityMap[req.body.taskTypeEnum] ?? 0
+            });
+        }
+
+        // 4: CHANGE_STATUS
+        if (req.body.doneFlag !== undefined && req.body.doneFlag !== oldData.doneFlag) {
+            await TaskHistory.create({
+                taskID: task.id,
+                userID: req.user.id,
+                actionID: 4,
+                fromID: oldData.doneFlag ? 1 : 0,
+                toID: req.body.doneFlag ? 1 : 0
+            });
+        }
+
         res.json(task);
     } catch (error) {
         res.status(400).json({ error: error.message });
@@ -106,14 +152,11 @@ exports.moveTask = async (req, res) => {
             return res.status(404).json({ error: 'Task not found' });
         }
 
-        // Logic to calculate new rank
-        // This assumes the frontend sends the index where the task was dropped
-        // We need to find the tasks bounding the new position
         const tasksInList = await Task.findAll({
             where: {
                 taskListID: taskListId,
                 activeFlag: true,
-                id: { [Op.ne]: taskId } // Exclude current task if same list
+                id: { [Op.ne]: taskId }
             },
             order: [['rank', 'ASC']]
         });
@@ -131,13 +174,25 @@ exports.moveTask = async (req, res) => {
             newRank = (prevRank + nextRank) / 2;
         }
 
+        const oldListId = task.taskListID;
         await task.update({
             taskListID: taskListId,
             rank: newRank
         });
 
+        // 1: MOVE_LIST
+        if (oldListId !== parseInt(taskListId)) {
+            await TaskHistory.create({
+                taskID: taskId,
+                userID: req.user.id,
+                actionID: 1,
+                fromID: oldListId,
+                toID: parseInt(taskListId)
+            });
+        }
+
         res.json(task);
     } catch (error) {
         res.status(400).json({ error: error.message });
     }
-}; 
+};

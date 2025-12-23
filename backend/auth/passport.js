@@ -20,7 +20,7 @@ passport.use(
       try {
         // Find or create user in database
         let user = await db.User.findOne({ where: { email: profile.emails[0].value } });
-        
+
         if (!user) {
           user = await db.User.create({
             email: profile.emails[0].value,
@@ -32,18 +32,18 @@ passport.use(
 
         // Generate JWT token
         const token = jwt.sign(
-          { 
+          {
             id: user.id,
             email: user.email,
             displayName: user.displayName
           },
           process.env.JWT_SECRET,
-          { expiresIn: '1h' }
+          { expiresIn: '24h' }
         );
 
         // Attach token to user object
         user.token = token;
-        
+
         return done(null, user);
       } catch (error) {
         console.error("Google OAuth Error:", error);
@@ -56,7 +56,7 @@ passport.use(
 // JWT verification middleware
 const verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
-  
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'No token provided' });
   }

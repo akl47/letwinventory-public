@@ -18,8 +18,7 @@ module.exports = {
       },
       projectID: {
         type: Sequelize.INTEGER,
-        allowNull: false,
-        defaultValue: 1
+        allowNull: true
       },
       taskListID: {
         type: Sequelize.INTEGER,

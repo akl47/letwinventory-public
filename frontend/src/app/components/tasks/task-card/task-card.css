@@ -26,6 +26,13 @@
     /* text-gray-800 */
 }
 
+.project-dot {
+    width: 32px;
+    height: 8px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+}
+
 .meta-info {
     margin-top: 0.5rem;
     /* mt-2 */

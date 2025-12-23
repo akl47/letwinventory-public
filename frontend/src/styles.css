@@ -38,8 +38,8 @@ body {
 }
 
 .cdk-drag-placeholder {
-    background-color: rgba(0, 100, 255, 0.15);
-    border: 2px dashed rgba(0, 100, 255, 0.4);
+    background-color: rgba(0, 0, 0, 0.2);
+    border: none;
     border-radius: 0.5rem;
     min-height: 50px;
     margin-bottom: 0.5rem;

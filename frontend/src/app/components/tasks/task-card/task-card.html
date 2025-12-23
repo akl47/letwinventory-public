@@ -1,10 +1,13 @@
 <div class="task-card" (click)="openDialog()">
-    <div class="task-title">{{ task.name }}</div>
-    @if (task.timeEstimate) {
+    @if (projectColor()) {
+    <div class="project-dot" [style.background-color]="projectColor()"></div>
+    }
+    <div class="task-title">{{ task().name }}</div>
+    @if (task().timeEstimate) {
     <div class="meta-info">
         <span class="time-estimate-badge">
             <i class="material-icons icon-xs">schedule</i>
-            {{ task.timeEstimate }}h
+            {{ task().timeEstimate }}h
         </span>
     </div>
     }
