@@ -1,0 +1,205 @@
+/* Sidenav Container - Full viewport height */
+.sidenav-container {
+  height: 100vh;
+}
+
+/* Sidenav - M3 Navigation Drawer styling */
+.sidenav {
+  width: 240px;
+  background-color: var(--mat-sys-surface-container-low);
+  border-right: none;
+  padding: 12px;
+  box-sizing: border-box;
+  transition: width 0.2s ease;
+
+  &.collapsed {
+    width: 90px;
+    overflow-x: hidden;
+
+    /* Hide header title when collapsed */
+    .sidenav-header .title {
+      display: none;
+    }
+
+    /* Center the header */
+    .sidenav-header {
+      justify-content: center;
+      padding: 16px 8px 28px 8px;
+    }
+
+    /* Hide nav item text when collapsed */
+    ::ng-deep .mat-mdc-list-item-title {
+      display: none;
+    }
+
+    /* Make nav items circular icon buttons */
+    ::ng-deep .mat-mdc-list-item {
+      width: 56px;
+      min-width: 56px;
+      padding: 0;
+      margin: 0 auto 4px auto;
+      justify-content: center;
+    }
+
+    /* Center icons and remove margin */
+    ::ng-deep .mat-mdc-list-item .mat-icon {
+      margin-right: 0;
+    }
+
+    /* Center the nav list */
+    ::ng-deep .mat-mdc-nav-list {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+  }
+}
+
+/* Header section with logo/title */
+.sidenav-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 16px 28px 16px;
+}
+
+.sidenav-header .logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--mat-sys-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mat-sys-on-primary);
+  font-weight: 500;
+  font-size: 14px;
+  overflow: hidden;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+}
+
+.sidenav-header .title {
+  font: var(--mat-sys-title-small);
+  color: var(--mat-sys-on-surface);
+  font-weight: 500;
+}
+
+/* M3 Navigation list styling */
+.sidenav ::ng-deep .mat-mdc-nav-list {
+  padding: 0;
+}
+
+/* M3 Navigation item - pill-shaped with proper states */
+.sidenav ::ng-deep .mat-mdc-list-item {
+  border-radius: 28px;
+  margin-bottom: 4px;
+  height: 56px;
+  padding: 0 24px 0 16px;
+  transition: background-color 0.2s ease;
+}
+
+/* Hover state */
+.sidenav ::ng-deep .mat-mdc-list-item:hover {
+  background-color: var(--mat-sys-surface-container-high);
+}
+
+/* Active link - M3 style with secondary container */
+.sidenav ::ng-deep .active-link {
+  background-color: var(--mat-sys-secondary-container) !important;
+}
+
+.sidenav ::ng-deep .active-link .mat-mdc-list-item-title {
+  color: var(--mat-sys-on-secondary-container);
+  font-weight: 500;
+}
+
+.sidenav ::ng-deep .active-link .mat-icon {
+  color: var(--mat-sys-on-secondary-container);
+}
+
+/* Icon styling */
+.sidenav ::ng-deep .mat-mdc-list-item .mat-icon {
+  color: var(--mat-sys-on-surface-variant);
+  margin-right: 12px;
+}
+
+/* Title text styling */
+.sidenav ::ng-deep .mat-mdc-list-item-title {
+  font: var(--mat-sys-label-large);
+  color: var(--mat-sys-on-surface-variant);
+  font-weight: 500;
+}
+
+/* Main content area - Disable default scroll */
+.sidenav-content {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--mat-sys-surface);
+  overflow: hidden;
+  /* Prevent body scroll */
+}
+
+/* Content padding - Enable inner scroll */
+.content {
+  flex: 1;
+  padding: 0;
+  background-color: var(--mat-sys-surface);
+  overflow: hidden;
+  /* Disable page scroll, let children scroll */
+  position: relative;
+  display: flex;
+  /* Ensure children can flex to fill height */
+  flex-direction: column;
+}
+
+/* Top app bar - M3 styling */
+.nav-header {
+  background-color: var(--mat-sys-surface);
+  color: var(--mat-sys-on-surface);
+  border-bottom: 1px solid var(--mat-sys-surface-variant);
+}
+
+.nav-header .title-text {
+  font: var(--mat-sys-title-large);
+  margin-left: 8px;
+}
+
+/* Spacer for flexbox alignment */
+.spacer {
+  flex: 1 1 auto;
+}
+
+/* Login/Logout button styling */
+.nav-header button {
+  color: var(--mat-sys-primary);
+}
+
+/* User name display */
+.nav-header .user-name {
+  font: var(--mat-sys-label-large);
+  color: var(--mat-sys-on-surface);
+  margin-right: 8px;
+}
+
+/* Section divider */
+.section-divider {
+  height: 1px;
+  background-color: var(--mat-sys-outline-variant);
+  margin: 16px 16px;
+}
+
+/* Section label */
+.section-label {
+  font: var(--mat-sys-title-small);
+  color: var(--mat-sys-on-surface-variant);
+  padding: 16px 16px 8px 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 11px;
+  font-weight: 500;
+}

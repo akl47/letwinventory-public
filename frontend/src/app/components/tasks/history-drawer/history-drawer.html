@@ -1,0 +1,51 @@
+<div class="history-drawer" [class.open]="isOpen">
+    <div class="drawer-header">
+        <div class="header-content">
+            <mat-icon>history</mat-icon>
+            <h3>History</h3>
+        </div>
+        <button mat-icon-button (click)="close.emit()">
+            <mat-icon>close</mat-icon>
+        </button>
+    </div>
+
+    <div class="drawer-body" #drawerBody (scroll)="onScroll($event)">
+        @for (item of history; track item.id) {
+        <div class="history-item">
+            <div class="user-avatar">
+                @if (item.user?.photoURL) {
+                <img [src]="item.user?.photoURL" [alt]="item.user?.displayName">
+                } @else {
+                <div class="avatar-placeholder">{{ item.user?.displayName?.charAt(0) }}</div>
+                }
+            </div>
+            <div class="item-content">
+                <div class="item-text">
+                    <span class="user-name">{{ item.user?.displayName }}</span>
+                    <span class="action-text">{{ getActionLabel(item.actionID) }} on </span>
+                    <span class="task-name clickable" (click)="openTaskCard(item.taskID)">{{ item.task?.name }}</span>
+                </div>
+                @if (item.actionID !== TaskActionID.CREATED) {
+                <div class="item-details">
+                    <span class="from-val">{{ getLabel(item, 'from') }}</span>
+                    <mat-icon class="arrow-icon">arrow_forward</mat-icon>
+                    <span class="to-val">{{ getLabel(item, 'to') }}</span>
+                </div>
+                }
+                <div class="item-time">{{ item.createdAt | date:'MMM d, h:mm a' }}</div>
+            </div>
+        </div>
+        } @empty {
+        @if (!isLoading) {
+        <div class="empty-state">No activity yet.</div>
+        }
+        }
+
+        @if (isLoading) {
+        <div class="loading-more">
+            <mat-spinner diameter="30"></mat-spinner>
+            <span>Loading more...</span>
+        </div>
+        }
+    </div>
+</div>

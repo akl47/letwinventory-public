@@ -1,0 +1,284 @@
+<div class="trello-dialog">
+    <!-- Header -->
+    <div class="dialog-header">
+        <div class="header-icon">
+            <input type="checkbox" class="header-checkbox" [checked]="task().doneFlag"
+                (click)="$event.preventDefault(); toggleComplete()" />
+        </div>
+        <div class="header-content">
+            @if (isEditingTitle()) {
+            <input type="text" class="title-input" [(ngModel)]="titleDraft" (keyup.enter)="updateTitle()"
+                (blur)="updateTitle()" autoFocus />
+            } @else {
+            <h2 class="task-title" [class.completed]="task().doneFlag" (click)="toggleEditTitle()">{{ task().name }}
+            </h2>
+            }
+            <p class="task-list-info">in list <span class="list-name clickable-text" [matMenuTriggerFor]="listMenu">{{
+                    currentListName() }}</span></p>
+
+            <mat-menu #listMenu="matMenu" class="list-selection-menu">
+                <div class="menu-header">Move to list</div>
+                @for (list of taskLists(); track list.id) {
+                <button mat-menu-item (click)="moveToList(list)" [class.selected]="list.id === task().taskListID">
+                    {{ list.name }}
+                    @if (list.id === task().taskListID) {
+                    <i class="material-icons check-icon">check</i>
+                    }
+                </button>
+                }
+            </mat-menu>
+        </div>
+        <button class="close-btn" mat-icon-button mat-dialog-close>
+            <i class="material-icons">close</i>
+        </button>
+    </div>
+
+    <!-- Main Content -->
+    <div class="dialog-body">
+        <!-- Left Column - Main Content -->
+        <div class="main-content">
+            <!-- Labels Section -->
+            <div class="section labels-section">
+                <div class="labels-container">
+                    <!-- Task Type Label with Dropdown -->
+                    <span class="label clickable-label" [ngClass]="{
+                            'label-blue': task().taskTypeEnum === 'normal',
+                            'label-yellow': task().taskTypeEnum === 'tracking',
+                            'label-red': task().taskTypeEnum === 'critical_path'
+                          }" [matMenuTriggerFor]="labelMenu">
+                        @switch (task().taskTypeEnum) {
+                        @case ('normal') { Normal }
+                        @case ('tracking') { Tracking }
+                        @case ('critical_path') { Critical Path }
+                        }
+                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+                    </span>
+
+                    <!-- Label Dropdown Menu -->
+                    <mat-menu #labelMenu="matMenu" class="label-menu">
+                        <div class="menu-header">Change Label</div>
+                        @for (option of labelOptions; track option.value) {
+                        <button mat-menu-item (click)="selectLabel(option)"
+                            [class.selected]="task().taskTypeEnum === option.value">
+                            <span class="menu-label" [ngClass]="option.colorClass">
+                                {{ option.label }}
+                            </span>
+                            @if (task().taskTypeEnum === option.value) {
+                            <i class="material-icons check-icon">check</i>
+                            }
+                        </button>
+                        }
+                    </mat-menu>
+
+
+                    <!-- Project Tag with Dropdown -->
+                    <span class="label project-label clickable-label"
+                        [style.background-color]="currentProject() ? '#' + currentProject()?.tagColorHex : null"
+                        [matMenuTriggerFor]="projectMenu">
+                        @if(currentProject()) {
+                        {{ currentProject()?.name }}
+                        } @else {
+                        <i class="material-icons dropdown-icon">add</i>
+                        &nbsp;
+                        Add Project
+                        }
+                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+                    </span>
+
+                    <mat-menu #projectMenu="matMenu" class="project-menu">
+                        <div class="menu-header">Change Project</div>
+                        <button mat-menu-item (click)="selectProject(null)" [class.selected]="!task().projectID">
+                            <span class="project-dot none-dot"></span>
+                            None
+                            @if (!task().projectID) {
+                            <i class="material-icons check-icon">check</i>
+                            }
+                        </button>
+                        @for (project of projects(); track project.id) {
+                        <button mat-menu-item (click)="selectProject(project)"
+                            [class.selected]="project.id === task().projectID">
+                            <span class="project-dot" [style.background-color]="'#' + project.tagColorHex"></span>
+                            {{ project.name }}
+                            @if (project.id === task().projectID) {
+                            <i class="material-icons check-icon">check</i>
+                            }
+                        </button>
+                        }
+                    </mat-menu>
+
+                    <!-- Due Date Label -->
+                    <span class="label date-label clickable-label" [class.overdue]="isOverdue()"
+                        [matMenuTriggerFor]="dateMenu" #dateTrigger="matMenuTrigger" (click)="openDateMenu()">
+                        <i class="material-icons left-icon">calendar_today</i>
+                        {{ task().dueDate ? (task().dueDate | date:'MMM d, yyyy, h:mm a') : 'Due Date' }}
+                        &nbsp;
+                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+
+                    </span>
+
+                    <mat-menu #dateMenu="matMenu" class="date-menu">
+                        <div class="date-picker-menu-content" (click)="$event.stopPropagation()">
+                            <div class="menu-header">Dates</div>
+
+                            <div class="calendar-container">
+                                <mat-calendar [selected]="selectedDate()" (selectedChange)="selectedDate.set($event)">
+                                </mat-calendar>
+                            </div>
+
+                            <div class="time-container">
+                                <h4 class="time-title">Time</h4>
+                                <input type="time" class="time-input" [ngModel]="selectedTime()"
+                                    (ngModelChange)="selectedTime.set($event)">
+                            </div>
+
+                            <div class="menu-actions">
+                                <button mat-raised-button color="primary"
+                                    (click)="saveDueDate(); dateTrigger.closeMenu()">Save</button>
+                                <button mat-button class="remove-btn"
+                                    (click)="removeDueDate(); dateTrigger.closeMenu()">Remove</button>
+                            </div>
+                        </div>
+                    </mat-menu>
+
+                    <!-- Time Estimate Label -->
+                    <span class="label estimate-label clickable-label" [matMenuTriggerFor]="estimateMenu"
+                        #estimateTrigger="matMenuTrigger">
+                        <i class="material-icons left-icon">timer</i>
+                        {{ task().timeEstimate ? formatEstimate(task().timeEstimate) : 'Estimate' }}
+                        &nbsp;
+                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+                    </span>
+
+                    <mat-menu #estimateMenu="matMenu" class="estimate-menu">
+                        <div class="menu-header">Estimate</div>
+                        <div class="menu-options-scroll">
+                            @for (opt of estimateOptions; track opt) {
+                            <button mat-menu-item (click)="updateEstimate(opt); estimateTrigger.closeMenu()"
+                                [class.selected]="opt === task().timeEstimate">
+                                {{ formatEstimate(opt) }}
+                                @if (opt === task().timeEstimate) {
+                                <i class="material-icons check-icon">check</i>
+                                }
+                            </button>
+                            }
+                        </div>
+                        @if (task().timeEstimate) {
+                        <div class="menu-divider"></div>
+                        <button mat-menu-item (click)="removeEstimate(); estimateTrigger.closeMenu()"
+                            class="remove-btn">
+                            Remove Estimate
+                        </button>
+                        }
+                    </mat-menu>
+
+                    <!-- Add Subtask Label -->
+                    <span class="label clickable-label subtask-add-label" (click)="toggleSubtasks()">
+                        <i class="material-icons left-icon">add_task</i>
+                        Add Subtask
+                        &nbsp;
+                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+                    </span>
+                </div>
+            </div>
+
+            <!-- Subtasks Section -->
+            @if (showSubtasks()) {
+            <div class="section subtasks-section">
+                <div class="section-header">
+                    <i class="material-icons">checklist</i>
+                    <h3 class="section-title">Subtasks</h3>
+                    @if (subtasks().length > 0) {
+                    <span class="subtask-count">{{ subtasks().length }} subtasks</span>
+                    }
+                    <div class="flex-spacer"></div>
+                    <mat-slide-toggle class="auto-complete-toggle" [checked]="task().completeWithChildren"
+                        (change)="toggleCompleteWithChildren()" matTooltip="Auto-complete when all subtasks are done">
+                        Auto-complete
+                    </mat-slide-toggle>
+                    <button mat-button class="link-existing-btn" [matMenuTriggerFor]="linkMenu">
+                        <i class="material-icons">link</i>
+                        Link Existing
+                    </button>
+
+                    <mat-menu #linkMenu="matMenu" class="link-task-menu">
+                        <div class="menu-header">Link Existing Task</div>
+                        <div class="menu-search">
+                            <input type="text" placeholder="Search tasks..." [(ngModel)]="searchQuery"
+                                (click)="$event.stopPropagation()" />
+                        </div>
+                        <div class="menu-options-scroll">
+                            @for (task of filteredAvailableTasks(); track task.id) {
+                            <button mat-menu-item (click)="linkExistingTask(task)">
+                                {{ task.name }}
+                            </button>
+                            } @empty {
+                            <div class="no-results">No available tasks found</div>
+                            }
+                        </div>
+                    </mat-menu>
+                </div>
+
+                <div class="subtask-list">
+                    @for (sub of subtasks(); track sub.id) {
+                    <div class="subtask-item">
+                        <input type="checkbox" class="subtask-checkbox" [checked]="sub.doneFlag"
+                            (change)="toggleSubtaskDone(sub)" />
+                        <span class="subtask-name" [class.completed]="sub.doneFlag" (click)="toggleSubtaskDone(sub)">{{
+                            sub.name }}</span>
+                        <button mat-icon-button class="unlink-subtask-btn" (click)="unlinkSubtask(sub)"
+                            matTooltip="Unlink subtask">
+                            <i class="material-icons">link_off</i>
+                        </button>
+                    </div>
+                    }
+
+                    <div class="add-subtask-form">
+                        <input type="text" class="subtask-input" [(ngModel)]="subtaskDraft" #subtaskInput
+                            (keyup.enter)="addSubtask()" placeholder="Add a subtask..." />
+                        @if (subtaskDraft().trim()) {
+                        <div class="subtask-controls">
+                            <button mat-raised-button color="primary" (click)="addSubtask()">Add</button>
+                        </div>
+                        }
+                    </div>
+                </div>
+            </div>
+            }
+
+            <!-- Description Section -->
+            <div class="section description-section">
+                <div class="section-header">
+                    <i class="material-icons">subject</i>
+                    <h3 class="section-title">Description</h3>
+                    @if (!isEditingDescription() && task().description) {
+                    <button mat-button class="edit-btn" (click)="toggleEditDescription()">Edit</button>
+                    }
+                </div>
+
+                @if (isEditingDescription()) {
+                <div class="description-edit">
+                    <textarea class="description-textarea" [ngModel]="descriptionDraft()" (input)="updateDraft($event)"
+                        placeholder="Add a more detailed description..." focus="true"></textarea>
+                    <div class="edit-controls">
+                        <button mat-raised-button color="primary" class="save-btn"
+                            (click)="saveDescription()">Save</button>
+                        <button mat-button class="cancel-btn" (click)="cancelEditDescription()">Cancel</button>
+                    </div>
+                </div>
+                } @else {
+                <div class="description-view" (click)="toggleEditDescription()">
+                    @if (task().description) {
+                    <div class="description-content">
+                        <p>{{ task().description }}</p>
+                    </div>
+                    } @else {
+                    <div class="input-inactive">
+                        <p>Add a more detailed description...</p>
+                    </div>
+                    }
+                </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>

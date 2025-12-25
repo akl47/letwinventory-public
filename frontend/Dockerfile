@@ -1,11 +1,17 @@
+FROM node:24-alpine
 
-FROM node:18
+WORKDIR /app
 
-WORKDIR /usr/src/
+# Install Angular CLI globally
+RUN npm install -g @angular/cli
+
 COPY package*.json ./
 
-RUN npm install -g @angular/cli @angular-devkit/build-angular && npm install --legacy-peer-deps
+RUN npm install
+
+COPY . .
 
 EXPOSE 4200
 
-CMD ["npm", "start"]
+# Poll for changes is often needed in Docker on Windows
+CMD ["ng", "serve", "--host", "0.0.0.0", "--poll", "2000"]

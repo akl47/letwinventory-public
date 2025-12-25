@@ -27,8 +27,8 @@ services:
     build:
       context: ./frontend
     volumes:
-      - /usr/src/node_modules
-      - ./frontend:/usr/src
+      - /app/node_modules
+      - ./frontend:/app
     ports:
       - 4200:4200
     depends_on:

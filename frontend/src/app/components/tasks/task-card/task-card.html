@@ -1,0 +1,37 @@
+<div class="task-card" (click)="openDialog()">
+    @if (projectColor()) {
+    <div class="project-dot" [style.background-color]="projectColor()"></div>
+    }
+    <div class="card-content">
+        <input type="checkbox" class="task-checkbox" [checked]="displayDone()"
+            (click)="$event.preventDefault(); toggleComplete($event)" />
+        <div class="task-title" [class.completed]="displayDone()">{{ task().name }}</div>
+    </div>
+    @if (isOverdue() || task().timeEstimate) {
+    <div class="meta-info">
+        @if (isOverdue()) {
+        <span class="overdue-tag">
+            <i class="material-icons icon-xs">schedule</i>
+            {{ task().dueDate | date:'MMM d' }}
+        </span>
+        }
+        @if (task().timeEstimate) {
+        <span class="time-estimate-badge">
+            <i class="material-icons icon-xs">timer</i>
+            {{ formatEstimate(task().timeEstimate) }}
+        </span>
+        }
+    </div>
+    }
+    @if (task().subtasks?.length || task().parentTaskID) {
+    <div class="hierarchy-icons">
+        @if (task().subtasks?.length) {
+        <i class="material-icons hierarchy-icon" matTooltip="Parent Task">account_tree</i>
+        }
+        @if (task().parentTaskID) {
+        <i class="material-icons hierarchy-icon" matTooltip="Subtask">subdirectory_arrow_right</i>
+        }
+
+    </div>
+    }
+</div>

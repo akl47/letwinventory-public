@@ -1,0 +1,41 @@
+<div class="list-container">
+    <!-- List Header -->
+    <div class="list-header">
+        <span>{{ taskList.name }}</span>
+    </div>
+
+    <!-- Tasks Container -->
+    <div class="tasks-container" cdkDropList [cdkDropListData]="taskList.tasks" [id]="'' + taskList.id"
+        [cdkDropListConnectedTo]="connectedLists" (cdkDropListDropped)="drop($event)">
+
+        @for(task of taskList.tasks; track task.id) {
+        @if (!task.doneFlag) {
+        <app-task-card [task]="task" cdkDrag></app-task-card>
+        }
+        }
+
+        @if (isAddingTask()) {
+        <div class="new-task-form">
+            <textarea #taskInput [(ngModel)]="newTaskName" (keydown.enter)="confirmAddTask(); $event.preventDefault()"
+                (keydown.escape)="cancelAddingTask()" class="new-task-card-input"
+                placeholder="Enter a title for this card..." rows="3"></textarea>
+            <div class="new-task-actions">
+                <button (click)="confirmAddTask()" class="add-card-btn">Add card</button>
+                <button (click)="cancelAddingTask()" class="cancel-btn">
+                    <i class="material-icons icon-lg">close</i>
+                </button>
+            </div>
+        </div>
+        }
+    </div>
+
+    <!-- New Task Button -->
+    @if (!isAddingTask()) {
+    <div class="new-task-wrapper">
+        <button class="new-task-btn" (click)="startAddingTask()">
+            <i class="material-icons icon-lg">add</i>
+            <span>New task</span>
+        </button>
+    </div>
+    }
+</div>

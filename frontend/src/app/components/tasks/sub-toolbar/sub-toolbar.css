@@ -1,0 +1,28 @@
+.sub-toolbar {
+    height: 48px;
+    /* background: rgba(255, 255, 255, 0.05); */
+    backdrop-filter: blur(4px);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    z-index: 10;
+}
+
+.toolbar-content {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    width: 100%;
+}
+
+.history-btn {
+    color: rgba(255, 255, 255, 0.5);
+    background-color: rgba(255, 255, 255, 0.05);
+    font-weight: 500;
+    border-radius: 3px;
+
+    &:hover {
+        background-color: rgba(255, 255, 255, 0.1);
+    }
+}

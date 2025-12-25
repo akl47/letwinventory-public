@@ -1,0 +1,78 @@
+:host {
+    display: block;
+    height: 100%;
+    overflow: hidden;
+}
+
+.board-container {
+    height: 100%;
+    width: 100%;
+    overflow-x: auto;
+    padding: 1rem;
+    box-sizing: border-box;
+    /* Fixes 100% + padding overflow */
+    display: flex;
+    /* Make it a flex container so children can fit */
+    flex-direction: column;
+}
+
+.board-wrapper {
+    display: flex;
+    flex-direction: row;
+    gap: 1rem;
+    height: 100%;
+    align-items: flex-start;
+}
+
+/* Loading State Styles */
+.loading-wrapper {
+    display: flex;
+    gap: 1rem;
+}
+
+.loading-placeholder {
+    width: 20rem;
+    /* w-80 */
+    background-color: rgba(255, 255, 255, .1);
+    /* bg-gray-100 */
+    border-radius: 0.5rem;
+    height: 24rem;
+    /* h-96 */
+    padding: 1rem;
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.loading-header {
+    height: 1.5rem;
+
+    background-color: rgba(255, 255, 255, .1);
+    /* bg-gray-300 */
+    border-radius: 0.25rem;
+    width: 50%;
+    margin-bottom: 1rem;
+}
+
+.loading-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.loading-item {
+    height: 5rem;
+    background-color: rgba(255, 255, 255, .1);
+    /* bg-gray-200 */
+    border-radius: 0.25rem;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: .5;
+    }
+}

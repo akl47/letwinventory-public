@@ -11,6 +11,7 @@ fs.readdirSync(__dirname)
             return(folder.indexOf('.')===-1);
         })
         .forEach(folder=>{
+            console.log('/'+group+'/'+folder)
             router.use('/'+group+'/'+folder,require('./'+group+'/'+folder+'/routes'))  
         })  
     })

@@ -1,0 +1,51 @@
+<mat-sidenav-container class="sidenav-container" autosize>
+    <mat-sidenav mode="side" opened class="sidenav" [class.collapsed]="isSidenavCollapsed()">
+        <!-- Sidenav Header -->
+        <div class="sidenav-header">
+            <div class="logo"><img src="assets/logo.svg" alt="Logo"></div>
+            <span class="title">Letwinventory</span>
+        </div>
+
+        <!-- Navigation Items -->
+        <mat-nav-list>
+            <a mat-list-item routerLink="/home" routerLinkActive="active-link" matTooltip="Home"
+                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
+                <mat-icon matListItemIcon>home</mat-icon>
+                <span matListItemTitle>Home</span>
+            </a>
+            @if (isAuthenticated()) {
+            <a mat-list-item routerLink="/tasks" routerLinkActive="active-link" matTooltip="Tasks"
+                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
+                <mat-icon matListItemIcon>task</mat-icon>
+                <span matListItemTitle>Tasks</span>
+            </a>
+            }
+        </mat-nav-list>
+    </mat-sidenav>
+
+    <mat-sidenav-content class="sidenav-content">
+        <mat-toolbar class="nav-header">
+            <button mat-icon-button (click)="toggleSidenav()" aria-label="Toggle sidenav">
+                <mat-icon>menu</mat-icon>
+            </button>
+            <span class="title-text">Letwinventory</span>
+            <span class="spacer"></span>
+            @if (isAuthenticated()) {
+            <span class="user-name">{{ currentUser()?.displayName }}</span>
+            <button mat-button (click)="logout()" aria-label="Logout">
+                <mat-icon>logout</mat-icon>
+                Logout
+            </button>
+            } @else {
+            <button mat-button (click)="login()" aria-label="Login with Google">
+                <mat-icon>login</mat-icon>
+                Login
+            </button>
+            }
+        </mat-toolbar>
+
+        <main class="content">
+            <router-outlet />
+        </main>
+    </mat-sidenav-content>
+</mat-sidenav-container>
