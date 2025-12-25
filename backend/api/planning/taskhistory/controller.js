@@ -2,8 +2,13 @@ const { TaskHistory, Task, User } = require('../../../models');
 
 exports.getAllHistory = async (req, res) => {
     try {
+        const limit = parseInt(req.query.limit) || 10;
+        const offset = parseInt(req.query.offset) || 0;
+
         const history = await TaskHistory.findAll({
             order: [['createdAt', 'DESC']],
+            limit: limit,
+            offset: offset,
             include: [
                 {
                     model: Task,

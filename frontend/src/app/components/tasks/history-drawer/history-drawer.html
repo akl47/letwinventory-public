@@ -9,8 +9,7 @@
         </button>
     </div>
 
-    <div class="drawer-body">
-        @if (history$ | async; as history) {
+    <div class="drawer-body" #drawerBody (scroll)="onScroll($event)">
         @for (item of history; track item.id) {
         <div class="history-item">
             <div class="user-avatar">
@@ -26,19 +25,27 @@
                     <span class="action-text">{{ getActionLabel(item.actionID) }} on </span>
                     <span class="task-name clickable" (click)="openTaskCard(item.taskID)">{{ item.task?.name }}</span>
                 </div>
+                @if (item.actionID !== TaskActionID.CREATED) {
                 <div class="item-details">
                     <span class="from-val">{{ getLabel(item, 'from') }}</span>
                     <mat-icon class="arrow-icon">arrow_forward</mat-icon>
                     <span class="to-val">{{ getLabel(item, 'to') }}</span>
                 </div>
+                }
                 <div class="item-time">{{ item.createdAt | date:'MMM d, h:mm a' }}</div>
             </div>
         </div>
         } @empty {
+        @if (!isLoading) {
         <div class="empty-state">No activity yet.</div>
         }
-        } @else {
-        <div class="loading">Loading history...</div>
+        }
+
+        @if (isLoading) {
+        <div class="loading-more">
+            <mat-spinner diameter="30"></mat-spinner>
+            <span>Loading more...</span>
+        </div>
         }
     </div>
 </div>

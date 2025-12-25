@@ -41,7 +41,7 @@
     h3 {
         margin: 0;
         font-size: 16px;
-        font-weight: 600;
+        font-weight: 500;
     }
 }
 
@@ -110,6 +110,17 @@
     font-weight: 500;
 }
 
+.loading-more {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    gap: 12px;
+    color: var(--mat-sys-on-surface-variant);
+    font: var(--mat-sys-label-medium);
+}
+
 .item-content {
     flex: 1;
     min-width: 0;
@@ -123,7 +134,7 @@
 }
 
 .user-name {
-    font-weight: 600;
+    font-weight: 500;
     color: #ffffff;
     margin-right: 4px;
 }

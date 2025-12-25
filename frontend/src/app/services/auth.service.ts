@@ -1,7 +1,7 @@
 import { Injectable, signal, computed, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { DOCUMENT } from '@angular/common';
-import { catchError, of, tap } from 'rxjs';
+import { Observable, catchError, map, of, tap } from 'rxjs';
 
 export interface User {
     id: number;
@@ -24,7 +24,6 @@ export class AuthService {
     constructor() {
         // Check for token in cookie first (from OAuth callback), then localStorage
         this.checkForOAuthCallback();
-        this.checkAuthStatus();
     }
 
     /**
@@ -67,28 +66,30 @@ export class AuthService {
         this.user.set(null);
     }
 
-    checkAuthStatus(): void {
+    checkAuthStatus(): Observable<boolean> {
         const token = this.getToken();
         if (!token) {
             this.user.set(null);
-            return;
+            return of(false);
         }
 
-        this.http.get<{ valid: boolean; user: User }>('http://localhost:3000/api/auth/user/checkToken', {
+        return this.http.get<{ valid: boolean; user: User }>('http://localhost:3000/api/auth/user/checkToken', {
             headers: { Authorization: `Bearer ${token}` }
         }).pipe(
-            tap(response => {
+            map(response => {
                 if (response.valid) {
                     this.user.set(response.user);
+                    return true;
                 } else {
                     this.clearToken();
+                    return false;
                 }
             }),
             catchError(() => {
                 this.clearToken();
-                return of(null);
+                return of(false);
             })
-        ).subscribe();
+        );
     }
 
     logout(): void {

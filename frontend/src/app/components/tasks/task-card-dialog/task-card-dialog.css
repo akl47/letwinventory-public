@@ -43,7 +43,29 @@
     color: #b6c2cf;
     line-height: 1.4;
     word-wrap: break-word;
-    transition: all 0.2s ease;
+    cursor: pointer;
+    padding: 2px 8px;
+    margin-left: -8px;
+    border-radius: 3px;
+    transition: background-color 0.2s ease;
+}
+
+.task-title:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.title-input {
+    background-color: #22272b;
+    border: 2px solid #579dff;
+    border-radius: 3px;
+    color: #b6c2cf;
+    font-size: 20px;
+    font-weight: 500;
+    padding: 2px 6px;
+    width: 100%;
+    margin-left: -8px;
+    outline: none;
+    margin-bottom: 4px;
 }
 
 .task-title.completed {
@@ -147,6 +169,17 @@
     font-size: 12px;
     font-weight: 500;
     color: #1d2125;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.label .material-icons {
+    font-size: 16px;
+}
+
+.left-icon {
+    margin-right: 2px;
 }
 
 .label-blue {
@@ -228,13 +261,11 @@
     color: #b6c2cf;
 }
 
-.due-date-badge.overdue {
-    background-color: #f87168;
+.overdue {
+    background-color: #f87168 !important;
+    color: #1d2125 !important;
 }
 
-.due-date-badge.overdue .date-text {
-    color: #1d2125;
-}
 
 .overdue-badge {
     background-color: #ae2e24;
@@ -256,9 +287,8 @@
 
 /* Description */
 .description-content {
-    background-color: rgba(255, 255, 255, 0.05);
     border-radius: 4px;
-    padding: 12px;
+    padding: 0 8px;
     margin-left: 28px;
 }
 
@@ -286,6 +316,64 @@
     margin: 0;
     font-size: 14px;
     color: rgba(255, 255, 255, 0.5);
+}
+
+.edit-btn {
+    margin-left: auto;
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #b6c2cf !important;
+    font-size: 12px !important;
+    height: 32px !important;
+    line-height: 32px !important;
+}
+
+.edit-btn:hover {
+    background-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.description-view {
+    cursor: pointer;
+    min-height: 40px;
+}
+
+.description-edit {
+    margin-left: 28px;
+}
+
+.description-textarea {
+    width: 100%;
+    min-height: 108px;
+    background-color: #22272b;
+    border: 2px solid #579dff;
+    border-radius: 4px;
+    color: #b6c2cf;
+    padding: 8px 12px;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.6;
+    resize: vertical;
+    box-sizing: border-box;
+    margin-bottom: 8px;
+}
+
+.description-textarea:focus {
+    outline: none;
+}
+
+.edit-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.save-btn {
+    background-color: #579dff !important;
+    color: #1d2125 !important;
+    font-weight: 500 !important;
+}
+
+.cancel-btn {
+    color: #b6c2cf !important;
 }
 
 /* Activity */
@@ -436,46 +524,51 @@
     background: rgba(255, 255, 255, 0.3);
 }
 
-/* List Selection Menu */
-::ng-deep .list-selection-menu.mat-mdc-menu-panel {
+/* Shared Menu Styles (List, Label, Project) */
+::ng-deep .list-selection-menu.mat-mdc-menu-panel,
+::ng-deep .label-menu.mat-mdc-menu-panel,
+::ng-deep .project-menu.mat-mdc-menu-panel {
     background-color: #282e33 !important;
     border: 1px solid #454f59 !important;
-    min-width: 240px !important;
+    border-radius: 8px !important;
 }
 
 .menu-header {
     padding: 12px;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     color: #9fadbc;
     text-align: center;
     border-bottom: 1px solid #454f59;
     margin-bottom: 8px;
 }
 
-::ng-deep .list-selection-menu .mat-mdc-menu-item {
+::ng-deep .list-selection-menu .mat-mdc-menu-item,
+::ng-deep .label-menu .mat-mdc-menu-item,
+::ng-deep .project-menu .mat-mdc-menu-item {
     color: #b6c2cf !important;
     min-height: 40px !important;
 }
 
-::ng-deep .list-selection-menu .mat-mdc-menu-item:hover {
+::ng-deep .list-selection-menu .mat-mdc-menu-item:hover,
+::ng-deep .label-menu .mat-mdc-menu-item:hover,
+::ng-deep .project-menu .mat-mdc-menu-item:hover {
     background-color: rgba(255, 255, 255, 0.05) !important;
 }
 
-::ng-deep .list-selection-menu .mat-mdc-menu-item.selected {
+::ng-deep .list-selection-menu .mat-mdc-menu-item.selected,
+::ng-deep .label-menu .mat-mdc-menu-item.selected,
+::ng-deep .project-menu .mat-mdc-menu-item.selected {
     color: #579dff !important;
 }
 
-/* Project Label and Menu */
-.project-label {
-    background-color: #454f59;
+/* Project Label and Menu Specifics */
+.project-label,
+.date-label,
+.estimate-label,
+.subtask-add-label {
+    background-color: rgba(255, 255, 255, 0.05);
     color: #fff;
-}
-
-::ng-deep .project-menu.mat-mdc-menu-panel {
-    background-color: #282e33 !important;
-    border: 1px solid #454f59 !important;
-    min-width: 200px !important;
 }
 
 .project-dot {
@@ -491,14 +584,293 @@
     border: 1px dashed rgba(255, 255, 255, 0.3);
 }
 
-::ng-deep .project-menu .mat-mdc-menu-item {
+/* Date Picker Menu */
+::ng-deep .date-menu.mat-mdc-menu-panel {
+    max-width: none !important;
+    width: 320px !important;
+    background-color: #282e33 !important;
+    border: 1px solid #454f59 !important;
+    border-radius: 8px !important;
+    overflow-x: hidden !important;
+}
+
+
+
+.date-picker-menu-content {
+    padding: 0;
+    color: #b6c2cf;
+}
+
+.calendar-container {
+    padding: 0 8px;
+}
+
+::ng-deep .calendar-container .mat-calendar {
+    background-color: transparent !important;
+}
+
+::ng-deep .calendar-container .mat-calendar-body-label,
+::ng-deep .calendar-container .mat-calendar-period-button,
+::ng-deep .calendar-container .mat-calendar-arrow {
     color: #b6c2cf !important;
 }
 
-::ng-deep .project-menu .mat-mdc-menu-item:hover {
+::ng-deep .calendar-container .mat-calendar-table-header {
+    color: rgba(255, 255, 255, 0.5) !important;
+}
+
+::ng-deep .calendar-container .mat-calendar-body-cell-content {
+    color: #b6c2cf !important;
+}
+
+::ng-deep .calendar-container .mat-calendar-body-selected {
+    background-color: #579dff !important;
+    color: #1d2125 !important;
+}
+
+::ng-deep .calendar-container .mat-calendar-body-today:not(.mat-calendar-body-selected) {
+    border-color: #579dff !important;
+}
+
+.time-container {
+    padding: 16px;
+    border-top: 1px solid #454f59;
+}
+
+.time-title {
+    font-size: 12px;
+    font-weight: 500;
+    color: #9fadbc;
+    margin-bottom: 8px;
+}
+
+.time-input {
+    width: 100%;
+    padding: 8px;
+    background-color: #22272b;
+    border: 1px solid #454f59;
+    border-radius: 4px;
+    color: #b6c2cf;
+    font-size: 14px;
+    outline: none;
+}
+
+.time-input:focus {
+    border-color: #579dff;
+}
+
+.menu-actions {
+    display: flex;
+    gap: 8px;
+    padding: 16px;
+    border-top: 1px solid #454f59;
+}
+
+.menu-actions button {
+    flex: 1;
+}
+
+.remove-btn {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    color: #f87168 !important;
+}
+
+.remove-btn:hover {
+    background-color: rgba(248, 113, 104, 0.1) !important;
+}
+
+.menu-options-scroll {
+    max-height: 250px;
+    overflow-y: auto;
+}
+
+.menu-divider {
+    height: 1px;
+    background-color: #454f59;
+    margin: 4px 0;
+}
+
+/* Subtasks Section */
+.subtasks-section {
+    margin-top: 24px;
+}
+
+.subtask-count {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.5);
+    margin-left: 8px;
+    font-weight: normal;
+}
+
+.subtask-list {
+    padding-left: 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.subtask-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+
+.subtask-item:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.subtask-checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: #579dff;
+}
+
+.subtask-name {
+    flex: 1;
+    font-size: 14px;
+    color: #b6c2cf;
+    cursor: pointer;
+}
+
+.subtask-name.completed {
+    text-decoration: line-through;
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.unlink-subtask-btn {
+    opacity: 0;
+    transition: opacity 0.2s;
+    color: rgba(255, 255, 255, 0.4) !important;
+}
+
+.subtask-item:hover .unlink-subtask-btn {
+    opacity: 1;
+}
+
+.unlink-subtask-btn:hover {
+    color: #579dff !important;
+}
+
+.add-subtask-form {
+    margin-top: 8px;
+}
+
+.input-inactive {
+    background-color: rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    padding: 12px;
+    margin-left: 28px;
+    cursor: pointer;
+}
+
+.subtask-input {
+    width: 100%;
+    padding: 12px;
+    background-color: rgba(255, 255, 255, 0.08);
+    border: none;
+    border-radius: 4px;
+    color: #b6c2cf;
+    font-size: 14px;
+    outline: none;
+    transition: background-color 0.2s, border-color 0.2s;
+    box-sizing: border-box;
+}
+
+.subtask-input:focus {
+    background-color: #22272b;
+    border: 2px solid #579dff;
+    padding: 10px;
+    /* 12px original - 2px border */
+    color: #b6c2cf;
+}
+
+.subtask-controls {
+    margin-top: 8px;
+    display: flex;
+    justify-content: flex-start;
+}
+
+.subtask-add-label {
     background-color: rgba(255, 255, 255, 0.05) !important;
 }
 
-::ng-deep .project-menu .mat-mdc-menu-item.selected {
-    color: #579dff !important;
+.subtask-add-label:hover {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Link Existing Task Menu */
+.auto-complete-toggle {
+    margin-right: 12px !important;
+    transform: scale(0.8);
+}
+
+.auto-complete-toggle .mdc-form-field {
+    color: #9fadbc !important;
+    font-size: 14px !important;
+}
+
+.link-existing-btn {
+    font-size: 12px !important;
+    color: #b6c2cf !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    height: 32px !important;
+    line-height: 32px !important;
+    padding: 0 12px !important;
+    border-radius: 4px !important;
+}
+
+.link-existing-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.link-task-menu {
+    background-color: #282e33 !important;
+    width: 300px !important;
+    max-width: 300px !important;
+}
+
+.menu-search {
+    padding: 8px 12px;
+    position: sticky;
+    top: 0;
+    background-color: #282e33;
+    z-index: 1;
+}
+
+.menu-options-scroll button {
+    width: 100%;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.menu-search input {
+    width: 100%;
+    padding: 6px 12px;
+    background-color: #22272b;
+    border: 1px solid #454f59;
+    border-radius: 3px;
+    color: #b6c2cf;
+    font-size: 14px;
+    outline: none;
+}
+
+.menu-search input:focus {
+    border-color: #579dff;
+}
+
+.no-results {
+    padding: 12px;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 13px;
+}
+
+.flex-spacer {
+    flex: 1;
 }

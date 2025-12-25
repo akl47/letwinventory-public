@@ -31,7 +31,7 @@ exports.createTask = async (req, res) => {
 
 exports.getAllTasks = async (req, res) => {
     try {
-        const { projectId, taskListId } = req.query;
+        const { projectId, taskListId, parentTaskID } = req.query;
         const where = { activeFlag: true };
 
         if (projectId) {
@@ -39,6 +39,9 @@ exports.getAllTasks = async (req, res) => {
         }
         if (taskListId) {
             where.taskListID = taskListId;
+        }
+        if (parentTaskID !== undefined) {
+            where.parentTaskID = parentTaskID === 'null' ? null : parentTaskID;
         }
 
         const tasks = await Task.findAll({
@@ -51,6 +54,11 @@ exports.getAllTasks = async (req, res) => {
                 model: User,
                 as: 'owner',
                 attributes: ['id', 'displayName', 'email', 'photoURL']
+            }, {
+                model: Task,
+                as: 'subtasks',
+                attributes: ['id'],
+                required: false
             }]
         });
         res.json(tasks);
@@ -91,6 +99,12 @@ exports.updateTask = async (req, res) => {
         // Tracked Actions:
         // 2: ADD_TO_PROJECT
         if (req.body.projectID !== undefined && req.body.projectID !== oldData.projectID) {
+            // Propagate to subtasks
+            await Task.update(
+                { projectID: req.body.projectID },
+                { where: { parentTaskID: task.id } }
+            );
+
             await TaskHistory.create({
                 taskID: task.id,
                 userID: req.user.id,
@@ -121,6 +135,39 @@ exports.updateTask = async (req, res) => {
                 fromID: oldData.doneFlag ? 1 : 0,
                 toID: req.body.doneFlag ? 1 : 0
             });
+
+            // Check for parent auto-completion recursively
+            if (req.body.doneFlag === true) {
+                let currentParentId = task.parentTaskID;
+
+                while (currentParentId) {
+                    const parent = await Task.findByPk(currentParentId, {
+                        include: [{ model: Task, as: 'subtasks', attributes: ['doneFlag'] }]
+                    });
+
+                    if (parent && parent.completeWithChildren) {
+                        const allSubtasksDone = parent.subtasks.every(t => t.doneFlag);
+                        if (allSubtasksDone && !parent.doneFlag) {
+                            await parent.update({ doneFlag: true });
+                            await TaskHistory.create({
+                                taskID: parent.id,
+                                userID: req.user.id,
+                                actionID: 4,
+                                fromID: 0,
+                                toID: 1
+                            });
+                            // Move up
+                            currentParentId = parent.parentTaskID;
+                        } else {
+                            // Parent not ready or already done
+                            break;
+                        }
+                    } else {
+                        // Chain broken
+                        break;
+                    }
+                }
+            }
         }
 
         res.json(task);

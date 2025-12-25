@@ -50,6 +50,16 @@ module.exports = {
         type: Sequelize.INTEGER,
         allowNull: true
       },
+      parentTaskID: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        references: {
+          model: 'Tasks',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
+      },
       taskTypeEnum: {
         type: Sequelize.ENUM([
           "normal",

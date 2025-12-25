@@ -17,7 +17,7 @@ passport.use(
 );
 
 exports.initiateLogin = (req, res, next) => {
-  passport.authenticate('google', { 
+  passport.authenticate('google', {
     scope: ['profile', 'email'],
     prompt: 'select_account'
   })(req, res, next);
@@ -45,17 +45,17 @@ exports.handleCallback = (req, res, next) => {
           photoURL: profile.photos[0].value
         }
       });
-      if(user.activeFlag) {
+      if (user.activeFlag) {
         // Generate JWT token
         const token = jwt.sign(
-          { 
+          {
             id: user.id,
             email: user.email,
             displayName: user.displayName,
             photoURL: user.photoURL
           },
           process.env.JWT_SECRET,
-          { expiresIn: '1h' }
+          { expiresIn: '24h' }
         );
 
         // Set token in cookie and redirect to frontend
@@ -63,12 +63,12 @@ exports.handleCallback = (req, res, next) => {
           httpOnly: false,
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
-          maxAge: 3600000 // 1 hour
+          maxAge: 86400000 // 24 hours
         }).cookie('name', encodeURI(user.displayName), {
           httpOnly: false, // Allow frontend to read the name
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
-          maxAge: 3600000 // 1 hour
+          maxAge: 86400000 // 24 hours
         }).redirect("http://localhost:4200");
       } else {
         throw new Error('User is not authorized');
@@ -89,11 +89,11 @@ exports.getCurrentUser = async (req, res) => {
     const user = await db.User.findByPk(req.user.id, {
       attributes: ['id', 'email', 'displayName', 'photoUrl']
     });
-    
+
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-    
+
     res.json(user);
   } catch (error) {
     console.error('Error fetching user:', error);

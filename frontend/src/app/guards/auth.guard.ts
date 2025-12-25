@@ -10,6 +10,6 @@ export const authGuard: CanActivateFn = () => {
         return true;
     }
 
-    // Redirect to page1 if not authenticated
-    return router.createUrlTree(['/page1']);
+    // Redirect to home if not authenticated
+    return router.createUrlTree(['/home']);
 };

@@ -56,4 +56,20 @@ export class TaskService {
         });
         return this.http.get<Task>(`http://localhost:3000/api/planning/task/${taskId}`, { headers });
     }
+
+    getSubtasks(parentTaskId: number): Observable<Task[]> {
+        const token = localStorage.getItem('auth_token');
+        const headers = new HttpHeaders({
+            'Authorization': `Bearer ${token}`
+        });
+        return this.http.get<Task[]>(`http://localhost:3000/api/planning/task?parentTaskID=${parentTaskId}`, { headers });
+    }
+
+    getAllTasks(): Observable<Task[]> {
+        const token = localStorage.getItem('auth_token');
+        const headers = new HttpHeaders({
+            'Authorization': `Bearer ${token}`
+        });
+        return this.http.get<Task[]>('http://localhost:3000/api/planning/task', { headers });
+    }
 }

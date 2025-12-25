@@ -9,9 +9,11 @@ export interface Task {
     completeWithChildren: boolean;
     dueDate?: Date;
     timeEstimate?: number;
+    parentTaskID?: number;
     rank: number;
     taskTypeEnum: 'normal' | 'tracking' | 'critical_path';
     activeFlag: boolean;
     createdAt: Date;
     updatedAt: Date;
+    subtasks?: Task[];
 }

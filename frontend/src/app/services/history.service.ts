@@ -6,7 +6,8 @@ export enum TaskActionID {
     MOVE_LIST = 1,
     ADD_TO_PROJECT = 2,
     ADD_PRIORITY = 3,
-    CHANGE_STATUS = 4
+    CHANGE_STATUS = 4,
+    CREATED = 5
 }
 
 export interface TaskHistory {
@@ -35,12 +36,12 @@ export class HistoryService {
     private apiUrl = 'http://localhost:3000/api/planning/taskhistory';
     private http = inject(HttpClient);
 
-    getAllHistory(): Observable<TaskHistory[]> {
+    getAllHistory(offset: number = 0, limit: number = 10): Observable<TaskHistory[]> {
         const token = localStorage.getItem('auth_token');
         const headers = new HttpHeaders({
             'Authorization': `Bearer ${token}`
         });
-        return this.http.get<TaskHistory[]>(this.apiUrl, { headers });
+        return this.http.get<TaskHistory[]>(`${this.apiUrl}?offset=${offset}&limit=${limit}`, { headers });
     }
 
     getTaskHistory(taskId: number): Observable<TaskHistory[]> {

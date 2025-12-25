@@ -22,6 +22,14 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'taskListID',
         as: 'taskList'
       });
+      Task.belongsTo(models.Task, {
+        foreignKey: 'parentTaskID',
+        as: 'parent'
+      });
+      Task.hasMany(models.Task, {
+        foreignKey: 'parentTaskID',
+        as: 'subtasks'
+      });
     }
   };
   Task.init({
@@ -66,6 +74,10 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
     timeEstimate: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    parentTaskID: {
       type: DataTypes.INTEGER,
       allowNull: true
     },

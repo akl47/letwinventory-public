@@ -18,7 +18,13 @@ exports.getAllTaskLists = async (req, res) => {
                 model: Task,
                 as: 'tasks',
                 where: { activeFlag: true },
-                required: false
+                required: false,
+                include: [{
+                    model: Task,
+                    as: 'subtasks',
+                    attributes: ['id'],
+                    required: false
+                }]
             }],
             order: [
                 ['createdAt', 'ASC'],

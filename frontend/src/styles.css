@@ -17,6 +17,11 @@ body {
     border-radius: 8px !important;
 }
 
+/* Global Material Menu Padding Fix */
+.mat-mdc-menu-content {
+    padding: 0 !important;
+}
+
 .trello-dialog-container .mat-mdc-dialog-container {
     padding: 0;
 }
