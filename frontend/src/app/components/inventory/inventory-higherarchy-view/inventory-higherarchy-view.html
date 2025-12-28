@@ -1,0 +1,29 @@
+<div class="hierarchy-wrapper">
+    <div class="search-bar">
+        <mat-form-field appearance="outline" class="search-field">
+            <mat-label>Search inventory</mat-label>
+            <input matInput
+                   [ngModel]="searchText()"
+                   (ngModelChange)="onSearchChange($event)"
+                   placeholder="Search by name, barcode, or part number">
+            <mat-icon matPrefix>search</mat-icon>
+        </mat-form-field>
+    </div>
+
+    <div class="hierarchy-container">
+        @if (treeData().length === 0 && searchText()) {
+            <div class="no-results">
+                <mat-icon>search_off</mat-icon>
+                <p>No items found matching "{{ searchText() }}"</p>
+            </div>
+        } @else {
+            @for (item of treeData(); track item.id) {
+                <app-inventory-higherarchy-item
+                    [item]="item"
+                    [expandedPath]="expandedPath()"
+                    (barcodeSelected)="onBarcodeSelected($event)">
+                </app-inventory-higherarchy-item>
+            }
+        }
+    </div>
+</div>

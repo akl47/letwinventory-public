@@ -1,0 +1,136 @@
+<div class="parts-table-container">
+    <div class="table-header">
+        <h2>
+            <mat-icon>precision_manufacturing</mat-icon>
+            Parts Catalog
+        </h2>
+        <div class="header-actions">
+            <mat-form-field appearance="outline" class="search-field">
+                <mat-label>Search parts</mat-label>
+                <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
+                       placeholder="Search by name, description, category, vendor, or SKU">
+                <mat-icon matPrefix>search</mat-icon>
+            </mat-form-field>
+            <mat-slide-toggle
+                [checked]="showInactive()"
+                (change)="onToggleInactive($event.checked)"
+                color="primary">
+                Show Inactive
+            </mat-slide-toggle>
+            <button mat-flat-button color="primary" (click)="openNewPartDialog()">
+                <mat-icon>add</mat-icon>
+                New Part
+            </button>
+        </div>
+    </div>
+
+    <div class="table-wrapper">
+        <table mat-table [dataSource]="displayedParts()" matSort (matSortChange)="onSortChange($event)" class="parts-table">
+            <!-- Name Column -->
+            <ng-container matColumnDef="name">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Part Number</th>
+                <td mat-cell *matCellDef="let part">
+                    <strong>{{ part.name }}</strong>
+                </td>
+            </ng-container>
+
+            <!-- Description Column -->
+            <ng-container matColumnDef="description">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Description</th>
+                <td mat-cell *matCellDef="let part">{{ part.description || '-' }}</td>
+            </ng-container>
+
+            <!-- Category Column -->
+            <ng-container matColumnDef="category">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Category</th>
+                <td mat-cell *matCellDef="let part">
+                    <span class="category-badge"
+                          [class.category-part]="part.PartCategory?.name === 'Part'"
+                          [class.category-consumable]="part.PartCategory?.name === 'Consumable'"
+                          [class.category-tooling]="part.PartCategory?.name === 'Tooling'">
+                        {{ part.PartCategory?.name || 'Unknown' }}
+                    </span>
+                </td>
+            </ng-container>
+
+            <!-- Vendor Column -->
+            <ng-container matColumnDef="vendor">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Vendor</th>
+                <td mat-cell *matCellDef="let part">{{ part.vendor }}</td>
+            </ng-container>
+
+            <!-- SKU Column -->
+            <ng-container matColumnDef="sku">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>SKU</th>
+                <td mat-cell *matCellDef="let part">
+                    @if (part.link) {
+                        <a [href]="part.link" target="_blank" class="sku-link">
+                            {{ part.sku || '-' }}
+                            <mat-icon class="link-icon">open_in_new</mat-icon>
+                        </a>
+                    } @else {
+                        {{ part.sku || '-' }}
+                    }
+                </td>
+            </ng-container>
+
+            <!-- Min Order Quantity Column -->
+            <ng-container matColumnDef="minimumOrderQuantity">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Min Order Qty</th>
+                <td mat-cell *matCellDef="let part">{{ part.minimumOrderQuantity }}</td>
+            </ng-container>
+
+            <!-- Internal Part Column -->
+            <ng-container matColumnDef="internalPart">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Type</th>
+                <td mat-cell *matCellDef="let part">
+                    <span class="part-type" [class.internal]="part.internalPart" [class.external]="!part.internalPart">
+                        {{ part.internalPart ? 'Internal' : 'Vendor' }}
+                    </span>
+                </td>
+            </ng-container>
+
+            <!-- Actions Column -->
+            <ng-container matColumnDef="actions">
+                <th mat-header-cell *matHeaderCellDef>Actions</th>
+                <td mat-cell *matCellDef="let part">
+                    <button mat-icon-button (click)="editPart(part)" matTooltip="Edit part">
+                        <mat-icon>edit</mat-icon>
+                    </button>
+                    @if (part.link) {
+                        <button mat-icon-button (click)="openLink(part.link)" matTooltip="Open vendor link">
+                            <mat-icon>link</mat-icon>
+                        </button>
+                    }
+                </td>
+            </ng-container>
+
+            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+            <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+
+            <!-- No data row -->
+            <tr class="mat-row" *matNoDataRow>
+                <td class="mat-cell" [attr.colspan]="displayedColumns.length">
+                    <div class="no-data">
+                        @if (searchText()) {
+                            <mat-icon>search_off</mat-icon>
+                            <p>No parts found matching "{{ searchText() }}"</p>
+                        } @else {
+                            <mat-icon>inventory_2</mat-icon>
+                            <p>No parts available</p>
+                        }
+                    </div>
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <mat-paginator
+        [length]="getTotalCount()"
+        [pageSize]="pageSize()"
+        [pageIndex]="pageIndex()"
+        [pageSizeOptions]="pageSizeOptions"
+        (page)="onPageChange($event)"
+        showFirstLastButtons>
+    </mat-paginator>
+</div>

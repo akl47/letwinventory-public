@@ -1,0 +1,128 @@
+<div class="orders-table-container">
+  <div class="table-header">
+    <h2>
+      <mat-icon>shopping_cart</mat-icon>
+      Orders
+    </h2>
+    <div class="header-actions">
+      <mat-form-field appearance="outline" class="search-field">
+        <mat-label>Search orders</mat-label>
+        <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
+               placeholder="Search by order #, vendor, status, or notes">
+        <mat-icon matPrefix>search</mat-icon>
+      </mat-form-field>
+      <mat-slide-toggle
+        [checked]="hideReceived()"
+        (change)="onToggleHideReceived($event.checked)"
+        color="primary">
+        Hide Received
+      </mat-slide-toggle>
+      <mat-slide-toggle
+        [checked]="showInactive()"
+        (change)="onToggleInactive($event.checked)"
+        color="primary">
+        Show Inactive
+      </mat-slide-toggle>
+      <button mat-flat-button color="primary" (click)="createNewOrder()">
+        <mat-icon>add</mat-icon>
+        New Order
+      </button>
+    </div>
+  </div>
+
+  <div class="table-wrapper">
+    <table mat-table [dataSource]="displayedOrders()" matSort (matSortChange)="onSortChange($event)" class="orders-table">
+      <!-- Order Number Column -->
+      <ng-container matColumnDef="orderID">
+        <th mat-header-cell *matHeaderCellDef mat-sort-header>Order #</th>
+        <td mat-cell *matCellDef="let order">
+          <strong>{{ order.id }}</strong>
+        </td>
+      </ng-container>
+
+      <!-- Vendor Column -->
+      <ng-container matColumnDef="vendor">
+        <th mat-header-cell *matHeaderCellDef mat-sort-header>Vendor</th>
+        <td mat-cell *matCellDef="let order">{{ order.vendor || '-' }}</td>
+      </ng-container>
+
+      <!-- Placed Date Column -->
+      <ng-container matColumnDef="placedDate">
+        <th mat-header-cell *matHeaderCellDef mat-sort-header>Placed Date</th>
+        <td mat-cell *matCellDef="let order">
+          {{ order.placedDate | date: 'mediumDate' }}
+        </td>
+      </ng-container>
+
+      <!-- Status Column -->
+      <ng-container matColumnDef="status">
+        <th mat-header-cell *matHeaderCellDef mat-sort-header>Status</th>
+        <td mat-cell *matCellDef="let order">
+          <span class="status-badge" [ngClass]="getStatusClass(order.OrderStatus?.name || '')">
+            {{ order.OrderStatus?.name || 'Unknown' }}
+          </span>
+        </td>
+      </ng-container>
+
+      <!-- Item Count Column -->
+      <ng-container matColumnDef="itemCount">
+        <th mat-header-cell *matHeaderCellDef>Items</th>
+        <td mat-cell *matCellDef="let order">
+          {{ calculateItemCount(order) }}
+        </td>
+      </ng-container>
+
+      <!-- Total Price Column -->
+      <ng-container matColumnDef="totalPrice">
+        <th mat-header-cell *matHeaderCellDef>Total</th>
+        <td mat-cell *matCellDef="let order">
+          ${{ calculateTotalPrice(order).toFixed(2) }}
+        </td>
+      </ng-container>
+
+      <!-- Actions Column -->
+      <ng-container matColumnDef="actions">
+        <th mat-header-cell *matHeaderCellDef>Actions</th>
+        <td mat-cell *matCellDef="let order">
+          <button mat-icon-button (click)="viewOrder(order); $event.stopPropagation()" matTooltip="View order details">
+            <mat-icon>visibility</mat-icon>
+          </button>
+          @if (order.link) {
+            <button mat-icon-button (click)="$event.stopPropagation(); openOrderLink(order.link)"
+                    matTooltip="Open order link">
+              <mat-icon>link</mat-icon>
+            </button>
+          }
+        </td>
+      </ng-container>
+
+      <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+      <tr mat-row *matRowDef="let row; columns: displayedColumns;"
+          (click)="viewOrder(row)" class="clickable-row"></tr>
+
+      <!-- No data row -->
+      <tr class="mat-row" *matNoDataRow>
+        <td class="mat-cell" [attr.colspan]="displayedColumns.length">
+          <div class="no-data">
+            @if (searchText()) {
+              <mat-icon>search_off</mat-icon>
+              <p>No orders found matching "{{ searchText() }}"</p>
+            } @else {
+              <mat-icon>shopping_cart</mat-icon>
+              <p>No orders available</p>
+            }
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <mat-paginator
+    [length]="getTotalCount()"
+    [pageSize]="pageSize()"
+    [pageIndex]="pageIndex()"
+    [pageSizeOptions]="pageSizeOptions"
+    (page)="onPageChange($event)"
+    showFirstLastButtons>
+  </mat-paginator>
+</div>

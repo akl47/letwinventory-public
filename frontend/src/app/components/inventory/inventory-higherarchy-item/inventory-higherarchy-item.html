@@ -1,0 +1,44 @@
+<div class="item-container">
+    <div class="item-header">
+        <div class="header-left" (click)="toggle()">
+            @if (item.children?.length) {
+            <mat-icon class="toggle-icon">{{ isExpanded() ? 'expand_more' : 'chevron_right' }}</mat-icon>
+            } @else {
+            <div class="spacer"></div>
+            }
+            <span class="item-info">
+                <span class="item-name">{{ item.name }}</span>
+                @if (item.description) {
+                <span class="item-desc"> - {{ item.description }}</span>
+                }
+                @if (item.type === 'Trace' && item.quantity) {
+                <span class="item-quantity"> (Qty: {{ item.quantity }})</span>
+                }
+            </span>
+            &nbsp;
+            &nbsp;
+            <app-barcode-tag [barcode]="item.barcode" (barcodeClicked)="onBarcodeTagClick()"></app-barcode-tag>
+        </div>
+
+        <div class="header-right">
+            <button mat-icon-button (click)="openEdit($event)" class="edit-btn" matTooltip="Edit item">
+                <mat-icon>edit</mat-icon>
+            </button>
+            <button mat-icon-button (click)="addChild($event)" class="edit-btn" matTooltip="Add Child">
+                <mat-icon>add</mat-icon>
+            </button>
+        </div>
+    </div>
+
+    @if (isExpanded() && item.children?.length) {
+    <div class="children-container">
+        @for (child of item.children; track child.id) {
+        <app-inventory-higherarchy-item
+            [item]="child"
+            [expandedPath]="expandedPath"
+            (barcodeSelected)="barcodeSelected.emit($event)">
+        </app-inventory-higherarchy-item>
+        }
+    </div>
+    }
+</div>

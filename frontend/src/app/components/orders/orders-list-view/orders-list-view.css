@@ -1,0 +1,155 @@
+.orders-table-container {
+    padding: 24px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.table-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.table-header h2 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 28px;
+    font-weight: 500;
+}
+
+.table-header h2 mat-icon {
+    font-size: 32px;
+    width: 32px;
+    height: 32px;
+}
+
+.header-actions {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex: 1;
+    justify-content: flex-end;
+}
+
+.search-field {
+    min-width: 300px;
+    flex: 1;
+    max-width: 500px;
+}
+
+.table-wrapper {
+    flex: 1;
+    overflow: auto;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 4px;
+    margin-bottom: 16px;
+}
+
+.orders-table {
+    width: 100%;
+}
+
+.orders-table th {
+    background-color: var(--mat-sys-surface-container);
+    font-weight: 600;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.orders-table td {
+    font-size: 14px;
+}
+
+.orders-table tr:hover {
+    background-color: var(--mat-sys-surface-container-low);
+}
+
+.clickable-row {
+    cursor: pointer;
+}
+
+.clickable-row:hover {
+    background-color: rgba(0, 0, 0, 0.04);
+}
+
+.no-data {
+    text-align: center;
+    padding: 48px 24px;
+    color: rgba(0, 0, 0, 0.54);
+}
+
+.no-data mat-icon {
+    font-size: 64px;
+    width: 64px;
+    height: 64px;
+    margin-bottom: 16px;
+    opacity: 0.3;
+}
+
+.no-data p {
+    margin: 0;
+    font-size: 16px;
+}
+
+mat-paginator {
+    border-top: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+/* Status badge styles */
+.status-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.status-pending {
+    background-color: #FEF3C7;
+    color: #92400E;
+}
+
+.status-placed {
+    background-color: #FEF08A;
+    color: #854D0E;
+}
+
+.status-shipped {
+    background-color: #FED7AA;
+    color: #9A3412;
+}
+
+.status-received {
+    background-color: #D1FAE5;
+    color: #065F46;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .table-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .search-field {
+        max-width: 100%;
+    }
+
+    .orders-table {
+        font-size: 12px;
+    }
+
+    .orders-table th,
+    .orders-table td {
+        padding: 8px 4px;
+    }
+}

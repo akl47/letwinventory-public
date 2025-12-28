@@ -1,0 +1,25 @@
+<mat-dialog-content>
+    <div class="barcode-container">
+        @if (isLoading() && !error()) {
+        <div class="loading">
+            <mat-spinner diameter="50"></mat-spinner>
+            <p>Loading barcode...</p>
+        </div>
+        }
+        @if (error()) {
+        <div class="error">
+            <p>{{ error() }}</p>
+        </div>
+        }
+        @if (barcodeImageUrl()) {
+        <div class="barcode-display" [class.hidden]="isLoading()">
+            <img [src]="barcodeImageUrl()" alt="Barcode" class="barcode-img" (load)="onImageLoad()"
+                (error)="onImageError()" />
+        </div>
+        }
+    </div>
+</mat-dialog-content>
+<mat-dialog-actions align="end">
+    <button mat-button (click)="moveBarcode()" style="margin-right: auto;">Move</button>
+    <button mat-button mat-dialog-close>Close</button>
+</mat-dialog-actions>

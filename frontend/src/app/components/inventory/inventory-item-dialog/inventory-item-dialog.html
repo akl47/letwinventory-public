@@ -1,0 +1,60 @@
+<h2 mat-dialog-title>{{ isEditMode ? 'Edit Item' : 'Add Child Item' }}</h2>
+<mat-dialog-content>
+    <form [formGroup]="form" class="dialog-form">
+        @if (!isEditMode) {
+        <mat-form-field appearance="outline">
+            <mat-label>Type</mat-label>
+            <mat-select formControlName="type">
+                <mat-option value="Location">Location</mat-option>
+                <mat-option value="Box">Box</mat-option>
+                <mat-option value="Trace">Trace (AKL)</mat-option>
+            </mat-select>
+        </mat-form-field>
+        }
+
+        @if (form.get('type')?.value === 'Trace') {
+        <mat-form-field appearance="outline">
+            <mat-label>Part</mat-label>
+            <input matInput formControlName="partSearch" [matAutocomplete]="auto"
+                placeholder="Search by name, description, vendor, or SKU">
+            <mat-autocomplete #auto="matAutocomplete" (optionSelected)="onPartSelected($event.option.value)">
+                @for (part of filteredParts(); track part.id) {
+                <mat-option [value]="part">
+                    <div class="part-option">
+                        <strong>{{ part.name }}</strong> - {{ part.description }}
+                        <br>
+                        <small>{{ part.vendor }}{{ part.sku ? ' | SKU: ' + part.sku : '' }}</small>
+                    </div>
+                </mat-option>
+                }
+            </mat-autocomplete>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+            <mat-label>Quantity</mat-label>
+            <input matInput type="number" formControlName="quantity" min="1">
+        </mat-form-field>
+        } @else {
+        <mat-form-field appearance="outline">
+            <mat-label>Name</mat-label>
+            <input matInput formControlName="name" placeholder="e.g. shelf 1">
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+            <mat-label>Description</mat-label>
+            <textarea matInput formControlName="description" rows="3"></textarea>
+        </mat-form-field>
+        }
+    </form>
+</mat-dialog-content>
+<mat-dialog-actions align="end">
+    @if (isEditMode) {
+    <button mat-flat-button class="mat-custom-error" (click)="delete()" style="margin-right: auto;">
+        <mat-icon>delete</mat-icon>
+        Delete
+    </button>
+    }
+    <button mat-button mat-dialog-close>Cancel</button>
+    <button mat-flat-button color="primary" (click)="save()" [disabled]="!isFormValid()">{{ isEditMode ? 'Save' : 'Add'
+        }}</button>
+</mat-dialog-actions>

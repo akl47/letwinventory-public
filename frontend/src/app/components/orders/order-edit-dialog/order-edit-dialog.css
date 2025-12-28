@@ -1,0 +1,36 @@
+.dialog-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 500px;
+    padding-top: 8px;
+}
+
+.full-width {
+    width: 100%;
+}
+
+.form-row {
+    display: flex;
+    gap: 16px;
+}
+
+.form-row mat-form-field {
+    flex: 1;
+}
+
+mat-dialog-actions {
+    padding: 16px 24px;
+    gap: 8px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .dialog-form {
+        min-width: 300px;
+    }
+
+    .form-row {
+        flex-direction: column;
+    }
+}

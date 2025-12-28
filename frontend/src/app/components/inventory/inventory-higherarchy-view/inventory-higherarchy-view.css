@@ -1,0 +1,45 @@
+.hierarchy-wrapper {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.search-bar {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+}
+
+.search-field {
+    width: 100%;
+    max-width: 600px;
+}
+
+.hierarchy-container {
+    padding: 20px;
+    color: #b6c2cf;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.no-results {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    color: var(--mat-sys-on-surface-variant);
+    text-align: center;
+}
+
+.no-results mat-icon {
+    font-size: 48px;
+    width: 48px;
+    height: 48px;
+    margin-bottom: 16px;
+    opacity: 0.5;
+}
+
+.no-results p {
+    margin: 0;
+    font-size: 16px;
+}

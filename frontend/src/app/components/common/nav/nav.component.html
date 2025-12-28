@@ -19,6 +19,21 @@
                 <mat-icon matListItemIcon>task</mat-icon>
                 <span matListItemTitle>Tasks</span>
             </a>
+            <a mat-list-item routerLink="/inventory" routerLinkActive="active-link" matTooltip="Inventory"
+                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
+                <mat-icon matListItemIcon>inventory</mat-icon>
+                <span matListItemTitle>Inventory</span>
+            </a>
+            <a mat-list-item routerLink="/parts" routerLinkActive="active-link" matTooltip="Parts"
+                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
+                <mat-icon matListItemIcon>widgets</mat-icon>
+                <span matListItemTitle>Parts</span>
+            </a>
+            <a mat-list-item routerLink="/orders" routerLinkActive="active-link" matTooltip="Orders"
+                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
+                <mat-icon matListItemIcon>shopping_cart</mat-icon>
+                <span matListItemTitle>Orders</span>
+            </a>
             }
         </mat-nav-list>
     </mat-sidenav>
