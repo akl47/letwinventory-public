@@ -30,6 +30,6 @@ module.exports = {
     });
   },
   down: async (queryInterface, Sequelize) => {
-    await queryInterface.dropTable('TaskLists');
+    await queryInterface.dropTable('TaskLists', { cascade: true });
   }
 };

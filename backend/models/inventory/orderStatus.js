@@ -10,6 +10,13 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'orderStatusID',
         onDelete: 'CASCADE'
       });
+
+      // Self-referential association for next status in workflow
+      OrderStatus.belongsTo(models.OrderStatus, {
+        foreignKey: 'nextStatusID',
+        as: 'NextStatus',
+        onDelete: 'SET NULL'
+      });
     }
   }
 
@@ -24,6 +31,16 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true
+    },
+    tagColor: {
+      type: DataTypes.STRING(7),
+      allowNull: true,
+      comment: 'Hex color code for status tag (e.g., #FF5733)'
+    },
+    nextStatusID: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      comment: 'ID of the next status in the workflow'
     },
     activeFlag: {
       type: DataTypes.BOOLEAN,

@@ -59,11 +59,11 @@ export class OrderView implements OnInit {
 
   // Inline editing signals
   editingItemId = signal<number | null>(null);
-  editingQuantity = 1;
-  editingPrice = 0;
-  editingLineTypeId = 1;
-  editingPartId: number | null = null;
-  editingDescription = '';
+  editingQuantity = signal<number>(1);
+  editingPrice = signal<number>(0);
+  editingLineTypeId = signal<number>(1);
+  editingPartId = signal<number | null>(null);
+  editingDescription = signal<string>('');
 
   orderStatuses = signal([
     { id: 1, name: 'Pending' },
@@ -122,7 +122,7 @@ export class OrderView implements OnInit {
     });
   }
 
-  loadOrder() {
+  loadOrder(preserveEditMode = false) {
     const id = this.orderId();
     if (!id) return;
 
@@ -139,8 +139,12 @@ export class OrderView implements OnInit {
           link: order.link,
           description: order.description
         });
-        this.orderItems.set(order.OrderItems || []);
-        this.isFormEditMode.set(false);
+        // Sort items by lineNumber to ensure correct order
+        const sortedItems = (order.OrderItems || []).sort((a, b) => a.lineNumber - b.lineNumber);
+        this.orderItems.set(sortedItems);
+        if (!preserveEditMode) {
+          this.isFormEditMode.set(false);
+        }
       },
       error: (err) => {
         this.errorNotification.showHttpError(err, 'Error loading order');
@@ -164,6 +168,58 @@ export class OrderView implements OnInit {
       return;
     }
 
+    // If a line item is being edited, save it first
+    const editingId = this.editingItemId();
+    if (editingId !== null) {
+      const editingItem = this.orderItems().find(item => item.id === editingId);
+      if (editingItem) {
+        // Validate the line item being edited
+        // Convert to numbers in case they're strings
+        const quantity = Number(this.editingQuantity());
+        const price = Number(this.editingPrice());
+
+        if (quantity < 1 || isNaN(quantity)) {
+          this.errorNotification.showError('Quantity must be at least 1');
+          return;
+        }
+        if (price < 0 || isNaN(price)) {
+          this.errorNotification.showError('Price cannot be negative');
+          return;
+        }
+
+        const updateData: any = {
+          quantity: quantity,
+          price: price,
+          orderLineTypeID: this.editingLineTypeId()
+        };
+
+        if (this.editingLineTypeId() === 1) {
+          updateData.partID = this.editingPartId();
+          updateData.name = null;
+        } else {
+          updateData.partID = null;
+          updateData.name = this.editingDescription();
+        }
+
+        // Save the line item first, then save the order
+        this.inventoryService.updateOrderItem(editingId, updateData).subscribe({
+          next: () => {
+            this.editingItemId.set(null);
+            this.saveOrder();
+          },
+          error: (err) => {
+            this.errorNotification.showHttpError(err, 'Failed to save line item');
+          }
+        });
+        return;
+      }
+    }
+
+    // No line item being edited, proceed with saving the order
+    this.saveOrder();
+  }
+
+  private saveOrder() {
     const formValue = this.form.value;
     const orderData = {
       placedDate: formValue.placedDate?.toISOString(),
@@ -295,45 +351,49 @@ export class OrderView implements OnInit {
 
   startEditLineItem(item: OrderItem) {
     this.editingItemId.set(item.id);
-    this.editingQuantity = item.quantity;
-    this.editingPrice = this.getPrice(item);
-    this.editingLineTypeId = item.orderLineTypeID;
-    this.editingPartId = item.partID;
-    this.editingDescription = item.name || '';
+    this.editingQuantity.set(item.quantity);
+    this.editingPrice.set(this.getPrice(item));
+    this.editingLineTypeId.set(item.orderLineTypeID);
+    this.editingPartId.set(item.partID);
+    this.editingDescription.set(item.name || '');
   }
 
   saveLineItem(item: OrderItem) {
-    if (this.editingQuantity < 1) {
+    // Convert to numbers in case they're strings
+    const quantity = Number(this.editingQuantity());
+    const price = Number(this.editingPrice());
+
+    if (quantity < 1 || isNaN(quantity)) {
       this.errorNotification.showError('Quantity must be at least 1');
       return;
     }
 
-    if (this.editingPrice < 0) {
+    if (price < 0 || isNaN(price)) {
       this.errorNotification.showError('Price cannot be negative');
       return;
     }
 
     const updateData: any = {
-      quantity: this.editingQuantity,
-      price: this.editingPrice,
-      orderLineTypeID: this.editingLineTypeId
+      quantity: quantity,
+      price: price,
+      orderLineTypeID: this.editingLineTypeId()
     };
 
     // If line type is Part (id=1), set partID and clear name
     // Otherwise, set name and clear partID
-    if (this.editingLineTypeId === 1) {
-      updateData.partID = this.editingPartId;
+    if (this.editingLineTypeId() === 1) {
+      updateData.partID = this.editingPartId();
       updateData.name = null;
     } else {
       updateData.partID = null;
-      updateData.name = this.editingDescription;
+      updateData.name = this.editingDescription();
     }
 
     this.inventoryService.updateOrderItem(item.id, updateData).subscribe({
       next: () => {
         this.errorNotification.showSuccess('Line item updated');
         this.editingItemId.set(null);
-        this.loadOrder();
+        this.loadOrder(true); // Preserve edit mode after saving line item
       },
       error: (err) => {
         this.errorNotification.showHttpError(err, 'Failed to update line item');
@@ -343,6 +403,14 @@ export class OrderView implements OnInit {
 
   cancelLineItemEdit() {
     this.editingItemId.set(null);
+  }
+
+  onQuantityChange(value: any) {
+    this.editingQuantity.set(value);
+  }
+
+  onPriceChange(value: any) {
+    this.editingPrice.set(value);
   }
 
   dropLineItem(event: CdkDragDrop<OrderItem[]>) {

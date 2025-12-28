@@ -386,7 +386,7 @@ exports.order = (req,res,next) => {
 exports.orderItem = (req,res,next) => {
     const model = db.OrderItem.tableAttributes
     let ignore = [...ignore_all]
-    ignore.push('orderItemID', 'quantity', 'unit', 'unitPrice', 'status', 'sku', 'vendor')
+    ignore.push('orderItemID', 'unit', 'unitPrice', 'status', 'sku', 'vendor')
     return_body = {}
     let error_message = ''
     console.log(req.body)

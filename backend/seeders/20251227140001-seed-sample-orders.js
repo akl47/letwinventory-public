@@ -2,6 +2,14 @@
 
 module.exports = {
   up: async (queryInterface, Sequelize) => {
+    const db = require('../models');
+
+    // Query for order statuses
+    const pendingStatus = await db.OrderStatus.findOne({ where: { name: 'Pending' }, raw: true });
+    const placedStatus = await db.OrderStatus.findOne({ where: { name: 'Placed' }, raw: true });
+    const shippedStatus = await db.OrderStatus.findOne({ where: { name: 'Shipped' }, raw: true });
+    const receivedStatus = await db.OrderStatus.findOne({ where: { name: 'Received' }, raw: true });
+
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
@@ -16,7 +24,7 @@ module.exports = {
         link: 'https://www.acmeelectronics.example/orders/QE2024-001',
         placedDate: sixtyDaysAgo,
         receivedDate: new Date(sixtyDaysAgo.getTime() + 10 * 24 * 60 * 60 * 1000),
-        orderStatusID: 4, // Received
+        orderStatusID: receivedStatus.id,
         activeFlag: true,
         createdAt: sixtyDaysAgo,
         updatedAt: new Date(sixtyDaysAgo.getTime() + 10 * 24 * 60 * 60 * 1000)
@@ -28,7 +36,7 @@ module.exports = {
         link: 'https://www.fastship.example/track/FS-URGENT-2024',
         placedDate: thirtyDaysAgo,
         receivedDate: new Date(thirtyDaysAgo.getTime() + 5 * 24 * 60 * 60 * 1000),
-        orderStatusID: 4, // Received
+        orderStatusID: receivedStatus.id,
         activeFlag: true,
         createdAt: thirtyDaysAgo,
         updatedAt: new Date(thirtyDaysAgo.getTime() + 5 * 24 * 60 * 60 * 1000)
@@ -40,7 +48,7 @@ module.exports = {
         link: 'https://www.techparts.example/order/TPD-2024-M03',
         placedDate: fifteenDaysAgo,
         receivedDate: null,
-        orderStatusID: 3, // Shipped
+        orderStatusID: shippedStatus.id,
         activeFlag: true,
         createdAt: fifteenDaysAgo,
         updatedAt: new Date(fifteenDaysAgo.getTime() + 2 * 24 * 60 * 60 * 1000)
@@ -52,7 +60,7 @@ module.exports = {
         link: 'https://www.industrialtools.example/quotes/QT-8472',
         placedDate: sevenDaysAgo,
         receivedDate: null,
-        orderStatusID: 2, // Placed
+        orderStatusID: placedStatus.id,
         activeFlag: true,
         createdAt: sevenDaysAgo,
         updatedAt: sevenDaysAgo
@@ -62,9 +70,9 @@ module.exports = {
         vendor: 'Global Components Ltd',
         trackingNumber: null,
         link: null,
-        placedDate: null,
+        placedDate: sevenDaysAgo,
         receivedDate: null,
-        orderStatusID: 1, // Pending
+        orderStatusID: pendingStatus.id,
         activeFlag: true,
         createdAt: now,
         updatedAt: now
@@ -76,7 +84,7 @@ module.exports = {
         link: 'https://www.precisionmfg.example/custom-orders/BETA-2024',
         placedDate: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
         receivedDate: null,
-        orderStatusID: 2, // Placed
+        orderStatusID: placedStatus.id,
         activeFlag: true,
         createdAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
         updatedAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000)

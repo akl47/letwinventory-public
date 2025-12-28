@@ -42,6 +42,16 @@ module.exports = {
         type: DataTypes.INTEGER,
         allowNull:false
       },
+      partCategoryID: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 1,
+        references: {
+          model: 'PartCategories',
+          key: 'id'
+        },
+        onDelete: 'CASCADE'
+      },
       createdAt: {
         allowNull: false,
         type: DataTypes.DATE
@@ -53,6 +63,6 @@ module.exports = {
     });
   },
   down: async (queryInterface, Sequelize) => {
-    await queryInterface.dropTable('Parts');
+    await queryInterface.dropTable('Parts', { cascade: true });
   }
 };

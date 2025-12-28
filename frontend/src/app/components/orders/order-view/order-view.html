@@ -184,7 +184,7 @@
               <td mat-cell *matCellDef="let item">
                 @if (isFormEditMode() && editingItemId() === item.id) {
                 <mat-form-field appearance="outline" class="inline-edit-field">
-                  <mat-select [(ngModel)]="editingLineTypeId">
+                  <mat-select [ngModel]="editingLineTypeId()" (ngModelChange)="editingLineTypeId.set($event)">
                     @for (type of orderLineTypes(); track type.id) {
                     <mat-option [value]="type.id">{{ type.name }}</mat-option>
                     }
@@ -201,10 +201,10 @@
               <th mat-header-cell *matHeaderCellDef>Part / Description</th>
               <td mat-cell *matCellDef="let item">
                 @if (isFormEditMode() && editingItemId() === item.id) {
-                  @if (editingLineTypeId === 1) {
+                  @if (editingLineTypeId() === 1) {
                   <mat-form-field appearance="outline" class="inline-edit-field part-selector">
                     <mat-label>Select Part</mat-label>
-                    <mat-select [(ngModel)]="editingPartId">
+                    <mat-select [ngModel]="editingPartId()" (ngModelChange)="editingPartId.set($event)">
                       @for (part of parts(); track part.id) {
                       <mat-option [value]="part.id">
                         {{ part.name }}
@@ -218,7 +218,7 @@
                   } @else {
                   <mat-form-field appearance="outline" class="inline-edit-field">
                     <mat-label>Description</mat-label>
-                    <input matInput [(ngModel)]="editingDescription" placeholder="Line item description">
+                    <input matInput [ngModel]="editingDescription()" (ngModelChange)="editingDescription.set($event)" placeholder="Line item description">
                   </mat-form-field>
                   }
                 } @else {
@@ -243,7 +243,7 @@
               <td mat-cell *matCellDef="let item">
                 @if (isFormEditMode() && editingItemId() === item.id) {
                 <mat-form-field appearance="outline" class="inline-edit-field">
-                  <input matInput type="number" [(ngModel)]="editingQuantity" min="1">
+                  <input matInput type="number" [ngModel]="editingQuantity()" (ngModelChange)="onQuantityChange($event)" min="1">
                 </mat-form-field>
                 } @else {
                 {{ item.quantity }}
@@ -257,7 +257,7 @@
               <td mat-cell *matCellDef="let item">
                 @if (isFormEditMode() && editingItemId() === item.id) {
                 <mat-form-field appearance="outline" class="inline-edit-field">
-                  <input matInput type="number" [(ngModel)]="editingPrice" step="0.01" min="0">
+                  <input matInput type="number" [ngModel]="editingPrice()" (ngModelChange)="onPriceChange($event)" step="0.01" min="0">
                 </mat-form-field>
                 } @else {
                 ${{ getPrice(item).toFixed(2) }}
@@ -270,7 +270,7 @@
               <th mat-header-cell *matHeaderCellDef>Total</th>
               <td mat-cell *matCellDef="let item">
                 @if (isFormEditMode() && editingItemId() === item.id) {
-                <strong>${{ (editingQuantity * editingPrice).toFixed(2) }}</strong>
+                <strong>${{ (editingQuantity() * editingPrice()).toFixed(2) }}</strong>
                 } @else {
                 <strong>${{ calculateLineTotal(item).toFixed(2) }}</strong>
                 }

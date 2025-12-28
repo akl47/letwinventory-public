@@ -5,24 +5,21 @@ const db = require('../models'); // Assuming migrations is next to models
 module.exports = {
   up: async (queryInterface, Sequelize) => {
 
-    console.log("2")
     let loc_category_id = await db.BarcodeCategory.findOne({
       where: {
         prefix: "LOC"
       }
     })
-    console.log("3")
     let box_category_id = await db.BarcodeCategory.findOne({
       where: {
         prefix: "BOX"
       }
     })
-    console.log("4")
     const earthBarcode = await db.Barcode.create({
       barcodeCategoryID: loc_category_id.dataValues.id,
       parentBarcodeID: 0
     })
-    console.log("5")
+    console.log("earth barcode", earthBarcode.dataValues)
     const earth = await db.Location.create({
       name: 'Earth',
       description: 'Pale Blue Dot',

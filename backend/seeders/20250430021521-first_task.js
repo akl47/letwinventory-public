@@ -12,11 +12,15 @@ module.exports = {
         ownerUserID: user.id,
         taskListID: taskList.id,
         name: "SHIP IT",
+        createdAt: new Date(),
+        updatedAt: new Date()
       }, {
         ownerUserID: user.id,
         projectID: project.id,
         taskListID: taskList.id,
         name: "Letwinventory SHIP IT",
+        createdAt: new Date(),
+        updatedAt: new Date()
       },
     ]);
   },

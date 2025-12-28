@@ -60,6 +60,8 @@ services:
       - ${PGADMIN_PORT}:80
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+    logging:  
+      driver: "none"  # Disable all logs for this container 
 
 volumes:
   postgres_data:

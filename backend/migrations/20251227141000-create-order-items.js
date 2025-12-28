@@ -71,6 +71,6 @@ module.exports = {
     });
   },
   down: async (queryInterface, DataTypes) => {
-    await queryInterface.dropTable('OrderItems');
+    await queryInterface.dropTable('OrderItems', { cascade: true });
   }
 };

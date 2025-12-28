@@ -2,14 +2,58 @@
 
 module.exports = {
   up: async (queryInterface, Sequelize) => {
+    const db = require('../models');
+
+    // Query for orders by vendor name
+    const orders = await db.Order.findAll({
+      where: {
+        vendor: [
+          'Acme Electronics Supply',
+          'FastShip Logistics',
+          'TechParts Direct',
+          'Industrial Tools Co',
+          'Global Components Ltd',
+          'Precision Manufacturing'
+        ]
+      },
+      raw: true
+    });
+
+    // Create a map of vendor names to order IDs
+    const orderMap = {};
+    orders.forEach(order => {
+      orderMap[order.vendor] = order.id;
+    });
+
+    // Query for order line types
+    const partLineType = await db.OrderLineType.findOne({ where: { name: 'Part' }, raw: true });
+    const shippingLineType = await db.OrderLineType.findOne({ where: { name: 'Shipping' }, raw: true });
+    const taxesLineType = await db.OrderLineType.findOne({ where: { name: 'Taxes' }, raw: true });
+    const servicesLineType = await db.OrderLineType.findOne({ where: { name: 'Services' }, raw: true });
+    const otherLineType = await db.OrderLineType.findOne({ where: { name: 'Other' }, raw: true });
+
+    // Query for parts by name
+    const parts = await db.Part.findAll({
+      where: {
+        name: ['000000', '000001', '000002', '000003', '000004', '000005', '000006', '000007', '000008', '000009']
+      },
+      raw: true
+    });
+
+    // Create a map of part names to IDs for easy lookup
+    const partMap = {};
+    parts.forEach(part => {
+      partMap[part.name] = part.id;
+    });
+
     const now = new Date();
 
     return queryInterface.bulkInsert('OrderItems', [
-      // Order 1 - Mixed parts and services
+      // Acme Electronics Supply - Mixed parts and services
       {
-        orderID: 1,
-        partID: 1,
-        orderLineTypeID: 1, // Part
+        orderID: orderMap['Acme Electronics Supply'],
+        partID: partMap['000000'],
+        orderLineTypeID: partLineType.id,
         lineNumber: 1,
         quantity: 50,
         price: 12.50,
@@ -19,9 +63,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 1,
-        partID: 2,
-        orderLineTypeID: 1, // Part
+        orderID: orderMap['Acme Electronics Supply'],
+        partID: partMap['000001'],
+        orderLineTypeID: partLineType.id,
         lineNumber: 2,
         quantity: 100,
         price: 8.75,
@@ -31,9 +75,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 1,
+        orderID: orderMap['Acme Electronics Supply'],
         partID: null,
-        orderLineTypeID: 2, // Shipping
+        orderLineTypeID: shippingLineType.id,
         lineNumber: 3,
         quantity: 1,
         price: 45.00,
@@ -43,9 +87,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 1,
+        orderID: orderMap['Acme Electronics Supply'],
         partID: null,
-        orderLineTypeID: 3, // Taxes
+        orderLineTypeID: taxesLineType.id,
         lineNumber: 4,
         quantity: 1,
         price: 112.19,
@@ -55,11 +99,11 @@ module.exports = {
         updatedAt: now
       },
 
-      // Order 1002 - Parts with express shipping
+      // FastShip Logistics - Parts with express shipping
       {
-        orderID: 2,
-        partID: 3, // References Parts table (000002)
-        orderLineTypeID: 1, // Part
+        orderID: orderMap['FastShip Logistics'],
+        partID: partMap['000002'],
+        orderLineTypeID: partLineType.id,
         lineNumber: 1,
         quantity: 25,
         price: 34.99,
@@ -69,9 +113,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 2,
-        partID: 4, // References Parts table (000003)
-        orderLineTypeID: 1, // Part
+        orderID: orderMap['FastShip Logistics'],
+        partID: partMap['000003'],
+        orderLineTypeID: partLineType.id,
         lineNumber: 2,
         quantity: 15,
         price: 67.50,
@@ -81,9 +125,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 2,
+        orderID: orderMap['FastShip Logistics'],
         partID: null,
-        orderLineTypeID: 2, // Shipping
+        orderLineTypeID: shippingLineType.id,
         lineNumber: 3,
         quantity: 1,
         price: 125.00,
@@ -93,11 +137,11 @@ module.exports = {
         updatedAt: now
       },
 
-      // Order 1003 - Consumables and services
+      // TechParts Direct - Consumables and services
       {
-        orderID: 3,
-        partID: 5, // References Parts table (000004)
-        orderLineTypeID: 1, // Part
+        orderID: orderMap['TechParts Direct'],
+        partID: partMap['000004'],
+        orderLineTypeID: partLineType.id,
         lineNumber: 1,
         quantity: 200,
         price: 2.25,
@@ -107,9 +151,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 3,
-        partID: 6, // References Parts table (000005)
-        orderLineTypeID: 1, // Part
+        orderID: orderMap['TechParts Direct'],
+        partID: partMap['000005'],
+        orderLineTypeID: partLineType.id,
         lineNumber: 2,
         quantity: 500,
         price: 0.85,
@@ -119,9 +163,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 3,
+        orderID: orderMap['TechParts Direct'],
         partID: null,
-        orderLineTypeID: 4, // Services
+        orderLineTypeID: servicesLineType.id,
         lineNumber: 3,
         quantity: 1,
         price: 75.00,
@@ -131,9 +175,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 3,
+        orderID: orderMap['TechParts Direct'],
         partID: null,
-        orderLineTypeID: 2, // Shipping
+        orderLineTypeID: shippingLineType.id,
         lineNumber: 4,
         quantity: 1,
         price: 65.00,
@@ -143,11 +187,11 @@ module.exports = {
         updatedAt: now
       },
 
-      // Order 1004 - Tooling and equipment
+      // Industrial Tools Co - Tooling and equipment
       {
-        orderID: 4,
-        partID: 7, // References Parts table (000006)
-        orderLineTypeID: 1, // Part
+        orderID: orderMap['Industrial Tools Co'],
+        partID: partMap['000006'],
+        orderLineTypeID: partLineType.id,
         lineNumber: 1,
         quantity: 3,
         price: 450.00,
@@ -157,9 +201,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 4,
-        partID: 8, // References Parts table (000007)
-        orderLineTypeID: 1, // Part
+        orderID: orderMap['Industrial Tools Co'],
+        partID: partMap['000007'],
+        orderLineTypeID: partLineType.id,
         lineNumber: 2,
         quantity: 5,
         price: 125.00,
@@ -169,9 +213,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 4,
+        orderID: orderMap['Industrial Tools Co'],
         partID: null,
-        orderLineTypeID: 4, // Services
+        orderLineTypeID: servicesLineType.id,
         lineNumber: 3,
         quantity: 1,
         price: 200.00,
@@ -181,9 +225,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 4,
+        orderID: orderMap['Industrial Tools Co'],
         partID: null,
-        orderLineTypeID: 5, // Other
+        orderLineTypeID: otherLineType.id,
         lineNumber: 4,
         quantity: 1,
         price: 50.00,
@@ -193,11 +237,11 @@ module.exports = {
         updatedAt: now
       },
 
-      // Order 1005 - Prototype components
+      // Global Components Ltd - Prototype components
       {
-        orderID: 5,
-        partID: 9, // References Parts table (000008)
-        orderLineTypeID: 1, // Part
+        orderID: orderMap['Global Components Ltd'],
+        partID: partMap['000008'],
+        orderLineTypeID: partLineType.id,
         lineNumber: 1,
         quantity: 10,
         price: 89.99,
@@ -207,9 +251,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 5,
-        partID: 10, // References Parts table (000009)
-        orderLineTypeID: 1, // Part
+        orderID: orderMap['Global Components Ltd'],
+        partID: partMap['000009'],
+        orderLineTypeID: partLineType.id,
         lineNumber: 2,
         quantity: 20,
         price: 45.00,
@@ -219,9 +263,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 5,
+        orderID: orderMap['Global Components Ltd'],
         partID: null,
-        orderLineTypeID: 5, // Other
+        orderLineTypeID: otherLineType.id,
         lineNumber: 3,
         quantity: 1,
         price: 150.00,
@@ -231,11 +275,11 @@ module.exports = {
         updatedAt: now
       },
 
-      // Order 1006 - Custom machined parts
+      // Precision Manufacturing - Custom machined parts
       {
-        orderID: 6,
+        orderID: orderMap['Precision Manufacturing'],
         partID: null,
-        orderLineTypeID: 5, // Other
+        orderLineTypeID: otherLineType.id,
         lineNumber: 1,
         quantity: 1,
         price: 5000.00,
@@ -245,9 +289,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 6,
+        orderID: orderMap['Precision Manufacturing'],
         partID: null,
-        orderLineTypeID: 5, // Other
+        orderLineTypeID: otherLineType.id,
         lineNumber: 2,
         quantity: 1,
         price: 3500.00,
@@ -257,9 +301,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 6,
+        orderID: orderMap['Precision Manufacturing'],
         partID: null,
-        orderLineTypeID: 4, // Services
+        orderLineTypeID: servicesLineType.id,
         lineNumber: 3,
         quantity: 1,
         price: 500.00,
@@ -269,9 +313,9 @@ module.exports = {
         updatedAt: now
       },
       {
-        orderID: 6,
+        orderID: orderMap['Precision Manufacturing'],
         partID: null,
-        orderLineTypeID: 2, // Shipping
+        orderLineTypeID: shippingLineType.id,
         lineNumber: 4,
         quantity: 1,
         price: 250.00,

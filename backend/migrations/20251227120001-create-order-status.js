@@ -14,6 +14,22 @@ module.exports = {
         allowNull: false,
         unique: true
       },
+      tagColor: {
+        type: Sequelize.STRING(7),
+        allowNull: true,
+        comment: 'Hex color code for status tag (e.g., #FF5733)'
+      },
+      nextStatusID: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        references: {
+          model: 'OrderStatuses',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL',
+        comment: 'ID of the next status in the workflow'
+      },
       activeFlag: {
         type: Sequelize.BOOLEAN,
         allowNull: false,

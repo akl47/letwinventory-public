@@ -36,6 +36,6 @@ module.exports = {
     });
   },
   down: async (queryInterface, DataTypes) => {
-    await queryInterface.dropTable('Barcodes');
+    await queryInterface.dropTable('Barcodes', { cascade: true });
   }
 };
