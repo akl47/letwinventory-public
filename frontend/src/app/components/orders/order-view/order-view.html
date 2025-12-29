@@ -12,6 +12,12 @@
     </h2>
     <span class="spacer"></span>
     @if (isEditMode() && !isFormEditMode()) {
+    @if (hasNextStatus()) {
+    <button mat-flat-button color="accent" (click)="moveToNextStatus()">
+      <mat-icon>arrow_forward</mat-icon>
+      Next Status
+    </button>
+    }
     <button mat-button (click)="enableEdit()">
       <mat-icon>edit</mat-icon>
       Edit
@@ -89,6 +95,11 @@
               }
             </mat-select>
           </mat-form-field>
+
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Notes</mat-label>
+            <textarea matInput formControlName="notes" rows="4" placeholder="Internal notes about this order"></textarea>
+          </mat-form-field>
         </form>
         } @else {
         <div class="order-view-info">
@@ -139,6 +150,11 @@
                 {{ getStatusName(currentOrder()?.orderStatusID || 1) }}
               </span>
             </div>
+          </div>
+
+          <div class="info-item">
+            <div class="info-label">Notes</div>
+            <div class="info-value description-text">{{ currentOrder()?.notes || '-' }}</div>
           </div>
         </div>
         }

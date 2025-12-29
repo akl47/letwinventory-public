@@ -46,7 +46,7 @@
 .table-wrapper {
     flex: 1;
     overflow: auto;
-    border: 1px solid rgba(0, 0, 0, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 4px;
     margin-bottom: 16px;
 }
@@ -137,7 +137,7 @@
 .no-data {
     text-align: center;
     padding: 48px 24px;
-    color: rgba(0, 0, 0, 0.54);
+    color: rgba(255, 255, 255, 0.54);
 }
 
 .no-data mat-icon {
@@ -154,7 +154,7 @@
 }
 
 mat-paginator {
-    border-top: 1px solid rgba(0, 0, 0, 0.12);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 /* Responsive adjustments */

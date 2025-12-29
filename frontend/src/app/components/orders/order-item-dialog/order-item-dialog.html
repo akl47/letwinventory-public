@@ -26,12 +26,11 @@
           matInput
           formControlName="partSearch"
           [matAutocomplete]="auto"
-          placeholder="Search by SKU, name, or description"
-          required>
+          placeholder="Search by SKU, name, or description">
         <mat-icon matPrefix>search</mat-icon>
-        <mat-autocomplete #auto="matAutocomplete" [displayWith]="formatPartDisplay">
+        <mat-autocomplete #auto="matAutocomplete" [displayWith]="formatPartDisplay.bind(this)" (optionSelected)="onPartSelected($event.option.value)">
           @for (part of filteredParts | async; track part.id) {
-            <mat-option [value]="part" (onSelectionChange)="onPartSelected(part)">
+            <mat-option [value]="part">
               <div class="part-option">
                 <div class="part-option-main">
                   <strong>{{ part.sku || 'No SKU' }}</strong> - {{ part.name }}
@@ -48,7 +47,7 @@
       <!-- Description for non-Part line items -->
       <mat-form-field appearance="outline" class="full-width">
         <mat-label>Description</mat-label>
-        <input matInput formControlName="name" placeholder="Enter description" required>
+        <input matInput formControlName="name" placeholder="Enter description">
       </mat-form-field>
     }
 

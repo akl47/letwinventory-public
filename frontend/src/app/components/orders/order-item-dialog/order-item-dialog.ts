@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal, computed } from '@angular/core';
+import { Component, OnInit, inject, signal, computed, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { MatDialogModule, MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
@@ -45,6 +45,9 @@ export class OrderItemDialog implements OnInit {
 
   allParts = signal<Part[]>([]);
   selectedPart = signal<Part | null>(null);
+  currentQuantity = signal<number>(1);
+  currentPrice = signal<number>(0);
+  currentLineTypeID = signal<number>(1);
 
   orderLineTypes = signal([
     { id: 1, name: 'Part' },
@@ -56,7 +59,7 @@ export class OrderItemDialog implements OnInit {
 
   form = this.fb.group({
     orderLineTypeID: [1, Validators.required],
-    partSearch: [''],
+    partSearch: [null as Part | string | null],
     partID: [null as number | null],
     name: [''],
     quantity: [1, [Validators.required, Validators.min(1)]],
@@ -65,11 +68,11 @@ export class OrderItemDialog implements OnInit {
 
   filteredParts!: Observable<Part[]>;
 
-  isPartLineType = computed(() => this.form.value.orderLineTypeID === 1);
+  isPartLineType = computed(() => this.currentLineTypeID() === 1);
 
   lineTotal = computed(() => {
-    const quantity = this.form.value.quantity || 0;
-    const price = this.form.value.price || 0;
+    const quantity = this.currentQuantity();
+    const price = this.currentPrice();
     return quantity * price;
   });
 
@@ -77,40 +80,72 @@ export class OrderItemDialog implements OnInit {
     this.loadParts();
     this.setupAutocomplete();
 
+    // Sync form values to signals for reactive updates
+    this.form.get('quantity')?.valueChanges.subscribe(val => {
+      this.currentQuantity.set(val || 0);
+    });
+
+    this.form.get('price')?.valueChanges.subscribe(val => {
+      this.currentPrice.set(val || 0);
+    });
+
+    this.form.get('orderLineTypeID')?.valueChanges.subscribe(val => {
+      this.currentLineTypeID.set(val || 1);
+    });
+
     // If editing an existing item, populate the form
     if (this.data.orderItem) {
       const item = this.data.orderItem;
+      const price = typeof item.price === 'string' ? parseFloat(item.price) : item.price;
+
       this.form.patchValue({
         orderLineTypeID: item.orderLineTypeID,
         partID: item.partID,
         name: item.name || '',
         quantity: item.quantity,
-        price: typeof item.price === 'string' ? parseFloat(item.price) : item.price
+        price: price
       });
+
+      // Update signals
+      this.currentQuantity.set(item.quantity);
+      this.currentPrice.set(price);
+      this.currentLineTypeID.set(item.orderLineTypeID);
 
       // If it's a Part line item, set up the part search field
       if (item.Part) {
         // Cast to Part since we know it has the essential fields from backend
-        this.selectedPart.set(item.Part as Part);
+        const part = item.Part as Part;
+        this.selectedPart.set(part);
         this.form.patchValue({
-          partSearch: this.formatPartDisplay(item.Part)
+          partSearch: part  // Set the Part object itself, displayWith will format it
         });
       }
     }
 
     // Update validation when line type changes
-    this.form.get('orderLineTypeID')?.valueChanges.subscribe(typeId => {
+    const updateValidation = (typeId: number) => {
       if (typeId === 1) {
         // Part line item - partID required, name optional
         this.form.get('partID')?.setValidators([Validators.required]);
         this.form.get('name')?.clearValidators();
+        this.form.get('name')?.setValue('');
       } else {
         // Non-part line item - name required, partID optional
         this.form.get('partID')?.clearValidators();
+        this.form.get('partID')?.setValue(null);
+        this.form.get('partSearch')?.setValue('');
         this.form.get('name')?.setValidators([Validators.required]);
       }
       this.form.get('partID')?.updateValueAndValidity();
       this.form.get('name')?.updateValueAndValidity();
+    };
+
+    // Set initial validation state
+    updateValidation(this.form.value.orderLineTypeID || 1);
+
+    // Subscribe to changes
+    this.form.get('orderLineTypeID')?.valueChanges.subscribe(typeId => {
+      updateValidation(typeId || 1);
     });
   }
 
@@ -127,8 +162,17 @@ export class OrderItemDialog implements OnInit {
 
   setupAutocomplete() {
     this.filteredParts = this.form.get('partSearch')!.valueChanges.pipe(
-      startWith(''),
+      startWith(null),
       map(value => {
+        // Handle Part objects, strings, and null/undefined
+        if (!value) {
+          return this.allParts();
+        }
+        // If a Part object is selected, show all parts (user might want to change selection)
+        if (typeof value === 'object') {
+          return this.allParts();
+        }
+        // If it's a string, filter the parts
         const searchValue = typeof value === 'string' ? value : '';
         return this._filterParts(searchValue);
       })
@@ -145,15 +189,17 @@ export class OrderItemDialog implements OnInit {
     );
   }
 
-  formatPartDisplay(part: Part | Partial<Part>): string {
-    return `${part.sku || ''} - ${part.name || ''}`;
+  formatPartDisplay(part: Part | Partial<Part> | string | null): string {
+    if (!part || typeof part === 'string') {
+      return part as string || '';
+    }
+    return `${part.sku || ''} - ${part.name || ''}`.trim();
   }
 
   onPartSelected(part: Part) {
     this.selectedPart.set(part);
     this.form.patchValue({
-      partID: part.id,
-      partSearch: this.formatPartDisplay(part)
+      partID: part.id
     });
   }
 
@@ -177,7 +223,7 @@ export class OrderItemDialog implements OnInit {
       return;
     }
 
-    const orderItemData = {
+    const orderItemData: any = {
       orderID: this.data.orderID,
       orderLineTypeID: formValue.orderLineTypeID!,
       partID: formValue.partID,
@@ -187,7 +233,9 @@ export class OrderItemDialog implements OnInit {
     };
 
     if (this.data.orderItem) {
-      // Update existing item
+      // Update existing item - preserve lineNumber
+      orderItemData.lineNumber = this.data.orderItem.lineNumber;
+
       this.inventoryService.updateOrderItem(this.data.orderItem.id, orderItemData).subscribe({
         next: () => {
           this.errorNotification.showSuccess('Line item updated successfully');
@@ -198,14 +246,26 @@ export class OrderItemDialog implements OnInit {
         }
       });
     } else {
-      // Create new item
-      this.inventoryService.createOrderItem(orderItemData).subscribe({
-        next: () => {
-          this.errorNotification.showSuccess('Line item added successfully');
-          this.dialogRef.close(true);
+      // Create new item - get the next line number
+      this.inventoryService.getOrderById(this.data.orderID).subscribe({
+        next: (order) => {
+          const maxLineNumber = order.OrderItems && order.OrderItems.length > 0
+            ? Math.max(...order.OrderItems.map((item: any) => item.lineNumber || 0))
+            : 0;
+          orderItemData.lineNumber = maxLineNumber + 1;
+
+          this.inventoryService.createOrderItem(orderItemData).subscribe({
+            next: () => {
+              this.errorNotification.showSuccess('Line item added successfully');
+              this.dialogRef.close(true);
+            },
+            error: (err) => {
+              this.errorNotification.showHttpError(err, 'Failed to add line item');
+            }
+          });
         },
         error: (err) => {
-          this.errorNotification.showHttpError(err, 'Failed to add line item');
+          this.errorNotification.showHttpError(err, 'Failed to get order details');
         }
       });
     }

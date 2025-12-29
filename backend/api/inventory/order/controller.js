@@ -9,7 +9,7 @@ exports.getAllOrders = (req, res, next) => {
     include: [
       {
         model: db.OrderStatus,
-        attributes: ['id', 'name']
+        attributes: ['id', 'name', 'tagColor', 'nextStatusID']
       },
       {
         model: db.OrderItem,
@@ -45,7 +45,7 @@ exports.getOrderById = (req, res, next) => {
     include: [
       {
         model: db.OrderStatus,
-        attributes: ['id', 'name']
+        attributes: ['id', 'name', 'tagColor', 'nextStatusID']
       },
       {
         model: db.OrderItem,
@@ -78,10 +78,14 @@ exports.getOrderById = (req, res, next) => {
 
 exports.createNewOrder = (req, res, next) => {
   db.Order.create({
+    description: req.body.description,
+    vendor: req.body.vendor,
+    trackingNumber: req.body.trackingNumber,
+    link: req.body.link,
+    notes: req.body.notes,
     placedDate: req.body.placedDate,
     receivedDate: req.body.receivedDate,
-    orderStatusID: req.body.orderStatusID,
-    description: req.body.description
+    orderStatusID: req.body.orderStatusID
   }).then(order => {
     res.json(order);
   }).catch(error => {

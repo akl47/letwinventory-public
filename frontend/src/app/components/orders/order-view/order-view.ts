@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { FormBuilder, ReactiveFormsModule, FormsModule, Validators } from '@angular/forms';
@@ -80,6 +80,11 @@ export class OrderView implements OnInit {
     { id: 5, name: 'Other' }
   ]);
 
+  hasNextStatus = computed(() => {
+    const order = this.currentOrder();
+    return order?.OrderStatus?.nextStatusID != null;
+  });
+
   get displayedColumns(): string[] {
     if (this.isFormEditMode()) {
       return ['dragHandle', 'lineNumber', 'lineType', 'part', 'quantity', 'price', 'total', 'actions'];
@@ -94,7 +99,8 @@ export class OrderView implements OnInit {
     vendor: [''],
     trackingNumber: [''],
     link: [''],
-    description: ['']
+    description: [''],
+    notes: ['']
   });
 
   ngOnInit() {
@@ -137,7 +143,8 @@ export class OrderView implements OnInit {
           vendor: order.vendor,
           trackingNumber: order.trackingNumber,
           link: order.link,
-          description: order.description
+          description: order.description,
+          notes: order.notes
         });
         // Sort items by lineNumber to ensure correct order
         const sortedItems = (order.OrderItems || []).sort((a, b) => a.lineNumber - b.lineNumber);
@@ -228,7 +235,8 @@ export class OrderView implements OnInit {
       vendor: formValue.vendor || null,
       trackingNumber: formValue.trackingNumber || null,
       link: formValue.link || null,
-      description: formValue.description
+      description: formValue.description,
+      notes: formValue.notes || null
     };
 
     if (this.isEditMode() && this.orderId()) {
@@ -252,6 +260,37 @@ export class OrderView implements OnInit {
         }
       });
     }
+  }
+
+  moveToNextStatus() {
+    const order = this.currentOrder();
+    const nextStatusID = order?.OrderStatus?.nextStatusID;
+
+    if (!order || !nextStatusID) {
+      return;
+    }
+
+    // Preserve all existing order data, only update the status
+    const orderData = {
+      placedDate: order.placedDate,
+      receivedDate: order.receivedDate,
+      orderStatusID: nextStatusID,
+      vendor: order.vendor,
+      trackingNumber: order.trackingNumber,
+      link: order.link,
+      description: order.description,
+      notes: order.notes
+    };
+
+    this.inventoryService.updateOrder(order.id, orderData).subscribe({
+      next: () => {
+        this.errorNotification.showSuccess('Order status updated successfully');
+        this.loadOrder();
+      },
+      error: (err) => {
+        this.errorNotification.showHttpError(err, 'Failed to update order status');
+      }
+    });
   }
 
   delete() {

@@ -34,9 +34,25 @@ exports.createOrderItem = (req, res, next) => {
     orderID: req.body.orderID,
     partID: req.body.partID,
     orderLineTypeID: req.body.orderLineTypeID,
+    lineNumber: req.body.lineNumber,
     quantity: req.body.quantity,
     price: req.body.price,
     name: req.body.name // For non-Part items
+  }).then(item => {
+    // Fetch the created record with related data
+    return db.OrderItem.findOne({
+      where: { id: item.id },
+      include: [
+        {
+          model: db.Part,
+          attributes: ['id', 'name', 'description', 'vendor', 'sku']
+        },
+        {
+          model: db.OrderLineType,
+          attributes: ['id', 'name']
+        }
+      ]
+    });
   }).then(item => {
     res.json(item);
   }).catch(error => {

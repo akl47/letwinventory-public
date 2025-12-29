@@ -24,6 +24,10 @@ module.exports = {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      notes: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
       placedDate: {
         type: DataTypes.DATE,
         allowNull: true

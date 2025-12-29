@@ -10,6 +10,7 @@ export interface Order {
     trackingNumber: string | null;
     link: string | null;
     description: string | null;
+    notes: string | null;
     activeFlag: boolean;
     createdAt: string;
     updatedAt: string;
