@@ -1,13 +1,19 @@
 <div class="hierarchy-wrapper">
-    <div class="search-bar">
-        <mat-form-field appearance="outline" class="search-field">
-            <mat-label>Search inventory</mat-label>
-            <input matInput
-                   [ngModel]="searchText()"
-                   (ngModelChange)="onSearchChange($event)"
-                   placeholder="Search by name, barcode, or part number">
-            <mat-icon matPrefix>search</mat-icon>
-        </mat-form-field>
+    <div class="table-header">
+        <h2>
+            <mat-icon>inventory</mat-icon>
+            Inventory
+        </h2>
+        <div class="header-actions">
+            <mat-form-field appearance="outline" class="search-field">
+                <mat-label>Search inventory</mat-label>
+                <input matInput
+                       [ngModel]="searchText()"
+                       (ngModelChange)="onSearchChange($event)"
+                       placeholder="Search by name, barcode, or part number">
+                <mat-icon matPrefix>search</mat-icon>
+            </mat-form-field>
+        </div>
     </div>
 
     <div class="hierarchy-container">

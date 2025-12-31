@@ -8,11 +8,14 @@
 
         <!-- Navigation Items -->
         <mat-nav-list>
+
+            @if (!isAuthenticated()) {
             <a mat-list-item routerLink="/home" routerLinkActive="active-link" matTooltip="Home"
                 matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
                 <mat-icon matListItemIcon>home</mat-icon>
                 <span matListItemTitle>Home</span>
             </a>
+            }
             @if (isAuthenticated()) {
             <a mat-list-item routerLink="/tasks" routerLinkActive="active-link" matTooltip="Tasks"
                 matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">

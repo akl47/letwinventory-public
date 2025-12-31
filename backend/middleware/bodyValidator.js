@@ -176,7 +176,7 @@ exports.trace = (req,res,next) => {
     ignore.push('barcodeID')
     ignore.push('parentBarcodeID')
     return_body = {}
-    let error_message
+    let error_message = ''
     console.log(req.body)
     Object.keys(model).forEach(attribute=>{
         if(!ignore.includes(attribute)) {
