@@ -124,6 +124,7 @@ letwinventory-public/
 - [Architecture](docs/ARCHITECTURE.md) - System architecture overview
 - [Development Guide](docs/DEVELOPMENT.md) - Development setup and guidelines
 - [Deployment Guide](docs/DEPLOYMENT.md) - Production deployment instructions
+- [Proxmox Deployment](docs/PROXMOX-DEPLOYMENT.md) - Deploy on Proxmox server
 
 ## Environment Variables
 
