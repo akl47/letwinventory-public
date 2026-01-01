@@ -1,0 +1,92 @@
+<h2 mat-dialog-title>{{ isEditMode ? 'Edit Part' : 'New Part' }}</h2>
+<mat-dialog-content>
+    <form [formGroup]="form" class="dialog-form">
+        <mat-form-field appearance="outline">
+            <mat-label>Part Number</mat-label>
+            <input matInput formControlName="name" placeholder="e.g. 000011" maxlength="16" required>
+            @if (!isEditMode && suggestedPartNumber) {
+            <mat-hint>Suggested next: {{ suggestedPartNumber }}</mat-hint>
+            } @else {
+            <mat-hint>Numeric part number (e.g. 000011)</mat-hint>
+            }
+            @if (form.get('name')?.hasError('required') && form.get('name')?.touched) {
+            <mat-error>Part number is required</mat-error>
+            } @else if (form.get('name')?.hasError('maxlength')) {
+            <mat-error>Part number must be 16 characters or less</mat-error>
+            } @else if (isPartNameTaken() && form.get('name')?.touched) {
+            <mat-error>This part name is already in use</mat-error>
+            }
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+            <mat-label>Description</mat-label>
+            <textarea matInput formControlName="description" rows="2" maxlength="62"
+                placeholder="Brief description of the part"></textarea>
+            <mat-hint>Max 62 characters</mat-hint>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+            <mat-label>Category</mat-label>
+            <mat-select formControlName="partCategoryID" required>
+                @for (category of categories(); track category.id) {
+                <mat-option [value]="category.id">{{ category.name }}</mat-option>
+                }
+            </mat-select>
+            @if (form.get('partCategoryID')?.hasError('required') && form.get('partCategoryID')?.touched) {
+            <mat-error>Category is required</mat-error>
+            }
+        </mat-form-field>
+
+        <mat-checkbox formControlName="internalPart">
+            Internal Part (manufactured in-house)
+        </mat-checkbox>
+
+        <mat-form-field appearance="outline">
+            <mat-label>Vendor</mat-label>
+            <input matInput formControlName="vendor" placeholder="e.g. Digi-Key, Mouser">
+            @if (!form.get('internalPart')?.value) {
+            <mat-hint>Required for external parts</mat-hint>
+            } @else {
+            <mat-hint>Optional for internal parts</mat-hint>
+            }
+            @if (form.get('vendor')?.hasError('required') && form.get('vendor')?.touched) {
+            <mat-error>Vendor is required for external parts</mat-error>
+            } @else if (form.get('vendor')?.invalid && form.get('vendor')?.touched) {
+            <mat-error>Please enter a vendor name</mat-error>
+            }
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+            <mat-label>SKU</mat-label>
+            <input matInput formControlName="sku" placeholder="Vendor SKU or part number">
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+            <mat-label>Vendor Link</mat-label>
+            <input matInput formControlName="link" type="url" placeholder="https://...">
+            <mat-hint>URL to vendor product page</mat-hint>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+            <mat-label>Minimum Order Quantity</mat-label>
+            <input matInput formControlName="minimumOrderQuantity" type="number" min="1" required>
+            @if (form.get('minimumOrderQuantity')?.hasError('required') && form.get('minimumOrderQuantity')?.touched) {
+            <mat-error>Minimum order quantity is required</mat-error>
+            } @else if (form.get('minimumOrderQuantity')?.hasError('min')) {
+            <mat-error>Must be at least 1</mat-error>
+            }
+        </mat-form-field>
+    </form>
+</mat-dialog-content>
+<mat-dialog-actions align="end">
+    @if (isEditMode) {
+    <button mat-flat-button class="mat-custom-error" (click)="delete()" style="margin-right: auto;">
+        <mat-icon>delete</mat-icon>
+        Delete
+    </button>
+    }
+    <button mat-button mat-dialog-close>Cancel</button>
+    <button mat-flat-button color="primary" (click)="save()">
+        {{ isEditMode ? 'Save' : 'Create' }}
+    </button>
+</mat-dialog-actions>

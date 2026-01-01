@@ -1,0 +1,46 @@
+.barcode-container {
+    width: 100%;
+    height: 200px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.barcode-display {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.barcode-display.hidden {
+    visibility: hidden;
+}
+
+.barcode-img {
+    width: 100%;
+    height: 75%;
+    object-fit: contain;
+    border-radius: 5px;
+}
+
+.loading,
+.error {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 16px;
+    padding: 24px;
+    color: #b6c2cf;
+}
+
+.error {
+    color: #ff6b6b;
+}

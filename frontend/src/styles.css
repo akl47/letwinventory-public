@@ -31,7 +31,7 @@ body {
 .cdk-drag-preview {
     background-color: rgba(40, 45, 52, 0.95);
     border-radius: 0.5rem;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 8px 24px rgba(255, 255, 255, 0.4);
     padding: 0.625rem;
     cursor: grabbing;
     z-index: 1000;
@@ -43,7 +43,7 @@ body {
 }
 
 .cdk-drag-placeholder {
-    background-color: rgba(0, 0, 0, 0.2);
+    background-color: rgba(255, 255, 255, 0.2);
     border: none;
     border-radius: 0.5rem;
     min-height: 50px;

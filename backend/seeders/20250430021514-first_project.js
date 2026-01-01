@@ -11,6 +11,8 @@ module.exports = {
         tagColorHex: "ff0000",
         name: "letwinventory",
         shortName: "INV",
+        createdAt: new Date(),
+        updatedAt: new Date()
       }
     ]);
   },

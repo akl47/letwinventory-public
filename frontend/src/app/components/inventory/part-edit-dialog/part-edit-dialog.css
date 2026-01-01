@@ -1,0 +1,15 @@
+.dialog-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 400px;
+    padding: 8px 0;
+}
+
+mat-form-field {
+    width: 100%;
+}
+
+mat-checkbox {
+    margin: 8px 0;
+}

@@ -34,3 +34,107 @@ body {
 .content {
   padding: 0;
 }
+
+.mat-custom-error {
+  --mdc-filled-button-container-color: var(--mat-sys-error);
+  --mdc-filled-button-label-text-color: var(--mat-sys-on-error);
+  --mdc-filled-button-disabled-container-color: var(--mat-sys-error);
+  --mdc-filled-button-disabled-label-text-color: var(--mat-sys-on-error);
+
+  background-color: var(--mat-sys-error) !important;
+  color: var(--mat-sys-on-error) !important;
+}
+
+/* Snackbar Styles */
+.error-snackbar {
+  --mdc-snackbar-container-color: var(--mat-sys-error);
+  --mdc-snackbar-supporting-text-color: var(--mat-sys-on-error);
+  --mat-snack-bar-button-color: var(--mat-sys-on-error);
+
+  .mat-mdc-snack-bar-label {
+    color: var(--mat-sys-on-error);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 20px;
+  }
+
+  .mat-mdc-button {
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+}
+
+.success-snackbar {
+  --mdc-snackbar-container-color: var(--mat-sys-primary);
+  --mdc-snackbar-supporting-text-color: var(--mat-sys-on-primary);
+  --mat-snack-bar-button-color: var(--mat-sys-on-primary);
+
+  .mat-mdc-snack-bar-label {
+    color: var(--mat-sys-on-primary);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 20px;
+  }
+
+  .mat-mdc-button {
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+}
+
+.warning-snackbar {
+  --mdc-snackbar-container-color: var(--mat-sys-tertiary);
+  --mdc-snackbar-supporting-text-color: var(--mat-sys-on-tertiary);
+  --mat-snack-bar-button-color: var(--mat-sys-on-tertiary);
+
+  .mat-mdc-snack-bar-label {
+    color: var(--mat-sys-on-tertiary);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 20px;
+  }
+
+  .mat-mdc-button {
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+}
+
+.info-snackbar {
+  --mdc-snackbar-container-color: var(--mat-sys-inverse-surface);
+  --mdc-snackbar-supporting-text-color: var(--mat-sys-inverse-on-surface);
+  --mat-snack-bar-button-color: var(--mat-sys-inverse-primary);
+
+  .mat-mdc-snack-bar-label {
+    color: var(--mat-sys-inverse-on-surface);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 20px;
+  }
+
+  .mat-mdc-button {
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+}
+
+/* Global snackbar improvements */
+.mat-mdc-snack-bar-container {
+  --mdc-snackbar-container-shape: 8px;
+
+  .mdc-snackbar__surface {
+    padding: 0;
+    min-width: 344px;
+    max-width: 672px;
+  }
+
+  .mat-mdc-snack-bar-label {
+    padding: 14px 16px;
+    margin: 0;
+  }
+
+  .mat-mdc-snack-bar-actions {
+    padding: 8px 8px 8px 0;
+    margin: 0;
+  }
+}

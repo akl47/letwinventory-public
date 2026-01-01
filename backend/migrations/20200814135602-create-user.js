@@ -50,6 +50,6 @@ module.exports = {
     });
   },
   down: async (queryInterface, DataTypes) => {
-    await queryInterface.dropTable('Users');
+    await queryInterface.dropTable('Users', { cascade: true });
   }
 };

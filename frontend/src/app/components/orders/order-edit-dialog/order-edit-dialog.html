@@ -1,0 +1,68 @@
+<h2 mat-dialog-title>
+  @if (isEditMode()) {
+    Edit Order
+  } @else {
+    New Order
+  }
+</h2>
+
+<mat-dialog-content>
+  <form [formGroup]="form" class="dialog-form">
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Vendor</mat-label>
+      <input matInput formControlName="vendor" placeholder="Enter vendor name">
+    </mat-form-field>
+
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Order Link</mat-label>
+      <input matInput formControlName="link" placeholder="https://vendor.com/order/12345">
+      <mat-icon matPrefix>link</mat-icon>
+    </mat-form-field>
+
+    <div class="form-row">
+      <mat-form-field appearance="outline">
+        <mat-label>Placed Date</mat-label>
+        <input matInput [matDatepicker]="placedPicker" formControlName="placedDate" required>
+        <mat-datepicker-toggle matIconSuffix [for]="placedPicker"></mat-datepicker-toggle>
+        <mat-datepicker #placedPicker></mat-datepicker>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline">
+        <mat-label>Received Date</mat-label>
+        <input matInput [matDatepicker]="receivedPicker" formControlName="receivedDate">
+        <mat-datepicker-toggle matIconSuffix [for]="receivedPicker"></mat-datepicker-toggle>
+        <mat-datepicker #receivedPicker></mat-datepicker>
+      </mat-form-field>
+    </div>
+
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Order Status</mat-label>
+      <mat-select formControlName="orderStatusID" required>
+        @for (status of orderStatuses(); track status.id) {
+          <mat-option [value]="status.id">{{ status.name }}</mat-option>
+        }
+      </mat-select>
+    </mat-form-field>
+
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Description</mat-label>
+      <textarea matInput formControlName="description" rows="3" placeholder="Order description"></textarea>
+    </mat-form-field>
+
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Notes</mat-label>
+      <textarea matInput formControlName="notes" rows="3" placeholder="Additional notes"></textarea>
+    </mat-form-field>
+  </form>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button (click)="cancel()">Cancel</button>
+  <button mat-flat-button color="primary" (click)="save()">
+    @if (isEditMode()) {
+      Update
+    } @else {
+      Create
+    }
+  </button>
+</mat-dialog-actions>
