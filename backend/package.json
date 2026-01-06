@@ -17,7 +17,7 @@
     "mysql2": "^3.3.3",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
-    "pg": "^8.2.1",
+    "pg": "^8.13.0",
     "pg-escape": "^0.2.0",
     "sequelize": "^6.11.0"
   },
