@@ -8,5 +8,5 @@ import { NavComponent } from './components/common/nav/nav.component';
   styleUrl: './app.css',
 })
 export class App {
-  protected readonly title = signal('frontend-app');
+  protected readonly title = signal('Letwinventory');
 }

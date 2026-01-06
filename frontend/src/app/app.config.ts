@@ -1,14 +1,28 @@
-import { ApplicationConfig, provideBrowserGlobalErrorListeners, APP_INITIALIZER, inject } from '@angular/core';
-import { provideRouter, withHashLocation } from '@angular/router';
+import { ApplicationConfig, provideBrowserGlobalErrorListeners, provideAppInitializer, inject, Injectable } from '@angular/core';
+import { provideRouter, withHashLocation, TitleStrategy, RouterStateSnapshot } from '@angular/router';
 import { provideHttpClient } from '@angular/common/http';
-import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
+import { provideAnimations } from '@angular/platform-browser/animations';
 import { provideNativeDateAdapter } from '@angular/material/core';
+import { Title } from '@angular/platform-browser';
+import { firstValueFrom } from 'rxjs';
 
 import { routes } from './app.routes';
 import { AuthService } from './services/auth.service';
 
-function initializeApp(authService: AuthService) {
-  return () => authService.checkAuthStatus();
+@Injectable({ providedIn: 'root' })
+export class AppTitleStrategy extends TitleStrategy {
+  constructor(private readonly title: Title) {
+    super();
+  }
+
+  override updateTitle(routerState: RouterStateSnapshot): void {
+    const title = this.buildTitle(routerState);
+    if (title) {
+      this.title.setTitle(`${title} | Letwinventory`);
+    } else {
+      this.title.setTitle('Letwinventory');
+    }
+  }
 }
 
 export const appConfig: ApplicationConfig = {
@@ -16,13 +30,9 @@ export const appConfig: ApplicationConfig = {
     provideBrowserGlobalErrorListeners(),
     provideRouter(routes, withHashLocation()),
     provideHttpClient(),
-    provideAnimationsAsync(),
+    provideAnimations(),
     provideNativeDateAdapter(),
-    {
-      provide: APP_INITIALIZER,
-      useFactory: initializeApp,
-      deps: [AuthService],
-      multi: true
-    }
+    { provide: TitleStrategy, useClass: AppTitleStrategy },
+    provideAppInitializer(() => firstValueFrom(inject(AuthService).checkAuthStatus()))
   ]
 };
