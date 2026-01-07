@@ -9,13 +9,7 @@ const path = require('path');
 const envFile = process.env.NODE_ENV === 'production'
   ? '.env.production'
   : '.env.development';
-console.log(envFile)
 dotenv.config({ path: path.join(__dirname, `../../../../${envFile}`) });
-
-console.log('Google OAuth Configuration:');
-console.log('Client ID:', process.env.GOOGLE_CLIENT_ID);
-console.log('Callback URL:', process.env.GOOGLE_CALLBACK_URL);
-console.log('Frontend URL:', process.env.FRONTEND_URL);
 
 passport.use(
   new GoogleStrategy(
@@ -74,8 +68,6 @@ exports.handleCallback = (req, res, next) => {
 
         // Set token in cookie and redirect to frontend
         const redirectUrl = process.env.FRONTEND_URL || '/';
-        console.log('Redirecting to:', redirectUrl);
-        console.log('FRONTEND_URL env var:', process.env.FRONTEND_URL);
         res.cookie('auth_token', token, {
           httpOnly: false,
           secure: process.env.NODE_ENV === 'production',

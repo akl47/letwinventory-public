@@ -8,6 +8,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { DOCUMENT } from '@angular/common';
 import { AuthService } from '../../../services/auth.service';
+import { environment } from '../../../../environments/environment';
 
 @Component({
     selector: 'app-nav',
@@ -38,7 +39,7 @@ export class NavComponent {
     }
 
     login() {
-        this.document.location.href = 'http://localhost:3000/api/auth/google';
+        this.document.location.href = `${environment.apiUrl}/auth/google`;
     }
 
     logout() {

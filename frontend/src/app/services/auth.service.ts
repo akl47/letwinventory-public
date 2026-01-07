@@ -2,6 +2,7 @@ import { Injectable, signal, computed, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { DOCUMENT } from '@angular/common';
 import { Observable, catchError, map, of, tap } from 'rxjs';
+import { environment } from '../../environments/environment';
 
 export interface User {
     id: number;
@@ -73,7 +74,7 @@ export class AuthService {
             return of(false);
         }
 
-        return this.http.get<{ valid: boolean; user: User }>('http://localhost:3000/api/auth/user/checkToken', {
+        return this.http.get<{ valid: boolean; user: User }>(`${environment.apiUrl}/auth/user/checkToken`, {
             headers: { Authorization: `Bearer ${token}` }
         }).pipe(
             map(response => {

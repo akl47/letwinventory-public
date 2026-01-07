@@ -1,6 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { environment } from '../../environments/environment';
 
 export enum TaskActionID {
     MOVE_LIST = 1,
@@ -33,7 +34,7 @@ export interface TaskHistory {
     providedIn: 'root'
 })
 export class HistoryService {
-    private apiUrl = 'http://localhost:3000/api/planning/taskhistory';
+    private apiUrl = `${environment.apiUrl}/planning/taskhistory`;
     private http = inject(HttpClient);
 
     getAllHistory(offset: number = 0, limit: number = 10): Observable<TaskHistory[]> {

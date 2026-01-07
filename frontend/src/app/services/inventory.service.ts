@@ -15,13 +15,14 @@ import {
     Box,
     Trace
 } from '../models';
+import { environment } from '../../environments/environment';
 
 @Injectable({
     providedIn: 'root'
 })
 export class InventoryService {
     private http = inject(HttpClient);
-    private apiUrl = 'http://localhost:3000/api/inventory';
+    private apiUrl = `${environment.apiUrl}/inventory`;
 
     getAllTags(): Observable<InventoryTag[]> {
         return this.http.get<InventoryTag[]>(`${this.apiUrl}/barcode/tag/`);
@@ -49,6 +50,16 @@ export class InventoryService {
 
     deleteItem(item: InventoryTag): Observable<any> {
         return this.http.delete(`${this.apiUrl}/barcode/${item.id}`);
+    }
+
+    getAllBarcodes(): Observable<Barcode[]> {
+        return this.http.get<Barcode[]>(`${this.apiUrl}/barcode/`);
+    }
+
+    getBarcodeZPL(barcodeId: number): Observable<string> {
+        return this.http.get(`${this.apiUrl}/barcode/display/${barcodeId}`, {
+            responseType: 'text'
+        });
     }
 
     createTrace(data: { partID: number; quantity: number; parentBarcodeID: number }): Observable<any> {

@@ -2,12 +2,13 @@ import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable, shareReplay } from 'rxjs';
 import { Project } from '../models/project.model';
+import { environment } from '../../environments/environment';
 
 @Injectable({
     providedIn: 'root'
 })
 export class ProjectService {
-    private apiUrl = 'http://localhost:3000/api/planning/project';
+    private apiUrl = `${environment.apiUrl}/planning/project`;
     private projects$?: Observable<Project[]>;
 
     constructor(private http: HttpClient) { }

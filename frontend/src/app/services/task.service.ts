@@ -3,12 +3,13 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable, Subject } from 'rxjs';
 import { TaskList } from '../models/task-list.model';
 import { Task } from '../models/task.model';
+import { environment } from '../../environments/environment';
 
 @Injectable({
     providedIn: 'root'
 })
 export class TaskService {
-    private apiUrl = 'http://localhost:3000/api/planning/tasklist';
+    private apiUrl = `${environment.apiUrl}/planning/tasklist`;
     private refreshTaskListsSubject = new Subject<void>();
     refreshTaskLists$ = this.refreshTaskListsSubject.asObservable();
 
@@ -30,7 +31,7 @@ export class TaskService {
         const headers = new HttpHeaders({
             'Authorization': `Bearer ${token}`
         });
-        return this.http.post<Task>('http://localhost:3000/api/planning/task', task, { headers });
+        return this.http.post<Task>(`${environment.apiUrl}/planning/task`, task, { headers });
     }
 
     moveTask(taskId: number, taskListId: number, newIndex: number): Observable<Task> {
@@ -38,7 +39,7 @@ export class TaskService {
         const headers = new HttpHeaders({
             'Authorization': `Bearer ${token}`
         });
-        return this.http.put<Task>(`http://localhost:3000/api/planning/task/${taskId}/move`, { taskListId, newIndex }, { headers });
+        return this.http.put<Task>(`${environment.apiUrl}/planning/task/${taskId}/move`, { taskListId, newIndex }, { headers });
     }
 
     updateTask(taskId: number, updates: Partial<Task>): Observable<Task> {
@@ -46,7 +47,7 @@ export class TaskService {
         const headers = new HttpHeaders({
             'Authorization': `Bearer ${token}`
         });
-        return this.http.put<Task>(`http://localhost:3000/api/planning/task/${taskId}`, updates, { headers });
+        return this.http.put<Task>(`${environment.apiUrl}/planning/task/${taskId}`, updates, { headers });
     }
 
     getTask(taskId: number): Observable<Task> {
@@ -54,7 +55,7 @@ export class TaskService {
         const headers = new HttpHeaders({
             'Authorization': `Bearer ${token}`
         });
-        return this.http.get<Task>(`http://localhost:3000/api/planning/task/${taskId}`, { headers });
+        return this.http.get<Task>(`${environment.apiUrl}/planning/task/${taskId}`, { headers });
     }
 
     getSubtasks(parentTaskId: number): Observable<Task[]> {
@@ -62,7 +63,7 @@ export class TaskService {
         const headers = new HttpHeaders({
             'Authorization': `Bearer ${token}`
         });
-        return this.http.get<Task[]>(`http://localhost:3000/api/planning/task?parentTaskID=${parentTaskId}`, { headers });
+        return this.http.get<Task[]>(`${environment.apiUrl}/planning/task?parentTaskID=${parentTaskId}`, { headers });
     }
 
     getAllTasks(): Observable<Task[]> {
@@ -70,6 +71,6 @@ export class TaskService {
         const headers = new HttpHeaders({
             'Authorization': `Bearer ${token}`
         });
-        return this.http.get<Task[]>('http://localhost:3000/api/planning/task', { headers });
+        return this.http.get<Task[]>(`${environment.apiUrl}/planning/task`, { headers });
     }
 }
