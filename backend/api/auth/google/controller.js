@@ -2,13 +2,27 @@ const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const jwt = require('jsonwebtoken');
 const db = require('../../../models');
+const dotenv = require('dotenv');
+const path = require('path');
+
+// Load environment-specific .env file
+const envFile = process.env.NODE_ENV === 'production'
+  ? '.env.production'
+  : '.env.development';
+console.log(envFile)
+dotenv.config({ path: path.join(__dirname, `../../../../${envFile}`) });
+
+console.log('Google OAuth Configuration:');
+console.log('Client ID:', process.env.GOOGLE_CLIENT_ID);
+console.log('Callback URL:', process.env.GOOGLE_CALLBACK_URL);
+console.log('Frontend URL:', process.env.FRONTEND_URL);
 
 passport.use(
   new GoogleStrategy(
     {
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "http://localhost:3000/api/auth/google/callback"
+      callbackURL: process.env.GOOGLE_CALLBACK_URL
     },
     (accessToken, refreshToken, profile, done) => {
       return done(null, profile);
@@ -59,6 +73,9 @@ exports.handleCallback = (req, res, next) => {
         );
 
         // Set token in cookie and redirect to frontend
+        const redirectUrl = process.env.FRONTEND_URL || '/';
+        console.log('Redirecting to:', redirectUrl);
+        console.log('FRONTEND_URL env var:', process.env.FRONTEND_URL);
         res.cookie('auth_token', token, {
           httpOnly: false,
           secure: process.env.NODE_ENV === 'production',
@@ -69,7 +86,7 @@ exports.handleCallback = (req, res, next) => {
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
           maxAge: 86400000 // 24 hours
-        }).redirect("http://localhost:4200");
+        }).redirect(redirectUrl);
       } else {
         throw new Error('User is not authorized');
       }

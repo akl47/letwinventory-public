@@ -6,7 +6,11 @@ const dotenv = require("dotenv");
 const cors = require("cors");
 const { passport } = require("./auth/passport");
 
-dotenv.config({ path: path.join(__dirname, "../.env") });
+// Load environment-specific .env file
+const envFile = process.env.NODE_ENV === 'production'
+  ? '.env.production'
+  : '.env.development';
+dotenv.config({ path: path.join(__dirname, `../${envFile}`) });
 
 const port = process.env.BACKEND_PORT;
 global.db = require("./models");
@@ -36,6 +40,19 @@ app.use(bodyParser.json({ type: "application/vnd.api+json" }));
 app.use(passport.initialize());
 
 app.use("/api", require("./api"));
+
+// Serve Angular static files in production
+if (process.env.NODE_ENV === 'production') {
+  const frontendDistPath = path.join(__dirname, 'public');
+
+  // Serve static files from the Angular build
+  app.use(express.static(frontendDistPath));
+
+  // All non-API routes should serve the Angular app
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(frontendDistPath, 'index.html'));
+  });
+}
 
 app.use(require("./util/errorHandler"));
 

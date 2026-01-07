@@ -4,7 +4,13 @@ const fs = require("fs");
 const path = require("path");
 const Sequelize = require("sequelize");
 const dotenv = require("dotenv");
-dotenv.config({ path: path.join(__dirname, "../../.env") });
+
+// Load environment-specific .env file
+const envFile = process.env.NODE_ENV === 'production'
+  ? '.env.production'
+  : '.env.development';
+dotenv.config({ path: path.join(__dirname, `../../${envFile}`) });
+
 const basename = path.basename(__filename);
 const db = {};
 

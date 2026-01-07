@@ -1,0 +1,38 @@
+# Stage 1: Build Angular frontend
+FROM node:24-alpine AS frontend-build
+
+WORKDIR /app
+
+# Install Angular CLI globally
+RUN npm install -g @angular/cli
+
+# Copy frontend source
+COPY frontend/package*.json ./
+RUN npm install
+
+COPY frontend ./
+RUN ng build --configuration production
+
+# Stage 2: Build backend with frontend files
+FROM node:24-alpine
+
+# Create app directory
+RUN mkdir -p /usr/src
+WORKDIR /usr/src
+
+# Install dependencies
+COPY backend/package.json .
+RUN npm install --production
+
+# Install bcrypt with proper build flags
+RUN npm install bcrypt
+
+# Bundle app source
+COPY backend .
+
+# Copy built frontend files from frontend-build stage
+COPY --from=frontend-build /app/dist/frontend-app/browser ./public
+
+# Exports
+EXPOSE 3000
+CMD [ "npm", "start" ]

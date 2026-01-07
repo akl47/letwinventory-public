@@ -2,19 +2,10 @@ services:
   letwinventory-backend:
     build:
       context: ./backend
+    env_file:
+      - .env.development
     environment:
-      BACKEND_PORT: ${BACKEND_PORT}
-      DB_HOST: ${DB_HOST}
-      DB_NAME: ${DB_NAME}
-      DB_SCHEMA: ${DB_SCHEMA}
-      DB_USERNAME: ${DB_USERNAME}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_DIALECT: ${DB_DIALECT}
-      DB_PORT: ${DB_PORT}
-      JWT_SECRET: ${JWT_SECRET}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
-      GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL}
+      NODE_ENV: development
     volumes:
       - ./backend:/usr/src
       - ./backend/node_modules:/usr/src/node_modules # Remove this if you have pure JS dependencies
@@ -35,10 +26,6 @@ services:
       - letwinventory-postgres
       - letwinventory-backend
     container_name: letwinventory-frontend
-    environment:
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
-      GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL}
   letwinventory-postgres:
     image: postgres:18
     volumes:
@@ -48,7 +35,7 @@ services:
       POSTGRES_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
-      - 5433:${DB_PORT}
+      - 5433:5432
     container_name: letwinventory-postgres
   letwinventory-pgadmin:
     container_name: letwinventory-pgadmin4

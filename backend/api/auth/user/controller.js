@@ -50,10 +50,10 @@ exports.checkToken = async (req, res, next) => {
     }
 
     const token = req.headers.authorization.replace('Bearer ', '');
-    
+
     // Verify the token using jwt directly
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
+
     // Find the user in the database
     const user = await db.User.findOne({
       where: {

@@ -1,6 +1,8 @@
 # See http://help.github.com/ignore-files/ for more about ignoring files.
 
 /.env
+/.env.development
+/.env.production
 
 # compiled output
 frontend/dist
@@ -8,8 +10,6 @@ frontend/dist
 /out-tsc
 # Only exists if Bazel was run
 /bazel-out
-
-backend/config/config.json
 
 # dependencies
 node_modules
