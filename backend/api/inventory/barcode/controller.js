@@ -19,11 +19,70 @@ exports.getQueuedUpdatedByID = async (req, res, next) => {
 
 exports.printBarcode = async (req, res, next) => {
   try {
-    const { barcode, description } = req.body;
+    const { barcode, description, labelSize, printerIP } = req.body;
     const zpl = generateZPL(barcode, description);
 
-    await sendToPrinter(zpl);
+    await sendToPrinter(zpl, printerIP);
     res.json({ message: "Done" });
+  } catch (error) {
+    next(createError(500, `Error printing barcode: ${error.message}`));
+  }
+};
+
+exports.printBarcodeByID = async (req, res, next) => {
+  try {
+    const barcodeID = req.params.id;
+    const { labelSize, printerIP } = req.body;
+
+    const barcode = await findBarcodeWithCategory(barcodeID);
+
+    if (!barcode) {
+      return next(createError(404, 'Barcode not found'));
+    }
+
+    const prefix = barcode.BarcodeCategory.prefix;
+    const qrCodeData = `${barcode.barcode}`;
+
+    let zpl;
+    if (labelSize === '1.5x1') {
+      const zplHeader = generateZPLHeader_1_5x1(qrCodeData);
+      let zplDetails;
+      switch (prefix) {
+        case "LOC":
+          zplDetails = await getLocationZPL_1_5x1(barcode.id);
+          break;
+        case "BOX":
+          zplDetails = await getBoxZPL_1_5x1(barcode.id);
+          break;
+        case "AKL":
+          zplDetails = await getPartZPL_1_5x1(barcode.id);
+          break;
+        default:
+          return next(createError(400, `Unknown barcode type: ${prefix}`));
+      }
+      zpl = zplHeader + zplDetails;
+    } else {
+      // Default 3x1 label
+      const zplHeader = generateZPLHeader(qrCodeData);
+      let zplDetails;
+      switch (prefix) {
+        case "LOC":
+          zplDetails = await getLocationZPL(barcode.id);
+          break;
+        case "BOX":
+          zplDetails = await getBoxZPL(barcode.id);
+          break;
+        case "AKL":
+          zplDetails = await getPartZPL(barcode.id);
+          break;
+        default:
+          return next(createError(400, `Unknown barcode type: ${prefix}`));
+      }
+      zpl = zplHeader + zplDetails;
+    }
+
+    await sendToPrinter(zpl, printerIP);
+    res.json({ message: "Label printed successfully" });
   } catch (error) {
     next(createError(500, `Error printing barcode: ${error.message}`));
   }
@@ -56,7 +115,7 @@ exports.displayBarcode = async (req, res, next) => {
       default:
         return next(createError(400, `Unknown barcode type: ${prefix}`));
     }
-
+    console.log(zplHeader + zplDetails)
     res.send(zplHeader + zplDetails);
   } catch (error) {
     next(createError(500, `Error displaying barcode: ${error.message}`));
@@ -294,7 +353,7 @@ async function getPartZPL(barcodeID) {
 // Helper Functions - Printer
 // ============================================
 
-function sendToPrinter(zpl) {
+function sendToPrinter(zpl, printerIP = "10.10.10.37") {
   return new Promise((resolve, reject) => {
     const client = new Net.Socket();
 
@@ -302,7 +361,7 @@ function sendToPrinter(zpl) {
       reject(new Error(`Printer connection error: ${error.message}`));
     });
 
-    client.connect({ port: 9100, host: "10.10.10.37" }, () => {
+    client.connect({ port: 9100, host: printerIP }, () => {
       client.write(zpl);
       client.destroy();
       resolve();
@@ -344,9 +403,8 @@ function generateZPLHeader(qrCodeData) {
 
     ^FO15,147^A0N,13,13^FDLETWINVENTORY^FS
     ^FO493,46
-    ^BQN,2,5,Q,7
-    ^FD   ${qrCodeData}
-    ^FS
+    ^BQN,2,5
+    ^FDMA,${qrCodeData}^FS
     ^FO500,165^A0N,17,17^FD${qrCodeData}^FS`;
 }
 
@@ -361,4 +419,81 @@ function generateZPLDetails(name, description) {
              ^FS
              ^XZ
              `;
+}
+
+// ============================================
+// Helper Functions - ZPL Generation (1.5"x1" Labels)
+// ============================================
+
+function generateZPLHeader_1_5x1(qrCodeData) {
+  // Duplicate of generateZPLHeader for 1.5"x1" label
+  // TODO: Replace with actual 1.5"x1" ZPL code when provided
+  return `
+    ^XA
+
+    ^FO7,33^GFA,1512,1512,14,,:::::::::::::::::::::::::::::::Q0EI03,P03F801FE,P0FFC03FF,O03FBE03CFC,O0FE0E0783F,N03F80E0700FE,N0FE0C607103F8,M07FC1C607381FE,L01IF0C607387FF8,L0JFC0E0701JF,K03JFE0IF03JFE,J01LF0IF87KF8,J07LF8IF9MF,I01MFCE079MFC,I07JFE07CE03BIF83F7E,I0F8IFE03EE03JF01F0F8,001F0IFC03FE03JF00F87C,003C1IFC03FE03IFE00F83E,00781IFC03FC03IFE00FC0E,00701IFC03FC01JF01FC0F,00F01IFE07FC01JF81FC078,00E01JF0OFC7FC038,01C61FFC7OF1IFC63C,01C71FFC7IF800FFE1IFC71C,03C71FFC7IF800IF1IFC61C,03801MFI0MF801C,03800MFI07LF800C,03800MF800MF800E,03800WFI0E,038007VFI0E,038003KFCIFBKFEI0E,038003KFC0F01KFCI0C,038001KF8J0KF8001C,03CI0KF8J0KFI01C,01CI03JFK07IFEI01C,01CJ0JFK0JF8I038,00EJ01F3F8I01FCFCJ038,00FL07FCI03FEL078,007I0600F9KFCF003I0F,007800E01F0KF87807I0E,003C00603E07JF03E03003E,001EJ07C07800F03FJ07C,I0F8001FFBF800JFC001F8,I07F007EIF800IF3F007E,I01JF83FF800FFE1JFC,J07FFEI03800EI07IF,K0FF8I03800EJ0FF8,Q03800E,::Q03IFE,Q0KF,P01KF8,P01EI03C,P01CI01C,::P01F8IFC,P01FCIFC,P01CI01C,:::::P01KFC,:P01CI01C,:::001gGFC,003gGFE,00gIF8,03FJ07Q0EJ0FC,07FJ07Q0EJ07F,^FS
+
+    ^FO15,147^A0N,13,13^FDLETWINVENTORY^FS
+    ^FO493,46
+    ^BQN,2,5,Q,7
+    ^FD   ${qrCodeData}
+    ^FS
+    ^FO500,165^A0N,17,17^FD${qrCodeData}^FS`;
+}
+
+function generateZPLDetails_1_5x1(name, description) {
+  // Duplicate of generateZPLDetails for 1.5"x1" label
+  // TODO: Replace with actual 1.5"x1" ZPL code when provided
+  return `
+          ^FO120,58^A0N,46,46^FD${name}^FS
+
+          ^CF0,23,23^FO120,102
+             ^FB367,2,,,
+             ^FX 62 char limit
+             ^FD ${description}
+             ^FS
+             ^XZ
+             `;
+}
+
+async function getLocationZPL_1_5x1(barcodeID) {
+  const location = await db.Location.findOne({
+    where: { barcodeID, activeFlag: true }
+  });
+
+  if (!location) {
+    throw new Error('Location not found');
+  }
+
+  const locationData = location.toJSON();
+  return generateZPLDetails_1_5x1(locationData.name, locationData.description);
+}
+
+async function getBoxZPL_1_5x1(barcodeID) {
+  const box = await db.Box.findOne({
+    where: { barcodeID, activeFlag: true }
+  });
+
+  if (!box) {
+    throw new Error('Box not found');
+  }
+
+  const boxData = box.toJSON();
+  return generateZPLDetails_1_5x1(boxData.name, boxData.description);
+}
+
+async function getPartZPL_1_5x1(barcodeID) {
+  const trace = await db.Trace.findOne({
+    include: [{ model: db.Part, required: true }],
+    where: { barcodeID, activeFlag: true }
+  });
+
+  if (!trace) {
+    throw new Error('Part not found');
+  }
+
+  const traceData = trace.toJSON();
+  const details = `PN: ${traceData.Part.name}\n${traceData.Part.description}\nQty: ${traceData.quantity}\nOrder Qty: ${traceData.Part.minimumOrderQuantity}`;
+
+  return generateZPLDetails_1_5x1(traceData.Part.name, details);
 }

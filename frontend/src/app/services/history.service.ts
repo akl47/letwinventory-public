@@ -1,5 +1,5 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 
@@ -38,18 +38,10 @@ export class HistoryService {
     private http = inject(HttpClient);
 
     getAllHistory(offset: number = 0, limit: number = 10): Observable<TaskHistory[]> {
-        const token = localStorage.getItem('auth_token');
-        const headers = new HttpHeaders({
-            'Authorization': `Bearer ${token}`
-        });
-        return this.http.get<TaskHistory[]>(`${this.apiUrl}?offset=${offset}&limit=${limit}`, { headers });
+        return this.http.get<TaskHistory[]>(`${this.apiUrl}?offset=${offset}&limit=${limit}`);
     }
 
     getTaskHistory(taskId: number): Observable<TaskHistory[]> {
-        const token = localStorage.getItem('auth_token');
-        const headers = new HttpHeaders({
-            'Authorization': `Bearer ${token}`
-        });
-        return this.http.get<TaskHistory[]>(`${this.apiUrl}/task/${taskId}`, { headers });
+        return this.http.get<TaskHistory[]>(`${this.apiUrl}/task/${taskId}`);
     }
 }

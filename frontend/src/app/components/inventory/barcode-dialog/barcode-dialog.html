@@ -17,9 +17,39 @@
                 (error)="onImageError()" />
         </div>
         }
+
+        <!-- Print Options -->
+        <div class="print-options">
+            <h3>Print Options</h3>
+
+            <mat-form-field appearance="outline">
+                <mat-label>Label Size</mat-label>
+                <mat-select [(ngModel)]="selectedLabelSize">
+                    @for (size of labelSizes; track size.value) {
+                        <mat-option [value]="size.value">{{ size.label }}</mat-option>
+                    }
+                </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+                <mat-label>Printer</mat-label>
+                <mat-select [(ngModel)]="selectedPrinterIP">
+                    @for (printer of printers; track printer.ip) {
+                        <mat-option [value]="printer.ip">{{ printer.name }}</mat-option>
+                    }
+                </mat-select>
+            </mat-form-field>
+        </div>
     </div>
 </mat-dialog-content>
 <mat-dialog-actions align="end">
     <button mat-button (click)="moveBarcode()" style="margin-right: auto;">Move</button>
+    <button mat-raised-button color="primary" (click)="printLabel()" [disabled]="isPrinting() || !barcodeId()">
+        @if (isPrinting()) {
+            Printing...
+        } @else {
+            Print Label
+        }
+    </button>
     <button mat-button mat-dialog-close>Close</button>
 </mat-dialog-actions>

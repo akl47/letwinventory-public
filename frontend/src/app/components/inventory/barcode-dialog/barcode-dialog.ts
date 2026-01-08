@@ -2,14 +2,27 @@ import { Component, Inject, OnInit, signal } from '@angular/core';
 import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatSelectModule } from '@angular/material/select';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatInputModule } from '@angular/material/input';
 import { CommonModule } from '@angular/common';
 import { inject } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { InventoryService } from '../../../services/inventory.service';
 
 @Component({
   selector: 'app-barcode-dialog',
   standalone: true,
-  imports: [MatDialogModule, MatButtonModule, MatProgressSpinnerModule, CommonModule],
+  imports: [
+    MatDialogModule,
+    MatButtonModule,
+    MatProgressSpinnerModule,
+    MatSelectModule,
+    MatFormFieldModule,
+    MatInputModule,
+    CommonModule,
+    FormsModule
+  ],
   templateUrl: './barcode-dialog.html',
   styleUrl: './barcode-dialog.css',
 })
@@ -20,6 +33,20 @@ export class BarcodeDialog implements OnInit {
   isLoading = signal(true);
   error = signal<string | null>(null);
   barcodeId = signal<number | null>(null);
+  selectedLabelSize = signal<string>('3x1');
+  selectedPrinterIP = signal<string>('10.10.10.37');
+  isPrinting = signal(false);
+
+  labelSizes = [
+    { value: '3x1', label: '3" x 1"' },
+    { value: '1.5x1', label: '1.5" x 1"' }
+  ];
+
+  printers = [
+    { ip: '10.10.10.37', name: 'Default Printer (10.10.10.37)' },
+    { ip: '10.10.10.38', name: 'Printer 2 (10.10.10.38)' },
+    { ip: '10.10.10.39', name: 'Printer 3 (10.10.10.39)' }
+  ];
 
   constructor(@Inject(MAT_DIALOG_DATA) public data: { barcode: string }) { }
 
@@ -107,5 +134,28 @@ export class BarcodeDialog implements OnInit {
   onImageError() {
     this.error.set('Failed to load barcode image from Labelary');
     this.isLoading.set(false);
+  }
+
+  printLabel() {
+    const barcodeId = this.barcodeId();
+    if (!barcodeId) {
+      alert('Barcode ID not found');
+      return;
+    }
+
+    this.isPrinting.set(true);
+    const labelSize = this.selectedLabelSize();
+    const printerIP = this.selectedPrinterIP();
+
+    this.inventoryService.printBarcode(barcodeId, labelSize, printerIP).subscribe({
+      next: () => {
+        this.isPrinting.set(false);
+        alert('Label printed successfully!');
+      },
+      error: (err) => {
+        this.isPrinting.set(false);
+        alert('Error printing label: ' + (err.error?.message || err.message || 'Unknown error'));
+      }
+    });
   }
 }
