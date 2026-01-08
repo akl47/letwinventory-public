@@ -33,6 +33,7 @@ export class NavComponent {
     protected readonly isSidenavCollapsed = signal(false);
     protected readonly isAuthenticated = this.authService.isAuthenticated;
     protected readonly currentUser = this.authService.currentUser;
+    protected readonly isDev = !environment.production;
 
     toggleSidenav() {
         this.isSidenavCollapsed.update((collapsed) => !collapsed);

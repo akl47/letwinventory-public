@@ -89,6 +89,11 @@
   font-weight: 500;
 }
 
+/* Development environment indicator */
+.dev {
+  background-color: #d32f2f !important;
+}
+
 /* M3 Navigation list styling */
 .sidenav ::ng-deep .mat-mdc-nav-list {
   padding: 0;
