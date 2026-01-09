@@ -56,8 +56,11 @@ export class InventoryService {
         return this.http.get<Barcode[]>(`${this.apiUrl}/barcode/`);
     }
 
-    getBarcodeZPL(barcodeId: number): Observable<string> {
-        return this.http.get(`${this.apiUrl}/barcode/display/${barcodeId}`, {
+    getBarcodeZPL(barcodeId: number, labelSize?: string): Observable<string> {
+        const url = labelSize
+            ? `${this.apiUrl}/barcode/display/${barcodeId}?labelSize=${labelSize}`
+            : `${this.apiUrl}/barcode/display/${barcodeId}`;
+        return this.http.get(url, {
             responseType: 'text'
         });
     }

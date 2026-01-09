@@ -33,9 +33,11 @@ export class BarcodeDialog implements OnInit {
   isLoading = signal(true);
   error = signal<string | null>(null);
   barcodeId = signal<number | null>(null);
+  selectedPreviewSize = signal<string>('3x1');
   selectedLabelSize = signal<string>('3x1');
   selectedPrinterIP = signal<string>('10.10.10.37');
   isPrinting = signal(false);
+  showPrintOptions = signal(false);
 
   labelSizes = [
     { value: '3x1', label: '3" x 1"' },
@@ -109,10 +111,11 @@ export class BarcodeDialog implements OnInit {
     });
   }
 
-  private fetchZPL(barcodeId: number) {
-    this.inventoryService.getBarcodeZPL(barcodeId).subscribe({
+  private fetchZPL(barcodeId: number, labelSize?: string) {
+    const size = labelSize || this.selectedPreviewSize();
+    this.inventoryService.getBarcodeZPL(barcodeId, size).subscribe({
       next: (zpl) => {
-        this.renderBarcodeImage(zpl);
+        this.renderBarcodeImage(zpl, size);
       },
       error: (err) => {
         this.error.set('Failed to fetch barcode ZPL: ' + err.message);
@@ -121,10 +124,19 @@ export class BarcodeDialog implements OnInit {
     });
   }
 
-  private renderBarcodeImage(zpl: string) {
+  private renderBarcodeImage(zpl: string, labelSize: string) {
     const encodedZPL = encodeURIComponent(zpl);
-    const labelaryUrl = `https://api.labelary.com/v1/printers/8dpmm/labels/3x1/0/${encodedZPL}`;
+    const labelaryUrl = `https://api.labelary.com/v1/printers/8dpmm/labels/${labelSize}/0/${encodedZPL}`;
     this.barcodeImageUrl.set(labelaryUrl);
+  }
+
+  onPreviewSizeChange() {
+    const barcodeId = this.barcodeId();
+    if (barcodeId) {
+      this.isLoading.set(true);
+      this.error.set(null);
+      this.fetchZPL(barcodeId, this.selectedPreviewSize());
+    }
   }
 
   onImageLoad() {
@@ -134,6 +146,10 @@ export class BarcodeDialog implements OnInit {
   onImageError() {
     this.error.set('Failed to load barcode image from Labelary');
     this.isLoading.set(false);
+  }
+
+  togglePrintOptions() {
+    this.showPrintOptions.set(!this.showPrintOptions());
   }
 
   printLabel() {

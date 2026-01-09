@@ -119,6 +119,62 @@ This file tracks changes made to the codebase during Claude Code sessions.
 
 ---
 
+## Session: 2026-01-08
+
+### Files Modified
+- `frontend/src/app/components/inventory/barcode-dialog/barcode-dialog.html`
+- `frontend/src/app/components/inventory/barcode-dialog/barcode-dialog.ts`
+- `frontend/src/app/components/inventory/barcode-dialog/barcode-dialog.css`
+- `frontend/src/app/services/inventory.service.ts`
+- `backend/api/inventory/barcode/controller.js`
+
+### Changes Made
+
+1. **Added barcode preview size toggle in barcode dialog**
+   - Added separate "Preview Size" dropdown in barcode dialog to control preview rendering
+   - Added "Print Label Size" dropdown to specify the size for actual printing
+   - Both dropdowns support 3"x1" and 1.5"x1" label sizes
+   - Preview updates dynamically when the preview size is changed
+
+2. **Updated frontend barcode dialog component**
+   - Added `selectedPreviewSize` signal to track preview size selection (defaults to 3x1)
+   - Added `onPreviewSizeChange()` method that refetches and re-renders barcode preview when size changes
+   - Updated `fetchZPL()` method to accept optional `labelSize` parameter
+   - Updated `renderBarcodeImage()` method to use the selected label size in Labelary API URL
+   - Kept `selectedLabelSize` separate for print operations
+
+3. **Updated inventory service**
+   - Modified `getBarcodeZPL()` method to accept optional `labelSize` parameter
+   - Passes label size as query parameter to backend: `/api/inventory/barcode/display/:id?labelSize=3x1`
+   - Maintains backward compatibility by making the parameter optional
+
+4. **Updated backend barcode display endpoint**
+   - Modified `displayBarcode` controller to read `labelSize` from query parameters
+   - Defaults to '3x1' if no label size is specified
+   - Routes to appropriate ZPL generation functions based on label size:
+     - `generateZPLHeader_1_5x1()` and size-specific detail functions for 1.5x1 labels
+     - `generateZPLHeader()` and standard detail functions for 3x1 labels
+   - Supports LOC, BOX, and AKL (part) barcode types for both sizes
+
+5. **Implemented collapsible print options UI**
+   - Print options are now hidden by default to reduce visual clutter
+   - Added `showPrintOptions` signal to control visibility of print options
+   - Added `togglePrintOptions()` method to show/hide print options
+   - "Print Label" button now shows the print options panel instead of immediately printing
+   - When print options are visible, button changes to "Confirm Print" and a "Cancel" button appears
+   - Preview options (preview size selector) remain always visible
+   - Added CSS styling for both `.preview-options` and `.print-options` sections
+
+### Notes
+- Preview and print sizes are now independently selectable
+- Users can preview a small barcode but print a large one, or vice versa
+- Barcode preview refreshes automatically when preview size selection changes
+- Print options are hidden by default until user clicks "Print Label" button
+- Improved UX with two-step print confirmation workflow
+- Current branch: print_barcode
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:

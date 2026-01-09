@@ -91,6 +91,7 @@ exports.printBarcodeByID = async (req, res, next) => {
 exports.displayBarcode = async (req, res, next) => {
   try {
     const barcodeID = req.params.id;
+    const labelSize = req.query.labelSize || '3x1';
     const barcode = await findBarcodeWithCategory(barcodeID);
 
     if (!barcode) {
@@ -99,24 +100,45 @@ exports.displayBarcode = async (req, res, next) => {
 
     const prefix = barcode.BarcodeCategory.prefix;
     const qrCodeData = `${barcode.barcode}`;
-    const zplHeader = generateZPLHeader(qrCodeData);
 
-    let zplDetails;
-    switch (prefix) {
-      case "LOC":
-        zplDetails = await getLocationZPL(barcode.id);
-        break;
-      case "BOX":
-        zplDetails = await getBoxZPL(barcode.id);
-        break;
-      case "AKL":
-        zplDetails = await getPartZPL(barcode.id);
-        break;
-      default:
-        return next(createError(400, `Unknown barcode type: ${prefix}`));
+    let zpl;
+    if (labelSize === '1.5x1') {
+      const zplHeader = generateZPLHeader_1_5x1(qrCodeData);
+      let zplDetails;
+      switch (prefix) {
+        case "LOC":
+          zplDetails = await getLocationZPL_1_5x1(barcode.id);
+          break;
+        case "BOX":
+          zplDetails = await getBoxZPL_1_5x1(barcode.id);
+          break;
+        case "AKL":
+          zplDetails = await getPartZPL_1_5x1(barcode.id);
+          break;
+        default:
+          return next(createError(400, `Unknown barcode type: ${prefix}`));
+      }
+      zpl = zplHeader + zplDetails;
+    } else {
+      const zplHeader = generateZPLHeader(qrCodeData);
+      let zplDetails;
+      switch (prefix) {
+        case "LOC":
+          zplDetails = await getLocationZPL(barcode.id);
+          break;
+        case "BOX":
+          zplDetails = await getBoxZPL(barcode.id);
+          break;
+        case "AKL":
+          zplDetails = await getPartZPL(barcode.id);
+          break;
+        default:
+          return next(createError(400, `Unknown barcode type: ${prefix}`));
+      }
+      zpl = zplHeader + zplDetails;
     }
-    console.log(zplHeader + zplDetails)
-    res.send(zplHeader + zplDetails);
+
+    res.send(zpl);
   } catch (error) {
     next(createError(500, `Error displaying barcode: ${error.message}`));
   }
