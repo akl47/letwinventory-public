@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient } from '@angular/common/http';
 import { Observable, shareReplay } from 'rxjs';
 import { Project } from '../models/project.model';
 import { environment } from '../../environments/environment';
@@ -15,11 +15,7 @@ export class ProjectService {
 
     getProjects(): Observable<Project[]> {
         if (!this.projects$) {
-            const token = localStorage.getItem('auth_token');
-            const headers = new HttpHeaders({
-                'Authorization': `Bearer ${token}`
-            });
-            this.projects$ = this.http.get<Project[]>(this.apiUrl, { headers }).pipe(
+            this.projects$ = this.http.get<Project[]>(this.apiUrl).pipe(
                 shareReplay(1)
             );
         }

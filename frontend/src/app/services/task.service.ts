@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient } from '@angular/common/http';
 import { Observable, Subject } from 'rxjs';
 import { TaskList } from '../models/task-list.model';
 import { Task } from '../models/task.model';
@@ -20,57 +20,30 @@ export class TaskService {
     }
 
     getTaskLists(): Observable<TaskList[]> {
-        const token = localStorage.getItem('auth_token');
-        const headers = new HttpHeaders({
-            'Authorization': `Bearer ${token}`
-        });
-        return this.http.get<TaskList[]>(this.apiUrl, { headers });
+        return this.http.get<TaskList[]>(this.apiUrl);
     }
+
     createTask(task: Partial<Task>): Observable<Task> {
-        const token = localStorage.getItem('auth_token');
-        const headers = new HttpHeaders({
-            'Authorization': `Bearer ${token}`
-        });
-        return this.http.post<Task>(`${environment.apiUrl}/planning/task`, task, { headers });
+        return this.http.post<Task>(`${environment.apiUrl}/planning/task`, task);
     }
 
     moveTask(taskId: number, taskListId: number, newIndex: number): Observable<Task> {
-        const token = localStorage.getItem('auth_token');
-        const headers = new HttpHeaders({
-            'Authorization': `Bearer ${token}`
-        });
-        return this.http.put<Task>(`${environment.apiUrl}/planning/task/${taskId}/move`, { taskListId, newIndex }, { headers });
+        return this.http.put<Task>(`${environment.apiUrl}/planning/task/${taskId}/move`, { taskListId, newIndex });
     }
 
     updateTask(taskId: number, updates: Partial<Task>): Observable<Task> {
-        const token = localStorage.getItem('auth_token');
-        const headers = new HttpHeaders({
-            'Authorization': `Bearer ${token}`
-        });
-        return this.http.put<Task>(`${environment.apiUrl}/planning/task/${taskId}`, updates, { headers });
+        return this.http.put<Task>(`${environment.apiUrl}/planning/task/${taskId}`, updates);
     }
 
     getTask(taskId: number): Observable<Task> {
-        const token = localStorage.getItem('auth_token');
-        const headers = new HttpHeaders({
-            'Authorization': `Bearer ${token}`
-        });
-        return this.http.get<Task>(`${environment.apiUrl}/planning/task/${taskId}`, { headers });
+        return this.http.get<Task>(`${environment.apiUrl}/planning/task/${taskId}`);
     }
 
     getSubtasks(parentTaskId: number): Observable<Task[]> {
-        const token = localStorage.getItem('auth_token');
-        const headers = new HttpHeaders({
-            'Authorization': `Bearer ${token}`
-        });
-        return this.http.get<Task[]>(`${environment.apiUrl}/planning/task?parentTaskID=${parentTaskId}`, { headers });
+        return this.http.get<Task[]>(`${environment.apiUrl}/planning/task?parentTaskID=${parentTaskId}`);
     }
 
     getAllTasks(): Observable<Task[]> {
-        const token = localStorage.getItem('auth_token');
-        const headers = new HttpHeaders({
-            'Authorization': `Bearer ${token}`
-        });
-        return this.http.get<Task[]>(`${environment.apiUrl}/planning/task`, { headers });
+        return this.http.get<Task[]>(`${environment.apiUrl}/planning/task`);
     }
 }

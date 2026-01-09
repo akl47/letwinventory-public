@@ -62,116 +62,66 @@ export class InventoryService {
         });
     }
 
+    printBarcode(barcodeId: number, labelSize: string, printerIP: string): Observable<any> {
+        return this.http.post(`${this.apiUrl}/barcode/print/${barcodeId}`, { labelSize, printerIP });
+    }
+
     createTrace(data: { partID: number; quantity: number; parentBarcodeID: number }): Observable<any> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.post(`${this.apiUrl}/trace`, data, {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
+        return this.http.post(`${this.apiUrl}/trace`, data);
     }
 
     getAllParts(): Observable<Part[]> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.get<Part[]>(`${this.apiUrl}/part`, {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
+        return this.http.get<Part[]>(`${this.apiUrl}/part`);
     }
 
     moveBarcode(barcodeId: number, newLocationID: number): Observable<any> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.post(`${this.apiUrl}/barcode/move/${barcodeId}`, { newLocationID }, {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
+        return this.http.post(`${this.apiUrl}/barcode/move/${barcodeId}`, { newLocationID });
     }
 
     createPart(data: any): Observable<any> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.post(`${this.apiUrl}/part`, data, {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
+        return this.http.post(`${this.apiUrl}/part`, data);
     }
 
     updatePart(partId: number, data: any): Observable<any> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.put(`${this.apiUrl}/part/${partId}`, data, {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
+        return this.http.put(`${this.apiUrl}/part/${partId}`, data);
     }
 
     deletePart(partId: number): Observable<any> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.delete(`${this.apiUrl}/part/${partId}`, {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
+        return this.http.delete(`${this.apiUrl}/part/${partId}`);
     }
 
     // Order methods
     getAllOrders(): Observable<Order[]> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.get<Order[]>(`${this.apiUrl}/order`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        return this.http.get<Order[]>(`${this.apiUrl}/order`);
     }
 
     getOrderById(orderId: number): Observable<Order> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.get<Order>(`${this.apiUrl}/order/${orderId}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        return this.http.get<Order>(`${this.apiUrl}/order/${orderId}`);
     }
 
     createOrder(data: Partial<Order>): Observable<Order> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.post<Order>(`${this.apiUrl}/order`, data, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        return this.http.post<Order>(`${this.apiUrl}/order`, data);
     }
 
     updateOrder(orderId: number, data: Partial<Order>): Observable<Order> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.put<Order>(`${this.apiUrl}/order/${orderId}`, data, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        return this.http.put<Order>(`${this.apiUrl}/order/${orderId}`, data);
     }
 
     deleteOrder(orderId: number): Observable<any> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.delete(`${this.apiUrl}/order/${orderId}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        return this.http.delete(`${this.apiUrl}/order/${orderId}`);
     }
 
     // OrderItem methods
     createOrderItem(data: Partial<OrderItem>): Observable<OrderItem> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.post<OrderItem>(`${this.apiUrl}/orderitem`, data, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        return this.http.post<OrderItem>(`${this.apiUrl}/orderitem`, data);
     }
 
     updateOrderItem(itemId: number, data: Partial<OrderItem>): Observable<OrderItem> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.put<OrderItem>(`${this.apiUrl}/orderitem/${itemId}`, data, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        return this.http.put<OrderItem>(`${this.apiUrl}/orderitem/${itemId}`, data);
     }
 
     deleteOrderItem(itemId: number): Observable<any> {
-        const token = localStorage.getItem('auth_token');
-        return this.http.delete(`${this.apiUrl}/orderitem/${itemId}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+        return this.http.delete(`${this.apiUrl}/orderitem/${itemId}`);
     }
 }
 
