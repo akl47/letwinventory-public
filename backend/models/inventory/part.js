@@ -13,6 +13,10 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'partCategoryID',
         onDelete: 'CASCADE'
       });
+      Part.belongsTo(models.UnitOfMeasure, {
+        foreignKey: 'defaultUnitOfMeasureID',
+        as: 'UnitOfMeasure'
+      });
     }
   };
   Part.init({
@@ -59,6 +63,21 @@ module.exports = (sequelize, DataTypes) => {
     partCategoryID: {
       type: DataTypes.INTEGER,
       allowNull: false
+    },
+    serialNumberRequired: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
+    lotNumberRequired: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
+    defaultUnitOfMeasureID: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: 1 // Default to 'ea'
     },
     createdAt: {
       allowNull: false,

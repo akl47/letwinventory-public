@@ -76,6 +76,25 @@
             <mat-error>Must be at least 1</mat-error>
             }
         </mat-form-field>
+
+        <mat-form-field appearance="outline">
+            <mat-label>Default Unit of Measure</mat-label>
+            <mat-select formControlName="defaultUnitOfMeasureID">
+                @for (uom of unitsOfMeasure(); track uom.id) {
+                <mat-option [value]="uom.id">{{ uom.name }} - {{ uom.description }}</mat-option>
+                }
+            </mat-select>
+            <mat-hint>Unit of measure for inventory tracking</mat-hint>
+        </mat-form-field>
+
+        <div class="checkbox-group">
+            <mat-checkbox formControlName="serialNumberRequired">
+                Requires Serial Number
+            </mat-checkbox>
+            <mat-checkbox formControlName="lotNumberRequired">
+                Requires Lot Number
+            </mat-checkbox>
+        </div>
     </form>
 </mat-dialog-content>
 <mat-dialog-actions align="end">

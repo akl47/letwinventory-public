@@ -83,3 +83,9 @@
 .item-header:hover .edit-btn {
     opacity: 1;
 }
+
+.button-spacer {
+    width: 40px;
+    /* Same width as mat-icon-button */
+    flex-shrink: 0;
+}

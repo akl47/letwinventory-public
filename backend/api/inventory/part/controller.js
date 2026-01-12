@@ -1,6 +1,22 @@
 const db = require('../../../models');
 const createError = require('http-errors')
 
+exports.getAllPartCategories = (req, res, next) => {
+  db.PartCategory.findAll({
+    where: {
+      activeFlag: true
+    },
+    order: [
+      ['name', 'asc']
+    ],
+    attributes: ['id', 'name']
+  }).then(categories => {
+    res.json(categories)
+  }).catch(error => {
+    next(createError(500, 'Error Getting Part Categories:' + error))
+  })
+}
+
 exports.getAllParts = (req, res, next) => {
   // Return all parts (active and inactive), let frontend filter
   db.Part.findAll({

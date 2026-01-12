@@ -18,61 +18,28 @@
         </div>
         }
 
-        <!-- Preview Options (Always Visible) -->
-        <div class="preview-options">
-            <h3>Preview Options</h3>
-
-            <mat-form-field appearance="outline">
-                <mat-label>Preview Size</mat-label>
-                <mat-select [(ngModel)]="selectedPreviewSize" (ngModelChange)="onPreviewSizeChange()">
-                    @for (size of labelSizes; track size.value) {
-                        <mat-option [value]="size.value">{{ size.label }}</mat-option>
-                    }
-                </mat-select>
-            </mat-form-field>
-        </div>
-
-        <!-- Print Options (Show when button clicked) -->
-        @if (showPrintOptions()) {
-        <div class="print-options">
-            <h3>Print Options</h3>
-
-            <mat-form-field appearance="outline">
-                <mat-label>Print Label Size</mat-label>
-                <mat-select [(ngModel)]="selectedLabelSize">
-                    @for (size of labelSizes; track size.value) {
-                        <mat-option [value]="size.value">{{ size.label }}</mat-option>
-                    }
-                </mat-select>
-            </mat-form-field>
-
-            <mat-form-field appearance="outline">
-                <mat-label>Printer</mat-label>
-                <mat-select [(ngModel)]="selectedPrinterIP">
-                    @for (printer of printers; track printer.ip) {
-                        <mat-option [value]="printer.ip">{{ printer.name }}</mat-option>
-                    }
-                </mat-select>
-            </mat-form-field>
-        </div>
-        }
     </div>
 </mat-dialog-content>
 <mat-dialog-actions align="end">
-    <button mat-button (click)="moveBarcode()" style="margin-right: auto;">Move</button>
-    @if (!showPrintOptions()) {
-        <button mat-raised-button color="primary" (click)="togglePrintOptions()" [disabled]="!barcodeId()">
-            Print Label
-        </button>
-    } @else {
-        <button mat-button (click)="togglePrintOptions()">Cancel</button>
-        <button mat-raised-button color="primary" (click)="printLabel()" [disabled]="isPrinting() || !barcodeId()">
-            @if (isPrinting()) {
-                Printing...
-            } @else {
-                Confirm Print
-            }
-        </button>
-    }
+    <button mat-icon-button (click)="moveBarcode()" matTooltip="Move Barcode" style="margin-right: auto;">
+        <mat-icon>swap_horiz</mat-icon>
+    </button>
+    <button mat-icon-button (click)="viewHistory()" matTooltip="View History" [disabled]="!barcodeId()">
+        <mat-icon>history</mat-icon>
+    </button>
+    <span class="label-size-toggle">
+        <span>1.5" x 1"</span>
+        <mat-slide-toggle [checked]="selectedLabelSize() === '3x1'" (change)="onLabelSizeToggle($event)">
+        </mat-slide-toggle>
+        <span>3" x 1"</span>
+    </span>
+    <button mat-icon-button color="primary" (click)="printLabel()" [disabled]="isPrinting() || !barcodeId()"
+        matTooltip="Print Label">
+        @if (isPrinting()) {
+        <mat-spinner diameter="24"></mat-spinner>
+        } @else {
+        <mat-icon>print</mat-icon>
+        }
+    </button>
     <button mat-button mat-dialog-close>Close</button>
 </mat-dialog-actions>

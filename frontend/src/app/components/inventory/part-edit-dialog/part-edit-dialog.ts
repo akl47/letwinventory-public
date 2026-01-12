@@ -8,7 +8,7 @@ import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatSelectModule } from '@angular/material/select';
 import { CommonModule } from '@angular/common';
 import { InventoryService } from '../../../services/inventory.service';
-import { Part } from '../../../models';
+import { Part, PartCategory, UnitOfMeasure } from '../../../models';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { MatIconModule } from '@angular/material/icon';
 
@@ -37,11 +37,9 @@ export class PartEditDialog implements OnInit {
   allParts: Part[] = [];
   suggestedPartNumber = '';
 
-  categories = signal<{ id: number, name: string }[]>([
-    { id: 1, name: 'Part' },
-    { id: 2, name: 'Consumable' },
-    { id: 3, name: 'Tooling' }
-  ]);
+  categories = signal<PartCategory[]>([]);
+
+  unitsOfMeasure = signal<UnitOfMeasure[]>([]);
 
   form = this.fb.group({
     name: ['', [Validators.required, Validators.maxLength(16)]],
@@ -51,7 +49,10 @@ export class PartEditDialog implements OnInit {
     sku: [''],
     link: [''],
     minimumOrderQuantity: [1, [Validators.required, Validators.min(1)]],
-    partCategoryID: [null as number | null, Validators.required]
+    partCategoryID: [null as number | null, Validators.required],
+    serialNumberRequired: [false],
+    lotNumberRequired: [false],
+    defaultUnitOfMeasureID: [1 as number | null]
   });
 
   constructor(
@@ -68,7 +69,10 @@ export class PartEditDialog implements OnInit {
         sku: data.part.sku || '',
         link: data.part.link || '',
         minimumOrderQuantity: data.part.minimumOrderQuantity,
-        partCategoryID: data.part.partCategoryID
+        partCategoryID: data.part.partCategoryID,
+        serialNumberRequired: data.part.serialNumberRequired || false,
+        lotNumberRequired: data.part.lotNumberRequired || false,
+        defaultUnitOfMeasureID: data.part.defaultUnitOfMeasureID || 1
       });
     }
   }
@@ -85,6 +89,26 @@ export class PartEditDialog implements OnInit {
       },
       error: (err) => {
         console.error('Failed to load parts:', err);
+      }
+    });
+
+    // Load units of measure
+    this.inventoryService.getUnitsOfMeasure().subscribe({
+      next: (uom) => {
+        this.unitsOfMeasure.set(uom);
+      },
+      error: (err) => {
+        console.error('Failed to load units of measure:', err);
+      }
+    });
+
+    // Load part categories from API
+    this.inventoryService.getPartCategories().subscribe({
+      next: (categories) => {
+        this.categories.set(categories);
+      },
+      error: (err) => {
+        console.error('Failed to load part categories:', err);
       }
     });
 
@@ -215,7 +239,10 @@ export class PartEditDialog implements OnInit {
         sku: formValue.sku || '',
         link: formValue.link || '',
         minimumOrderQuantity: formValue.minimumOrderQuantity!,
-        partCategoryID: formValue.partCategoryID!
+        partCategoryID: formValue.partCategoryID!,
+        serialNumberRequired: formValue.serialNumberRequired || false,
+        lotNumberRequired: formValue.lotNumberRequired || false,
+        defaultUnitOfMeasureID: formValue.defaultUnitOfMeasureID || 1
       };
 
       if (this.isEditMode && this.data.part?.id) {

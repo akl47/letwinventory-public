@@ -1,6 +1,7 @@
-import { Component, OnInit, inject, signal, computed } from '@angular/core';
+import { Component, OnInit, OnDestroy, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { FormBuilder, ReactiveFormsModule, FormsModule, Validators } from '@angular/forms';
 import { CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
 import { MatCardModule } from '@angular/material/card';
@@ -18,6 +19,9 @@ import { InventoryService } from '../../../services/inventory.service';
 import { Order, OrderItem, Part } from '../../../models';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { OrderItemDialog } from '../order-item-dialog/order-item-dialog';
+import { ReceiveLineItemDialog, ReceiveLineItemDialogResult } from '../receive-line-item-dialog/receive-line-item-dialog';
+import { BarcodeDialog } from '../../inventory/barcode-dialog/barcode-dialog';
+import { BarcodeTag } from '../../inventory/barcode-tag/barcode-tag';
 
 @Component({
   selector: 'app-order-view',
@@ -37,17 +41,19 @@ import { OrderItemDialog } from '../order-item-dialog/order-item-dialog';
     MatNativeDateModule,
     MatTableModule,
     MatTooltipModule,
+    BarcodeTag,
   ],
   templateUrl: './order-view.html',
   styleUrl: './order-view.css'
 })
-export class OrderView implements OnInit {
+export class OrderView implements OnInit, OnDestroy {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private fb = inject(FormBuilder);
   private inventoryService = inject(InventoryService);
   private errorNotification = inject(ErrorNotificationService);
   private dialog = inject(MatDialog);
+  private paramSubscription?: Subscription;
 
   orderId = signal<number | null>(null);
   orderID = signal<number | null>(null);
@@ -65,11 +71,16 @@ export class OrderView implements OnInit {
   editingPartId = signal<number | null>(null);
   editingDescription = signal<string>('');
 
+  // Receive mode signals
+  isReceiveMode = signal<boolean>(false);
+  receivingQuantities = signal<Map<number, number>>(new Map());
+
   orderStatuses = signal([
     { id: 1, name: 'Pending' },
     { id: 2, name: 'Placed' },
     { id: 3, name: 'Shipped' },
-    { id: 4, name: 'Received' }
+    { id: 4, name: 'Received' },
+    { id: 5, name: 'Partially Received' }
   ]);
 
   orderLineTypes = signal([
@@ -85,11 +96,34 @@ export class OrderView implements OnInit {
     return order?.OrderStatus?.nextStatusID != null;
   });
 
+  nextStatusName = computed(() => {
+    const order = this.currentOrder();
+    const nextStatusID = order?.OrderStatus?.nextStatusID;
+    if (nextStatusID == null) return '';
+    return this.orderStatuses().find(s => s.id === nextStatusID)?.name || '';
+  });
+
+  // Check if the order is in a state that can be received (Shipped or Partially Received)
+  canReceive = computed(() => {
+    const order = this.currentOrder();
+    const statusId = order?.orderStatusID;
+    return statusId === 3 || statusId === 5; // Shipped or Partially Received
+  });
+
+  // Check if we should show "Receive" button instead of "Mark as X"
+  showReceiveButton = computed(() => {
+    const order = this.currentOrder();
+    return order?.orderStatusID === 3; // Shipped
+  });
+
   get displayedColumns(): string[] {
     if (this.isFormEditMode()) {
       return ['dragHandle', 'lineNumber', 'lineType', 'part', 'quantity', 'price', 'total', 'actions'];
     }
-    return ['lineNumber', 'lineType', 'part', 'quantity', 'price', 'total'];
+    if (this.isReceiveMode()) {
+      return ['lineNumber', 'lineType', 'part', 'barcode', 'ordered', 'received', 'remaining', 'actions'];
+    }
+    return ['lineNumber', 'lineType', 'part', 'barcode', 'quantity', 'received', 'price', 'total'];
   }
 
   form = this.fb.group({
@@ -104,17 +138,37 @@ export class OrderView implements OnInit {
   });
 
   ngOnInit() {
-    const id = this.route.snapshot.paramMap.get('id');
-    if (id === 'new') {
-      this.isEditMode.set(false);
-    } else {
-      this.orderId.set(Number(id));
-      this.isEditMode.set(true);
-      this.loadOrder();
-    }
+    // Subscribe to route param changes to handle navigation to different orders
+    this.paramSubscription = this.route.paramMap.subscribe(params => {
+      const id = params.get('id');
+      if (id === 'new') {
+        this.isEditMode.set(false);
+        this.orderId.set(null);
+        this.currentOrder.set(null);
+        this.orderItems.set([]);
+        this.form.reset({
+          placedDate: new Date(),
+          receivedDate: null,
+          orderStatusID: 1,
+          vendor: '',
+          trackingNumber: '',
+          link: '',
+          description: '',
+          notes: ''
+        });
+      } else {
+        this.orderId.set(Number(id));
+        this.isEditMode.set(true);
+        this.loadOrder();
+      }
+    });
 
     // Load parts for part selector
     this.loadParts();
+  }
+
+  ngOnDestroy() {
+    this.paramSubscription?.unsubscribe();
   }
 
   loadParts() {
@@ -293,6 +347,201 @@ export class OrderView implements OnInit {
     });
   }
 
+  // Receive mode methods
+  enterReceiveMode() {
+    // Initialize receiving quantities with remaining quantities for Part line items
+    const quantities = new Map<number, number>();
+    this.orderItems().forEach(item => {
+      // Only Part line items (id=1) can be received
+      if (item.orderLineTypeID === 1) {
+        const remaining = item.quantity - (item.receivedQuantity || 0);
+        quantities.set(item.id, remaining);
+      }
+    });
+    this.receivingQuantities.set(quantities);
+    this.isReceiveMode.set(true);
+  }
+
+  cancelReceiveMode() {
+    this.isReceiveMode.set(false);
+    this.receivingQuantities.set(new Map());
+  }
+
+  updateReceivingQuantity(itemId: number, quantity: number) {
+    const quantities = new Map(this.receivingQuantities());
+    quantities.set(itemId, quantity);
+    this.receivingQuantities.set(quantities);
+  }
+
+  getReceivingQuantity(itemId: number): number {
+    return this.receivingQuantities().get(itemId) || 0;
+  }
+
+  getRemainingQuantity(item: OrderItem): number {
+    return item.quantity - (item.receivedQuantity || 0);
+  }
+
+  receiveLineItem(item: OrderItem) {
+    const remaining = this.getRemainingQuantity(item);
+    if (remaining <= 0) {
+      this.errorNotification.showError('This item is already fully received');
+      return;
+    }
+
+    const dialogRef = this.dialog.open(ReceiveLineItemDialog, {
+      width: '450px',
+      data: {
+        orderItem: item,
+        remainingQuantity: remaining
+      }
+    });
+
+    dialogRef.afterClosed().subscribe((result: ReceiveLineItemDialogResult) => {
+      if (result?.success && item.partID) {
+        const newReceivedQty = (item.receivedQuantity || 0) + result.receivedQuantity;
+
+        // First create a trace (which creates a barcode)
+        this.inventoryService.receiveOrderItem({
+          partID: item.partID,
+          quantity: result.receivedQuantity,
+          parentBarcodeID: result.parentBarcodeID,
+          orderItemID: item.id
+        }).subscribe({
+          next: (trace) => {
+            // Then update the order item's received quantity
+            this.inventoryService.updateOrderItem(item.id, {
+              receivedQuantity: newReceivedQty
+            }).subscribe({
+              next: () => {
+                this.checkAndUpdateOrderStatus();
+                this.loadOrder(true);
+
+                // Get the barcode string from the trace
+                const barcodeString = trace.Barcode?.barcode || trace.barcode;
+
+                // Print the barcode if requested
+                if (result.printBarcode && trace.barcodeID) {
+                  this.inventoryService.printBarcode(
+                    trace.barcodeID,
+                    result.barcodeSize,
+                    '10.10.10.37' // Default printer IP
+                  ).subscribe({
+                    next: () => {
+                      this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.Part?.name || 'item'} - Label printed`);
+                    },
+                    error: (err) => {
+                      this.errorNotification.showHttpError(err, 'Received item but failed to print label');
+                    }
+                  });
+                } else {
+                  this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.Part?.name || 'item'}`);
+                }
+
+                // Show the barcode dialog with the created barcode
+                if (barcodeString) {
+                  this.dialog.open(BarcodeDialog, {
+                    width: '500px',
+                    data: { barcode: barcodeString }
+                  });
+                }
+              },
+              error: (err) => {
+                this.errorNotification.showHttpError(err, 'Created barcode but failed to update order item');
+              }
+            });
+          },
+          error: (err) => {
+            this.errorNotification.showHttpError(err, 'Failed to create barcode for received item');
+          }
+        });
+      } else if (result?.success) {
+        // Non-part item, just update the received quantity
+        const newReceivedQty = (item.receivedQuantity || 0) + result.receivedQuantity;
+        this.inventoryService.updateOrderItem(item.id, {
+          receivedQuantity: newReceivedQty
+        }).subscribe({
+          next: () => {
+            this.checkAndUpdateOrderStatus();
+            this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.name || 'item'}`);
+            this.loadOrder(true);
+          },
+          error: (err) => {
+            this.errorNotification.showHttpError(err, 'Failed to update item');
+          }
+        });
+      }
+    });
+  }
+
+  private checkAndUpdateOrderStatus() {
+    const order = this.currentOrder();
+    if (!order) return;
+
+    // Reload items to get latest state and then check status
+    this.inventoryService.getOrderById(order.id).subscribe({
+      next: (updatedOrder) => {
+        const items = updatedOrder.OrderItems || [];
+        let allFullyReceived = true;
+        let anyReceived = false;
+
+        items.forEach(item => {
+          if (item.orderLineTypeID === 1) { // Only check Part line items
+            const received = item.receivedQuantity || 0;
+            if (received < item.quantity) {
+              allFullyReceived = false;
+            }
+            if (received > 0) {
+              anyReceived = true;
+            }
+          }
+        });
+
+        // Determine new status
+        let newStatusId = order.orderStatusID;
+        if (allFullyReceived) {
+          newStatusId = 4; // Received
+        } else if (anyReceived) {
+          newStatusId = 5; // Partially Received
+        }
+
+        // Only update if status changed
+        if (newStatusId !== order.orderStatusID) {
+          const orderData = {
+            placedDate: order.placedDate,
+            receivedDate: allFullyReceived ? new Date().toISOString() : order.receivedDate,
+            orderStatusID: newStatusId,
+            vendor: order.vendor,
+            trackingNumber: order.trackingNumber,
+            link: order.link,
+            description: order.description,
+            notes: order.notes
+          };
+
+          this.inventoryService.updateOrder(order.id, orderData).subscribe({
+            next: () => {
+              if (allFullyReceived) {
+                this.errorNotification.showSuccess('Order fully received!');
+                this.isReceiveMode.set(false);
+              }
+              this.loadOrder();
+            },
+            error: (err) => {
+              // Silently fail status update - item was already received
+            }
+          });
+        }
+      }
+    });
+  }
+
+  completeReceipt() {
+    // Just exit receive mode - receiving is done via individual line item "Receive" buttons
+    // Backend automatically calculates order status when receivedQuantity is updated
+    this.isReceiveMode.set(false);
+    this.receivingQuantities.set(new Map());
+    this.loadOrder(); // Reload to show latest status from backend
+  }
+
   delete() {
     const id = this.orderId();
     if (!id) return;
@@ -466,6 +715,15 @@ export class OrderView implements OnInit {
 
   onPriceChange(value: any) {
     this.editingPrice.set(value);
+  }
+
+  openBarcodeDialog(barcodeString?: string) {
+    if (barcodeString) {
+      this.dialog.open(BarcodeDialog, {
+        width: '500px',
+        data: { barcode: barcodeString }
+      });
+    }
   }
 
   dropLineItem(event: CdkDragDrop<OrderItem[]>) {

@@ -1,0 +1,101 @@
+<div class="dialog-container">
+    <h2 mat-dialog-title>
+        <mat-icon>inventory_2</mat-icon>
+        Receive Item
+    </h2>
+
+    <mat-dialog-content>
+        <div class="item-info">
+            <div class="item-name">{{ data.orderItem.Part?.name || data.orderItem.name }}</div>
+            @if (data.orderItem.Part?.sku) {
+                <div class="item-sku">SKU: {{ data.orderItem.Part?.sku }}</div>
+            }
+            <div class="item-quantities">
+                <span>Ordered: <strong>{{ data.orderItem.quantity }}</strong></span>
+                <span>Previously Received: <strong>{{ data.orderItem.receivedQuantity || 0 }}</strong></span>
+                <span>Remaining: <strong>{{ data.remainingQuantity }}</strong></span>
+            </div>
+        </div>
+
+        <div class="location-section">
+            <label class="section-label">Receive To Location</label>
+            @if (loadingLocations()) {
+                <mat-spinner diameter="24"></mat-spinner>
+            } @else {
+                <mat-form-field appearance="outline" class="full-width">
+                    <mat-label>Select Location</mat-label>
+                    <mat-select [ngModel]="selectedLocationId()" (ngModelChange)="selectedLocationId.set($event)" required>
+                        @for (loc of locations(); track loc.id) {
+                            <mat-option [value]="loc.id">
+                                {{ loc.barcode }}@if (loc.name || loc.description) { - {{ loc.name || loc.description }}}
+                            </mat-option>
+                        }
+                    </mat-select>
+                    <mat-hint>Where will this item be stored?</mat-hint>
+                </mat-form-field>
+            }
+        </div>
+
+        <div class="receipt-type-section">
+            <label class="section-label">Receipt Type</label>
+            <mat-radio-group [ngModel]="receiptType()" (ngModelChange)="receiptType.set($event)" class="receipt-type-group">
+                <mat-radio-button value="full">
+                    <div class="radio-content">
+                        <span class="radio-label">Full Receipt</span>
+                        <span class="radio-desc">Receive all {{ data.remainingQuantity }} remaining</span>
+                    </div>
+                </mat-radio-button>
+                <mat-radio-button value="partial">
+                    <div class="radio-content">
+                        <span class="radio-label">Partial Receipt</span>
+                        <span class="radio-desc">Specify quantity received</span>
+                    </div>
+                </mat-radio-button>
+            </mat-radio-group>
+        </div>
+
+        @if (receiptType() === 'partial') {
+            <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Quantity Received</mat-label>
+                <input matInput type="number"
+                       [ngModel]="partialQuantity()"
+                       (ngModelChange)="partialQuantity.set($event)"
+                       [max]="data.remainingQuantity"
+                       min="1">
+                <mat-hint>Max: {{ data.remainingQuantity }}</mat-hint>
+            </mat-form-field>
+        }
+
+        <div class="barcode-section">
+            <mat-slide-toggle
+                [ngModel]="printBarcode()"
+                (ngModelChange)="printBarcode.set($event)">
+                Print Barcode Label
+            </mat-slide-toggle>
+
+            @if (printBarcode()) {
+                <mat-form-field appearance="outline" class="barcode-size-field">
+                    <mat-label>Label Size</mat-label>
+                    <mat-select [ngModel]="barcodeSize()" (ngModelChange)="barcodeSize.set($event)">
+                        @for (size of barcodeSizes; track size.value) {
+                            <mat-option [value]="size.value">{{ size.label }}</mat-option>
+                        }
+                    </mat-select>
+                </mat-form-field>
+            }
+        </div>
+
+        <div class="summary">
+            <mat-icon>check_circle</mat-icon>
+            <span>Will receive <strong>{{ receivedQuantity }}</strong> of {{ data.remainingQuantity }} remaining</span>
+        </div>
+    </mat-dialog-content>
+
+    <mat-dialog-actions align="end">
+        <button mat-button (click)="onCancel()">Cancel</button>
+        <button mat-flat-button color="primary" (click)="onSubmit()" [disabled]="!canSubmit">
+            <mat-icon>check</mat-icon>
+            Receive
+        </button>
+    </mat-dialog-actions>
+</div>

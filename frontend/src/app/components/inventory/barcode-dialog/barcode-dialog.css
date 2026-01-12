@@ -68,3 +68,11 @@
 .print-options mat-form-field {
     width: 100%;
 }
+
+.label-size-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: #666;
+}

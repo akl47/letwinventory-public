@@ -13,7 +13,8 @@ import {
     BarcodeCategory,
     Location,
     Box,
-    Trace
+    Trace,
+    UnitOfMeasure
 } from '../models';
 import { environment } from '../../environments/environment';
 
@@ -52,8 +53,19 @@ export class InventoryService {
         return this.http.delete(`${this.apiUrl}/barcode/${item.id}`);
     }
 
-    getAllBarcodes(): Observable<Barcode[]> {
-        return this.http.get<Barcode[]>(`${this.apiUrl}/barcode/`);
+    getAllBarcodes(includeInactive = false): Observable<Barcode[]> {
+        const url = includeInactive
+            ? `${this.apiUrl}/barcode/?includeInactive=true`
+            : `${this.apiUrl}/barcode/`;
+        return this.http.get<Barcode[]>(url);
+    }
+
+    getLocationBarcodes(): Observable<any[]> {
+        return this.http.get<any[]>(`${this.apiUrl}/barcode/locations`);
+    }
+
+    lookupBarcode(barcodeString: string): Observable<Barcode> {
+        return this.http.get<Barcode>(`${this.apiUrl}/barcode/lookup/${encodeURIComponent(barcodeString)}`);
     }
 
     getBarcodeZPL(barcodeId: number, labelSize?: string): Observable<string> {
@@ -69,12 +81,48 @@ export class InventoryService {
         return this.http.post(`${this.apiUrl}/barcode/print/${barcodeId}`, { labelSize, printerIP });
     }
 
-    createTrace(data: { partID: number; quantity: number; parentBarcodeID: number }): Observable<any> {
+    createTrace(data: {
+        partID: number;
+        quantity: number;
+        parentBarcodeID?: number | null;
+        unitOfMeasureID?: number | null;
+        serialNumber?: string | null;
+        lotNumber?: string | null;
+    }): Observable<any> {
         return this.http.post(`${this.apiUrl}/trace`, data);
+    }
+
+    receiveOrderItem(data: {
+        partID: number;
+        quantity: number;
+        parentBarcodeID: number;
+        orderItemID?: number;
+        unitOfMeasureID?: number | null;
+        serialNumber?: string | null;
+        lotNumber?: string | null;
+    }): Observable<any> {
+        return this.http.post(`${this.apiUrl}/trace`, data);
+    }
+
+    getUnitsOfMeasure(): Observable<UnitOfMeasure[]> {
+        // Hardcoded until backend endpoint is created
+        return new Observable(observer => {
+            observer.next([
+                { id: 1, name: 'ea', description: 'Each (individual unit)' },
+                { id: 2, name: 'gal', description: 'Gallon' },
+                { id: 3, name: 'g', description: 'Gram' },
+                { id: 4, name: 'kg', description: 'Kilogram' }
+            ]);
+            observer.complete();
+        });
     }
 
     getAllParts(): Observable<Part[]> {
         return this.http.get<Part[]>(`${this.apiUrl}/part`);
+    }
+
+    getPartCategories(): Observable<PartCategory[]> {
+        return this.http.get<PartCategory[]>(`${this.apiUrl}/part/categories`);
     }
 
     moveBarcode(barcodeId: number, newLocationID: number): Observable<any> {
@@ -91,6 +139,21 @@ export class InventoryService {
 
     deletePart(partId: number): Observable<any> {
         return this.http.delete(`${this.apiUrl}/part/${partId}`);
+    }
+
+    // Trace action methods
+    splitTrace(barcodeId: number, splitQuantity: number): Observable<any> {
+        return this.http.post(`${this.apiUrl}/trace/split/${barcodeId}`, { splitQuantity });
+    }
+
+    mergeTrace(targetBarcodeId: number, mergeBarcodeId: number): Observable<any> {
+        return this.http.post(`${this.apiUrl}/trace/merge/${targetBarcodeId}`, { mergeBarcodeId });
+    }
+
+    deleteTrace(barcodeId: number, deleteQuantity?: number): Observable<any> {
+        return this.http.delete(`${this.apiUrl}/trace/barcode/${barcodeId}`, {
+            body: deleteQuantity !== undefined ? { deleteQuantity } : {}
+        });
     }
 
     // Order methods
@@ -141,5 +204,6 @@ export type {
     BarcodeCategory,
     Location,
     Box,
-    Trace
+    Trace,
+    UnitOfMeasure
 };

@@ -13,6 +13,14 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'partID',
         onDelete: 'CASCADE'
       })
+      Trace.belongsTo(models.UnitOfMeasure,{
+        foreignKey: 'unitOfMeasureID',
+        as: 'unitOfMeasure'
+      })
+      Trace.belongsTo(models.OrderItem,{
+        foreignKey: 'orderItemID',
+        onDelete: 'SET NULL'
+      })
     }
   };
   Trace.init({
@@ -27,8 +35,12 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false
     },
     quantity: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.FLOAT,
       allowNull: false
+    },
+    unitOfMeasureID: {
+      type: DataTypes.INTEGER,
+      allowNull: true
     },
     orderItemID: {
       type: DataTypes.INTEGER,
@@ -43,6 +55,14 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       allowNull:false,
       defaultValue:true
+    },
+    serialNumber: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    lotNumber: {
+      type: DataTypes.STRING,
+      allowNull: true
     },
     createdAt: {
       allowNull: false,

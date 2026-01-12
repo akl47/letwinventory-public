@@ -8,7 +8,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatIconModule } from '@angular/material/icon';
 import { InventoryService } from '../../../services/inventory.service';
-import { InventoryTag, Part } from '../../../models';
+import { InventoryTag, Part, UnitOfMeasure } from '../../../models';
 import { CommonModule } from '@angular/common';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 
@@ -35,6 +35,8 @@ export class InventoryItemDialog implements OnInit {
   private errorNotification = inject(ErrorNotificationService);
   isEditMode = false;
   parts = signal<Part[]>([]);
+  unitsOfMeasure = signal<UnitOfMeasure[]>([]);
+  selectedPart = signal<Part | null>(null);
   partSearchText = signal<string>('');
   filteredParts = computed(() => {
     const searchText = this.partSearchText().toLowerCase();
@@ -48,6 +50,11 @@ export class InventoryItemDialog implements OnInit {
       (part.sku && part.sku.toLowerCase().includes(searchText))
     );
   });
+  selectedPartUOM = computed(() => {
+    const part = this.selectedPart();
+    if (!part || !part.defaultUnitOfMeasureID) return null;
+    return this.unitsOfMeasure().find(u => u.id === part.defaultUnitOfMeasureID) || null;
+  });
 
   form = this.fb.group({
     name: ['', Validators.required],
@@ -55,7 +62,10 @@ export class InventoryItemDialog implements OnInit {
     type: ['Box', Validators.required], // Default to Box for creation
     partSearch: [''],
     partID: [null as number | null],
-    quantity: [1]
+    quantity: [1],
+    unitOfMeasureID: [1 as number | null], // Default to 'ea' (id: 1)
+    serialNumber: [''],
+    lotNumber: ['']
   });
 
   constructor(
@@ -86,6 +96,16 @@ export class InventoryItemDialog implements OnInit {
         }
       });
 
+      // Load units of measure
+      this.inventoryService.getUnitsOfMeasure().subscribe({
+        next: (uom) => {
+          this.unitsOfMeasure.set(uom);
+        },
+        error: (err) => {
+          console.error('Error loading units of measure:', err);
+        }
+      });
+
       // Set initial validators based on default type (Box)
       this.updateValidators('Box');
 
@@ -102,6 +122,7 @@ export class InventoryItemDialog implements OnInit {
   }
 
   onPartSelected(part: Part) {
+    this.selectedPart.set(part);
     this.form.patchValue({
       partID: part.id,
       partSearch: `${part.name} - ${part.description}`
@@ -147,7 +168,18 @@ export class InventoryItemDialog implements OnInit {
 
     if (type === 'Trace') {
       // For trace: need partID and quantity
-      return !!formValue.partID && !!formValue.quantity && formValue.quantity > 0;
+      const basicValid = !!formValue.partID && !!formValue.quantity && formValue.quantity > 0;
+      if (!basicValid) return false;
+
+      // Check serial/lot number requirements based on selected part
+      const part = this.selectedPart();
+      if (part?.serialNumberRequired && !formValue.serialNumber?.trim()) {
+        return false;
+      }
+      if (part?.lotNumberRequired && !formValue.lotNumber?.trim()) {
+        return false;
+      }
+      return true;
     } else {
       // For Location/Box: need name
       return !!formValue.name;
@@ -177,11 +209,15 @@ export class InventoryItemDialog implements OnInit {
       } else {
         // Create mode
         if (formValue.type === 'Trace') {
-          // Create trace
+          // Create trace - use the part's default UOM
+          const part = this.selectedPart();
           const traceData = {
             partID: formValue.partID!,
             quantity: formValue.quantity!,
-            parentBarcodeID: this.data.parentId!
+            parentBarcodeID: this.data.parentId!,
+            unitOfMeasureID: part?.defaultUnitOfMeasureID || 1,
+            serialNumber: formValue.serialNumber || null,
+            lotNumber: formValue.lotNumber || null
           };
           console.log('Creating trace with data:', traceData);
           this.inventoryService.createTrace(traceData).subscribe({

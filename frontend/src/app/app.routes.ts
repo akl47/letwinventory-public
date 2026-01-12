@@ -17,6 +17,13 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'inventory/barcode-history/:id',
+        title: 'Barcode History',
+        loadComponent: () =>
+            import('./components/inventory/barcode-history/barcode-history').then((m) => m.BarcodeHistoryComponent),
+        canActivate: [authGuard],
+    },
+    {
         path: 'inventory',
         title: 'Inventory',
         loadComponent: () =>
@@ -31,17 +38,17 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
-        path: 'orders',
-        title: 'Orders',
-        loadComponent: () =>
-            import('./components/orders/orders-list-view/orders-list-view').then((m) => m.OrdersListView),
-        canActivate: [authGuard],
-    },
-    {
         path: 'orders/:id',
         title: 'Order Details',
         loadComponent: () =>
             import('./components/orders/order-view/order-view').then((m) => m.OrderView),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'orders',
+        title: 'Orders',
+        loadComponent: () =>
+            import('./components/orders/orders-list-view/orders-list-view').then((m) => m.OrdersListView),
         canActivate: [authGuard],
     }
 ];

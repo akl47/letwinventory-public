@@ -1,5 +1,13 @@
-const { Task, User, TaskHistory, TaskList } = require('../../../models');
+const { Task, User, TaskHistory, TaskList, TaskHistoryActionType } = require('../../../models');
 const { Op } = require('sequelize');
+
+// Helper function to get action type ID by code
+async function getActionTypeId(code) {
+    const actionType = await TaskHistoryActionType.findOne({
+        where: { code, activeFlag: true }
+    });
+    return actionType ? actionType.id : null;
+}
 
 exports.createTask = async (req, res) => {
     try {
@@ -15,13 +23,16 @@ exports.createTask = async (req, res) => {
             ownerUserID: req.user.id // Set the owner to the current user
         });
 
-        await TaskHistory.create({
-            taskID: task.id,
-            userID: req.user.id,
-            actionID: 5,
-            fromID: 0,
-            toID: task.taskListID
-        });
+        const actionId = await getActionTypeId('CREATED');
+        if (actionId) {
+            await TaskHistory.create({
+                taskID: task.id,
+                userID: req.user.id,
+                actionID: actionId,
+                fromID: 0,
+                toID: task.taskListID
+            });
+        }
 
         res.status(201).json(task);
     } catch (error) {
@@ -96,8 +107,7 @@ exports.updateTask = async (req, res) => {
         const oldData = { ...task.get() };
         await task.update(req.body);
 
-        // Tracked Actions:
-        // 2: ADD_TO_PROJECT
+        // ADD_TO_PROJECT
         if (req.body.projectID !== undefined && req.body.projectID !== oldData.projectID) {
             // Propagate to subtasks
             await Task.update(
@@ -105,36 +115,45 @@ exports.updateTask = async (req, res) => {
                 { where: { parentTaskID: task.id } }
             );
 
-            await TaskHistory.create({
-                taskID: task.id,
-                userID: req.user.id,
-                actionID: 2,
-                fromID: oldData.projectID || 0,
-                toID: req.body.projectID || 0
-            });
+            const actionId = await getActionTypeId('ADD_TO_PROJECT');
+            if (actionId) {
+                await TaskHistory.create({
+                    taskID: task.id,
+                    userID: req.user.id,
+                    actionID: actionId,
+                    fromID: oldData.projectID || 0,
+                    toID: req.body.projectID || 0
+                });
+            }
         }
 
-        // 3: ADD_PRIORITY
+        // ADD_PRIORITY
         if (req.body.taskTypeEnum !== undefined && req.body.taskTypeEnum !== oldData.taskTypeEnum) {
             const priorityMap = { 'normal': 0, 'tracking': 1, 'critical_path': 2 };
-            await TaskHistory.create({
-                taskID: task.id,
-                userID: req.user.id,
-                actionID: 3,
-                fromID: priorityMap[oldData.taskTypeEnum] ?? 0,
-                toID: priorityMap[req.body.taskTypeEnum] ?? 0
-            });
+            const actionId = await getActionTypeId('ADD_PRIORITY');
+            if (actionId) {
+                await TaskHistory.create({
+                    taskID: task.id,
+                    userID: req.user.id,
+                    actionID: actionId,
+                    fromID: priorityMap[oldData.taskTypeEnum] ?? 0,
+                    toID: priorityMap[req.body.taskTypeEnum] ?? 0
+                });
+            }
         }
 
-        // 4: CHANGE_STATUS
+        // CHANGE_STATUS
         if (req.body.doneFlag !== undefined && req.body.doneFlag !== oldData.doneFlag) {
-            await TaskHistory.create({
-                taskID: task.id,
-                userID: req.user.id,
-                actionID: 4,
-                fromID: oldData.doneFlag ? 1 : 0,
-                toID: req.body.doneFlag ? 1 : 0
-            });
+            const actionId = await getActionTypeId('CHANGE_STATUS');
+            if (actionId) {
+                await TaskHistory.create({
+                    taskID: task.id,
+                    userID: req.user.id,
+                    actionID: actionId,
+                    fromID: oldData.doneFlag ? 1 : 0,
+                    toID: req.body.doneFlag ? 1 : 0
+                });
+            }
 
             // Check for parent auto-completion recursively
             if (req.body.doneFlag === true) {
@@ -149,13 +168,15 @@ exports.updateTask = async (req, res) => {
                         const allSubtasksDone = parent.subtasks.every(t => t.doneFlag);
                         if (allSubtasksDone && !parent.doneFlag) {
                             await parent.update({ doneFlag: true });
-                            await TaskHistory.create({
-                                taskID: parent.id,
-                                userID: req.user.id,
-                                actionID: 4,
-                                fromID: 0,
-                                toID: 1
-                            });
+                            if (actionId) {
+                                await TaskHistory.create({
+                                    taskID: parent.id,
+                                    userID: req.user.id,
+                                    actionID: actionId,
+                                    fromID: 0,
+                                    toID: 1
+                                });
+                            }
                             // Move up
                             currentParentId = parent.parentTaskID;
                         } else {
@@ -227,15 +248,18 @@ exports.moveTask = async (req, res) => {
             rank: newRank
         });
 
-        // 1: MOVE_LIST
+        // MOVE_LIST
         if (oldListId !== parseInt(taskListId)) {
-            await TaskHistory.create({
-                taskID: taskId,
-                userID: req.user.id,
-                actionID: 1,
-                fromID: oldListId,
-                toID: parseInt(taskListId)
-            });
+            const actionId = await getActionTypeId('MOVE_LIST');
+            if (actionId) {
+                await TaskHistory.create({
+                    taskID: taskId,
+                    userID: req.user.id,
+                    actionID: actionId,
+                    fromID: oldListId,
+                    toID: parseInt(taskListId)
+                });
+            }
         }
 
         res.json(task);

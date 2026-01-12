@@ -8,6 +8,7 @@ export interface OrderItem {
     orderLineTypeID: number;
     lineNumber: number;
     quantity: number;
+    receivedQuantity: number;
     price: number | string;
     name: string | null;
     activeFlag: boolean;

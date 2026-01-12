@@ -24,9 +24,13 @@
             <button mat-icon-button (click)="openEdit($event)" class="edit-btn" matTooltip="Edit item">
                 <mat-icon>edit</mat-icon>
             </button>
-            <button mat-icon-button (click)="addChild($event)" class="edit-btn" matTooltip="Add Child">
-                <mat-icon>add</mat-icon>
-            </button>
+            @if (item.type !== 'Trace') {
+                <button mat-icon-button (click)="addChild($event)" class="edit-btn" matTooltip="Add Child">
+                    <mat-icon>add</mat-icon>
+                </button>
+            } @else {
+                <div class="button-spacer"></div>
+            }
         </div>
     </div>
 

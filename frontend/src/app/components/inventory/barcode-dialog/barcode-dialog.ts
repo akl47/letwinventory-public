@@ -1,14 +1,20 @@
 import { Component, Inject, OnInit, signal } from '@angular/core';
-import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
+import { MAT_DIALOG_DATA, MatDialog, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatSelectModule } from '@angular/material/select';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
+import { MatSlideToggleChange, MatSlideToggleModule } from '@angular/material/slide-toggle';
+import { MatIconModule } from '@angular/material/icon';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { CommonModule } from '@angular/common';
 import { inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { InventoryService } from '../../../services/inventory.service';
+import { ErrorNotificationService } from '../../../services/error-notification.service';
+import { BarcodeMovementDialog, BarcodeMovementDialogResult } from '../barcode-movement-dialog/barcode-movement-dialog';
 
 @Component({
   selector: 'app-barcode-dialog',
@@ -20,6 +26,9 @@ import { InventoryService } from '../../../services/inventory.service';
     MatSelectModule,
     MatFormFieldModule,
     MatInputModule,
+    MatSlideToggleModule,
+    MatIconModule,
+    MatTooltipModule,
     CommonModule,
     FormsModule
   ],
@@ -29,6 +38,9 @@ import { InventoryService } from '../../../services/inventory.service';
 export class BarcodeDialog implements OnInit {
   private inventoryService = inject(InventoryService);
   private dialogRef = inject(MatDialogRef<BarcodeDialog>);
+  private dialog = inject(MatDialog);
+  private router = inject(Router);
+  private errorNotification = inject(ErrorNotificationService);
   barcodeImageUrl = signal<string | null>(null);
   isLoading = signal(true);
   error = signal<string | null>(null);
@@ -78,35 +90,24 @@ export class BarcodeDialog implements OnInit {
   moveBarcode() {
     const barcodeId = this.barcodeId();
     if (!barcodeId) {
-      alert('Barcode ID not found');
+      this.errorNotification.showError('Barcode ID not found');
       return;
     }
 
-    const newLocationBarcode = prompt('Enter the destination barcode (LOC-XXXXXX or BOX-XXXXXX):');
-    if (!newLocationBarcode) {
-      return;
-    }
+    const moveDialogRef = this.dialog.open(BarcodeMovementDialog, {
+      width: '450px',
+      data: {
+        action: 'move',
+        barcodeId: barcodeId,
+        barcode: this.data.barcode,
+        isTrace: this.data.barcode.startsWith('AKL')
+      }
+    });
 
-    this.inventoryService.getAllBarcodes().subscribe({
-      next: (barcodes) => {
-        const destBarcode = barcodes.find((b: any) => b.barcode === newLocationBarcode);
-        if (!destBarcode) {
-          alert('Destination barcode not found: ' + newLocationBarcode);
-          return;
-        }
-
-        this.inventoryService.moveBarcode(barcodeId, destBarcode.id).subscribe({
-          next: () => {
-            alert(`Successfully moved ${this.data.barcode} to ${newLocationBarcode}`);
-            this.dialogRef.close(true);
-          },
-          error: (err) => {
-            alert('Error moving barcode: ' + (err.error?.message || err.message || 'Unknown error'));
-          }
-        });
-      },
-      error: (err) => {
-        alert('Error fetching barcodes: ' + err.message);
+    moveDialogRef.afterClosed().subscribe((result: BarcodeMovementDialogResult) => {
+      if (result?.success) {
+        this.errorNotification.showSuccess(`Successfully moved ${this.data.barcode}`);
+        this.dialogRef.close(true);
       }
     });
   }
@@ -152,10 +153,17 @@ export class BarcodeDialog implements OnInit {
     this.showPrintOptions.set(!this.showPrintOptions());
   }
 
+  onLabelSizeToggle(event: MatSlideToggleChange) {
+    const newSize = event.checked ? '3x1' : '1.5x1';
+    this.selectedLabelSize.set(newSize);
+    this.selectedPreviewSize.set(newSize);
+    this.onPreviewSizeChange();
+  }
+
   printLabel() {
     const barcodeId = this.barcodeId();
     if (!barcodeId) {
-      alert('Barcode ID not found');
+      this.errorNotification.showError('Barcode ID not found');
       return;
     }
 
@@ -164,14 +172,22 @@ export class BarcodeDialog implements OnInit {
     const printerIP = this.selectedPrinterIP();
 
     this.inventoryService.printBarcode(barcodeId, labelSize, printerIP).subscribe({
-      next: () => {
+      next: (response: any) => {
         this.isPrinting.set(false);
-        alert('Label printed successfully!');
+        this.errorNotification.showSuccess(response?.message || 'Label printed successfully!');
       },
       error: (err) => {
         this.isPrinting.set(false);
-        alert('Error printing label: ' + (err.error?.message || err.message || 'Unknown error'));
+        this.errorNotification.showHttpError(err, 'Error printing label');
       }
     });
+  }
+
+  viewHistory() {
+    const barcodeId = this.barcodeId();
+    if (barcodeId) {
+      this.dialogRef.close();
+      this.router.navigate(['/inventory/barcode-history', barcodeId]);
+    }
   }
 }

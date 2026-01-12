@@ -13,3 +13,10 @@ mat-form-field {
 mat-checkbox {
     margin: 8px 0;
 }
+
+.checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 8px 0;
+}
