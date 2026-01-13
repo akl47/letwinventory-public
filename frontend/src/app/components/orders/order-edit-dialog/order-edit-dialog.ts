@@ -41,12 +41,7 @@ export class OrderEditDialog implements OnInit {
   private router = inject(Router);
   data = inject<OrderEditDialogData>(MAT_DIALOG_DATA, { optional: true });
 
-  orderStatuses = signal([
-    { id: 1, name: 'Pending' },
-    { id: 2, name: 'Placed' },
-    { id: 3, name: 'Shipped' },
-    { id: 4, name: 'Received' }
-  ]);
+  orderStatuses = signal<any[]>([]);
 
   form = this.fb.group({
     vendor: [''],
@@ -60,6 +55,15 @@ export class OrderEditDialog implements OnInit {
   isEditMode = signal<boolean>(false);
 
   ngOnInit() {
+    this.inventoryService.getOrderStatuses().subscribe({
+      next: (statuses) => {
+        this.orderStatuses.set(statuses);
+      },
+      error: (err) => {
+        this.errorNotification.showHttpError(err, 'Failed to load order statuses');
+      }
+    });
+
     if (this.data?.order) {
       this.isEditMode.set(true);
       const order = this.data.order;

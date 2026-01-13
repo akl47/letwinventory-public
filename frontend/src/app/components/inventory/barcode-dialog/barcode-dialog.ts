@@ -45,6 +45,7 @@ export class BarcodeDialog implements OnInit {
   isLoading = signal(true);
   error = signal<string | null>(null);
   barcodeId = signal<number | null>(null);
+  barcodeObject = signal<any | null>(null);
   selectedPreviewSize = signal<string>('3x1');
   selectedLabelSize = signal<string>('3x1');
   selectedPrinterIP = signal<string>('10.10.10.37');
@@ -56,16 +57,29 @@ export class BarcodeDialog implements OnInit {
     { value: '1.5x1', label: '1.5" x 1"' }
   ];
 
-  printers = [
-    { ip: '10.10.10.37', name: 'Default Printer (10.10.10.37)' },
-    { ip: '10.10.10.38', name: 'Printer 2 (10.10.10.38)' },
-    { ip: '10.10.10.39', name: 'Printer 3 (10.10.10.39)' }
-  ];
+  printers = signal<any[]>([]);
 
   constructor(@Inject(MAT_DIALOG_DATA) public data: { barcode: string }) { }
 
   ngOnInit() {
     this.fetchAndRenderBarcode();
+    this.loadPrinters();
+  }
+
+  private loadPrinters() {
+    this.inventoryService.getPrinters().subscribe({
+      next: (printers) => {
+        this.printers.set(printers);
+        // Set default printer if available
+        const defaultPrinter = printers.find(p => p.isDefault);
+        if (defaultPrinter) {
+          this.selectedPrinterIP.set(defaultPrinter.ipAddress);
+        }
+      },
+      error: (err) => {
+        this.errorNotification.showHttpError(err, 'Failed to load printers');
+      }
+    });
   }
 
   private fetchAndRenderBarcode() {
@@ -74,6 +88,7 @@ export class BarcodeDialog implements OnInit {
         const barcode = barcodes.find((b: any) => b.barcode === this.data.barcode);
         if (barcode) {
           this.barcodeId.set(barcode.id);
+          this.barcodeObject.set(barcode);
           this.fetchZPL(barcode.id);
         } else {
           this.error.set('Barcode not found');
@@ -94,13 +109,16 @@ export class BarcodeDialog implements OnInit {
       return;
     }
 
+    const barcodeObj = this.barcodeObject();
+    const isTrace = barcodeObj?.BarcodeCategory?.name === 'Trace';
+
     const moveDialogRef = this.dialog.open(BarcodeMovementDialog, {
       width: '450px',
       data: {
         action: 'move',
         barcodeId: barcodeId,
         barcode: this.data.barcode,
-        isTrace: this.data.barcode.startsWith('AKL')
+        isTrace: isTrace
       }
     });
 

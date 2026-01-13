@@ -105,8 +105,8 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
         // Find current barcode info
         this.barcodeInfo = barcodes.find((b: any) => b.id === this.barcodeId);
 
-        // Set columns based on barcode type - show trace columns only for traces (AKL prefix)
-        const isTraceBarcode = this.barcodeInfo?.barcode?.startsWith('AKL');
+        // Set columns based on barcode type - show trace columns only for traces
+        const isTraceBarcode = this.barcodeInfo?.BarcodeCategory?.name === 'Trace';
         this.isTrace.set(isTraceBarcode);
         if (isTraceBarcode) {
           this.displayedColumns = ['action', 'qty', 'serialNumber', 'lotNumber', 'from', 'to', 'user', 'date'];

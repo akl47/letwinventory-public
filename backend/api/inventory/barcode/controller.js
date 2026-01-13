@@ -117,7 +117,8 @@ exports.getAllBarcodes = async (req, res, next) => {
     const includeInactive = req.query.includeInactive === 'true';
     const whereClause = includeInactive ? {} : { activeFlag: true };
     const barcodes = await db.Barcode.findAll({
-      where: whereClause
+      where: whereClause,
+      include: { model: db.BarcodeCategory }
     });
     res.json(barcodes);
   } catch (error) {

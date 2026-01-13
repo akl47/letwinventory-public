@@ -37,11 +37,7 @@ export class TaskCardDialog implements OnInit, OnDestroy {
   private projectService = inject(ProjectService);
   private pendingRefresh: any;
 
-  labelOptions: LabelOption[] = [
-    { value: 'normal', label: 'Normal', colorClass: 'label-blue' },
-    { value: 'tracking', label: 'Tracking', colorClass: 'label-yellow' },
-    { value: 'critical_path', label: 'Critical Path', colorClass: 'label-red' },
-  ];
+  labelOptions = signal<LabelOption[]>([]);
 
   task = signal<Task>(this.data.task);
   taskLists = signal<TaskList[]>([]);
@@ -77,12 +73,22 @@ export class TaskCardDialog implements OnInit, OnDestroy {
   });
 
   ngOnInit(): void {
+    this.loadTaskTypes();
     this.loadTaskLists();
     this.loadProjects();
     this.loadSubtasks();
     this.loadAvailableTasks();
     this.descriptionDraft.set(this.task().description || '');
     this.titleDraft.set(this.task().name);
+  }
+
+  loadTaskTypes(): void {
+    this.taskService.getTaskTypes().subscribe({
+      next: (types) => {
+        this.labelOptions.set(types);
+      },
+      error: (err) => console.error('Failed to load task types', err)
+    });
   }
 
   loadSubtasks(): void {

@@ -1,4 +1,4 @@
-const { Task, User, TaskHistory, TaskList, TaskHistoryActionType } = require('../../../models');
+const { Task, User, TaskHistory, TaskList, TaskHistoryActionType, TaskType } = require('../../../models');
 const { Op } = require('sequelize');
 
 // Helper function to get action type ID by code
@@ -265,5 +265,18 @@ exports.moveTask = async (req, res) => {
         res.json(task);
     } catch (error) {
         res.status(400).json({ error: error.message });
+    }
+};
+
+exports.getTaskTypes = async (req, res) => {
+    try {
+        const taskTypes = await TaskType.findAll({
+            where: { activeFlag: true },
+            attributes: ['id', 'value', 'label', 'colorClass'],
+            order: [['id', 'ASC']]
+        });
+        res.json(taskTypes);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 };

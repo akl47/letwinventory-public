@@ -75,21 +75,11 @@ export class OrderView implements OnInit, OnDestroy {
   isReceiveMode = signal<boolean>(false);
   receivingQuantities = signal<Map<number, number>>(new Map());
 
-  orderStatuses = signal([
-    { id: 1, name: 'Pending' },
-    { id: 2, name: 'Placed' },
-    { id: 3, name: 'Shipped' },
-    { id: 4, name: 'Received' },
-    { id: 5, name: 'Partially Received' }
-  ]);
+  orderStatuses = signal<any[]>([]);
 
-  orderLineTypes = signal([
-    { id: 1, name: 'Part' },
-    { id: 2, name: 'Shipping' },
-    { id: 3, name: 'Taxes' },
-    { id: 4, name: 'Services' },
-    { id: 5, name: 'Other' }
-  ]);
+  orderLineTypes = signal<any[]>([]);
+
+  printers = signal<any[]>([]);
 
   hasNextStatus = computed(() => {
     const order = this.currentOrder();
@@ -138,6 +128,34 @@ export class OrderView implements OnInit, OnDestroy {
   });
 
   ngOnInit() {
+    // Load order statuses and line types from API
+    this.inventoryService.getOrderStatuses().subscribe({
+      next: (statuses) => {
+        this.orderStatuses.set(statuses);
+      },
+      error: (err) => {
+        this.errorNotification.showHttpError(err, 'Failed to load order statuses');
+      }
+    });
+
+    this.inventoryService.getOrderLineTypes().subscribe({
+      next: (lineTypes) => {
+        this.orderLineTypes.set(lineTypes);
+      },
+      error: (err) => {
+        this.errorNotification.showHttpError(err, 'Failed to load order line types');
+      }
+    });
+
+    this.inventoryService.getPrinters().subscribe({
+      next: (printers) => {
+        this.printers.set(printers);
+      },
+      error: (err) => {
+        this.errorNotification.showHttpError(err, 'Failed to load printers');
+      }
+    });
+
     // Subscribe to route param changes to handle navigation to different orders
     this.paramSubscription = this.route.paramMap.subscribe(params => {
       const id = params.get('id');
@@ -421,10 +439,12 @@ export class OrderView implements OnInit, OnDestroy {
 
                 // Print the barcode if requested
                 if (result.printBarcode && trace.barcodeID) {
+                  const defaultPrinter = this.printers().find(p => p.isDefault);
+                  const printerIP = defaultPrinter?.ipAddress || '10.10.10.37';
                   this.inventoryService.printBarcode(
                     trace.barcodeID,
                     result.barcodeSize,
-                    '10.10.10.37' // Default printer IP
+                    printerIP
                   ).subscribe({
                     next: () => {
                       this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.Part?.name || 'item'} - Label printed`);

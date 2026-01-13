@@ -105,16 +105,7 @@ export class InventoryService {
     }
 
     getUnitsOfMeasure(): Observable<UnitOfMeasure[]> {
-        // Hardcoded until backend endpoint is created
-        return new Observable(observer => {
-            observer.next([
-                { id: 1, name: 'ea', description: 'Each (individual unit)' },
-                { id: 2, name: 'gal', description: 'Gallon' },
-                { id: 3, name: 'g', description: 'Gram' },
-                { id: 4, name: 'kg', description: 'Kilogram' }
-            ]);
-            observer.complete();
-        });
+        return this.http.get<UnitOfMeasure[]>(`${this.apiUrl}/unitofmeasure`);
     }
 
     getAllParts(): Observable<Part[]> {
@@ -188,6 +179,18 @@ export class InventoryService {
 
     deleteOrderItem(itemId: number): Observable<any> {
         return this.http.delete(`${this.apiUrl}/orderitem/${itemId}`);
+    }
+
+    getOrderStatuses(): Observable<OrderStatus[]> {
+        return this.http.get<OrderStatus[]>(`${this.apiUrl}/order/statuses`);
+    }
+
+    getOrderLineTypes(): Observable<OrderLineType[]> {
+        return this.http.get<OrderLineType[]>(`${this.apiUrl}/order/line-types`);
+    }
+
+    getPrinters(): Observable<any[]> {
+        return this.http.get<any[]>(`${environment.apiUrl}/config/printers`);
     }
 }
 
