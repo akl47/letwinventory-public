@@ -293,7 +293,11 @@
                   <input matInput type="number" [ngModel]="editingQuantity()" (ngModelChange)="onQuantityChange($event)" min="1">
                 </mat-form-field>
                 } @else {
-                {{ item.quantity }}
+                  @if (item.orderLineTypeID === 1) {
+                  {{ item.quantity }}
+                  } @else {
+                  -
+                  }
                 }
               </td>
             </ng-container>
@@ -301,14 +305,24 @@
             <!-- Ordered Column (for receive mode) -->
             <ng-container matColumnDef="ordered">
               <th mat-header-cell *matHeaderCellDef>Ordered</th>
-              <td mat-cell *matCellDef="let item">{{ item.quantity }}</td>
+              <td mat-cell *matCellDef="let item">
+                @if (item.orderLineTypeID === 1) {
+                {{ item.quantity }}
+                } @else {
+                -
+                }
+              </td>
             </ng-container>
 
             <!-- Received Column -->
             <ng-container matColumnDef="received">
               <th mat-header-cell *matHeaderCellDef>Received</th>
               <td mat-cell *matCellDef="let item">
+                @if (item.orderLineTypeID === 1) {
                 {{ item.receivedQuantity || 0 }}
+                } @else {
+                -
+                }
               </td>
             </ng-container>
 

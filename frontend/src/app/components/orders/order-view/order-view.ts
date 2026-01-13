@@ -457,13 +457,6 @@ export class OrderView implements OnInit, OnDestroy {
                   this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.Part?.name || 'item'}`);
                 }
 
-                // Show the barcode dialog with the created barcode
-                if (barcodeString) {
-                  this.dialog.open(BarcodeDialog, {
-                    width: '500px',
-                    data: { barcode: barcodeString }
-                  });
-                }
               },
               error: (err) => {
                 this.errorNotification.showHttpError(err, 'Created barcode but failed to update order item');
@@ -555,11 +548,44 @@ export class OrderView implements OnInit, OnDestroy {
   }
 
   completeReceipt() {
-    // Just exit receive mode - receiving is done via individual line item "Receive" buttons
-    // Backend automatically calculates order status when receivedQuantity is updated
-    this.isReceiveMode.set(false);
-    this.receivingQuantities.set(new Map());
-    this.loadOrder(); // Reload to show latest status from backend
+    const order = this.currentOrder();
+    if (!order) return;
+
+    // Check if there are any part lines (orderLineTypeID === 1)
+    const items = this.orderItems();
+    const hasPartLines = items.some(item => item.orderLineTypeID === 1);
+
+    // If there are no part lines, mark the order as received
+    if (!hasPartLines) {
+      const orderData = {
+        placedDate: order.placedDate,
+        receivedDate: new Date().toISOString(),
+        orderStatusID: 4, // Received
+        vendor: order.vendor,
+        trackingNumber: order.trackingNumber,
+        link: order.link,
+        description: order.description,
+        notes: order.notes
+      };
+
+      this.inventoryService.updateOrder(order.id, orderData).subscribe({
+        next: () => {
+          this.errorNotification.showSuccess('Order marked as received');
+          this.isReceiveMode.set(false);
+          this.receivingQuantities.set(new Map());
+          this.loadOrder();
+        },
+        error: (err) => {
+          this.errorNotification.showHttpError(err, 'Failed to mark order as received');
+        }
+      });
+    } else {
+      // Just exit receive mode - receiving is done via individual line item "Receive" buttons
+      // Backend automatically calculates order status when receivedQuantity is updated
+      this.isReceiveMode.set(false);
+      this.receivingQuantities.set(new Map());
+      this.loadOrder(); // Reload to show latest status from backend
+    }
   }
 
   delete() {
