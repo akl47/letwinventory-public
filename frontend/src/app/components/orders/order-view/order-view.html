@@ -347,10 +347,10 @@
               <td mat-cell *matCellDef="let item">
                 @if (isFormEditMode() && editingItemId() === item.id) {
                 <mat-form-field appearance="outline" class="inline-edit-field">
-                  <input matInput type="number" [ngModel]="editingPrice()" (ngModelChange)="onPriceChange($event)" step="0.01" min="0">
+                  <input matInput type="number" [ngModel]="editingPrice()" (ngModelChange)="onPriceChange($event)" step="0.00001" min="0">
                 </mat-form-field>
                 } @else {
-                ${{ getPrice(item).toFixed(2) }}
+                ${{ formatPrice(item) }}
                 }
               </td>
             </ng-container>

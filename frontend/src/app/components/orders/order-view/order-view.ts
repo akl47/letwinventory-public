@@ -615,8 +615,19 @@ export class OrderView implements OnInit, OnDestroy {
     return typeof item.price === 'string' ? parseFloat(item.price) : item.price;
   }
 
+  formatPrice(item: OrderItem): string {
+    const price = this.getPrice(item);
+    // Always show at least 2 decimal places, up to 5 if needed
+    const priceStr = price.toFixed(5);
+    // Remove trailing zeros after the 2nd decimal place
+    const formatted = priceStr.replace(/(\.\d{2}\d*?)0+$/, '$1');
+    return formatted;
+  }
+
   calculateLineTotal(item: OrderItem): number {
-    return item.quantity * this.getPrice(item);
+    const total = item.quantity * this.getPrice(item);
+    // Round up to 2 decimal places
+    return Math.ceil(total * 100) / 100;
   }
 
   calculateOrderTotal(): number {
