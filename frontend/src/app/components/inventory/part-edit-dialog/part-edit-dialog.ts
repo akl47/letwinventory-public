@@ -8,7 +8,7 @@ import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatSelectModule } from '@angular/material/select';
 import { CommonModule } from '@angular/common';
 import { InventoryService } from '../../../services/inventory.service';
-import { Part } from '../../../models';
+import { Part, PartCategory, UnitOfMeasure } from '../../../models';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { MatIconModule } from '@angular/material/icon';
 
@@ -37,11 +37,9 @@ export class PartEditDialog implements OnInit {
   allParts: Part[] = [];
   suggestedPartNumber = '';
 
-  categories = signal<{ id: number, name: string }[]>([
-    { id: 1, name: 'Part' },
-    { id: 2, name: 'Consumable' },
-    { id: 3, name: 'Tooling' }
-  ]);
+  categories = signal<PartCategory[]>([]);
+
+  unitsOfMeasure = signal<UnitOfMeasure[]>([]);
 
   form = this.fb.group({
     name: ['', [Validators.required, Validators.maxLength(16)]],
@@ -51,7 +49,13 @@ export class PartEditDialog implements OnInit {
     sku: [''],
     link: [''],
     minimumOrderQuantity: [1, [Validators.required, Validators.min(1)]],
-    partCategoryID: [null as number | null, Validators.required]
+    partCategoryID: [null as number | null, Validators.required],
+    serialNumberRequired: [false],
+    lotNumberRequired: [false],
+    defaultUnitOfMeasureID: [1 as number | null],
+    manufacturer: [''],
+    manufacturerPN: [''],
+    manufacturerSameAsVendor: [false]
   });
 
   constructor(
@@ -68,7 +72,12 @@ export class PartEditDialog implements OnInit {
         sku: data.part.sku || '',
         link: data.part.link || '',
         minimumOrderQuantity: data.part.minimumOrderQuantity,
-        partCategoryID: data.part.partCategoryID
+        partCategoryID: data.part.partCategoryID,
+        serialNumberRequired: data.part.serialNumberRequired || false,
+        lotNumberRequired: data.part.lotNumberRequired || false,
+        defaultUnitOfMeasureID: data.part.defaultUnitOfMeasureID || 1,
+        manufacturer: data.part.manufacturer || '',
+        manufacturerPN: data.part.manufacturerPN || ''
       });
     }
   }
@@ -88,42 +97,111 @@ export class PartEditDialog implements OnInit {
       }
     });
 
+    // Load units of measure
+    this.inventoryService.getUnitsOfMeasure().subscribe({
+      next: (uom) => {
+        this.unitsOfMeasure.set(uom);
+      },
+      error: (err) => {
+        console.error('Failed to load units of measure:', err);
+      }
+    });
+
+    // Load part categories from API
+    this.inventoryService.getPartCategories().subscribe({
+      next: (categories) => {
+        this.categories.set(categories);
+      },
+      error: (err) => {
+        console.error('Failed to load part categories:', err);
+      }
+    });
+
     // Update vendor validation when internalPart changes
     this.form.get('internalPart')?.valueChanges.subscribe(isInternal => {
       const vendorControl = this.form.get('vendor');
+      const manufacturerControl = this.form.get('manufacturer');
+      const manufacturerPNControl = this.form.get('manufacturerPN');
+
       if (isInternal) {
-        // Internal parts don't require vendor
+        // Internal parts don't require vendor or manufacturer
         vendorControl?.clearValidators();
+        manufacturerControl?.clearValidators();
+        manufacturerPNControl?.clearValidators();
+        // Clear manufacturer fields for internal parts
+        this.form.patchValue({
+          manufacturer: '',
+          manufacturerPN: '',
+          manufacturerSameAsVendor: false
+        });
       } else {
-        // External parts require vendor
+        // External parts require vendor and manufacturer
         vendorControl?.setValidators([Validators.required]);
+        manufacturerControl?.setValidators([Validators.required]);
+        manufacturerPNControl?.setValidators([Validators.required]);
       }
       vendorControl?.updateValueAndValidity();
+      manufacturerControl?.updateValueAndValidity();
+      manufacturerPNControl?.updateValueAndValidity();
     });
 
-    // Set initial vendor validation based on current internalPart value
+    // Set initial vendor and manufacturer validation based on current internalPart value
     const isInternal = this.form.get('internalPart')?.value;
     const vendorControl = this.form.get('vendor');
+    const manufacturerControl = this.form.get('manufacturer');
+    const manufacturerPNControl = this.form.get('manufacturerPN');
     if (!isInternal) {
       vendorControl?.setValidators([Validators.required]);
+      manufacturerControl?.setValidators([Validators.required]);
+      manufacturerPNControl?.setValidators([Validators.required]);
       vendorControl?.updateValueAndValidity();
+      manufacturerControl?.updateValueAndValidity();
+      manufacturerPNControl?.updateValueAndValidity();
     }
+
+    // Handle "manufacturer same as vendor" checkbox
+    this.form.get('manufacturerSameAsVendor')?.valueChanges.subscribe(isSame => {
+      if (isSame) {
+        // Copy vendor info to manufacturer fields
+        const vendor = this.form.get('vendor')?.value;
+        const sku = this.form.get('sku')?.value;
+        this.form.patchValue({
+          manufacturer: vendor || '',
+          manufacturerPN: sku || ''
+        });
+        // Disable manufacturer fields when checkbox is checked
+        this.form.get('manufacturer')?.disable();
+        this.form.get('manufacturerPN')?.disable();
+      } else {
+        // Enable manufacturer fields when checkbox is unchecked
+        this.form.get('manufacturer')?.enable();
+        this.form.get('manufacturerPN')?.enable();
+      }
+    });
+
+    // When vendor or SKU changes, update manufacturer fields if checkbox is checked
+    this.form.get('vendor')?.valueChanges.subscribe(vendor => {
+      if (this.form.get('manufacturerSameAsVendor')?.value) {
+        this.form.patchValue({ manufacturer: vendor || '' });
+      }
+    });
+
+    this.form.get('sku')?.valueChanges.subscribe(sku => {
+      if (this.form.get('manufacturerSameAsVendor')?.value) {
+        this.form.patchValue({ manufacturerPN: sku || '' });
+      }
+    });
   }
 
   getNextAvailablePartNumber(): string {
-    // Extract all numeric part numbers
-    const numericParts = this.allParts
-      .map(p => p.name)
-      .filter(name => /^\d+$/.test(name))
-      .map(name => parseInt(name, 10))
-      .filter(num => !isNaN(num));
+    // Find the highest part ID
+    const maxPartId = this.allParts.length > 0
+      ? Math.max(...this.allParts.map(p => p.id))
+      : 0;
 
-    // Find the highest number
-    const maxNumber = numericParts.length > 0 ? Math.max(...numericParts) : -1;
-
-    // Suggest next number with leading zeros (6 digits)
-    const nextNumber = maxNumber + 1;
-    return nextNumber.toString().padStart(6, '0');
+    // Next part ID will be maxPartId + 1, formatted as 6-digit number with leading zeros
+    const nextPartId = maxPartId + 1;
+    return nextPartId.toString().padStart(6, '0');
   }
 
   isPartNameTaken(): boolean {
@@ -174,6 +252,12 @@ export class PartEditDialog implements OnInit {
     if (this.form.get('vendor')?.hasError('required')) {
       errors.push('Vendor is required');
     }
+    if (this.form.get('manufacturer')?.hasError('required')) {
+      errors.push('Manufacturer is required for vendor parts');
+    }
+    if (this.form.get('manufacturerPN')?.hasError('required')) {
+      errors.push('Manufacturer Part Number is required for vendor parts');
+    }
     if (this.form.get('minimumOrderQuantity')?.hasError('required')) {
       errors.push('Minimum order quantity is required');
     }
@@ -215,7 +299,12 @@ export class PartEditDialog implements OnInit {
         sku: formValue.sku || '',
         link: formValue.link || '',
         minimumOrderQuantity: formValue.minimumOrderQuantity!,
-        partCategoryID: formValue.partCategoryID!
+        partCategoryID: formValue.partCategoryID!,
+        serialNumberRequired: formValue.serialNumberRequired || false,
+        lotNumberRequired: formValue.lotNumberRequired || false,
+        defaultUnitOfMeasureID: formValue.defaultUnitOfMeasureID || 1,
+        manufacturer: this.form.get('manufacturer')?.value || '',
+        manufacturerPN: this.form.get('manufacturerPN')?.value || ''
       };
 
       if (this.isEditMode && this.data.part?.id) {

@@ -64,6 +64,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true
     },
+    receivedQuantity: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0
+    },
     activeFlag: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

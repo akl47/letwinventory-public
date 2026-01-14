@@ -1,30 +1,85 @@
 import { Component, Inject, OnInit, signal } from '@angular/core';
-import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
+import { MAT_DIALOG_DATA, MatDialog, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatSelectModule } from '@angular/material/select';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatInputModule } from '@angular/material/input';
+import { MatSlideToggleChange, MatSlideToggleModule } from '@angular/material/slide-toggle';
+import { MatIconModule } from '@angular/material/icon';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { CommonModule } from '@angular/common';
 import { inject } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { InventoryService } from '../../../services/inventory.service';
+import { ErrorNotificationService } from '../../../services/error-notification.service';
+import { BarcodeMovementDialog, BarcodeMovementDialogResult } from '../barcode-movement-dialog/barcode-movement-dialog';
 
 @Component({
   selector: 'app-barcode-dialog',
   standalone: true,
-  imports: [MatDialogModule, MatButtonModule, MatProgressSpinnerModule, CommonModule],
+  imports: [
+    MatDialogModule,
+    MatButtonModule,
+    MatProgressSpinnerModule,
+    MatSelectModule,
+    MatFormFieldModule,
+    MatInputModule,
+    MatSlideToggleModule,
+    MatIconModule,
+    MatTooltipModule,
+    CommonModule,
+    FormsModule
+  ],
   templateUrl: './barcode-dialog.html',
   styleUrl: './barcode-dialog.css',
 })
 export class BarcodeDialog implements OnInit {
   private inventoryService = inject(InventoryService);
   private dialogRef = inject(MatDialogRef<BarcodeDialog>);
+  private dialog = inject(MatDialog);
+  private router = inject(Router);
+  private errorNotification = inject(ErrorNotificationService);
   barcodeImageUrl = signal<string | null>(null);
   isLoading = signal(true);
   error = signal<string | null>(null);
   barcodeId = signal<number | null>(null);
+  barcodeObject = signal<any | null>(null);
+  selectedPreviewSize = signal<string>('3x1');
+  selectedLabelSize = signal<string>('3x1');
+  selectedPrinterIP = signal<string>('10.10.10.37');
+  isPrinting = signal(false);
+  showPrintOptions = signal(false);
+
+  labelSizes = [
+    { value: '3x1', label: '3" x 1"' },
+    { value: '1.5x1', label: '1.5" x 1"' }
+  ];
+
+  printers = signal<any[]>([]);
 
   constructor(@Inject(MAT_DIALOG_DATA) public data: { barcode: string }) { }
 
   ngOnInit() {
     this.fetchAndRenderBarcode();
+    this.loadPrinters();
+  }
+
+  private loadPrinters() {
+    this.inventoryService.getPrinters().subscribe({
+      next: (printers) => {
+        this.printers.set(printers);
+        // Set default printer if available
+        const defaultPrinter = printers.find(p => p.isDefault);
+        if (defaultPrinter) {
+          this.selectedPrinterIP.set(defaultPrinter.ipAddress);
+        }
+      },
+      error: (err) => {
+        this.errorNotification.showHttpError(err, 'Failed to load printers');
+      }
+    });
   }
 
   private fetchAndRenderBarcode() {
@@ -33,6 +88,7 @@ export class BarcodeDialog implements OnInit {
         const barcode = barcodes.find((b: any) => b.barcode === this.data.barcode);
         if (barcode) {
           this.barcodeId.set(barcode.id);
+          this.barcodeObject.set(barcode);
           this.fetchZPL(barcode.id);
         } else {
           this.error.set('Barcode not found');
@@ -49,43 +105,36 @@ export class BarcodeDialog implements OnInit {
   moveBarcode() {
     const barcodeId = this.barcodeId();
     if (!barcodeId) {
-      alert('Barcode ID not found');
+      this.errorNotification.showError('Barcode ID not found');
       return;
     }
 
-    const newLocationBarcode = prompt('Enter the destination barcode (LOC-XXXXXX or BOX-XXXXXX):');
-    if (!newLocationBarcode) {
-      return;
-    }
+    const barcodeObj = this.barcodeObject();
+    const isTrace = barcodeObj?.BarcodeCategory?.name === 'Trace';
 
-    this.inventoryService.getAllBarcodes().subscribe({
-      next: (barcodes) => {
-        const destBarcode = barcodes.find((b: any) => b.barcode === newLocationBarcode);
-        if (!destBarcode) {
-          alert('Destination barcode not found: ' + newLocationBarcode);
-          return;
-        }
+    const moveDialogRef = this.dialog.open(BarcodeMovementDialog, {
+      width: '450px',
+      data: {
+        action: 'move',
+        barcodeId: barcodeId,
+        barcode: this.data.barcode,
+        isTrace: isTrace
+      }
+    });
 
-        this.inventoryService.moveBarcode(barcodeId, destBarcode.id).subscribe({
-          next: () => {
-            alert(`Successfully moved ${this.data.barcode} to ${newLocationBarcode}`);
-            this.dialogRef.close(true);
-          },
-          error: (err) => {
-            alert('Error moving barcode: ' + (err.error?.message || err.message || 'Unknown error'));
-          }
-        });
-      },
-      error: (err) => {
-        alert('Error fetching barcodes: ' + err.message);
+    moveDialogRef.afterClosed().subscribe((result: BarcodeMovementDialogResult) => {
+      if (result?.success) {
+        this.errorNotification.showSuccess(`Successfully moved ${this.data.barcode}`);
+        this.dialogRef.close(true);
       }
     });
   }
 
-  private fetchZPL(barcodeId: number) {
-    this.inventoryService.getBarcodeZPL(barcodeId).subscribe({
+  private fetchZPL(barcodeId: number, labelSize?: string) {
+    const size = labelSize || this.selectedPreviewSize();
+    this.inventoryService.getBarcodeZPL(barcodeId, size).subscribe({
       next: (zpl) => {
-        this.renderBarcodeImage(zpl);
+        this.renderBarcodeImage(zpl, size);
       },
       error: (err) => {
         this.error.set('Failed to fetch barcode ZPL: ' + err.message);
@@ -94,10 +143,19 @@ export class BarcodeDialog implements OnInit {
     });
   }
 
-  private renderBarcodeImage(zpl: string) {
+  private renderBarcodeImage(zpl: string, labelSize: string) {
     const encodedZPL = encodeURIComponent(zpl);
-    const labelaryUrl = `https://api.labelary.com/v1/printers/8dpmm/labels/3x1/0/${encodedZPL}`;
+    const labelaryUrl = `https://api.labelary.com/v1/printers/8dpmm/labels/${labelSize}/0/${encodedZPL}`;
     this.barcodeImageUrl.set(labelaryUrl);
+  }
+
+  onPreviewSizeChange() {
+    const barcodeId = this.barcodeId();
+    if (barcodeId) {
+      this.isLoading.set(true);
+      this.error.set(null);
+      this.fetchZPL(barcodeId, this.selectedPreviewSize());
+    }
   }
 
   onImageLoad() {
@@ -107,5 +165,47 @@ export class BarcodeDialog implements OnInit {
   onImageError() {
     this.error.set('Failed to load barcode image from Labelary');
     this.isLoading.set(false);
+  }
+
+  togglePrintOptions() {
+    this.showPrintOptions.set(!this.showPrintOptions());
+  }
+
+  onLabelSizeToggle(event: MatSlideToggleChange) {
+    const newSize = event.checked ? '3x1' : '1.5x1';
+    this.selectedLabelSize.set(newSize);
+    this.selectedPreviewSize.set(newSize);
+    this.onPreviewSizeChange();
+  }
+
+  printLabel() {
+    const barcodeId = this.barcodeId();
+    if (!barcodeId) {
+      this.errorNotification.showError('Barcode ID not found');
+      return;
+    }
+
+    this.isPrinting.set(true);
+    const labelSize = this.selectedLabelSize();
+    const printerIP = this.selectedPrinterIP();
+
+    this.inventoryService.printBarcode(barcodeId, labelSize, printerIP).subscribe({
+      next: (response: any) => {
+        this.isPrinting.set(false);
+        this.errorNotification.showSuccess(response?.message || 'Label printed successfully!');
+      },
+      error: (err) => {
+        this.isPrinting.set(false);
+        this.errorNotification.showHttpError(err, 'Error printing label');
+      }
+    });
+  }
+
+  viewHistory() {
+    const barcodeId = this.barcodeId();
+    if (barcodeId) {
+      this.dialogRef.close();
+      this.router.navigate(['/inventory/barcode-history', barcodeId]);
+    }
   }
 }

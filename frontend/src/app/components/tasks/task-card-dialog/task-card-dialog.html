@@ -57,7 +57,7 @@
                     <!-- Label Dropdown Menu -->
                     <mat-menu #labelMenu="matMenu" class="label-menu">
                         <div class="menu-header">Change Label</div>
-                        @for (option of labelOptions; track option.value) {
+                        @for (option of labelOptions(); track option.value) {
                         <button mat-menu-item (click)="selectLabel(option)"
                             [class.selected]="task().taskTypeEnum === option.value">
                             <span class="menu-label" [ngClass]="option.colorClass">

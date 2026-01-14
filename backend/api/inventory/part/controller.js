@@ -1,6 +1,22 @@
 const db = require('../../../models');
 const createError = require('http-errors')
 
+exports.getAllPartCategories = (req, res, next) => {
+  db.PartCategory.findAll({
+    where: {
+      activeFlag: true
+    },
+    order: [
+      ['name', 'asc']
+    ],
+    attributes: ['id', 'name']
+  }).then(categories => {
+    res.json(categories)
+  }).catch(error => {
+    next(createError(500, 'Error Getting Part Categories:' + error))
+  })
+}
+
 exports.getAllParts = (req, res, next) => {
   // Return all parts (active and inactive), let frontend filter
   db.Part.findAll({
@@ -29,6 +45,13 @@ exports.getAllParts = (req, res, next) => {
 
 
 exports.createNewPart = (req, res, next) => {
+  // Validate manufacturer fields for vendor parts
+  if (!req.body.internalPart) {
+    if (!req.body.manufacturer || !req.body.manufacturerPN) {
+      return next(createError(400, 'Manufacturer and Manufacturer Part Number are required for vendor parts'));
+    }
+  }
+
   db.Part.create(req.body).then(part => {
     res.json(part)
   }).catch(error => {
@@ -37,6 +60,13 @@ exports.createNewPart = (req, res, next) => {
 }
 
 exports.updatePartByID = (req, res, next) => {
+  // Validate manufacturer fields for vendor parts
+  if (!req.body.internalPart) {
+    if (!req.body.manufacturer || !req.body.manufacturerPN) {
+      return next(createError(400, 'Manufacturer and Manufacturer Part Number are required for vendor parts'));
+    }
+  }
+
   db.Part.update(req.body, {
     where: {
       id: req.params.id

@@ -4,6 +4,7 @@ const taskHistoryController = require('./controller');
 const checkToken = require("../../../middleware/checkToken.js");
 
 router.get('/', checkToken, taskHistoryController.getAllHistory);
+router.get('/actiontypes', checkToken, taskHistoryController.getActionTypes);
 router.get('/task/:taskId', checkToken, taskHistoryController.getTaskHistory);
 
 module.exports = router;

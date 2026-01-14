@@ -17,12 +17,12 @@
     "mysql2": "^3.3.3",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
-    "pg": "^8.13.0",
+    "pg": "^8.16.3",
     "pg-escape": "^0.2.0",
     "sequelize": "^6.11.0"
   },
   "devDependencies": {
-    "nodemon": "^2.0.22",
+    "nodemon": "^3.1.11",
     "sequelize-cli": "^6.3.0"
   }
 }

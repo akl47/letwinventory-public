@@ -46,4 +46,8 @@ export class TaskService {
     getAllTasks(): Observable<Task[]> {
         return this.http.get<Task[]>(`${environment.apiUrl}/planning/task`);
     }
+
+    getTaskTypes(): Observable<any[]> {
+        return this.http.get<any[]>(`${environment.apiUrl}/planning/task/types`);
+    }
 }

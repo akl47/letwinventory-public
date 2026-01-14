@@ -4,6 +4,7 @@ const taskController = require('./controller');
 const checkToken = require("../../../middleware/checkToken.js");
 
 router.post('/', checkToken, taskController.createTask);
+router.get('/types', checkToken, taskController.getTaskTypes);
 router.get('/', checkToken, taskController.getAllTasks);
 router.get('/:id', checkToken, taskController.getTaskById);
 router.put('/:id', checkToken, taskController.updateTask);

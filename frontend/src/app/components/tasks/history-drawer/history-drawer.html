@@ -22,10 +22,10 @@
             <div class="item-content">
                 <div class="item-text">
                     <span class="user-name">{{ item.user?.displayName }}</span>
-                    <span class="action-text">{{ getActionLabel(item.actionID) }} on </span>
+                    <span class="action-text">{{ getActionLabel(item) }} on </span>
                     <span class="task-name clickable" (click)="openTaskCard(item.taskID)">{{ item.task?.name }}</span>
                 </div>
-                @if (item.actionID !== TaskActionID.CREATED) {
+                @if (!isCreatedAction(item)) {
                 <div class="item-details">
                     <span class="from-val">{{ getLabel(item, 'from') }}</span>
                     <mat-icon class="arrow-icon">arrow_forward</mat-icon>

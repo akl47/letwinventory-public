@@ -13,6 +13,10 @@ module.exports = (sequelize, DataTypes) => {
                 foreignKey: 'userID',
                 as: 'user'
             });
+            TaskHistory.belongsTo(models.TaskHistoryActionType, {
+                foreignKey: 'actionID',
+                as: 'actionType'
+            });
         }
     };
     TaskHistory.init({

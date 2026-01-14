@@ -386,7 +386,7 @@ exports.order = (req,res,next) => {
 exports.orderItem = (req,res,next) => {
     const model = db.OrderItem.tableAttributes
     let ignore = [...ignore_all]
-    ignore.push('orderItemID', 'unit', 'unitPrice', 'status', 'sku', 'vendor')
+    ignore.push('orderItemID', 'unit', 'unitPrice', 'status', 'sku', 'vendor', 'receivedQuantity')
     return_body = {}
     let error_message = ''
     console.log(req.body)
@@ -407,13 +407,27 @@ exports.orderItem = (req,res,next) => {
                 }
             } else {
                 if(typeof req.body[attribute] =='undefined'||req.body[attribute]==null) {
-                    return_body[attribute] = null
+                    // Only set to null for POST (create) operations
+                    // For updates, omit missing fields to preserve existing values
+                    if(!isUpdate) {
+                        return_body[attribute] = null
+                    }
                 } else {
                     checkType(model[attribute].type.constructor.name,attribute)
                 }
             }
         }
     })
+
+    // Handle receivedQuantity explicitly - optional but pass through if provided
+    if (req.body.receivedQuantity !== undefined && req.body.receivedQuantity !== null) {
+        if (validator.isInt(req.body.receivedQuantity.toString())) {
+            return_body.receivedQuantity = parseInt(req.body.receivedQuantity);
+        } else {
+            error_message += ' receivedQuantity should be a number.';
+        }
+    }
+
     if(!!error_message) {
         next(new RestError(error_message,400));
     }

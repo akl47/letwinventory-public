@@ -3,19 +3,17 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 
-export enum TaskActionID {
-    MOVE_LIST = 1,
-    ADD_TO_PROJECT = 2,
-    ADD_PRIORITY = 3,
-    CHANGE_STATUS = 4,
-    CREATED = 5
+export interface TaskHistoryActionType {
+    id: number;
+    code: string;
+    label: string;
 }
 
 export interface TaskHistory {
     id: number;
     taskID: number;
     userID: number;
-    actionID: TaskActionID;
+    actionID: number;
     fromID: number;
     toID: number;
     createdAt: string;
@@ -28,6 +26,46 @@ export interface TaskHistory {
         displayName: string;
         photoURL?: string;
     };
+    actionType?: TaskHistoryActionType;
+}
+
+export interface BarcodeHistoryActionType {
+    id: number;
+    code: string;
+    label: string;
+}
+
+export interface BarcodeHistoryUnitOfMeasure {
+    id: number;
+    name: string;
+    description: string | null;
+}
+
+export interface BarcodeHistory {
+    id: number;
+    barcodeID: number;
+    userID: number | null;
+    actionID: number;
+    fromID: number | null;
+    toID: number | null;
+    qty: number | null;
+    serialNumber: string | null;
+    lotNumber: string | null;
+    unitOfMeasureID: number | null;
+    createdAt: string;
+    barcode?: {
+        id: number;
+        barcode: string;
+        barcodeCategoryID: number;
+        parentBarcodeID: number | null;
+    };
+    user?: {
+        id: number;
+        displayName: string;
+        photoURL?: string;
+    };
+    actionType?: BarcodeHistoryActionType;
+    unitOfMeasure?: BarcodeHistoryUnitOfMeasure;
 }
 
 @Injectable({
@@ -43,5 +81,29 @@ export class HistoryService {
 
     getTaskHistory(taskId: number): Observable<TaskHistory[]> {
         return this.http.get<TaskHistory[]>(`${this.apiUrl}/task/${taskId}`);
+    }
+
+    getActionTypes(): Observable<TaskHistoryActionType[]> {
+        return this.http.get<TaskHistoryActionType[]>(`${this.apiUrl}/actiontypes`);
+    }
+}
+
+@Injectable({
+    providedIn: 'root'
+})
+export class BarcodeHistoryService {
+    private apiUrl = `${environment.apiUrl}/inventory/barcodehistory`;
+    private http = inject(HttpClient);
+
+    getAllHistory(offset: number = 0, limit: number = 10): Observable<BarcodeHistory[]> {
+        return this.http.get<BarcodeHistory[]>(`${this.apiUrl}?offset=${offset}&limit=${limit}`);
+    }
+
+    getBarcodeHistory(barcodeId: number): Observable<BarcodeHistory[]> {
+        return this.http.get<BarcodeHistory[]>(`${this.apiUrl}/barcode/${barcodeId}`);
+    }
+
+    getActionTypes(): Observable<BarcodeHistoryActionType[]> {
+        return this.http.get<BarcodeHistoryActionType[]>(`${this.apiUrl}/actiontypes`);
     }
 }

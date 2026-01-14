@@ -62,6 +62,17 @@ exports.getOrderById = (req, res, next) => {
           {
             model: db.OrderLineType,
             attributes: ['id', 'name']
+          },
+          {
+            model: db.Trace,
+            where: { activeFlag: true },
+            required: false,
+            include: [
+              {
+                model: db.Barcode,
+                attributes: ['id', 'barcode']
+              }
+            ]
           }
         ]
       }
@@ -130,5 +141,29 @@ exports.deleteOrderByID = (req, res, next) => {
     });
   }).catch(error => {
     next(createError(500, 'Error Finding Order: ' + error));
+  });
+};
+
+exports.getOrderStatuses = (req, res, next) => {
+  db.OrderStatus.findAll({
+    where: { activeFlag: true },
+    attributes: ['id', 'name', 'tagColor', 'nextStatusID'],
+    order: [['id', 'ASC']]
+  }).then(statuses => {
+    res.json(statuses);
+  }).catch(error => {
+    next(createError(500, 'Error Getting Order Statuses: ' + error));
+  });
+};
+
+exports.getOrderLineTypes = (req, res, next) => {
+  db.OrderLineType.findAll({
+    where: { activeFlag: true },
+    attributes: ['id', 'name'],
+    order: [['id', 'ASC']]
+  }).then(lineTypes => {
+    res.json(lineTypes);
+  }).catch(error => {
+    next(createError(500, 'Error Getting Order Line Types: ' + error));
   });
 };

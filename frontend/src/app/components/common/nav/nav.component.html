@@ -42,12 +42,12 @@
     </mat-sidenav>
 
     <mat-sidenav-content class="sidenav-content">
-        <mat-toolbar class="nav-header">
+        <mat-toolbar class="nav-header" [class.dev]="isDev">
             <button mat-icon-button (click)="toggleSidenav()" aria-label="Toggle sidenav">
                 <mat-icon>menu</mat-icon>
             </button>
             <img height="36em" src="assets/logo.svg" alt="Logo">
-            <span class="title-text">Letwinventory</span>
+            <span class="title-text">{{ isDev ? 'Letwinventory-dev' : 'Letwinventory' }}</span>
             <span class="spacer"></span>
             @if (isAuthenticated()) {
             <span class="user-name">{{ currentUser()?.displayName }}</span>

@@ -13,7 +13,8 @@ import {
     BarcodeCategory,
     Location,
     Box,
-    Trace
+    Trace,
+    UnitOfMeasure
 } from '../models';
 import { environment } from '../../environments/environment';
 
@@ -52,12 +53,26 @@ export class InventoryService {
         return this.http.delete(`${this.apiUrl}/barcode/${item.id}`);
     }
 
-    getAllBarcodes(): Observable<Barcode[]> {
-        return this.http.get<Barcode[]>(`${this.apiUrl}/barcode/`);
+    getAllBarcodes(includeInactive = false): Observable<Barcode[]> {
+        const url = includeInactive
+            ? `${this.apiUrl}/barcode/?includeInactive=true`
+            : `${this.apiUrl}/barcode/`;
+        return this.http.get<Barcode[]>(url);
     }
 
-    getBarcodeZPL(barcodeId: number): Observable<string> {
-        return this.http.get(`${this.apiUrl}/barcode/display/${barcodeId}`, {
+    getLocationBarcodes(): Observable<any[]> {
+        return this.http.get<any[]>(`${this.apiUrl}/barcode/locations`);
+    }
+
+    lookupBarcode(barcodeString: string): Observable<Barcode> {
+        return this.http.get<Barcode>(`${this.apiUrl}/barcode/lookup/${encodeURIComponent(barcodeString)}`);
+    }
+
+    getBarcodeZPL(barcodeId: number, labelSize?: string): Observable<string> {
+        const url = labelSize
+            ? `${this.apiUrl}/barcode/display/${barcodeId}?labelSize=${labelSize}`
+            : `${this.apiUrl}/barcode/display/${barcodeId}`;
+        return this.http.get(url, {
             responseType: 'text'
         });
     }
@@ -66,12 +81,39 @@ export class InventoryService {
         return this.http.post(`${this.apiUrl}/barcode/print/${barcodeId}`, { labelSize, printerIP });
     }
 
-    createTrace(data: { partID: number; quantity: number; parentBarcodeID: number }): Observable<any> {
+    createTrace(data: {
+        partID: number;
+        quantity: number;
+        parentBarcodeID?: number | null;
+        unitOfMeasureID?: number | null;
+        serialNumber?: string | null;
+        lotNumber?: string | null;
+    }): Observable<any> {
         return this.http.post(`${this.apiUrl}/trace`, data);
+    }
+
+    receiveOrderItem(data: {
+        partID: number;
+        quantity: number;
+        parentBarcodeID: number;
+        orderItemID?: number;
+        unitOfMeasureID?: number | null;
+        serialNumber?: string | null;
+        lotNumber?: string | null;
+    }): Observable<any> {
+        return this.http.post(`${this.apiUrl}/trace`, data);
+    }
+
+    getUnitsOfMeasure(): Observable<UnitOfMeasure[]> {
+        return this.http.get<UnitOfMeasure[]>(`${this.apiUrl}/unitofmeasure`);
     }
 
     getAllParts(): Observable<Part[]> {
         return this.http.get<Part[]>(`${this.apiUrl}/part`);
+    }
+
+    getPartCategories(): Observable<PartCategory[]> {
+        return this.http.get<PartCategory[]>(`${this.apiUrl}/part/categories`);
     }
 
     moveBarcode(barcodeId: number, newLocationID: number): Observable<any> {
@@ -88,6 +130,21 @@ export class InventoryService {
 
     deletePart(partId: number): Observable<any> {
         return this.http.delete(`${this.apiUrl}/part/${partId}`);
+    }
+
+    // Trace action methods
+    splitTrace(barcodeId: number, splitQuantity: number): Observable<any> {
+        return this.http.post(`${this.apiUrl}/trace/split/${barcodeId}`, { splitQuantity });
+    }
+
+    mergeTrace(targetBarcodeId: number, mergeBarcodeId: number): Observable<any> {
+        return this.http.post(`${this.apiUrl}/trace/merge/${targetBarcodeId}`, { mergeBarcodeId });
+    }
+
+    deleteTrace(barcodeId: number, deleteQuantity?: number): Observable<any> {
+        return this.http.delete(`${this.apiUrl}/trace/barcode/${barcodeId}`, {
+            body: deleteQuantity !== undefined ? { deleteQuantity } : {}
+        });
     }
 
     // Order methods
@@ -123,6 +180,18 @@ export class InventoryService {
     deleteOrderItem(itemId: number): Observable<any> {
         return this.http.delete(`${this.apiUrl}/orderitem/${itemId}`);
     }
+
+    getOrderStatuses(): Observable<OrderStatus[]> {
+        return this.http.get<OrderStatus[]>(`${this.apiUrl}/order/statuses`);
+    }
+
+    getOrderLineTypes(): Observable<OrderLineType[]> {
+        return this.http.get<OrderLineType[]>(`${this.apiUrl}/order/line-types`);
+    }
+
+    getPrinters(): Observable<any[]> {
+        return this.http.get<any[]>(`${environment.apiUrl}/config/printers`);
+    }
 }
 
 // Re-export models for backward compatibility
@@ -138,5 +207,6 @@ export type {
     BarcodeCategory,
     Location,
     Box,
-    Trace
+    Trace,
+    UnitOfMeasure
 };

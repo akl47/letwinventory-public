@@ -1,0 +1,162 @@
+<div class="barcode-history-container">
+    <div class="table-header">
+        <h2>
+            <button mat-icon-button (click)="goBack()">
+                <mat-icon>arrow_back</mat-icon>
+            </button>
+            <mat-icon>history</mat-icon>
+            Barcode History
+            @if (barcodeInfo) {
+                <span class="barcode-label">{{ barcodeInfo.barcode }}</span>
+            }
+        </h2>
+        <div class="header-actions">
+            <mat-form-field appearance="outline" class="search-field">
+                <mat-label>Search history</mat-label>
+                <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
+                       placeholder="Search by action, user, location, serial, lot...">
+                <mat-icon matPrefix>search</mat-icon>
+            </mat-form-field>
+            <div class="action-buttons">
+                <button mat-icon-button (click)="onMove()" matTooltip="Move">
+                    <mat-icon>swap_horiz</mat-icon>
+                </button>
+                @if (isTrace()) {
+                    <button mat-icon-button (click)="onMerge()" matTooltip="Merge">
+                        <mat-icon>call_merge</mat-icon>
+                    </button>
+                    <button mat-icon-button (click)="onSplit()" matTooltip="Split">
+                        <mat-icon>call_split</mat-icon>
+                    </button>
+                }
+                <button mat-icon-button (click)="onDelete()" matTooltip="Delete" class="delete-button">
+                    <mat-icon>delete</mat-icon>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    @if (isLoading) {
+        <div class="loading">
+            <mat-spinner diameter="50"></mat-spinner>
+            <p>Loading history...</p>
+        </div>
+    }
+
+    @if (error) {
+        <div class="error">
+            <mat-icon>error</mat-icon>
+            <p>{{ error }}</p>
+        </div>
+    }
+
+    @if (!isLoading && !error) {
+        <div class="table-wrapper">
+            <table mat-table [dataSource]="displayedHistory()" matSort (matSortChange)="onSortChange($event)" class="history-table">
+                <ng-container matColumnDef="action">
+                    <th mat-header-cell *matHeaderCellDef>Action</th>
+                    <td mat-cell *matCellDef="let item">
+                        <div class="action-cell">
+                            <mat-icon class="action-icon">{{ getActionIcon(item) }}</mat-icon>
+                            <span>{{ getActionLabel(item) }}</span>
+                        </div>
+                    </td>
+                </ng-container>
+
+                <ng-container matColumnDef="from">
+                    <th mat-header-cell *matHeaderCellDef>From</th>
+                    <td mat-cell *matCellDef="let item">
+                        @if (item.fromID !== null && item.fromID !== undefined) {
+                            <app-barcode-tag [barcode]="getLocationLabel(item, 'from')"></app-barcode-tag>
+                        } @else {
+                            <span class="location-value">-</span>
+                        }
+                    </td>
+                </ng-container>
+
+                <ng-container matColumnDef="to">
+                    <th mat-header-cell *matHeaderCellDef>To</th>
+                    <td mat-cell *matCellDef="let item">
+                        @if (item.toID !== null && item.toID !== undefined) {
+                            <app-barcode-tag [barcode]="getLocationLabel(item, 'to')"></app-barcode-tag>
+                        } @else {
+                            <span class="location-value">-</span>
+                        }
+                    </td>
+                </ng-container>
+
+                <ng-container matColumnDef="qty">
+                    <th mat-header-cell *matHeaderCellDef>Qty</th>
+                    <td mat-cell *matCellDef="let item">
+                        @if (item.qty !== null) {
+                            {{ item.qty }} {{ item.unitOfMeasure?.name || '' }}
+                        } @else {
+                            -
+                        }
+                    </td>
+                </ng-container>
+
+                <ng-container matColumnDef="serialNumber">
+                    <th mat-header-cell *matHeaderCellDef>Serial Number</th>
+                    <td mat-cell *matCellDef="let item">{{ item.serialNumber || '-' }}</td>
+                </ng-container>
+
+                <ng-container matColumnDef="lotNumber">
+                    <th mat-header-cell *matHeaderCellDef>Lot Number</th>
+                    <td mat-cell *matCellDef="let item">{{ item.lotNumber || '-' }}</td>
+                </ng-container>
+
+                <ng-container matColumnDef="user">
+                    <th mat-header-cell *matHeaderCellDef>User</th>
+                    <td mat-cell *matCellDef="let item">
+                        <div class="user-cell">
+                            @if (item.user?.photoURL) {
+                                <img [src]="item.user.photoURL" class="user-avatar" [alt]="item.user?.displayName">
+                            }
+                            <span>{{ item.user?.displayName || '-' }}</span>
+                        </div>
+                    </td>
+                </ng-container>
+
+                <ng-container matColumnDef="date">
+                    <th mat-header-cell *matHeaderCellDef class="sortable-header" (click)="toggleDateSort()">
+                        <div class="sort-header">
+                            Date
+                            <mat-icon class="sort-icon">
+                                {{ sortDirection() === 'asc' ? 'arrow_upward' : 'arrow_downward' }}
+                            </mat-icon>
+                        </div>
+                    </th>
+                    <td mat-cell *matCellDef="let item">{{ item.createdAt | date:'MMM d, yyyy h:mm a' }}</td>
+                </ng-container>
+
+                <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+                <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+
+                <!-- No data row -->
+                <tr class="mat-row" *matNoDataRow>
+                    <td class="mat-cell" [attr.colspan]="displayedColumns.length">
+                        <div class="no-data">
+                            @if (searchText()) {
+                                <mat-icon>search_off</mat-icon>
+                                <p>No history found matching "{{ searchText() }}"</p>
+                            } @else {
+                                <mat-icon>history</mat-icon>
+                                <p>No history available for this barcode.</p>
+                            }
+                        </div>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <mat-paginator
+            [length]="getTotalCount()"
+            [pageSize]="pageSize()"
+            [pageIndex]="pageIndex()"
+            [pageSizeOptions]="pageSizeOptions"
+            (page)="onPageChange($event)"
+            showFirstLastButtons>
+        </mat-paginator>
+    }
+</div>

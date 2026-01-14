@@ -11,16 +11,31 @@
       }
     </h2>
     <span class="spacer"></span>
-    @if (isEditMode() && !isFormEditMode()) {
-    @if (hasNextStatus()) {
+    @if (isEditMode() && !isFormEditMode() && !isReceiveMode()) {
+    @if (canReceive()) {
+    <button mat-flat-button color="accent" (click)="enterReceiveMode()">
+      <mat-icon>inventory_2</mat-icon>
+      Receive
+    </button>
+    } @else if (hasNextStatus()) {
     <button mat-flat-button color="accent" (click)="moveToNextStatus()">
       <mat-icon>arrow_forward</mat-icon>
-      Next Status
+      Mark as {{ nextStatusName() }}
     </button>
     }
     <button mat-button (click)="enableEdit()">
       <mat-icon>edit</mat-icon>
       Edit
+    </button>
+    }
+    @if (isReceiveMode()) {
+    <button mat-button (click)="cancelReceiveMode()">
+      <mat-icon>close</mat-icon>
+      Cancel
+    </button>
+    <button mat-flat-button color="primary" (click)="completeReceipt()">
+      <mat-icon>check</mat-icon>
+      Complete Receipt
     </button>
     }
     @if (isFormEditMode() || !isEditMode()) {
@@ -255,6 +270,20 @@
               </td>
             </ng-container>
 
+            <!-- Barcode Column -->
+            <ng-container matColumnDef="barcode">
+              <th mat-header-cell *matHeaderCellDef>Barcode</th>
+              <td mat-cell *matCellDef="let item">
+                @if (item.Traces?.length) {
+                  @for (trace of item.Traces; track trace.id) {
+                    <app-barcode-tag [barcode]="trace.Barcode?.barcode || trace.barcode"></app-barcode-tag>
+                  }
+                } @else {
+                  -
+                }
+              </td>
+            </ng-container>
+
             <!-- Quantity Column -->
             <ng-container matColumnDef="quantity">
               <th mat-header-cell *matHeaderCellDef>Qty</th>
@@ -264,7 +293,50 @@
                   <input matInput type="number" [ngModel]="editingQuantity()" (ngModelChange)="onQuantityChange($event)" min="1">
                 </mat-form-field>
                 } @else {
+                  @if (item.orderLineTypeID === 1) {
+                  {{ item.quantity }}
+                  } @else {
+                  -
+                  }
+                }
+              </td>
+            </ng-container>
+
+            <!-- Ordered Column (for receive mode) -->
+            <ng-container matColumnDef="ordered">
+              <th mat-header-cell *matHeaderCellDef>Ordered</th>
+              <td mat-cell *matCellDef="let item">
+                @if (item.orderLineTypeID === 1) {
                 {{ item.quantity }}
+                } @else {
+                -
+                }
+              </td>
+            </ng-container>
+
+            <!-- Received Column -->
+            <ng-container matColumnDef="received">
+              <th mat-header-cell *matHeaderCellDef>Received</th>
+              <td mat-cell *matCellDef="let item">
+                @if (item.orderLineTypeID === 1) {
+                {{ item.receivedQuantity || 0 }}
+                } @else {
+                -
+                }
+              </td>
+            </ng-container>
+
+            <!-- Remaining Column (for receive mode) -->
+            <ng-container matColumnDef="remaining">
+              <th mat-header-cell *matHeaderCellDef>Remaining</th>
+              <td mat-cell *matCellDef="let item">
+                @if (getRemainingQuantity(item) > 0) {
+                  <span class="remaining-qty">{{ getRemainingQuantity(item) }}</span>
+                } @else {
+                  <span class="fully-received">
+                    <mat-icon>check_circle</mat-icon>
+                    Complete
+                  </span>
                 }
               </td>
             </ng-container>
@@ -300,21 +372,29 @@
               <th mat-header-cell *matHeaderCellDef>Actions</th>
               <td mat-cell *matCellDef="let item">
                 @if (isFormEditMode()) {
-                @if (editingItemId() === item.id) {
-                <button mat-icon-button color="primary" (click)="saveLineItem(item)" matTooltip="Save">
-                  <mat-icon>check</mat-icon>
-                </button>
-                <button mat-icon-button (click)="cancelLineItemEdit()" matTooltip="Cancel">
-                  <mat-icon>close</mat-icon>
-                </button>
-                } @else {
-                <button mat-icon-button (click)="startEditLineItem(item)" matTooltip="Edit">
-                  <mat-icon>edit</mat-icon>
-                </button>
-                <button mat-icon-button color="warn" (click)="deleteLineItem(item)" matTooltip="Delete">
-                  <mat-icon>delete</mat-icon>
-                </button>
-                }
+                  @if (editingItemId() === item.id) {
+                  <button mat-icon-button color="primary" (click)="saveLineItem(item)" matTooltip="Save">
+                    <mat-icon>check</mat-icon>
+                  </button>
+                  <button mat-icon-button (click)="cancelLineItemEdit()" matTooltip="Cancel">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                  } @else {
+                  <button mat-icon-button (click)="editLineItem(item)" matTooltip="Edit">
+                    <mat-icon>edit</mat-icon>
+                  </button>
+                  <button mat-icon-button color="warn" (click)="deleteLineItem(item)" matTooltip="Delete">
+                    <mat-icon>delete</mat-icon>
+                  </button>
+                  }
+                } @else if (isReceiveMode() && item.orderLineTypeID === 1) {
+                  @if (getRemainingQuantity(item) > 0) {
+                  <button mat-icon-button color="primary" (click)="receiveLineItem(item)" matTooltip="Receive">
+                    <mat-icon>inventory_2</mat-icon>
+                  </button>
+                  } @else {
+                  <mat-icon class="received-check">check_circle</mat-icon>
+                  }
                 }
               </td>
             </ng-container>

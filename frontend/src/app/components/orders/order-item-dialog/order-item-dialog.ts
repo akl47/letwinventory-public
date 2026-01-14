@@ -125,19 +125,24 @@ export class OrderItemDialog implements OnInit {
     // Update validation when line type changes
     const updateValidation = (typeId: number) => {
       if (typeId === 1) {
-        // Part line item - partID required, name optional
+        // Part line item - partID required, name optional, quantity required
         this.form.get('partID')?.setValidators([Validators.required]);
         this.form.get('name')?.clearValidators();
         this.form.get('name')?.setValue('');
+        this.form.get('quantity')?.setValidators([Validators.required, Validators.min(1)]);
       } else {
-        // Non-part line item - name required, partID optional
+        // Non-part line item - name required, partID optional, quantity set to 1 and not required
         this.form.get('partID')?.clearValidators();
         this.form.get('partID')?.setValue(null);
         this.form.get('partSearch')?.setValue('');
         this.form.get('name')?.setValidators([Validators.required]);
+        this.form.get('quantity')?.clearValidators();
+        this.form.get('quantity')?.setValue(1);
+        this.currentQuantity.set(1);
       }
       this.form.get('partID')?.updateValueAndValidity();
       this.form.get('name')?.updateValueAndValidity();
+      this.form.get('quantity')?.updateValueAndValidity();
     };
 
     // Set initial validation state

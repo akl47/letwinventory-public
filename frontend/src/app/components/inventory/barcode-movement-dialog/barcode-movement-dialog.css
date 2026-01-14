@@ -1,0 +1,127 @@
+.dialog-container {
+    min-width: 400px;
+}
+
+h2[mat-dialog-title] {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0;
+    padding: 16px 24px;
+}
+
+h2[mat-dialog-title] mat-icon {
+    font-size: 28px;
+    width: 28px;
+    height: 28px;
+}
+
+mat-dialog-content {
+    padding: 0 24px 16px;
+}
+
+.barcode-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    background-color: var(--mat-sys-surface-container);
+    border-radius: 8px;
+    margin-bottom: 16px;
+}
+
+.barcode-info .label {
+    color: var(--mat-sys-on-surface-variant);
+    font-size: 14px;
+}
+
+.barcode-info .barcode-value {
+    font-family: monospace;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--mat-sys-primary);
+}
+
+.action-description {
+    margin: 0 0 16px;
+    color: var(--mat-sys-on-surface-variant);
+    font-size: 14px;
+}
+
+.full-width {
+    width: 100%;
+}
+
+.delete-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+    background-color: rgba(244, 67, 54, 0.1);
+    border: 1px solid rgba(244, 67, 54, 0.3);
+    border-radius: 8px;
+    margin-bottom: 16px;
+}
+
+.delete-warning mat-icon {
+    color: #f44336;
+    font-size: 24px;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.delete-warning p {
+    margin: 0;
+    color: #f44336;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+mat-dialog-actions {
+    padding: 16px 24px;
+    gap: 8px;
+}
+
+.button-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.button-content mat-icon {
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+}
+
+.delete-type-selection {
+    margin-bottom: 16px;
+}
+
+.delete-type-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.error-message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    background-color: rgba(244, 67, 54, 0.1);
+    border: 1px solid rgba(244, 67, 54, 0.3);
+    border-radius: 8px;
+    margin-top: 16px;
+    color: #f44336;
+    font-size: 14px;
+}
+
+.error-message mat-icon {
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}

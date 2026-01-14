@@ -1,6 +1,6 @@
 import { Component, Input, Output, EventEmitter, inject, OnInit, ViewChild, ElementRef, OnDestroy } from '@angular/core';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
-import { HistoryService, TaskHistory, TaskActionID } from '../../../services/history.service';
+import { HistoryService, TaskHistory } from '../../../services/history.service';
 import { ProjectService } from '../../../services/project.service';
 import { TaskService } from '../../../services/task.service';
 import { Project } from '../../../models/project.model';
@@ -22,8 +22,6 @@ export class HistoryDrawerComponent implements OnInit, OnDestroy {
   @Input() isOpen = false;
   @Output() close = new EventEmitter<void>();
   @ViewChild('drawerBody') drawerBody!: ElementRef;
-
-  TaskActionID = TaskActionID;
 
   private historyService = inject(HistoryService);
   private projectService = inject(ProjectService);
@@ -111,24 +109,29 @@ export class HistoryDrawerComponent implements OnInit, OnDestroy {
     });
   }
 
+  isCreatedAction(item: TaskHistory): boolean {
+    return item.actionType?.code === 'CREATED';
+  }
+
   getLabel(item: TaskHistory, type: 'from' | 'to'): string {
     const id = type === 'from' ? item.fromID : item.toID;
+    const actionCode = item.actionType?.code;
 
-    switch (item.actionID) {
-      case TaskActionID.MOVE_LIST:
+    switch (actionCode) {
+      case 'MOVE_LIST':
         const list = this.taskLists.find(l => l.id === id);
         return list ? list.name : `List ${id}`;
 
-      case TaskActionID.ADD_TO_PROJECT:
+      case 'ADD_TO_PROJECT':
         if (id === 0) return 'None';
         const project = this.projects.find(p => p.id === id);
         return project ? project.name : `Project ${id}`;
 
-      case TaskActionID.ADD_PRIORITY:
+      case 'ADD_PRIORITY':
         const priorities = ['Normal', 'Tracking', 'Critical Path'];
         return priorities[id] || 'Unknown';
 
-      case TaskActionID.CHANGE_STATUS:
+      case 'CHANGE_STATUS':
         return id === 1 ? 'Completed' : 'Pending';
 
       default:
@@ -136,13 +139,15 @@ export class HistoryDrawerComponent implements OnInit, OnDestroy {
     }
   }
 
-  getActionLabel(actionID: number): string {
-    switch (actionID) {
-      case TaskActionID.MOVE_LIST: return 'moved a card';
-      case TaskActionID.ADD_TO_PROJECT: return 'added card to project';
-      case TaskActionID.ADD_PRIORITY: return 'set priority';
-      case TaskActionID.CHANGE_STATUS: return 'changed status';
-      case TaskActionID.CREATED: return 'created a card';
+  getActionLabel(item: TaskHistory): string {
+    const actionCode = item.actionType?.code;
+
+    switch (actionCode) {
+      case 'MOVE_LIST': return 'moved a card';
+      case 'ADD_TO_PROJECT': return 'added card to project';
+      case 'ADD_PRIORITY': return 'set priority';
+      case 'CHANGE_STATUS': return 'changed status';
+      case 'CREATED': return 'created a card';
       default: return 'updated card';
     }
   }

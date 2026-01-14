@@ -1,4 +1,4 @@
-const { TaskHistory, Task, User } = require('../../../models');
+const { TaskHistory, Task, User, TaskHistoryActionType } = require('../../../models');
 
 exports.getAllHistory = async (req, res) => {
     try {
@@ -19,6 +19,11 @@ exports.getAllHistory = async (req, res) => {
                     model: User,
                     as: 'user',
                     attributes: ['id', 'displayName', 'photoURL']
+                },
+                {
+                    model: TaskHistoryActionType,
+                    as: 'actionType',
+                    attributes: ['id', 'code', 'label']
                 }
             ],
             attributes: ['id', 'taskID', 'userID', 'actionID', 'fromID', 'toID', 'createdAt']
@@ -40,10 +45,28 @@ exports.getTaskHistory = async (req, res) => {
                     model: User,
                     as: 'user',
                     attributes: ['id', 'displayName', 'photoURL']
+                },
+                {
+                    model: TaskHistoryActionType,
+                    as: 'actionType',
+                    attributes: ['id', 'code', 'label']
                 }
             ]
         });
         res.json(history);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+exports.getActionTypes = async (req, res) => {
+    try {
+        const actionTypes = await TaskHistoryActionType.findAll({
+            where: { activeFlag: true },
+            attributes: ['id', 'code', 'label'],
+            order: [['id', 'ASC']]
+        });
+        res.json(actionTypes);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

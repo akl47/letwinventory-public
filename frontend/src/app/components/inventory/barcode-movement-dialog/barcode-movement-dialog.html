@@ -1,0 +1,123 @@
+<div class="dialog-container">
+    <h2 mat-dialog-title>
+        <mat-icon>{{ actionIcon }}</mat-icon>
+        {{ actionTitle }}
+    </h2>
+
+    <mat-dialog-content>
+        <div class="barcode-info">
+            <span class="label">Barcode:</span>
+            <span class="barcode-value">{{ data.barcode }}</span>
+        </div>
+
+        <!-- Move Form -->
+        @if (data.action === 'move') {
+            <p class="action-description">Move this barcode to a new location or container.</p>
+            <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Destination Barcode</mat-label>
+                <input matInput [(ngModel)]="destinationBarcode"
+                       placeholder="Scan or enter destination barcode">
+                <mat-icon matPrefix>qr_code_scanner</mat-icon>
+            </mat-form-field>
+        }
+
+        <!-- Merge Form -->
+        @if (data.action === 'merge') {
+            <p class="action-description">Merge this barcode into another barcode of the same part. The entered barcode will remain active.</p>
+            <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Destination Barcode (will stay)</mat-label>
+                <input matInput [(ngModel)]="mergeBarcode"
+                       placeholder="Scan or enter destination barcode">
+                <mat-icon matPrefix>qr_code_scanner</mat-icon>
+            </mat-form-field>
+        }
+
+        <!-- Split Form -->
+        @if (data.action === 'split') {
+            <p class="action-description">Split a quantity from this barcode into a new barcode.</p>
+            <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Quantity to Split</mat-label>
+                <input matInput type="number" [(ngModel)]="splitQuantity"
+                       placeholder="Enter quantity" min="1">
+                <mat-icon matPrefix>content_cut</mat-icon>
+            </mat-form-field>
+        }
+
+        <!-- Delete Confirmation -->
+        @if (data.action === 'delete') {
+            <div class="delete-warning">
+                <mat-icon>warning</mat-icon>
+                @if (data.isTrace) {
+                    <p>This will modify or delete the trace and its associated barcode.</p>
+                } @else {
+                    <p>This action cannot be undone. This will permanently delete the barcode and all associated data.</p>
+                }
+            </div>
+
+            @if (data.isTrace) {
+                <div class="delete-type-selection">
+                    <mat-radio-group [(ngModel)]="deleteType" class="delete-type-group">
+                        <mat-radio-button value="full">Delete entire trace</mat-radio-button>
+                        <mat-radio-button value="partial">Remove quantity</mat-radio-button>
+                    </mat-radio-group>
+                </div>
+
+                @if (deleteType === 'partial') {
+                    <mat-form-field appearance="outline" class="full-width">
+                        <mat-label>Quantity to Remove</mat-label>
+                        <input matInput type="number" [(ngModel)]="deleteQuantity"
+                               placeholder="Enter quantity to remove" min="1">
+                        <mat-icon matPrefix>remove_circle</mat-icon>
+                    </mat-form-field>
+                }
+            }
+
+            <p class="action-description">Type <strong>{{ data.barcode }}</strong> to confirm:</p>
+            <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Confirm Barcode</mat-label>
+                <input matInput [(ngModel)]="deleteConfirmation"
+                       placeholder="Type barcode to confirm">
+            </mat-form-field>
+        }
+
+        @if (errorMessage()) {
+            <div class="error-message">
+                <mat-icon>error</mat-icon>
+                <span>{{ errorMessage() }}</span>
+            </div>
+        }
+    </mat-dialog-content>
+
+    <mat-dialog-actions align="end">
+        <button mat-button (click)="onCancel()" [disabled]="isSubmitting()">
+            Cancel
+        </button>
+        @if (data.action === 'delete') {
+            <button mat-flat-button color="warn"
+                    (click)="onSubmit()"
+                    [disabled]="!canSubmit || isSubmitting()">
+                @if (isSubmitting()) {
+                    <mat-spinner diameter="20"></mat-spinner>
+                } @else {
+                    <span class="button-content">
+                        <mat-icon>delete</mat-icon>
+                        Delete
+                    </span>
+                }
+            </button>
+        } @else {
+            <button mat-flat-button color="primary"
+                    (click)="onSubmit()"
+                    [disabled]="!canSubmit || isSubmitting()">
+                @if (isSubmitting()) {
+                    <mat-spinner diameter="20"></mat-spinner>
+                } @else {
+                    <span class="button-content">
+                        <mat-icon>{{ actionIcon }}</mat-icon>
+                        {{ actionTitle }}
+                    </span>
+                }
+            </button>
+        }
+    </mat-dialog-actions>
+</div>

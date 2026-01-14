@@ -17,9 +17,29 @@
                 (error)="onImageError()" />
         </div>
         }
+
     </div>
 </mat-dialog-content>
 <mat-dialog-actions align="end">
-    <button mat-button (click)="moveBarcode()" style="margin-right: auto;">Move</button>
+    <button mat-icon-button (click)="moveBarcode()" matTooltip="Move Barcode" style="margin-right: auto;">
+        <mat-icon>swap_horiz</mat-icon>
+    </button>
+    <button mat-icon-button (click)="viewHistory()" matTooltip="View History" [disabled]="!barcodeId()">
+        <mat-icon>history</mat-icon>
+    </button>
+    <span class="label-size-toggle">
+        <span>1.5" x 1"</span>
+        <mat-slide-toggle [checked]="selectedLabelSize() === '3x1'" (change)="onLabelSizeToggle($event)">
+        </mat-slide-toggle>
+        <span>3" x 1"</span>
+    </span>
+    <button mat-icon-button color="primary" (click)="printLabel()" [disabled]="isPrinting() || !barcodeId()"
+        matTooltip="Print Label">
+        @if (isPrinting()) {
+        <mat-spinner diameter="24"></mat-spinner>
+        } @else {
+        <mat-icon>print</mat-icon>
+        }
+    </button>
     <button mat-button mat-dialog-close>Close</button>
 </mat-dialog-actions>

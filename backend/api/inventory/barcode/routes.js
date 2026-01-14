@@ -2,10 +2,11 @@ var router = require('express').Router();
 var controller = require('./controller');
 const checkToken = require('../../../middleware/checkToken.js');
 
-// router.post('/print/', checkToken, controller.printBarcode);
-// router.post('/print/:id', checkToken, controller.printBarcodeByID);
+router.post('/print/:id', checkToken, controller.printBarcodeByID);
 router.post('/move/:id', checkToken, controller.moveBarcodeByID)
 router.get('/', checkToken, controller.getAllBarcodes);
+router.get('/locations', checkToken, controller.getLocationBarcodes);
+router.get('/lookup/:barcode', checkToken, controller.getBarcodeByString);
 router.get('/display/:id', checkToken, controller.displayBarcode);
 router.get('/tag/:id', checkToken, controller.getTagByID);
 router.get('/tag/chain/:id', checkToken, controller.getTagChainByID);
