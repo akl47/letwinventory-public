@@ -666,7 +666,7 @@ export class OrderView implements OnInit, OnDestroy {
 
     dialogRef.afterClosed().subscribe(result => {
       if (result) {
-        this.loadOrder();
+        this.loadOrder(true); // Preserve edit mode after adding line item
       }
     });
   }
@@ -679,7 +679,7 @@ export class OrderView implements OnInit, OnDestroy {
 
     dialogRef.afterClosed().subscribe(result => {
       if (result) {
-        this.loadOrder();
+        this.loadOrder(true); // Preserve edit mode after editing line item
       }
     });
   }
@@ -691,7 +691,7 @@ export class OrderView implements OnInit, OnDestroy {
     this.inventoryService.deleteOrderItem(item.id).subscribe({
       next: () => {
         this.errorNotification.showSuccess('Line item deleted');
-        this.loadOrder();
+        this.loadOrder(true); // Preserve edit mode after deleting line item
       },
       error: (err) => {
         this.errorNotification.showHttpError(err, 'Failed to delete line item');

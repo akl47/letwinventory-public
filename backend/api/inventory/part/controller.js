@@ -45,6 +45,13 @@ exports.getAllParts = (req, res, next) => {
 
 
 exports.createNewPart = (req, res, next) => {
+  // Validate manufacturer fields for vendor parts
+  if (!req.body.internalPart) {
+    if (!req.body.manufacturer || !req.body.manufacturerPN) {
+      return next(createError(400, 'Manufacturer and Manufacturer Part Number are required for vendor parts'));
+    }
+  }
+
   db.Part.create(req.body).then(part => {
     res.json(part)
   }).catch(error => {
@@ -53,6 +60,13 @@ exports.createNewPart = (req, res, next) => {
 }
 
 exports.updatePartByID = (req, res, next) => {
+  // Validate manufacturer fields for vendor parts
+  if (!req.body.internalPart) {
+    if (!req.body.manufacturer || !req.body.manufacturerPN) {
+      return next(createError(400, 'Manufacturer and Manufacturer Part Number are required for vendor parts'));
+    }
+  }
+
   db.Part.update(req.body, {
     where: {
       id: req.params.id

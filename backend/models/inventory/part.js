@@ -79,6 +79,14 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
       defaultValue: 1 // Default to 'ea'
     },
+    manufacturer: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    manufacturerPN: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
     createdAt: {
       allowNull: false,
       type: DataTypes.DATE

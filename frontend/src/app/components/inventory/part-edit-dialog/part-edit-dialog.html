@@ -67,6 +67,29 @@
             <mat-hint>URL to vendor product page</mat-hint>
         </mat-form-field>
 
+        @if (!form.get('internalPart')?.value) {
+        <mat-checkbox formControlName="manufacturerSameAsVendor">
+            Manufacturer same as Vendor
+        </mat-checkbox>
+
+        <mat-form-field appearance="outline">
+            <mat-label>Manufacturer</mat-label>
+            <input matInput formControlName="manufacturer" placeholder="e.g. Texas Instruments, STMicroelectronics" required>
+            <mat-hint>Actual manufacturer of the part</mat-hint>
+            @if (form.get('manufacturer')?.hasError('required') && form.get('manufacturer')?.touched) {
+            <mat-error>Manufacturer is required for vendor parts</mat-error>
+            }
+        </mat-form-field>
+
+        <mat-form-field appearance="outline">
+            <mat-label>Manufacturer Part Number</mat-label>
+            <input matInput formControlName="manufacturerPN" placeholder="Manufacturer's part number" required>
+            @if (form.get('manufacturerPN')?.hasError('required') && form.get('manufacturerPN')?.touched) {
+            <mat-error>Manufacturer Part Number is required for vendor parts</mat-error>
+            }
+        </mat-form-field>
+        }
+
         <mat-form-field appearance="outline">
             <mat-label>Minimum Order Quantity</mat-label>
             <input matInput formControlName="minimumOrderQuantity" type="number" min="1" required>

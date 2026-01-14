@@ -16,6 +16,8 @@ export interface Part {
     serialNumberRequired: boolean;
     lotNumberRequired: boolean;
     defaultUnitOfMeasureID: number | null;
+    manufacturer: string | null;
+    manufacturerPN: string | null;
     createdAt: string;
     updatedAt: string;
     PartCategory?: PartCategory;
