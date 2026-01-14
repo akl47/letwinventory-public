@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy, inject, ChangeDetectorRef, signal } from '@angular/core';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import { Location } from '@angular/common';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -25,6 +25,7 @@ import { BarcodeTag } from '../barcode-tag/barcode-tag';
   imports: [
     CommonModule,
     FormsModule,
+    RouterModule,
     MatIconModule,
     MatButtonModule,
     MatProgressSpinnerModule,

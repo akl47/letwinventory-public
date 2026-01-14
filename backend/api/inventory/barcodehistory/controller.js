@@ -1,4 +1,4 @@
-const { BarcodeHistory, Barcode, User, BarcodeHistoryActionType, UnitOfMeasure } = require('../../../models');
+const { BarcodeHistory, Barcode, User, BarcodeHistoryActionType, UnitOfMeasure, Trace, OrderItem, Order } = require('../../../models');
 
 exports.getAllHistory = async (req, res) => {
     try {
@@ -64,7 +64,41 @@ exports.getBarcodeHistory = async (req, res) => {
             ],
             attributes: ['id', 'barcodeID', 'userID', 'actionID', 'fromID', 'toID', 'qty', 'serialNumber', 'lotNumber', 'unitOfMeasureID', 'createdAt']
         });
-        res.json(history);
+
+        // For each history item, if it's a RECEIVED action, look up the trace to get order info
+        const historyWithOrders = await Promise.all(history.map(async (item) => {
+            const historyObj = item.toJSON();
+
+            // If this is a received action, find the associated trace and order
+            if (historyObj.actionType?.code === 'RECEIVED') {
+                const trace = await Trace.findOne({
+                    where: { barcodeID: barcodeId },
+                    include: [
+                        {
+                            model: OrderItem,
+                            attributes: ['id', 'orderID', 'lineNumber'],
+                            include: [
+                                {
+                                    model: Order,
+                                    attributes: ['id']
+                                }
+                            ]
+                        }
+                    ]
+                });
+
+                if (trace && trace.OrderItem) {
+                    historyObj.orderInfo = {
+                        orderID: trace.OrderItem.orderID,
+                        lineNumber: trace.OrderItem.lineNumber
+                    };
+                }
+            }
+
+            return historyObj;
+        }));
+
+        res.json(historyWithOrders);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

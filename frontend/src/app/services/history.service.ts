@@ -66,6 +66,10 @@ export interface BarcodeHistory {
     };
     actionType?: BarcodeHistoryActionType;
     unitOfMeasure?: BarcodeHistoryUnitOfMeasure;
+    orderInfo?: {
+        orderID: number;
+        lineNumber: number;
+    };
 }
 
 @Injectable({

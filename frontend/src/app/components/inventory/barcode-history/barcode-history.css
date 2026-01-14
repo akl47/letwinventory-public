@@ -170,6 +170,21 @@
     font-size: 13px;
 }
 
+.order-link {
+    color: var(--mat-sys-primary);
+    text-decoration: none;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: color 0.2s ease;
+}
+
+.order-link:hover {
+    color: var(--mat-sys-primary-container);
+    text-decoration: underline;
+}
+
 .user-cell {
     display: flex;
     align-items: center;
