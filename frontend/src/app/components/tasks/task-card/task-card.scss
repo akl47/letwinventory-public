@@ -22,24 +22,29 @@
 .card-content {
     display: flex;
     align-items: flex-start;
-    gap: 8px;
+    gap: 0;
 }
 
 .task-checkbox {
-    width: 16px;
+    width: 0;
     height: 16px;
     margin-top: 2px;
     cursor: pointer;
     opacity: 0;
-    transition: opacity 0.2s ease;
+    transition: width 0.2s ease, opacity 0.2s ease, margin-right 0.2s ease;
     accent-color: var(--mat-sys-primary);
+    flex-shrink: 0;
 
     &:checked {
+        width: 16px;
+        margin-right: 8px;
         opacity: 0.6;
     }
 }
 
 .task-card:hover .task-checkbox {
+    width: 16px;
+    margin-right: 8px;
     opacity: 1;
 }
 
@@ -115,6 +120,11 @@
     box-shadow: 0 5px 20px rgba(255, 255, 255, 0.3);
     padding: 0.625rem;
     cursor: grabbing;
+    overflow: hidden;
+
+    .task-checkbox {
+        display: none;
+    }
 }
 
 .cdk-drag-preview .task-title {

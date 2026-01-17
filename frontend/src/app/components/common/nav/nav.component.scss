@@ -152,6 +152,8 @@
 /* Content padding - Enable inner scroll */
 .content {
   flex: 1;
+  min-height: 0;
+  /* Critical: allows flex child to shrink below content size */
   padding: 0;
   background-color: var(--mat-sys-surface);
   overflow: hidden;
@@ -160,6 +162,12 @@
   display: flex;
   /* Ensure children can flex to fill height */
   flex-direction: column;
+
+  /* Make routed components fill available height */
+  ::ng-deep > * {
+    flex: 1;
+    min-height: 0;
+  }
 }
 
 /* Top app bar - M3 styling */

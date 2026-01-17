@@ -1,8 +1,69 @@
 <div class="sub-toolbar">
     <div class="toolbar-content">
-        <button mat-button class="history-btn" (click)="toggleHistory.emit()">
-            <mat-icon>history</mat-icon>
-            History
-        </button>
+        <!-- Filters on the left -->
+        <div class="filters-section">
+            <!-- Project Filter Dropdown -->
+            <button mat-button class="toolbar-btn filter-btn" [matMenuTriggerFor]="projectMenu"
+                [class.has-filter]="activeFilterCount() > 0">
+                <div class="project-chips">
+                    @if (selectedProjects().length === 0 && !showNoProject()) {
+                    <span class="no-projects">None selected</span>
+                    } @else if (allProjectsSelected()) {
+                    <span class="all-projects">All projects</span>
+                    } @else {
+                    @if (showNoProject()) {
+                    <span class="project-chip no-project-chip" title="No Project">—</span>
+                    }
+                    @for (project of selectedProjects(); track project.id) {
+                    <span class="project-chip" [style.background-color]="'#' + project.tagColorHex"
+                        [title]="project.name">{{ project.shortName || project.name.substring(0, 3) }}</span>
+                    }
+                    }
+                </div>
+            </button>
+            <mat-menu #projectMenu="matMenu" class="project-filter-menu">
+                <div class="menu-header" (click)="$event.stopPropagation()">
+                    <mat-checkbox [checked]="allProjectsSelected()" [indeterminate]="someProjectsSelected()"
+                        (change)="toggleAllProjects()">
+                        All Projects
+                    </mat-checkbox>
+                </div>
+                <mat-divider></mat-divider>
+                <div class="menu-item" (click)="$event.stopPropagation()">
+                    <mat-checkbox [checked]="showNoProject()" (change)="toggleNoProject()">
+                        <span class="project-color no-project-color"></span>
+                        No Project
+                    </mat-checkbox>
+                </div>
+                @for (project of projects(); track project.id) {
+                <div class="menu-item" (click)="$event.stopPropagation()">
+                    <mat-checkbox [checked]="isProjectSelected(project.id)" (change)="toggleProject(project.id)">
+                        <span class="project-color" [style.background-color]="'#' + project.tagColorHex"></span>
+                        {{ project.name }}
+                    </mat-checkbox>
+                </div>
+                }
+            </mat-menu>
+
+            <!-- Child Tasks Toggle -->
+            <div class="toggle-container">
+                <mat-slide-toggle [checked]="showChildTasks()" (change)="onShowChildTasksChange($event.checked)"
+                    labelPosition="before">
+                    Subtasks
+                </mat-slide-toggle>
+            </div>
+        </div>
+
+        <!-- Actions on the right -->
+        <div class="actions-section">
+            <button mat-button class="toolbar-btn" [class.active]="isEditMode" (click)="toggleEditMode.emit()">
+                <mat-icon>edit</mat-icon>
+                {{ isEditMode ? 'Done' : 'Edit Lists' }}
+            </button>
+            <button mat-button class="toolbar-btn" (click)="toggleHistory.emit()">
+                <mat-icon>history</mat-icon>
+                History
+            </button>
+        </div>
     </div>
 </div>

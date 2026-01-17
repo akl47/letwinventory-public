@@ -1,17 +1,28 @@
-<div class="list-container">
+<div class="list-container" [class.edit-mode]="isEditMode">
     <!-- List Header -->
-    <div class="list-header">
-        <span>{{ taskList.name }}</span>
+    <div class="list-header" [class.editable]="isEditMode">
+        @if (isEditingTitle()) {
+        <input #titleInput [(ngModel)]="editedTitle" (keydown.enter)="confirmEditTitle()"
+            (keydown.escape)="cancelEditingTitle()" (blur)="confirmEditTitle()" class="title-input" />
+        } @else {
+        <span (click)="startEditingTitle()" [class.clickable]="isEditMode">{{ taskList.name }}</span>
+        @if (isEditMode) {
+        <div class="edit-actions">
+            <button class="delete-list-btn" (click)="confirmDelete($event)" title="Delete list">
+                <i class="material-icons">delete</i>
+            </button>
+            <i class="material-icons drag-handle" cdkDragHandle>drag_indicator</i>
+        </div>
+        }
+        }
     </div>
 
     <!-- Tasks Container -->
-    <div class="tasks-container" cdkDropList [cdkDropListData]="taskList.tasks" [id]="'' + taskList.id"
+    <div class="tasks-container" cdkDropList [cdkDropListData]="taskList.tasks || []" [id]="'' + taskList.id"
         [cdkDropListConnectedTo]="connectedLists" (cdkDropListDropped)="drop($event)">
 
-        @for(task of taskList.tasks; track task.id) {
-        @if (!task.doneFlag) {
-        <app-task-card [task]="task" cdkDrag></app-task-card>
-        }
+        @for(task of filteredTasks; track task.id) {
+        <app-task-card [task]="task" [cdkDragData]="task" cdkDrag></app-task-card>
         }
 
         @if (isAddingTask()) {

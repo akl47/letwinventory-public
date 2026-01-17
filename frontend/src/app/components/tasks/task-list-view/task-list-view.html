@@ -1,10 +1,46 @@
-<app-sub-toolbar (toggleHistory)="toggleHistory()"></app-sub-toolbar>
+<app-sub-toolbar (toggleHistory)="toggleHistory()" (toggleEditMode)="toggleEditMode()"
+    (projectFilterChanged)="onProjectFilterChanged($event)" (showNoProjectChanged)="onShowNoProjectChanged($event)"
+    (showChildTasksChanged)="onShowChildTasksChanged($event)" [isEditMode]="isEditMode()"
+    [initialProjectIds]="initialProjectIds()" [initialShowNoProject]="initialShowNoProject()"
+    [initialShowChildTasks]="initialShowChildTasks()"></app-sub-toolbar>
 <app-history-drawer [isOpen]="isHistoryOpen()" (close)="toggleHistory()"></app-history-drawer>
 <div class="board-container">
+    @if (isEditMode()) {
+    <!-- Edit Mode: Use local copy with drag/drop -->
+    <div class="board-wrapper" cdkDropList cdkDropListOrientation="horizontal" [cdkDropListData]="taskListsLocal()"
+        (cdkDropListDropped)="dropList($event)">
+        @for(list of taskListsLocal(); track list.id) {
+        <app-task-list [taskList]="list" [connectedLists]="(connectedListIds$ | async) || []" [isEditMode]="true"
+            [filterProjectIds]="selectedProjectIds()" [showNoProject]="showNoProject()" [showChildTasks]="showChildTasks()"
+            (listRenamed)="onListRenamed(list.id, $event)" (listDeleted)="onListDeleted(list.id)" cdkDrag></app-task-list>
+        }
+
+        <!-- Add New List -->
+        @if (isAddingList()) {
+        <div class="new-list-form">
+            <input #listInput [(ngModel)]="newListName" (keydown.enter)="confirmAddList()"
+                (keydown.escape)="cancelAddingList()" class="new-list-input" placeholder="Enter list name..." autofocus />
+            <div class="new-list-actions">
+                <button (click)="confirmAddList()" class="add-list-btn">Add list</button>
+                <button (click)="cancelAddingList()" class="cancel-btn">
+                    <i class="material-icons">close</i>
+                </button>
+            </div>
+        </div>
+        } @else {
+        <button class="add-list-btn-large" (click)="startAddingList()">
+            <i class="material-icons">add</i>
+            <span>Add another list</span>
+        </button>
+        }
+    </div>
+    } @else {
+    <!-- Normal Mode: Use observable -->
     <div class="board-wrapper">
         @if (taskLists$ | async; as taskLists) {
         @for(list of taskLists; track list.id) {
-        <app-task-list [taskList]="list" [connectedLists]="(connectedListIds$ | async) || []"></app-task-list>
+        <app-task-list [taskList]="list" [connectedLists]="(connectedListIds$ | async) || []"
+            [filterProjectIds]="selectedProjectIds()" [showNoProject]="showNoProject()" [showChildTasks]="showChildTasks()"></app-task-list>
         }
         } @else {
         <div class="loading-wrapper">
@@ -21,4 +57,5 @@
         </div>
         }
     </div>
+    }
 </div>

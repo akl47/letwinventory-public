@@ -50,4 +50,20 @@ export class TaskService {
     getTaskTypes(): Observable<any[]> {
         return this.http.get<any[]>(`${environment.apiUrl}/planning/task/types`);
     }
+
+    createTaskList(taskList: Partial<TaskList>): Observable<TaskList> {
+        return this.http.post<TaskList>(this.apiUrl, taskList);
+    }
+
+    updateTaskList(id: number, updates: Partial<TaskList>): Observable<TaskList> {
+        return this.http.put<TaskList>(`${this.apiUrl}/${id}`, updates);
+    }
+
+    reorderTaskLists(orderedIds: number[]): Observable<void> {
+        return this.http.put<void>(`${this.apiUrl}/reorder`, { orderedIds });
+    }
+
+    deleteTaskList(id: number): Observable<void> {
+        return this.http.delete<void>(`${this.apiUrl}/${id}`);
+    }
 }
