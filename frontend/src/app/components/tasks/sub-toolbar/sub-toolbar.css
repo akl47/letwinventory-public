@@ -1,6 +1,11 @@
+:host {
+    display: block;
+    flex: none;
+    /* Don't grow or shrink in flex container */
+}
+
 .sub-toolbar {
     height: 48px;
-    /* background: rgba(255, 255, 255, 0.05); */
     backdrop-filter: blur(4px);
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     display: flex;
@@ -12,17 +17,122 @@
 .toolbar-content {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     width: 100%;
 }
 
-.history-btn {
+.filters-section {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.actions-section {
+    display: flex;
+    align-items: center;
+}
+
+.toolbar-btn {
     color: rgba(255, 255, 255, 0.5);
     background-color: rgba(255, 255, 255, 0.05);
     font-weight: 500;
     border-radius: 3px;
+    margin-left: 8px;
 
     &:hover {
         background-color: rgba(255, 255, 255, 0.1);
     }
+
+    &.active {
+        color: var(--mat-sys-primary);
+        background-color: rgba(var(--mat-sys-primary-rgb), 0.15);
+    }
+}
+
+.filter-btn {
+    margin-left: 0;
+
+    .dropdown-icon {
+        margin-left: 4px;
+        margin-right: -8px;
+    }
+
+    &.has-filter {
+        color: var(--mat-sys-primary);
+        background-color: rgba(var(--mat-sys-primary-rgb), 0.15);
+    }
+}
+
+.project-chips {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.project-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    color: white;
+    text-transform: uppercase;
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+}
+
+.no-projects,
+.all-projects {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 14px;
+}
+
+.filter-badge {
+    background-color: var(--mat-sys-primary);
+    color: white;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin-left: 4px;
+}
+
+.toggle-container {
+    display: flex;
+    align-items: center;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 14px;
+    font-weight: 500;
+}
+
+/* Menu Styles */
+.menu-header,
+.menu-item {
+    padding: 8px 16px;
+}
+
+.menu-header {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.project-color {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+.no-project-color {
+    background-color: rgba(255, 255, 255, 0.3);
+    border: 1px dashed rgba(255, 255, 255, 0.5);
+}
+
+.no-project-chip {
+    background-color: rgba(255, 255, 255, 0.2);
+    border: 1px dashed rgba(255, 255, 255, 0.4);
 }

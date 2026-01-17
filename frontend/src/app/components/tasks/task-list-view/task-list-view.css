@@ -1,19 +1,45 @@
 :host {
-    display: block;
-    height: 100%;
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    inset: 0;
     overflow: hidden;
 }
 
 .board-container {
-    height: 100%;
+    flex: 1;
+    min-height: 0;
+    /* Critical: allows flex child to shrink below content size */
     width: 100%;
     overflow-x: auto;
+    overflow-y: hidden;
     padding: 1rem;
     box-sizing: border-box;
-    /* Fixes 100% + padding overflow */
-    display: flex;
-    /* Make it a flex container so children can fit */
-    flex-direction: column;
+}
+
+/* Horizontal Scrollbar Styles - Webkit (Chrome, Safari, Edge) */
+.board-container::-webkit-scrollbar {
+    height: 12px;
+}
+
+.board-container::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+}
+
+.board-container::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+}
+
+.board-container::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Firefox scrollbar */
+.board-container {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.2) rgba(255, 255, 255, 0.05);
 }
 
 .board-wrapper {
@@ -21,7 +47,11 @@
     flex-direction: row;
     gap: 1rem;
     height: 100%;
-    align-items: flex-start;
+    align-items: stretch;
+    /* Stretch host elements to full height */
+    width: max-content;
+    min-width: 100%;
+    padding-bottom: 12px;
 }
 
 /* Loading State Styles */
@@ -74,5 +104,91 @@
 
     50% {
         opacity: .5;
+    }
+}
+
+/* Add New List Styles */
+.add-list-btn-large {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 18rem;
+    padding: 0.75rem 1rem;
+    background-color: rgba(255, 255, 255, 0.1);
+    border: none;
+    border-radius: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    height: fit-content;
+
+    &:hover {
+        background-color: rgba(255, 255, 255, 0.15);
+    }
+}
+
+.new-list-form {
+    min-width: 18rem;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 0.75rem;
+    padding: 0.5rem;
+}
+
+.new-list-input {
+    width: 100%;
+    padding: 0.5rem;
+    border: none;
+    border-radius: 0.25rem;
+    background-color: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 0.875rem;
+    font-family: inherit;
+    outline: none;
+    box-sizing: border-box;
+
+    &:focus {
+        background-color: rgba(255, 255, 255, 0.15);
+    }
+}
+
+.new-list-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.add-list-btn {
+    background-color: #0c66e4;
+    color: white;
+    border: none;
+    padding: 0.375rem 0.75rem;
+    border-radius: 3px;
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+
+    &:hover {
+        background-color: #0055cc;
+    }
+}
+
+.cancel-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem;
+    border-radius: 3px;
+
+    &:hover {
+        color: rgba(255, 255, 255, 0.8);
+        background-color: rgba(255, 255, 255, 0.08);
     }
 }

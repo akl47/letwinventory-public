@@ -1,5 +1,13 @@
+:host {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
 .order-view-container {
-    height: 100vh;
+    flex: 1;
     overflow-y: auto;
     background-color: var(--mat-sys-surface-container-lowest);
     padding: 0;
