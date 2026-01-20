@@ -7,10 +7,10 @@
             (click)="$event.preventDefault(); toggleComplete($event)" />
         <div class="task-title" [class.completed]="displayDone()">{{ task().name }}</div>
     </div>
-    @if (isOverdue() || task().timeEstimate) {
+    @if (task().dueDate || task().timeEstimate || task().subtasks?.length || task().parentTaskID) {
     <div class="meta-info">
-        @if (isOverdue()) {
-        <span class="overdue-tag">
+        @if (task().dueDate) {
+        <span class="due-date-tag" [class.overdue]="isOverdue()">
             <i class="material-icons icon-xs">schedule</i>
             {{ task().dueDate | date:'MMM d' }}
         </span>
@@ -21,17 +21,13 @@
             {{ formatEstimate(task().timeEstimate) }}
         </span>
         }
-    </div>
-    }
-    @if (task().subtasks?.length || task().parentTaskID) {
-    <div class="hierarchy-icons">
+        <span class="spacer"></span>
         @if (task().subtasks?.length) {
         <i class="material-icons hierarchy-icon" matTooltip="Parent Task">account_tree</i>
         }
         @if (task().parentTaskID) {
         <i class="material-icons hierarchy-icon" matTooltip="Subtask">subdirectory_arrow_right</i>
         }
-
     </div>
     }
 </div>

@@ -452,6 +452,24 @@ async function getZPLDetails(barcodeID, prefix, labelSize) {
       uom = data.Part.UnitOfMeasure?.name;
       break;
     }
+    case "EQP": {
+      const equipment = await db.Equipment.findOne({
+        where: { barcodeID, activeFlag: true },
+        include: [{ model: db.Part }]
+      });
+      if (!equipment) throw new Error('Equipment not found');
+      const data = equipment.toJSON();
+      name = data.name;
+      // Use Part's manufacturer and manufacturerPN if available
+      if (data.Part?.manufacturer && data.Part?.manufacturerPN) {
+        description = `${data.Part.manufacturer} - ${data.Part.manufacturerPN}`;
+      } else if (data.Part?.manufacturer) {
+        description = data.Part.manufacturer;
+      } else {
+        description = data.serialNumber || data.description;
+      }
+      break;
+    }
     default:
       throw new Error(`Unknown barcode type: ${prefix}`);
   }

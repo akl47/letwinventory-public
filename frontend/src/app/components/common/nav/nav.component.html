@@ -32,6 +32,11 @@
                 <mat-icon matListItemIcon>widgets</mat-icon>
                 <span matListItemTitle>Parts</span>
             </a>
+            <a mat-list-item routerLink="/equipment" routerLinkActive="active-link" matTooltip="Equipment"
+                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
+                <mat-icon matListItemIcon>build</mat-icon>
+                <span matListItemTitle>Equipment</span>
+            </a>
             <a mat-list-item routerLink="/orders" routerLinkActive="active-link" matTooltip="Orders"
                 matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
                 <mat-icon matListItemIcon>shopping_cart</mat-icon>

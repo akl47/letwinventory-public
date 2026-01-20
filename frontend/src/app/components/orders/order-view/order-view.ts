@@ -272,7 +272,7 @@ export class OrderView implements OnInit, OnDestroy {
           orderLineTypeID: this.editingLineTypeId()
         };
 
-        if (this.editingLineTypeId() === 1) {
+        if (this.isPartOrEquipmentTypeId(this.editingLineTypeId())) {
           updateData.partID = this.editingPartId();
           updateData.name = null;
         } else {
@@ -367,11 +367,11 @@ export class OrderView implements OnInit, OnDestroy {
 
   // Receive mode methods
   enterReceiveMode() {
-    // Initialize receiving quantities with remaining quantities for Part line items
+    // Initialize receiving quantities with remaining quantities for receivable line items
     const quantities = new Map<number, number>();
     this.orderItems().forEach(item => {
-      // Only Part line items (id=1) can be received
-      if (item.orderLineTypeID === 1) {
+      // Part and Equipment line items can be received
+      if (this.isReceivableLineType(item)) {
         const remaining = item.quantity - (item.receivedQuantity || 0);
         quantities.set(item.id, remaining);
       }
@@ -399,6 +399,31 @@ export class OrderView implements OnInit, OnDestroy {
     return item.quantity - (item.receivedQuantity || 0);
   }
 
+  isEquipmentPart(item: OrderItem): boolean {
+    return item.Part?.PartCategory?.name === 'Equipment';
+  }
+
+  isPartLineType(item: OrderItem): boolean {
+    return item.OrderLineType?.name === 'Part';
+  }
+
+  isEquipmentLineType(item: OrderItem): boolean {
+    return item.OrderLineType?.name === 'Equipment';
+  }
+
+  isReceivableLineType(item: OrderItem): boolean {
+    return this.isPartLineType(item) || this.isEquipmentLineType(item);
+  }
+
+  getLineTypeName(typeId: number): string {
+    return this.orderLineTypes().find(t => t.id === typeId)?.name || '';
+  }
+
+  isPartOrEquipmentTypeId(typeId: number): boolean {
+    const name = this.getLineTypeName(typeId);
+    return name === 'Part' || name === 'Equipment';
+  }
+
   receiveLineItem(item: OrderItem) {
     const remaining = this.getRemainingQuantity(item);
     if (remaining <= 0) {
@@ -406,82 +431,129 @@ export class OrderView implements OnInit, OnDestroy {
       return;
     }
 
+    const isEquipment = this.isEquipmentPart(item) || this.isEquipmentLineType(item);
+
     const dialogRef = this.dialog.open(ReceiveLineItemDialog, {
       width: '450px',
       data: {
         orderItem: item,
-        remainingQuantity: remaining
+        remainingQuantity: remaining,
+        isEquipment: isEquipment
       }
     });
 
     dialogRef.afterClosed().subscribe((result: ReceiveLineItemDialogResult) => {
-      if (result?.success && item.partID) {
-        const newReceivedQty = (item.receivedQuantity || 0) + result.receivedQuantity;
+      if (result?.success) {
+        // Handle equipment receiving
+        if (isEquipment && item.partID) {
+          this.inventoryService.receiveEquipment({
+            name: result.equipmentName || item.Part?.name || item.name || 'Equipment',
+            description: item.Part?.description || null,
+            serialNumber: result.serialNumber || null,
+            commissionDate: new Date().toISOString().split('T')[0],
+            parentBarcodeID: result.parentBarcodeID,
+            orderItemID: item.id,
+            partID: item.partID
+          }).subscribe({
+            next: (equipment) => {
+              const newReceivedQty = (item.receivedQuantity || 0) + 1;
+              this.inventoryService.updateOrderItem(item.id, {
+                receivedQuantity: newReceivedQty
+              }).subscribe({
+                next: () => {
+                  this.checkAndUpdateOrderStatus();
+                  this.loadOrder(true);
 
-        // First create a trace (which creates a barcode)
-        this.inventoryService.receiveOrderItem({
-          partID: item.partID,
-          quantity: result.receivedQuantity,
-          parentBarcodeID: result.parentBarcodeID,
-          orderItemID: item.id
-        }).subscribe({
-          next: (trace) => {
-            // Then update the order item's received quantity
-            this.inventoryService.updateOrderItem(item.id, {
-              receivedQuantity: newReceivedQty
-            }).subscribe({
-              next: () => {
-                this.checkAndUpdateOrderStatus();
-                this.loadOrder(true);
-
-                // Get the barcode string from the trace
-                const barcodeString = trace.Barcode?.barcode || trace.barcode;
-
-                // Print the barcode if requested
-                if (result.printBarcode && trace.barcodeID) {
-                  const defaultPrinter = this.printers().find(p => p.isDefault);
-                  const printerIP = defaultPrinter?.ipAddress || '10.10.10.37';
-                  this.inventoryService.printBarcode(
-                    trace.barcodeID,
-                    result.barcodeSize,
-                    printerIP
-                  ).subscribe({
-                    next: () => {
-                      this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.Part?.name || 'item'} - Label printed`);
-                    },
-                    error: (err) => {
-                      this.errorNotification.showHttpError(err, 'Received item but failed to print label');
-                    }
-                  });
-                } else {
-                  this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.Part?.name || 'item'}`);
+                  if (result.printBarcode && equipment.barcodeID) {
+                    const defaultPrinter = this.printers().find(p => p.isDefault);
+                    const printerIP = defaultPrinter?.ipAddress || '10.10.10.37';
+                    this.inventoryService.printBarcode(
+                      equipment.barcodeID,
+                      result.barcodeSize,
+                      printerIP
+                    ).subscribe({
+                      next: () => {
+                        this.errorNotification.showSuccess(`Received equipment "${equipment.name}" - Label printed`);
+                      },
+                      error: (err) => {
+                        this.errorNotification.showHttpError(err, 'Received equipment but failed to print label');
+                      }
+                    });
+                  } else {
+                    this.errorNotification.showSuccess(`Received equipment "${equipment.name}"`);
+                  }
+                },
+                error: (err) => {
+                  this.errorNotification.showHttpError(err, 'Created equipment but failed to update order item');
                 }
+              });
+            },
+            error: (err) => {
+              this.errorNotification.showHttpError(err, 'Failed to create equipment');
+            }
+          });
+        } else if (item.partID) {
+          // Handle regular part receiving
+          const newReceivedQty = (item.receivedQuantity || 0) + result.receivedQuantity;
 
-              },
-              error: (err) => {
-                this.errorNotification.showHttpError(err, 'Created barcode but failed to update order item');
-              }
-            });
-          },
-          error: (err) => {
-            this.errorNotification.showHttpError(err, 'Failed to create barcode for received item');
-          }
-        });
-      } else if (result?.success) {
-        // Non-part item, just update the received quantity
-        const newReceivedQty = (item.receivedQuantity || 0) + result.receivedQuantity;
-        this.inventoryService.updateOrderItem(item.id, {
-          receivedQuantity: newReceivedQty
-        }).subscribe({
-          next: () => {
-            this.checkAndUpdateOrderStatus();
-            this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.name || 'item'}`);
-            this.loadOrder(true);
-          },
-          error: (err) => {
-            this.errorNotification.showHttpError(err, 'Failed to update item');
-          }
-        });
+          this.inventoryService.receiveOrderItem({
+            partID: item.partID,
+            quantity: result.receivedQuantity,
+            parentBarcodeID: result.parentBarcodeID,
+            orderItemID: item.id
+          }).subscribe({
+            next: (trace) => {
+              this.inventoryService.updateOrderItem(item.id, {
+                receivedQuantity: newReceivedQty
+              }).subscribe({
+                next: () => {
+                  this.checkAndUpdateOrderStatus();
+                  this.loadOrder(true);
+
+                  if (result.printBarcode && trace.barcodeID) {
+                    const defaultPrinter = this.printers().find(p => p.isDefault);
+                    const printerIP = defaultPrinter?.ipAddress || '10.10.10.37';
+                    this.inventoryService.printBarcode(
+                      trace.barcodeID,
+                      result.barcodeSize,
+                      printerIP
+                    ).subscribe({
+                      next: () => {
+                        this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.Part?.name || 'item'} - Label printed`);
+                      },
+                      error: (err) => {
+                        this.errorNotification.showHttpError(err, 'Received item but failed to print label');
+                      }
+                    });
+                  } else {
+                    this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.Part?.name || 'item'}`);
+                  }
+                },
+                error: (err) => {
+                  this.errorNotification.showHttpError(err, 'Created barcode but failed to update order item');
+                }
+              });
+            },
+            error: (err) => {
+              this.errorNotification.showHttpError(err, 'Failed to create barcode for received item');
+            }
+          });
+        } else {
+          // Non-part item, just update the received quantity
+          const newReceivedQty = (item.receivedQuantity || 0) + result.receivedQuantity;
+          this.inventoryService.updateOrderItem(item.id, {
+            receivedQuantity: newReceivedQty
+          }).subscribe({
+            next: () => {
+              this.checkAndUpdateOrderStatus();
+              this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.name || 'item'}`);
+              this.loadOrder(true);
+            },
+            error: (err) => {
+              this.errorNotification.showHttpError(err, 'Failed to update item');
+            }
+          });
+        }
       }
     });
   }
@@ -498,7 +570,8 @@ export class OrderView implements OnInit, OnDestroy {
         let anyReceived = false;
 
         items.forEach(item => {
-          if (item.orderLineTypeID === 1) { // Only check Part line items
+          // Only check receivable line items (Part and Equipment)
+          if (this.isReceivableLineType(item)) {
             const received = item.receivedQuantity || 0;
             if (received < item.quantity) {
               allFullyReceived = false;
@@ -551,12 +624,12 @@ export class OrderView implements OnInit, OnDestroy {
     const order = this.currentOrder();
     if (!order) return;
 
-    // Check if there are any part lines (orderLineTypeID === 1)
+    // Check if there are any receivable lines (Part or Equipment)
     const items = this.orderItems();
-    const hasPartLines = items.some(item => item.orderLineTypeID === 1);
+    const hasReceivableLines = items.some(item => this.isReceivableLineType(item));
 
-    // If there are no part lines, mark the order as received
-    if (!hasPartLines) {
+    // If there are no receivable lines, mark the order as received
+    if (!hasReceivableLines) {
       const orderData = {
         placedDate: order.placedDate,
         receivedDate: new Date().toISOString(),
@@ -740,9 +813,9 @@ export class OrderView implements OnInit, OnDestroy {
       orderLineTypeID: this.editingLineTypeId()
     };
 
-    // If line type is Part (id=1), set partID and clear name
+    // If line type is Part or Equipment, set partID and clear name
     // Otherwise, set name and clear partID
-    if (this.editingLineTypeId() === 1) {
+    if (this.isPartOrEquipmentTypeId(this.editingLineTypeId())) {
       updateData.partID = this.editingPartId();
       updateData.name = null;
     } else {

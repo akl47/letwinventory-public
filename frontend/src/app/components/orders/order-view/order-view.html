@@ -113,7 +113,8 @@
 
           <mat-form-field appearance="outline" class="full-width">
             <mat-label>Notes</mat-label>
-            <textarea matInput formControlName="notes" rows="4" placeholder="Internal notes about this order"></textarea>
+            <textarea matInput formControlName="notes" rows="4"
+              placeholder="Internal notes about this order"></textarea>
           </mat-form-field>
         </form>
         } @else {
@@ -137,11 +138,11 @@
               <div class="info-label">Link</div>
               <div class="info-value">
                 @if (currentOrder()?.link) {
-                  <a [href]="currentOrder()!.link" target="_blank" rel="noopener noreferrer">
-                    {{ currentOrder()!.link }}
-                  </a>
+                <a [href]="currentOrder()!.link" target="_blank" rel="noopener noreferrer">
+                  {{ currentOrder()!.link }}
+                </a>
                 } @else {
-                  -
+                -
                 }
               </div>
             </div>
@@ -161,9 +162,8 @@
           <div class="info-item">
             <div class="info-label">Order Status</div>
             <div class="info-value">
-              <span class="status-badge"
-                    [style.background-color]="currentOrder()?.OrderStatus?.tagColor || '#cccccc'"
-                    [style.color]="getContrastColor(currentOrder()?.OrderStatus?.tagColor || '#cccccc')">
+              <span class="status-badge" [style.background-color]="currentOrder()?.OrderStatus?.tagColor || '#cccccc'"
+                [style.color]="getContrastColor(currentOrder()?.OrderStatus?.tagColor || '#cccccc')">
                 {{ currentOrder()?.OrderStatus?.name || 'Unknown' }}
               </span>
             </div>
@@ -234,38 +234,39 @@
               <th mat-header-cell *matHeaderCellDef>Part / Description</th>
               <td mat-cell *matCellDef="let item">
                 @if (isFormEditMode() && editingItemId() === item.id) {
-                  @if (editingLineTypeId() === 1) {
-                  <mat-form-field appearance="outline" class="inline-edit-field part-selector">
-                    <mat-label>Select Part</mat-label>
-                    <mat-select [ngModel]="editingPartId()" (ngModelChange)="editingPartId.set($event)">
-                      @for (part of parts(); track part.id) {
-                      <mat-option [value]="part.id">
-                        {{ part.name }}
-                        @if (part.sku) {
-                        <span class="part-option-sku"> ({{ part.sku }})</span>
-                        }
-                      </mat-option>
+                @if (isPartOrEquipmentTypeId(editingLineTypeId())) {
+                <mat-form-field appearance="outline" class="inline-edit-field part-selector">
+                  <mat-label>Select Part</mat-label>
+                  <mat-select [ngModel]="editingPartId()" (ngModelChange)="editingPartId.set($event)">
+                    @for (part of parts(); track part.id) {
+                    <mat-option [value]="part.id">
+                      {{ part.name }}
+                      @if (part.sku) {
+                      <span class="part-option-sku"> ({{ part.sku }})</span>
                       }
-                    </mat-select>
-                  </mat-form-field>
-                  } @else {
-                  <mat-form-field appearance="outline" class="inline-edit-field">
-                    <mat-label>Description</mat-label>
-                    <input matInput [ngModel]="editingDescription()" (ngModelChange)="editingDescription.set($event)" placeholder="Line item description">
-                  </mat-form-field>
-                  }
-                } @else {
-                  @if (item.Part) {
-                  <div class="part-info">
-                    <strong>{{ item.Part.name }}</strong>
-                    <div class="part-subtitle">{{ item.Part.description }}</div>
-                    @if (item.Part.vendor) {
-                    <div class="part-subtitle">SKU: {{ item.Part.sku }} | Vendor: {{ item.Part.vendor }}</div>
+                    </mat-option>
                     }
-                  </div>
-                  } @else {
-                  {{ item.name || '-' }}
+                  </mat-select>
+                </mat-form-field>
+                } @else {
+                <mat-form-field appearance="outline" class="inline-edit-field">
+                  <mat-label>Description</mat-label>
+                  <input matInput [ngModel]="editingDescription()" (ngModelChange)="editingDescription.set($event)"
+                    placeholder="Line item description">
+                </mat-form-field>
+                }
+                } @else {
+                @if (item.Part) {
+                <div class="part-info">
+                  <strong>{{ item.Part.name }}</strong>
+                  <div class="part-subtitle">{{ item.Part.description }}</div>
+                  @if (item.Part.vendor) {
+                  <div class="part-subtitle">SKU: {{ item.Part.sku }} | Vendor: {{ item.Part.vendor }}</div>
                   }
+                </div>
+                } @else {
+                {{ item.name || '-' }}
+                }
                 }
               </td>
             </ng-container>
@@ -274,12 +275,16 @@
             <ng-container matColumnDef="barcode">
               <th mat-header-cell *matHeaderCellDef>Barcode</th>
               <td mat-cell *matCellDef="let item">
-                @if (item.Traces?.length) {
-                  @for (trace of item.Traces; track trace.id) {
-                    <app-barcode-tag [barcode]="trace.Barcode?.barcode || trace.barcode"></app-barcode-tag>
-                  }
+                @if (isEquipmentPart(item) && item.Equipment?.length) {
+                @for (equipment of item.Equipment; track equipment.id) {
+                <app-barcode-tag [barcode]="equipment.Barcode?.barcode"></app-barcode-tag>
+                }
+                } @else if (item.Traces?.length) {
+                @for (trace of item.Traces; track trace.id) {
+                <app-barcode-tag [barcode]="trace.Barcode?.barcode || trace.barcode"></app-barcode-tag>
+                }
                 } @else {
-                  -
+                -
                 }
               </td>
             </ng-container>
@@ -290,14 +295,15 @@
               <td mat-cell *matCellDef="let item">
                 @if (isFormEditMode() && editingItemId() === item.id) {
                 <mat-form-field appearance="outline" class="inline-edit-field">
-                  <input matInput type="number" [ngModel]="editingQuantity()" (ngModelChange)="onQuantityChange($event)" min="1">
+                  <input matInput type="number" [ngModel]="editingQuantity()" (ngModelChange)="onQuantityChange($event)"
+                    min="1">
                 </mat-form-field>
                 } @else {
-                  @if (item.orderLineTypeID === 1) {
-                  {{ item.quantity }}
-                  } @else {
-                  -
-                  }
+                @if (isReceivableLineType(item)) {
+                {{ item.quantity }}
+                } @else {
+                -
+                }
                 }
               </td>
             </ng-container>
@@ -306,7 +312,7 @@
             <ng-container matColumnDef="ordered">
               <th mat-header-cell *matHeaderCellDef>Ordered</th>
               <td mat-cell *matCellDef="let item">
-                @if (item.orderLineTypeID === 1) {
+                @if (isReceivableLineType(item)) {
                 {{ item.quantity }}
                 } @else {
                 -
@@ -318,7 +324,7 @@
             <ng-container matColumnDef="received">
               <th mat-header-cell *matHeaderCellDef>Received</th>
               <td mat-cell *matCellDef="let item">
-                @if (item.orderLineTypeID === 1) {
+                @if (isReceivableLineType(item)) {
                 {{ item.receivedQuantity || 0 }}
                 } @else {
                 -
@@ -331,12 +337,12 @@
               <th mat-header-cell *matHeaderCellDef>Remaining</th>
               <td mat-cell *matCellDef="let item">
                 @if (getRemainingQuantity(item) > 0) {
-                  <span class="remaining-qty">{{ getRemainingQuantity(item) }}</span>
+                <span class="remaining-qty">{{ getRemainingQuantity(item) }}</span>
                 } @else {
-                  <span class="fully-received">
-                    <mat-icon>check_circle</mat-icon>
-                    Complete
-                  </span>
+                <span class="fully-received">
+                  <mat-icon>check_circle</mat-icon>
+                  Complete
+                </span>
                 }
               </td>
             </ng-container>
@@ -347,7 +353,8 @@
               <td mat-cell *matCellDef="let item">
                 @if (isFormEditMode() && editingItemId() === item.id) {
                 <mat-form-field appearance="outline" class="inline-edit-field">
-                  <input matInput type="number" [ngModel]="editingPrice()" (ngModelChange)="onPriceChange($event)" step="0.00001" min="0">
+                  <input matInput type="number" [ngModel]="editingPrice()" (ngModelChange)="onPriceChange($event)"
+                    step="0.00001" min="0">
                 </mat-form-field>
                 } @else {
                 ${{ formatPrice(item) }}
@@ -372,29 +379,29 @@
               <th mat-header-cell *matHeaderCellDef>Actions</th>
               <td mat-cell *matCellDef="let item">
                 @if (isFormEditMode()) {
-                  @if (editingItemId() === item.id) {
-                  <button mat-icon-button color="primary" (click)="saveLineItem(item)" matTooltip="Save">
-                    <mat-icon>check</mat-icon>
-                  </button>
-                  <button mat-icon-button (click)="cancelLineItemEdit()" matTooltip="Cancel">
-                    <mat-icon>close</mat-icon>
-                  </button>
-                  } @else {
-                  <button mat-icon-button (click)="editLineItem(item)" matTooltip="Edit">
-                    <mat-icon>edit</mat-icon>
-                  </button>
-                  <button mat-icon-button color="warn" (click)="deleteLineItem(item)" matTooltip="Delete">
-                    <mat-icon>delete</mat-icon>
-                  </button>
-                  }
-                } @else if (isReceiveMode() && item.orderLineTypeID === 1) {
-                  @if (getRemainingQuantity(item) > 0) {
-                  <button mat-icon-button color="primary" (click)="receiveLineItem(item)" matTooltip="Receive">
-                    <mat-icon>inventory_2</mat-icon>
-                  </button>
-                  } @else {
-                  <mat-icon class="received-check">check_circle</mat-icon>
-                  }
+                @if (editingItemId() === item.id) {
+                <button mat-icon-button color="primary" (click)="saveLineItem(item)" matTooltip="Save">
+                  <mat-icon>check</mat-icon>
+                </button>
+                <button mat-icon-button (click)="cancelLineItemEdit()" matTooltip="Cancel">
+                  <mat-icon>close</mat-icon>
+                </button>
+                } @else {
+                <button mat-icon-button (click)="editLineItem(item)" matTooltip="Edit">
+                  <mat-icon>edit</mat-icon>
+                </button>
+                <button mat-icon-button color="warn" (click)="deleteLineItem(item)" matTooltip="Delete">
+                  <mat-icon>delete</mat-icon>
+                </button>
+                }
+                } @else if (isReceiveMode() && isReceivableLineType(item)) {
+                @if (getRemainingQuantity(item) > 0) {
+                <button mat-icon-button color="primary" (click)="receiveLineItem(item)" matTooltip="Receive">
+                  <mat-icon>inventory_2</mat-icon>
+                </button>
+                } @else {
+                <mat-icon class="received-check">check_circle</mat-icon>
+                }
                 }
               </td>
             </ng-container>

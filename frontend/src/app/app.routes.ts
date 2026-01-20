@@ -38,6 +38,13 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'equipment',
+        title: 'Equipment',
+        loadComponent: () =>
+            import('./components/inventory/equipment-table-view/equipment-table-view').then((m) => m.EquipmentTableView),
+        canActivate: [authGuard],
+    },
+    {
         path: 'orders/:id',
         title: 'Order Details',
         loadComponent: () =>

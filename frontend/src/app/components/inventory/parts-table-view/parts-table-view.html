@@ -8,13 +8,10 @@
             <mat-form-field appearance="outline" class="search-field">
                 <mat-label>Search parts</mat-label>
                 <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
-                       placeholder="Search by name, description, category, vendor, or SKU">
+                    placeholder="Search by name, description, category, vendor, or SKU">
                 <mat-icon matPrefix>search</mat-icon>
             </mat-form-field>
-            <mat-slide-toggle
-                [checked]="showInactive()"
-                (change)="onToggleInactive($event.checked)"
-                color="primary">
+            <mat-slide-toggle [checked]="showInactive()" (change)="onToggleInactive($event.checked)" color="primary">
                 Show Inactive
             </mat-slide-toggle>
             <button mat-flat-button color="primary" (click)="openNewPartDialog()">
@@ -25,7 +22,8 @@
     </div>
 
     <div class="table-wrapper">
-        <table mat-table [dataSource]="displayedParts()" matSort (matSortChange)="onSortChange($event)" class="parts-table">
+        <table mat-table [dataSource]="displayedParts()" matSort (matSortChange)="onSortChange($event)"
+            class="parts-table">
             <!-- Name Column -->
             <ng-container matColumnDef="name">
                 <th mat-header-cell *matHeaderCellDef mat-sort-header>Part Number</th>
@@ -44,10 +42,11 @@
             <ng-container matColumnDef="category">
                 <th mat-header-cell *matHeaderCellDef mat-sort-header>Category</th>
                 <td mat-cell *matCellDef="let part">
-                    <span class="category-badge"
-                          [class.category-part]="part.PartCategory?.name === 'Part'"
-                          [class.category-consumable]="part.PartCategory?.name === 'Consumable'"
-                          [class.category-tooling]="part.PartCategory?.name === 'Tooling'">
+                    <span class="category-badge" [class.category-part]="part.PartCategory?.name === 'Part'"
+                        [class.category-consumable]="part.PartCategory?.name === 'Consumable'"
+                        [class.category-equipment]="part.PartCategory?.name === 'Equipment'"
+                        [class.category-tooling]="part.PartCategory?.name === 'Tooling'">
+
                         {{ part.PartCategory?.name || 'Unknown' }}
                     </span>
                 </td>
@@ -64,12 +63,12 @@
                 <th mat-header-cell *matHeaderCellDef mat-sort-header>SKU</th>
                 <td mat-cell *matCellDef="let part">
                     @if (part.link) {
-                        <a [href]="part.link" target="_blank" class="sku-link">
-                            {{ part.sku || '-' }}
-                            <mat-icon class="link-icon">open_in_new</mat-icon>
-                        </a>
-                    } @else {
+                    <a [href]="part.link" target="_blank" class="sku-link">
                         {{ part.sku || '-' }}
+                        <mat-icon class="link-icon">open_in_new</mat-icon>
+                    </a>
+                    } @else {
+                    {{ part.sku || '-' }}
                     }
                 </td>
             </ng-container>
@@ -98,9 +97,9 @@
                         <mat-icon>edit</mat-icon>
                     </button>
                     @if (part.link) {
-                        <button mat-icon-button (click)="openLink(part.link)" matTooltip="Open vendor link">
-                            <mat-icon>link</mat-icon>
-                        </button>
+                    <button mat-icon-button (click)="openLink(part.link)" matTooltip="Open vendor link">
+                        <mat-icon>link</mat-icon>
+                    </button>
                     }
                 </td>
             </ng-container>
@@ -113,11 +112,11 @@
                 <td class="mat-cell" [attr.colspan]="displayedColumns.length">
                     <div class="no-data">
                         @if (searchText()) {
-                            <mat-icon>search_off</mat-icon>
-                            <p>No parts found matching "{{ searchText() }}"</p>
+                        <mat-icon>search_off</mat-icon>
+                        <p>No parts found matching "{{ searchText() }}"</p>
                         } @else {
-                            <mat-icon>inventory_2</mat-icon>
-                            <p>No parts available</p>
+                        <mat-icon>inventory_2</mat-icon>
+                        <p>No parts available</p>
                         }
                     </div>
                 </td>
@@ -125,12 +124,7 @@
         </table>
     </div>
 
-    <mat-paginator
-        [length]="getTotalCount()"
-        [pageSize]="pageSize()"
-        [pageIndex]="pageIndex()"
-        [pageSizeOptions]="pageSizeOptions"
-        (page)="onPageChange($event)"
-        showFirstLastButtons>
+    <mat-paginator [length]="getTotalCount()" [pageSize]="pageSize()" [pageIndex]="pageIndex()"
+        [pageSizeOptions]="pageSizeOptions" (page)="onPageChange($event)" showFirstLastButtons>
     </mat-paginator>
 </div>

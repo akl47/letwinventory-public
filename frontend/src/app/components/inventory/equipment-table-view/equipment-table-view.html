@@ -1,0 +1,95 @@
+<div class="equipment-table-container">
+    <div class="table-header">
+        <h2>
+            <mat-icon>construction</mat-icon>
+            Equipment
+        </h2>
+        <div class="header-actions">
+            <mat-form-field appearance="outline" class="search-field">
+                <mat-label>Search equipment</mat-label>
+                <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
+                    placeholder="Search by name, serial number, or barcode">
+                <mat-icon matPrefix>search</mat-icon>
+            </mat-form-field>
+            <mat-slide-toggle [checked]="showInactive()" (change)="onToggleInactive($event.checked)" color="primary">
+                Show Inactive
+            </mat-slide-toggle>
+            <button mat-flat-button color="primary" (click)="openNewEquipmentDialog()">
+                <mat-icon>add</mat-icon>
+                New Equipment
+            </button>
+        </div>
+    </div>
+
+    <div class="table-wrapper">
+        <table mat-table [dataSource]="displayedEquipment()" matSort (matSortChange)="onSortChange($event)"
+            class="equipment-table">
+            <!-- Name Column -->
+            <ng-container matColumnDef="name">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Name</th>
+                <td mat-cell *matCellDef="let equipment">
+                    <strong>{{ equipment.name }}</strong>
+                    @if (equipment.description) {
+                    <div class="equipment-description">{{ equipment.description }}</div>
+                    }
+                </td>
+            </ng-container>
+
+            <!-- Serial Number Column -->
+            <ng-container matColumnDef="serialNumber">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Serial Number</th>
+                <td mat-cell *matCellDef="let equipment">
+                    <span class="serial-number">{{ equipment.serialNumber || '-' }}</span>
+                </td>
+            </ng-container>
+
+            <!-- Barcode Column -->
+            <ng-container matColumnDef="barcode">
+                <th mat-header-cell *matHeaderCellDef>Barcode</th>
+                <td mat-cell *matCellDef="let equipment">
+                    <app-barcode-tag [barcode]="equipment.Barcode?.barcode"></app-barcode-tag>
+                </td>
+            </ng-container>
+
+            <!-- Commission Date Column -->
+            <ng-container matColumnDef="commissionDate">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Commission Date</th>
+                <td mat-cell *matCellDef="let equipment">
+                    {{ formatDate(equipment.commissionDate) }}
+                </td>
+            </ng-container>
+
+            <!-- Actions Column -->
+            <ng-container matColumnDef="actions">
+                <th mat-header-cell *matHeaderCellDef>Actions</th>
+                <td mat-cell *matCellDef="let equipment">
+                    <button mat-icon-button (click)="editEquipment(equipment)" matTooltip="Edit equipment">
+                        <mat-icon>edit</mat-icon>
+                    </button>
+                </td>
+            </ng-container>
+
+            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+            <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+
+            <!-- No data row -->
+            <tr class="mat-row" *matNoDataRow>
+                <td class="mat-cell" [attr.colspan]="displayedColumns.length">
+                    <div class="no-data">
+                        @if (searchText()) {
+                        <mat-icon>search_off</mat-icon>
+                        <p>No equipment found matching "{{ searchText() }}"</p>
+                        } @else {
+                        <mat-icon>construction</mat-icon>
+                        <p>No equipment available</p>
+                        }
+                    </div>
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <mat-paginator [length]="getTotalCount()" [pageSize]="pageSize()" [pageIndex]="pageIndex()"
+        [pageSizeOptions]="pageSizeOptions" (page)="onPageChange($event)" showFirstLastButtons>
+    </mat-paginator>
+</div>

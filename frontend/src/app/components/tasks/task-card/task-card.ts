@@ -40,6 +40,23 @@ export class TaskCard implements OnInit, OnDestroy {
 
   formatEstimate(minutes?: number): string {
     if (minutes === undefined || minutes === null) return '';
+
+    // Month (30 days)
+    if (minutes >= 43200) {
+      const months = Math.floor(minutes / 43200);
+      return months === 1 ? '1 month' : `${months} months`;
+    }
+    // Weeks (7 days)
+    if (minutes >= 10080) {
+      const weeks = Math.floor(minutes / 10080);
+      return weeks === 1 ? '1 week' : `${weeks} weeks`;
+    }
+    // Days (24 hours)
+    if (minutes >= 1440) {
+      const days = Math.floor(minutes / 1440);
+      return days === 1 ? '1 day' : `${days} days`;
+    }
+    // Hours and minutes
     if (minutes < 60) return `${minutes}m`;
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;

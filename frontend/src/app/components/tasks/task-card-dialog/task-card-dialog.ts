@@ -402,10 +402,33 @@ export class TaskCardDialog implements OnInit, OnDestroy {
     });
   }
 
-  estimateOptions = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480];
+  // Time estimates: minutes up to 8h, then days, weeks, month
+  estimateOptions = [
+    15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480,  // Up to 8 hours
+    1440, 2880, 4320,  // 1 day, 2 days, 3 days
+    10080, 20160, 30240,  // 1 week, 2 weeks, 3 weeks
+    43200  // 1 month (30 days)
+  ];
 
   formatEstimate(minutes?: number): string {
     if (minutes === undefined || minutes === null) return '';
+
+    // Month (30 days)
+    if (minutes >= 43200) {
+      const months = Math.floor(minutes / 43200);
+      return months === 1 ? '1 month' : `${months} months`;
+    }
+    // Weeks (7 days)
+    if (minutes >= 10080) {
+      const weeks = Math.floor(minutes / 10080);
+      return weeks === 1 ? '1 week' : `${weeks} weeks`;
+    }
+    // Days (24 hours)
+    if (minutes >= 1440) {
+      const days = Math.floor(minutes / 1440);
+      return days === 1 ? '1 day' : `${days} days`;
+    }
+    // Hours and minutes
     if (minutes < 60) return `${minutes}m`;
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;

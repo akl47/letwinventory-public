@@ -16,6 +16,7 @@ import {
     Trace,
     UnitOfMeasure
 } from '../models';
+import { Equipment } from '../models/equipment.model';
 import { environment } from '../../environments/environment';
 
 @Injectable({
@@ -192,6 +193,39 @@ export class InventoryService {
     getPrinters(): Observable<any[]> {
         return this.http.get<any[]>(`${environment.apiUrl}/config/printers`);
     }
+
+    // Equipment methods
+    getAllEquipment(): Observable<Equipment[]> {
+        return this.http.get<Equipment[]>(`${this.apiUrl}/equipment`);
+    }
+
+    getEquipmentById(equipmentId: number): Observable<Equipment> {
+        return this.http.get<Equipment>(`${this.apiUrl}/equipment/${equipmentId}`);
+    }
+
+    createEquipment(data: Partial<Equipment>): Observable<Equipment> {
+        return this.http.post<Equipment>(`${this.apiUrl}/equipment`, data);
+    }
+
+    updateEquipment(equipmentId: number, data: Partial<Equipment>): Observable<Equipment> {
+        return this.http.put<Equipment>(`${this.apiUrl}/equipment/${equipmentId}`, data);
+    }
+
+    deleteEquipment(equipmentId: number): Observable<any> {
+        return this.http.delete(`${this.apiUrl}/equipment/${equipmentId}`);
+    }
+
+    receiveEquipment(data: {
+        name: string;
+        description?: string | null;
+        serialNumber?: string | null;
+        commissionDate?: string | null;
+        parentBarcodeID: number;
+        orderItemID?: number;
+        partID?: number | null;
+    }): Observable<Equipment> {
+        return this.http.post<Equipment>(`${this.apiUrl}/equipment/receive`, data);
+    }
 }
 
 // Re-export models for backward compatibility
@@ -208,5 +242,6 @@ export type {
     Location,
     Box,
     Trace,
-    UnitOfMeasure
+    UnitOfMeasure,
+    Equipment
 };
