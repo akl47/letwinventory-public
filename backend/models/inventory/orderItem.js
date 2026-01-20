@@ -15,6 +15,11 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'partID',
         onDelete: 'CASCADE'
       });
+      OrderItem.hasMany(models.Equipment, {
+        as: 'Equipment',
+        foreignKey: 'orderItemID',
+        onDelete: 'SET NULL'
+      });
       OrderItem.belongsTo(models.OrderLineType, {
         foreignKey: 'orderLineTypeID',
         onDelete: 'CASCADE'

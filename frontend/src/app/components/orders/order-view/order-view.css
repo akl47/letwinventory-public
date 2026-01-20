@@ -304,6 +304,19 @@ mat-card-content {
     font-size: 13px;
 }
 
+.equipment-badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 500;
+    text-transform: uppercase;
+    background-color: var(--mat-sys-tertiary-container);
+    color: var(--mat-sys-on-tertiary-container);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
 .part-subtitle {
     font-size: 11px;
     color: rgba(255, 255, 255, 0.4);

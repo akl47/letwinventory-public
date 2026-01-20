@@ -7,7 +7,7 @@
 </h2>
 
 <mat-dialog-content>
-  <form [formGroup]="form" class="dialog-form">
+  <form [formGroup]="form" class="dialog-form" (keydown.enter)="$event.preventDefault(); save()">
     <mat-form-field appearance="outline" class="full-width">
       <mat-label>Line Type</mat-label>
       <mat-select formControlName="orderLineTypeID" required>
@@ -17,18 +17,18 @@
       </mat-select>
     </mat-form-field>
 
-    @if (isPartLineType()) {
-      <!-- Part Autocomplete -->
+    @if (showPartAutocomplete()) {
+      <!-- Part/Equipment Autocomplete -->
       <mat-form-field appearance="outline" class="full-width">
-        <mat-label>Select Part</mat-label>
+        <mat-label>@if (isEquipmentLineType()) { Select Equipment } @else { Select Part }</mat-label>
         <input
           type="text"
           matInput
           formControlName="partSearch"
-          [matAutocomplete]="auto"
+          [matAutocomplete]="partAuto"
           placeholder="Search by SKU, name, or description">
         <mat-icon matPrefix>search</mat-icon>
-        <mat-autocomplete #auto="matAutocomplete" [displayWith]="formatPartDisplay.bind(this)" (optionSelected)="onPartSelected($event.option.value)">
+        <mat-autocomplete #partAuto="matAutocomplete" [displayWith]="formatPartDisplay.bind(this)" (optionSelected)="onPartSelected($event.option.value)">
           @for (part of filteredParts | async; track part.id) {
             <mat-option [value]="part">
               <div class="part-option">
@@ -44,7 +44,7 @@
         </mat-autocomplete>
       </mat-form-field>
     } @else {
-      <!-- Description for non-Part line items -->
+      <!-- Description for other line items -->
       <mat-form-field appearance="outline" class="full-width">
         <mat-label>Description</mat-label>
         <input matInput formControlName="name" placeholder="Enter description">
@@ -52,21 +52,21 @@
     }
 
     <div class="form-row">
-      @if (isPartLineType()) {
+      @if (showQuantityField()) {
       <mat-form-field appearance="outline">
         <mat-label>Quantity</mat-label>
         <input matInput type="number" formControlName="quantity" min="1" required>
       </mat-form-field>
       }
 
-      <mat-form-field appearance="outline" [class.full-width]="!isPartLineType()">
+      <mat-form-field appearance="outline" [class.full-width]="!showQuantityField()">
         <mat-label>Unit Price</mat-label>
         <input matInput type="number" formControlName="price" min="0" step="0.00001" required>
         <span matTextPrefix>$&nbsp;</span>
       </mat-form-field>
     </div>
 
-    @if (isPartLineType()) {
+    @if (showQuantityField()) {
     <div class="total-preview">
       Line Total: <strong>${{ lineTotal().toFixed(2) }}</strong>
     </div>

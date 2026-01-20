@@ -27,6 +27,19 @@
 
 .part-option-main {
     font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.equipment-badge {
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    background-color: var(--mat-sys-tertiary-container);
+    color: var(--mat-sys-on-tertiary-container);
+    padding: 2px 6px;
+    border-radius: 4px;
 }
 
 .part-option-subtitle {

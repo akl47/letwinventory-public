@@ -1,7 +1,11 @@
 <div class="dialog-container">
     <h2 mat-dialog-title>
         <mat-icon>inventory_2</mat-icon>
-        Receive Item
+        @if (isEquipment) {
+            Receive Equipment
+        } @else {
+            Receive Item
+        }
     </h2>
 
     <mat-dialog-content>
@@ -36,34 +40,55 @@
             }
         </div>
 
-        <div class="receipt-type-section">
-            <label class="section-label">Receipt Type</label>
-            <mat-radio-group [ngModel]="receiptType()" (ngModelChange)="receiptType.set($event)" class="receipt-type-group">
-                <mat-radio-button value="full">
-                    <div class="radio-content">
-                        <span class="radio-label">Full Receipt</span>
-                        <span class="radio-desc">Receive all {{ data.remainingQuantity }} remaining</span>
-                    </div>
-                </mat-radio-button>
-                <mat-radio-button value="partial">
-                    <div class="radio-content">
-                        <span class="radio-label">Partial Receipt</span>
-                        <span class="radio-desc">Specify quantity received</span>
-                    </div>
-                </mat-radio-button>
-            </mat-radio-group>
-        </div>
-
-        @if (receiptType() === 'partial') {
+        @if (isEquipment) {
             <mat-form-field appearance="outline" class="full-width">
-                <mat-label>Quantity Received</mat-label>
-                <input matInput type="number"
-                       [ngModel]="partialQuantity()"
-                       (ngModelChange)="partialQuantity.set($event)"
-                       [max]="data.remainingQuantity"
-                       min="1">
-                <mat-hint>Max: {{ data.remainingQuantity }}</mat-hint>
+                <mat-label>Equipment Name</mat-label>
+                <input matInput
+                       [ngModel]="equipmentName()"
+                       (ngModelChange)="equipmentName.set($event)"
+                       placeholder="Name for this equipment"
+                       required>
             </mat-form-field>
+
+            <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Serial Number (Optional)</mat-label>
+                <input matInput
+                       [ngModel]="serialNumber()"
+                       (ngModelChange)="serialNumber.set($event)"
+                       placeholder="Manufacturer serial number">
+            </mat-form-field>
+        }
+
+        @if (!isEquipment) {
+            <div class="receipt-type-section">
+                <label class="section-label">Receipt Type</label>
+                <mat-radio-group [ngModel]="receiptType()" (ngModelChange)="receiptType.set($event)" class="receipt-type-group">
+                    <mat-radio-button value="full">
+                        <div class="radio-content">
+                            <span class="radio-label">Full Receipt</span>
+                            <span class="radio-desc">Receive all {{ data.remainingQuantity }} remaining</span>
+                        </div>
+                    </mat-radio-button>
+                    <mat-radio-button value="partial">
+                        <div class="radio-content">
+                            <span class="radio-label">Partial Receipt</span>
+                            <span class="radio-desc">Specify quantity received</span>
+                        </div>
+                    </mat-radio-button>
+                </mat-radio-group>
+            </div>
+
+            @if (receiptType() === 'partial') {
+                <mat-form-field appearance="outline" class="full-width">
+                    <mat-label>Quantity Received</mat-label>
+                    <input matInput type="number"
+                           [ngModel]="partialQuantity()"
+                           (ngModelChange)="partialQuantity.set($event)"
+                           [max]="data.remainingQuantity"
+                           min="1">
+                    <mat-hint>Max: {{ data.remainingQuantity }}</mat-hint>
+                </mat-form-field>
+            }
         }
 
         <div class="barcode-section">
@@ -87,7 +112,11 @@
 
         <div class="summary">
             <mat-icon>check_circle</mat-icon>
-            <span>Will receive <strong>{{ receivedQuantity }}</strong> of {{ data.remainingQuantity }} remaining</span>
+            @if (isEquipment) {
+                <span>Will receive <strong>1</strong> equipment item</span>
+            } @else {
+                <span>Will receive <strong>{{ receivedQuantity }}</strong> of {{ data.remainingQuantity }} remaining</span>
+            }
         </div>
     </mat-dialog-content>
 

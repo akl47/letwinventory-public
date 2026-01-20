@@ -16,6 +16,7 @@ import { InventoryService } from '../../../services/inventory.service';
 export interface ReceiveLineItemDialogData {
   orderItem: OrderItem;
   remainingQuantity: number;
+  isEquipment?: boolean;
 }
 
 export interface ReceiveLineItemDialogResult {
@@ -24,6 +25,8 @@ export interface ReceiveLineItemDialogResult {
   printBarcode: boolean;
   barcodeSize: string;
   parentBarcodeID: number;
+  equipmentName?: string | null;
+  serialNumber?: string | null;
 }
 
 interface LocationBarcode {
@@ -65,6 +68,8 @@ export class ReceiveLineItemDialog implements OnInit {
   selectedLocationId = signal<number | null>(null);
   locations = signal<LocationBarcode[]>([]);
   loadingLocations = signal<boolean>(true);
+  equipmentName = signal<string>('');
+  serialNumber = signal<string>('');
 
   barcodeSizes = [
     { value: '3x1', label: '3" x 1"' },
@@ -73,6 +78,11 @@ export class ReceiveLineItemDialog implements OnInit {
 
   ngOnInit() {
     this.loadLocations();
+    // Pre-fill equipment name from part name
+    if (this.data.isEquipment) {
+      const name = this.data.orderItem.Part?.name || this.data.orderItem.name || '';
+      this.equipmentName.set(name);
+    }
   }
 
   private loadLocations() {
@@ -88,10 +98,18 @@ export class ReceiveLineItemDialog implements OnInit {
     });
   }
 
+  get isEquipment(): boolean {
+    return this.data.isEquipment === true;
+  }
+
   get canSubmit(): boolean {
     // Must have a location selected
     if (!this.selectedLocationId()) {
       return false;
+    }
+    // Equipment requires a name and is always received 1 at a time
+    if (this.isEquipment) {
+      return !!this.equipmentName().trim();
     }
     if (this.receiptType() === 'full') {
       return true;
@@ -101,6 +119,10 @@ export class ReceiveLineItemDialog implements OnInit {
   }
 
   get receivedQuantity(): number {
+    // Equipment is always received 1 at a time
+    if (this.isEquipment) {
+      return 1;
+    }
     if (this.receiptType() === 'full') {
       return this.data.remainingQuantity;
     }
@@ -119,7 +141,9 @@ export class ReceiveLineItemDialog implements OnInit {
       receivedQuantity: this.receivedQuantity,
       printBarcode: this.printBarcode(),
       barcodeSize: this.barcodeSize(),
-      parentBarcodeID: this.selectedLocationId()!
+      parentBarcodeID: this.selectedLocationId()!,
+      equipmentName: this.isEquipment ? this.equipmentName().trim() : null,
+      serialNumber: this.isEquipment ? (this.serialNumber().trim() || null) : null
     };
 
     this.dialogRef.close(result);

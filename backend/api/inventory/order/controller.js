@@ -21,7 +21,13 @@ exports.getAllOrders = (req, res, next) => {
         include: [
           {
             model: db.Part,
-            attributes: ['id', 'name', 'description', 'vendor', 'sku']
+            attributes: ['id', 'name', 'description', 'vendor', 'sku', 'partCategoryID'],
+            include: [
+              {
+                model: db.PartCategory,
+                attributes: ['id', 'name']
+              }
+            ]
           },
           {
             model: db.OrderLineType,
@@ -57,7 +63,13 @@ exports.getOrderById = (req, res, next) => {
         include: [
           {
             model: db.Part,
-            attributes: ['id', 'name', 'description', 'vendor', 'sku']
+            attributes: ['id', 'name', 'description', 'vendor', 'sku', 'partCategoryID'],
+            include: [
+              {
+                model: db.PartCategory,
+                attributes: ['id', 'name']
+              }
+            ]
           },
           {
             model: db.OrderLineType,
@@ -67,6 +79,17 @@ exports.getOrderById = (req, res, next) => {
             model: db.Trace,
             where: { activeFlag: true },
             required: false,
+            include: [
+              {
+                model: db.Barcode,
+                attributes: ['id', 'barcode']
+              }
+            ]
+          },
+          {
+            model: db.Equipment,
+            as: 'Equipment',
+            attributes: ['id', 'name', 'description', 'serialNumber', 'commissionDate', 'barcodeID'],
             include: [
               {
                 model: db.Barcode,

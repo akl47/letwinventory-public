@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal, computed, effect } from '@angular/core';
+import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { MatDialogModule, MAT_DIALOG_DATA, MatDialogRef } from '@angular/material/dialog';
@@ -11,7 +11,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { Observable } from 'rxjs';
 import { map, startWith } from 'rxjs/operators';
 import { InventoryService } from '../../../services/inventory.service';
-import { Part, OrderItem } from '../../../models';
+import { Part, OrderItem, OrderLineType } from '../../../models';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 
 export interface OrderItemDialogData {
@@ -49,13 +49,7 @@ export class OrderItemDialog implements OnInit {
   currentPrice = signal<number>(0);
   currentLineTypeID = signal<number>(1);
 
-  orderLineTypes = signal([
-    { id: 1, name: 'Part' },
-    { id: 2, name: 'Shipping' },
-    { id: 3, name: 'Taxes' },
-    { id: 4, name: 'Services' },
-    { id: 5, name: 'Other' }
-  ]);
+  orderLineTypes = signal<OrderLineType[]>([]);
 
   form = this.fb.group({
     orderLineTypeID: [1, Validators.required],
@@ -68,7 +62,28 @@ export class OrderItemDialog implements OnInit {
 
   filteredParts!: Observable<Part[]>;
 
-  isPartLineType = computed(() => this.currentLineTypeID() === 1);
+  currentLineTypeName = computed(() => {
+    const types = this.orderLineTypes();
+    const id = this.currentLineTypeID();
+    const found = types.find(t => t.id === id);
+    return found?.name || '';
+  });
+
+  isPartLineType = computed(() => this.currentLineTypeName() === 'Part');
+  isEquipmentLineType = computed(() => this.currentLineTypeName() === 'Equipment');
+  showPartAutocomplete = computed(() => this.isPartLineType() || this.isEquipmentLineType());
+  showQuantityField = computed(() => this.isPartLineType());
+
+  // Filter parts based on line type
+  availableParts = computed(() => {
+    const parts = this.allParts();
+    if (this.isEquipmentLineType()) {
+      return parts.filter(p => p.PartCategory?.name === 'Equipment');
+    } else if (this.isPartLineType()) {
+      return parts.filter(p => p.PartCategory?.name !== 'Equipment');
+    }
+    return parts;
+  });
 
   lineTotal = computed(() => {
     const quantity = this.currentQuantity();
@@ -78,6 +93,7 @@ export class OrderItemDialog implements OnInit {
 
   ngOnInit() {
     this.loadParts();
+    this.loadOrderLineTypes();
     this.setupAutocomplete();
 
     // Sync form values to signals for reactive updates
@@ -113,45 +129,13 @@ export class OrderItemDialog implements OnInit {
 
       // If it's a Part line item, set up the part search field
       if (item.Part) {
-        // Cast to Part since we know it has the essential fields from backend
         const part = item.Part as Part;
         this.selectedPart.set(part);
         this.form.patchValue({
-          partSearch: part  // Set the Part object itself, displayWith will format it
+          partSearch: part
         });
       }
     }
-
-    // Update validation when line type changes
-    const updateValidation = (typeId: number) => {
-      if (typeId === 1) {
-        // Part line item - partID required, name optional, quantity required
-        this.form.get('partID')?.setValidators([Validators.required]);
-        this.form.get('name')?.clearValidators();
-        this.form.get('name')?.setValue('');
-        this.form.get('quantity')?.setValidators([Validators.required, Validators.min(1)]);
-      } else {
-        // Non-part line item - name required, partID optional, quantity set to 1 and not required
-        this.form.get('partID')?.clearValidators();
-        this.form.get('partID')?.setValue(null);
-        this.form.get('partSearch')?.setValue('');
-        this.form.get('name')?.setValidators([Validators.required]);
-        this.form.get('quantity')?.clearValidators();
-        this.form.get('quantity')?.setValue(1);
-        this.currentQuantity.set(1);
-      }
-      this.form.get('partID')?.updateValueAndValidity();
-      this.form.get('name')?.updateValueAndValidity();
-      this.form.get('quantity')?.updateValueAndValidity();
-    };
-
-    // Set initial validation state
-    updateValidation(this.form.value.orderLineTypeID || 1);
-
-    // Subscribe to changes
-    this.form.get('orderLineTypeID')?.valueChanges.subscribe(typeId => {
-      updateValidation(typeId || 1);
-    });
   }
 
   loadParts() {
@@ -165,19 +149,110 @@ export class OrderItemDialog implements OnInit {
     });
   }
 
+  loadOrderLineTypes() {
+    this.inventoryService.getOrderLineTypes().subscribe({
+      next: (types) => {
+        this.orderLineTypes.set(types);
+        // Now that types are loaded, set up validation
+        this.setupValidation();
+      },
+      error: (err) => {
+        this.errorNotification.showHttpError(err, 'Error loading order line types');
+      }
+    });
+  }
+
+  private setupValidation() {
+    // Update validation when line type changes
+    const updateValidation = (typeId: number, resetValues = true) => {
+      const typeName = this.orderLineTypes().find(t => t.id === typeId)?.name || '';
+
+      if (typeName === 'Part') {
+        // Part line item - partID required, name optional, quantity required
+        this.form.get('partID')?.setValidators([Validators.required]);
+        if (resetValues) {
+          this.form.get('partID')?.setValue(null);
+          this.form.get('partSearch')?.setValue('');
+          this.selectedPart.set(null);
+        }
+        this.form.get('name')?.clearValidators();
+        if (resetValues) {
+          this.form.get('name')?.setValue('');
+        }
+        this.form.get('quantity')?.setValidators([Validators.required, Validators.min(1)]);
+      } else if (typeName === 'Equipment') {
+        // Equipment line item - partID required, no quantity (always 1)
+        this.form.get('partID')?.setValidators([Validators.required]);
+        if (resetValues) {
+          this.form.get('partID')?.setValue(null);
+          this.form.get('partSearch')?.setValue('');
+          this.selectedPart.set(null);
+        }
+        this.form.get('name')?.clearValidators();
+        if (resetValues) {
+          this.form.get('name')?.setValue('');
+        }
+        this.form.get('quantity')?.clearValidators();
+        this.form.get('quantity')?.setValue(1);
+        this.currentQuantity.set(1);
+      } else if (typeName === 'Shipping') {
+        // Shipping - default name to "Shipping"
+        this.form.get('partID')?.clearValidators();
+        this.form.get('partID')?.setValue(null);
+        this.form.get('partSearch')?.setValue('');
+        this.form.get('name')?.setValidators([Validators.required]);
+        if (resetValues) {
+          this.form.get('name')?.setValue('Shipping');
+        }
+        this.form.get('quantity')?.clearValidators();
+        this.form.get('quantity')?.setValue(1);
+        this.currentQuantity.set(1);
+      } else if (typeName === 'Taxes') {
+        // Taxes - default name to "Tax"
+        this.form.get('partID')?.clearValidators();
+        this.form.get('partID')?.setValue(null);
+        this.form.get('partSearch')?.setValue('');
+        this.form.get('name')?.setValidators([Validators.required]);
+        if (resetValues) {
+          this.form.get('name')?.setValue('Tax');
+        }
+        this.form.get('quantity')?.clearValidators();
+        this.form.get('quantity')?.setValue(1);
+        this.currentQuantity.set(1);
+      } else {
+        // Other line items - name required, quantity set to 1
+        this.form.get('partID')?.clearValidators();
+        this.form.get('partID')?.setValue(null);
+        this.form.get('partSearch')?.setValue('');
+        this.form.get('name')?.setValidators([Validators.required]);
+        this.form.get('quantity')?.clearValidators();
+        this.form.get('quantity')?.setValue(1);
+        this.currentQuantity.set(1);
+      }
+      this.form.get('partID')?.updateValueAndValidity();
+      this.form.get('name')?.updateValueAndValidity();
+      this.form.get('quantity')?.updateValueAndValidity();
+    };
+
+    // Set initial validation state (don't reset values if editing)
+    updateValidation(this.form.value.orderLineTypeID || 1, !this.data.orderItem);
+
+    // Subscribe to changes (always reset values when user changes type)
+    this.form.get('orderLineTypeID')?.valueChanges.subscribe(typeId => {
+      updateValidation(typeId || 1, true);
+    });
+  }
+
   setupAutocomplete() {
     this.filteredParts = this.form.get('partSearch')!.valueChanges.pipe(
       startWith(null),
       map(value => {
-        // Handle Part objects, strings, and null/undefined
         if (!value) {
-          return this.allParts();
+          return this.availableParts();
         }
-        // If a Part object is selected, show all parts (user might want to change selection)
         if (typeof value === 'object') {
-          return this.allParts();
+          return this.availableParts();
         }
-        // If it's a string, filter the parts
         const searchValue = typeof value === 'string' ? value : '';
         return this._filterParts(searchValue);
       })
@@ -186,7 +261,7 @@ export class OrderItemDialog implements OnInit {
 
   private _filterParts(value: string): Part[] {
     const filterValue = value.toLowerCase();
-    return this.allParts().filter(part =>
+    return this.availableParts().filter(part =>
       part.name.toLowerCase().includes(filterValue) ||
       part.description?.toLowerCase().includes(filterValue) ||
       part.sku?.toLowerCase().includes(filterValue) ||
@@ -215,15 +290,16 @@ export class OrderItemDialog implements OnInit {
     }
 
     const formValue = this.form.value;
+    const typeName = this.currentLineTypeName();
 
-    // Validation: if Part line item, partID must be set
-    if (formValue.orderLineTypeID === 1 && !formValue.partID) {
+    // Validation: if Part or Equipment line item, partID must be set
+    if ((typeName === 'Part' || typeName === 'Equipment') && !formValue.partID) {
       this.errorNotification.showError('Please select a part from the catalog');
       return;
     }
 
-    // Validation: if non-Part line item, name must be set
-    if (formValue.orderLineTypeID !== 1 && !formValue.name) {
+    // Validation: if non-Part/Equipment line item, name must be set
+    if (typeName !== 'Part' && typeName !== 'Equipment' && !formValue.name) {
       this.errorNotification.showError('Please enter a description for this line item');
       return;
     }
