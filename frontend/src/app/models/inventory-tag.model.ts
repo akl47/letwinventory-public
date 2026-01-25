@@ -8,7 +8,7 @@ export interface InventoryTag {
     description?: string;
     quantity?: number; // For Trace items
     // properties from backend query
-    type: 'Location' | 'Box' | 'Trace';
+    type: 'Location' | 'Box' | 'Trace' | 'Equipment';
     item_id: number;
 
     children?: InventoryTag[]; // For tree structure

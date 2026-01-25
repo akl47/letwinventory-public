@@ -2,7 +2,10 @@
     (projectFilterChanged)="onProjectFilterChanged($event)" (showNoProjectChanged)="onShowNoProjectChanged($event)"
     (showChildTasksChanged)="onShowChildTasksChanged($event)" [isEditMode]="isEditMode()"
     [initialProjectIds]="initialProjectIds()" [initialShowNoProject]="initialShowNoProject()"
-    [initialShowChildTasks]="initialShowChildTasks()"></app-sub-toolbar>
+    [initialShowChildTasks]="initialShowChildTasks()"
+    [currentProjects]="currentProjectsParam()" [currentNoProject]="currentNoProjectParam()"
+    [currentSubtasks]="currentSubtasksParam()"
+    (revertToDefault)="onRevertToDefault()" (saveAsDefault)="onSaveAsDefault()"></app-sub-toolbar>
 <app-history-drawer [isOpen]="isHistoryOpen()" (close)="toggleHistory()"></app-history-drawer>
 <div class="board-container">
     @if (isEditMode()) {

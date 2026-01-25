@@ -69,39 +69,26 @@ export class TaskListComponent implements OnChanges {
 
       return true;
     });
-
-    console.log(`[${this.taskList?.name}] Tasks: ${tasks.length} total, ${this.filteredTasks.length} filtered`);
   }
 
   drop(event: CdkDragDrop<Task[], Task[], Task>) {
-    console.log('=== DROP EVENT DEBUG ===');
-    console.log('Container ID:', event.container.id);
-    console.log('Previous Container ID:', event.previousContainer.id);
-    console.log('Same container?', event.previousContainer === event.container);
-
     if (!event.container.data || !event.previousContainer.data) {
-      console.log('ERROR: Missing container data');
       return;
     }
 
     // Get the actual task from cdkDragData
     const movedTask: Task = event.item.data;
-    console.log('Task being moved:', movedTask?.name, 'id:', movedTask?.id);
 
     // Find the actual index in the unfiltered source array
     const sourceArray = event.previousContainer.data;
     const destArray = event.container.data;
     const actualSourceIndex = sourceArray.findIndex(t => t.id === movedTask.id);
 
-    console.log('Actual source index:', actualSourceIndex);
-
     if (actualSourceIndex === -1) {
-      console.log('ERROR: Could not find task in source array');
       return;
     }
 
     if (event.previousContainer === event.container) {
-      console.log('Reordering within same list');
       // For same-list reorder, we need to calculate the target position in the unfiltered array
       // Use the filtered index to determine relative position
       const filteredTargetIndex = event.currentIndex;
@@ -112,7 +99,6 @@ export class TaskListComponent implements OnChanges {
       this.updateFilteredTasks();
       this.taskService.moveTask(movedTask.id, this.taskList.id, event.currentIndex).subscribe();
     } else {
-      console.log('Moving between lists');
       // Remove from source array
       sourceArray.splice(actualSourceIndex, 1);
 
@@ -132,7 +118,6 @@ export class TaskListComponent implements OnChanges {
       destArray.splice(actualTargetIndex, 0, movedTask);
       this.updateFilteredTasks();
 
-      console.log('Task transferred:', movedTask.name, 'to list', this.taskList.id, 'at index', actualTargetIndex);
       this.taskService.moveTask(movedTask.id, this.taskList.id, event.currentIndex).subscribe({
         next: () => {
           // Trigger full refresh to sync all lists

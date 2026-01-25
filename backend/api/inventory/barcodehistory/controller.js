@@ -1,4 +1,4 @@
-const { BarcodeHistory, Barcode, User, BarcodeHistoryActionType, UnitOfMeasure, Trace, OrderItem, Order } = require('../../../models');
+const { BarcodeHistory, Barcode, User, BarcodeHistoryActionType, UnitOfMeasure, Trace, OrderItem, Order, Equipment } = require('../../../models');
 
 exports.getAllHistory = async (req, res) => {
     try {
@@ -65,12 +65,13 @@ exports.getBarcodeHistory = async (req, res) => {
             attributes: ['id', 'barcodeID', 'userID', 'actionID', 'fromID', 'toID', 'qty', 'serialNumber', 'lotNumber', 'unitOfMeasureID', 'createdAt']
         });
 
-        // For each history item, if it's a RECEIVED action, look up the trace to get order info
+        // For each history item, if it's a RECEIVED action, look up the trace or equipment to get order info
         const historyWithOrders = await Promise.all(history.map(async (item) => {
             const historyObj = item.toJSON();
 
-            // If this is a received action, find the associated trace and order
+            // If this is a received action, find the associated trace or equipment and order
             if (historyObj.actionType?.code === 'RECEIVED') {
+                // First try to find a Trace with order info
                 const trace = await Trace.findOne({
                     where: { barcodeID: barcodeId },
                     include: [
@@ -92,6 +93,30 @@ exports.getBarcodeHistory = async (req, res) => {
                         orderID: trace.OrderItem.orderID,
                         lineNumber: trace.OrderItem.lineNumber
                     };
+                } else {
+                    // Try to find Equipment with order info
+                    const equipment = await Equipment.findOne({
+                        where: { barcodeID: barcodeId },
+                        include: [
+                            {
+                                model: OrderItem,
+                                attributes: ['id', 'orderID', 'lineNumber'],
+                                include: [
+                                    {
+                                        model: Order,
+                                        attributes: ['id']
+                                    }
+                                ]
+                            }
+                        ]
+                    });
+
+                    if (equipment && equipment.OrderItem) {
+                        historyObj.orderInfo = {
+                            orderID: equipment.OrderItem.orderID,
+                            lineNumber: equipment.OrderItem.lineNumber
+                        };
+                    }
                 }
             }
 

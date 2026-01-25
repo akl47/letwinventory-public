@@ -17,7 +17,7 @@
             </a>
             }
             @if (isAuthenticated()) {
-            <a mat-list-item routerLink="/tasks" routerLinkActive="active-link" matTooltip="Tasks"
+            <a mat-list-item routerLink="/tasks" (click)="navigateToTasks($event)" routerLinkActive="active-link" matTooltip="Tasks"
                 matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
                 <mat-icon matListItemIcon>task</mat-icon>
                 <span matListItemTitle>Tasks</span>

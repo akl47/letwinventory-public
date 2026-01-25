@@ -19,6 +19,7 @@ export class InventoryHigherarchyItem implements OnInit {
   @Input({ required: true }) item!: InventoryTag;
   @Input() expandedPath: number[] = [];
   @Output() barcodeSelected = new EventEmitter<number>();
+  @Output() dataChanged = new EventEmitter<void>();
   isExpanded = signal(false);
   private dialog = inject(MatDialog);
 
@@ -58,7 +59,7 @@ export class InventoryHigherarchyItem implements OnInit {
 
     dialogRef.afterClosed().subscribe(result => {
       if (result) {
-        window.location.reload();
+        this.dataChanged.emit();
       }
     });
   }
@@ -71,7 +72,7 @@ export class InventoryHigherarchyItem implements OnInit {
 
     dialogRef.afterClosed().subscribe(result => {
       if (result) {
-        window.location.reload();
+        this.dataChanged.emit();
       }
     });
   }
@@ -86,9 +87,13 @@ export class InventoryHigherarchyItem implements OnInit {
     });
     dialogRef.afterClosed().subscribe(result => {
       if (result) {
-        window.location.reload();
+        this.dataChanged.emit();
       }
     });
 
+  }
+
+  onChildDataChanged() {
+    this.dataChanged.emit();
   }
 }

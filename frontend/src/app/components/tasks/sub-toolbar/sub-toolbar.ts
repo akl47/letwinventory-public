@@ -1,4 +1,4 @@
-import { Component, Input, Output, EventEmitter, OnInit, inject, signal, computed } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnInit, OnChanges, SimpleChanges, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
@@ -6,8 +6,10 @@ import { MatMenuModule } from '@angular/material/menu';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatDividerModule } from '@angular/material/divider';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { Project } from '../../../models/project.model';
 import { ProjectService } from '../../../services/project.service';
+import { TaskViewPreferencesService } from '../../../services/task-view-preferences.service';
 
 @Component({
   selector: 'app-sub-toolbar',
@@ -18,23 +20,30 @@ import { ProjectService } from '../../../services/project.service';
     MatMenuModule,
     MatCheckboxModule,
     MatSlideToggleModule,
-    MatDividerModule
+    MatDividerModule,
+    MatTooltipModule
   ],
   templateUrl: './sub-toolbar.html',
   styleUrl: './sub-toolbar.css',
 })
-export class SubToolbarComponent implements OnInit {
+export class SubToolbarComponent implements OnInit, OnChanges {
   @Input() isEditMode = false;
   @Input() initialProjectIds: number[] | null = null;
   @Input() initialShowNoProject: boolean | null = null;
   @Input() initialShowChildTasks: boolean | null = null;
+  @Input() currentProjects: string = '';
+  @Input() currentNoProject: string = 'true';
+  @Input() currentSubtasks: string = 'true';
   @Output() toggleHistory = new EventEmitter<void>();
   @Output() toggleEditMode = new EventEmitter<void>();
   @Output() projectFilterChanged = new EventEmitter<number[]>();
   @Output() showNoProjectChanged = new EventEmitter<boolean>();
   @Output() showChildTasksChanged = new EventEmitter<boolean>();
+  @Output() revertToDefault = new EventEmitter<void>();
+  @Output() saveAsDefault = new EventEmitter<void>();
 
   private projectService = inject(ProjectService);
+  private preferencesService = inject(TaskViewPreferencesService);
 
   // Special ID for "No Project" category
   static readonly NO_PROJECT_ID = 0;
@@ -71,6 +80,20 @@ export class SubToolbarComponent implements OnInit {
     return unselectedProjectCount + noProjectHidden;
   });
 
+  // Check if a default view exists
+  hasDefaultView(): boolean {
+    return this.preferencesService.hasDefaultView();
+  }
+
+  // Check if current view matches saved default
+  isCurrentViewDefault(): boolean {
+    return this.preferencesService.isCurrentViewDefault(
+      this.currentProjects,
+      this.currentNoProject,
+      this.currentSubtasks
+    );
+  }
+
   // Get selected projects for chip display
   selectedProjects = computed(() => {
     const projects = this.projects();
@@ -87,32 +110,50 @@ export class SubToolbarComponent implements OnInit {
 
     this.projectService.getProjects().subscribe(projects => {
       this.projects.set(projects);
-
-      // Apply initial values from URL or use defaults
-      let projectIds: Set<number>;
-      let showNoProj: boolean;
-
-      if (this.initialProjectIds !== null) {
-        // Use URL params
-        projectIds = new Set(this.initialProjectIds);
-      } else {
-        // Default: select all projects
-        projectIds = new Set(projects.map(p => p.id));
-      }
-
-      if (this.initialShowNoProject !== null) {
-        showNoProj = this.initialShowNoProject;
-      } else {
-        showNoProj = true;
-      }
-
-      this.selectedProjectIds.set(projectIds);
-      this.showNoProject.set(showNoProj);
-
-      // Emit initial state so parent knows what's selected
-      this.projectFilterChanged.emit(Array.from(projectIds));
-      this.showNoProjectChanged.emit(showNoProj);
+      this.applyInitialValues(projects);
     });
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    // React to input changes (e.g., when reverting to default view)
+    const projects = this.projects();
+    if (projects.length === 0) return; // Wait for projects to load first
+
+    if (changes['initialProjectIds'] || changes['initialShowNoProject'] || changes['initialShowChildTasks']) {
+      this.applyInitialValues(projects);
+    }
+  }
+
+  private applyInitialValues(projects: Project[]): void {
+    // Apply initial values from URL or use defaults
+    let projectIds: Set<number>;
+    let showNoProj: boolean;
+
+    if (this.initialProjectIds !== null) {
+      // Use URL params
+      projectIds = new Set(this.initialProjectIds);
+    } else {
+      // Default: select all projects
+      projectIds = new Set(projects.map(p => p.id));
+    }
+
+    if (this.initialShowNoProject !== null) {
+      showNoProj = this.initialShowNoProject;
+    } else {
+      showNoProj = true;
+    }
+
+    if (this.initialShowChildTasks !== null) {
+      this.showChildTasks.set(this.initialShowChildTasks);
+    }
+
+    this.selectedProjectIds.set(projectIds);
+    this.showNoProject.set(showNoProj);
+
+    // Emit state so parent knows what's selected
+    this.projectFilterChanged.emit(Array.from(projectIds));
+    this.showNoProjectChanged.emit(showNoProj);
+    this.showChildTasksChanged.emit(this.showChildTasks());
   }
 
   isProjectSelected(projectId: number): boolean {

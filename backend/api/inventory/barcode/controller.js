@@ -34,7 +34,6 @@ exports.printBarcodeByID = async (req, res, next) => {
     }
 
     const zpl = await generateZPL(barcode, labelSize);
-    console.log(labelSize)
     await sendToPrinter(zpl, printerIP);
     res.json({ message: "Label printed successfully" });
   } catch (error) {
@@ -105,6 +104,13 @@ exports.getAllTags = async (req, res, next) => {
       JOIN "Traces" as t ON t."barcodeID" = b.id
       JOIN "Parts" as p ON t."partID" = p.id
       WHERE b."activeFlag" = true AND t."activeFlag" = true
+
+      UNION ALL
+
+      SELECT b.*, e.name, e.description, e.id as item_id, 'Equipment' as type, NULL::INTEGER as quantity
+      FROM "Barcodes" as b
+      JOIN "Equipment" as e ON e."barcodeID" = b.id
+      WHERE b."activeFlag" = true AND e."activeFlag" = true
     `);
     res.json(results);
   } catch (error) {
@@ -205,8 +211,6 @@ exports.moveBarcodeByID = async (req, res, next) => {
   try {
     const barcodeID = parseInt(req.params.id);
     const { newLocationID } = req.body;
-
-    console.log('Move barcode request:', { barcodeID, newLocationID, params: req.params, body: req.body });
 
     if (isNaN(barcodeID) || !newLocationID) {
       return next(createError(400, 'Invalid barcode ID or location ID'));
@@ -525,7 +529,6 @@ function generateZPLHeader(qrCodeData, labelSize = '3x1') {
  * @returns {string} ZPL details section
  */
 function generateZPLDetailsSection(name, description, labelSize = '3x1', qty = null, uom = null) {
-  console.log('Generating ZPL Details Section:', { name, description, labelSize, qty, uom });
   if (labelSize === '1.5x1') {
     // 1.5"x1" label layout
     font_size = Math.floor(-1.25 * name.length + 42)

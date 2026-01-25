@@ -4,12 +4,13 @@ import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
 import { TaskService } from '../../../services/task.service';
 import { TaskList } from '../../../models/task-list.model';
-import { Observable, map, startWith, switchMap, shareReplay, tap } from 'rxjs';
+import { Observable, map, startWith, switchMap, shareReplay } from 'rxjs';
 import { TaskListComponent } from '../task-list/task-list';
 import { SubToolbarComponent } from '../sub-toolbar/sub-toolbar';
 import { HistoryDrawerComponent } from '../history-drawer/history-drawer';
 import { signal } from '@angular/core';
 import { CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
+import { TaskViewPreferencesService } from '../../../services/task-view-preferences.service';
 
 @Component({
   selector: 'app-task-list-view',
@@ -39,15 +40,23 @@ export class TaskListViewComponent implements OnInit {
   // Local copy for drag/drop manipulation
   taskListsLocal = signal<TaskList[]>([]);
 
+  // Current URL params for default view comparison
+  currentProjectsParam = signal<string>('');
+  currentNoProjectParam = signal<string>('true');
+  currentSubtasksParam = signal<string>('true');
+
   constructor(
     private taskService: TaskService,
     private router: Router,
-    private route: ActivatedRoute
+    private route: ActivatedRoute,
+    private preferencesService: TaskViewPreferencesService
   ) { }
 
   ngOnInit(): void {
-    // Read initial filter values from URL
-    this.parseUrlParams();
+    // Subscribe to query param changes (handles initial load and navigation)
+    this.route.queryParams.subscribe(params => {
+      this.applyUrlParams(params);
+    });
 
     this.taskLists$ = this.taskService.refreshTaskLists$.pipe(
       startWith(undefined),
@@ -61,33 +70,39 @@ export class TaskListViewComponent implements OnInit {
     });
 
     this.connectedListIds$ = this.taskLists$.pipe(
-      map(lists => lists.map(list => `${list.id}`)),
-      tap(ids => console.log('Connected list IDs:', ids))
+      map(lists => lists.map(list => `${list.id}`))
     );
   }
 
-  private parseUrlParams(): void {
-    const params = this.route.snapshot.queryParams;
-
+  private applyUrlParams(params: { [key: string]: string }): void {
     // Parse projects param (comma-separated IDs)
     if (params['projects'] !== undefined) {
       const projectsStr = params['projects'];
+      this.currentProjectsParam.set(projectsStr);
       if (projectsStr === '') {
         this.initialProjectIds.set([]);
+        this.selectedProjectIds.set([]);
       } else {
         const ids = projectsStr.split(',').map((id: string) => parseInt(id, 10)).filter((id: number) => !isNaN(id));
         this.initialProjectIds.set(ids);
+        this.selectedProjectIds.set(ids);
       }
     }
 
     // Parse noProject param
     if (params['noProject'] !== undefined) {
-      this.initialShowNoProject.set(params['noProject'] === 'true');
+      this.currentNoProjectParam.set(params['noProject']);
+      const showNoProj = params['noProject'] === 'true';
+      this.initialShowNoProject.set(showNoProj);
+      this.showNoProject.set(showNoProj);
     }
 
     // Parse subtasks param
     if (params['subtasks'] !== undefined) {
-      this.initialShowChildTasks.set(params['subtasks'] === 'true');
+      this.currentSubtasksParam.set(params['subtasks']);
+      const showSubtasks = params['subtasks'] === 'true';
+      this.initialShowChildTasks.set(showSubtasks);
+      this.showChildTasks.set(showSubtasks);
     }
   }
 
@@ -111,6 +126,11 @@ export class TaskListViewComponent implements OnInit {
 
     // subtasks param
     queryParams['subtasks'] = subtasks ? 'true' : 'false';
+
+    // Update current param signals for default view comparison
+    this.currentProjectsParam.set(queryParams['projects'] || '');
+    this.currentNoProjectParam.set(queryParams['noProject'] || 'true');
+    this.currentSubtasksParam.set(queryParams['subtasks'] || 'true');
 
     this.router.navigate([], {
       relativeTo: this.route,
@@ -208,5 +228,20 @@ export class TaskListViewComponent implements OnInit {
   onShowChildTasksChanged(show: boolean) {
     this.showChildTasks.set(show);
     this.updateUrlParams();
+  }
+
+  onRevertToDefault() {
+    const defaults = this.preferencesService.getDefaultViewQueryParams();
+    if (defaults) {
+      this.router.navigate(['/tasks'], { queryParams: defaults });
+    }
+  }
+
+  onSaveAsDefault() {
+    this.preferencesService.saveDefaultView({
+      projects: this.currentProjectsParam(),
+      noProject: this.currentNoProjectParam(),
+      subtasks: this.currentSubtasksParam()
+    });
   }
 }

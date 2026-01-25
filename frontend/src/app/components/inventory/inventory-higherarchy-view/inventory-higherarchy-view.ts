@@ -5,6 +5,7 @@ import { FormsModule } from '@angular/forms';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatIconModule } from '@angular/material/icon';
+import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { InventoryService, InventoryTag } from '../../../services/inventory.service';
 import { InventoryHigherarchyItem } from '../inventory-higherarchy-item/inventory-higherarchy-item';
 
@@ -17,6 +18,7 @@ import { InventoryHigherarchyItem } from '../inventory-higherarchy-item/inventor
     MatFormFieldModule,
     MatInputModule,
     MatIconModule,
+    MatSlideToggleModule,
     InventoryHigherarchyItem
   ],
   templateUrl: './inventory-higherarchy-view.html',
@@ -30,14 +32,18 @@ export class InventoryHigherarchyView implements OnInit {
   selectedBarcodeId = signal<number | null>(null);
   expandedPath = signal<number[]>([]);
   searchText = signal<string>('');
+  showEquipment = signal<boolean>(true);
   private allTags: InventoryTag[] = [];
   private fullTree: InventoryTag[] = [];
 
   ngOnInit() {
+    this.loadTags();
+  }
+
+  private loadTags() {
     this.inventoryService.getAllTags().subscribe(tags => {
       this.allTags = tags;
-      this.fullTree = this.buildTree(tags);
-      this.treeData.set(this.fullTree);
+      this.rebuildTree();
 
       // Check if there's a barcode ID in the URL
       this.route.queryParams.subscribe(params => {
@@ -51,15 +57,33 @@ export class InventoryHigherarchyView implements OnInit {
     });
   }
 
+  refreshData() {
+    this.loadTags();
+  }
+
   onSearchChange(value: string) {
     this.searchText.set(value);
-    if (!value.trim()) {
-      // No search - show full tree
+    this.rebuildTree();
+  }
+
+  onShowEquipmentChange(show: boolean) {
+    this.showEquipment.set(show);
+    this.rebuildTree();
+  }
+
+  private rebuildTree() {
+    const searchValue = this.searchText();
+    if (!searchValue.trim()) {
+      // No search - show full tree (with equipment filter applied)
+      const filteredTags = this.showEquipment()
+        ? this.allTags
+        : this.allTags.filter(tag => tag.type !== 'Equipment');
+      this.fullTree = this.buildTree(filteredTags);
       this.treeData.set(this.fullTree);
       this.expandedPath.set([]);
     } else {
       // Search and filter
-      const filtered = this.filterTreeBySearch(value.toLowerCase());
+      const filtered = this.filterTreeBySearch(searchValue.toLowerCase());
       this.treeData.set(filtered);
 
       // Expand all nodes in filtered results
@@ -69,8 +93,13 @@ export class InventoryHigherarchyView implements OnInit {
   }
 
   private filterTreeBySearch(searchTerm: string): InventoryTag[] {
+    // First filter out equipment if toggle is off
+    const tagsToSearch = this.showEquipment()
+      ? this.allTags
+      : this.allTags.filter(tag => tag.type !== 'Equipment');
+
     // Find all matching tags
-    const matches = this.allTags.filter(tag =>
+    const matches = tagsToSearch.filter(tag =>
       tag.name.toLowerCase().includes(searchTerm) ||
       tag.barcode.toLowerCase().includes(searchTerm) ||
       (tag.type === 'Trace' && tag.item_id && this.getPartNumber(tag.item_id)?.toLowerCase().includes(searchTerm))
@@ -87,12 +116,16 @@ export class InventoryHigherarchyView implements OnInit {
       path.forEach(id => includedIds.add(id));
     });
 
-    // Build filtered tree with only included tags
+    // Build filtered tree with only included tags (also respect equipment filter)
     return this.buildFilteredTree(Array.from(includedIds));
   }
 
   private buildFilteredTree(includedIds: number[]): InventoryTag[] {
-    const tagsToInclude = this.allTags.filter(tag => includedIds.includes(tag.id));
+    let tagsToInclude = this.allTags.filter(tag => includedIds.includes(tag.id));
+    // Also filter out equipment if toggle is off
+    if (!this.showEquipment()) {
+      tagsToInclude = tagsToInclude.filter(tag => tag.type !== 'Equipment');
+    }
     return this.buildTree(tagsToInclude);
   }
 

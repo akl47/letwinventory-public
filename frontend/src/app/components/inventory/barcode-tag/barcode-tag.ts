@@ -12,13 +12,20 @@ import { BarcodeDialog } from '../barcode-dialog/barcode-dialog';
 export class BarcodeTag {
   @Input({ required: true }) barcode!: string;
   @Output() barcodeClicked = new EventEmitter<void>();
+  @Output() dataChanged = new EventEmitter<void>();
   private dialog = inject(MatDialog);
 
   openBarcodeDialog(event: Event) {
     event.stopPropagation();
     this.barcodeClicked.emit();
-    this.dialog.open(BarcodeDialog, {
+    const dialogRef = this.dialog.open(BarcodeDialog, {
       data: { barcode: this.barcode }
+    });
+
+    dialogRef.afterClosed().subscribe(result => {
+      if (result) {
+        this.dataChanged.emit();
+      }
     });
   }
 }

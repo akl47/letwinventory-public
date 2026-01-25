@@ -3,7 +3,7 @@
         <!-- Filters on the left -->
         <div class="filters-section">
             <!-- Project Filter Dropdown -->
-            <button mat-button class="toolbar-btn filter-btn" [matMenuTriggerFor]="projectMenu"
+            <button mat-button class="filter-btn" [matMenuTriggerFor]="projectMenu"
                 [class.has-filter]="activeFilterCount() > 0">
                 <div class="project-chips">
                     @if (selectedProjects().length === 0 && !showNoProject()) {
@@ -52,15 +52,28 @@
                     Subtasks
                 </mat-slide-toggle>
             </div>
+
+            <!-- Revert to Default Button -->
+            <button mat-button [disabled]="!hasDefaultView() || isCurrentViewDefault()" (click)="revertToDefault.emit()"
+                [matTooltip]="hasDefaultView() ? 'Revert to saved default view' : 'No default view saved'">
+                <mat-icon>restore</mat-icon>
+                Default
+            </button>
         </div>
 
         <!-- Actions on the right -->
         <div class="actions-section">
-            <button mat-button class="toolbar-btn" [class.active]="isEditMode" (click)="toggleEditMode.emit()">
+            <!-- Save Default View Button -->
+            <button mat-button [disabled]="isCurrentViewDefault()" (click)="saveAsDefault.emit()"
+                [matTooltip]="isCurrentViewDefault() ? 'Current view is the default' : 'Save current view as default'">
+                <mat-icon>bookmark</mat-icon>
+                Save Default
+            </button>
+            <button mat-button [class.active]="isEditMode" (click)="toggleEditMode.emit()">
                 <mat-icon>edit</mat-icon>
                 {{ isEditMode ? 'Done' : 'Edit Lists' }}
             </button>
-            <button mat-button class="toolbar-btn" (click)="toggleHistory.emit()">
+            <button mat-button (click)="toggleHistory.emit()">
                 <mat-icon>history</mat-icon>
                 History
             </button>

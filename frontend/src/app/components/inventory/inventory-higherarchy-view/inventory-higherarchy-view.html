@@ -5,6 +5,11 @@
             Inventory
         </h2>
         <div class="header-actions">
+            <mat-slide-toggle
+                [checked]="showEquipment()"
+                (change)="onShowEquipmentChange($event.checked)">
+                Show Equipment
+            </mat-slide-toggle>
             <mat-form-field appearance="outline" class="search-field">
                 <mat-label>Search inventory</mat-label>
                 <input matInput
@@ -27,7 +32,8 @@
                 <app-inventory-higherarchy-item
                     [item]="item"
                     [expandedPath]="expandedPath()"
-                    (barcodeSelected)="onBarcodeSelected($event)">
+                    (barcodeSelected)="onBarcodeSelected($event)"
+                    (dataChanged)="refreshData()">
                 </app-inventory-higherarchy-item>
             }
         }
