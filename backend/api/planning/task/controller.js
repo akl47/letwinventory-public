@@ -203,6 +203,7 @@ exports.deleteTask = async (req, res) => {
         if (!task) {
             return res.status(404).json({ error: 'Task not found' });
         }
+
         await task.update({ activeFlag: false });
         res.json({ message: 'Task deleted successfully' });
     } catch (error) {

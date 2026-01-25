@@ -1,0 +1,38 @@
+{
+  "timeZone": "America/Los_Angeles",
+  "dependencies": {},
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "addOns": {
+    "common": {
+      "name": "Letwinventory Tasks",
+      "logoUrl": "https://letwinventory.letwin.co/assets/logo.png",
+      "useLocaleFromApp": true,
+      "homepageTrigger": {
+        "runFunction": "onHomepage"
+      },
+      "universalActions": [
+        {
+          "label": "Refresh",
+          "runFunction": "onRefresh"
+        }
+      ]
+    },
+    "calendar": {
+      "homepageTrigger": {
+        "runFunction": "onCalendarHomepage"
+      },
+      "eventOpenTrigger": {
+        "runFunction": "onEventOpen"
+      }
+    }
+  },
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.addons.execute",
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/script.locale",
+    "openid",
+    "email"
+  ]
+}

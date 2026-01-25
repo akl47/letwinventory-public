@@ -26,8 +26,10 @@ passport.use(
 
 exports.initiateLogin = (req, res, next) => {
   passport.authenticate('google', {
-    scope: ['profile', 'email'],
-    prompt: 'select_account'
+    scope: [
+      'profile',
+      'email'
+    ]
   })(req, res, next);
 };
 
@@ -53,6 +55,7 @@ exports.handleCallback = (req, res, next) => {
           photoURL: profile.photos[0].value
         }
       });
+
       if (user.activeFlag) {
         // Generate JWT token
         const token = jwt.sign(
