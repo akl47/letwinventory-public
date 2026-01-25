@@ -2,7 +2,7 @@
 
 module.exports = {
   async up(queryInterface, Sequelize) {
-    await queryInterface.createTable('TaskTimeTrackings', {
+    await queryInterface.createTable('TaskTimeTracking', {
       id: {
         allowNull: false,
         autoIncrement: true,
@@ -55,12 +55,12 @@ module.exports = {
     });
 
     // Add index for faster lookups
-    await queryInterface.addIndex('TaskTimeTrackings', ['taskID']);
-    await queryInterface.addIndex('TaskTimeTrackings', ['userID']);
-    await queryInterface.addIndex('TaskTimeTrackings', ['calendarEventID']);
+    await queryInterface.addIndex('TaskTimeTracking', ['taskID']);
+    await queryInterface.addIndex('TaskTimeTracking', ['userID']);
+    await queryInterface.addIndex('TaskTimeTracking', ['calendarEventID']);
   },
 
   async down(queryInterface, Sequelize) {
-    await queryInterface.dropTable('TaskTimeTrackings');
+    await queryInterface.dropTable('TaskTimeTracking');
   }
 };
