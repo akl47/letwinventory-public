@@ -1,2 +1,11 @@
-<p>Home</p>
-<mat-slide-toggle>Slide Toggle</mat-slide-toggle>
+<div class="home-container">
+    <div class="welcome-card">
+        <img src="assets/logo.svg" alt="Letwinventory Logo" class="logo">
+        <h1>Welcome to Letwinventory</h1>
+        <p>Please sign in to continue</p>
+        <button mat-raised-button color="primary" (click)="login()" class="login-btn">
+            <mat-icon>login</mat-icon>
+            Sign in with Google
+        </button>
+    </div>
+</div>

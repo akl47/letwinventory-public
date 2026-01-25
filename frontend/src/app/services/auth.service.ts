@@ -1,8 +1,10 @@
 import { Injectable, signal, computed, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
+import { Router } from '@angular/router';
 import { DOCUMENT } from '@angular/common';
-import { Observable, catchError, map, of, tap } from 'rxjs';
+import { Observable, catchError, map, of } from 'rxjs';
 import { environment } from '../../environments/environment';
+import { TaskViewPreferencesService } from './task-view-preferences.service';
 
 export interface User {
     id: number;
@@ -15,7 +17,9 @@ export interface User {
 })
 export class AuthService {
     private readonly http = inject(HttpClient);
+    private readonly router = inject(Router);
     private readonly document = inject(DOCUMENT);
+    private readonly taskViewPreferences = inject(TaskViewPreferencesService);
     private readonly user = signal<User | null>(null);
     private readonly TOKEN_KEY = 'auth_token';
 
@@ -38,6 +42,13 @@ export class AuthService {
             localStorage.setItem(this.TOKEN_KEY, cookieToken);
             // Clear the cookie (we'll use localStorage going forward)
             this.deleteCookie(this.TOKEN_KEY);
+            // Redirect to tasks page with default view if available
+            const defaultParams = this.taskViewPreferences.getDefaultViewQueryParams();
+            if (defaultParams) {
+                this.router.navigate(['/tasks'], { queryParams: defaultParams });
+            } else {
+                this.router.navigate(['/tasks']);
+            }
         }
     }
 
@@ -95,5 +106,6 @@ export class AuthService {
 
     logout(): void {
         this.clearToken();
+        this.router.navigate(['/home']);
     }
 }
