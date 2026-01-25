@@ -467,6 +467,21 @@ function buildSettingsCard() {
       console.error('Failed to load projects:', projectError.message);
     }
 
+    // Account section with logout
+    const accountSection = CardService.newCardSection()
+      .setHeader('Account');
+
+    accountSection.addWidget(
+      CardService.newTextButton()
+        .setText('Logout')
+        .setOnClickAction(
+          CardService.newAction()
+            .setFunctionName('onLogout')
+        )
+    );
+
+    card.addSection(accountSection);
+
     // Footer with back button
     card.setFixedFooter(
       CardService.newFixedFooter()
@@ -597,6 +612,14 @@ function buildErrorCard(message) {
             .setOnClickAction(
               CardService.newAction()
                 .setFunctionName('onRefresh')
+            )
+        )
+        .setSecondaryButton(
+          CardService.newTextButton()
+            .setText('Logout')
+            .setOnClickAction(
+              CardService.newAction()
+                .setFunctionName('onLogout')
             )
         )
     )

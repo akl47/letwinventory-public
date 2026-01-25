@@ -6,7 +6,7 @@
   "addOns": {
     "common": {
       "name": "Letwinventory Tasks",
-      "logoUrl": "https://letwinventory.letwin.co/assets/logo.png",
+      "logoUrl": "https://letwinventory.letwin.co/assets/logo-32.png",
       "useLocaleFromApp": true,
       "homepageTrigger": {
         "runFunction": "onHomepage"
