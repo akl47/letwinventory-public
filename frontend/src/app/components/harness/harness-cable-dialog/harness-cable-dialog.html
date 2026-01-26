@@ -1,0 +1,142 @@
+<h2 mat-dialog-title>Manage Cables</h2>
+
+<mat-dialog-content>
+  <mat-tab-group>
+    <!-- Cable List -->
+    <mat-tab label="Cables ({{ cables().length }})">
+      <div class="tab-content">
+        @if (cables().length === 0) {
+          <div class="empty-state">
+            <mat-icon>settings_ethernet</mat-icon>
+            <p>No cables defined yet</p>
+          </div>
+        } @else {
+          <div class="cable-list">
+            @for (cable of cables(); track cable.id) {
+              <mat-expansion-panel>
+                <mat-expansion-panel-header>
+                  <mat-panel-title>{{ cable.label }}</mat-panel-title>
+                  <mat-panel-description>
+                    {{ cable.wireCount }} wires {{ cable.gaugeAWG ? '• ' + cable.gaugeAWG + ' AWG' : '' }}
+                  </mat-panel-description>
+                </mat-expansion-panel-header>
+
+                <div class="cable-details">
+                  <div class="form-row">
+                    <mat-form-field appearance="outline" class="half-width">
+                      <mat-label>Label</mat-label>
+                      <input matInput [(ngModel)]="cable.label">
+                    </mat-form-field>
+                    <mat-form-field appearance="outline" class="half-width">
+                      <mat-label>Gauge (AWG)</mat-label>
+                      <mat-select [(ngModel)]="cable.gaugeAWG">
+                        <mat-option value="">Not specified</mat-option>
+                        @for (gauge of awgGauges; track gauge) {
+                          <mat-option [value]="gauge">{{ gauge }} AWG</mat-option>
+                        }
+                      </mat-select>
+                    </mat-form-field>
+                  </div>
+
+                  <h4>Wires</h4>
+                  <div class="wire-list">
+                    @for (wire of cable.wires; track wire.id; let i = $index) {
+                      <div class="wire-row">
+                        <span class="wire-index">{{ i + 1 }}</span>
+                        <mat-form-field appearance="outline" class="color-field">
+                          <mat-label>Color</mat-label>
+                          <mat-select [(ngModel)]="wire.colorCode">
+                            @for (color of wireColors; track color.code) {
+                              <mat-option [value]="color.code">
+                                <span class="color-option">
+                                  <span class="color-swatch" [style.backgroundColor]="color.hex"></span>
+                                  {{ color.name }} ({{ color.code }})
+                                </span>
+                              </mat-option>
+                            }
+                          </mat-select>
+                        </mat-form-field>
+                        <button mat-icon-button color="warn" (click)="removeWire(cable, i)" [disabled]="cable.wires.length <= 1">
+                          <mat-icon>delete</mat-icon>
+                        </button>
+                      </div>
+                    }
+                  </div>
+
+                  <div class="wire-actions">
+                    <button mat-button (click)="addWire(cable)">
+                      <mat-icon>add</mat-icon>
+                      Add Wire
+                    </button>
+                  </div>
+                </div>
+
+                <mat-action-row>
+                  <button mat-button color="warn" (click)="removeCable(cable)">Delete Cable</button>
+                </mat-action-row>
+              </mat-expansion-panel>
+            }
+          </div>
+        }
+
+        <button mat-stroked-button class="add-cable-btn" (click)="addCable()">
+          <mat-icon>add</mat-icon>
+          Add Cable
+        </button>
+      </div>
+    </mat-tab>
+
+    <!-- Quick Add -->
+    <mat-tab label="Quick Add">
+      <div class="tab-content quick-add">
+        <p class="help-text">
+          Quickly create a cable with multiple wires of different colors.
+        </p>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Cable Label</mat-label>
+          <input matInput [(ngModel)]="quickLabel" placeholder="e.g., W1, CABLE-A">
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Wire Gauge (AWG)</mat-label>
+          <mat-select [(ngModel)]="quickGauge">
+            <mat-option value="">Not specified</mat-option>
+            @for (gauge of awgGauges; track gauge) {
+              <mat-option [value]="gauge">{{ gauge }} AWG</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Wire Colors (comma-separated codes)</mat-label>
+          <input matInput [(ngModel)]="quickColors" placeholder="e.g., RD, BK, GN, WH">
+          <mat-hint>Use codes: BK, WH, RD, GN, BU, YE, OR, BR, PK, VT, GY</mat-hint>
+        </mat-form-field>
+
+        <button mat-raised-button color="primary" (click)="quickAdd()" [disabled]="!quickLabel || !quickColors">
+          Create Cable
+        </button>
+
+        <div class="color-reference">
+          <h4>Color Code Reference</h4>
+          <div class="color-chips">
+            @for (color of wireColors; track color.code) {
+              <div class="color-chip" [matTooltip]="color.name">
+                <span class="chip-swatch" [style.backgroundColor]="color.hex"></span>
+                <span class="chip-code">{{ color.code }}</span>
+              </div>
+            }
+          </div>
+        </div>
+      </div>
+    </mat-tab>
+  </mat-tab-group>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button mat-dialog-close>Cancel</button>
+  <button mat-raised-button color="primary" (click)="save()">
+    Save Changes
+  </button>
+</mat-dialog-actions>

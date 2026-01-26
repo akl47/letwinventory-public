@@ -1,0 +1,89 @@
+<h2 mat-dialog-title>{{ isEdit() ? 'Edit Connector' : 'Add Connector' }}</h2>
+
+<mat-dialog-content>
+  <br />
+  <!-- Part Search (only show when not editing) -->
+  @if (!isEdit()) {
+  <div class="part-search-section">
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Search Connector Parts</mat-label>
+      <input matInput [formControl]="partSearchControl" [matAutocomplete]="auto"
+        placeholder="Type to search connector parts...">
+      <mat-icon matSuffix>search</mat-icon>
+      <mat-autocomplete #auto="matAutocomplete" [displayWith]="displayPart"
+        (optionSelected)="onPartSelected($event.option.value)">
+        @if (isLoading()) {
+        <mat-option disabled>
+          <mat-spinner diameter="20"></mat-spinner>
+          Loading...
+        </mat-option>
+        } @else if (filteredParts().length === 0 && partSearchControl.value) {
+        <mat-option disabled>No connector parts found</mat-option>
+        } @else {
+        @for (part of filteredParts(); track part.id) {
+        <mat-option [value]="part">
+          <span class="part-option">
+            <strong>{{ part.name }}</strong>
+            <span class="part-desc">{{ part.description || 'No description' }}</span>
+          </span>
+        </mat-option>
+        }
+        }
+      </mat-autocomplete>
+    </mat-form-field>
+  </div>
+  }
+
+  @if (selectedPart() || isEdit()) {
+  <div class="connector-form">
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Label</mat-label>
+      <input matInput [(ngModel)]="label" placeholder="e.g., J1, P2, CN1" required>
+    </mat-form-field>
+
+    <!-- Read-only connector info from part -->
+    <div class="connector-info">
+      <div class="info-row">
+        <span class="info-label">Type:</span>
+        <span class="info-value">{{ getTypeLabel(connectorType) }}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Pin Count:</span>
+        <span class="info-value">{{ pinCount }}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Color:</span>
+        <span class="info-value">
+          <span class="color-swatch" [style.backgroundColor]="getColorHex(color)"></span>
+          {{ getColorName(color) }}
+        </span>
+      </div>
+    </div>
+
+    <!-- Pin labels section -->
+    <div class="pin-labels-section">
+      <h3>Pin Configuration</h3>
+      <div class="pin-list">
+        @for (pin of pins(); track pin.id; let i = $index) {
+        <div class="pin-row">
+          <span class="pin-number">{{ pin.number }}</span>
+          <input class="pin-label-input" [(ngModel)]="pin.label" placeholder="Label">
+        </div>
+        }
+      </div>
+    </div>
+  </div>
+  } @else {
+  <div class="empty-state">
+    <mat-icon>search</mat-icon>
+    <p>Search for a connector part above to add it to the diagram</p>
+  </div>
+  }
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button mat-dialog-close>Cancel</button>
+  <button mat-raised-button color="primary" (click)="save()" [disabled]="!isValid()">
+    {{ isEdit() ? 'Update' : 'Add' }}
+  </button>
+</mat-dialog-actions>

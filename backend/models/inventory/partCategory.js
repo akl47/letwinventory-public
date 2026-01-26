@@ -29,6 +29,11 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       defaultValue: true
     },
+    tagColorHex: {
+      type: DataTypes.STRING(7),
+      allowNull: true,
+      defaultValue: '#808080'
+    },
     createdAt: {
       allowNull: false,
       type: DataTypes.DATE

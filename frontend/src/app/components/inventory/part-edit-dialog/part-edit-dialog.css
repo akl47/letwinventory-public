@@ -20,3 +20,175 @@ mat-checkbox {
     gap: 8px;
     margin: 8px 0;
 }
+
+.category-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.category-fields h4 {
+    margin: 0 0 8px 0;
+    font-weight: 500;
+    opacity: 0.8;
+}
+
+/* Image upload styles */
+.image-uploads-row {
+    display: flex;
+    gap: 16px;
+    margin-top: 8px;
+}
+
+.image-upload-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.image-upload-section {
+    margin-top: 8px;
+}
+
+.image-label {
+    display: block;
+    font-size: 12px;
+    opacity: 0.7;
+    margin-bottom: 8px;
+}
+
+.image-upload-container {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.upload-placeholder {
+    width: 120px;
+    height: 80px;
+    border: 2px dashed currentColor;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0.4;
+    transition: opacity 0.2s, background-color 0.2s;
+}
+
+.upload-placeholder:hover {
+    opacity: 0.7;
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.upload-placeholder mat-icon {
+    font-size: 32px;
+    width: 32px;
+    height: 32px;
+}
+
+.upload-placeholder span {
+    font-size: 11px;
+    margin-top: 4px;
+}
+
+.image-preview {
+    position: relative;
+    width: 120px;
+    height: 80px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid currentColor;
+    opacity: 0.8;
+}
+
+.image-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.image-preview .remove-image {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: rgba(0, 0, 0, 0.7) !important;
+    color: white !important;
+    width: 24px !important;
+    height: 24px !important;
+    min-width: 24px !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+}
+
+.image-preview .remove-image mat-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+    line-height: 14px;
+}
+
+/* Wire colors section */
+.wire-colors-section {
+    margin-top: 8px;
+}
+
+.wire-colors-section h5 {
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    font-weight: 500;
+    opacity: 0.7;
+}
+
+.wire-colors-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.wire-color-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.wire-number {
+    min-width: 60px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.wire-color-select {
+    flex: 1;
+}
+
+.wire-color-select mat-form-field {
+    width: 100%;
+}
+
+.color-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.color-swatch {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    flex-shrink: 0;
+}
+
+.color-preview {
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    flex-shrink: 0;
+}

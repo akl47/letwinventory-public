@@ -41,10 +41,123 @@
 
 .header-actions {
     display: flex;
-    gap: 16px;
+    gap: 12px;
     align-items: center;
     flex: 1;
     justify-content: flex-end;
+}
+
+/* Filter Button Styles */
+.filter-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 12px;
+    height: 36px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+    color: rgba(255, 255, 255, 0.7);
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.filter-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.filter-btn.has-filter {
+    color: var(--mat-sys-primary);
+    background-color: rgba(var(--mat-sys-primary-rgb), 0.15);
+    border-color: var(--mat-sys-primary);
+}
+
+.filter-btn .dropdown-icon {
+    margin-left: 4px;
+    margin-right: -8px;
+}
+
+/* Category Chips in Filter Button */
+.category-chips {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.category-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.no-selection,
+.all-selected {
+    font-size: 14px;
+}
+
+/* Filter Menu Styles */
+.menu-header,
+.menu-item {
+    padding: 8px 16px;
+}
+
+.menu-header {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.category-color {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+/* Filter Badge */
+.filter-badge {
+    background-color: var(--mat-sys-primary);
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin-left: 4px;
+}
+
+/* Filter Menu Section Headers */
+.menu-section-header {
+    padding: 8px 16px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+/* Type Color Indicators */
+.type-color {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+.type-color.internal {
+    background-color: var(--mat-sys-secondary-container);
+}
+
+.type-color.vendor {
+    background-color: var(--mat-sys-tertiary-container);
 }
 
 .search-field {
@@ -124,30 +237,9 @@
     padding: 4px 12px;
     border-radius: 12px;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-}
-
-.category-badge.category-part {
-    background-color: #e3f2fd;
-    color: #1565c0;
-}
-
-.category-badge.category-consumable {
-    background-color: #fff3e0;
-    color: #e65100;
-}
-
-.category-badge.category-equipment {
-    background-color: #e0f7fa;
-    color: #006064;
-}
-
-
-.category-badge.category-tooling {
-    background-color: #f3e5f5;
-    color: #6a1b9a;
 }
 
 .no-data {

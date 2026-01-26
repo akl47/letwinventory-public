@@ -1,0 +1,108 @@
+mat-dialog-content {
+  min-height: 300px;
+  max-height: 60vh;
+}
+
+.search-field {
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+.loading-container {
+  display: flex;
+  justify-content: center;
+  padding: 40px;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px;
+  color: #666;
+}
+
+.empty-state mat-icon {
+  font-size: 48px;
+  width: 48px;
+  height: 48px;
+  color: #ccc;
+}
+
+.harness-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.harness-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.harness-item:hover {
+  border-color: #1976d2;
+  background: #f5f5f5;
+}
+
+.harness-item.selected {
+  border-color: #1976d2;
+  background: #e3f2fd;
+}
+
+.harness-thumbnail {
+  width: 64px;
+  height: 48px;
+  background: #f5f5f5;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.harness-thumbnail img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.harness-thumbnail mat-icon {
+  font-size: 32px;
+  width: 32px;
+  height: 32px;
+  color: #ccc;
+}
+
+.harness-info {
+  flex: 1;
+}
+
+.harness-name {
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.harness-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: #666;
+  margin-top: 4px;
+}
+
+.part-number {
+  color: #666;
+}
+
+.harness-date {
+  font-size: 11px;
+  color: #999;
+  margin-top: 4px;
+}

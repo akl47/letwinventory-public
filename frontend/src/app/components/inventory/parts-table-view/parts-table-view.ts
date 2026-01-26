@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatTableModule } from '@angular/material/table';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
@@ -9,10 +9,13 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
+import { MatMenuModule } from '@angular/material/menu';
+import { MatCheckboxModule } from '@angular/material/checkbox';
+import { MatDividerModule } from '@angular/material/divider';
 import { FormsModule } from '@angular/forms';
 import { MatDialog } from '@angular/material/dialog';
 import { InventoryService } from '../../../services/inventory.service';
-import { Part } from '../../../models';
+import { Part, PartCategory } from '../../../models';
 import { PartEditDialog } from '../part-edit-dialog/part-edit-dialog';
 
 @Component({
@@ -29,6 +32,9 @@ import { PartEditDialog } from '../part-edit-dialog/part-edit-dialog';
     MatIconModule,
     MatTooltipModule,
     MatSlideToggleModule,
+    MatMenuModule,
+    MatCheckboxModule,
+    MatDividerModule,
     FormsModule
   ],
   templateUrl: './parts-table-view.html',
@@ -43,6 +49,14 @@ export class PartsTableView implements OnInit {
   searchText = signal<string>('');
   showInactive = signal<boolean>(false);
 
+  // Category filter
+  categories = signal<PartCategory[]>([]);
+  selectedCategoryIds = signal<Set<number>>(new Set());
+
+  // Part type filter
+  showInternal = signal<boolean>(true);
+  showVendor = signal<boolean>(true);
+
   displayedColumns: string[] = ['name', 'description', 'category', 'vendor', 'sku', 'minimumOrderQuantity', 'internalPart', 'actions'];
 
   // Pagination
@@ -54,8 +68,71 @@ export class PartsTableView implements OnInit {
   sortColumn = signal<string>('name');
   sortDirection = signal<'asc' | 'desc'>('asc');
 
+  // Computed: check if all categories are selected
+  allCategoriesSelected = computed(() => {
+    const cats = this.categories();
+    const selected = this.selectedCategoryIds();
+    return cats.length > 0 && cats.every(c => selected.has(c.id));
+  });
+
+  // Computed: check if some but not all categories are selected
+  someCategoriesSelected = computed(() => {
+    const cats = this.categories();
+    const selected = this.selectedCategoryIds();
+    const selectedCount = cats.filter(c => selected.has(c.id)).length;
+    return selectedCount > 0 && selectedCount < cats.length;
+  });
+
+  // Computed: get selected categories for chip display
+  selectedCategories = computed(() => {
+    const cats = this.categories();
+    const selected = this.selectedCategoryIds();
+    return cats.filter(c => selected.has(c.id));
+  });
+
+  // Computed: count of hidden categories (for filter indicator)
+  hiddenCategoryCount = computed(() => {
+    const cats = this.categories();
+    const selected = this.selectedCategoryIds();
+    return cats.filter(c => !selected.has(c.id)).length;
+  });
+
+  // Computed: check if all types are selected
+  allTypesSelected = computed(() => {
+    return this.showInternal() && this.showVendor();
+  });
+
+  // Computed: check if some but not all types are selected
+  someTypesSelected = computed(() => {
+    const internal = this.showInternal();
+    const vendor = this.showVendor();
+    return (internal || vendor) && !(internal && vendor);
+  });
+
+  // Computed: count of active filters (categories + types)
+  activeFilterCount = computed(() => {
+    let count = this.hiddenCategoryCount();
+    if (!this.showInternal()) count++;
+    if (!this.showVendor()) count++;
+    return count;
+  });
+
   ngOnInit() {
+    this.loadCategories();
     this.loadParts();
+  }
+
+  loadCategories() {
+    this.inventoryService.getPartCategories().subscribe({
+      next: (categories) => {
+        this.categories.set(categories);
+        // Select all categories by default
+        this.selectedCategoryIds.set(new Set(categories.map(c => c.id)));
+      },
+      error: (err) => {
+        console.error('Error loading categories:', err);
+      }
+    });
   }
 
   loadParts() {
@@ -76,6 +153,31 @@ export class PartsTableView implements OnInit {
     // Filter by active flag
     if (!this.showInactive()) {
       filtered = filtered.filter(part => part.activeFlag === true);
+    }
+
+    // Filter by category
+    const selectedCats = this.selectedCategoryIds();
+    if (selectedCats.size === 0) {
+      // No categories selected - show nothing
+      filtered = [];
+    } else if (selectedCats.size < this.categories().length) {
+      // Some categories selected - filter by them
+      filtered = filtered.filter(part => {
+        const categoryId = part.PartCategory?.id;
+        return categoryId && selectedCats.has(categoryId);
+      });
+    }
+    // If all categories selected, no filtering needed
+
+    // Filter by part type (internal/vendor)
+    const showInternal = this.showInternal();
+    const showVendor = this.showVendor();
+    if (!showInternal && !showVendor) {
+      filtered = [];
+    } else if (!showInternal) {
+      filtered = filtered.filter(part => part.internalPart === false);
+    } else if (!showVendor) {
+      filtered = filtered.filter(part => part.internalPart === true);
     }
 
     // Apply search filter
@@ -130,12 +232,93 @@ export class PartsTableView implements OnInit {
     this.applyFiltersAndSort();
   }
 
+  // Category filter methods
+  isCategorySelected(categoryId: number): boolean {
+    return this.selectedCategoryIds().has(categoryId);
+  }
+
+  toggleCategory(categoryId: number): void {
+    const current = this.selectedCategoryIds();
+    const newSet = new Set(current);
+    if (newSet.has(categoryId)) {
+      newSet.delete(categoryId);
+    } else {
+      newSet.add(categoryId);
+    }
+    this.selectedCategoryIds.set(newSet);
+    this.pageIndex.set(0);
+    this.applyFiltersAndSort();
+  }
+
+  toggleAllCategories(): void {
+    const cats = this.categories();
+    if (this.allCategoriesSelected()) {
+      // Deselect all
+      this.selectedCategoryIds.set(new Set());
+    } else {
+      // Select all
+      this.selectedCategoryIds.set(new Set(cats.map(c => c.id)));
+    }
+    this.pageIndex.set(0);
+    this.applyFiltersAndSort();
+  }
+
+  // Part type filter methods
+  toggleInternal(): void {
+    this.showInternal.update(v => !v);
+    this.pageIndex.set(0);
+    this.applyFiltersAndSort();
+  }
+
+  toggleVendor(): void {
+    this.showVendor.update(v => !v);
+    this.pageIndex.set(0);
+    this.applyFiltersAndSort();
+  }
+
+  toggleAllTypes(): void {
+    if (this.allTypesSelected()) {
+      this.showInternal.set(false);
+      this.showVendor.set(false);
+    } else {
+      this.showInternal.set(true);
+      this.showVendor.set(true);
+    }
+    this.pageIndex.set(0);
+    this.applyFiltersAndSort();
+  }
+
   getTotalCount(): number {
     let filtered = [...this.allParts()];
 
     // Filter by active flag
     if (!this.showInactive()) {
       filtered = filtered.filter(part => part.activeFlag === true);
+    }
+
+    // Filter by category
+    const selectedCats = this.selectedCategoryIds();
+    if (selectedCats.size === 0) {
+      // No categories selected - show nothing
+      filtered = [];
+    } else if (selectedCats.size < this.categories().length) {
+      // Some categories selected - filter by them
+      filtered = filtered.filter(part => {
+        const categoryId = part.PartCategory?.id;
+        return categoryId && selectedCats.has(categoryId);
+      });
+    }
+    // If all categories selected, no filtering needed
+
+    // Filter by part type (internal/vendor)
+    const showInternal = this.showInternal();
+    const showVendor = this.showVendor();
+    if (!showInternal && !showVendor) {
+      filtered = [];
+    } else if (!showInternal) {
+      filtered = filtered.filter(part => part.internalPart === false);
+    } else if (!showVendor) {
+      filtered = filtered.filter(part => part.internalPart === true);
     }
 
     // Apply search filter
@@ -188,5 +371,22 @@ export class PartsTableView implements OnInit {
   deletePart(part: Part) {
     // This method is kept for potential future use, but delete is handled in the dialog
     console.log('Delete part:', part);
+  }
+
+  getCategoryBgColor(hexColor: string | null | undefined): string {
+    if (!hexColor) return 'rgba(128, 128, 128, 0.2)';
+    // Create a lighter background from the tag color
+    return this.hexToRgba(hexColor, 0.2);
+  }
+
+  getCategoryTextColor(hexColor: string | null | undefined): string {
+    return hexColor || '#808080';
+  }
+
+  private hexToRgba(hex: string, alpha: number): string {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 }

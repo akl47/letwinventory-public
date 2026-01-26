@@ -1,0 +1,104 @@
+<div class="property-panel">
+  <!-- Metadata section - always visible -->
+  <mat-expansion-panel [expanded]="true" class="metadata-panel">
+    <mat-expansion-panel-header>
+      <mat-panel-title>Harness Info</mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="property-group">
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Name</mat-label>
+        <input matInput [value]="harnessData()?.name || ''" (input)="updateMetadata('name', $event)">
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Part Number</mat-label>
+        <input matInput [value]="harnessData()?.partNumber || ''" disabled>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="half-width">
+        <mat-label>Revision</mat-label>
+        <input matInput [value]="harnessData()?.revision || 'A'" disabled>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Description</mat-label>
+        <textarea matInput rows="2" [value]="harnessData()?.description || ''"
+          (input)="updateMetadata('description', $event)"></textarea>
+      </mat-form-field>
+
+      <div class="harness-actions">
+        <button mat-stroked-button color="warn" (click)="deleteHarness.emit()">
+          <mat-icon>delete</mat-icon>
+          Delete Harness
+        </button>
+      </div>
+    </div>
+  </mat-expansion-panel>
+
+  @if (selection()?.type === 'wire') {
+  <mat-expansion-panel [expanded]="true" class="wire-panel">
+    <mat-expansion-panel-header>
+      <mat-panel-title>Wire Properties</mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="property-group">
+      <div class="connection-info">
+        <div class="endpoint">
+          <strong>From:</strong>
+          {{ getEndpointDescription(selection()?.connection, 'from') }}
+        </div>
+        <mat-icon class="arrow-icon">arrow_forward</mat-icon>
+        <div class="endpoint">
+          <strong>To:</strong>
+          {{ getEndpointDescription(selection()?.connection, 'to') }}
+        </div>
+      </div>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Wire Label</mat-label>
+        <input matInput [value]="selection()?.connection?.label || ''" (input)="updateConnectionInput('label', $event)"
+          placeholder="e.g., IGN, GND, PWR">
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Wire Color</mat-label>
+        <mat-select [value]="selection()?.connection?.color || 'BK'"
+          (selectionChange)="updateConnection('color', $event.value)">
+          @for (color of wireColors; track color.code) {
+          <mat-option [value]="color.code">
+            <span class="color-option">
+              <span class="color-swatch" [style.backgroundColor]="color.hex"></span>
+              {{ color.name }} ({{ color.code }})
+            </span>
+          </mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Wire Length (mm)</mat-label>
+        <input matInput type="number" [value]="selection()?.connection?.lengthMm || ''"
+          (input)="updateConnectionInput('lengthMm', $event)" min="1">
+      </mat-form-field>
+
+      @if (selection()?.connection?.cable) {
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Wire in Cable</mat-label>
+        <mat-select [value]="selection()?.connection?.wire || ''"
+          (selectionChange)="updateConnection('wire', $event.value)">
+          @for (wire of getWiresForCable(selection()?.connection?.cable); track wire.id) {
+          <mat-option [value]="wire.id">
+            <span class="color-option">
+              <span class="color-swatch" [style.backgroundColor]="getWireHex(wire.colorCode || wire.color)"></span>
+              {{ wire.color }}
+            </span>
+          </mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+      }
+    </div>
+  </mat-expansion-panel>
+  }
+</div>

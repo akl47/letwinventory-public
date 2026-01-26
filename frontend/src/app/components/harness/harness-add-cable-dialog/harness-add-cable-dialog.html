@@ -1,0 +1,98 @@
+<h2 mat-dialog-title>{{ isEdit() ? 'Edit Cable' : 'Add Cable' }}</h2>
+
+<mat-dialog-content>
+  <br />
+  <!-- Part Search (only show when not editing) -->
+  @if (!isEdit()) {
+  <div class="part-search-section">
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Search Cable Parts</mat-label>
+      <input matInput [formControl]="partSearchControl" [matAutocomplete]="auto"
+        placeholder="Type to search cable parts...">
+      <mat-icon matSuffix>search</mat-icon>
+      <mat-autocomplete #auto="matAutocomplete" [displayWith]="displayPart"
+        (optionSelected)="onPartSelected($event.option.value)">
+        @if (isLoading()) {
+        <mat-option disabled>
+          <mat-spinner diameter="20"></mat-spinner>
+          Loading...
+        </mat-option>
+        } @else if (filteredParts().length === 0 && partSearchControl.value) {
+        <mat-option disabled>No cable parts found</mat-option>
+        } @else {
+        @for (part of filteredParts(); track part.id) {
+        <mat-option [value]="part">
+          <span class="part-option">
+            <strong>{{ part.name }}</strong>
+            <span class="part-desc">{{ part.description || 'No description' }}</span>
+          </span>
+        </mat-option>
+        }
+        }
+      </mat-autocomplete>
+    </mat-form-field>
+  </div>
+  }
+
+  @if (selectedPart() || isEdit()) {
+  <div class="cable-form">
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Label</mat-label>
+      <input matInput [(ngModel)]="label" placeholder="e.g., W1, CABLE-A" required>
+    </mat-form-field>
+
+    <!-- Read-only cable info from part -->
+    <div class="cable-info">
+      <div class="info-row">
+        <span class="info-label">Wire Count:</span>
+        <span class="info-value">{{ wires().length }}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Gauge:</span>
+        <span class="info-value">{{ gaugeAWG || 'Not specified' }} AWG</span>
+      </div>
+    </div>
+
+    <!-- Wire colors with drag-and-drop reordering -->
+    <div class="wire-colors-section">
+      <h3>Wires <span class="drag-hint">(drag to reorder)</span></h3>
+      <div class="wire-list" cdkDropList (cdkDropListDropped)="onWireDrop($event)">
+        @for (wire of wires(); track wire.id; let i = $index) {
+        <div class="wire-row" cdkDrag>
+          <mat-icon class="drag-handle" cdkDragHandle>drag_indicator</mat-icon>
+          <span class="wire-index">{{ i + 1 }}</span>
+          <span class="color-swatch" [style.backgroundColor]="getWireHex(wire.colorCode || wire.color)"></span>
+          <span class="wire-color-name">{{ wire.color }} ({{ wire.colorCode }})</span>
+          <input
+            class="wire-label-input"
+            [(ngModel)]="wire.label"
+            placeholder="Label"
+            matTooltip="Wire label (optional)"
+          >
+          <div class="drag-placeholder" *cdkDragPlaceholder></div>
+        </div>
+        }
+      </div>
+    </div>
+
+    <!-- Cable length in mm -->
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Cable Length (mm)</mat-label>
+      <input matInput type="number" [(ngModel)]="lengthMm" min="1">
+      <mat-hint>Physical length of the cable</mat-hint>
+    </mat-form-field>
+  </div>
+  } @else {
+  <div class="empty-state">
+    <mat-icon>search</mat-icon>
+    <p>Search for a cable part above to add it to the diagram</p>
+  </div>
+  }
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button mat-dialog-close>Cancel</button>
+  <button mat-raised-button color="primary" (click)="save()" [disabled]="!isValid()">
+    {{ isEdit() ? 'Update' : 'Add' }}
+  </button>
+</mat-dialog-actions>

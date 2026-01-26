@@ -1,4 +1,5 @@
-<h2 mat-dialog-title>{{ isEditMode ? 'Edit Part' : 'New Part' }}</h2>
+<h2 mat-dialog-title>{{ isEditMode ? 'Edit Part' : (lockedCategoryName === 'Harness' ? 'New Harness Part' : 'New Part')
+    }}</h2>
 <mat-dialog-content>
     <form [formGroup]="form" class="dialog-form">
         <mat-form-field appearance="outline">
@@ -27,17 +28,178 @@
 
         <mat-form-field appearance="outline">
             <mat-label>Category</mat-label>
-            <mat-select formControlName="partCategoryID" required>
+            <mat-select formControlName="partCategoryID" required [disabled]="lockedCategoryName !== null">
                 @for (category of categories(); track category.id) {
                 <mat-option [value]="category.id">{{ category.name }}</mat-option>
                 }
             </mat-select>
+            @if (lockedCategoryName) {
+            <mat-hint>Category is locked to {{ lockedCategoryName }}</mat-hint>
+            }
             @if (form.get('partCategoryID')?.hasError('required') && form.get('partCategoryID')?.touched) {
             <mat-error>Category is required</mat-error>
             }
         </mat-form-field>
 
-        <mat-checkbox formControlName="internalPart">
+        <!-- Connector-specific fields -->
+        @if (isConnector()) {
+        <div class="category-fields">
+            <h4>Connector Details</h4>
+            <mat-form-field appearance="outline">
+                <mat-label>Connector Type</mat-label>
+                <mat-select formControlName="connectorType" required>
+                    <mat-option value="male">Male</mat-option>
+                    <mat-option value="female">Female</mat-option>
+                    <mat-option value="terminal">Terminal</mat-option>
+                    <mat-option value="splice">Splice</mat-option>
+                </mat-select>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+                <mat-label>Number of Pins</mat-label>
+                <input matInput formControlName="connectorPinCount" type="number" min="1" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+                <mat-label>Color Code</mat-label>
+                <input matInput formControlName="connectorColor" placeholder="e.g., BK, GY, RD">
+                <mat-hint>Optional color code</mat-hint>
+            </mat-form-field>
+
+            <!-- Image Uploads Row -->
+            <div class="image-uploads-row">
+                <!-- Connector Image Upload -->
+                <div class="image-upload-card">
+                    <label class="image-label">Connector Image</label>
+                    @if (connectorImage()) {
+                    <div class="image-preview">
+                        <img [src]="connectorImage()" alt="Connector image">
+                        <button mat-icon-button class="remove-image" (click)="removeConnectorImage()">
+                            <mat-icon>close</mat-icon>
+                        </button>
+                    </div>
+                    } @else {
+                    <div class="upload-placeholder" (click)="connectorImageInput.click()">
+                        <mat-icon>add_photo_alternate</mat-icon>
+                        <span>Click to upload</span>
+                    </div>
+                    }
+                    <input #connectorImageInput type="file" accept="image/*" hidden
+                        (change)="onConnectorImageSelected($event)">
+                </div>
+
+                <!-- Pinout Diagram Upload -->
+                <div class="image-upload-card">
+                    <label class="image-label">Pinout Diagram</label>
+                    @if (pinoutDiagramImage()) {
+                    <div class="image-preview">
+                        <img [src]="pinoutDiagramImage()" alt="Pinout diagram">
+                        <button mat-icon-button class="remove-image" (click)="removePinoutDiagram()">
+                            <mat-icon>close</mat-icon>
+                        </button>
+                    </div>
+                    } @else {
+                    <div class="upload-placeholder" (click)="pinoutImageInput.click()">
+                        <mat-icon>add_photo_alternate</mat-icon>
+                        <span>Click to upload</span>
+                    </div>
+                    }
+                    <input #pinoutImageInput type="file" accept="image/*" hidden
+                        (change)="onPinoutDiagramSelected($event)">
+                </div>
+            </div>
+        </div>
+        }
+
+        <!-- Wire-specific fields -->
+        @if (isWire()) {
+        <div class="category-fields">
+            <h4>Wire Details</h4>
+            <mat-form-field appearance="outline">
+                <mat-label>Wire Color</mat-label>
+                <input matInput formControlName="wireColor" placeholder="e.g., Black, Red" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+                <mat-label>Color Code</mat-label>
+                <input matInput formControlName="wireColorCode" placeholder="e.g., BK, RD">
+                <mat-hint>Optional 2-letter code</mat-hint>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+                <mat-label>Wire Gauge (AWG)</mat-label>
+                <input matInput formControlName="wireGauge" placeholder="e.g., 22, 18, 14">
+            </mat-form-field>
+        </div>
+        }
+
+        <!-- Cable-specific fields -->
+        @if (isCable()) {
+        <div class="category-fields">
+            <h4>Cable Details</h4>
+            <mat-form-field appearance="outline">
+                <mat-label>Number of Conductors</mat-label>
+                <input matInput formControlName="cableWireCount" type="number" min="1" required>
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+                <mat-label>Wire Gauge (AWG)</mat-label>
+                <input matInput formControlName="cableGauge" placeholder="e.g., 22, 18, 14">
+            </mat-form-field>
+
+            <!-- Wire Colors -->
+            @if (cableWireColors().length > 0) {
+            <div class="wire-colors-section">
+                <h5>Wire Colors</h5>
+                <div class="wire-colors-grid">
+                    @for (wire of cableWireColors(); track wire.id; let i = $index) {
+                    <div class="wire-color-row">
+                        <span class="wire-number">Wire {{ i + 1 }}</span>
+                        <mat-form-field appearance="outline" class="wire-color-select">
+                            <mat-label>Color</mat-label>
+                            <mat-select [value]="wire.colorCode" (selectionChange)="onWireColorChange(i, $event.value)">
+                                @for (color of wireColorOptions; track color.code) {
+                                <mat-option [value]="color.code">
+                                    <span class="color-option">
+                                        <span class="color-swatch" [style.background-color]="color.hex"></span>
+                                        {{ color.name }} ({{ color.code }})
+                                    </span>
+                                </mat-option>
+                                }
+                            </mat-select>
+                        </mat-form-field>
+                        <span class="color-preview" [style.background-color]="getWireColorHex(wire.colorCode)"></span>
+                    </div>
+                    }
+                </div>
+            </div>
+            }
+
+            <!-- Cable Diagram Image Upload -->
+            <div class="image-upload-section">
+                <div class="image-upload-card">
+                    <label class="image-label">Cable Diagram</label>
+                    @if (cableDiagramImage()) {
+                    <div class="image-preview">
+                        <img [src]="cableDiagramImage()" alt="Cable diagram">
+                        <button mat-icon-button class="remove-image" (click)="removeCableDiagram()">
+                            <mat-icon>close</mat-icon>
+                        </button>
+                    </div>
+                    } @else {
+                    <div class="upload-placeholder" (click)="cableDiagramInput.click()">
+                        <mat-icon>add_photo_alternate</mat-icon>
+                        <span>Click to upload</span>
+                    </div>
+                    }
+                    <input #cableDiagramInput type="file" accept="image/*" hidden
+                        (change)="onCableDiagramSelected($event)">
+                </div>
+            </div>
+        </div>
+        }
+
+        <mat-checkbox formControlName="internalPart" [disabled]="lockedCategoryName === 'Harness'">
             Internal Part (manufactured in-house)
         </mat-checkbox>
 
@@ -74,7 +236,8 @@
 
         <mat-form-field appearance="outline">
             <mat-label>Manufacturer</mat-label>
-            <input matInput formControlName="manufacturer" placeholder="e.g. Texas Instruments, STMicroelectronics" required>
+            <input matInput formControlName="manufacturer" placeholder="e.g. Texas Instruments, STMicroelectronics"
+                required>
             <mat-hint>Actual manufacturer of the part</mat-hint>
             @if (form.get('manufacturer')?.hasError('required') && form.get('manufacturer')?.touched) {
             <mat-error>Manufacturer is required for vendor parts</mat-error>

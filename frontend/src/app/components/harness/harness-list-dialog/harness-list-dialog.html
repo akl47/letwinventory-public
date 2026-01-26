@@ -1,0 +1,74 @@
+<h2 mat-dialog-title>Open Wire Harness</h2>
+
+<mat-dialog-content>
+  <mat-form-field appearance="outline" class="search-field">
+    <mat-label>Search</mat-label>
+    <input matInput [(ngModel)]="searchText" (ngModelChange)="onSearch()" placeholder="Search by name or part number">
+    <mat-icon matSuffix>search</mat-icon>
+  </mat-form-field>
+
+  @if (loading()) {
+    <div class="loading-container">
+      <mat-spinner diameter="40"></mat-spinner>
+    </div>
+  } @else if (harnesses().length === 0) {
+    <div class="empty-state">
+      <mat-icon>folder_off</mat-icon>
+      <p>No harnesses found</p>
+    </div>
+  } @else {
+    <div class="harness-list">
+      @for (harness of harnesses(); track harness.id) {
+        <div class="harness-item" (click)="selectHarness(harness)" [class.selected]="selectedHarness()?.id === harness.id">
+          <div class="harness-thumbnail">
+            @if (harness.thumbnailBase64) {
+              <img [src]="harness.thumbnailBase64" alt="Preview">
+            } @else {
+              <mat-icon>cable</mat-icon>
+            }
+          </div>
+          <div class="harness-info">
+            <div class="harness-name">{{ harness.name }}</div>
+            <div class="harness-meta">
+              @if (harness.partNumber) {
+                <span class="part-number">{{ harness.partNumber }}</span>
+              }
+              <span class="revision">Rev {{ harness.revision }}</span>
+            </div>
+            <div class="harness-date">
+              Updated: {{ formatDate(harness.updatedAt) }}
+            </div>
+          </div>
+          <button mat-icon-button [matMenuTriggerFor]="itemMenu" (click)="$event.stopPropagation()">
+            <mat-icon>more_vert</mat-icon>
+          </button>
+          <mat-menu #itemMenu="matMenu">
+            <button mat-menu-item (click)="duplicateHarness(harness)">
+              <mat-icon>content_copy</mat-icon>
+              <span>Duplicate</span>
+            </button>
+            <button mat-menu-item (click)="deleteHarness(harness)">
+              <mat-icon>delete</mat-icon>
+              <span>Delete</span>
+            </button>
+          </mat-menu>
+        </div>
+      }
+    </div>
+
+    <mat-paginator
+      [length]="pagination().total"
+      [pageSize]="pagination().limit"
+      [pageIndex]="pagination().page - 1"
+      [pageSizeOptions]="[10, 20, 50]"
+      (page)="onPageChange($event)">
+    </mat-paginator>
+  }
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button mat-dialog-close>Cancel</button>
+  <button mat-raised-button color="primary" (click)="openSelected()" [disabled]="!selectedHarness()">
+    Open
+  </button>
+</mat-dialog-actions>

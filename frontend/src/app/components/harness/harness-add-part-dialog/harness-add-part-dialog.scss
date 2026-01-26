@@ -1,0 +1,223 @@
+mat-dialog-content {
+  min-width: 450px;
+  max-height: 70vh;
+}
+
+.tab-content {
+  padding: 16px 0;
+}
+
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px;
+  gap: 16px;
+  color: #888;
+}
+
+.selection-mode {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #404040;
+}
+
+.mode-radio {
+  display: flex;
+  gap: 24px;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px;
+  color: #888;
+}
+
+.empty-state mat-icon {
+  font-size: 48px;
+  width: 48px;
+  height: 48px;
+  color: #555;
+  margin-bottom: 8px;
+}
+
+.part-list {
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.part-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.part-radio-option {
+  display: block;
+  padding: 12px;
+  background: #333;
+  border-radius: 4px;
+  border: 1px solid #444;
+  transition: border-color 0.2s;
+}
+
+.part-radio-option:hover {
+  border-color: #666;
+}
+
+::ng-deep .part-radio-option.mat-mdc-radio-checked {
+  border-color: #ab47bc !important;
+  background: #3d2b42;
+}
+
+.part-option-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.part-label {
+  font-weight: 500;
+  color: #e0e0e0;
+  min-width: 60px;
+}
+
+.part-details {
+  font-size: 12px;
+  color: #888;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.part-link {
+  font-size: 11px;
+  color: #ab47bc;
+  background: #3d2b42;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid #555;
+  display: inline-block;
+}
+
+.wire-colors {
+  display: flex;
+  gap: 4px;
+}
+
+.wire-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid #555;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.full-width {
+  width: 100%;
+}
+
+.color-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  border: 1px solid #555;
+}
+
+.wires-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #404040;
+}
+
+.wires-section h3 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.wire-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wire-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wire-index {
+  width: 24px;
+  text-align: center;
+  color: #888;
+  font-weight: 500;
+}
+
+.color-field {
+  flex: 1;
+}
+
+.add-wire-btn {
+  margin-top: 8px;
+  width: 100%;
+}
+
+.save-to-library {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #404040;
+}
+
+.save-to-library label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #b0b0b0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.save-to-library input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+::ng-deep .mat-mdc-tab-labels {
+  gap: 8px;
+}
+
+::ng-deep .mat-mdc-tab .mdc-tab__text-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

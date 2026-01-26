@@ -57,5 +57,26 @@ export const routes: Routes = [
         loadComponent: () =>
             import('./components/orders/orders-list-view/orders-list-view').then((m) => m.OrdersListView),
         canActivate: [authGuard],
+    },
+    {
+        path: 'harness',
+        title: 'Wire Harnesses',
+        loadComponent: () =>
+            import('./components/harness/harness-list-view/harness-list-view').then((m) => m.HarnessListView),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'harness/editor',
+        title: 'Harness Editor',
+        loadComponent: () =>
+            import('./components/harness/harness-page/harness-page').then((m) => m.HarnessPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'harness/editor/:id',
+        title: 'Harness Editor',
+        loadComponent: () =>
+            import('./components/harness/harness-page/harness-page').then((m) => m.HarnessPage),
+        canActivate: [authGuard],
     }
 ];

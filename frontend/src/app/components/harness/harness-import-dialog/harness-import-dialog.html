@@ -1,0 +1,101 @@
+<h2 mat-dialog-title>Import Wire Harness</h2>
+
+<mat-dialog-content>
+  <!-- File upload area -->
+  <div
+    class="upload-area"
+    [class.drag-over]="isDragOver()"
+    [class.has-file]="!!fileContent()"
+    (dragover)="onDragOver($event)"
+    (dragleave)="onDragLeave($event)"
+    (drop)="onDrop($event)"
+    (click)="fileInput.click()">
+
+    <input
+      #fileInput
+      type="file"
+      accept=".json"
+      style="display: none"
+      (change)="onFileSelected($event)">
+
+    @if (!fileContent()) {
+      <mat-icon>upload_file</mat-icon>
+      <p>Drag and drop a JSON file here</p>
+      <p class="hint">or click to browse</p>
+    } @else {
+      <mat-icon class="success">check_circle</mat-icon>
+      <p>{{ fileName() }}</p>
+      <button mat-button color="warn" (click)="clearFile($event)">
+        <mat-icon>close</mat-icon>
+        Remove
+      </button>
+    }
+  </div>
+
+  <!-- Or paste JSON -->
+  <div class="divider">
+    <span>OR</span>
+  </div>
+
+  <mat-form-field appearance="outline" class="full-width">
+    <mat-label>Paste JSON</mat-label>
+    <textarea
+      matInput
+      rows="8"
+      [(ngModel)]="pastedJson"
+      (ngModelChange)="onJsonPasted()"
+      placeholder='{"name": "My Harness", ...}'>
+    </textarea>
+  </mat-form-field>
+
+  <!-- Validation status -->
+  @if (validating()) {
+    <mat-progress-bar mode="indeterminate"></mat-progress-bar>
+  }
+
+  @if (validationErrors().length > 0) {
+    <div class="validation-errors">
+      <h4><mat-icon>error</mat-icon> Validation Errors</h4>
+      <ul>
+        @for (error of validationErrors(); track error.message) {
+          <li>{{ error.message }}</li>
+        }
+      </ul>
+    </div>
+  }
+
+  @if (isValid()) {
+    <div class="validation-success">
+      <mat-icon>check_circle</mat-icon>
+      <span>Valid harness data</span>
+      <span class="stats">
+        {{ parsedData()?.connectors?.length || 0 }} connectors,
+        {{ parsedData()?.cables?.length || 0 }} cables,
+        {{ parsedData()?.connections?.length || 0 }} connections
+      </span>
+    </div>
+  }
+
+  <!-- Sample JSON template -->
+  <div class="sample-section">
+    <button mat-button (click)="showSample = !showSample">
+      <mat-icon>{{ showSample ? 'expand_less' : 'expand_more' }}</mat-icon>
+      {{ showSample ? 'Hide' : 'Show' }} JSON Template
+    </button>
+
+    @if (showSample) {
+      <pre class="sample-json">{{ sampleJson }}</pre>
+      <button mat-button (click)="useSample()">
+        <mat-icon>content_copy</mat-icon>
+        Use as Template
+      </button>
+    }
+  </div>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button mat-dialog-close>Cancel</button>
+  <button mat-raised-button color="primary" (click)="import()" [disabled]="!isValid()">
+    Import
+  </button>
+</mat-dialog-actions>

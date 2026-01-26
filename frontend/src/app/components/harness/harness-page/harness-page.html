@@ -1,0 +1,68 @@
+<div class="harness-page">
+  <app-harness-toolbar
+    [hasChanges]="hasUnsavedChanges()"
+    [isSaving]="isSaving()"
+    [zoomLevel]="zoomLevel()"
+    [gridEnabled]="gridEnabled()"
+    [snapToGrid]="snapToGrid()"
+    [harnessName]="harnessData()?.name || ''"
+    [harnessPartNumber]="harnessData()?.partNumber || ''"
+    [harnessRevision]="harnessData()?.revision || ''"
+    [hasElementSelected]="currentSelection()?.type === 'connector' || currentSelection()?.type === 'cable'"
+    [activeTool]="activeTool()"
+    (newHarness)="onNewHarness()"
+    (openHarness)="onOpenHarness()"
+    (save)="onSave()"
+    (exportJSON)="onExportJSON()"
+    (exportPNG)="onExportPNG()"
+    (importJSON)="onImportJSON()"
+    (addConnector)="onAddConnector()"
+    (addCable)="onAddCable()"
+    (deleteSelected)="onDeleteSelected()"
+    (rotateConnector)="rotateSelected(90)"
+    (flipConnector)="flipSelected()"
+    (zoomIn)="onZoomIn()"
+    (zoomOut)="onZoomOut()"
+    (resetZoom)="onResetZoom()"
+    (gridEnabledChange)="gridEnabled.set($event)"
+    (snapToGridChange)="snapToGrid.set($event)"
+    (toolChanged)="onToolChanged($event)">
+  </app-harness-toolbar>
+
+  <div class="main-content">
+    <app-harness-canvas
+      #harnessCanvas
+      [harnessData]="harnessData()"
+      [activeTool]="activeTool()"
+      [gridEnabled]="gridEnabled()"
+      [snapToGrid]="snapToGrid()"
+      [gridSize]="20"
+      (selectionChanged)="onSelectionChanged($event)"
+      (dataChanged)="onDataChanged($event)"
+      (connectorMoved)="onConnectorMoved($event)"
+      (cableMoved)="onCableMoved($event)"
+      (editConnector)="onEditConnector($event)"
+      (editCable)="onEditCable($event)"
+      (bringToFront)="onBringToFront()"
+      (moveForward)="onMoveForward()"
+      (moveBackward)="onMoveBackward()"
+      (sendToBack)="onSendToBack()"
+      (rotateSelected)="rotateSelected(90)"
+      (flipSelected)="flipSelected()"
+      (requestDelete)="onDeleteSelected()">
+    </app-harness-canvas>
+
+    <app-harness-property-panel
+      [harnessData]="harnessData()"
+      [selection]="currentSelection()"
+      (metadataChanged)="onMetadataChanged($event)"
+      (connectorChanged)="onConnectorPropertyChanged($event)"
+      (connectionChanged)="onConnectionPropertyChanged($event)"
+      (pinLabelChanged)="onPinLabelChanged($event)"
+      (deleteConnector)="onDeleteSelected()"
+      (deleteCable)="onDeleteSelected()"
+      (deleteConnection)="onDeleteSelected()"
+      (deleteHarness)="onDeleteHarness()">
+    </app-harness-property-panel>
+  </div>
+</div>

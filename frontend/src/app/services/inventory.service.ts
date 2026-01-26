@@ -133,6 +133,12 @@ export class InventoryService {
         return this.http.delete(`${this.apiUrl}/part/${partId}`);
     }
 
+    searchPartsByCategory(categoryName: string, searchTerm: string): Observable<Part[]> {
+        return this.http.get<Part[]>(`${this.apiUrl}/part/search`, {
+            params: { category: categoryName, q: searchTerm }
+        });
+    }
+
     // Trace action methods
     splitTrace(barcodeId: number, splitQuantity: number): Observable<any> {
         return this.http.post(`${this.apiUrl}/trace/split/${barcodeId}`, { splitQuantity });

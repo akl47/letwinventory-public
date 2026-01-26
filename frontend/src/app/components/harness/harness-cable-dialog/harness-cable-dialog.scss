@@ -1,0 +1,144 @@
+mat-dialog-content {
+  min-width: 500px;
+  min-height: 400px;
+}
+
+.tab-content {
+  padding: 16px 0;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px;
+  color: #666;
+}
+
+.empty-state mat-icon {
+  font-size: 48px;
+  width: 48px;
+  height: 48px;
+  color: #ccc;
+}
+
+.cable-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cable-details {
+  padding: 8px 0;
+}
+
+.form-row {
+  display: flex;
+  gap: 16px;
+}
+
+.half-width {
+  flex: 1;
+}
+
+.full-width {
+  width: 100%;
+}
+
+h4 {
+  margin: 16px 0 8px 0;
+  font-size: 13px;
+  color: #666;
+}
+
+.wire-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wire-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wire-index {
+  width: 24px;
+  text-align: center;
+  color: #666;
+}
+
+.color-field {
+  flex: 1;
+}
+
+.color-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  border: 1px solid #ccc;
+}
+
+.wire-actions {
+  margin-top: 8px;
+}
+
+.add-cable-btn {
+  width: 100%;
+  margin-top: 16px;
+}
+
+.quick-add {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.help-text {
+  color: #666;
+  margin: 0;
+}
+
+.color-reference {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.color-reference h4 {
+  margin: 0 0 8px 0;
+}
+
+.color-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.color-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: #f5f5f5;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.chip-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  border: 1px solid #ccc;
+}
+
+.chip-code {
+  font-family: monospace;
+}
