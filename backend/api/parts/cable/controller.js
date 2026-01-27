@@ -7,7 +7,7 @@ exports.getAllCables = async (req, res, next) => {
     const { includeInactive = false } = req.query;
     const whereClause = includeInactive === 'true' ? {} : { activeFlag: true };
 
-    const cables = await db.HarnessCable.findAll({
+    const cables = await db.Cable.findAll({
       where: whereClause,
       order: [['label', 'ASC']],
       include: db.Part ? [{
@@ -26,7 +26,7 @@ exports.getAllCables = async (req, res, next) => {
 // Get single cable
 exports.getCableById = async (req, res, next) => {
   try {
-    const cable = await db.HarnessCable.findOne({
+    const cable = await db.Cable.findOne({
       where: { id: req.params.id },
       include: db.Part ? [{
         model: db.Part,
@@ -68,7 +68,7 @@ exports.createCable = async (req, res, next) => {
       }
     }
 
-    const cable = await db.HarnessCable.create({
+    const cable = await db.Cable.create({
       label,
       wireCount: wireCount || cableWires.length,
       gaugeAWG: gaugeAWG || null,
@@ -88,7 +88,7 @@ exports.updateCable = async (req, res, next) => {
   try {
     const { label, wireCount, gaugeAWG, wires, partID, cableDiagramImage } = req.body;
 
-    const cable = await db.HarnessCable.findOne({
+    const cable = await db.Cable.findOne({
       where: { id: req.params.id }
     });
 
@@ -104,11 +104,11 @@ exports.updateCable = async (req, res, next) => {
     if (partID !== undefined) updateData.partID = partID;
     if (cableDiagramImage !== undefined) updateData.cableDiagramImage = cableDiagramImage;
 
-    await db.HarnessCable.update(updateData, {
+    await db.Cable.update(updateData, {
       where: { id: req.params.id }
     });
 
-    const updatedCable = await db.HarnessCable.findByPk(req.params.id, {
+    const updatedCable = await db.Cable.findByPk(req.params.id, {
       include: db.Part ? [{
         model: db.Part,
         as: 'part',
@@ -125,7 +125,7 @@ exports.updateCable = async (req, res, next) => {
 // Get cable by partID
 exports.getCableByPartId = async (req, res, next) => {
   try {
-    const cable = await db.HarnessCable.findOne({
+    const cable = await db.Cable.findOne({
       where: { partID: req.params.partId, activeFlag: true },
       include: db.Part ? [{
         model: db.Part,
@@ -147,7 +147,7 @@ exports.getCableByPartId = async (req, res, next) => {
 // Soft delete cable
 exports.deleteCable = async (req, res, next) => {
   try {
-    const cable = await db.HarnessCable.findOne({
+    const cable = await db.Cable.findOne({
       where: {
         id: req.params.id,
         activeFlag: true
@@ -158,7 +158,7 @@ exports.deleteCable = async (req, res, next) => {
       return next(createError(404, 'Cable not found'));
     }
 
-    await db.HarnessCable.update(
+    await db.Cable.update(
       { activeFlag: false },
       { where: { id: req.params.id } }
     );

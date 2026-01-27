@@ -56,6 +56,38 @@ export interface HarnessCable {
   showCableDiagram?: boolean;     // Toggle for cable diagram visibility
 }
 
+export interface HarnessComponentPin {
+  id: string;
+  number: string;
+  label?: string;
+}
+
+export interface HarnessComponentPinGroup {
+  id: string;
+  name: string;
+  pinTypeID: number | null;
+  pinTypeName?: string;
+  pins: HarnessComponentPin[];
+}
+
+export interface HarnessComponent {
+  id: string;
+  label: string;
+  pinCount: number;
+  pinGroups: HarnessComponentPinGroup[];
+  position: { x: number; y: number };
+  rotation?: 0 | 90 | 180 | 270;  // Rotation in degrees
+  flipped?: boolean;              // Vertical flip
+  zIndex?: number;                // Layer order (higher = in front)
+  dbId?: number;                  // Database record ID
+  partId?: number;                // Link to inventory Part
+  partName?: string;              // Part name for display
+  pinoutDiagramImage?: string;    // Base64 encoded pinout diagram
+  componentImage?: string;        // Base64 encoded component image
+  showPinoutDiagram?: boolean;    // Toggle for pinout diagram visibility
+  showComponentImage?: boolean;   // Toggle for component image visibility
+}
+
 export interface HarnessWaypoint {
   x: number;
   y: number;
@@ -63,18 +95,22 @@ export interface HarnessWaypoint {
 
 export interface HarnessConnection {
   id: string;
-  // From endpoint - can be connector pin or cable wire
+  // From endpoint - can be connector pin, cable wire, or component pin
   fromConnector?: string;
   fromPin?: string;
   fromCable?: string;
   fromWire?: string;
   fromSide?: 'left' | 'right';  // Which side of cable
-  // To endpoint - can be connector pin or cable wire
+  fromComponent?: string;       // Component ID
+  fromComponentPin?: string;    // Pin ID within the component
+  // To endpoint - can be connector pin, cable wire, or component pin
   toConnector?: string;
   toPin?: string;
   toCable?: string;
   toWire?: string;
   toSide?: 'left' | 'right';  // Which side of cable
+  toComponent?: string;       // Component ID
+  toComponentPin?: string;    // Pin ID within the component
   // Legacy fields for backward compatibility
   cable?: string;
   wire?: string;
@@ -101,6 +137,7 @@ export interface HarnessData {
   description?: string;
   connectors: HarnessConnector[];
   cables: HarnessCable[];
+  components: HarnessComponent[];
   connections: HarnessConnection[];
   canvasSettings?: HarnessCanvasSettings;
 }
@@ -150,8 +187,15 @@ export interface HarnessValidationResult {
   errors: string[];
 }
 
+// Electrical Pin Type (for connector pin styles)
+export interface ElectricalPinType {
+  id: number;
+  name: string;
+  description?: string;
+}
+
 // Database entity types (from backend API)
-export interface DbHarnessConnector {
+export interface DbElectricalConnector {
   id: number;
   label: string;
   type: 'male' | 'female' | 'terminal' | 'splice';
@@ -161,13 +205,15 @@ export interface DbHarnessConnector {
   pinoutDiagramImage: string | null;
   connectorImage: string | null;
   partID: number | null;
+  electricalPinTypeID: number | null;
   activeFlag: boolean;
   createdAt: string;
   updatedAt: string;
   part?: { id: number; name: string };
+  pinType?: { id: number; name: string };
 }
 
-export interface DbHarnessWire {
+export interface DbWire {
   id: number;
   label: string;
   color: string;
@@ -180,7 +226,7 @@ export interface DbHarnessWire {
   part?: { id: number; name: string };
 }
 
-export interface DbHarnessCable {
+export interface DbCable {
   id: number;
   label: string;
   wireCount: number;
@@ -194,6 +240,39 @@ export interface DbHarnessCable {
   part?: { id: number; name: string };
 }
 
+export interface ComponentPin {
+  id: string;
+  number: string;
+  label: string;
+}
+
+export interface ComponentPinGroup {
+  id: string;
+  name: string;
+  pinTypeID: number | null;
+  pinTypeName?: string;  // For display purposes
+  pins: ComponentPin[];
+}
+
+export interface DbElectricalComponent {
+  id: number;
+  label: string;
+  pinCount: number;
+  pins: ComponentPinGroup[];  // Array of pin groups
+  pinoutDiagramImage: string | null;
+  componentImage: string | null;
+  partID: number | null;
+  activeFlag: boolean;
+  createdAt: string;
+  updatedAt: string;
+  part?: { id: number; name: string };
+}
+
+// Type aliases for backward compatibility
+export type DbHarnessConnector = DbElectricalConnector;
+export type DbHarnessWire = DbWire;
+export type DbHarnessCable = DbCable;
+
 // Default empty harness data factory
 export function createEmptyHarnessData(name: string = 'New Harness'): HarnessData {
   return {
@@ -203,6 +282,7 @@ export function createEmptyHarnessData(name: string = 'New Harness'): HarnessDat
     description: '',
     connectors: [],
     cables: [],
+    components: [],
     connections: [],
     canvasSettings: {
       zoom: 1,

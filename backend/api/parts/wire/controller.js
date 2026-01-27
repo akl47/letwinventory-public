@@ -7,7 +7,7 @@ exports.getAllWires = async (req, res, next) => {
     const { includeInactive = false } = req.query;
     const whereClause = includeInactive === 'true' ? {} : { activeFlag: true };
 
-    const wires = await db.HarnessWire.findAll({
+    const wires = await db.Wire.findAll({
       where: whereClause,
       order: [['label', 'ASC']],
       include: db.Part ? [{
@@ -26,7 +26,7 @@ exports.getAllWires = async (req, res, next) => {
 // Get single wire
 exports.getWireById = async (req, res, next) => {
   try {
-    const wire = await db.HarnessWire.findOne({
+    const wire = await db.Wire.findOne({
       where: { id: req.params.id },
       include: db.Part ? [{
         model: db.Part,
@@ -57,7 +57,7 @@ exports.createWire = async (req, res, next) => {
       return next(createError(400, 'Color is required'));
     }
 
-    const wire = await db.HarnessWire.create({
+    const wire = await db.Wire.create({
       label,
       color,
       colorCode: colorCode || null,
@@ -76,7 +76,7 @@ exports.updateWire = async (req, res, next) => {
   try {
     const { label, color, colorCode, gaugeAWG, partID } = req.body;
 
-    const wire = await db.HarnessWire.findOne({
+    const wire = await db.Wire.findOne({
       where: { id: req.params.id }
     });
 
@@ -91,11 +91,11 @@ exports.updateWire = async (req, res, next) => {
     if (gaugeAWG !== undefined) updateData.gaugeAWG = gaugeAWG;
     if (partID !== undefined) updateData.partID = partID;
 
-    await db.HarnessWire.update(updateData, {
+    await db.Wire.update(updateData, {
       where: { id: req.params.id }
     });
 
-    const updatedWire = await db.HarnessWire.findByPk(req.params.id, {
+    const updatedWire = await db.Wire.findByPk(req.params.id, {
       include: db.Part ? [{
         model: db.Part,
         as: 'part',
@@ -112,7 +112,7 @@ exports.updateWire = async (req, res, next) => {
 // Get wire by partID
 exports.getWireByPartId = async (req, res, next) => {
   try {
-    const wire = await db.HarnessWire.findOne({
+    const wire = await db.Wire.findOne({
       where: { partID: req.params.partId, activeFlag: true },
       include: db.Part ? [{
         model: db.Part,
@@ -134,7 +134,7 @@ exports.getWireByPartId = async (req, res, next) => {
 // Soft delete wire
 exports.deleteWire = async (req, res, next) => {
   try {
-    const wire = await db.HarnessWire.findOne({
+    const wire = await db.Wire.findOne({
       where: {
         id: req.params.id,
         activeFlag: true
@@ -145,7 +145,7 @@ exports.deleteWire = async (req, res, next) => {
       return next(createError(404, 'Wire not found'));
     }
 
-    await db.HarnessWire.update(
+    await db.Wire.update(
       { activeFlag: false },
       { where: { id: req.params.id } }
     );

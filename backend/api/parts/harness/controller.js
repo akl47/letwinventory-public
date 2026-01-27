@@ -192,7 +192,7 @@ exports.updateHarness = async (req, res, next) => {
 
     // Return with computed partNumber
     const result = updatedHarness.toJSON();
-    result.partNumber = result.Part ? `LET-${String(result.Part.id).padStart(4, '0')}` : null;
+    result.partNumber = result.Part ? result.Part.name : null;
 
     res.json(result);
   } catch (error) {

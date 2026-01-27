@@ -11,22 +11,22 @@
     <div class="meta-info">
         @if (task().dueDate) {
         <span class="due-date-tag" [class.overdue]="isOverdue()">
-            <i class="material-icons icon-xs">schedule</i>
+            <mat-icon class="icon-xs">schedule</mat-icon>
             {{ task().dueDate | date:'MMM d' }}
         </span>
         }
         @if (task().timeEstimate) {
         <span class="time-estimate-badge">
-            <i class="material-icons icon-xs">timer</i>
+            <mat-icon class="icon-xs">timer</mat-icon>
             {{ formatEstimate(task().timeEstimate) }}
         </span>
         }
         <span class="spacer"></span>
         @if (task().subtasks?.length) {
-        <i class="material-icons hierarchy-icon" matTooltip="Parent Task">account_tree</i>
+        <mat-icon class="hierarchy-icon" matTooltip="Parent Task">account_tree</mat-icon>
         }
         @if (task().parentTaskID) {
-        <i class="material-icons hierarchy-icon" matTooltip="Subtask">subdirectory_arrow_right</i>
+        <mat-icon class="hierarchy-icon" matTooltip="Subtask">subdirectory_arrow_right</mat-icon>
         }
     </div>
     }

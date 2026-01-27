@@ -14,6 +14,7 @@ import {
   HarnessConnection,
   HarnessData,
   HarnessCable,
+  HarnessComponent,
   HarnessPin,
   HarnessWire
 } from '../../../models/harness.model';
@@ -50,6 +51,7 @@ export class HarnessPropertyPanel {
   pinLabelChanged = output<{ index: number; label: string }>();
   deleteConnector = output<void>();
   deleteCable = output<void>();
+  deleteComponent = output<void>();
   deleteConnection = output<void>();
   deleteHarness = output<void>();
 
@@ -123,6 +125,26 @@ export class HarnessPropertyPanel {
     return cable?.label || cableId;
   }
 
+  getComponentLabel(componentId: string | undefined): string {
+    if (!componentId) return 'Unknown';
+    const component = this.harnessData()?.components?.find(c => c.id === componentId);
+    return component?.label || componentId;
+  }
+
+  getComponentPinNumber(componentId: string | undefined, pinId: string | undefined): string {
+    if (!componentId || !pinId) return '?';
+    const component = this.harnessData()?.components?.find(c => c.id === componentId);
+    if (component) {
+      for (const group of component.pinGroups) {
+        const pin = group.pins.find(p => p.id === pinId);
+        if (pin) {
+          return pin.number || pinId;
+        }
+      }
+    }
+    return pinId;
+  }
+
   getWireLabel(cableId: string | undefined, wireId: string | undefined): string {
     if (!cableId || !wireId) return '?';
     const cable = this.harnessData()?.cables?.find(c => c.id === cableId);
@@ -148,6 +170,10 @@ export class HarnessPropertyPanel {
         const wireLabel = this.getWireLabel(connection.fromCable, connection.fromWire);
         const side = connection.fromSide === 'left' ? 'L' : 'R';
         return `${cableLabel} [${side}] ${wireLabel}`;
+      } else if (connection.fromComponent) {
+        const compLabel = this.getComponentLabel(connection.fromComponent);
+        const pinNum = this.getComponentPinNumber(connection.fromComponent, connection.fromComponentPin);
+        return `${compLabel} Pin ${pinNum}`;
       }
     } else {
       if (connection.toConnector) {
@@ -159,6 +185,10 @@ export class HarnessPropertyPanel {
         const wireLabel = this.getWireLabel(connection.toCable, connection.toWire);
         const side = connection.toSide === 'left' ? 'L' : 'R';
         return `${cableLabel} [${side}] ${wireLabel}`;
+      } else if (connection.toComponent) {
+        const compLabel = this.getComponentLabel(connection.toComponent);
+        const pinNum = this.getComponentPinNumber(connection.toComponent, connection.toComponentPin);
+        return `${compLabel} Pin ${pinNum}`;
       }
     }
     return 'Unknown';

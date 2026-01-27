@@ -1,0 +1,97 @@
+<h2 mat-dialog-title>{{ isEdit() ? 'Edit Component' : 'Add Component' }}</h2>
+
+<mat-dialog-content>
+  <br />
+  <!-- Part Search (only show when not editing) -->
+  @if (!isEdit()) {
+  <div class="part-search-section">
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Search Electrical Component Parts</mat-label>
+      <input matInput [formControl]="partSearchControl" [matAutocomplete]="auto"
+        placeholder="Type to search electrical component parts...">
+      <mat-icon matSuffix>search</mat-icon>
+      <mat-autocomplete #auto="matAutocomplete" [displayWith]="displayPart"
+        (optionSelected)="onPartSelected($event.option.value)">
+        @if (isLoading()) {
+        <mat-option disabled>
+          <mat-spinner diameter="20"></mat-spinner>
+          Loading...
+        </mat-option>
+        } @else if (filteredParts().length === 0 && partSearchControl.value) {
+        <mat-option disabled>No electrical component parts found</mat-option>
+        } @else {
+        @for (part of filteredParts(); track part.id) {
+        <mat-option [value]="part">
+          <span class="part-option">
+            <strong>{{ part.name }}</strong>
+            <span class="part-desc">{{ part.description || 'No description' }}</span>
+          </span>
+        </mat-option>
+        }
+        }
+      </mat-autocomplete>
+    </mat-form-field>
+  </div>
+  }
+
+  @if (selectedPart() || isEdit()) {
+  <div class="component-form">
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Label</mat-label>
+      <input matInput [(ngModel)]="label" placeholder="e.g., U1, IC1, REL1" required>
+    </mat-form-field>
+
+    <!-- Read-only component info from part -->
+    <div class="component-info">
+      <div class="info-row">
+        <span class="info-label">Total Pins:</span>
+        <span class="info-value">{{ getTotalPinCount() }}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Pin Groups:</span>
+        <span class="info-value">{{ pinGroups().length }}</span>
+      </div>
+    </div>
+
+    <!-- Pin groups section -->
+    <div class="pin-groups-section">
+      <h3>Pin Groups</h3>
+      <div class="pin-groups-list">
+        @for (group of pinGroups(); track group.id) {
+        <div class="pin-group">
+          <div class="pin-group-header">
+            <span class="group-name">{{ group.name }}</span>
+            @if (group.pinTypeName) {
+            <span class="group-type">{{ group.pinTypeName }}</span>
+            }
+            <span class="group-count">{{ group.pins.length }} pins</span>
+          </div>
+          <div class="pin-list">
+            @for (pin of group.pins; track pin.id; let i = $index) {
+            <div class="pin-row">
+              <span class="pin-number">{{ pin.number }}</span>
+              <input class="pin-label-input" [(ngModel)]="pin.label" placeholder="Label">
+            </div>
+            }
+          </div>
+        </div>
+        } @empty {
+        <div class="no-pins">No pin groups configured</div>
+        }
+      </div>
+    </div>
+  </div>
+  } @else {
+  <div class="empty-state">
+    <mat-icon>memory</mat-icon>
+    <p>Search for an electrical component part above to add it to the diagram</p>
+  </div>
+  }
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button mat-dialog-close>Cancel</button>
+  <button mat-raised-button color="primary" (click)="save()" [disabled]="!isValid()">
+    {{ isEdit() ? 'Update' : 'Add' }}
+  </button>
+</mat-dialog-actions>

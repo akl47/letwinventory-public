@@ -11,7 +11,7 @@ import { InventoryService } from '../../../services/inventory.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { HarnessService } from '../../../services/harness.service';
 import { Part, PartCategory, UnitOfMeasure } from '../../../models';
-import { DbHarnessConnector, DbHarnessWire, DbHarnessCable, createEmptyHarnessData } from '../../../models/harness.model';
+import { DbHarnessConnector, DbHarnessWire, DbHarnessCable, DbElectricalComponent, ElectricalPinType, ComponentPinGroup, ComponentPin, createEmptyHarnessData } from '../../../models/harness.model';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { MatIconModule } from '@angular/material/icon';
 import { WIRE_COLORS, WireColor } from '../../../utils/harness/wire-color-map';
@@ -46,15 +46,24 @@ export class PartEditDialog implements OnInit {
 
   categories = signal<PartCategory[]>([]);
   unitsOfMeasure = signal<UnitOfMeasure[]>([]);
+  pinTypes = signal<ElectricalPinType[]>([]);
 
   // Harness-specific data
   existingConnector = signal<DbHarnessConnector | null>(null);
   existingWire = signal<DbHarnessWire | null>(null);
   existingCable = signal<DbHarnessCable | null>(null);
+  existingComponent = signal<DbElectricalComponent | null>(null);
 
   // Connector images
   connectorImage = signal<string | null>(null);
   pinoutDiagramImage = signal<string | null>(null);
+
+  // Component images
+  componentImage = signal<string | null>(null);
+  componentPinoutImage = signal<string | null>(null);
+
+  // Component pin groups
+  componentPinGroups = signal<ComponentPinGroup[]>([]);
 
   // Cable diagram image
   cableDiagramImage = signal<string | null>(null);
@@ -89,6 +98,7 @@ export class PartEditDialog implements OnInit {
     connectorType: ['male' as 'male' | 'female' | 'terminal' | 'splice'],
     connectorPinCount: [1, [Validators.min(1)]],
     connectorColor: [''],
+    connectorPinTypeID: [null as number | null],
     // Wire fields
     wireColor: ['Black'],
     wireColorCode: ['BK'],
@@ -146,7 +156,8 @@ export class PartEditDialog implements OnInit {
             this.form.patchValue({
               connectorType: connector.type,
               connectorPinCount: connector.pinCount,
-              connectorColor: connector.color || ''
+              connectorColor: connector.color || '',
+              connectorPinTypeID: connector.electricalPinTypeID || null
             });
             // Load existing images
             this.connectorImage.set(connector.connectorImage || null);
@@ -192,6 +203,21 @@ export class PartEditDialog implements OnInit {
           }
         }
       });
+    } else if (categoryName === 'Electrical Component') {
+      this.harnessPartsService.getComponentByPartId(partId).subscribe({
+        next: (component) => {
+          this.existingComponent.set(component);
+          if (component) {
+            // Load existing pin groups
+            if (component.pins && component.pins.length > 0) {
+              this.componentPinGroups.set(component.pins);
+            }
+            // Load existing images
+            this.componentImage.set(component.componentImage || null);
+            this.componentPinoutImage.set(component.pinoutDiagramImage || null);
+          }
+        }
+      });
     }
   }
 
@@ -217,6 +243,16 @@ export class PartEditDialog implements OnInit {
       },
       error: (err) => {
         console.error('Failed to load units of measure:', err);
+      }
+    });
+
+    // Load pin types for connectors
+    this.harnessPartsService.getPinTypes().subscribe({
+      next: (pinTypes) => {
+        this.pinTypes.set(pinTypes);
+      },
+      error: (err) => {
+        console.error('Failed to load pin types:', err);
       }
     });
 
@@ -364,6 +400,11 @@ export class PartEditDialog implements OnInit {
     return this.getCategoryName(categoryId) === 'Harness';
   }
 
+  isComponent(): boolean {
+    const categoryId = this.form.get('partCategoryID')?.value as number | null | undefined;
+    return this.getCategoryName(categoryId) === 'Electrical Component';
+  }
+
   private updateCategoryValidators(categoryId: number | null | undefined) {
     const categoryName = this.getCategoryName(categoryId);
     const connectorTypeControl = this.form.get('connectorType');
@@ -386,6 +427,7 @@ export class PartEditDialog implements OnInit {
     } else if (categoryName === 'Cable') {
       cableWireCountControl?.setValidators([Validators.required, Validators.min(1)]);
     }
+    // Electrical Component uses pin groups, no simple pin count validator needed
 
     connectorTypeControl?.updateValueAndValidity();
     connectorPinCountControl?.updateValueAndValidity();
@@ -480,6 +522,128 @@ export class PartEditDialog implements OnInit {
 
   removeCableDiagram() {
     this.cableDiagramImage.set(null);
+  }
+
+  onComponentImageSelected(event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      this.convertToBase64(input.files[0], (base64) => {
+        this.componentImage.set(base64);
+      });
+    }
+  }
+
+  removeComponentImage() {
+    this.componentImage.set(null);
+  }
+
+  onComponentPinoutSelected(event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      this.convertToBase64(input.files[0], (base64) => {
+        this.componentPinoutImage.set(base64);
+      });
+    }
+  }
+
+  removeComponentPinout() {
+    this.componentPinoutImage.set(null);
+  }
+
+  // Component pin group management
+  addPinGroup() {
+    const groups = [...this.componentPinGroups()];
+    const newGroup: ComponentPinGroup = {
+      id: `group-${Date.now()}`,
+      name: `Group ${groups.length + 1}`,
+      pinTypeID: null,
+      pins: [{
+        id: `pin-${Date.now()}-1`,
+        number: '1',
+        label: ''
+      }]
+    };
+    groups.push(newGroup);
+    this.componentPinGroups.set(groups);
+  }
+
+  removePinGroup(groupIndex: number) {
+    const groups = [...this.componentPinGroups()];
+    groups.splice(groupIndex, 1);
+    this.componentPinGroups.set(groups);
+  }
+
+  updatePinGroupName(groupIndex: number, name: string) {
+    const groups = [...this.componentPinGroups()];
+    if (groups[groupIndex]) {
+      groups[groupIndex] = { ...groups[groupIndex], name };
+      this.componentPinGroups.set(groups);
+    }
+  }
+
+  updatePinGroupType(groupIndex: number, pinTypeID: number | null) {
+    const groups = [...this.componentPinGroups()];
+    if (groups[groupIndex]) {
+      const pinType = this.pinTypes().find(pt => pt.id === pinTypeID);
+      groups[groupIndex] = {
+        ...groups[groupIndex],
+        pinTypeID,
+        pinTypeName: pinType?.name
+      };
+      this.componentPinGroups.set(groups);
+    }
+  }
+
+  addPinToGroup(groupIndex: number) {
+    const groups = [...this.componentPinGroups()];
+    if (groups[groupIndex]) {
+      const group = { ...groups[groupIndex] };
+      const nextPinNumber = group.pins.length + 1;
+      group.pins = [...group.pins, {
+        id: `pin-${Date.now()}-${nextPinNumber}`,
+        number: String(nextPinNumber),
+        label: ''
+      }];
+      groups[groupIndex] = group;
+      this.componentPinGroups.set(groups);
+    }
+  }
+
+  removePinFromGroup(groupIndex: number, pinIndex: number) {
+    const groups = [...this.componentPinGroups()];
+    if (groups[groupIndex] && groups[groupIndex].pins.length > 1) {
+      const group = { ...groups[groupIndex] };
+      group.pins = [...group.pins];
+      group.pins.splice(pinIndex, 1);
+      groups[groupIndex] = group;
+      this.componentPinGroups.set(groups);
+    }
+  }
+
+  updatePinNumber(groupIndex: number, pinIndex: number, number: string) {
+    const groups = [...this.componentPinGroups()];
+    if (groups[groupIndex] && groups[groupIndex].pins[pinIndex]) {
+      const group = { ...groups[groupIndex] };
+      group.pins = [...group.pins];
+      group.pins[pinIndex] = { ...group.pins[pinIndex], number };
+      groups[groupIndex] = group;
+      this.componentPinGroups.set(groups);
+    }
+  }
+
+  updatePinLabel(groupIndex: number, pinIndex: number, label: string) {
+    const groups = [...this.componentPinGroups()];
+    if (groups[groupIndex] && groups[groupIndex].pins[pinIndex]) {
+      const group = { ...groups[groupIndex] };
+      group.pins = [...group.pins];
+      group.pins[pinIndex] = { ...group.pins[pinIndex], label };
+      groups[groupIndex] = group;
+      this.componentPinGroups.set(groups);
+    }
+  }
+
+  getTotalPinCount(): number {
+    return this.componentPinGroups().reduce((total, group) => total + group.pins.length, 0);
   }
 
   // Update cable wire colors when wire count changes
@@ -648,6 +812,7 @@ export class PartEditDialog implements OnInit {
         partID: number;
         connectorImage?: string | null;
         pinoutDiagramImage?: string | null;
+        electricalPinTypeID?: number | null;
       } = {
         label: partName,
         type: this.form.get('connectorType')?.value as 'male' | 'female' | 'terminal' | 'splice',
@@ -656,7 +821,8 @@ export class PartEditDialog implements OnInit {
         partID: partId,
         // Explicitly pass null to clear images, or the image data to set them
         connectorImage: this.connectorImage(),
-        pinoutDiagramImage: this.pinoutDiagramImage()
+        pinoutDiagramImage: this.pinoutDiagramImage(),
+        electricalPinTypeID: this.form.get('connectorPinTypeID')?.value || null
       };
 
       const existingConnector = this.existingConnector();
@@ -705,6 +871,33 @@ export class PartEditDialog implements OnInit {
         this.harnessPartsService.updateCable(existingCable.id, cableData).subscribe();
       } else {
         this.harnessPartsService.createCable(cableData).subscribe();
+      }
+    } else if (categoryName === 'Electrical Component') {
+      const pinGroups = this.componentPinGroups();
+      const componentData = {
+        label: partName,
+        pinCount: this.getTotalPinCount(),
+        pins: pinGroups,
+        partID: partId,
+        componentImage: this.componentImage(),
+        pinoutDiagramImage: this.componentPinoutImage()
+      };
+
+      const existingComponent = this.existingComponent();
+      if (existingComponent) {
+        this.harnessPartsService.updateComponent(existingComponent.id, componentData).subscribe({
+          error: (err) => {
+            console.error('Failed to update component:', err);
+            this.errorNotification.showHttpError(err, 'Failed to save component data');
+          }
+        });
+      } else {
+        this.harnessPartsService.createComponent(componentData).subscribe({
+          error: (err) => {
+            console.error('Failed to create component:', err);
+            this.errorNotification.showHttpError(err, 'Failed to save component data');
+          }
+        });
       }
     } else if (categoryName === 'Harness') {
       // Create a WireHarness record linked to this part (only for new parts)

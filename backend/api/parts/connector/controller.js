@@ -7,14 +7,21 @@ exports.getAllConnectors = async (req, res, next) => {
     const { includeInactive = false } = req.query;
     const whereClause = includeInactive === 'true' ? {} : { activeFlag: true };
 
-    const connectors = await db.HarnessConnector.findAll({
+    const connectors = await db.ElectricalConnector.findAll({
       where: whereClause,
       order: [['label', 'ASC']],
-      include: db.Part ? [{
-        model: db.Part,
-        as: 'part',
-        attributes: ['id', 'name']
-      }] : []
+      include: [
+        ...(db.Part ? [{
+          model: db.Part,
+          as: 'part',
+          attributes: ['id', 'name']
+        }] : []),
+        ...(db.ElectricalPinType ? [{
+          model: db.ElectricalPinType,
+          as: 'pinType',
+          attributes: ['id', 'name']
+        }] : [])
+      ]
     });
 
     res.json(connectors);
@@ -26,13 +33,20 @@ exports.getAllConnectors = async (req, res, next) => {
 // Get single connector
 exports.getConnectorById = async (req, res, next) => {
   try {
-    const connector = await db.HarnessConnector.findOne({
+    const connector = await db.ElectricalConnector.findOne({
       where: { id: req.params.id },
-      include: db.Part ? [{
-        model: db.Part,
-        as: 'part',
-        attributes: ['id', 'name']
-      }] : []
+      include: [
+        ...(db.Part ? [{
+          model: db.Part,
+          as: 'part',
+          attributes: ['id', 'name']
+        }] : []),
+        ...(db.ElectricalPinType ? [{
+          model: db.ElectricalPinType,
+          as: 'pinType',
+          attributes: ['id', 'name']
+        }] : [])
+      ]
     });
 
     if (!connector) {
@@ -48,7 +62,7 @@ exports.getConnectorById = async (req, res, next) => {
 // Create connector
 exports.createConnector = async (req, res, next) => {
   try {
-    const { label, type, pinCount, color, pins, partID, pinoutDiagramImage, connectorImage } = req.body;
+    const { label, type, pinCount, color, pins, partID, pinoutDiagramImage, connectorImage, electricalPinTypeID } = req.body;
 
     if (!label) {
       return next(createError(400, 'Label is required'));
@@ -71,7 +85,7 @@ exports.createConnector = async (req, res, next) => {
       }
     }
 
-    const connector = await db.HarnessConnector.create({
+    const connector = await db.ElectricalConnector.create({
       label,
       type,
       pinCount: pinCount || connectorPins.length,
@@ -79,7 +93,8 @@ exports.createConnector = async (req, res, next) => {
       pins: connectorPins,
       partID: partID || null,
       pinoutDiagramImage: pinoutDiagramImage || null,
-      connectorImage: connectorImage || null
+      connectorImage: connectorImage || null,
+      electricalPinTypeID: electricalPinTypeID || null
     });
 
     res.status(201).json(connector);
@@ -91,9 +106,9 @@ exports.createConnector = async (req, res, next) => {
 // Update connector
 exports.updateConnector = async (req, res, next) => {
   try {
-    const { label, type, pinCount, color, pins, partID, pinoutDiagramImage, connectorImage } = req.body;
+    const { label, type, pinCount, color, pins, partID, pinoutDiagramImage, connectorImage, electricalPinTypeID } = req.body;
 
-    const connector = await db.HarnessConnector.findOne({
+    const connector = await db.ElectricalConnector.findOne({
       where: { id: req.params.id }
     });
 
@@ -110,17 +125,25 @@ exports.updateConnector = async (req, res, next) => {
     if (partID !== undefined) updateData.partID = partID;
     if (pinoutDiagramImage !== undefined) updateData.pinoutDiagramImage = pinoutDiagramImage;
     if (connectorImage !== undefined) updateData.connectorImage = connectorImage;
+    if (electricalPinTypeID !== undefined) updateData.electricalPinTypeID = electricalPinTypeID;
 
-    await db.HarnessConnector.update(updateData, {
+    await db.ElectricalConnector.update(updateData, {
       where: { id: req.params.id }
     });
 
-    const updatedConnector = await db.HarnessConnector.findByPk(req.params.id, {
-      include: db.Part ? [{
-        model: db.Part,
-        as: 'part',
-        attributes: ['id', 'name']
-      }] : []
+    const updatedConnector = await db.ElectricalConnector.findByPk(req.params.id, {
+      include: [
+        ...(db.Part ? [{
+          model: db.Part,
+          as: 'part',
+          attributes: ['id', 'name']
+        }] : []),
+        ...(db.ElectricalPinType ? [{
+          model: db.ElectricalPinType,
+          as: 'pinType',
+          attributes: ['id', 'name']
+        }] : [])
+      ]
     });
 
     res.json(updatedConnector);
@@ -132,13 +155,20 @@ exports.updateConnector = async (req, res, next) => {
 // Get connector by partID
 exports.getConnectorByPartId = async (req, res, next) => {
   try {
-    const connector = await db.HarnessConnector.findOne({
+    const connector = await db.ElectricalConnector.findOne({
       where: { partID: req.params.partId, activeFlag: true },
-      include: db.Part ? [{
-        model: db.Part,
-        as: 'part',
-        attributes: ['id', 'name']
-      }] : []
+      include: [
+        ...(db.Part ? [{
+          model: db.Part,
+          as: 'part',
+          attributes: ['id', 'name']
+        }] : []),
+        ...(db.ElectricalPinType ? [{
+          model: db.ElectricalPinType,
+          as: 'pinType',
+          attributes: ['id', 'name']
+        }] : [])
+      ]
     });
 
     if (!connector) {
@@ -151,10 +181,25 @@ exports.getConnectorByPartId = async (req, res, next) => {
   }
 };
 
+// Get all electrical pin types
+exports.getAllPinTypes = async (req, res, next) => {
+  try {
+    const pinTypes = await db.ElectricalPinType.findAll({
+      where: { activeFlag: true },
+      order: [['name', 'ASC']],
+      attributes: ['id', 'name', 'description']
+    });
+
+    res.json(pinTypes);
+  } catch (error) {
+    next(createError(500, 'Error Getting Pin Types: ' + error.message));
+  }
+};
+
 // Soft delete connector
 exports.deleteConnector = async (req, res, next) => {
   try {
-    const connector = await db.HarnessConnector.findOne({
+    const connector = await db.ElectricalConnector.findOne({
       where: {
         id: req.params.id,
         activeFlag: true
@@ -165,7 +210,7 @@ exports.deleteConnector = async (req, res, next) => {
       return next(createError(404, 'Connector not found'));
     }
 
-    await db.HarnessConnector.update(
+    await db.ElectricalConnector.update(
       { activeFlag: false },
       { where: { id: req.params.id } }
     );

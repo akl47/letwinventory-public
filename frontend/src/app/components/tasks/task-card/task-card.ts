@@ -7,11 +7,12 @@ import { TaskCardDialog } from '../task-card-dialog/task-card-dialog';
 import { ProjectService } from '../../../services/project.service';
 import { Project } from '../../../models/project.model';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatIconModule } from '@angular/material/icon';
 
 @Component({
   selector: 'app-task-card',
   standalone: true,
-  imports: [CommonModule, MatTooltipModule],
+  imports: [CommonModule, MatTooltipModule, MatIconModule],
   templateUrl: './task-card.html',
   styleUrl: './task-card.scss',
 })

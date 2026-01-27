@@ -374,7 +374,7 @@ export class PartsTableView implements OnInit {
   }
 
   getCategoryBgColor(hexColor: string | null | undefined): string {
-    if (!hexColor) return 'rgba(128, 128, 128, 0.2)';
+    if (!hexColor) return 'rgba(255, 255, 255, 0.2)';
     // Create a lighter background from the tag color
     return this.hexToRgba(hexColor, 0.2);
   }

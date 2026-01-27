@@ -6,11 +6,12 @@ import { FormsModule } from '@angular/forms';
 import { TaskService } from '../../../services/task.service';
 import { Task } from '../../../models/task.model';
 import { CdkDragDrop, DragDropModule, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop';
+import { MatIconModule } from '@angular/material/icon';
 
 @Component({
   selector: 'app-task-list',
   standalone: true,
-  imports: [CommonModule, TaskCard, FormsModule, DragDropModule],
+  imports: [CommonModule, TaskCard, FormsModule, DragDropModule, MatIconModule],
   templateUrl: './task-list.html',
   styleUrl: './task-list.css',
 })

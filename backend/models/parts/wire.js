@@ -2,11 +2,11 @@
 const { Model } = require('sequelize');
 
 module.exports = (sequelize, DataTypes) => {
-  class HarnessWire extends Model {
+  class Wire extends Model {
     static associate(models) {
       // Associate with Part if it exists
       if (models.Part) {
-        HarnessWire.belongsTo(models.Part, {
+        Wire.belongsTo(models.Part, {
           foreignKey: 'partID',
           as: 'part'
         });
@@ -14,7 +14,7 @@ module.exports = (sequelize, DataTypes) => {
     }
   }
 
-  HarnessWire.init({
+  Wire.init({
     id: {
       allowNull: false,
       autoIncrement: true,
@@ -65,10 +65,10 @@ module.exports = (sequelize, DataTypes) => {
     }
   }, {
     sequelize,
-    modelName: 'HarnessWire',
-    tableName: 'HarnessWires',
+    modelName: 'Wire',
+    tableName: 'Wires',
     freezeTableName: true
   });
 
-  return HarnessWire;
+  return Wire;
 };

@@ -1,4 +1,5 @@
 'use strict';
+
 module.exports = {
   up: async (queryInterface, DataTypes) => {
     await queryInterface.createTable('WireHarnesses', {
@@ -18,7 +19,9 @@ module.exports = {
         references: {
           model: 'Parts',
           key: 'id'
-        }
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
       },
       revision: {
         type: DataTypes.STRING(10),
@@ -56,7 +59,11 @@ module.exports = {
         type: DataTypes.DATE
       }
     });
+
+    await queryInterface.addIndex('WireHarnesses', ['partID']);
+    await queryInterface.addIndex('WireHarnesses', ['activeFlag']);
   },
+
   down: async (queryInterface, Sequelize) => {
     await queryInterface.dropTable('WireHarnesses');
   }

@@ -2,11 +2,11 @@
 const { Model } = require('sequelize');
 
 module.exports = (sequelize, DataTypes) => {
-  class HarnessCable extends Model {
+  class ElectricalComponent extends Model {
     static associate(models) {
       // Associate with Part if it exists
       if (models.Part) {
-        HarnessCable.belongsTo(models.Part, {
+        ElectricalComponent.belongsTo(models.Part, {
           foreignKey: 'partID',
           as: 'part'
         });
@@ -14,7 +14,7 @@ module.exports = (sequelize, DataTypes) => {
     }
   }
 
-  HarnessCable.init({
+  ElectricalComponent.init({
     id: {
       allowNull: false,
       autoIncrement: true,
@@ -24,23 +24,28 @@ module.exports = (sequelize, DataTypes) => {
     label: {
       type: DataTypes.STRING(50),
       allowNull: false,
-      comment: 'Cable label (e.g., CABLE-A)'
+      comment: 'Component label/reference designator (e.g., U1, R2, C3)'
     },
-    wireCount: {
+    pinCount: {
       type: DataTypes.INTEGER,
       allowNull: false,
       defaultValue: 1
     },
-    gaugeAWG: {
-      type: DataTypes.STRING(10),
-      allowNull: true,
-      comment: 'Wire gauge for all wires in cable'
-    },
-    wires: {
+    pins: {
       type: DataTypes.JSONB,
       allowNull: false,
       defaultValue: [],
-      comment: 'Array of wire definitions [{id, color, colorCode}]'
+      comment: 'Array of pin groups [{id, name, pinTypeID, pins: [{id, number, label}]}]'
+    },
+    pinoutDiagramImage: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      comment: 'Base64 encoded pinout diagram image'
+    },
+    componentImage: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      comment: 'Base64 encoded component image'
     },
     partID: {
       type: DataTypes.INTEGER,
@@ -50,11 +55,6 @@ module.exports = (sequelize, DataTypes) => {
         key: 'id'
       },
       comment: 'Link to inventory Part'
-    },
-    cableDiagramImage: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-      comment: 'Base64 encoded cable diagram image'
     },
     activeFlag: {
       type: DataTypes.BOOLEAN,
@@ -71,10 +71,10 @@ module.exports = (sequelize, DataTypes) => {
     }
   }, {
     sequelize,
-    modelName: 'HarnessCable',
-    tableName: 'HarnessCables',
+    modelName: 'ElectricalComponent',
+    tableName: 'ElectricalComponents',
     freezeTableName: true
   });
 
-  return HarnessCable;
+  return ElectricalComponent;
 };

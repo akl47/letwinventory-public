@@ -48,6 +48,7 @@ export class HarnessToolbar {
   importJSON = output<void>();
   addConnector = output<void>();
   addCable = output<void>();
+  addComponent = output<void>();
   deleteSelected = output<void>();
   rotateConnector = output<void>();
   flipConnector = output<void>();

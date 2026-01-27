@@ -9,6 +9,7 @@ import { HarnessToolbar, HarnessTool } from '../harness-toolbar/harness-toolbar'
 import { HarnessPropertyPanel } from '../harness-property-panel/harness-property-panel';
 import { HarnessConnectorDialog } from '../harness-connector-dialog/harness-connector-dialog';
 import { HarnessAddCableDialog } from '../harness-add-cable-dialog/harness-add-cable-dialog';
+import { HarnessComponentDialog } from '../harness-component-dialog/harness-component-dialog';
 import { HarnessListDialog } from '../harness-list-dialog/harness-list-dialog';
 import { HarnessImportDialog } from '../harness-import-dialog/harness-import-dialog';
 import { PartEditDialog } from '../../inventory/part-edit-dialog/part-edit-dialog';
@@ -19,12 +20,14 @@ import {
   HarnessData,
   HarnessConnector,
   HarnessCable,
+  HarnessComponent,
   WireHarness,
   createEmptyHarnessData
 } from '../../../models/harness.model';
 import {
   getConnectorCentroidOffset,
   getCableCentroidOffset,
+  getComponentCentroidOffset,
   rotateAroundCentroid
 } from '../../../utils/harness/canvas-renderer';
 
@@ -234,6 +237,30 @@ export class HarnessPage implements OnInit, OnDestroy {
       );
       this.currentSelection.set({ type: 'cable', cable: updatedCable });
     }
+    // Handle component rotation
+    else if (selection?.component) {
+      const component = (data.components || []).find(c => c.id === selection.component!.id);
+      if (!component) return;
+
+      const currentRotation = component.rotation || 0;
+      let newRotation = (currentRotation + delta) % 360;
+      if (newRotation < 0) newRotation += 360;
+
+      // Calculate new position to rotate around centroid
+      const centroidOffset = getComponentCentroidOffset(component);
+      const currentPos = component.position || { x: 100, y: 100 };
+      const newPos = rotateAroundCentroid(currentPos, centroidOffset, currentRotation, newRotation);
+
+      const updatedComponent = {
+        ...component,
+        rotation: newRotation as 0 | 90 | 180 | 270,
+        position: newPos
+      };
+      this.updateHarnessComponents(
+        (data.components || []).map(c => c.id === updatedComponent.id ? updatedComponent : c)
+      );
+      this.currentSelection.set({ type: 'component', component: updatedComponent });
+    }
   }
 
   flipSelected() {
@@ -264,6 +291,18 @@ export class HarnessPage implements OnInit, OnDestroy {
         data.cables.map(c => c.id === updatedCable.id ? updatedCable : c)
       );
       this.currentSelection.set({ type: 'cable', cable: updatedCable });
+    }
+    // Handle component flip
+    else if (selection?.component) {
+      const component = (data.components || []).find(c => c.id === selection.component!.id);
+      if (!component) return;
+
+      const currentFlipped = component.flipped || false;
+      const updatedComponent = { ...component, flipped: !currentFlipped };
+      this.updateHarnessComponents(
+        (data.components || []).map(c => c.id === updatedComponent.id ? updatedComponent : c)
+      );
+      this.currentSelection.set({ type: 'component', component: updatedComponent });
     }
   }
 
@@ -687,7 +726,8 @@ export class HarnessPage implements OnInit, OnDestroy {
     if (!data) return 0;
     const connectorMax = Math.max(0, ...data.connectors.map(c => c.zIndex || 0));
     const cableMax = Math.max(0, ...data.cables.map(c => c.zIndex || 0));
-    return Math.max(connectorMax, cableMax);
+    const componentMax = Math.max(0, ...(data.components || []).map(c => c.zIndex || 0));
+    return Math.max(connectorMax, cableMax, componentMax);
   }
 
   private getMinZIndex(): number {
@@ -695,7 +735,8 @@ export class HarnessPage implements OnInit, OnDestroy {
     if (!data) return 0;
     const connectorMin = Math.min(0, ...data.connectors.map(c => c.zIndex || 0));
     const cableMin = Math.min(0, ...data.cables.map(c => c.zIndex || 0));
-    return Math.min(connectorMin, cableMin);
+    const componentMin = Math.min(0, ...(data.components || []).map(c => c.zIndex || 0));
+    return Math.min(connectorMin, cableMin, componentMin);
   }
 
   onBringToFront() {
@@ -719,6 +760,13 @@ export class HarnessPage implements OnInit, OnDestroy {
         cables: data.cables.map(c => c.id === updated.id ? updated : c)
       });
       this.currentSelection.set({ type: 'cable', cable: updated });
+    } else if (selection?.component) {
+      const updated = { ...selection.component, zIndex: maxZ + 1 };
+      this.harnessData.set({
+        ...data,
+        components: (data.components || []).map(c => c.id === updated.id ? updated : c)
+      });
+      this.currentSelection.set({ type: 'component', component: updated });
     }
     this.triggerAutoSave();
   }
@@ -744,6 +792,13 @@ export class HarnessPage implements OnInit, OnDestroy {
         cables: data.cables.map(c => c.id === updated.id ? updated : c)
       });
       this.currentSelection.set({ type: 'cable', cable: updated });
+    } else if (selection?.component) {
+      const updated = { ...selection.component, zIndex: minZ - 1 };
+      this.harnessData.set({
+        ...data,
+        components: (data.components || []).map(c => c.id === updated.id ? updated : c)
+      });
+      this.currentSelection.set({ type: 'component', component: updated });
     }
     this.triggerAutoSave();
   }
@@ -769,6 +824,14 @@ export class HarnessPage implements OnInit, OnDestroy {
         cables: data.cables.map(c => c.id === updated.id ? updated : c)
       });
       this.currentSelection.set({ type: 'cable', cable: updated });
+    } else if (selection?.component) {
+      const currentZ = selection.component.zIndex || 0;
+      const updated = { ...selection.component, zIndex: currentZ + 1 };
+      this.harnessData.set({
+        ...data,
+        components: (data.components || []).map(c => c.id === updated.id ? updated : c)
+      });
+      this.currentSelection.set({ type: 'component', component: updated });
     }
     this.triggerAutoSave();
   }
@@ -794,6 +857,14 @@ export class HarnessPage implements OnInit, OnDestroy {
         cables: data.cables.map(c => c.id === updated.id ? updated : c)
       });
       this.currentSelection.set({ type: 'cable', cable: updated });
+    } else if (selection?.component) {
+      const currentZ = selection.component.zIndex || 0;
+      const updated = { ...selection.component, zIndex: currentZ - 1 };
+      this.harnessData.set({
+        ...data,
+        components: (data.components || []).map(c => c.id === updated.id ? updated : c)
+      });
+      this.currentSelection.set({ type: 'component', component: updated });
     }
     this.triggerAutoSave();
   }
@@ -852,6 +923,58 @@ export class HarnessPage implements OnInit, OnDestroy {
       c.id === event.cable.id ? event.cable : c
     );
     this.harnessData.set({ ...data, cables });
+    this.triggerAutoSave();
+  }
+
+  onAddComponent() {
+    const dialogRef = this.dialog.open(HarnessComponentDialog, {
+      width: '500px',
+      data: { existingComponents: this.harnessData()?.components || [] }
+    });
+
+    dialogRef.afterClosed().subscribe((component: HarnessComponent | undefined) => {
+      if (component) {
+        // Assign highest zIndex so new component appears in front
+        const newComponent = { ...component, zIndex: this.getMaxZIndex() + 1 };
+        this.harnessCanvas?.addComponent(newComponent);
+        this.updateHarnessComponents([...(this.harnessData()?.components || []), newComponent]);
+      }
+    });
+  }
+
+  onEditComponent(component: HarnessComponent) {
+    const dialogRef = this.dialog.open(HarnessComponentDialog, {
+      width: '500px',
+      data: {
+        existingComponents: this.harnessData()?.components || [],
+        editComponent: component
+      }
+    });
+
+    dialogRef.afterClosed().subscribe((updatedComponent: HarnessComponent | undefined) => {
+      if (updatedComponent) {
+        const data = this.harnessData();
+        if (data) {
+          const components = (data.components || []).map(c =>
+            c.id === updatedComponent.id ? updatedComponent : c
+          );
+          this.updateHarnessComponents(components);
+          // Update selection with new component data
+          this.currentSelection.set({ type: 'component', component: updatedComponent });
+        }
+      }
+    });
+  }
+
+  onComponentMoved(event: { component: HarnessComponent; x: number; y: number }) {
+    // Update the harness data with new position
+    const data = this.harnessData();
+    if (!data) return;
+
+    const components = (data.components || []).map(c =>
+      c.id === event.component.id ? event.component : c
+    );
+    this.harnessData.set({ ...data, components });
     this.triggerAutoSave();
   }
 
@@ -951,6 +1074,14 @@ export class HarnessPage implements OnInit, OnDestroy {
     if (!data) return;
 
     this.harnessData.set({ ...data, cables });
+    this.triggerAutoSave();
+  }
+
+  private updateHarnessComponents(components: HarnessComponent[]) {
+    const data = this.harnessData();
+    if (!data) return;
+
+    this.harnessData.set({ ...data, components });
     this.triggerAutoSave();
   }
 

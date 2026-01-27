@@ -1,5 +1,5 @@
 // Native Canvas Renderer for Wire Harness
-import { HarnessConnector, HarnessConnection, HarnessPin, HarnessCable } from '../../models/harness.model';
+import { HarnessConnector, HarnessConnection, HarnessPin, HarnessCable, HarnessComponent, HarnessComponentPinGroup } from '../../models/harness.model';
 import { getWireColorHex } from './wire-color-map';
 
 // Constants for table-style connectors (aligned to 20px grid)
@@ -996,6 +996,540 @@ export function hitTestCableWire(
 }
 
 // ============ END CABLE FUNCTIONS ============
+
+// ============ COMPONENT FUNCTIONS ============
+
+// Constants for component elements
+const COMPONENT_PIN_SPACING = 20;
+const COMPONENT_PIN_RADIUS = 5;
+const COMPONENT_IMAGE_WIDTH = 90;
+const COMPONENT_IMAGE_MAX_HEIGHT = 80;
+
+export interface ComponentPinPosition {
+  pinId: string;
+  groupId: string;
+  x: number;
+  y: number;
+}
+
+// Get component dimensions
+export function getComponentDimensions(component: HarnessComponent): {
+  width: number;
+  height: number;
+  hasPartName: boolean;
+  hasComponentImage: boolean;
+  componentImageHeight: number;
+  groupHeights: number[];
+} {
+  const hasPartName = !!component.partName;
+  const hasComponentImage = !!component.showComponentImage && !!component.componentImage;
+  const componentImageHeight = hasComponentImage ? COMPONENT_IMAGE_MAX_HEIGHT : 0;
+
+  // Calculate width based on longest label
+  let maxLabelWidth = LABEL_COL_WIDTH;
+  const ctx = document.createElement('canvas').getContext('2d');
+  if (ctx) {
+    ctx.font = '12px monospace';
+    for (const group of component.pinGroups) {
+      // Check group name
+      const groupWidth = ctx.measureText(group.name || 'Group').width + 16;
+      maxLabelWidth = Math.max(maxLabelWidth, groupWidth);
+      // Check pin labels
+      for (const pin of group.pins) {
+        if (pin.label) {
+          const width = ctx.measureText(pin.label).width + 16;
+          maxLabelWidth = Math.max(maxLabelWidth, width);
+        }
+      }
+    }
+    // Also consider part name width
+    if (component.partName) {
+      ctx.font = '11px monospace';
+      const partNameWidth = ctx.measureText(component.partName).width + 16;
+      maxLabelWidth = Math.max(maxLabelWidth, partNameWidth - PIN_COL_WIDTH);
+    }
+  }
+
+  let width = PIN_COL_WIDTH + maxLabelWidth;
+  // Ensure width is at least enough for the component image if shown
+  if (hasComponentImage) {
+    width = Math.max(width, COMPONENT_IMAGE_WIDTH + 4);
+  }
+
+  // Calculate height based on pin groups
+  const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
+  const groupHeights: number[] = [];
+  let totalPinHeight = 0;
+  for (const group of component.pinGroups) {
+    const groupHeight = group.pins.length * ROW_HEIGHT;
+    groupHeights.push(groupHeight);
+    totalPinHeight += groupHeight;
+  }
+
+  const height = HEADER_HEIGHT + componentImageHeight + partNameRowHeight + totalPinHeight;
+
+  return { width, height, hasPartName, hasComponentImage, componentImageHeight, groupHeights };
+}
+
+// Draw a component on canvas
+export function drawComponent(
+  ctx: CanvasRenderingContext2D,
+  component: HarnessComponent,
+  isSelected: boolean = false,
+  loadedImages?: Map<string, HTMLImageElement>
+): void {
+  const { width, height, hasPartName, hasComponentImage, componentImageHeight, groupHeights } = getComponentDimensions(component);
+  const x = component.position?.x || 100;
+  const y = component.position?.y || 100;
+  const rotation = component.rotation || 0;
+  const flipped = component.flipped || false;
+
+  // Component uses a teal color to distinguish from connectors
+  const headerColor = '#00695c';
+  const bodyColor = '#3a3a3a';
+  const borderColor = '#555555';
+  const textColor = '#e0e0e0';
+  const pinBgColor = '#4a4a4a';
+
+  const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
+
+  ctx.save();
+
+  // Origin is at the first pin center (so pins land on grid lines)
+  ctx.translate(x, y - ROW_HEIGHT / 2);
+  ctx.rotate((rotation * Math.PI) / 180);
+
+  // Flip around the center of the component if flipped
+  if (flipped) {
+    const centerX = width / 2;
+    const totalGroupHeight = groupHeights.reduce((a, b) => a + b, 0);
+    const centerY = totalGroupHeight / 2 - HEADER_HEIGHT - componentImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
+    ctx.translate(centerX, centerY);
+    ctx.scale(-1, 1);
+    ctx.translate(-centerX, -centerY);
+  }
+
+  // Position relative to origin
+  const left = 0;
+  const top = -HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
+
+  // Draw pinout diagram to the left if shown
+  if (component.showPinoutDiagram && component.pinoutDiagramImage) {
+    const pinoutImg = loadedImages?.get(`component-pinout-${component.id}`);
+    if (pinoutImg) {
+      const imgX = left - PINOUT_IMAGE_WIDTH - 10;
+      const imgY = top + (height - PINOUT_IMAGE_HEIGHT) / 2;
+
+      ctx.fillStyle = '#2a2a2a';
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 1;
+      roundRect(ctx, imgX - 4, imgY - 4, PINOUT_IMAGE_WIDTH + 8, PINOUT_IMAGE_HEIGHT + 8, 4);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.save();
+      if (flipped) {
+        ctx.translate(imgX + PINOUT_IMAGE_WIDTH / 2, imgY + PINOUT_IMAGE_HEIGHT / 2);
+        ctx.scale(-1, 1);
+        ctx.translate(-(imgX + PINOUT_IMAGE_WIDTH / 2), -(imgY + PINOUT_IMAGE_HEIGHT / 2));
+      }
+      ctx.drawImage(pinoutImg, imgX, imgY, PINOUT_IMAGE_WIDTH, PINOUT_IMAGE_HEIGHT);
+      ctx.restore();
+    }
+  }
+
+  // Draw selection highlight
+  if (isSelected) {
+    ctx.strokeStyle = '#64b5f6';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([5, 3]);
+    roundRect(ctx, left - 4, top - 4, width + 8, height + 8, 6);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Main body background
+  ctx.fillStyle = bodyColor;
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 1;
+  roundRect(ctx, left, top, width, height, 4);
+  ctx.fill();
+  ctx.stroke();
+
+  // Header row
+  ctx.fillStyle = headerColor;
+  ctx.beginPath();
+  ctx.moveTo(left + 4, top);
+  ctx.lineTo(left + width - 4, top);
+  ctx.quadraticCurveTo(left + width, top, left + width, top + 4);
+  ctx.lineTo(left + width, top + HEADER_HEIGHT);
+  ctx.lineTo(left, top + HEADER_HEIGHT);
+  ctx.lineTo(left, top + 4);
+  ctx.quadraticCurveTo(left, top, left + 4, top);
+  ctx.closePath();
+  ctx.fill();
+
+  // Header divider line
+  ctx.strokeStyle = borderColor;
+  ctx.beginPath();
+  ctx.moveTo(left, top + HEADER_HEIGHT);
+  ctx.lineTo(left + width, top + HEADER_HEIGHT);
+  ctx.stroke();
+
+  // Component label in header
+  ctx.save();
+  if (flipped) {
+    ctx.scale(-1, 1);
+  }
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 13px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const headerTextX = flipped ? -(width / 2) : (width / 2);
+  ctx.fillText(component.label || 'COMP', headerTextX, top + HEADER_HEIGHT / 2);
+  ctx.restore();
+
+  // Draw component image section if shown
+  if (hasComponentImage && component.componentImage) {
+    const imgSectionTop = top + HEADER_HEIGHT;
+
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(left + 1, imgSectionTop, width - 2, componentImageHeight);
+
+    const compImg = loadedImages?.get(`component-img-${component.id}`);
+    if (compImg) {
+      const aspectRatio = compImg.width / compImg.height;
+      let imgWidth = COMPONENT_IMAGE_WIDTH;
+      let imgHeight = imgWidth / aspectRatio;
+      if (imgHeight > COMPONENT_IMAGE_MAX_HEIGHT) {
+        imgHeight = COMPONENT_IMAGE_MAX_HEIGHT;
+        imgWidth = imgHeight * aspectRatio;
+      }
+      const imgX = left + (width - imgWidth) / 2;
+      const imgY = imgSectionTop + (componentImageHeight - imgHeight) / 2;
+
+      ctx.save();
+      if (flipped) {
+        ctx.translate(imgX + imgWidth / 2, imgY + imgHeight / 2);
+        ctx.scale(-1, 1);
+        ctx.translate(-(imgX + imgWidth / 2), -(imgY + imgHeight / 2));
+      }
+      ctx.drawImage(compImg, imgX, imgY, imgWidth, imgHeight);
+      ctx.restore();
+    }
+
+    ctx.strokeStyle = borderColor;
+    ctx.beginPath();
+    ctx.moveTo(left, imgSectionTop + componentImageHeight);
+    ctx.lineTo(left + width, imgSectionTop + componentImageHeight);
+    ctx.stroke();
+  }
+
+  // Draw part name row if present
+  if (hasPartName && component.partName) {
+    const partNameRowTop = top + HEADER_HEIGHT + componentImageHeight;
+    const partNameRowCenter = partNameRowTop + ROW_HEIGHT / 2;
+
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(left + 1, partNameRowTop, width - 2, ROW_HEIGHT);
+
+    ctx.strokeStyle = borderColor;
+    ctx.beginPath();
+    ctx.moveTo(left, partNameRowTop + ROW_HEIGHT);
+    ctx.lineTo(left + width, partNameRowTop + ROW_HEIGHT);
+    ctx.stroke();
+
+    ctx.save();
+    if (flipped) {
+      ctx.scale(-1, 1);
+    }
+    ctx.fillStyle = '#888888';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const partNameTextX = flipped ? -(width / 2) : (width / 2);
+    ctx.fillText(component.partName, partNameTextX, partNameRowCenter);
+    ctx.restore();
+  }
+
+  // Draw pin groups
+  let currentY = top + HEADER_HEIGHT + componentImageHeight + partNameRowHeight;
+  let pinIndex = 0;
+
+  for (let gi = 0; gi < component.pinGroups.length; gi++) {
+    const group = component.pinGroups[gi];
+
+    // Draw thicker divider line between pin groups (not before first group)
+    if (gi > 0) {
+      ctx.strokeStyle = '#CCCCCC';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(left, currentY);
+      ctx.lineTo(left + width, currentY);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+
+    // Draw pins in this group
+    for (let i = 0; i < group.pins.length; i++) {
+      const pin = group.pins[i];
+      const rowTop = currentY + (i * ROW_HEIGHT);
+      const rowCenter = rowTop + ROW_HEIGHT / 2;
+
+      // Alternating row background
+      if ((pinIndex + i) % 2 === 1) {
+        ctx.fillStyle = pinBgColor;
+        ctx.fillRect(left + 1, rowTop, width - 2, ROW_HEIGHT);
+      }
+
+      // Row divider
+      if (i > 0) {
+        ctx.strokeStyle = '#4a4a4a';
+        ctx.beginPath();
+        ctx.moveTo(left, rowTop);
+        ctx.lineTo(left + width, rowTop);
+        ctx.stroke();
+      }
+
+      // Column divider
+      ctx.strokeStyle = '#4a4a4a';
+      ctx.beginPath();
+      ctx.moveTo(left + PIN_COL_WIDTH, rowTop);
+      ctx.lineTo(left + PIN_COL_WIDTH, rowTop + ROW_HEIGHT);
+      ctx.stroke();
+
+      // Pin number and label
+      ctx.save();
+      if (flipped) {
+        ctx.scale(-1, 1);
+      }
+
+      ctx.fillStyle = textColor;
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const pinNumX = flipped ? -(left + PIN_COL_WIDTH / 2) : (left + PIN_COL_WIDTH / 2);
+      ctx.fillText(pin.number || String(i + 1), pinNumX, rowCenter);
+
+      if (pin.label) {
+        ctx.fillStyle = '#b0b0b0';
+        ctx.font = '11px monospace';
+        ctx.textAlign = flipped ? 'right' : 'left';
+        const labelX = flipped ? -(left + PIN_COL_WIDTH + 8) : (left + PIN_COL_WIDTH + 8);
+        ctx.fillText(pin.label, labelX, rowCenter);
+      }
+      ctx.restore();
+
+      // Wire connection point (circle on the right side)
+      const circleX = left + width + COMPONENT_PIN_RADIUS;
+      ctx.beginPath();
+      ctx.arc(circleX, rowCenter, COMPONENT_PIN_RADIUS, 0, Math.PI * 2);
+      ctx.fillStyle = headerColor;
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    currentY += group.pins.length * ROW_HEIGHT;
+    pinIndex += group.pins.length;
+  }
+
+  // Draw expand buttons if images exist
+  if (component.componentImage) {
+    const compImgBtnX = left + width - EXPAND_BUTTON_SIZE - 2;
+    const compImgBtnY = top + (HEADER_HEIGHT - EXPAND_BUTTON_SIZE) / 2;
+    drawExpandButton(ctx, compImgBtnX, compImgBtnY, !!component.showComponentImage, flipped);
+  }
+
+  if (component.pinoutDiagramImage) {
+    const totalPinHeight = groupHeights.reduce((a, b) => a + b, 0);
+    const pinoutBtnX = left - EXPAND_BUTTON_SIZE - 4;
+    const pinoutBtnY = top + HEADER_HEIGHT + componentImageHeight + partNameRowHeight + (totalPinHeight / 2) - (EXPAND_BUTTON_SIZE / 2);
+    drawExpandButton(ctx, pinoutBtnX, pinoutBtnY, !!component.showPinoutDiagram, flipped);
+  }
+
+  ctx.restore();
+}
+
+// Get pin positions for a component
+export function getComponentPinPositions(component: HarnessComponent): ComponentPinPosition[] {
+  const { width, hasPartName, componentImageHeight, groupHeights } = getComponentDimensions(component);
+  const ox = component.position?.x || 100;
+  const oy = component.position?.y || 100;
+  const rotation = component.rotation || 0;
+  const flipped = component.flipped || false;
+
+  const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
+  const positions: ComponentPinPosition[] = [];
+
+  let currentLocalY = componentImageHeight + partNameRowHeight + HEADER_HEIGHT;
+
+  for (const group of component.pinGroups) {
+    for (let pi = 0; pi < group.pins.length; pi++) {
+      const pin = group.pins[pi];
+      const localPinY = currentLocalY + (pi * ROW_HEIGHT) + ROW_HEIGHT / 2;
+
+      // Pin connection is on the right side of the component
+      let localX = width + COMPONENT_PIN_RADIUS;
+      let localY = localPinY - HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
+
+      // Apply flip
+      if (flipped) {
+        const centerX = width / 2;
+        localX = 2 * centerX - localX;
+      }
+
+      // Apply rotation
+      const rad = (rotation * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const rotatedX = localX * cos - localY * sin;
+      const rotatedY = localX * sin + localY * cos;
+
+      positions.push({
+        pinId: pin.id,
+        groupId: group.id,
+        x: ox + rotatedX,
+        y: oy + rotatedY
+      });
+    }
+
+    currentLocalY += group.pins.length * ROW_HEIGHT;
+  }
+
+  return positions;
+}
+
+// Hit test for component body
+export function hitTestComponent(
+  component: HarnessComponent,
+  testX: number,
+  testY: number
+): boolean {
+  const { width, height, hasPartName, componentImageHeight } = getComponentDimensions(component);
+  const ox = component.position?.x || 100;
+  const oy = component.position?.y || 100;
+  const rotation = component.rotation || 0;
+  const flipped = component.flipped || false;
+
+  const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
+
+  // Transform to local space
+  const rad = (-rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = testX - ox;
+  const dy = testY - oy;
+
+  let localX = dx * cos - dy * sin;
+  let localY = dx * sin + dy * cos;
+
+  if (flipped) {
+    const centerX = width / 2;
+    localX = 2 * centerX - localX;
+  }
+
+  const left = -COMPONENT_PIN_RADIUS;
+  const right = width + COMPONENT_PIN_RADIUS;
+  const top = -HEADER_HEIGHT - componentImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
+  const bottom = height - HEADER_HEIGHT - componentImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
+
+  return localX >= left && localX <= right &&
+    localY >= top && localY <= bottom;
+}
+
+// Hit test for component pin
+export function hitTestComponentPin(
+  component: HarnessComponent,
+  testX: number,
+  testY: number
+): { pinId: string; groupId: string } | null {
+  const positions = getComponentPinPositions(component);
+
+  for (const pos of positions) {
+    const dist = Math.sqrt(Math.pow(testX - pos.x, 2) + Math.pow(testY - pos.y, 2));
+    if (dist <= COMPONENT_PIN_RADIUS + 6) {
+      return { pinId: pos.pinId, groupId: pos.groupId };
+    }
+  }
+  return null;
+}
+
+// Hit test for component expand buttons
+export function hitTestComponentButton(
+  component: HarnessComponent,
+  testX: number,
+  testY: number
+): 'pinout' | 'componentImage' | null {
+  const { width, height, hasPartName, componentImageHeight, groupHeights } = getComponentDimensions(component);
+  const ox = component.position?.x || 100;
+  const oy = component.position?.y || 100;
+  const rotation = component.rotation || 0;
+  const flipped = component.flipped || false;
+
+  const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
+
+  // Transform to local space
+  const rad = (-rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = testX - ox;
+  const dy = testY - oy;
+
+  let localX = dx * cos - dy * sin;
+  let localY = dx * sin + dy * cos;
+
+  if (flipped) {
+    const centerX = width / 2;
+    localX = 2 * centerX - localX;
+  }
+
+  const left = 0;
+  const top = -HEADER_HEIGHT - componentImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
+
+  // Check component image button
+  if (component.componentImage) {
+    const compImgBtnX = left + width - EXPAND_BUTTON_SIZE - 2;
+    const compImgBtnY = top + (HEADER_HEIGHT - EXPAND_BUTTON_SIZE) / 2;
+
+    if (localX >= compImgBtnX && localX <= compImgBtnX + EXPAND_BUTTON_SIZE &&
+      localY >= compImgBtnY && localY <= compImgBtnY + EXPAND_BUTTON_SIZE) {
+      return 'componentImage';
+    }
+  }
+
+  // Check pinout diagram button
+  if (component.pinoutDiagramImage) {
+    const totalPinHeight = groupHeights.reduce((a, b) => a + b, 0);
+    const pinoutBtnX = left - EXPAND_BUTTON_SIZE - 4;
+    const pinoutBtnY = (totalPinHeight / 2) - (EXPAND_BUTTON_SIZE / 2);
+
+    if (localX >= pinoutBtnX && localX <= pinoutBtnX + EXPAND_BUTTON_SIZE &&
+      localY >= pinoutBtnY && localY <= pinoutBtnY + EXPAND_BUTTON_SIZE) {
+      return 'pinout';
+    }
+  }
+
+  return null;
+}
+
+// Get the centroid offset for component
+export function getComponentCentroidOffset(component: HarnessComponent): { cx: number; cy: number } {
+  const { width, height, hasPartName, componentImageHeight } = getComponentDimensions(component);
+  const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
+
+  const drawingTop = -HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
+  const drawingBottom = drawingTop + height;
+
+  const localCy = (drawingTop + drawingBottom) / 2;
+  const cx = width / 2;
+  const cy = localCy - ROW_HEIGHT / 2;
+
+  return { cx, cy };
+}
+
+// ============ END COMPONENT FUNCTIONS ============
 
 // Calculate orthogonal (right-angle) path between two points
 export function calculateOrthogonalPath(

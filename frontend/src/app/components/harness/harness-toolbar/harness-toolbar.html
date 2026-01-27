@@ -1,22 +1,15 @@
 <div class="toolbar">
   <!-- Tools -->
   <div class="toolbar-group">
-    <button mat-icon-button
-            matTooltip="Select (V)"
-            [class.active]="activeTool() === 'select'"
-            (click)="setTool('select')">
+    <button mat-icon-button matTooltip="Select (V)" [class.active]="activeTool() === 'select'"
+      (click)="setTool('select')">
       <mat-icon>near_me</mat-icon>
     </button>
-    <button mat-icon-button
-            matTooltip="Pan (H)"
-            [class.active]="activeTool() === 'pan'"
-            (click)="setTool('pan')">
+    <button mat-icon-button matTooltip="Pan (H)" [class.active]="activeTool() === 'pan'" (click)="setTool('pan')">
       <mat-icon>pan_tool</mat-icon>
     </button>
-    <button mat-icon-button
-            matTooltip="Draw Wire (W)"
-            [class.active]="activeTool() === 'wire'"
-            (click)="setTool('wire')">
+    <button mat-icon-button matTooltip="Draw Wire (W)" [class.active]="activeTool() === 'wire'"
+      (click)="setTool('wire')">
       <mat-icon>cable</mat-icon>
     </button>
   </div>
@@ -26,10 +19,13 @@
   <!-- Add elements -->
   <div class="toolbar-group">
     <button mat-icon-button matTooltip="Add Connector" (click)="addConnector.emit()">
-      <mat-icon>add_box</mat-icon>
+      <mat-icon>power</mat-icon>
     </button>
     <button mat-icon-button matTooltip="Add Cable" (click)="addCable.emit()">
-      <mat-icon>electrical_services</mat-icon>
+      <mat-icon>cable</mat-icon>
+    </button>
+    <button mat-icon-button matTooltip="Add Component" (click)="addComponent.emit()">
+      <mat-icon>memory</mat-icon>
     </button>
   </div>
 
@@ -53,17 +49,12 @@
 
   <!-- Grid settings -->
   <div class="toolbar-group">
-    <mat-slide-toggle
-      [checked]="gridEnabled()"
-      (change)="gridEnabledChange.emit($event.checked)"
+    <mat-slide-toggle [checked]="gridEnabled()" (change)="gridEnabledChange.emit($event.checked)"
       matTooltip="Toggle Grid">
       Grid
     </mat-slide-toggle>
-    <mat-slide-toggle
-      [checked]="snapToGrid()"
-      (change)="snapToGridChange.emit($event.checked)"
-      matTooltip="Snap to Grid"
-      [disabled]="!gridEnabled()">
+    <mat-slide-toggle [checked]="snapToGrid()" (change)="snapToGridChange.emit($event.checked)"
+      matTooltip="Snap to Grid" [disabled]="!gridEnabled()">
       Snap
     </mat-slide-toggle>
   </div>
@@ -72,16 +63,11 @@
 
   <!-- Edit operations -->
   <div class="toolbar-group">
-    <button mat-icon-button
-            matTooltip="Rotate 90° (R)"
-            (click)="rotateConnector.emit()"
-            [disabled]="!hasElementSelected()">
+    <button mat-icon-button matTooltip="Rotate 90° (R)" (click)="rotateConnector.emit()"
+      [disabled]="!hasElementSelected()">
       <mat-icon>rotate_right</mat-icon>
     </button>
-    <button mat-icon-button
-            matTooltip="Mirror (F)"
-            (click)="flipConnector.emit()"
-            [disabled]="!hasElementSelected()">
+    <button mat-icon-button matTooltip="Mirror (F)" (click)="flipConnector.emit()" [disabled]="!hasElementSelected()">
       <mat-icon>flip</mat-icon>
     </button>
     <button mat-icon-button matTooltip="Delete Selected (Del)" (click)="deleteSelected.emit()">
@@ -119,11 +105,11 @@
     <span class="harness-revision" *ngIf="harnessPartNumber()">{{ harnessPartNumber() }}</span>
     <span class="harness-revision" *ngIf="harnessRevision()">Rev {{ harnessRevision() }}</span>
     @if (isSaving()) {
-      <span class="saving-indicator">Saving...</span>
+    <span class="saving-indicator">Saving...</span>
     } @else if (hasChanges()) {
-      <span class="unsaved-indicator">*</span>
+    <span class="unsaved-indicator">*</span>
     } @else {
-      <span class="saved-indicator">Saved</span>
+    <span class="saved-indicator">Saved</span>
     }
   </div>
 </div>

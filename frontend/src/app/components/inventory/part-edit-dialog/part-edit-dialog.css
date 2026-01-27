@@ -192,3 +192,91 @@ mat-checkbox {
     border: 1px solid rgba(255, 255, 255, 0.3);
     flex-shrink: 0;
 }
+
+/* Pin count display */
+.pin-count-display {
+    font-size: 14px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+    margin-bottom: 8px;
+}
+
+/* Pin groups section */
+.pin-groups-section {
+    margin-top: 8px;
+}
+
+.pin-groups-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.pin-groups-header h5 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 500;
+    opacity: 0.7;
+}
+
+.pin-group-card {
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.pin-group-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.group-name-field {
+    flex: 1;
+    min-width: 120px;
+}
+
+.pin-type-field {
+    flex: 1;
+    min-width: 150px;
+}
+
+.pins-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-left: 8px;
+    border-left: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.pin-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.pin-number-field {
+    width: 80px;
+    flex-shrink: 0;
+}
+
+.pin-label-field {
+    flex: 1;
+}
+
+.add-pin-btn {
+    align-self: flex-start;
+    margin-top: 4px;
+}
+
+.no-groups-message {
+    text-align: center;
+    padding: 24px;
+    opacity: 0.5;
+    font-style: italic;
+}
