@@ -38,6 +38,8 @@ import {
   hitTestCableButton,
   hitTestComponentButton,
   hitTestWireControlPoint,
+  hitTestWireLabelHandle,
+  getPositionFromPoint,
   getConnectorPinPositions,
   getCableWirePositions,
   getComponentPinPositions,
@@ -137,6 +139,9 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
   private wireEndY = 0;
   private hoveredPinConnectorId: string | null = null;
   private hoveredPinId: string | null = null;
+  private hoveredCableId: string | null = null;
+  private hoveredCableWireId: string | null = null;
+  private hoveredCableSide: 'left' | 'right' | null = null;
   private hoveredComponentId: string | null = null;
   private hoveredComponentPinId: string | null = null;
 
@@ -144,6 +149,10 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
   private isDraggingControlPoint = false;
   private draggedConnectionId: string | null = null;
   private draggedControlPointIndex: number = -1;
+
+  // Wire label dragging state
+  private isDraggingLabel = false;
+  private draggedLabelConnectionId: string | null = null;
 
   private resizeObserver: ResizeObserver | null = null;
   private animationFrameId: number | null = null;
@@ -436,6 +445,18 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
             if (wire) {
               startX = wire.x;
               startY = wire.y;
+              startPinPos = wire;
+            }
+          }
+        } else if (this.wireStartComponentId && this.wireStartComponentPinId) {
+          const startComponent = (data.components || []).find(c => c.id === this.wireStartComponentId);
+          if (startComponent) {
+            const pins = getComponentPinPositions(startComponent);
+            const startPin = pins.find(p => p.pinId === this.wireStartComponentPinId);
+            if (startPin) {
+              startX = startPin.x;
+              startY = startPin.y;
+              startPinPos = startPin;
             }
           }
         }
@@ -444,17 +465,41 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           drawWirePreview(ctx, startX, startY, this.wireEndX, this.wireEndY, this.gridSize());
         }
 
-        // Draw green highlight on start pin
+        // Draw green highlight on start pin (connector, cable, or component)
         if (startPinPos) {
           drawPinHighlight(ctx, startPinPos.x, startPinPos.y, true);
         }
 
-        // Draw green highlight on hovered end pin
+        // Draw green highlight on hovered end pin (connector)
         if (this.hoveredPinConnectorId && this.hoveredPinId) {
           const hoveredConnector = data.connectors.find(c => c.id === this.hoveredPinConnectorId);
           if (hoveredConnector) {
             const pins = getConnectorPinPositions(hoveredConnector);
             const hoveredPin = pins.find(p => p.pinId === this.hoveredPinId);
+            if (hoveredPin) {
+              drawPinHighlight(ctx, hoveredPin.x, hoveredPin.y, false);
+            }
+          }
+        }
+
+        // Draw green highlight on hovered end pin (cable wire)
+        if (this.hoveredCableId && this.hoveredCableWireId && this.hoveredCableSide) {
+          const hoveredCable = data.cables.find(c => c.id === this.hoveredCableId);
+          if (hoveredCable) {
+            const wires = getCableWirePositions(hoveredCable);
+            const hoveredWire = wires.find(w => w.wireId === this.hoveredCableWireId && w.side === this.hoveredCableSide);
+            if (hoveredWire) {
+              drawPinHighlight(ctx, hoveredWire.x, hoveredWire.y, false);
+            }
+          }
+        }
+
+        // Draw green highlight on hovered end pin (component)
+        if (this.hoveredComponentId && this.hoveredComponentPinId) {
+          const hoveredComponent = (data.components || []).find(c => c.id === this.hoveredComponentId);
+          if (hoveredComponent) {
+            const pins = getComponentPinPositions(hoveredComponent);
+            const hoveredPin = pins.find(p => p.pinId === this.hoveredComponentPinId);
             if (hoveredPin) {
               drawPinHighlight(ctx, hoveredPin.x, hoveredPin.y, false);
             }
@@ -729,6 +774,23 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       }
     }
 
+    // Check for wire label handle hit (if a wire is selected and has a label)
+    if (this.selectedConnectionId) {
+      const selectedConnection = data.connections.find(c => c.id === this.selectedConnectionId);
+      if (selectedConnection && selectedConnection.label) {
+        const connFromPos = this.getConnectionFromPos(data, selectedConnection);
+        const connToPos = this.getConnectionToPos(data, selectedConnection);
+
+        if (connFromPos && connToPos) {
+          if (hitTestWireLabelHandle(selectedConnection, connFromPos, connToPos, x, y, this.gridSize())) {
+            this.isDraggingLabel = true;
+            this.draggedLabelConnectionId = selectedConnection.id;
+            return;
+          }
+        }
+      }
+    }
+
     // Check for wire control point hit (if a wire is selected)
     if (this.selectedConnectionId) {
       const selectedConnection = data.connections.find(c => c.id === this.selectedConnectionId);
@@ -795,6 +857,9 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       // Track hovered pin for green indicator
       this.hoveredPinConnectorId = null;
       this.hoveredPinId = null;
+      this.hoveredCableId = null;
+      this.hoveredCableWireId = null;
+      this.hoveredCableSide = null;
       this.hoveredComponentId = null;
       this.hoveredComponentPinId = null;
 
@@ -813,8 +878,25 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           }
         }
 
-        // Check component pins if no connector pin found
+        // Check cable wire endpoints if no connector pin found
         if (!this.hoveredPinConnectorId) {
+          for (const cable of data.cables) {
+            if (!cable.position) continue;
+            // Don't highlight the start cable's wire
+            if (cable.id === this.wireStartCableId) continue;
+
+            const hit = hitTestCableWire(cable, x, y);
+            if (hit) {
+              this.hoveredCableId = cable.id;
+              this.hoveredCableWireId = hit.wireId;
+              this.hoveredCableSide = hit.side;
+              break;
+            }
+          }
+        }
+
+        // Check component pins if no connector pin or cable wire found
+        if (!this.hoveredPinConnectorId && !this.hoveredCableId) {
           for (const component of (data.components || [])) {
             // Don't highlight the start component's pin
             if (component.id === this.wireStartComponentId) continue;
@@ -956,8 +1038,32 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       return;
     }
 
+    // Dragging wire label
+    if (this.isDraggingLabel && this.draggedLabelConnectionId) {
+      const data = this.harnessData();
+      if (!data) return;
+
+      // Update the label position along the wire
+      const connections = data.connections.map(conn => {
+        if (conn.id === this.draggedLabelConnectionId) {
+          const fromPos = this.getConnectionFromPos(data, conn);
+          const toPos = this.getConnectionToPos(data, conn);
+
+          if (fromPos && toPos) {
+            const newPosition = getPositionFromPoint(conn, fromPos, toPos, x, y, this.gridSize());
+            return { ...conn, labelPosition: newPosition };
+          }
+        }
+        return conn;
+      });
+
+      this.dataChanged.emit({ ...data, connections });
+      this.render();
+      return;
+    }
+
     // Update cursor based on what's under it
-    if (!this.isDragging && !this.isDraggingCable && !this.isPanning && !this.isDrawingWire && !this.isDraggingControlPoint) {
+    if (!this.isDragging && !this.isDraggingCable && !this.isPanning && !this.isDrawingWire && !this.isDraggingControlPoint && !this.isDraggingLabel) {
       const data = this.harnessData();
       if (data) {
         let cursor = 'default';
@@ -1058,6 +1164,21 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
             }
           }
 
+          // Check if over a wire label handle (if a wire is selected and has a label)
+          if (!found && this.selectedConnectionId) {
+            const selectedConnection = data.connections.find(c => c.id === this.selectedConnectionId);
+            if (selectedConnection && selectedConnection.label) {
+              const connFromPos = this.getConnectionFromPos(data, selectedConnection);
+              const connToPos = this.getConnectionToPos(data, selectedConnection);
+              if (connFromPos && connToPos) {
+                if (hitTestWireLabelHandle(selectedConnection, connFromPos, connToPos, x, y, this.gridSize())) {
+                  cursor = 'move';
+                  found = true;
+                }
+              }
+            }
+          }
+
           // Check if over a wire control point (if a wire is selected)
           if (!found && this.selectedConnectionId) {
             const selectedConnection = data.connections.find(c => c.id === this.selectedConnectionId);
@@ -1141,9 +1262,12 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
               toPin: pinId
             };
 
+            // Normalize so from is always top-left
+            const normalizedConnection = this.normalizeConnection(data, newConnection);
+
             this.dataChanged.emit({
               ...data,
-              connections: [...data.connections, newConnection]
+              connections: [...data.connections, normalizedConnection]
             });
             connectionCreated = true;
             break;
@@ -1176,9 +1300,12 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
                 toSide: hit.side
               };
 
+              // Normalize so from is always top-left
+              const normalizedConnection = this.normalizeConnection(data, newConnection);
+
               this.dataChanged.emit({
                 ...data,
-                connections: [...data.connections, newConnection]
+                connections: [...data.connections, normalizedConnection]
               });
               connectionCreated = true;
               break;
@@ -1210,9 +1337,12 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
                 toComponentPin: hit.pinId
               };
 
+              // Normalize so from is always top-left
+              const normalizedConnection = this.normalizeConnection(data, newConnection);
+
               this.dataChanged.emit({
                 ...data,
-                connections: [...data.connections, newConnection]
+                connections: [...data.connections, normalizedConnection]
               });
               break;
             }
@@ -1230,6 +1360,9 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       this.wireStartComponentPinId = null;
       this.hoveredPinConnectorId = null;
       this.hoveredPinId = null;
+      this.hoveredCableId = null;
+      this.hoveredCableWireId = null;
+      this.hoveredCableSide = null;
       this.hoveredComponentId = null;
       this.hoveredComponentPinId = null;
       this.render();
@@ -1294,6 +1427,12 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       this.isDraggingControlPoint = false;
       this.draggedConnectionId = null;
       this.draggedControlPointIndex = -1;
+    }
+
+    // End dragging label
+    if (this.isDraggingLabel) {
+      this.isDraggingLabel = false;
+      this.draggedLabelConnectionId = null;
     }
   }
 
@@ -1651,5 +1790,67 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       }
     }
     return null;
+  }
+
+  // Normalize connection so "from" is always the top-left endpoint
+  private normalizeConnection(data: HarnessData, connection: HarnessConnection): HarnessConnection {
+    const fromPos = this.getConnectionFromPos(data, connection);
+    const toPos = this.getConnectionToPos(data, connection);
+
+    if (!fromPos || !toPos) return connection;
+
+    // Compare positions: top-left is the one with smaller (x + y) value
+    // If equal, prefer smaller x
+    const fromScore = fromPos.x + fromPos.y;
+    const toScore = toPos.x + toPos.y;
+
+    const shouldSwap = toScore < fromScore || (toScore === fromScore && toPos.x < fromPos.x);
+
+    if (shouldSwap) {
+      // Swap from and to endpoints, and swap terminations
+      return {
+        ...connection,
+        fromConnector: connection.toConnector,
+        fromPin: connection.toPin,
+        fromCable: connection.toCable,
+        fromWire: connection.toWire,
+        fromSide: connection.toSide,
+        fromComponent: connection.toComponent,
+        fromComponentPin: connection.toComponentPin,
+        fromTermination: connection.toTermination,
+        toConnector: connection.fromConnector,
+        toPin: connection.fromPin,
+        toCable: connection.fromCable,
+        toWire: connection.fromWire,
+        toSide: connection.fromSide,
+        toComponent: connection.fromComponent,
+        toComponentPin: connection.fromComponentPin,
+        toTermination: connection.fromTermination,
+        // Reverse waypoints if they exist
+        waypoints: connection.waypoints ? [...connection.waypoints].reverse() : undefined
+      };
+    }
+
+    return connection;
+  }
+
+  // Normalize all connections in the data
+  normalizeAllConnections() {
+    const data = this.harnessData();
+    if (!data) return;
+
+    const normalizedConnections = data.connections.map(conn => this.normalizeConnection(data, conn));
+
+    // Only update if something changed
+    const hasChanges = normalizedConnections.some((conn, i) =>
+      conn.fromConnector !== data.connections[i].fromConnector ||
+      conn.fromPin !== data.connections[i].fromPin ||
+      conn.fromCable !== data.connections[i].fromCable ||
+      conn.fromComponent !== data.connections[i].fromComponent
+    );
+
+    if (hasChanges) {
+      this.dataChanged.emit({ ...data, connections: normalizedConnections });
+    }
   }
 }

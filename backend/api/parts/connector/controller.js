@@ -20,6 +20,15 @@ exports.getAllConnectors = async (req, res, next) => {
           model: db.ElectricalPinType,
           as: 'pinType',
           attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'pinoutDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }, {
+          model: db.UploadedFile,
+          as: 'connectorImageFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
         }] : [])
       ]
     });
@@ -45,6 +54,15 @@ exports.getConnectorById = async (req, res, next) => {
           model: db.ElectricalPinType,
           as: 'pinType',
           attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'pinoutDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }, {
+          model: db.UploadedFile,
+          as: 'connectorImageFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
         }] : [])
       ]
     });
@@ -62,7 +80,7 @@ exports.getConnectorById = async (req, res, next) => {
 // Create connector
 exports.createConnector = async (req, res, next) => {
   try {
-    const { label, type, pinCount, color, pins, partID, pinoutDiagramImage, connectorImage, electricalPinTypeID } = req.body;
+    const { label, type, pinCount, color, pins, partID, pinoutDiagramFileID, connectorImageFileID, electricalPinTypeID } = req.body;
 
     if (!label) {
       return next(createError(400, 'Label is required'));
@@ -92,8 +110,8 @@ exports.createConnector = async (req, res, next) => {
       color: color || null,
       pins: connectorPins,
       partID: partID || null,
-      pinoutDiagramImage: pinoutDiagramImage || null,
-      connectorImage: connectorImage || null,
+      pinoutDiagramFileID: pinoutDiagramFileID || null,
+      connectorImageFileID: connectorImageFileID || null,
       electricalPinTypeID: electricalPinTypeID || null
     });
 
@@ -106,7 +124,7 @@ exports.createConnector = async (req, res, next) => {
 // Update connector
 exports.updateConnector = async (req, res, next) => {
   try {
-    const { label, type, pinCount, color, pins, partID, pinoutDiagramImage, connectorImage, electricalPinTypeID } = req.body;
+    const { label, type, pinCount, color, pins, partID, pinoutDiagramFileID, connectorImageFileID, electricalPinTypeID } = req.body;
 
     const connector = await db.ElectricalConnector.findOne({
       where: { id: req.params.id }
@@ -123,8 +141,8 @@ exports.updateConnector = async (req, res, next) => {
     if (color !== undefined) updateData.color = color;
     if (pins !== undefined) updateData.pins = pins;
     if (partID !== undefined) updateData.partID = partID;
-    if (pinoutDiagramImage !== undefined) updateData.pinoutDiagramImage = pinoutDiagramImage;
-    if (connectorImage !== undefined) updateData.connectorImage = connectorImage;
+    if (pinoutDiagramFileID !== undefined) updateData.pinoutDiagramFileID = pinoutDiagramFileID;
+    if (connectorImageFileID !== undefined) updateData.connectorImageFileID = connectorImageFileID;
     if (electricalPinTypeID !== undefined) updateData.electricalPinTypeID = electricalPinTypeID;
 
     await db.ElectricalConnector.update(updateData, {
@@ -142,6 +160,15 @@ exports.updateConnector = async (req, res, next) => {
           model: db.ElectricalPinType,
           as: 'pinType',
           attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'pinoutDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }, {
+          model: db.UploadedFile,
+          as: 'connectorImageFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
         }] : [])
       ]
     });
@@ -167,6 +194,15 @@ exports.getConnectorByPartId = async (req, res, next) => {
           model: db.ElectricalPinType,
           as: 'pinType',
           attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'pinoutDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }, {
+          model: db.UploadedFile,
+          as: 'connectorImageFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
         }] : [])
       ]
     });

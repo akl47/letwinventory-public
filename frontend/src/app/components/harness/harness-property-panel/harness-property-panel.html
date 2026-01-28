@@ -76,8 +76,19 @@
         </mat-select>
       </mat-form-field>
 
-      <mat-form-field appearance="outline" class="full-width">
-        <mat-label>Wire Length (mm)</mat-label>
+      <mat-form-field appearance="outline" class="half-width">
+        <mat-label>Wire Gauge</mat-label>
+        <mat-select [value]="selection()?.connection?.gauge || ''"
+          (selectionChange)="updateConnection('gauge', $event.value)">
+          <mat-option value="">Not specified</mat-option>
+          @for (gauge of awgGauges; track gauge) {
+          <mat-option [value]="gauge">{{ gauge }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="half-width">
+        <mat-label>Length (mm)</mat-label>
         <input matInput type="number" [value]="selection()?.connection?.lengthMm || ''"
           (input)="updateConnectionInput('lengthMm', $event)" min="1">
       </mat-form-field>
@@ -98,6 +109,33 @@
         </mat-select>
       </mat-form-field>
       }
+
+      <mat-divider></mat-divider>
+
+      <!-- Wire End Terminations -->
+      <div class="termination-row">
+        <mat-form-field appearance="outline" class="half-width">
+          <mat-label>Left End</mat-label>
+          <mat-select [value]="selection()?.connection?.fromTermination || ''"
+            (selectionChange)="updateConnection('fromTermination', $event.value)">
+            <mat-option value="">None</mat-option>
+            @for (term of terminationTypes; track term.value) {
+            <mat-option [value]="term.value">{{ term.label }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="half-width">
+          <mat-label>Right End</mat-label>
+          <mat-select [value]="selection()?.connection?.toTermination || ''"
+            (selectionChange)="updateConnection('toTermination', $event.value)">
+            <mat-option value="">None</mat-option>
+            @for (term of terminationTypes; track term.value) {
+            <mat-option [value]="term.value">{{ term.label }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+      </div>
     </div>
   </mat-expansion-panel>
   }

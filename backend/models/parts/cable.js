@@ -11,6 +11,13 @@ module.exports = (sequelize, DataTypes) => {
           as: 'part'
         });
       }
+      // Associate with UploadedFile for images
+      if (models.UploadedFile) {
+        Cable.belongsTo(models.UploadedFile, {
+          foreignKey: 'cableDiagramFileID',
+          as: 'cableDiagramFile'
+        });
+      }
     }
   }
 
@@ -51,10 +58,14 @@ module.exports = (sequelize, DataTypes) => {
       },
       comment: 'Link to inventory Part'
     },
-    cableDiagramImage: {
-      type: DataTypes.TEXT,
+    cableDiagramFileID: {
+      type: DataTypes.INTEGER,
       allowNull: true,
-      comment: 'Base64 encoded cable diagram image'
+      references: {
+        model: 'UploadedFiles',
+        key: 'id'
+      },
+      comment: 'Reference to cable diagram in UploadedFiles'
     },
     activeFlag: {
       type: DataTypes.BOOLEAN,

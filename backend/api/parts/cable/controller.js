@@ -10,11 +10,18 @@ exports.getAllCables = async (req, res, next) => {
     const cables = await db.Cable.findAll({
       where: whereClause,
       order: [['label', 'ASC']],
-      include: db.Part ? [{
-        model: db.Part,
-        as: 'part',
-        attributes: ['id', 'name']
-      }] : []
+      include: [
+        ...(db.Part ? [{
+          model: db.Part,
+          as: 'part',
+          attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'cableDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }] : [])
+      ]
     });
 
     res.json(cables);
@@ -28,11 +35,18 @@ exports.getCableById = async (req, res, next) => {
   try {
     const cable = await db.Cable.findOne({
       where: { id: req.params.id },
-      include: db.Part ? [{
-        model: db.Part,
-        as: 'part',
-        attributes: ['id', 'name']
-      }] : []
+      include: [
+        ...(db.Part ? [{
+          model: db.Part,
+          as: 'part',
+          attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'cableDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }] : [])
+      ]
     });
 
     if (!cable) {
@@ -48,7 +62,7 @@ exports.getCableById = async (req, res, next) => {
 // Create cable
 exports.createCable = async (req, res, next) => {
   try {
-    const { label, wireCount, gaugeAWG, wires, partID, cableDiagramImage } = req.body;
+    const { label, wireCount, gaugeAWG, wires, partID, cableDiagramFileID } = req.body;
 
     if (!label) {
       return next(createError(400, 'Label is required'));
@@ -74,7 +88,7 @@ exports.createCable = async (req, res, next) => {
       gaugeAWG: gaugeAWG || null,
       wires: cableWires,
       partID: partID || null,
-      cableDiagramImage: cableDiagramImage || null
+      cableDiagramFileID: cableDiagramFileID || null
     });
 
     res.status(201).json(cable);
@@ -86,7 +100,7 @@ exports.createCable = async (req, res, next) => {
 // Update cable
 exports.updateCable = async (req, res, next) => {
   try {
-    const { label, wireCount, gaugeAWG, wires, partID, cableDiagramImage } = req.body;
+    const { label, wireCount, gaugeAWG, wires, partID, cableDiagramFileID } = req.body;
 
     const cable = await db.Cable.findOne({
       where: { id: req.params.id }
@@ -102,18 +116,25 @@ exports.updateCable = async (req, res, next) => {
     if (gaugeAWG !== undefined) updateData.gaugeAWG = gaugeAWG;
     if (wires !== undefined) updateData.wires = wires;
     if (partID !== undefined) updateData.partID = partID;
-    if (cableDiagramImage !== undefined) updateData.cableDiagramImage = cableDiagramImage;
+    if (cableDiagramFileID !== undefined) updateData.cableDiagramFileID = cableDiagramFileID;
 
     await db.Cable.update(updateData, {
       where: { id: req.params.id }
     });
 
     const updatedCable = await db.Cable.findByPk(req.params.id, {
-      include: db.Part ? [{
-        model: db.Part,
-        as: 'part',
-        attributes: ['id', 'name']
-      }] : []
+      include: [
+        ...(db.Part ? [{
+          model: db.Part,
+          as: 'part',
+          attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'cableDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }] : [])
+      ]
     });
 
     res.json(updatedCable);
@@ -127,11 +148,18 @@ exports.getCableByPartId = async (req, res, next) => {
   try {
     const cable = await db.Cable.findOne({
       where: { partID: req.params.partId, activeFlag: true },
-      include: db.Part ? [{
-        model: db.Part,
-        as: 'part',
-        attributes: ['id', 'name']
-      }] : []
+      include: [
+        ...(db.Part ? [{
+          model: db.Part,
+          as: 'part',
+          attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'cableDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }] : [])
+      ]
     });
 
     if (!cable) {

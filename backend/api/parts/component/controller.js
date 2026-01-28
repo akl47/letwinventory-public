@@ -15,6 +15,15 @@ exports.getAllComponents = async (req, res, next) => {
           model: db.Part,
           as: 'part',
           attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'pinoutDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }, {
+          model: db.UploadedFile,
+          as: 'componentImageFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
         }] : [])
       ]
     });
@@ -35,6 +44,15 @@ exports.getComponentById = async (req, res, next) => {
           model: db.Part,
           as: 'part',
           attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'pinoutDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }, {
+          model: db.UploadedFile,
+          as: 'componentImageFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
         }] : [])
       ]
     });
@@ -52,7 +70,7 @@ exports.getComponentById = async (req, res, next) => {
 // Create component
 exports.createComponent = async (req, res, next) => {
   try {
-    const { label, pinCount, pins, partID, pinoutDiagramImage, componentImage } = req.body;
+    const { label, pinCount, pins, partID, pinoutDiagramFileID, componentImageFileID } = req.body;
 
     if (!label) {
       return next(createError(400, 'Label is required'));
@@ -75,8 +93,8 @@ exports.createComponent = async (req, res, next) => {
       pinCount: totalPinCount,
       pins: componentPins,
       partID: partID || null,
-      pinoutDiagramImage: pinoutDiagramImage || null,
-      componentImage: componentImage || null
+      pinoutDiagramFileID: pinoutDiagramFileID || null,
+      componentImageFileID: componentImageFileID || null
     });
 
     res.status(201).json(component);
@@ -88,7 +106,7 @@ exports.createComponent = async (req, res, next) => {
 // Update component
 exports.updateComponent = async (req, res, next) => {
   try {
-    const { label, pinCount, pins, partID, pinoutDiagramImage, componentImage } = req.body;
+    const { label, pinCount, pins, partID, pinoutDiagramFileID, componentImageFileID } = req.body;
 
     const component = await db.ElectricalComponent.findOne({
       where: { id: req.params.id }
@@ -103,8 +121,8 @@ exports.updateComponent = async (req, res, next) => {
     if (pinCount !== undefined) updateData.pinCount = pinCount;
     if (pins !== undefined) updateData.pins = pins;
     if (partID !== undefined) updateData.partID = partID;
-    if (pinoutDiagramImage !== undefined) updateData.pinoutDiagramImage = pinoutDiagramImage;
-    if (componentImage !== undefined) updateData.componentImage = componentImage;
+    if (pinoutDiagramFileID !== undefined) updateData.pinoutDiagramFileID = pinoutDiagramFileID;
+    if (componentImageFileID !== undefined) updateData.componentImageFileID = componentImageFileID;
 
     await db.ElectricalComponent.update(updateData, {
       where: { id: req.params.id }
@@ -116,6 +134,15 @@ exports.updateComponent = async (req, res, next) => {
           model: db.Part,
           as: 'part',
           attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'pinoutDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }, {
+          model: db.UploadedFile,
+          as: 'componentImageFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
         }] : [])
       ]
     });
@@ -136,6 +163,15 @@ exports.getComponentByPartId = async (req, res, next) => {
           model: db.Part,
           as: 'part',
           attributes: ['id', 'name']
+        }] : []),
+        ...(db.UploadedFile ? [{
+          model: db.UploadedFile,
+          as: 'pinoutDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }, {
+          model: db.UploadedFile,
+          as: 'componentImageFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
         }] : [])
       ]
     });

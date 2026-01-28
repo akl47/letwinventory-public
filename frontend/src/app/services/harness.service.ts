@@ -65,11 +65,6 @@ export class HarnessService {
     return this.http.delete<{ message: string }>(`${this.apiUrl}/${id}`);
   }
 
-  // Duplicate harness
-  duplicateHarness(id: number, newName?: string, createPart: boolean = true): Observable<WireHarness> {
-    return this.http.post<WireHarness>(`${this.apiUrl}/${id}/duplicate`, { newName, createPart });
-  }
-
   // Validate harness JSON without saving
   validateHarness(harnessData: HarnessData): Observable<HarnessValidationResult> {
     return this.http.post<HarnessValidationResult>(`${this.apiUrl}/validate`, { harnessData });

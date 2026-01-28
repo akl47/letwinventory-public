@@ -1,4 +1,4 @@
-import { Component, input, output, computed } from '@angular/core';
+import { Component, input, output, computed, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatFormFieldModule } from '@angular/material/form-field';
@@ -60,6 +60,22 @@ export class HarnessPropertyPanel {
   connectorColors = CONNECTOR_COLORS;
   wireColors = WIRE_COLORS;
   awgGauges = AWG_GAUGES;
+
+  // Wire termination types
+  terminationTypes = [
+    { value: 'f-pin', label: 'F Pin' },
+    { value: 'm-pin', label: 'M Pin' },
+    { value: 'f-spade', label: 'F Spade' },
+    { value: 'm-spade', label: 'M Spade' },
+    { value: 'ring', label: 'Ring' },
+    { value: 'fork', label: 'Fork' },
+    { value: 'ferrule', label: 'Ferrule' },
+    { value: 'soldered', label: 'Soldered' },
+    { value: 'bare', label: 'Bare' }
+  ];
+
+  // Wire end selection state
+  selectedWireEnd = signal<'from' | 'to'>('from');
 
   // Computed values
   cables = computed(() => this.harnessData()?.cables || []);
@@ -203,5 +219,114 @@ export class HarnessPropertyPanel {
   getWireHex(colorCode: string): string {
     const color = this.wireColors.find(c => c.code === colorCode);
     return color?.hex || '#808080';
+  }
+
+  getEndpointType(connection: HarnessConnection | undefined, endpoint: 'from' | 'to'): 'connector' | 'cable' | 'component' | null {
+    if (!connection) return null;
+    if (endpoint === 'from') {
+      if (connection.fromConnector) return 'connector';
+      if (connection.fromCable) return 'cable';
+      if (connection.fromComponent) return 'component';
+    } else {
+      if (connection.toConnector) return 'connector';
+      if (connection.toCable) return 'cable';
+      if (connection.toComponent) return 'component';
+    }
+    return null;
+  }
+
+  getConnectorsForSelection(): HarnessConnector[] {
+    return this.harnessData()?.connectors || [];
+  }
+
+  getCablesForSelection(): HarnessCable[] {
+    return this.harnessData()?.cables || [];
+  }
+
+  getComponentsForSelection(): HarnessComponent[] {
+    return this.harnessData()?.components || [];
+  }
+
+  getPinsForConnector(connectorId: string | undefined): HarnessPin[] {
+    if (!connectorId) return [];
+    const connector = this.harnessData()?.connectors?.find(c => c.id === connectorId);
+    return connector?.pins || [];
+  }
+
+  getWiresForCableId(cableId: string | undefined): HarnessWire[] {
+    if (!cableId) return [];
+    const cable = this.harnessData()?.cables?.find(c => c.id === cableId);
+    return cable?.wires || [];
+  }
+
+  getPinsForComponent(componentId: string | undefined): { pin: HarnessPin; groupName: string }[] {
+    if (!componentId) return [];
+    const component = this.harnessData()?.components?.find(c => c.id === componentId);
+    if (!component) return [];
+    const pins: { pin: HarnessPin; groupName: string }[] = [];
+    for (const group of component.pinGroups) {
+      for (const pin of group.pins) {
+        pins.push({ pin, groupName: group.name });
+      }
+    }
+    return pins;
+  }
+
+  getCurrentEndpointConnectorId(): string | undefined {
+    const conn = this.selection()?.connection;
+    if (!conn) return undefined;
+    return this.selectedWireEnd() === 'from' ? conn.fromConnector : conn.toConnector;
+  }
+
+  getCurrentEndpointPinId(): string | undefined {
+    const conn = this.selection()?.connection;
+    if (!conn) return undefined;
+    return this.selectedWireEnd() === 'from' ? conn.fromPin : conn.toPin;
+  }
+
+  getCurrentEndpointCableId(): string | undefined {
+    const conn = this.selection()?.connection;
+    if (!conn) return undefined;
+    return this.selectedWireEnd() === 'from' ? conn.fromCable : conn.toCable;
+  }
+
+  getCurrentEndpointWireId(): string | undefined {
+    const conn = this.selection()?.connection;
+    if (!conn) return undefined;
+    return this.selectedWireEnd() === 'from' ? conn.fromWire : conn.toWire;
+  }
+
+  getCurrentEndpointSide(): 'left' | 'right' | undefined {
+    const conn = this.selection()?.connection;
+    if (!conn) return undefined;
+    return this.selectedWireEnd() === 'from' ? conn.fromSide : conn.toSide;
+  }
+
+  getCurrentEndpointComponentId(): string | undefined {
+    const conn = this.selection()?.connection;
+    if (!conn) return undefined;
+    return this.selectedWireEnd() === 'from' ? conn.fromComponent : conn.toComponent;
+  }
+
+  getCurrentEndpointComponentPinId(): string | undefined {
+    const conn = this.selection()?.connection;
+    if (!conn) return undefined;
+    return this.selectedWireEnd() === 'from' ? conn.fromComponentPin : conn.toComponentPin;
+  }
+
+  updateEndpointSide(side: 'left' | 'right') {
+    const field = this.selectedWireEnd() === 'from' ? 'fromSide' : 'toSide';
+    this.connectionChanged.emit({ field, value: side });
+  }
+
+  getCurrentEndpointTermination(): string | undefined {
+    const conn = this.selection()?.connection;
+    if (!conn) return undefined;
+    return this.selectedWireEnd() === 'from' ? conn.fromTermination : conn.toTermination;
+  }
+
+  updateEndpointTermination(termination: string) {
+    const field = this.selectedWireEnd() === 'from' ? 'fromTermination' : 'toTermination';
+    this.connectionChanged.emit({ field, value: termination });
   }
 }

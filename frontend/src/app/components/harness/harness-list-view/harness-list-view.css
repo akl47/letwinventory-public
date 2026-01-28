@@ -115,12 +115,20 @@
     color: rgba(255, 255, 255, 0.54);
 }
 
-.no-data mat-icon {
+.no-data > mat-icon {
     font-size: 72px;
     width: 72px;
     height: 72px;
     margin-bottom: 16px;
     opacity: 0.3;
+}
+
+.no-data button mat-icon {
+    font-size: 24px;
+    width: 24px;
+    height: 24px;
+    margin-bottom: 0;
+    opacity: 1;
 }
 
 .no-data h3 {

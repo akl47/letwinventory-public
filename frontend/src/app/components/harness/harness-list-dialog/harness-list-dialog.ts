@@ -87,15 +87,6 @@ export class HarnessListDialog implements OnInit {
     }
   }
 
-  duplicateHarness(harness: WireHarnessSummary) {
-    if (confirm(`Duplicate "${harness.name}"?`)) {
-      this.harnessService.duplicateHarness(harness.id).subscribe({
-        next: () => {
-          this.loadHarnesses(this.pagination().page);
-        }
-      });
-    }
-  }
 
   deleteHarness(harness: WireHarnessSummary) {
     if (confirm(`Delete "${harness.name}"? This action cannot be undone.`)) {

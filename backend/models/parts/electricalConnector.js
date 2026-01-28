@@ -18,6 +18,17 @@ module.exports = (sequelize, DataTypes) => {
           as: 'pinType'
         });
       }
+      // Associate with UploadedFile for images
+      if (models.UploadedFile) {
+        ElectricalConnector.belongsTo(models.UploadedFile, {
+          foreignKey: 'pinoutDiagramFileID',
+          as: 'pinoutDiagramFile'
+        });
+        ElectricalConnector.belongsTo(models.UploadedFile, {
+          foreignKey: 'connectorImageFileID',
+          as: 'connectorImageFile'
+        });
+      }
     }
   }
 
@@ -53,16 +64,6 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: [],
       comment: 'Array of pin definitions [{id, number, label}]'
     },
-    pinoutDiagramImage: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-      comment: 'Base64 encoded pinout diagram image'
-    },
-    connectorImage: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-      comment: 'Base64 encoded connector image'
-    },
     partID: {
       type: DataTypes.INTEGER,
       allowNull: true,
@@ -80,6 +81,24 @@ module.exports = (sequelize, DataTypes) => {
         key: 'id'
       },
       comment: 'Link to ElectricalPinType'
+    },
+    pinoutDiagramFileID: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'UploadedFiles',
+        key: 'id'
+      },
+      comment: 'Reference to pinout diagram in UploadedFiles'
+    },
+    connectorImageFileID: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'UploadedFiles',
+        key: 'id'
+      },
+      comment: 'Reference to connector image in UploadedFiles'
     },
     activeFlag: {
       type: DataTypes.BOOLEAN,

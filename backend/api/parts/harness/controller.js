@@ -117,7 +117,6 @@ exports.createHarness = async (req, res, next) => {
         name: name,
         description: description || null,
         internalPart: true,
-        vendor: 'Letwin',
         partCategoryID: harnessCategory.id,
         minimumOrderQuantity: 1,
         activeFlag: true,
@@ -222,64 +221,6 @@ exports.deleteHarness = async (req, res, next) => {
     res.json({ message: 'Harness deleted successfully' });
   } catch (error) {
     next(createError(500, 'Error Deleting Harness: ' + error.message));
-  }
-};
-
-// Duplicate harness
-exports.duplicateHarness = async (req, res, next) => {
-  try {
-    const sourceHarness = await db.WireHarness.findOne({
-      where: { id: req.params.id }
-    });
-
-    if (!sourceHarness) {
-      return next(createError(404, 'Source harness not found'));
-    }
-
-    const { newName, createPart } = req.body;
-    const duplicateName = newName || `${sourceHarness.name} (Copy)`;
-
-    let linkedPartId = null;
-
-    // Create a new Part for the duplicate if requested
-    if (createPart) {
-      const harnessCategory = await db.PartCategory.findOne({
-        where: { name: 'Harness', activeFlag: true }
-      });
-
-      if (harnessCategory) {
-        const createdPart = await db.Part.create({
-          name: duplicateName,
-          description: sourceHarness.description,
-          internalPart: true,
-          vendor: 'Letwin',
-          partCategoryID: harnessCategory.id,
-          minimumOrderQuantity: 1,
-          activeFlag: true,
-          serialNumberRequired: false,
-          lotNumberRequired: false
-        });
-        linkedPartId = createdPart.id;
-      }
-    }
-
-    const newHarness = await db.WireHarness.create({
-      name: duplicateName,
-      revision: 'A',
-      description: sourceHarness.description,
-      harnessData: sourceHarness.harnessData,
-      thumbnailBase64: sourceHarness.thumbnailBase64,
-      createdBy: req.user ? req.user.displayName : null,
-      partID: linkedPartId
-    });
-
-    // Return with computed partNumber from Part name
-    const result = newHarness.toJSON();
-    result.partNumber = linkedPartId ? duplicateName : null;
-
-    res.status(201).json(result);
-  } catch (error) {
-    next(createError(500, 'Error Duplicating Harness: ' + error.message));
   }
 };
 

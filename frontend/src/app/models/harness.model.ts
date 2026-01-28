@@ -117,8 +117,13 @@ export interface HarnessConnection {
   // Wire properties
   color?: string;  // Direct wire color code (e.g., 'BK', 'RD', 'BU')
   label?: string;  // Wire label/identifier
+  gauge?: string;  // Wire gauge (e.g., '18 AWG', '20 AWG')
   lengthMm?: number;  // Physical length in millimeters
+  labelPosition?: number;  // Position of label along wire (0-1, default 0.5 = center)
   waypoints?: HarnessWaypoint[];
+  // Termination types for each end
+  fromTermination?: string;  // e.g., 'f-pin', 'm-pin', 'ring', 'ferrule', etc.
+  toTermination?: string;
 }
 
 export interface HarnessCanvasSettings {
@@ -202,8 +207,13 @@ export interface DbElectricalConnector {
   pinCount: number;
   color: string | null;
   pins: HarnessPin[];
-  pinoutDiagramImage: string | null;
-  connectorImage: string | null;
+  pinoutDiagramFileID: number | null;
+  connectorImageFileID: number | null;
+  pinoutDiagramFile?: UploadedFileRef | null;
+  connectorImageFile?: UploadedFileRef | null;
+  // Computed properties for backward compatibility
+  pinoutDiagramImage?: string | null;
+  connectorImage?: string | null;
   partID: number | null;
   electricalPinTypeID: number | null;
   activeFlag: boolean;
@@ -232,7 +242,10 @@ export interface DbCable {
   wireCount: number;
   gaugeAWG: string | null;
   wires: { id: string; color: string; colorCode?: string }[];
-  cableDiagramImage: string | null;
+  cableDiagramFileID: number | null;
+  cableDiagramFile?: UploadedFileRef | null;
+  // Computed property for backward compatibility
+  cableDiagramImage?: string | null;
   partID: number | null;
   activeFlag: boolean;
   createdAt: string;
@@ -259,13 +272,26 @@ export interface DbElectricalComponent {
   label: string;
   pinCount: number;
   pins: ComponentPinGroup[];  // Array of pin groups
-  pinoutDiagramImage: string | null;
-  componentImage: string | null;
+  pinoutDiagramFileID: number | null;
+  componentImageFileID: number | null;
+  pinoutDiagramFile?: UploadedFileRef | null;
+  componentImageFile?: UploadedFileRef | null;
+  // Computed properties for backward compatibility
+  pinoutDiagramImage?: string | null;
+  componentImage?: string | null;
   partID: number | null;
   activeFlag: boolean;
   createdAt: string;
   updatedAt: string;
   part?: { id: number; name: string };
+}
+
+// Uploaded file reference from backend
+export interface UploadedFileRef {
+  id: number;
+  filename: string;
+  mimeType: string;
+  data: string;  // Base64 encoded with data URI prefix
 }
 
 // Type aliases for backward compatibility

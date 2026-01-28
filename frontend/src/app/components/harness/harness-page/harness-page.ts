@@ -261,6 +261,9 @@ export class HarnessPage implements OnInit, OnDestroy {
       );
       this.currentSelection.set({ type: 'component', component: updatedComponent });
     }
+
+    // Normalize connections so "from" is always the top-left endpoint
+    this.harnessCanvas?.normalizeAllConnections();
   }
 
   flipSelected() {
@@ -304,6 +307,9 @@ export class HarnessPage implements OnInit, OnDestroy {
       );
       this.currentSelection.set({ type: 'component', component: updatedComponent });
     }
+
+    // Normalize connections so "from" is always the top-left endpoint
+    this.harnessCanvas?.normalizeAllConnections();
   }
 
   copyConnector() {
@@ -911,6 +917,8 @@ export class HarnessPage implements OnInit, OnDestroy {
       c.id === event.connector.id ? event.connector : c
     );
     this.harnessData.set({ ...data, connectors });
+    // Normalize connections so "from" is always the top-left endpoint
+    this.harnessCanvas?.normalizeAllConnections();
     this.triggerAutoSave();
   }
 
@@ -923,6 +931,8 @@ export class HarnessPage implements OnInit, OnDestroy {
       c.id === event.cable.id ? event.cable : c
     );
     this.harnessData.set({ ...data, cables });
+    // Normalize connections so "from" is always the top-left endpoint
+    this.harnessCanvas?.normalizeAllConnections();
     this.triggerAutoSave();
   }
 
@@ -975,6 +985,8 @@ export class HarnessPage implements OnInit, OnDestroy {
       c.id === event.component.id ? event.component : c
     );
     this.harnessData.set({ ...data, components });
+    // Normalize connections so "from" is always the top-left endpoint
+    this.harnessCanvas?.normalizeAllConnections();
     this.triggerAutoSave();
   }
 
@@ -1040,6 +1052,8 @@ export class HarnessPage implements OnInit, OnDestroy {
         c.id === updatedConnection.id ? updatedConnection : c
       )
     });
+    // Update selection with new connection data
+    this.currentSelection.set({ type: 'wire', connection: updatedConnection });
     this.triggerAutoSave();
   }
 

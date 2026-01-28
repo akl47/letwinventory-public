@@ -7,7 +7,6 @@ router.get('/next-part-number', checkToken, controller.getNextPartNumber);
 router.get('/:id', checkToken, controller.getHarnessById);
 router.post('/', checkToken, controller.createHarness);
 router.post('/validate', checkToken, controller.validateHarness);
-router.post('/:id/duplicate', checkToken, controller.duplicateHarness);
 router.put('/:id', checkToken, controller.updateHarness);
 router.delete('/:id', checkToken, controller.deleteHarness);
 
