@@ -1,0 +1,289 @@
+.property-panel {
+  width: 300px;
+  height: 100%;
+  min-height: 0; // Required for overflow scroll in flex container
+  background: #252525;
+  border-left: 1px solid #404040;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex-shrink: 0;
+}
+
+.mat-expansion-panel {
+  margin: 8px;
+  box-shadow: none !important;
+  border: 1px solid #404040;
+  background: #2d2d2d !important;
+}
+
+::ng-deep .mat-expansion-panel-header-title {
+  color: #e0e0e0 !important;
+}
+
+::ng-deep .mat-expansion-panel-header-description {
+  color: #888 !important;
+}
+
+::ng-deep .mat-expansion-indicator::after {
+  color: #888 !important;
+}
+
+.nested-panel {
+  margin: 8px 0 !important;
+}
+
+.property-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.full-width {
+  width: 100%;
+}
+
+.half-width {
+  width: calc(50% - 4px);
+}
+
+.termination-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+mat-form-field {
+  font-size: 13px;
+}
+
+::ng-deep .mat-mdc-form-field {
+  --mdc-outlined-text-field-outline-color: #555;
+  --mdc-outlined-text-field-focus-outline-color: #64b5f6;
+  --mdc-outlined-text-field-label-text-color: #888;
+  --mdc-outlined-text-field-input-text-color: #e0e0e0;
+}
+
+.color-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  border: 1px solid #555;
+}
+
+.pin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pin-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pin-number {
+  width: 24px;
+  text-align: center;
+  font-weight: 500;
+  color: #888;
+}
+
+.pin-label-field {
+  flex: 1;
+}
+
+.action-buttons {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #404040;
+}
+
+.no-selection {
+  padding: 32px 16px;
+  text-align: center;
+  color: #888;
+}
+
+.no-selection mat-icon {
+  font-size: 48px;
+  width: 48px;
+  height: 48px;
+  color: #555;
+}
+
+.no-selection p {
+  margin-top: 8px;
+}
+
+.connector-selected-info {
+  padding: 24px 16px;
+  text-align: center;
+  color: #b0b0b0;
+  margin: 8px;
+  background: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 4px;
+}
+
+.connector-selected-info mat-icon {
+  font-size: 36px;
+  width: 36px;
+  height: 36px;
+  color: #64b5f6;
+}
+
+.connector-selected-info p {
+  margin: 8px 0 4px 0;
+}
+
+.connector-selected-info .hint {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 16px;
+}
+
+.cable-selected-info {
+  padding: 24px 16px;
+  text-align: center;
+  color: #b0b0b0;
+  margin: 8px;
+  background: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 4px;
+}
+
+.cable-selected-info mat-icon {
+  font-size: 36px;
+  width: 36px;
+  height: 36px;
+  color: #ab47bc;
+}
+
+.cable-selected-info p {
+  margin: 8px 0 4px 0;
+}
+
+.cable-selected-info .cable-details {
+  font-size: 13px;
+  color: #888;
+}
+
+.cable-selected-info .hint {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 16px;
+}
+
+.connection-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: #333;
+  border-radius: 4px;
+  width: 100%;
+  margin-bottom: 8px;
+  color: #ccc;
+}
+
+.endpoint {
+  flex: 1;
+  font-size: 12px;
+}
+
+.arrow-icon {
+  color: #888;
+}
+
+.cable-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cable-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px;
+  background: #333;
+  border-radius: 4px;
+}
+
+.cable-label {
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.cable-info {
+  font-size: 12px;
+  color: #888;
+}
+
+.empty-message {
+  color: #666;
+  font-style: italic;
+  text-align: center;
+  padding: 16px;
+}
+
+.manage-btn {
+  width: 100%;
+  margin-top: 8px;
+  color: #b0b0b0 !important;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.stat-item {
+  text-align: center;
+  padding: 12px;
+  background: #333;
+  border-radius: 4px;
+}
+
+.stat-value {
+  display: block;
+  font-size: 24px;
+  font-weight: 500;
+  color: #64b5f6;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+}
+
+.harness-actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #404040;
+}
+
+.harness-actions button {
+  flex: 1;
+  font-size: 12px;
+}
+
+.harness-actions mat-icon {
+  font-size: 16px;
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+}

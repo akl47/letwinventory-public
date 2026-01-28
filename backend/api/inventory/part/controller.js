@@ -1,5 +1,6 @@
 const db = require('../../../models');
-const createError = require('http-errors')
+const createError = require('http-errors');
+const { Op } = require('sequelize');
 
 exports.getAllPartCategories = (req, res, next) => {
   db.PartCategory.findAll({
@@ -9,13 +10,60 @@ exports.getAllPartCategories = (req, res, next) => {
     order: [
       ['name', 'asc']
     ],
-    attributes: ['id', 'name']
+    attributes: ['id', 'name', 'tagColorHex']
   }).then(categories => {
     res.json(categories)
   }).catch(error => {
     next(createError(500, 'Error Getting Part Categories:' + error))
   })
 }
+
+exports.searchPartsByCategory = async (req, res, next) => {
+  try {
+    const { category, q } = req.query;
+
+    if (!category) {
+      return next(createError(400, 'Category parameter is required'));
+    }
+
+    // Find the category by name
+    const partCategory = await db.PartCategory.findOne({
+      where: { name: category, activeFlag: true }
+    });
+
+    if (!partCategory) {
+      return res.json([]);
+    }
+
+    // Build search conditions
+    const whereClause = {
+      partCategoryID: partCategory.id,
+      activeFlag: true
+    };
+
+    // Add search term if provided
+    if (q && q.trim()) {
+      whereClause[Op.or] = [
+        { name: { [Op.iLike]: `%${q}%` } },
+        { description: { [Op.iLike]: `%${q}%` } }
+      ];
+    }
+
+    const parts = await db.Part.findAll({
+      where: whereClause,
+      order: [['name', 'ASC']],
+      limit: 20,
+      include: [{
+        model: db.PartCategory,
+        attributes: ['id', 'name', 'tagColorHex']
+      }]
+    });
+
+    res.json(parts);
+  } catch (error) {
+    next(createError(500, 'Error searching parts: ' + error.message));
+  }
+};
 
 exports.getAllParts = (req, res, next) => {
   // Return all parts (active and inactive), let frontend filter
@@ -33,7 +81,7 @@ exports.getAllParts = (req, res, next) => {
       },
       {
         model: db.PartCategory,
-        attributes: ['id', 'name']
+        attributes: ['id', 'name', 'tagColorHex']
       }
     ]
   }).then(parts => {

@@ -1,0 +1,22 @@
+.harness-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #1a1a1a;
+}
+
+.main-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+app-harness-canvas {
+  flex: 1;
+  min-width: 0;
+}
+
+app-harness-property-panel {
+  height: 100%;
+  overflow: hidden;
+}

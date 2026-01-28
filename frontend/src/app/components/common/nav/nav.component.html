@@ -17,8 +17,8 @@
             </a>
             }
             @if (isAuthenticated()) {
-            <a mat-list-item routerLink="/tasks" (click)="navigateToTasks($event)" routerLinkActive="active-link" matTooltip="Tasks"
-                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
+            <a mat-list-item routerLink="/tasks" (click)="navigateToTasks($event)" routerLinkActive="active-link"
+                matTooltip="Tasks" matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
                 <mat-icon matListItemIcon>task</mat-icon>
                 <span matListItemTitle>Tasks</span>
             </a>
@@ -41,6 +41,11 @@
                 matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
                 <mat-icon matListItemIcon>shopping_cart</mat-icon>
                 <span matListItemTitle>Orders</span>
+            </a>
+            <a mat-list-item routerLink="/harness" routerLinkActive="active-link" matTooltip="Wire Harness"
+                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
+                <mat-icon matListItemIcon>cable</mat-icon>
+                <span matListItemTitle>Wire Harness</span>
             </a>
             }
         </mat-nav-list>

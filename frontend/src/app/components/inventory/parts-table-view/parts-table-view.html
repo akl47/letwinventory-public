@@ -5,6 +5,56 @@
             Parts Catalog
         </h2>
         <div class="header-actions">
+            <!-- Filter Dropdown -->
+            <button mat-button class="filter-btn" [matMenuTriggerFor]="filterMenu"
+                [class.has-filter]="activeFilterCount() > 0">
+                <mat-icon>filter_list</mat-icon>
+                <span>Filter</span>
+                @if (activeFilterCount() > 0) {
+                <span class="filter-badge">{{ activeFilterCount() }}</span>
+                }
+                <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
+            </button>
+            <mat-menu #filterMenu="matMenu" class="filter-menu">
+                <!-- Categories Section -->
+                <div class="menu-section-header">Categories</div>
+                <div class="menu-header" (click)="$event.stopPropagation()">
+                    <mat-checkbox [checked]="allCategoriesSelected()" [indeterminate]="someCategoriesSelected()"
+                        (change)="toggleAllCategories()">
+                        All Categories
+                    </mat-checkbox>
+                </div>
+                @for (cat of categories(); track cat.id) {
+                <div class="menu-item" (click)="$event.stopPropagation()">
+                    <mat-checkbox [checked]="isCategorySelected(cat.id)" (change)="toggleCategory(cat.id)">
+                        <span class="category-color" [style.background-color]="cat.tagColorHex || '#808080'"></span>
+                        {{ cat.name }}
+                    </mat-checkbox>
+                </div>
+                }
+                <mat-divider></mat-divider>
+                <!-- Part Type Section -->
+                <div class="menu-section-header">Part Type</div>
+                <div class="menu-header" (click)="$event.stopPropagation()">
+                    <mat-checkbox [checked]="allTypesSelected()" [indeterminate]="someTypesSelected()"
+                        (change)="toggleAllTypes()">
+                        All Types
+                    </mat-checkbox>
+                </div>
+                <div class="menu-item" (click)="$event.stopPropagation()">
+                    <mat-checkbox [checked]="showInternal()" (change)="toggleInternal()">
+                        <span class="type-color internal"></span>
+                        Internal
+                    </mat-checkbox>
+                </div>
+                <div class="menu-item" (click)="$event.stopPropagation()">
+                    <mat-checkbox [checked]="showVendor()" (change)="toggleVendor()">
+                        <span class="type-color vendor"></span>
+                        Vendor
+                    </mat-checkbox>
+                </div>
+            </mat-menu>
+
             <mat-form-field appearance="outline" class="search-field">
                 <mat-label>Search parts</mat-label>
                 <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
@@ -42,11 +92,9 @@
             <ng-container matColumnDef="category">
                 <th mat-header-cell *matHeaderCellDef mat-sort-header>Category</th>
                 <td mat-cell *matCellDef="let part">
-                    <span class="category-badge" [class.category-part]="part.PartCategory?.name === 'Part'"
-                        [class.category-consumable]="part.PartCategory?.name === 'Consumable'"
-                        [class.category-equipment]="part.PartCategory?.name === 'Equipment'"
-                        [class.category-tooling]="part.PartCategory?.name === 'Tooling'">
-
+                    <span class="category-badge"
+                        [style.background-color]="getCategoryBgColor(part.PartCategory?.tagColorHex)"
+                        [style.color]="getCategoryTextColor(part.PartCategory?.tagColorHex)">
                         {{ part.PartCategory?.name || 'Unknown' }}
                     </span>
                 </td>

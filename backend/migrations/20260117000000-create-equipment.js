@@ -39,6 +39,26 @@ module.exports = {
         allowNull: false,
         defaultValue: true
       },
+      partID: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: {
+          model: 'Parts',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
+      },
+      orderItemID: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: {
+          model: 'OrderItems',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
+      },
       createdAt: {
         allowNull: false,
         type: DataTypes.DATE

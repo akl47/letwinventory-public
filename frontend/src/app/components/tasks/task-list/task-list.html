@@ -9,9 +9,9 @@
         @if (isEditMode) {
         <div class="edit-actions">
             <button class="delete-list-btn" (click)="confirmDelete($event)" title="Delete list">
-                <i class="material-icons">delete</i>
+                <mat-icon>delete</mat-icon>
             </button>
-            <i class="material-icons drag-handle" cdkDragHandle>drag_indicator</i>
+            <mat-icon class="drag-handle" cdkDragHandle>drag_indicator</mat-icon>
         </div>
         }
         }
@@ -33,7 +33,7 @@
             <div class="new-task-actions">
                 <button (click)="confirmAddTask()" class="add-card-btn">Add card</button>
                 <button (click)="cancelAddingTask()" class="cancel-btn">
-                    <i class="material-icons icon-lg">close</i>
+                    <mat-icon class="icon-lg">close</mat-icon>
                 </button>
             </div>
         </div>
@@ -44,7 +44,7 @@
     @if (!isAddingTask()) {
     <div class="new-task-wrapper">
         <button class="new-task-btn" (click)="startAddingTask()">
-            <i class="material-icons icon-lg">add</i>
+            <mat-icon class="icon-lg">add</mat-icon>
             <span>New task</span>
         </button>
     </div>

@@ -30,11 +30,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// BODY PARSER
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.text());
-app.use(bodyParser.json({ type: "application/vnd.api+json" }));
+// BODY PARSER - increased limit for base64 image uploads
+app.use(bodyParser.json({ limit: '50mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
+app.use(bodyParser.text({ limit: '50mb' }));
+app.use(bodyParser.json({ type: "application/vnd.api+json", limit: '50mb' }));
 
 // Initialize Passport
 app.use(passport.initialize());

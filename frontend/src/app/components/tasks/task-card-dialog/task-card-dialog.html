@@ -22,14 +22,14 @@
                 <button mat-menu-item (click)="moveToList(list)" [class.selected]="list.id === task().taskListID">
                     {{ list.name }}
                     @if (list.id === task().taskListID) {
-                    <i class="material-icons check-icon">check</i>
+                    <mat-icon class="check-icon">check</mat-icon>
                     }
                 </button>
                 }
             </mat-menu>
         </div>
         <button class="close-btn" mat-icon-button mat-dialog-close>
-            <i class="material-icons">close</i>
+            <mat-icon>close</mat-icon>
         </button>
     </div>
 
@@ -51,7 +51,7 @@
                         @case ('tracking') { Tracking }
                         @case ('critical_path') { Critical Path }
                         }
-                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+                        <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
                     </span>
 
                     <!-- Label Dropdown Menu -->
@@ -64,7 +64,7 @@
                                 {{ option.label }}
                             </span>
                             @if (task().taskTypeEnum === option.value) {
-                            <i class="material-icons check-icon">check</i>
+                            <mat-icon class="check-icon">check</mat-icon>
                             }
                         </button>
                         }
@@ -78,11 +78,11 @@
                         @if(currentProject()) {
                         {{ currentProject()?.name }}
                         } @else {
-                        <i class="material-icons dropdown-icon">add</i>
+                        <mat-icon class="dropdown-icon">add</mat-icon>
                         &nbsp;
                         Add Project
                         }
-                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+                        <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
                     </span>
 
                     <mat-menu #projectMenu="matMenu" class="project-menu">
@@ -91,7 +91,7 @@
                             <span class="project-dot none-dot"></span>
                             None
                             @if (!task().projectID) {
-                            <i class="material-icons check-icon">check</i>
+                            <mat-icon class="check-icon">check</mat-icon>
                             }
                         </button>
                         @for (project of projects(); track project.id) {
@@ -100,7 +100,7 @@
                             <span class="project-dot" [style.background-color]="'#' + project.tagColorHex"></span>
                             {{ project.name }}
                             @if (project.id === task().projectID) {
-                            <i class="material-icons check-icon">check</i>
+                            <mat-icon class="check-icon">check</mat-icon>
                             }
                         </button>
                         }
@@ -109,10 +109,10 @@
                     <!-- Due Date Label -->
                     <span class="label date-label clickable-label" [class.overdue]="isOverdue()"
                         [matMenuTriggerFor]="dateMenu" #dateTrigger="matMenuTrigger" (click)="openDateMenu()">
-                        <i class="material-icons left-icon">calendar_today</i>
+                        <mat-icon class="left-icon">calendar_today</mat-icon>
                         {{ task().dueDate ? (task().dueDate | date:'MMM d, yyyy, h:mm a') : 'Due Date' }}
                         &nbsp;
-                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+                        <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
 
                     </span>
 
@@ -143,10 +143,10 @@
                     <!-- Time Estimate Label -->
                     <span class="label estimate-label clickable-label" [matMenuTriggerFor]="estimateMenu"
                         #estimateTrigger="matMenuTrigger">
-                        <i class="material-icons left-icon">timer</i>
+                        <mat-icon class="left-icon">timer</mat-icon>
                         {{ task().timeEstimate ? formatEstimate(task().timeEstimate) : 'Estimate' }}
                         &nbsp;
-                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+                        <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
                     </span>
 
                     <mat-menu #estimateMenu="matMenu" class="estimate-menu">
@@ -157,7 +157,7 @@
                                 [class.selected]="opt === task().timeEstimate">
                                 {{ formatEstimate(opt) }}
                                 @if (opt === task().timeEstimate) {
-                                <i class="material-icons check-icon">check</i>
+                                <mat-icon class="check-icon">check</mat-icon>
                                 }
                             </button>
                             }
@@ -173,10 +173,10 @@
 
                     <!-- Add Subtask Label -->
                     <span class="label clickable-label subtask-add-label" (click)="toggleSubtasks()">
-                        <i class="material-icons left-icon">add_task</i>
+                        <mat-icon class="left-icon">add_task</mat-icon>
                         Add Subtask
                         &nbsp;
-                        <i class="material-icons dropdown-icon">arrow_drop_down</i>
+                        <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
                     </span>
                 </div>
             </div>
@@ -185,7 +185,7 @@
             @if (showSubtasks()) {
             <div class="section subtasks-section">
                 <div class="section-header">
-                    <i class="material-icons">checklist</i>
+                    <mat-icon>checklist</mat-icon>
                     <h3 class="section-title">Subtasks</h3>
                     @if (subtasks().length > 0) {
                     <span class="subtask-count">{{ subtasks().length }} subtasks</span>
@@ -196,7 +196,7 @@
                         Auto-complete
                     </mat-slide-toggle>
                     <button mat-button class="link-existing-btn" [matMenuTriggerFor]="linkMenu">
-                        <i class="material-icons">link</i>
+                        <mat-icon>link</mat-icon>
                         Link Existing
                     </button>
 
@@ -227,7 +227,7 @@
                             sub.name }}</span>
                         <button mat-icon-button class="unlink-subtask-btn" (click)="unlinkSubtask(sub)"
                             matTooltip="Unlink subtask">
-                            <i class="material-icons">link_off</i>
+                            <mat-icon>link_off</mat-icon>
                         </button>
                     </div>
                     }
@@ -248,7 +248,7 @@
             <!-- Description Section -->
             <div class="section description-section">
                 <div class="section-header">
-                    <i class="material-icons">subject</i>
+                    <mat-icon>subject</mat-icon>
                     <h3 class="section-title">Description</h3>
                     @if (!isEditingDescription() && task().description) {
                     <button mat-button class="edit-btn" (click)="toggleEditDescription()">Edit</button>

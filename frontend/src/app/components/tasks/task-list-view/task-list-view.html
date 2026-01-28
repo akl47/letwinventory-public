@@ -26,13 +26,13 @@
             <div class="new-list-actions">
                 <button (click)="confirmAddList()" class="add-list-btn">Add list</button>
                 <button (click)="cancelAddingList()" class="cancel-btn">
-                    <i class="material-icons">close</i>
+                    <mat-icon>close</mat-icon>
                 </button>
             </div>
         </div>
         } @else {
         <button class="add-list-btn-large" (click)="startAddingList()">
-            <i class="material-icons">add</i>
+            <mat-icon>add</mat-icon>
             <span>Add another list</span>
         </button>
         }

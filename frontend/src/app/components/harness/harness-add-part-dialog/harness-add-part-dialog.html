@@ -1,0 +1,334 @@
+<h2 mat-dialog-title>Add Part</h2>
+
+<mat-dialog-content>
+  <mat-tab-group [(selectedIndex)]="selectedTab" (selectedIndexChange)="onTabChange($event)">
+    <!-- Connector Tab -->
+    <mat-tab>
+      <ng-template mat-tab-label>
+        <mat-icon>add_box</mat-icon>
+        <span>Connector</span>
+      </ng-template>
+      <div class="tab-content">
+        @if (loadingConnectors()) {
+          <div class="loading-state">
+            <mat-spinner diameter="32"></mat-spinner>
+            <span>Loading connectors...</span>
+          </div>
+        } @else {
+          <!-- Selection Mode -->
+          <div class="selection-mode">
+            <mat-radio-group [(ngModel)]="connectorMode" class="mode-radio">
+              <mat-radio-button value="existing" [disabled]="dbConnectors().length === 0">
+                Select Existing ({{ dbConnectors().length }})
+              </mat-radio-button>
+              <mat-radio-button value="new">Create New</mat-radio-button>
+            </mat-radio-group>
+          </div>
+
+          @if (connectorMode === 'existing') {
+            <!-- Existing Connectors List -->
+            @if (dbConnectors().length === 0) {
+              <div class="empty-state">
+                <mat-icon>add_box</mat-icon>
+                <p>No connectors in library</p>
+              </div>
+            } @else {
+              <div class="part-list">
+                <mat-radio-group [(ngModel)]="selectedConnectorId" class="part-radio-group">
+                  @for (conn of dbConnectors(); track conn.id) {
+                    <mat-radio-button [value]="conn.id" class="part-radio-option">
+                      <div class="part-option-content">
+                        <span class="part-label">{{ conn.label }}</span>
+                        <span class="part-details">
+                          {{ conn.type }} • {{ conn.pinCount }} pins
+                          @if (conn.color) {
+                            <span class="color-dot" [style.backgroundColor]="getConnectorHex(conn.color)"></span>
+                          }
+                        </span>
+                        @if (conn.part) {
+                          <span class="part-link">{{ conn.part.name }}</span>
+                        }
+                      </div>
+                    </mat-radio-button>
+                  }
+                </mat-radio-group>
+              </div>
+            }
+          } @else {
+            <!-- Create New Connector Form -->
+            <div class="form-grid">
+              <mat-form-field appearance="outline">
+                <mat-label>Label</mat-label>
+                <input matInput [(ngModel)]="newConnector.label" placeholder="e.g., J1, P2, CN1" required>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline">
+                <mat-label>Type</mat-label>
+                <mat-select [(ngModel)]="newConnector.type">
+                  @for (type of connectorTypes; track type.value) {
+                    <mat-option [value]="type.value">{{ type.label }}</mat-option>
+                  }
+                </mat-select>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline">
+                <mat-label>Pin Count</mat-label>
+                <input matInput type="number" [(ngModel)]="newConnector.pinCount" min="1" max="100">
+              </mat-form-field>
+
+              <mat-form-field appearance="outline">
+                <mat-label>Color</mat-label>
+                <mat-select [(ngModel)]="newConnector.color">
+                  @for (c of connectorColors; track c.code) {
+                    <mat-option [value]="c.code">
+                      <span class="color-option">
+                        <span class="color-swatch" [style.backgroundColor]="c.hex"></span>
+                        {{ c.name }}
+                      </span>
+                    </mat-option>
+                  }
+                </mat-select>
+              </mat-form-field>
+            </div>
+
+            <div class="save-to-library">
+              <label>
+                <input type="checkbox" [(ngModel)]="saveConnectorToLibrary">
+                Save to library for reuse
+              </label>
+            </div>
+          }
+        }
+      </div>
+    </mat-tab>
+
+    <!-- Wire Tab -->
+    <mat-tab>
+      <ng-template mat-tab-label>
+        <mat-icon>timeline</mat-icon>
+        <span>Wire</span>
+      </ng-template>
+      <div class="tab-content">
+        @if (loadingWires()) {
+          <div class="loading-state">
+            <mat-spinner diameter="32"></mat-spinner>
+            <span>Loading wires...</span>
+          </div>
+        } @else {
+          <!-- Selection Mode -->
+          <div class="selection-mode">
+            <mat-radio-group [(ngModel)]="wireMode" class="mode-radio">
+              <mat-radio-button value="existing" [disabled]="dbWires().length === 0">
+                Select Existing ({{ dbWires().length }})
+              </mat-radio-button>
+              <mat-radio-button value="new">Create New</mat-radio-button>
+            </mat-radio-group>
+          </div>
+
+          @if (wireMode === 'existing') {
+            <!-- Existing Wires List -->
+            @if (dbWires().length === 0) {
+              <div class="empty-state">
+                <mat-icon>timeline</mat-icon>
+                <p>No wires in library</p>
+              </div>
+            } @else {
+              <div class="part-list">
+                <mat-radio-group [(ngModel)]="selectedWireId" class="part-radio-group">
+                  @for (wire of dbWires(); track wire.id) {
+                    <mat-radio-button [value]="wire.id" class="part-radio-option">
+                      <div class="part-option-content">
+                        <span class="part-label">{{ wire.label }}</span>
+                        <span class="part-details">
+                          {{ wire.color }}
+                          @if (wire.gaugeAWG) {
+                            • {{ wire.gaugeAWG }} AWG
+                          }
+                          <span class="color-dot" [style.backgroundColor]="getWireHex(wire.colorCode || '')"></span>
+                        </span>
+                        @if (wire.part) {
+                          <span class="part-link">{{ wire.part.name }}</span>
+                        }
+                      </div>
+                    </mat-radio-button>
+                  }
+                </mat-radio-group>
+              </div>
+            }
+          } @else {
+            <!-- Create New Wire Form -->
+            <div class="form-grid">
+              <mat-form-field appearance="outline">
+                <mat-label>Label</mat-label>
+                <input matInput [(ngModel)]="newWire.label" placeholder="e.g., W1, GND" required>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline">
+                <mat-label>Color</mat-label>
+                <mat-select [(ngModel)]="newWire.colorCode" (ngModelChange)="updateNewWireColor()">
+                  @for (color of wireColors; track color.code) {
+                    <mat-option [value]="color.code">
+                      <span class="color-option">
+                        <span class="color-swatch" [style.backgroundColor]="color.hex"></span>
+                        {{ color.name }} ({{ color.code }})
+                      </span>
+                    </mat-option>
+                  }
+                </mat-select>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline">
+                <mat-label>Gauge (AWG)</mat-label>
+                <mat-select [(ngModel)]="newWire.gaugeAWG">
+                  <mat-option value="">Not specified</mat-option>
+                  @for (gauge of awgGauges; track gauge) {
+                    <mat-option [value]="gauge">{{ gauge }} AWG</mat-option>
+                  }
+                </mat-select>
+              </mat-form-field>
+            </div>
+
+            <div class="save-to-library">
+              <label>
+                <input type="checkbox" [(ngModel)]="saveWireToLibrary">
+                Save to library for reuse
+              </label>
+            </div>
+          }
+        }
+      </div>
+    </mat-tab>
+
+    <!-- Cable Tab -->
+    <mat-tab>
+      <ng-template mat-tab-label>
+        <mat-icon>electrical_services</mat-icon>
+        <span>Cable</span>
+      </ng-template>
+      <div class="tab-content">
+        @if (loadingCables()) {
+          <div class="loading-state">
+            <mat-spinner diameter="32"></mat-spinner>
+            <span>Loading cables...</span>
+          </div>
+        } @else {
+          <!-- Selection Mode -->
+          <div class="selection-mode">
+            <mat-radio-group [(ngModel)]="cableMode" class="mode-radio">
+              <mat-radio-button value="existing" [disabled]="dbCables().length === 0">
+                Select Existing ({{ dbCables().length }})
+              </mat-radio-button>
+              <mat-radio-button value="new">Create New</mat-radio-button>
+            </mat-radio-group>
+          </div>
+
+          @if (cableMode === 'existing') {
+            <!-- Existing Cables List -->
+            @if (dbCables().length === 0) {
+              <div class="empty-state">
+                <mat-icon>electrical_services</mat-icon>
+                <p>No cables in library</p>
+              </div>
+            } @else {
+              <div class="part-list">
+                <mat-radio-group [(ngModel)]="selectedCableId" class="part-radio-group">
+                  @for (cable of dbCables(); track cable.id) {
+                    <mat-radio-button [value]="cable.id" class="part-radio-option">
+                      <div class="part-option-content">
+                        <span class="part-label">{{ cable.label }}</span>
+                        <span class="part-details">
+                          {{ cable.wireCount }} wire(s)
+                          @if (cable.gaugeAWG) {
+                            • {{ cable.gaugeAWG }} AWG
+                          }
+                        </span>
+                        <div class="wire-colors">
+                          @for (wire of cable.wires; track wire.id) {
+                            <span class="wire-dot" [style.backgroundColor]="getWireHex(wire.colorCode || '')"></span>
+                          }
+                        </div>
+                        @if (cable.part) {
+                          <span class="part-link">{{ cable.part.name }}</span>
+                        }
+                      </div>
+                    </mat-radio-button>
+                  }
+                </mat-radio-group>
+              </div>
+            }
+          } @else {
+            <!-- Create New Cable Form -->
+            <div class="form-section">
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Cable Label</mat-label>
+                <input matInput [(ngModel)]="newCable.label" placeholder="e.g., CABLE-A" required>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Wire Gauge (AWG)</mat-label>
+                <mat-select [(ngModel)]="newCable.gaugeAWG">
+                  <mat-option value="">Not specified</mat-option>
+                  @for (gauge of awgGauges; track gauge) {
+                    <mat-option [value]="gauge">{{ gauge }} AWG</mat-option>
+                  }
+                </mat-select>
+              </mat-form-field>
+
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Cable Length (mm)</mat-label>
+                <input matInput type="number" [(ngModel)]="newCable.lengthMm" min="1">
+                <mat-hint>Physical length of the cable</mat-hint>
+              </mat-form-field>
+            </div>
+
+            <div class="wires-section">
+              <h3>Wires</h3>
+              <div class="wire-list">
+                @for (wire of cableWires(); track wire.id; let i = $index) {
+                  <div class="wire-row">
+                    <span class="wire-index">{{ i + 1 }}</span>
+                    <mat-form-field appearance="outline" class="color-field">
+                      <mat-label>Color</mat-label>
+                      <mat-select [(ngModel)]="wire.colorCode" (ngModelChange)="updateCableWireColor(wire)">
+                        @for (color of wireColors; track color.code) {
+                          <mat-option [value]="color.code">
+                            <span class="color-option">
+                              <span class="color-swatch" [style.backgroundColor]="color.hex"></span>
+                              {{ color.name }} ({{ color.code }})
+                            </span>
+                          </mat-option>
+                        }
+                      </mat-select>
+                    </mat-form-field>
+                    <button mat-icon-button color="warn" (click)="removeCableWire(i)" [disabled]="cableWires().length <= 1">
+                      <mat-icon>delete</mat-icon>
+                    </button>
+                  </div>
+                }
+              </div>
+
+              <button mat-button (click)="addCableWire()" class="add-wire-btn">
+                <mat-icon>add</mat-icon>
+                Add Wire
+              </button>
+            </div>
+
+            <div class="save-to-library">
+              <label>
+                <input type="checkbox" [(ngModel)]="saveCableToLibrary">
+                Save to library for reuse
+              </label>
+            </div>
+          }
+        }
+      </div>
+    </mat-tab>
+  </mat-tab-group>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button mat-dialog-close>Cancel</button>
+  <button mat-raised-button color="primary" (click)="save()" [disabled]="!isValid()">
+    Add {{ getPartTypeName() }}
+  </button>
+</mat-dialog-actions>

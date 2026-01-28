@@ -1,0 +1,40 @@
+<div class="canvas-container" #canvasContainer (click)="hideContextMenu()">
+  <canvas #mainCanvas
+    (mousedown)="onMouseDown($event)"
+    (mousemove)="onMouseMove($event)"
+    (mouseup)="onMouseUp($event)"
+    (mouseleave)="onMouseUp($event)"
+    (dblclick)="onDoubleClick($event)"
+    (wheel)="onWheel($event)"
+    (contextmenu)="onContextMenu($event)">
+  </canvas>
+  @if (contextMenuVisible) {
+    <div class="context-menu" [style.left.px]="contextMenuX" [style.top.px]="contextMenuY">
+      @if (contextMenuTarget) {
+        <div class="context-menu-item" (click)="onContextMenuAction('rotate')">
+          <span class="icon">↻</span> Rotate 90°
+        </div>
+        <div class="context-menu-item" (click)="onContextMenuAction('flip')">
+          <span class="icon">↔</span> Flip
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" (click)="onContextMenuAction('bringToFront')">
+          <span class="icon">⬆</span> Bring to Front
+        </div>
+        <div class="context-menu-item" (click)="onContextMenuAction('moveForward')">
+          <span class="icon">↑</span> Move Forward
+        </div>
+        <div class="context-menu-item" (click)="onContextMenuAction('moveBackward')">
+          <span class="icon">↓</span> Move Backward
+        </div>
+        <div class="context-menu-item" (click)="onContextMenuAction('sendToBack')">
+          <span class="icon">⬇</span> Send to Back
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" (click)="onContextMenuAction('delete')">
+          <span class="icon">🗑</span> Delete
+        </div>
+      }
+    </div>
+  }
+</div>

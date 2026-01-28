@@ -11,11 +11,12 @@ import { HistoryDrawerComponent } from '../history-drawer/history-drawer';
 import { signal } from '@angular/core';
 import { CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
 import { TaskViewPreferencesService } from '../../../services/task-view-preferences.service';
+import { MatIconModule } from '@angular/material/icon';
 
 @Component({
   selector: 'app-task-list-view',
   standalone: true,
-  imports: [CommonModule, FormsModule, TaskListComponent, SubToolbarComponent, HistoryDrawerComponent, DragDropModule],
+  imports: [CommonModule, FormsModule, TaskListComponent, SubToolbarComponent, HistoryDrawerComponent, DragDropModule, MatIconModule],
   templateUrl: './task-list-view.html',
   styleUrl: './task-list-view.css',
 })

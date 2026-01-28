@@ -1,0 +1,104 @@
+import { Component, OnInit, inject, signal } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { MatDialogModule, MatDialogRef } from '@angular/material/dialog';
+import { MatButtonModule } from '@angular/material/button';
+import { MatIconModule } from '@angular/material/icon';
+import { MatInputModule } from '@angular/material/input';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
+import { MatMenuModule } from '@angular/material/menu';
+import { HarnessService } from '../../../services/harness.service';
+import { WireHarnessSummary, HarnessPagination } from '../../../models/harness.model';
+
+@Component({
+  selector: 'app-harness-list-dialog',
+  standalone: true,
+  imports: [
+    CommonModule,
+    FormsModule,
+    MatDialogModule,
+    MatButtonModule,
+    MatIconModule,
+    MatInputModule,
+    MatFormFieldModule,
+    MatProgressSpinnerModule,
+    MatPaginatorModule,
+    MatMenuModule
+  ],
+  templateUrl: './harness-list-dialog.html',
+  styleUrls: ['./harness-list-dialog.scss']
+})
+export class HarnessListDialog implements OnInit {
+  private dialogRef = inject(MatDialogRef<HarnessListDialog>);
+  private harnessService = inject(HarnessService);
+
+  harnesses = signal<WireHarnessSummary[]>([]);
+  pagination = signal<HarnessPagination>({ total: 0, page: 1, limit: 20, totalPages: 0 });
+  loading = signal<boolean>(false);
+  selectedHarness = signal<WireHarnessSummary | null>(null);
+  searchText = '';
+
+  private searchTimeout: any;
+
+  ngOnInit() {
+    this.loadHarnesses();
+  }
+
+  loadHarnesses(page: number = 1) {
+    this.loading.set(true);
+    this.harnessService.getAllHarnesses(page, this.pagination().limit).subscribe({
+      next: (response) => {
+        this.harnesses.set(response.harnesses);
+        this.pagination.set(response.pagination);
+        this.loading.set(false);
+      },
+      error: () => {
+        this.loading.set(false);
+      }
+    });
+  }
+
+  onSearch() {
+    clearTimeout(this.searchTimeout);
+    this.searchTimeout = setTimeout(() => {
+      this.loadHarnesses(1);
+    }, 300);
+  }
+
+  onPageChange(event: PageEvent) {
+    this.loadHarnesses(event.pageIndex + 1);
+  }
+
+  selectHarness(harness: WireHarnessSummary) {
+    this.selectedHarness.set(harness);
+  }
+
+  openSelected() {
+    const harness = this.selectedHarness();
+    if (harness) {
+      // Fetch full harness data
+      this.harnessService.getHarnessById(harness.id).subscribe({
+        next: (fullHarness) => {
+          this.dialogRef.close(fullHarness);
+        }
+      });
+    }
+  }
+
+
+  deleteHarness(harness: WireHarnessSummary) {
+    if (confirm(`Delete "${harness.name}"? This action cannot be undone.`)) {
+      this.harnessService.deleteHarness(harness.id).subscribe({
+        next: () => {
+          this.loadHarnesses(this.pagination().page);
+        }
+      });
+    }
+  }
+
+  formatDate(dateStr: string): string {
+    return new Date(dateStr).toLocaleDateString();
+  }
+}

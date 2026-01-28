@@ -6,6 +6,7 @@ const bodyValidator = require('../../../middleware/bodyValidator');
 
 router.get('/',checkToken,controller.getAllParts);
 router.get('/categories',checkToken,controller.getAllPartCategories);
+router.get('/search',checkToken,controller.searchPartsByCategory);
 // router.get('/error',checkToken,controller.testError);
 // router.get('/:id',checkToken,controller.getPartByID);
 router.post('/',[checkToken,bodyValidator.part],controller.createNewPart);
