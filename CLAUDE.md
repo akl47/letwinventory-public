@@ -175,6 +175,44 @@ This file tracks changes made to the codebase during Claude Code sessions.
 
 ---
 
+## Session: 2026-01-28
+
+### Files Modified
+- `backend/models/common/uploadedFile.js`
+- `backend/api/files/controller.js`
+- `frontend/src/app/services/harness-parts.service.ts`
+- `frontend/src/app/components/inventory/part-edit-dialog/part-edit-dialog.ts`
+- `frontend/src/app/components/tasks/task-card/task-card.scss`
+- `frontend/src/app/components/harness/harness-list-view/harness-list-view.css`
+
+### Changes Made
+
+1. **Removed category and description fields from file uploads**
+   - Removed `category` and `description` field definitions from `uploadedFile.js` model
+   - Updated `controller.js` to not accept or return category/description
+   - Updated `harness-parts.service.ts`:
+     - Removed `category` and `description` from `UploadedFileResponse` interface
+     - Simplified `uploadFile()` method to only accept `file` parameter
+   - Updated `part-edit-dialog.ts` to call `uploadFile()` with only the file argument (5 call sites updated)
+
+2. **Fixed task card time estimate icon size**
+   - Increased `.icon-xs` class from 10px to 14px in `task-card.scss`
+   - Added explicit `width: 14px` and `height: 14px` for proper sizing
+   - Timer icon in time estimate badges is now readable
+
+3. **Fixed harness list empty state button icon**
+   - Changed `.no-data mat-icon` to `.no-data > mat-icon` to only target direct children (decorative icons)
+   - Added `.no-data button mat-icon` rule with 24px sizing for proper button icon display
+   - The + icon in "Create Harness" button no longer inherits the 72px decorative icon size
+
+### Notes
+- File uploads are now simpler without category/description metadata
+- The migration file already didn't have category/description columns, so no migration changes needed
+- UI fixes improve readability and visual consistency
+- Current branch: wire_harness
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:

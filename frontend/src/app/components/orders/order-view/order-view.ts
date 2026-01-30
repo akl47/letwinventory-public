@@ -466,7 +466,7 @@ export class OrderView implements OnInit, OnDestroy {
 
                   if (result.printBarcode && equipment.barcodeID) {
                     const defaultPrinter = this.printers().find(p => p.isDefault);
-                    const printerIP = defaultPrinter?.ipAddress || '10.10.10.37';
+                    const printerIP = defaultPrinter?.ipAddress || '10.50.20.91';
                     this.inventoryService.printBarcode(
                       equipment.barcodeID,
                       result.barcodeSize,
@@ -512,7 +512,7 @@ export class OrderView implements OnInit, OnDestroy {
 
                   if (result.printBarcode && trace.barcodeID) {
                     const defaultPrinter = this.printers().find(p => p.isDefault);
-                    const printerIP = defaultPrinter?.ipAddress || '10.10.10.37';
+                    const printerIP = defaultPrinter?.ipAddress || '10.50.20.91';
                     this.inventoryService.printBarcode(
                       trace.barcodeID,
                       result.barcodeSize,

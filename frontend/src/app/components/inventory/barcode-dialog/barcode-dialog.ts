@@ -48,38 +48,18 @@ export class BarcodeDialog implements OnInit {
   barcodeObject = signal<any | null>(null);
   selectedPreviewSize = signal<string>('3x1');
   selectedLabelSize = signal<string>('3x1');
-  selectedPrinterIP = signal<string>('10.10.10.37');
   isPrinting = signal(false);
   showPrintOptions = signal(false);
 
   labelSizes = [
-    { value: '3x1', label: '3" x 1"' },
-    { value: '1.5x1', label: '1.5" x 1"' }
+    { value: '3x1', label: '3" x 1"', printer: '10.50.20.91' },
+    { value: '1.5x1', label: '1.5" x 1"', printer: '10.50.20.92' }
   ];
-
-  printers = signal<any[]>([]);
 
   constructor(@Inject(MAT_DIALOG_DATA) public data: { barcode: string }) { }
 
   ngOnInit() {
     this.fetchAndRenderBarcode();
-    this.loadPrinters();
-  }
-
-  private loadPrinters() {
-    this.inventoryService.getPrinters().subscribe({
-      next: (printers) => {
-        this.printers.set(printers);
-        // Set default printer if available
-        const defaultPrinter = printers.find(p => p.isDefault);
-        if (defaultPrinter) {
-          this.selectedPrinterIP.set(defaultPrinter.ipAddress);
-        }
-      },
-      error: (err) => {
-        this.errorNotification.showHttpError(err, 'Failed to load printers');
-      }
-    });
   }
 
   private fetchAndRenderBarcode() {
@@ -145,7 +125,12 @@ export class BarcodeDialog implements OnInit {
 
   private renderBarcodeImage(zpl: string, labelSize: string) {
     const encodedZPL = encodeURIComponent(zpl);
-    const labelaryUrl = `https://api.labelary.com/v1/printers/8dpmm/labels/${labelSize}/0/${encodedZPL}`;
+    let labelaryUrl = '';
+    if (labelSize === '1.5x1') {
+      labelaryUrl = `https://api.labelary.com/v1/printers/8dpmm/labels/${labelSize}/0/${encodedZPL}`;
+    } else if (labelSize === '3x1') {
+      labelaryUrl = `https://api.labelary.com/v1/printers/12dpmm/labels/${labelSize}/0/${encodedZPL}`;
+    }
     this.barcodeImageUrl.set(labelaryUrl);
   }
 
@@ -187,9 +172,10 @@ export class BarcodeDialog implements OnInit {
 
     this.isPrinting.set(true);
     const labelSize = this.selectedLabelSize();
-    const printerIP = this.selectedPrinterIP();
 
-    this.inventoryService.printBarcode(barcodeId, labelSize, printerIP).subscribe({
+    // Printer is determined by backend based on label size:
+    // 3x1 -> 10.50.20.91, 1.5x1 -> 10.50.20.92
+    this.inventoryService.printBarcode(barcodeId, labelSize).subscribe({
       next: (response: any) => {
         this.isPrinting.set(false);
         this.errorNotification.showSuccess(response?.message || 'Label printed successfully!');

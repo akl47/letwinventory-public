@@ -4,27 +4,18 @@ module.exports = {
   up: async (queryInterface, Sequelize) => {
     return queryInterface.bulkInsert('Printers', [
       {
-        name: 'Default Printer',
-        ipAddress: '10.10.10.37',
-        description: 'Main warehouse printer',
+        name: '3x1 Label Printer',
+        ipAddress: '10.50.20.91',
+        description: '3x1 Label Printer',
         isDefault: true,
         activeFlag: true,
         createdAt: new Date(),
         updatedAt: new Date()
       },
       {
-        name: 'Printer 2',
-        ipAddress: '10.10.10.38',
-        description: 'Secondary warehouse printer',
-        isDefault: false,
-        activeFlag: true,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      },
-      {
-        name: 'Printer 3',
-        ipAddress: '10.10.10.39',
-        description: 'Office printer',
+        name: '1.5x1 Label Printer',
+        ipAddress: '10.50.20.92',
+        description: '1.5x1 Label Printer',
         isDefault: false,
         activeFlag: true,
         createdAt: new Date(),
