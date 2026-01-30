@@ -22,7 +22,7 @@ exports.printBarcodeByID = async (req, res, next) => {
   console.log("Print barcode request received");
   try {
     const barcodeID = req.params.id;
-    const { labelSize = '3x1', printerIP: customPrinterIP } = req.body;
+    const { labelSize, printerIP: customPrinterIP } = req.body;
 
     // Determine printer IP based on label size or custom IP
     let printerIP;
@@ -33,7 +33,7 @@ exports.printBarcodeByID = async (req, res, next) => {
     } else if (labelSize === '1.5x1') {
       printerIP = "10.50.20.92";
     } else {
-      return next(createError(400, 'Invalid label size specified'));
+      return next(createError(400, 'Label size must be specified (3x1 or 1.5x1)'));
     }
 
     const barcode = await findBarcodeWithCategory(barcodeID);

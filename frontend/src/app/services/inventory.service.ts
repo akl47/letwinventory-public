@@ -78,8 +78,12 @@ export class InventoryService {
         });
     }
 
-    printBarcode(barcodeId: number, labelSize: string, printerIP: string): Observable<any> {
-        return this.http.post(`${this.apiUrl}/barcode/print/${barcodeId}`, { labelSize, printerIP });
+    printBarcode(barcodeId: number, labelSize: string, printerIP?: string): Observable<any> {
+        const body: { labelSize: string; printerIP?: string } = { labelSize };
+        if (printerIP) {
+            body.printerIP = printerIP;
+        }
+        return this.http.post(`${this.apiUrl}/barcode/print/${barcodeId}`, body);
     }
 
     createTrace(data: {
