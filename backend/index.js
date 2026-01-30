@@ -1,10 +1,12 @@
 const express = require("express");
+const http = require("http");
 const app = express();
 const bodyParser = require("body-parser");
 const path = require("path");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const { passport } = require("./auth/passport");
+const printAgentService = require("./services/printAgentService");
 
 // Load environment-specific .env file
 const envFile = process.env.NODE_ENV === 'production'
@@ -56,7 +58,13 @@ if (process.env.NODE_ENV === 'production') {
 
 app.use(require("./util/errorHandler"));
 
-app.listen(port, () => {
+// Create HTTP server and initialize WebSocket for print agent
+const server = http.createServer(app);
+
+// Initialize print agent WebSocket service
+printAgentService.initialize(server);
+
+server.listen(port, () => {
   db.sequelize.sync().then(() => {
     console.log(`Server listening on the port:${port}`);
   });

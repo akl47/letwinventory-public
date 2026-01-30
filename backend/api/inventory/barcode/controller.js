@@ -1,6 +1,7 @@
 const db = require('../../../models');
 const Net = require('net');
 const createError = require('http-errors');
+const printAgentService = require('../../../services/printAgentService');
 
 // ============================================
 // Controller Methods
@@ -18,24 +19,42 @@ exports.getQueuedUpdatedByID = async (req, res, next) => {
 };
 
 exports.printBarcodeByID = async (req, res, next) => {
+  console.log("Print barcode request received");
   try {
     const barcodeID = req.params.id;
-    const { labelSize = '3x1' } = req.body;
-    if (labelSize == '3x1') {
-      printerIP = "10.50.10.91"
-    } else if (labelSize == '1.5x1') {
-      printerIP = "10.50.10.92"
+    const { labelSize = '3x1', printerIP: customPrinterIP } = req.body;
+
+    // Determine printer IP based on label size or custom IP
+    let printerIP;
+    if (customPrinterIP) {
+      printerIP = customPrinterIP;
+    } else if (labelSize === '3x1') {
+      printerIP = "10.50.20.91";
+    } else if (labelSize === '1.5x1') {
+      printerIP = "10.50.20.92";
     } else {
-      next(createError(400, 'Invalid label size specified'));
+      return next(createError(400, 'Invalid label size specified'));
     }
+
     const barcode = await findBarcodeWithCategory(barcodeID);
     if (!barcode) {
       return next(createError(404, 'Barcode not found'));
     }
 
     const zpl = await generateZPL(barcode, labelSize);
-    await sendToPrinter(zpl, printerIP);
-    res.json({ message: "Label printed successfully" });
+
+    // Check if print agent is connected
+    if (printAgentService.hasConnectedAgent()) {
+      // Send via print agent (for remote printing)
+      print(`Sending print job to print agent for printer ${printerIP}`);
+      await printAgentService.sendPrintJob(zpl, printerIP);
+      res.json({ message: "Label printed successfully via print agent" });
+    } else {
+      // Fall back to direct TCP (only works if server is on same network)
+      console.log(`No connected print agent, sending directly via TCP ${printerIP}`);
+      await sendToPrinter(zpl, printerIP);
+      res.json({ message: "Label printed successfully" });
+    }
   } catch (error) {
     next(createError(500, `Error printing barcode: ${error.message}`));
   }
@@ -368,13 +387,14 @@ async function buildTagChain(startingBarcodeID) {
 // Helper Functions - Printer
 // ============================================
 
-function sendToPrinter(zpl, printerIP = "10.10.10.37") {
+function sendToPrinter(zpl, printerIP = "10.50.20.91") {
   return new Promise((resolve, reject) => {
     const client = new Net.Socket();
 
     client.on('error', (error) => {
       reject(new Error(`Printer connection error: ${error.message}`));
     });
+    console.log(zpl)
 
     client.connect({ port: 9100, host: printerIP }, () => {
       client.write(zpl);
@@ -507,14 +527,15 @@ function generateZPLHeader(qrCodeData, labelSize = '3x1') {
   // Default 3x1 label layout
   return `
     ^XA
-    ^FO10,10^GFA,128,128,4,,::::::001E78,007246,01F2478,0FFBDFF,1FCE7E6827C67E6467CE7E6247FE3FE243FE7FE243FC1FC240F81F82201FFC022026240418DC3F18I042,I06E,I0C1,I081,::I0C3,I0C1,3FDCBFFC,:^FS
+    ^FO10,10^GFA,288,288,6,,:::::::::J0181C,J07C3F,I01C661C,I0F9268F,003FC663FC,01FFE7E7FF8,07FE366FE7E,0CFE1E3FC33,18FC1C3FC31830FE3C3FC38C30FBJF3F8424FBFC1F3F8660IFC1IF0660NF02607IFCFFE02203FF007FC06200FF007F8043I0F01FI0C18219FF984080C038C19C038070FF81FF06,01F808101FC,K081,K0C3,J01FF8,J0100C,:J0180C,J0100C,:::J0300C,0PF,380CJ0301C3004J0100E,:^FS
 
-    ^FO50,20^A0N,20,20^FDLETWINVENTORY^FS
-    ^FO493,10
-    ^BQN,2,5
+    ^FO60,25^A0N,30,30^FDLETWINVENTORY^FS
+    ^FO720,15
+    ^BQN,2,8
     ^FDMA,${qrCodeData}^FS
-    ^FO500,135^A0N,17,17^FD${qrCodeData}^FS`;
+    ^FO739,200^A0N,25,25^FD${qrCodeData}^FS`;
 }
+
 
 
 
@@ -548,13 +569,13 @@ function generateZPLDetailsSection(name, description, labelSize = '3x1', qty = n
     return label_text;
   }
 
-  font_size = Math.floor(-3.75 * name.length + 96)
-  desc_height = Math.floor(-0.833 * font_size + 134.978)
+  font_size = Math.floor(-5.5 * name.length + 142)
+  desc_height = Math.floor(-1.23 * font_size + 200)
   // Default 3x1 label layout
   label_text = `
-          ^FO20,${desc_height}^A0N,${font_size},${font_size}^FD${name}^FS
-          ^CF0,23,23
-          ^FO20,142
+          ^FO30,${desc_height}^A0N,${font_size},${font_size}^FD${name}^FS
+          ^CF0,34,34
+          ^FO30,210
           ^FB465,2,,,
           ^FX 62 char limit
           ^FD${description}

@@ -1,0 +1,12 @@
+{
+  "name": "letwinventory-print-agent",
+  "version": "1.0.0",
+  "description": "Local print agent for LetwinInventory - bridges hosted server with local printers",
+  "main": "agent.js",
+  "scripts": {
+    "start": "node agent.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

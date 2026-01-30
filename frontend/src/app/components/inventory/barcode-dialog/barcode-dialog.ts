@@ -48,7 +48,7 @@ export class BarcodeDialog implements OnInit {
   barcodeObject = signal<any | null>(null);
   selectedPreviewSize = signal<string>('3x1');
   selectedLabelSize = signal<string>('3x1');
-  selectedPrinterIP = signal<string>('10.10.10.37');
+  selectedPrinterIP = signal<string>('10.50.20.91');
   isPrinting = signal(false);
   showPrintOptions = signal(false);
 
@@ -145,7 +145,12 @@ export class BarcodeDialog implements OnInit {
 
   private renderBarcodeImage(zpl: string, labelSize: string) {
     const encodedZPL = encodeURIComponent(zpl);
-    const labelaryUrl = `https://api.labelary.com/v1/printers/8dpmm/labels/${labelSize}/0/${encodedZPL}`;
+    let labelaryUrl = '';
+    if (labelSize === '1.5x1') {
+      labelaryUrl = `https://api.labelary.com/v1/printers/8dpmm/labels/${labelSize}/0/${encodedZPL}`;
+    } else if (labelSize === '3x1') {
+      labelaryUrl = `https://api.labelary.com/v1/printers/12dpmm/labels/${labelSize}/0/${encodedZPL}`;
+    }
     this.barcodeImageUrl.set(labelaryUrl);
   }
 

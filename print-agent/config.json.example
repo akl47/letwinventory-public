@@ -1,0 +1,8 @@
+{
+  "serverUrl": "wss://letwinventory.letwin.co/ws/print-agent",
+  "agentId": "warehouse-agent-1",
+  "apiKey": "your-api-key-here",
+  "reconnectInterval": 5000,
+  "reconnectMaxDelay": 60000,
+  "heartbeatInterval": 30000
+}
