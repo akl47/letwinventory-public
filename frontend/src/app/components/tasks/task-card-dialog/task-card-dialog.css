@@ -169,17 +169,26 @@
     font-size: 12px;
     font-weight: 500;
     color: #1d2125;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 4px;
+    line-height: 1;
+    vertical-align: middle;
 }
 
-.label .material-icons {
+.label .material-icons,
+.label mat-icon {
     font-size: 16px;
+    width: 16px;
+    height: 16px;
+    line-height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .left-icon {
-    margin-right: 2px;
+    margin-right: 4px;
 }
 
 .label-blue {
@@ -205,6 +214,8 @@
     align-items: center;
     gap: 2px;
     transition: filter 0.15s ease, transform 0.15s ease;
+    line-height: 1;
+    vertical-align: middle;
 }
 
 .clickable-label:hover {
@@ -218,8 +229,11 @@
 
 .dropdown-icon {
     font-size: 18px !important;
-    margin-left: -4px;
-    margin-right: -6px;
+    width: 18px !important;
+    height: 18px !important;
+    line-height: 18px !important;
+    margin-left: -2px;
+    margin-right: -4px;
 }
 
 /* Label Menu Styles */
