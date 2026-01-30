@@ -46,7 +46,7 @@ exports.printBarcodeByID = async (req, res, next) => {
     // Check if print agent is connected
     if (printAgentService.hasConnectedAgent()) {
       // Send via print agent (for remote printing)
-      print(`Sending print job to print agent for printer ${printerIP}`);
+      console.log(`Sending print job to print agent for printer ${printerIP}`);
       await printAgentService.sendPrintJob(zpl, printerIP);
       res.json({ message: "Label printed successfully via print agent" });
     } else {
