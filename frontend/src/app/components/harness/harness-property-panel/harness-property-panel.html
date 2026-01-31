@@ -76,7 +76,7 @@
         </mat-select>
       </mat-form-field>
 
-      <mat-form-field appearance="outline" class="half-width">
+      <mat-form-field appearance="outline" class="full-width">
         <mat-label>Wire Gauge</mat-label>
         <mat-select [value]="selection()?.connection?.gauge || ''"
           (selectionChange)="updateConnection('gauge', $event.value)">
@@ -87,7 +87,7 @@
         </mat-select>
       </mat-form-field>
 
-      <mat-form-field appearance="outline" class="half-width">
+      <mat-form-field appearance="outline" class="full-width">
         <mat-label>Length (mm)</mat-label>
         <input matInput type="number" [value]="selection()?.connection?.lengthMm || ''"
           (input)="updateConnectionInput('lengthMm', $event)" min="1">
@@ -119,7 +119,7 @@
           <mat-select [value]="selection()?.connection?.fromTermination || ''"
             (selectionChange)="updateConnection('fromTermination', $event.value)">
             <mat-option value="">None</mat-option>
-            @for (term of terminationTypes; track term.value) {
+            @for (term of terminationTypes(); track term.value) {
             <mat-option [value]="term.value">{{ term.label }}</mat-option>
             }
           </mat-select>
@@ -130,7 +130,7 @@
           <mat-select [value]="selection()?.connection?.toTermination || ''"
             (selectionChange)="updateConnection('toTermination', $event.value)">
             <mat-option value="">None</mat-option>
-            @for (term of terminationTypes; track term.value) {
+            @for (term of terminationTypes(); track term.value) {
             <mat-option [value]="term.value">{{ term.label }}</mat-option>
             }
           </mat-select>

@@ -1,10 +1,10 @@
 // Wire rendering and hit testing utilities
-import { HarnessConnection } from '../../models/harness.model';
+import { HarnessConnection, WireEnd } from '../../models/harness.model';
 import { getWireColorHex } from './wire-color-map';
 import { WIRE_STROKE_WIDTH, PIN_CIRCLE_RADIUS } from './constants';
 
-// Termination type display labels
-const TERMINATION_LABELS: { [key: string]: string } = {
+// Default termination type display labels (fallback when API data unavailable)
+const DEFAULT_TERMINATION_LABELS: { [key: string]: string } = {
   'f-pin': 'F Pin',
   'm-pin': 'M Pin',
   'f-spade': 'F Spade',
@@ -15,6 +15,26 @@ const TERMINATION_LABELS: { [key: string]: string } = {
   'soldered': 'Solder',
   'bare': 'Bare'
 };
+
+// Current termination labels (can be updated from API)
+let TERMINATION_LABELS: { [key: string]: string } = { ...DEFAULT_TERMINATION_LABELS };
+
+/**
+ * Update termination labels from API wire end data
+ */
+export function setTerminationLabels(wireEnds: WireEnd[]): void {
+  TERMINATION_LABELS = {};
+  for (const we of wireEnds) {
+    TERMINATION_LABELS[we.code] = we.name;
+  }
+}
+
+/**
+ * Get termination label for a code
+ */
+export function getTerminationLabel(code: string): string | undefined {
+  return TERMINATION_LABELS[code];
+}
 
 /**
  * Calculate orthogonal (right-angle) path between two points

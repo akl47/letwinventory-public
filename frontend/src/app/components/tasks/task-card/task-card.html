@@ -1,4 +1,4 @@
-<div class="task-card" (click)="openDialog()">
+<div class="task-card" (click)="openDialog()" (mouseenter)="onMouseEnter()" (mouseleave)="onMouseLeave()">
     @if (projectColor()) {
     <div class="project-dot" [style.background-color]="projectColor()"></div>
     }

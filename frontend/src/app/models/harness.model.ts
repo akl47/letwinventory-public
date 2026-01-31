@@ -199,6 +199,15 @@ export interface ElectricalPinType {
   description?: string;
 }
 
+// Wire End / Termination Type
+export interface WireEnd {
+  id: number;
+  code: string;
+  name: string;
+  description?: string;
+  activeFlag: boolean;
+}
+
 // Database entity types (from backend API)
 export interface DbElectricalConnector {
   id: number;

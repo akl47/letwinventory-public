@@ -1,4 +1,4 @@
-import { Component, input, output, computed, signal } from '@angular/core';
+import { Component, input, output, computed, signal, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatFormFieldModule } from '@angular/material/form-field';
@@ -16,10 +16,12 @@ import {
   HarnessCable,
   HarnessComponent,
   HarnessPin,
-  HarnessWire
+  HarnessWire,
+  WireEnd
 } from '../../../models/harness.model';
 import { CONNECTOR_TYPES, CONNECTOR_COLORS, WIRE_COLORS, AWG_GAUGES } from '../../../utils/harness/wire-color-map';
 import { CanvasSelection } from '../harness-canvas/harness-canvas';
+import { HarnessPartsService } from '../../../services/harness-parts.service';
 
 @Component({
   selector: 'app-harness-property-panel',
@@ -39,7 +41,9 @@ import { CanvasSelection } from '../harness-canvas/harness-canvas';
   templateUrl: './harness-property-panel.html',
   styleUrls: ['./harness-property-panel.scss'],
 })
-export class HarnessPropertyPanel {
+export class HarnessPropertyPanel implements OnInit {
+  private harnessPartsService = inject(HarnessPartsService);
+
   // Inputs
   harnessData = input<HarnessData | null>(null);
   selection = input<CanvasSelection | null>(null);
@@ -61,21 +65,27 @@ export class HarnessPropertyPanel {
   wireColors = WIRE_COLORS;
   awgGauges = AWG_GAUGES;
 
-  // Wire termination types
-  terminationTypes = [
-    { value: 'f-pin', label: 'F Pin' },
-    { value: 'm-pin', label: 'M Pin' },
-    { value: 'f-spade', label: 'F Spade' },
-    { value: 'm-spade', label: 'M Spade' },
-    { value: 'ring', label: 'Ring' },
-    { value: 'fork', label: 'Fork' },
-    { value: 'ferrule', label: 'Ferrule' },
-    { value: 'soldered', label: 'Soldered' },
-    { value: 'bare', label: 'Bare' }
-  ];
+  // Wire termination types (loaded from API)
+  terminationTypes = signal<{ value: string; label: string }[]>([]);
 
   // Wire end selection state
   selectedWireEnd = signal<'from' | 'to'>('from');
+
+  ngOnInit(): void {
+    this.loadWireEnds();
+  }
+
+  loadWireEnds(): void {
+    this.harnessPartsService.getWireEnds().subscribe({
+      next: (wireEnds) => {
+        this.terminationTypes.set(wireEnds.map(we => ({
+          value: we.code,
+          label: we.name
+        })));
+      },
+      error: (err) => console.error('Failed to load wire ends', err)
+    });
+  }
 
   // Computed values
   cables = computed(() => this.harnessData()?.cables || []);

@@ -57,7 +57,7 @@ export class PartsTableView implements OnInit {
   showInternal = signal<boolean>(true);
   showVendor = signal<boolean>(true);
 
-  displayedColumns: string[] = ['name', 'description', 'category', 'vendor', 'sku', 'minimumOrderQuantity', 'internalPart', 'actions'];
+  displayedColumns: string[] = ['name', 'description', 'category', 'vendor', 'sku', 'minimumOrderQuantity', 'internalPart', 'createdAt', 'actions'];
 
   // Pagination
   pageSize = signal<number>(10);
@@ -196,8 +196,14 @@ export class PartsTableView implements OnInit {
     const sortCol = this.sortColumn();
     const sortDir = this.sortDirection();
     filtered.sort((a, b) => {
-      const aVal = (a as any)[sortCol];
-      const bVal = (b as any)[sortCol];
+      const aVal = this.getSortValue(a, sortCol);
+      const bVal = this.getSortValue(b, sortCol);
+
+      // Handle nulls - sort nulls last
+      if (aVal === null && bVal === null) return 0;
+      if (aVal === null) return sortDir === 'asc' ? 1 : -1;
+      if (bVal === null) return sortDir === 'asc' ? -1 : 1;
+
       const comparison = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
       return sortDir === 'asc' ? comparison : -comparison;
     });
@@ -388,5 +394,19 @@ export class PartsTableView implements OnInit {
     const g = parseInt(hex.slice(3, 5), 16);
     const b = parseInt(hex.slice(5, 7), 16);
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  private getSortValue(part: Part, column: string): string | number | null {
+    switch (column) {
+      case 'category':
+        return part.PartCategory?.name?.toLowerCase() ?? null;
+      case 'createdAt':
+        return part.createdAt ? new Date(part.createdAt).getTime() : null;
+      default:
+        const val = (part as any)[column];
+        if (val === undefined || val === null) return null;
+        if (typeof val === 'string') return val.toLowerCase();
+        return val;
+    }
   }
 }

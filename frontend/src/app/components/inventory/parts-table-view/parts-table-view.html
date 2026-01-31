@@ -137,6 +137,12 @@
                 </td>
             </ng-container>
 
+            <!-- Created Date Column -->
+            <ng-container matColumnDef="createdAt">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Created</th>
+                <td mat-cell *matCellDef="let part">{{ part.createdAt | date:'MMM d, y' }}</td>
+            </ng-container>
+
             <!-- Actions Column -->
             <ng-container matColumnDef="actions">
                 <th mat-header-cell *matHeaderCellDef>Actions</th>
@@ -144,11 +150,6 @@
                     <button mat-icon-button (click)="editPart(part)" matTooltip="Edit part">
                         <mat-icon>edit</mat-icon>
                     </button>
-                    @if (part.link) {
-                    <button mat-icon-button (click)="openLink(part.link)" matTooltip="Open vendor link">
-                        <mat-icon>link</mat-icon>
-                    </button>
-                    }
                 </td>
             </ng-container>
 

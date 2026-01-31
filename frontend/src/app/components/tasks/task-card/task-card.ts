@@ -1,4 +1,4 @@
-import { Component, inject, input, signal, computed, OnInit, OnDestroy } from '@angular/core';
+import { Component, inject, input, signal, computed, OnInit, OnDestroy, HostListener } from '@angular/core';
 import { TaskService } from '../../../services/task.service';
 import { Task } from '../../../models/task.model';
 import { CommonModule } from '@angular/common';
@@ -28,9 +28,15 @@ export class TaskCard implements OnInit, OnDestroy {
   displayDone = computed(() => this.isDoneOverride() ?? this.task().doneFlag);
 
   projects = signal<Project[]>([]);
+  isHovered = signal(false);
+
   projectColor = computed(() => {
     const project = this.projects().find(p => p.id === this.task().projectID);
     return project ? '#' + project.tagColorHex : null;
+  });
+
+  sortedProjects = computed(() => {
+    return [...this.projects()].sort((a, b) => a.name.localeCompare(b.name));
   });
 
   isOverdue = computed(() => {
@@ -116,6 +122,46 @@ export class TaskCard implements OnInit, OnDestroy {
       width: '768px',
       maxWidth: '95vw',
       panelClass: 'trello-dialog-container',
+    });
+  }
+
+  onMouseEnter(): void {
+    this.isHovered.set(true);
+  }
+
+  onMouseLeave(): void {
+    this.isHovered.set(false);
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  onKeyDown(event: KeyboardEvent): void {
+    if (!this.isHovered()) return;
+
+    // Check for number keys 0-9
+    const key = event.key;
+    if (!/^[0-9]$/.test(key)) return;
+
+    const num = parseInt(key, 10);
+    const sorted = this.sortedProjects();
+
+    if (num === 0) {
+      // Clear project assignment
+      this.assignProject(null);
+    } else if (num <= sorted.length) {
+      // Assign project at index (1-based)
+      this.assignProject(sorted[num - 1].id);
+    }
+  }
+
+  private assignProject(projectId: number | null): void {
+    const task = this.task();
+    if (task.projectID === projectId) return;
+
+    this.taskService.updateTask(task.id, { projectID: projectId as any }).subscribe({
+      next: () => {
+        this.taskService.triggerRefresh();
+      },
+      error: (err) => console.error('Failed to assign project', err)
     });
   }
 }

@@ -7,6 +7,7 @@ import {
   DbCable,
   DbElectricalComponent,
   ElectricalPinType,
+  WireEnd,
   ComponentPinGroup,
   UploadedFileRef
 } from '../models/harness.model';
@@ -90,6 +91,29 @@ export class HarnessPartsService {
 
   getPinTypes(): Observable<ElectricalPinType[]> {
     return this.http.get<ElectricalPinType[]>(`${this.baseUrl}/parts/connector/pin-types`);
+  }
+
+  // === Wire Ends (Termination Types) ===
+
+  getWireEnds(includeInactive = false): Observable<WireEnd[]> {
+    const params = includeInactive ? '?includeInactive=true' : '';
+    return this.http.get<WireEnd[]>(`${this.baseUrl}/parts/wire-end${params}`);
+  }
+
+  getWireEndByCode(code: string): Observable<WireEnd | null> {
+    return this.http.get<WireEnd | null>(`${this.baseUrl}/parts/wire-end/by-code/${code}`);
+  }
+
+  createWireEnd(data: { code: string; name: string; description?: string }): Observable<WireEnd> {
+    return this.http.post<WireEnd>(`${this.baseUrl}/parts/wire-end`, data);
+  }
+
+  updateWireEnd(id: number, data: { code?: string; name?: string; description?: string }): Observable<WireEnd> {
+    return this.http.put<WireEnd>(`${this.baseUrl}/parts/wire-end/${id}`, data);
+  }
+
+  deleteWireEnd(id: number): Observable<{ message: string }> {
+    return this.http.delete<{ message: string }>(`${this.baseUrl}/parts/wire-end/${id}`);
   }
 
   // === Connectors ===

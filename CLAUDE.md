@@ -2,6 +2,73 @@
 
 This file tracks changes made to the codebase during Claude Code sessions.
 
+# CLAUDE.md
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+
 ## Session: 2026-01-06
 
 ### Files Modified
@@ -210,6 +277,71 @@ This file tracks changes made to the codebase during Claude Code sessions.
 - The migration file already didn't have category/description columns, so no migration changes needed
 - UI fixes improve readability and visual consistency
 - Current branch: wire_harness
+
+---
+
+## Session: 2026-01-31
+
+### Files Created
+- `backend/migrations/20260130000001-create-wire-ends-table.js`
+- `backend/models/parts/wireEnd.js`
+- `backend/api/parts/wire-end/controller.js`
+- `backend/api/parts/wire-end/routes.js`
+
+### Files Modified
+- `frontend/src/app/components/tasks/task-card/task-card.ts`
+- `frontend/src/app/components/tasks/task-card/task-card.html`
+- `frontend/src/app/components/inventory/parts-table-view/parts-table-view.ts`
+- `frontend/src/app/components/inventory/parts-table-view/parts-table-view.html`
+- `frontend/src/app/components/tasks/task-card-dialog/task-card-dialog.ts`
+- `frontend/src/app/models/harness.model.ts`
+- `frontend/src/app/services/harness-parts.service.ts`
+- `frontend/src/app/utils/harness/wire.ts`
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.ts`
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.html`
+
+### Changes Made
+
+1. **Task card keyboard shortcut (1-9 assigns project)**
+   - Added `isHovered` signal to track mouse hover state
+   - Added `sortedProjects` computed to sort projects alphabetically
+   - Added `@HostListener` for document keydown events
+   - When card is hovered and number key 1-9 is pressed, assigns corresponding project
+   - Key 0 clears the project assignment
+   - Added `onMouseEnter()` and `onMouseLeave()` handlers to template
+
+2. **Added createdAt column to parts table view**
+   - Added `'createdAt'` to `displayedColumns` array
+   - Added column template with date pipe formatting (`MMM d, y`)
+   - Column is sortable via mat-sort-header
+
+3. **Fixed sorting on parts table view**
+   - Added `getSortValue()` helper method for proper sort value extraction
+   - Handles nested properties (`PartCategory.name` for category column)
+   - Handles date strings (converts to timestamp for numeric comparison)
+   - Handles null/undefined values (sorted last)
+   - Case-insensitive string comparison
+
+4. **Created Wire Ends database table and API**
+   - Created migration with `WireEnds` table (id, code, name, description, activeFlag)
+   - Seeds 9 existing termination types: f-pin, m-pin, f-spade, m-spade, ring, fork, ferrule, soldered, bare
+   - Created Sequelize model `WireEnd`
+   - Created REST API with CRUD operations at `/api/parts/wire-end`
+   - Added `WireEnd` interface to frontend harness model
+   - Added service methods: `getWireEnds()`, `getWireEndByCode()`, `createWireEnd()`, `updateWireEnd()`, `deleteWireEnd()`
+   - Updated `wire.ts` with `setTerminationLabels()` and `getTerminationLabel()` functions
+   - Updated harness property panel to load termination types from API instead of hardcoded array
+
+5. **Calendar start time 15-minute rounding**
+   - Added `roundToNearest15Minutes()` helper method
+   - When opening date picker with no existing due date, default time is now current time rounded down to nearest 15-minute interval
+   - Previously hardcoded to `12:00`
+
+### Notes
+- Wire ends API follows same pattern as other parts APIs (connector, wire, cable, component)
+- Migration needs to be run: `npx sequelize-cli db:migrate`
+- Termination types are now database-driven, allowing future additions without code changes
+- Current branch: minor_fixes
 
 ---
 

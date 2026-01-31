@@ -366,9 +366,19 @@ export class TaskCardDialog implements OnInit, OnDestroy {
       const pad = (n: number) => n.toString().padStart(2, '0');
       this.selectedTime.set(`${pad(d.getHours())}:${pad(d.getMinutes())}`);
     } else {
-      this.selectedDate.set(new Date());
-      this.selectedTime.set('12:00');
+      const now = this.roundToNearest15Minutes(new Date());
+      this.selectedDate.set(now);
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      this.selectedTime.set(`${pad(now.getHours())}:${pad(now.getMinutes())}`);
     }
+  }
+
+  private roundToNearest15Minutes(date: Date): Date {
+    const result = new Date(date);
+    const minutes = result.getMinutes();
+    const roundedMinutes = Math.floor(minutes / 15) * 15;
+    result.setMinutes(roundedMinutes, 0, 0);
+    return result;
   }
 
   saveDueDate(): void {
