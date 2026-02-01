@@ -1,5 +1,6 @@
 import { Component, Input, Output, EventEmitter, OnInit, OnChanges, SimpleChanges, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatMenuModule } from '@angular/material/menu';
@@ -44,6 +45,7 @@ export class SubToolbarComponent implements OnInit, OnChanges {
 
   private projectService = inject(ProjectService);
   private preferencesService = inject(TaskViewPreferencesService);
+  private router = inject(Router);
 
   // Special ID for "No Project" category
   static readonly NO_PROJECT_ID = 0;
@@ -195,5 +197,9 @@ export class SubToolbarComponent implements OnInit, OnChanges {
   onShowChildTasksChange(checked: boolean): void {
     this.showChildTasks.set(checked);
     this.showChildTasksChanged.emit(checked);
+  }
+
+  openEditProjects(): void {
+    this.router.navigate(['/projects']);
   }
 }

@@ -1,0 +1,614 @@
+:host {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.page-container {
+    flex: 1;
+    overflow-y: auto;
+    background-color: var(--mat-sys-surface-container-lowest);
+    padding: 0;
+}
+
+.header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 24px;
+    background-color: var(--mat-sys-surface);
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+    box-shadow: 0 2px 4px rgba(255, 255, 255, 0.05);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.header h2 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 400;
+    color: var(--mat-sys-on-surface);
+}
+
+.spacer {
+    flex: 1;
+}
+
+.content-wrapper {
+    padding: 20px;
+}
+
+/* Two column layout for Part Info + Inventory Settings */
+.two-column-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+/* Card styles */
+mat-card {
+    padding: 16px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+}
+
+.two-column-layout mat-card {
+    margin-bottom: 0;
+}
+
+mat-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+}
+
+mat-card-title {
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--mat-sys-on-surface);
+}
+
+mat-card-content {
+    padding: 0;
+}
+
+/* Form styles */
+.part-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.form-row {
+    display: flex;
+    gap: 12px;
+}
+
+.form-row mat-form-field {
+    flex: 1;
+}
+
+.full-width {
+    width: 100%;
+}
+
+mat-form-field {
+    font-size: 14px;
+}
+
+mat-checkbox {
+    margin: 8px 0;
+}
+
+.checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 8px 0;
+}
+
+/* Vendor card header with checkbox */
+.vendor-card mat-card-header {
+    flex-wrap: wrap;
+}
+
+.vendor-card mat-card-header mat-checkbox {
+    margin: 0;
+}
+
+/* Internal badge */
+.internal-badge {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background-color: var(--mat-sys-surface-container);
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.internal-badge.is-internal {
+    background-color: var(--mat-sys-primary-container);
+    color: var(--mat-sys-on-primary-container);
+}
+
+/* View mode styles */
+.view-info {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.info-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+}
+
+.info-row.three-col {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+.info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.info-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.info-value {
+    font-size: 14px;
+    color: var(--mat-sys-on-surface);
+    line-height: 1.4;
+}
+
+.info-value a {
+    color: var(--mat-sys-primary);
+    text-decoration: none;
+}
+
+.info-value a:hover {
+    text-decoration: underline;
+}
+
+.description-text {
+    white-space: pre-wrap;
+    padding: 8px;
+    background-color: var(--mat-sys-surface-container-lowest);
+    border-radius: 4px;
+    border-left: 2px solid var(--mat-sys-outline-variant);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.category-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: white;
+}
+
+/* Color indicator for wire/cable colors */
+.color-indicator {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    vertical-align: middle;
+    margin-right: 6px;
+}
+
+/* Wire colors display (view mode) */
+.wire-colors-display {
+    margin-top: 8px;
+}
+
+.wire-colors-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.wire-color-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    background-color: var(--mat-sys-surface-container);
+    border-radius: 16px;
+    font-size: 12px;
+}
+
+/* Pin group display (view mode) */
+.pin-group-display {
+    padding: 12px;
+    background-color: var(--mat-sys-surface-container-lowest);
+    border-radius: 8px;
+    border-left: 3px solid var(--mat-sys-primary);
+    margin-bottom: 12px;
+}
+
+.pin-group-title {
+    font-weight: 500;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pin-type-badge {
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    background-color: var(--mat-sys-secondary-container);
+    color: var(--mat-sys-on-secondary-container);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.pins-display {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.pin-chip {
+    display: inline-block;
+    padding: 3px 8px;
+    background-color: var(--mat-sys-surface-container);
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: monospace;
+}
+
+/* Image display (view mode) */
+.image-display-row {
+    display: flex;
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.image-display {
+    display: flex;
+    flex-direction: column;
+}
+
+.image-display img {
+    max-width: 200px;
+    max-height: 150px;
+    object-fit: contain;
+    border-radius: 8px;
+    border: 1px solid var(--mat-sys-outline-variant);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* Image upload styles (edit mode) */
+.image-uploads-row {
+    display: flex;
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.image-upload-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    max-width: 200px;
+}
+
+.image-upload-section {
+    margin-top: 16px;
+}
+
+.image-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--mat-sys-on-surface-variant);
+    margin-bottom: 8px;
+}
+
+.upload-placeholder {
+    width: 140px;
+    height: 100px;
+    border: 2px dashed var(--mat-sys-outline-variant);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.2s, background-color 0.2s;
+}
+
+.upload-placeholder:hover {
+    opacity: 1;
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.upload-placeholder mat-icon {
+    font-size: 32px;
+    width: 32px;
+    height: 32px;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.upload-placeholder span {
+    font-size: 11px;
+    margin-top: 4px;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.image-preview {
+    position: relative;
+    width: 140px;
+    height: 100px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--mat-sys-outline-variant);
+}
+
+.image-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.image-preview .remove-image {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: rgba(0, 0, 0, 0.7) !important;
+    color: white !important;
+    width: 24px !important;
+    height: 24px !important;
+    min-width: 24px !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+}
+
+.image-preview .remove-image mat-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+    line-height: 14px;
+}
+
+/* Wire colors section (edit mode) */
+.wire-colors-section {
+    margin-top: 16px;
+}
+
+.wire-colors-section h5 {
+    margin: 0 0 12px 0;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.wire-colors-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.wire-color-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.wire-number {
+    min-width: 60px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.wire-color-select {
+    flex: 1;
+    max-width: 250px;
+}
+
+.color-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.color-swatch {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    flex-shrink: 0;
+}
+
+.color-preview {
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    flex-shrink: 0;
+}
+
+/* Pin count display */
+.pin-count-display {
+    font-size: 14px;
+    padding: 6px 12px;
+    background: var(--mat-sys-surface-container-low);
+    border-radius: 4px;
+}
+
+/* Pin groups section (edit mode) */
+.pin-groups-section {
+    margin-bottom: 16px;
+}
+
+.pin-groups-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.pin-groups-header h5 {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.pin-group-card {
+    border: 1px solid var(--mat-sys-outline-variant);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+    background: var(--mat-sys-surface-container-lowest);
+}
+
+.pin-group-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.group-name-field {
+    flex: 1;
+    min-width: 120px;
+}
+
+.pin-type-field {
+    flex: 1;
+    min-width: 150px;
+}
+
+.pins-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-left: 12px;
+    border-left: 2px solid var(--mat-sys-primary);
+}
+
+.pin-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.pin-number-field {
+    width: 80px;
+    flex-shrink: 0;
+}
+
+.pin-label-field {
+    flex: 1;
+}
+
+.add-pin-btn {
+    align-self: flex-start;
+    margin-top: 4px;
+}
+
+.no-groups-message {
+    text-align: center;
+    padding: 24px;
+    color: var(--mat-sys-on-surface-variant);
+    font-style: italic;
+}
+
+/* Delete button */
+.mat-custom-error {
+    --mdc-filled-button-container-color: #f44336 !important;
+    --mdc-filled-button-label-text-color: white !important;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1024px) {
+    .two-column-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .two-column-layout mat-card {
+        margin-bottom: 20px;
+    }
+
+    .info-row.three-col {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 768px) {
+    .header {
+        padding: 12px 16px;
+    }
+
+    .header h2 {
+        font-size: 20px;
+    }
+
+    .content-wrapper {
+        padding: 12px;
+    }
+
+    .form-row {
+        flex-direction: column;
+    }
+
+    .info-row,
+    .info-row.three-col {
+        grid-template-columns: 1fr;
+    }
+
+    mat-card-title {
+        font-size: 16px;
+    }
+
+    mat-card {
+        padding: 12px;
+    }
+
+    .image-uploads-row,
+    .image-display-row {
+        flex-direction: column;
+    }
+
+    .vendor-card mat-card-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+}

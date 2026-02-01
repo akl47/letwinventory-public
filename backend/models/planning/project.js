@@ -47,6 +47,14 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       allowNull: true
     },
+    keyboardShortcut: {
+      type: DataTypes.STRING(1),
+      allowNull: true,
+      unique: true,
+      validate: {
+        is: /^[1-9]$/ // 0 is reserved for "no project"
+      }
+    },
     activeFlag: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

@@ -6,6 +6,7 @@ export interface Project {
     name: string;
     shortName: string;
     description?: string;
+    keyboardShortcut?: string;
     activeFlag: boolean;
     createdAt: Date;
     updatedAt: Date;

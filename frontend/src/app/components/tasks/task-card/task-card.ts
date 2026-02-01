@@ -1,4 +1,4 @@
-import { Component, inject, input, signal, computed, OnInit, OnDestroy } from '@angular/core';
+import { Component, inject, input, signal, computed, OnInit, OnDestroy, HostListener } from '@angular/core';
 import { TaskService } from '../../../services/task.service';
 import { Task } from '../../../models/task.model';
 import { CommonModule } from '@angular/common';
@@ -28,9 +28,15 @@ export class TaskCard implements OnInit, OnDestroy {
   displayDone = computed(() => this.isDoneOverride() ?? this.task().doneFlag);
 
   projects = signal<Project[]>([]);
+  isHovered = signal(false);
+
   projectColor = computed(() => {
     const project = this.projects().find(p => p.id === this.task().projectID);
     return project ? '#' + project.tagColorHex : null;
+  });
+
+  sortedProjects = computed(() => {
+    return [...this.projects()].sort((a, b) => a.name.localeCompare(b.name));
   });
 
   isOverdue = computed(() => {
@@ -116,6 +122,58 @@ export class TaskCard implements OnInit, OnDestroy {
       width: '768px',
       maxWidth: '95vw',
       panelClass: 'trello-dialog-container',
+    });
+  }
+
+  onMouseEnter(): void {
+    this.isHovered.set(true);
+  }
+
+  onMouseLeave(): void {
+    this.isHovered.set(false);
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  onKeyDown(event: KeyboardEvent): void {
+    if (!this.isHovered()) return;
+
+    const key = event.key.toLowerCase();
+
+    // 'c' toggles completion
+    if (key === 'c') {
+      this.toggleComplete(event);
+      return;
+    }
+
+    // Check for number keys 0-9
+    if (!/^[0-9]$/.test(event.key)) return;
+
+    if (event.key === '0') {
+      // Clear project assignment
+      this.assignProject(null);
+    } else {
+      // Find project with this keyboard shortcut
+      const project = this.projects().find(p => p.keyboardShortcut === event.key);
+      if (project) {
+        // Toggle: if already assigned to this project, clear it
+        if (this.task().projectID === project.id) {
+          this.assignProject(null);
+        } else {
+          this.assignProject(project.id);
+        }
+      }
+    }
+  }
+
+  private assignProject(projectId: number | null): void {
+    const task = this.task();
+    if (task.projectID === projectId) return;
+
+    this.taskService.updateTask(task.id, { projectID: projectId as any }).subscribe({
+      next: () => {
+        this.taskService.triggerRefresh();
+      },
+      error: (err) => console.error('Failed to assign project', err)
     });
   }
 }

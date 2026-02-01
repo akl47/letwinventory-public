@@ -117,6 +117,10 @@ export class InventoryService {
         return this.http.get<Part[]>(`${this.apiUrl}/part`);
     }
 
+    getPartById(partId: number): Observable<Part> {
+        return this.http.get<Part>(`${this.apiUrl}/part/${partId}`);
+    }
+
     getPartCategories(): Observable<PartCategory[]> {
         return this.http.get<PartCategory[]>(`${this.apiUrl}/part/categories`);
     }

@@ -1,0 +1,76 @@
+<h2 mat-dialog-title>{{ isEditMode ? 'Edit Project' : 'New Project' }}</h2>
+
+<mat-dialog-content>
+    <form [formGroup]="form" class="dialog-form">
+        <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Project Name</mat-label>
+            <input matInput formControlName="name" required maxlength="100"
+                placeholder="e.g., Website Redesign">
+            <mat-hint>Max 100 characters</mat-hint>
+            @if (form.get('name')?.hasError('required') && form.get('name')?.touched) {
+            <mat-error>Name is required</mat-error>
+            } @else if (form.get('name')?.hasError('maxlength')) {
+            <mat-error>Name must be 100 characters or less</mat-error>
+            }
+        </mat-form-field>
+
+        <div class="form-row">
+            <mat-form-field appearance="outline">
+                <mat-label>Short Name</mat-label>
+                <input matInput formControlName="shortName" required maxlength="6"
+                    placeholder="e.g., WEB" style="text-transform: uppercase;">
+                <mat-hint>Max 6 characters (used in tags)</mat-hint>
+                @if (form.get('shortName')?.hasError('required') && form.get('shortName')?.touched) {
+                <mat-error>Short name is required</mat-error>
+                } @else if (form.get('shortName')?.hasError('maxlength')) {
+                <mat-error>Max 6 characters</mat-error>
+                }
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+                <mat-label>Keyboard Shortcut</mat-label>
+                <mat-select formControlName="keyboardShortcut">
+                    <mat-option [value]="null">None</mat-option>
+                    @for (digit of availableShortcuts(); track digit) {
+                    <mat-option [value]="digit">{{ digit }}</mat-option>
+                    }
+                </mat-select>
+                <mat-hint>Press this digit to select project</mat-hint>
+            </mat-form-field>
+        </div>
+
+        <div class="color-row">
+            <div class="color-picker-wrapper">
+                <label class="color-label">Tag Color</label>
+                <input type="color" [value]="form.get('tagColorHex')?.value"
+                    (input)="onColorChange($event)" class="color-picker">
+            </div>
+            <div class="color-preview">
+                <span class="preview-label">Preview:</span>
+                <span class="project-tag" [style.background-color]="form.get('tagColorHex')?.value">
+                    {{ form.get('shortName')?.value || 'TAG' }}
+                </span>
+            </div>
+        </div>
+
+        <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Description</mat-label>
+            <textarea matInput formControlName="description" rows="3" maxlength="255"
+                placeholder="Brief description of the project"></textarea>
+            <mat-hint>Max 255 characters</mat-hint>
+        </mat-form-field>
+    </form>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+    @if (isEditMode) {
+    <button mat-flat-button class="mat-custom-error" (click)="delete()">
+        <mat-icon>delete</mat-icon>
+        Delete
+    </button>
+    }
+    <button mat-button mat-dialog-close>Cancel</button>
+    <button mat-flat-button color="primary" (click)="save()">
+        {{ isEditMode ? 'Save' : 'Create' }}
+    </button>
+</mat-dialog-actions>

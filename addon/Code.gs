@@ -236,8 +236,8 @@ function onAddToCalendar(e) {
       endTime = new Date(taskDueDate);
       startTime = new Date(endTime.getTime() - durationMs);
     } else {
-      // No due date - start now
-      startTime = new Date();
+      // No due date - start now, rounded to nearest 15 minutes
+      startTime = roundToNearest15Minutes(new Date());
       endTime = new Date(startTime.getTime() + durationMs);
     }
 
@@ -298,6 +298,19 @@ function onAddToCalendar(e) {
 function formatEventTime(date) {
   const options = { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
   return date.toLocaleDateString('en-US', options);
+}
+
+/**
+ * Round a date down to the nearest 15-minute interval
+ * @param {Date} date - Date to round
+ * @returns {Date} Rounded date
+ */
+function roundToNearest15Minutes(date) {
+  var result = new Date(date);
+  var minutes = result.getMinutes();
+  var roundedMinutes = Math.floor(minutes / 15) * 15;
+  result.setMinutes(roundedMinutes, 0, 0);
+  return result;
 }
 
 /**

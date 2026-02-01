@@ -1,0 +1,731 @@
+<div class="page-container">
+    <div class="header">
+        <button mat-icon-button (click)="cancel()">
+            <mat-icon>arrow_back</mat-icon>
+        </button>
+        <h2>{{ isEditMode ? 'Part #' + (currentPart?.name || '...') : (lockedCategoryName === 'Harness' ? 'New Harness Part' : 'New Part') }}</h2>
+        <span class="spacer"></span>
+        @if (isDataLoaded()) {
+        @if (isEditMode && !isFormEditMode()) {
+        <button mat-button (click)="enableEdit()">
+            <mat-icon>edit</mat-icon>
+            Edit
+        </button>
+        }
+        @if (isFormEditMode() || !isEditMode) {
+        @if (isFormEditMode() && isEditMode) {
+        <button mat-button (click)="cancelEdit()">
+            <mat-icon>close</mat-icon>
+            Cancel
+        </button>
+        <button mat-flat-button class="mat-custom-error" (click)="delete()">
+            <mat-icon>delete</mat-icon>
+            Delete
+        </button>
+        }
+        <button mat-flat-button color="primary" (click)="save()">
+            <mat-icon>save</mat-icon>
+            {{ isEditMode ? 'Save' : 'Create' }}
+        </button>
+        }
+        }
+    </div>
+
+    @if (!isDataLoaded()) {
+    <div class="content-wrapper" style="display: flex; justify-content: center; align-items: center; min-height: 200px;">
+        <span>Loading...</span>
+    </div>
+    } @else {
+    <div class="content-wrapper">
+        <!-- Top row: Part Information + Inventory Settings -->
+        <div class="two-column-layout">
+            <mat-card class="part-info-card">
+                <mat-card-header>
+                    <mat-card-title>Part Information</mat-card-title>
+                </mat-card-header>
+                <mat-card-content>
+                    @if (isFormEditMode() || !isEditMode) {
+                    <form [formGroup]="form" class="part-form">
+                        <div class="form-row">
+                            <mat-form-field appearance="outline">
+                                <mat-label>Part Number</mat-label>
+                                <input matInput formControlName="name" placeholder="e.g. 000011" maxlength="16" required>
+                                @if (!isEditMode && suggestedPartNumber) {
+                                <mat-hint>Suggested next: {{ suggestedPartNumber }}</mat-hint>
+                                }
+                                @if (form.get('name')?.hasError('required') && form.get('name')?.touched) {
+                                <mat-error>Part number is required</mat-error>
+                                } @else if (form.get('name')?.hasError('maxlength')) {
+                                <mat-error>Part number must be 16 characters or less</mat-error>
+                                } @else if (isPartNameTaken() && form.get('name')?.touched) {
+                                <mat-error>This part name is already in use</mat-error>
+                                }
+                            </mat-form-field>
+
+                            <mat-form-field appearance="outline">
+                                <mat-label>Category</mat-label>
+                                <mat-select formControlName="partCategoryID" required>
+                                    @for (category of categories(); track category.id) {
+                                    <mat-option [value]="category.id">{{ category.name }}</mat-option>
+                                    }
+                                </mat-select>
+                                @if (lockedCategoryName) {
+                                <mat-hint>Category is locked to {{ lockedCategoryName }}</mat-hint>
+                                }
+                                @if (form.get('partCategoryID')?.hasError('required') && form.get('partCategoryID')?.touched) {
+                                <mat-error>Category is required</mat-error>
+                                }
+                            </mat-form-field>
+                        </div>
+
+                        <mat-form-field appearance="outline" class="full-width">
+                            <mat-label>Description</mat-label>
+                            <textarea matInput formControlName="description" rows="2" maxlength="62"
+                                placeholder="Brief description of the part"></textarea>
+                            <mat-hint>Max 62 characters</mat-hint>
+                        </mat-form-field>
+                    </form>
+                    } @else {
+                    <div class="view-info">
+                        <div class="info-row">
+                            <div class="info-item">
+                                <div class="info-label">Part Number</div>
+                                <div class="info-value">{{ currentPart?.name || '-' }}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Category</div>
+                                <div class="info-value">
+                                    <span class="category-badge" [style.background-color]="currentPart?.PartCategory?.tagColorHex || '#808080'">
+                                        {{ currentPart?.PartCategory?.name || '-' }}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Description</div>
+                            <div class="info-value description-text">{{ currentPart?.description || '-' }}</div>
+                        </div>
+                    </div>
+                    }
+                </mat-card-content>
+            </mat-card>
+
+            <mat-card class="inventory-card">
+                <mat-card-header>
+                    <mat-card-title>Inventory Settings</mat-card-title>
+                </mat-card-header>
+                <mat-card-content>
+                    @if (isFormEditMode() || !isEditMode) {
+                    <form [formGroup]="form" class="part-form">
+                        <div class="form-row">
+                            <mat-form-field appearance="outline">
+                                <mat-label>Minimum Order Quantity</mat-label>
+                                <input matInput formControlName="minimumOrderQuantity" type="number" min="1" required>
+                                @if (form.get('minimumOrderQuantity')?.hasError('required') && form.get('minimumOrderQuantity')?.touched) {
+                                <mat-error>Minimum order quantity is required</mat-error>
+                                } @else if (form.get('minimumOrderQuantity')?.hasError('min')) {
+                                <mat-error>Must be at least 1</mat-error>
+                                }
+                            </mat-form-field>
+
+                            <mat-form-field appearance="outline">
+                                <mat-label>Default Unit of Measure</mat-label>
+                                <mat-select formControlName="defaultUnitOfMeasureID">
+                                    @for (uom of unitsOfMeasure(); track uom.id) {
+                                    <mat-option [value]="uom.id">{{ uom.name }} - {{ uom.description }}</mat-option>
+                                    }
+                                </mat-select>
+                            </mat-form-field>
+                        </div>
+
+                        <div class="checkbox-group">
+                            <mat-checkbox formControlName="serialNumberRequired">
+                                Requires Serial Number
+                            </mat-checkbox>
+                            <mat-checkbox formControlName="lotNumberRequired">
+                                Requires Lot Number
+                            </mat-checkbox>
+                        </div>
+                    </form>
+                    } @else {
+                    <div class="view-info">
+                        <div class="info-row">
+                            <div class="info-item">
+                                <div class="info-label">Min Order Qty</div>
+                                <div class="info-value">{{ currentPart?.minimumOrderQuantity || 1 }}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Unit of Measure</div>
+                                <div class="info-value">{{ getUomName(currentPart?.defaultUnitOfMeasureID) }}</div>
+                            </div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-item">
+                                <div class="info-label">Serial Number Required</div>
+                                <div class="info-value">{{ currentPart?.serialNumberRequired ? 'Yes' : 'No' }}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Lot Number Required</div>
+                                <div class="info-value">{{ currentPart?.lotNumberRequired ? 'Yes' : 'No' }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    }
+                </mat-card-content>
+            </mat-card>
+        </div>
+
+        <!-- Vendor Information -->
+        <mat-card class="vendor-card">
+            <mat-card-header>
+                <mat-card-title>Vendor Information</mat-card-title>
+                @if (isFormEditMode() || !isEditMode) {
+                <form [formGroup]="form">
+                    <mat-checkbox formControlName="internalPart">
+                        Internal Part
+                    </mat-checkbox>
+                </form>
+                } @else {
+                <span class="internal-badge" [class.is-internal]="currentPart?.internalPart">
+                    {{ currentPart?.internalPart ? 'Internal Part' : 'Vendor Part' }}
+                </span>
+                }
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode() || !isEditMode) {
+                <form [formGroup]="form" class="part-form">
+                    <div class="form-row">
+                        <mat-form-field appearance="outline">
+                            <mat-label>Vendor</mat-label>
+                            <input matInput formControlName="vendor" placeholder="e.g. Digi-Key, Mouser">
+                            @if (!form.get('internalPart')?.value) {
+                            <mat-hint>Required for external parts</mat-hint>
+                            } @else {
+                            <mat-hint>Optional for internal parts</mat-hint>
+                            }
+                            @if (form.get('vendor')?.hasError('required') && form.get('vendor')?.touched) {
+                            <mat-error>Vendor is required for external parts</mat-error>
+                            }
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>SKU</mat-label>
+                            <input matInput formControlName="sku" placeholder="Vendor SKU or part number">
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>Vendor Link</mat-label>
+                            <input matInput formControlName="link" type="url" placeholder="https://...">
+                        </mat-form-field>
+                    </div>
+
+                    @if (!form.get('internalPart')?.value) {
+                    <mat-checkbox formControlName="manufacturerSameAsVendor">
+                        Manufacturer same as Vendor
+                    </mat-checkbox>
+
+                    <div class="form-row">
+                        <mat-form-field appearance="outline">
+                            <mat-label>Manufacturer</mat-label>
+                            <input matInput formControlName="manufacturer" placeholder="e.g. Texas Instruments" required>
+                            @if (form.get('manufacturer')?.hasError('required') && form.get('manufacturer')?.touched) {
+                            <mat-error>Manufacturer is required for vendor parts</mat-error>
+                            }
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>Manufacturer Part Number</mat-label>
+                            <input matInput formControlName="manufacturerPN" placeholder="Manufacturer's part number" required>
+                            @if (form.get('manufacturerPN')?.hasError('required') && form.get('manufacturerPN')?.touched) {
+                            <mat-error>Manufacturer Part Number is required for vendor parts</mat-error>
+                            }
+                        </mat-form-field>
+                    </div>
+                    }
+                </form>
+                } @else {
+                <div class="view-info">
+                    <div class="info-row three-col">
+                        <div class="info-item">
+                            <div class="info-label">Vendor</div>
+                            <div class="info-value">{{ currentPart?.vendor || '-' }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">SKU</div>
+                            <div class="info-value">{{ currentPart?.sku || '-' }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Vendor Link</div>
+                            <div class="info-value">
+                                @if (currentPart?.link) {
+                                <a [href]="currentPart!.link" target="_blank" rel="noopener noreferrer">
+                                    {{ currentPart!.link }}
+                                </a>
+                                } @else {
+                                -
+                                }
+                            </div>
+                        </div>
+                    </div>
+                    @if (!currentPart?.internalPart) {
+                    <div class="info-row">
+                        <div class="info-item">
+                            <div class="info-label">Manufacturer</div>
+                            <div class="info-value">{{ currentPart?.manufacturer || '-' }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Manufacturer Part Number</div>
+                            <div class="info-value">{{ currentPart?.manufacturerPN || '-' }}</div>
+                        </div>
+                    </div>
+                    }
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+
+        <!-- Connector-specific fields -->
+        @if (isConnector()) {
+        <mat-card class="category-card">
+            <mat-card-header>
+                <mat-card-title>Connector Details</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode() || !isEditMode) {
+                <form [formGroup]="form" class="part-form">
+                    <div class="form-row">
+                        <mat-form-field appearance="outline">
+                            <mat-label>Connector Type</mat-label>
+                            <mat-select formControlName="connectorType" required>
+                                <mat-option value="male">Male</mat-option>
+                                <mat-option value="female">Female</mat-option>
+                                <mat-option value="terminal">Terminal</mat-option>
+                                <mat-option value="splice">Splice</mat-option>
+                            </mat-select>
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>Number of Pins</mat-label>
+                            <input matInput formControlName="connectorPinCount" type="number" min="1" required>
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>Color Code</mat-label>
+                            <input matInput formControlName="connectorColor" placeholder="e.g., BK, GY, RD">
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>Pin Type</mat-label>
+                            <mat-select formControlName="connectorPinTypeID">
+                                <mat-option [value]="null">None</mat-option>
+                                @for (pinType of pinTypes(); track pinType.id) {
+                                <mat-option [value]="pinType.id">{{ pinType.name }}</mat-option>
+                                }
+                            </mat-select>
+                        </mat-form-field>
+                    </div>
+
+                    <div class="image-uploads-row">
+                        <div class="image-upload-card">
+                            <label class="image-label">Connector Image</label>
+                            @if (connectorImage()) {
+                            <div class="image-preview">
+                                <img [src]="connectorImage()" alt="Connector image">
+                                <button mat-icon-button class="remove-image" (click)="removeConnectorImage()">
+                                    <mat-icon>close</mat-icon>
+                                </button>
+                            </div>
+                            } @else {
+                            <div class="upload-placeholder" (click)="connectorImageInput.click()">
+                                <mat-icon>add_photo_alternate</mat-icon>
+                                <span>Click to upload</span>
+                            </div>
+                            }
+                            <input #connectorImageInput type="file" accept="image/*" hidden
+                                (change)="onConnectorImageSelected($event)">
+                        </div>
+
+                        <div class="image-upload-card">
+                            <label class="image-label">Pinout Diagram</label>
+                            @if (pinoutDiagramImage()) {
+                            <div class="image-preview">
+                                <img [src]="pinoutDiagramImage()" alt="Pinout diagram">
+                                <button mat-icon-button class="remove-image" (click)="removePinoutDiagram()">
+                                    <mat-icon>close</mat-icon>
+                                </button>
+                            </div>
+                            } @else {
+                            <div class="upload-placeholder" (click)="pinoutImageInput.click()">
+                                <mat-icon>add_photo_alternate</mat-icon>
+                                <span>Click to upload</span>
+                            </div>
+                            }
+                            <input #pinoutImageInput type="file" accept="image/*" hidden
+                                (change)="onPinoutDiagramSelected($event)">
+                        </div>
+                    </div>
+                </form>
+                } @else {
+                <div class="view-info">
+                    <div class="info-row">
+                        <div class="info-item">
+                            <div class="info-label">Connector Type</div>
+                            <div class="info-value">{{ existingConnector()?.type | titlecase }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Number of Pins</div>
+                            <div class="info-value">{{ existingConnector()?.pinCount }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Color Code</div>
+                            <div class="info-value">{{ existingConnector()?.color || '-' }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Pin Type</div>
+                            <div class="info-value">{{ getPinTypeName(existingConnector()?.electricalPinTypeID) }}</div>
+                        </div>
+                    </div>
+                    <div class="image-display-row">
+                        @if (connectorImage()) {
+                        <div class="image-display">
+                            <label class="image-label">Connector Image</label>
+                            <img [src]="connectorImage()" alt="Connector image">
+                        </div>
+                        }
+                        @if (pinoutDiagramImage()) {
+                        <div class="image-display">
+                            <label class="image-label">Pinout Diagram</label>
+                            <img [src]="pinoutDiagramImage()" alt="Pinout diagram">
+                        </div>
+                        }
+                    </div>
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+        }
+
+        <!-- Wire-specific fields -->
+        @if (isWire()) {
+        <mat-card class="category-card">
+            <mat-card-header>
+                <mat-card-title>Wire Details</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode() || !isEditMode) {
+                <form [formGroup]="form" class="part-form">
+                    <div class="form-row">
+                        <mat-form-field appearance="outline">
+                            <mat-label>Wire Color</mat-label>
+                            <input matInput formControlName="wireColor" placeholder="e.g., Black, Red" required>
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>Color Code</mat-label>
+                            <input matInput formControlName="wireColorCode" placeholder="e.g., BK, RD">
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>Wire Gauge (AWG)</mat-label>
+                            <input matInput formControlName="wireGauge" placeholder="e.g., 22, 18, 14">
+                        </mat-form-field>
+                    </div>
+                </form>
+                } @else {
+                <div class="view-info">
+                    <div class="info-row three-col">
+                        <div class="info-item">
+                            <div class="info-label">Wire Color</div>
+                            <div class="info-value">
+                                <span class="color-indicator" [style.background-color]="getWireColorHex(existingWire()?.colorCode || 'BK')"></span>
+                                {{ existingWire()?.color || '-' }}
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Color Code</div>
+                            <div class="info-value">{{ existingWire()?.colorCode || '-' }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Wire Gauge</div>
+                            <div class="info-value">{{ existingWire()?.gaugeAWG ? existingWire()?.gaugeAWG + ' AWG' : '-' }}</div>
+                        </div>
+                    </div>
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+        }
+
+        <!-- Cable-specific fields -->
+        @if (isCable()) {
+        <mat-card class="category-card">
+            <mat-card-header>
+                <mat-card-title>Cable Details</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode() || !isEditMode) {
+                <form [formGroup]="form" class="part-form">
+                    <div class="form-row">
+                        <mat-form-field appearance="outline">
+                            <mat-label>Number of Conductors</mat-label>
+                            <input matInput formControlName="cableWireCount" type="number" min="1" required>
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>Wire Gauge (AWG)</mat-label>
+                            <input matInput formControlName="cableGauge" placeholder="e.g., 22, 18, 14">
+                        </mat-form-field>
+                    </div>
+
+                    @if (cableWireColors().length > 0) {
+                    <div class="wire-colors-section">
+                        <h5>Wire Colors</h5>
+                        <div class="wire-colors-grid">
+                            @for (wire of cableWireColors(); track wire.id; let i = $index) {
+                            <div class="wire-color-row">
+                                <span class="wire-number">Wire {{ i + 1 }}</span>
+                                <mat-form-field appearance="outline" class="wire-color-select">
+                                    <mat-label>Color</mat-label>
+                                    <mat-select [value]="wire.colorCode" (selectionChange)="onWireColorChange(i, $event.value)">
+                                        @for (color of wireColorOptions; track color.code) {
+                                        <mat-option [value]="color.code">
+                                            <span class="color-option">
+                                                <span class="color-swatch" [style.background-color]="color.hex"></span>
+                                                {{ color.name }} ({{ color.code }})
+                                            </span>
+                                        </mat-option>
+                                        }
+                                    </mat-select>
+                                </mat-form-field>
+                                <span class="color-preview" [style.background-color]="getWireColorHex(wire.colorCode)"></span>
+                            </div>
+                            }
+                        </div>
+                    </div>
+                    }
+
+                    <div class="image-upload-section">
+                        <div class="image-upload-card">
+                            <label class="image-label">Cable Diagram</label>
+                            @if (cableDiagramImage()) {
+                            <div class="image-preview">
+                                <img [src]="cableDiagramImage()" alt="Cable diagram">
+                                <button mat-icon-button class="remove-image" (click)="removeCableDiagram()">
+                                    <mat-icon>close</mat-icon>
+                                </button>
+                            </div>
+                            } @else {
+                            <div class="upload-placeholder" (click)="cableDiagramInput.click()">
+                                <mat-icon>add_photo_alternate</mat-icon>
+                                <span>Click to upload</span>
+                            </div>
+                            }
+                            <input #cableDiagramInput type="file" accept="image/*" hidden
+                                (change)="onCableDiagramSelected($event)">
+                        </div>
+                    </div>
+                </form>
+                } @else {
+                <div class="view-info">
+                    <div class="info-row">
+                        <div class="info-item">
+                            <div class="info-label">Number of Conductors</div>
+                            <div class="info-value">{{ existingCable()?.wireCount }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Wire Gauge</div>
+                            <div class="info-value">{{ existingCable()?.gaugeAWG ? existingCable()?.gaugeAWG + ' AWG' : '-' }}</div>
+                        </div>
+                    </div>
+                    @if (cableWireColors().length > 0) {
+                    <div class="wire-colors-display">
+                        <div class="info-label">Wire Colors</div>
+                        <div class="wire-colors-list">
+                            @for (wire of cableWireColors(); track wire.id; let i = $index) {
+                            <span class="wire-color-chip">
+                                <span class="color-indicator" [style.background-color]="getWireColorHex(wire.colorCode)"></span>
+                                Wire {{ i + 1 }}: {{ wire.color }}
+                            </span>
+                            }
+                        </div>
+                    </div>
+                    }
+                    @if (cableDiagramImage()) {
+                    <div class="image-display-row">
+                        <div class="image-display">
+                            <label class="image-label">Cable Diagram</label>
+                            <img [src]="cableDiagramImage()" alt="Cable diagram">
+                        </div>
+                    </div>
+                    }
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+        }
+
+        <!-- Component-specific fields -->
+        @if (isComponent()) {
+        <mat-card class="category-card">
+            <mat-card-header>
+                <mat-card-title>Component Details</mat-card-title>
+                <div class="pin-count-display">
+                    Total Pins: <strong>{{ getTotalPinCount() }}</strong>
+                </div>
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode() || !isEditMode) {
+                <div class="pin-groups-section">
+                    <div class="pin-groups-header">
+                        <h5>Pin Groups</h5>
+                        <button mat-stroked-button type="button" (click)="addPinGroup()">
+                            <mat-icon>add</mat-icon>
+                            Add Group
+                        </button>
+                    </div>
+
+                    @for (group of componentPinGroups(); track group.id; let gi = $index) {
+                    <div class="pin-group-card">
+                        <div class="pin-group-header">
+                            <mat-form-field appearance="outline" class="group-name-field">
+                                <mat-label>Group Name</mat-label>
+                                <input matInput [value]="group.name"
+                                    (input)="updatePinGroupName(gi, $any($event.target).value)"
+                                    placeholder="e.g., Power, Data, Control">
+                            </mat-form-field>
+
+                            <mat-form-field appearance="outline" class="pin-type-field">
+                                <mat-label>Pin Type</mat-label>
+                                <mat-select [value]="group.pinTypeID"
+                                    (selectionChange)="updatePinGroupType(gi, $event.value)">
+                                    <mat-option [value]="null">None</mat-option>
+                                    @for (pinType of pinTypes(); track pinType.id) {
+                                    <mat-option [value]="pinType.id">{{ pinType.name }}</mat-option>
+                                    }
+                                </mat-select>
+                            </mat-form-field>
+
+                            <button mat-icon-button color="warn" type="button" (click)="removePinGroup(gi)"
+                                [disabled]="componentPinGroups().length <= 1">
+                                <mat-icon>delete</mat-icon>
+                            </button>
+                        </div>
+
+                        <div class="pins-list">
+                            @for (pin of group.pins; track pin.id; let pi = $index) {
+                            <div class="pin-row">
+                                <mat-form-field appearance="outline" class="pin-number-field">
+                                    <mat-label>Pin #</mat-label>
+                                    <input matInput [value]="pin.number"
+                                        (input)="updatePinNumber(gi, pi, $any($event.target).value)"
+                                        placeholder="1">
+                                </mat-form-field>
+
+                                <mat-form-field appearance="outline" class="pin-label-field">
+                                    <mat-label>Label</mat-label>
+                                    <input matInput [value]="pin.label"
+                                        (input)="updatePinLabel(gi, pi, $any($event.target).value)"
+                                        placeholder="e.g., VIN, GND, DATA">
+                                </mat-form-field>
+
+                                <button mat-icon-button color="warn" type="button"
+                                    (click)="removePinFromGroup(gi, pi)"
+                                    [disabled]="group.pins.length <= 1">
+                                    <mat-icon>remove_circle</mat-icon>
+                                </button>
+                            </div>
+                            }
+                            <button mat-stroked-button type="button" class="add-pin-btn"
+                                (click)="addPinToGroup(gi)">
+                                <mat-icon>add</mat-icon>
+                                Add Pin
+                            </button>
+                        </div>
+                    </div>
+                    }
+
+                    @if (componentPinGroups().length === 0) {
+                    <div class="no-groups-message">
+                        No pin groups defined. Click "Add Group" to create one.
+                    </div>
+                    }
+                </div>
+
+                <div class="image-uploads-row">
+                    <div class="image-upload-card">
+                        <label class="image-label">Component Image</label>
+                        @if (componentImage()) {
+                        <div class="image-preview">
+                            <img [src]="componentImage()" alt="Component image">
+                            <button mat-icon-button class="remove-image" (click)="removeComponentImage()">
+                                <mat-icon>close</mat-icon>
+                            </button>
+                        </div>
+                        } @else {
+                        <div class="upload-placeholder" (click)="componentImageInput.click()">
+                            <mat-icon>add_photo_alternate</mat-icon>
+                            <span>Click to upload</span>
+                        </div>
+                        }
+                        <input #componentImageInput type="file" accept="image/*" hidden
+                            (change)="onComponentImageSelected($event)">
+                    </div>
+
+                    <div class="image-upload-card">
+                        <label class="image-label">Pinout Diagram</label>
+                        @if (componentPinoutImage()) {
+                        <div class="image-preview">
+                            <img [src]="componentPinoutImage()" alt="Pinout diagram">
+                            <button mat-icon-button class="remove-image" (click)="removeComponentPinout()">
+                                <mat-icon>close</mat-icon>
+                            </button>
+                        </div>
+                        } @else {
+                        <div class="upload-placeholder" (click)="componentPinoutInput.click()">
+                            <mat-icon>add_photo_alternate</mat-icon>
+                            <span>Click to upload</span>
+                        </div>
+                        }
+                        <input #componentPinoutInput type="file" accept="image/*" hidden
+                            (change)="onComponentPinoutSelected($event)">
+                    </div>
+                </div>
+                } @else {
+                <div class="view-info">
+                    @for (group of componentPinGroups(); track group.id) {
+                    <div class="pin-group-display">
+                        <div class="pin-group-title">
+                            {{ group.name }}
+                            @if (group.pinTypeName) {
+                            <span class="pin-type-badge">{{ group.pinTypeName }}</span>
+                            }
+                        </div>
+                        <div class="pins-display">
+                            @for (pin of group.pins; track pin.id) {
+                            <span class="pin-chip">{{ pin.number }}{{ pin.label ? ': ' + pin.label : '' }}</span>
+                            }
+                        </div>
+                    </div>
+                    }
+                    <div class="image-display-row">
+                        @if (componentImage()) {
+                        <div class="image-display">
+                            <label class="image-label">Component Image</label>
+                            <img [src]="componentImage()" alt="Component image">
+                        </div>
+                        }
+                        @if (componentPinoutImage()) {
+                        <div class="image-display">
+                            <label class="image-label">Pinout Diagram</label>
+                            <img [src]="componentPinoutImage()" alt="Pinout diagram">
+                        </div>
+                        }
+                    </div>
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+        }
+    </div>
+    }
+</div>
