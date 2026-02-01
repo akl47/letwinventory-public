@@ -17,6 +17,13 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'projects',
+        title: 'Projects',
+        loadComponent: () =>
+            import('./components/projects/projects-list-view/projects-list-view').then((m) => m.ProjectsListView),
+        canActivate: [authGuard],
+    },
+    {
         path: 'inventory/barcode-history/:id',
         title: 'Barcode History',
         loadComponent: () =>
@@ -35,6 +42,20 @@ export const routes: Routes = [
         title: 'Parts',
         loadComponent: () =>
             import('./components/inventory/parts-table-view/parts-table-view').then((m) => m.PartsTableView),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'parts/new',
+        title: 'New Part',
+        loadComponent: () =>
+            import('./components/inventory/part-edit-page/part-edit-page').then((m) => m.PartEditPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'parts/:id/edit',
+        title: 'Edit Part',
+        loadComponent: () =>
+            import('./components/inventory/part-edit-page/part-edit-page').then((m) => m.PartEditPage),
         canActivate: [authGuard],
     },
     {

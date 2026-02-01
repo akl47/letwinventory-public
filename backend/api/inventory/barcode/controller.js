@@ -568,10 +568,11 @@ function generateZPLDetailsSection(name, description, labelSize = '3x1', qty = n
     label_text += `^XZ`
     return label_text;
   }
-
-  font_size = Math.floor(-5.5 * name.length + 142)
-  desc_height = Math.floor(-1.23 * font_size + 200)
   // Default 3x1 label layout
+  d = name.length < 8 ? 8 : name.length
+  font_size = Math.floor(800 / d)
+  desc_height = Math.floor(110 + 5 * (d - 8))
+  console.log("Font size:", font_size, "Desc height:", desc_height)
   label_text = `
           ^FO30,${desc_height}^A0N,${font_size},${font_size}^FD${name}^FS
           ^CF0,34,34
@@ -582,7 +583,7 @@ function generateZPLDetailsSection(name, description, labelSize = '3x1', qty = n
           ^FS`
   if (qty !== null && uom !== null) {
     label_text += `
-          ^FO500,175^A0N,20,20^FDQTY: ${qty} ${uom}^FS`
+          ^FO720,258^A0N,30,30^FDQTY: ${qty} ${uom}^FS`
   }
   label_text += `^XZ`
   return label_text;

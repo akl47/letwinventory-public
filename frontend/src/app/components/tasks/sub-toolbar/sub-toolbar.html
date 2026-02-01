@@ -45,6 +45,14 @@
                 }
             </mat-menu>
 
+            <!-- Edit Projects Button (shown in edit mode) -->
+            @if (isEditMode) {
+            <button mat-button class="edit-projects-btn" (click)="openEditProjects()">
+                <mat-icon>folder_open</mat-icon>
+                Edit Projects
+            </button>
+            }
+
             <!-- Child Tasks Toggle -->
             <div class="toggle-container">
                 <mat-slide-toggle [checked]="showChildTasks()" (change)="onShowChildTasksChange($event.checked)"

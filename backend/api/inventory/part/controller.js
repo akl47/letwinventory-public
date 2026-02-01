@@ -91,6 +91,27 @@ exports.getAllParts = (req, res, next) => {
   })
 }
 
+exports.getPartByID = (req, res, next) => {
+  db.Part.findOne({
+    where: {
+      id: req.params.id
+    },
+    include: [
+      {
+        model: db.PartCategory,
+        attributes: ['id', 'name', 'tagColorHex']
+      }
+    ]
+  }).then(part => {
+    if (!part) {
+      return next(createError(404, 'Part not found'));
+    }
+    res.json(part)
+  }).catch(error => {
+    next(createError(500, 'Error Getting Part:' + error))
+  })
+}
+
 
 exports.createNewPart = (req, res, next) => {
   // Validate manufacturer fields for vendor parts

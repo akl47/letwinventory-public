@@ -287,6 +287,13 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - `backend/models/parts/wireEnd.js`
 - `backend/api/parts/wire-end/controller.js`
 - `backend/api/parts/wire-end/routes.js`
+- `backend/migrations/20260131000001-add-keyboard-shortcut-to-projects.js`
+- `frontend/src/app/components/projects/projects-list-view/projects-list-view.ts`
+- `frontend/src/app/components/projects/projects-list-view/projects-list-view.html`
+- `frontend/src/app/components/projects/projects-list-view/projects-list-view.css`
+- `frontend/src/app/components/projects/project-edit-dialog/project-edit-dialog.ts`
+- `frontend/src/app/components/projects/project-edit-dialog/project-edit-dialog.html`
+- `frontend/src/app/components/projects/project-edit-dialog/project-edit-dialog.css`
 
 ### Files Modified
 - `frontend/src/app/components/tasks/task-card/task-card.ts`
@@ -299,6 +306,12 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - `frontend/src/app/utils/harness/wire.ts`
 - `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.ts`
 - `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.html`
+- `frontend/src/app/models/project.model.ts`
+- `frontend/src/app/services/project.service.ts`
+- `frontend/src/app/app.routes.ts`
+- `frontend/src/app/components/tasks/sub-toolbar/sub-toolbar.ts`
+- `frontend/src/app/components/tasks/sub-toolbar/sub-toolbar.html`
+- `backend/models/planning/project.js`
 
 ### Changes Made
 
@@ -337,10 +350,50 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
    - When opening date picker with no existing due date, default time is now current time rounded down to nearest 15-minute interval
    - Previously hardcoded to `12:00`
 
+6. **Created Projects List View component**
+   - New standalone component at `frontend/src/app/components/projects/projects-list-view/`
+   - Material table with pagination, sorting, and search filtering
+   - Columns: Tag (shortName as colored chip), Name, Description, Keyboard Shortcut, Created Date
+   - Clickable rows open project edit dialog
+   - "Show Inactive" toggle to include archived projects
+   - Back button using Location service for browser navigation
+   - Added route `/projects` in `app.routes.ts`
+
+7. **Created Project Edit Dialog component**
+   - New dialog at `frontend/src/app/components/projects/project-edit-dialog/`
+   - Reactive form with fields: name, shortName, keyboardShortcut (1-9 dropdown), color picker, description, activeFlag
+   - Color picker uses native `<input type="color">` outside mat-form-field for proper display
+   - Handles `#` prefix stripping/adding for tagColorHex (stored without #)
+   - Dropdown shows only available shortcuts (filters out already-used ones)
+   - Supports create and edit modes based on dialog data
+
+8. **Added keyboardShortcut field to Projects**
+   - Created migration `backend/migrations/20260131000001-add-keyboard-shortcut-to-projects.js`
+   - Added field to `backend/models/planning/project.js` with validation regex `/^[1-9]$/`
+   - Field is unique but nullable (digits 1-9 only, 0 reserved for "no project")
+   - Added to `frontend/src/app/models/project.model.ts` interface
+
+9. **Updated Project Service with CRUD methods**
+   - Added `getProjectById()`, `createProject()`, `updateProject()`, `deleteProject()`
+   - Full REST operations for project management
+
+10. **Updated task-card keyboard shortcuts to use project.keyboardShortcut**
+    - Changed from hardcoded index-based assignment to using project's keyboardShortcut field
+    - Key 0 clears project assignment
+    - Keys 1-9 find project with matching keyboardShortcut value
+    - Added toggle behavior: pressing same shortcut removes project assignment
+
+11. **Added "Edit Projects" button in task sub-toolbar**
+    - Added Router injection and `openEditProjects()` method to sub-toolbar component
+    - Button appears when in edit mode, navigates to `/projects`
+
 ### Notes
 - Wire ends API follows same pattern as other parts APIs (connector, wire, cable, component)
 - Migration needs to be run: `npx sequelize-cli db:migrate`
 - Termination types are now database-driven, allowing future additions without code changes
+- Projects are managed via list view at `/projects` route
+- Keyboard shortcuts 1-9 allow quick project assignment when hovering task cards
+- tagColorHex is stored WITHOUT the # prefix in the database
 - Current branch: minor_fixes
 
 ---

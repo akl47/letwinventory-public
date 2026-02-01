@@ -137,19 +137,31 @@ export class TaskCard implements OnInit, OnDestroy {
   onKeyDown(event: KeyboardEvent): void {
     if (!this.isHovered()) return;
 
+    const key = event.key.toLowerCase();
+
+    // 'c' toggles completion
+    if (key === 'c') {
+      this.toggleComplete(event);
+      return;
+    }
+
     // Check for number keys 0-9
-    const key = event.key;
-    if (!/^[0-9]$/.test(key)) return;
+    if (!/^[0-9]$/.test(event.key)) return;
 
-    const num = parseInt(key, 10);
-    const sorted = this.sortedProjects();
-
-    if (num === 0) {
+    if (event.key === '0') {
       // Clear project assignment
       this.assignProject(null);
-    } else if (num <= sorted.length) {
-      // Assign project at index (1-based)
-      this.assignProject(sorted[num - 1].id);
+    } else {
+      // Find project with this keyboard shortcut
+      const project = this.projects().find(p => p.keyboardShortcut === event.key);
+      if (project) {
+        // Toggle: if already assigned to this project, clear it
+        if (this.task().projectID === project.id) {
+          this.assignProject(null);
+        } else {
+          this.assignProject(project.id);
+        }
+      }
     }
   }
 

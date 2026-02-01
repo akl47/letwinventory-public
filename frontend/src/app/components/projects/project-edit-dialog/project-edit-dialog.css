@@ -1,0 +1,101 @@
+.dialog-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 400px;
+    padding: 8px 0;
+}
+
+.full-width {
+    width: 100%;
+}
+
+.form-row {
+    display: flex;
+    gap: 16px;
+}
+
+.form-row mat-form-field {
+    flex: 1;
+}
+
+.color-row {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 8px 0;
+}
+
+.color-picker-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.color-label {
+    font-size: 12px;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.color-picker {
+    width: 60px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid var(--mat-sys-outline);
+    border-radius: 4px;
+    cursor: pointer;
+    background: transparent;
+}
+
+.color-picker::-webkit-color-swatch-wrapper {
+    padding: 2px;
+}
+
+.color-picker::-webkit-color-swatch {
+    border-radius: 2px;
+    border: none;
+}
+
+.color-preview {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.preview-label {
+    font-size: 12px;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.project-tag {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: white;
+}
+
+/* Delete button */
+.mat-custom-error {
+    --mdc-filled-button-container-color: #f44336 !important;
+    --mdc-filled-button-label-text-color: white !important;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .dialog-form {
+        min-width: 280px;
+    }
+
+    .form-row {
+        flex-direction: column;
+    }
+
+    .color-row {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

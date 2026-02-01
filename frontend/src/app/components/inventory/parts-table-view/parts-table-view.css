@@ -190,7 +190,11 @@
     font-size: 14px;
 }
 
-.parts-table tr:hover {
+.parts-table tr.clickable-row {
+    cursor: pointer;
+}
+
+.parts-table tr.clickable-row:hover {
     background-color: var(--mat-sys-surface-container-low);
 }
 
