@@ -33,7 +33,7 @@ COPY backend .
 # Copy built frontend files from frontend-build stage
 COPY --from=frontend-build /app/dist/frontend-app/browser ./public
 
-run npm install pg pg-hstore sequelize sequelize-cli
+RUN npm install pg pg-hstore sequelize sequelize-cli
 
 # Exports
 EXPOSE 3000
