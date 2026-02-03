@@ -10,6 +10,7 @@ import { DOCUMENT } from '@angular/common';
 import { AuthService } from '../../../services/auth.service';
 import { TaskViewPreferencesService } from '../../../services/task-view-preferences.service';
 import { environment } from '../../../../environments/environment';
+import { APP_VERSION } from '../../../../environments/version';
 
 @Component({
     selector: 'app-nav',
@@ -37,6 +38,7 @@ export class NavComponent {
     protected readonly isAuthenticated = this.authService.isAuthenticated;
     protected readonly currentUser = this.authService.currentUser;
     protected readonly isDev = !environment.production;
+    protected readonly appVersion = APP_VERSION;
 
     toggleSidenav() {
         this.isSidenavCollapsed.update((collapsed) => !collapsed);

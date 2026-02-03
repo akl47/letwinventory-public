@@ -49,6 +49,11 @@
             </a>
             }
         </mat-nav-list>
+
+        <!-- Version Footer -->
+        <div class="version-footer" [class.collapsed]="isSidenavCollapsed()">
+            <span class="version-text">v{{ appVersion }}</span>
+        </div>
     </mat-sidenav>
 
     <mat-sidenav-content class="sidenav-content">
