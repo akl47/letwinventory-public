@@ -77,6 +77,9 @@ export {
 // Re-export from wire
 export {
   calculateOrthogonalPath,
+  calculateOrthogonalPathV2,
+  calculateLeadOutDirection,
+  adjustWaypointForObstacles,
   drawWire,
   drawWirePreview,
   drawMatingWirePreview,
@@ -91,7 +94,39 @@ export {
   findWaypointInsertIndex,
   getNearestPointOnWire
 } from './wire';
-export type { WireObstacle } from './wire';
+export type { WireObstacle, WireRoutingContext } from './wire';
+
+// Re-export from wire-endpoint
+export type {
+  Point,
+  WireEndpoint,
+  ConnectorEndpoint,
+  ConnectorMatingEndpoint,
+  CableEndpoint,
+  ComponentEndpoint,
+  SubHarnessEndpoint,
+  WireDrawingState
+} from './wire-endpoint';
+export {
+  isMatingEndpoint,
+  createEmptyWireDrawingState
+} from './wire-endpoint';
+
+// Re-export from endpoint-resolver
+export type { SubHarnessDataCache } from './endpoint-resolver';
+export {
+  resolveConnectorEndpoint,
+  resolveConnectorMatingEndpoint,
+  resolveCableEndpoint,
+  resolveComponentEndpoint,
+  resolveSubHarnessEndpoint,
+  resolveFromEndpoint,
+  resolveToEndpoint,
+  getEndpointWireColor
+} from './endpoint-resolver';
+
+// Re-export from wire-drawing-manager
+export { WireDrawingManager } from './wire-drawing-manager';
 
 // Re-export from grid
 export { drawGrid } from './grid';

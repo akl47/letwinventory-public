@@ -14,6 +14,7 @@ import { WireHarnessSummary, HarnessPagination } from '../../../models/harness.m
 
 export interface HarnessListDialogData {
   excludeHarnessId?: number;  // Harness ID to exclude from the list
+  excludePartNumber?: string; // Part number to exclude (filters out all revisions of a harness)
   selectMode?: boolean;       // If true, hides delete button and changes title
 }
 
@@ -48,6 +49,7 @@ export class HarnessListDialog implements OnInit {
 
   // Expose dialog data for template
   get excludeHarnessId(): number | undefined { return this.dialogData?.excludeHarnessId; }
+  get excludePartNumber(): string | undefined { return this.dialogData?.excludePartNumber; }
   get selectMode(): boolean { return this.dialogData?.selectMode ?? false; }
 
   private searchTimeout: any;
@@ -64,6 +66,10 @@ export class HarnessListDialog implements OnInit {
         let filtered = response.harnesses;
         if (this.excludeHarnessId) {
           filtered = filtered.filter(h => h.id !== this.excludeHarnessId);
+        }
+        // Filter out harnesses with the same part number (all revisions of same harness)
+        if (this.excludePartNumber) {
+          filtered = filtered.filter(h => h.partNumber !== this.excludePartNumber);
         }
         this.harnesses.set(filtered);
         this.pagination.set(response.pagination);

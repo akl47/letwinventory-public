@@ -56,12 +56,13 @@ function drawMatingPoint(
   x: number,
   y: number,
   size: number,
-  fillColor: string
+  fillColor: string,
+  highlighted: boolean = false
 ): void {
-  ctx.fillStyle = fillColor;
+  ctx.fillStyle = highlighted ? '#ffeb3b' : fillColor;  // Yellow when highlighted
   ctx.fillRect(x, y, size, size);
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = highlighted ? '#ff9800' : '#ffffff';  // Orange stroke when highlighted
+  ctx.lineWidth = highlighted ? 2 : 1;
   ctx.strokeRect(x, y, size, size);
 }
 
@@ -104,7 +105,9 @@ export function drawConnector(
   ctx: CanvasRenderingContext2D,
   connector: HarnessConnector,
   isSelected: boolean = false,
-  loadedImages?: Map<string, HTMLImageElement>
+  loadedImages?: Map<string, HTMLImageElement>,
+  highlightedPinIds?: Set<string>,
+  highlightedMatingPinIds?: Set<string>
 ): void {
   const { width, height, hasPartName, hasConnectorImage, connectorImageHeight } = getConnectorDimensions(connector);
   const x = connector.position?.x || 100;
@@ -183,13 +186,17 @@ export function drawConnector(
       index > 0
     );
 
+    // Check if this pin should be highlighted (wire or mating)
+    const isPinHighlighted = highlightedPinIds?.has(pin.id) || false;
+    const isMatingPinHighlighted = highlightedMatingPinIds?.has(pin.id) || false;
+
     // Wire connection point (circle on the side) - for wire connections
     const wireCircleX = connector.type === 'male' ? left + width + PIN_CIRCLE_RADIUS : left - PIN_CIRCLE_RADIUS;
-    drawPinCircle(ctx, wireCircleX, rowCenter, PIN_CIRCLE_RADIUS, headerColor);
+    drawPinCircle(ctx, wireCircleX, rowCenter, PIN_CIRCLE_RADIUS, headerColor, isPinHighlighted);
 
     // Mating connection point (square on the opposite side) - for connector-to-connector mating
     const matingX = connector.type === 'male' ? left - MATING_POINT_SIZE : left + width;
-    drawMatingPoint(ctx, matingX, rowCenter - MATING_POINT_SIZE / 2, MATING_POINT_SIZE, headerColor);
+    drawMatingPoint(ctx, matingX, rowCenter - MATING_POINT_SIZE / 2, MATING_POINT_SIZE, headerColor, isMatingPinHighlighted);
   });
 
   // Draw expand buttons if images exist

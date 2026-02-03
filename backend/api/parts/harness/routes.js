@@ -21,6 +21,7 @@ router.get('/:id/revisions', checkToken, controller.getAllRevisions);
 router.post('/:id/submit-review', checkToken, controller.submitForReview);
 router.post('/:id/reject', checkToken, controller.rejectHarness);
 router.post('/:id/release', checkToken, controller.releaseHarness);
+router.post('/:id/release-production', checkToken, controller.releaseProduction);
 router.post('/:id/revert/:historyId', checkToken, controller.revertToSnapshot);
 
 module.exports = router;

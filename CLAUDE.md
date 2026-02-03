@@ -682,6 +682,98 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Session: 2026-02-03
+
+### Files Created
+- `frontend/src/app/utils/harness/wire-endpoint.ts`
+- `frontend/src/app/utils/harness/endpoint-resolver.ts`
+- `frontend/src/app/utils/harness/wire-drawing-manager.ts`
+
+### Files Modified
+- `frontend/src/app/utils/harness/wire.ts`
+- `frontend/src/app/utils/harness/canvas-renderer.ts`
+- `frontend/src/app/components/harness/harness-canvas/harness-canvas.ts`
+
+### Changes Made
+
+1. **Created wire endpoint type definitions (`wire-endpoint.ts`)**
+   - Defined `Point` interface for x, y coordinates
+   - Created discriminated union `WireEndpoint` with types:
+     - `ConnectorEndpoint` - wire side of connector pin
+     - `ConnectorMatingEndpoint` - mating side of connector pin
+     - `CableEndpoint` - cable wire endpoint
+     - `ComponentEndpoint` - component pin endpoint
+     - `SubHarnessEndpoint` - sub-harness connector pin
+   - Each endpoint carries: `position`, `elementCenter`, `elementBounds`
+   - Added `WireDrawingState` interface for consolidated state management
+   - Added `WireRoutingContext` interface for improved path calculation
+   - Helper function `isMatingEndpoint()` to check endpoint type
+
+2. **Created endpoint resolver utilities (`endpoint-resolver.ts`)**
+   - Functions to resolve endpoints from HarnessConnection:
+     - `resolveFromEndpoint(data, connection, cache)` - resolve "from" endpoint
+     - `resolveToEndpoint(data, connection, cache)` - resolve "to" endpoint
+   - Type-specific resolution functions:
+     - `resolveConnectorEndpoint()` - connector wire pin
+     - `resolveConnectorMatingEndpoint()` - connector mating pin
+     - `resolveCableEndpoint()` - cable wire
+     - `resolveComponentEndpoint()` - component pin
+     - `resolveSubHarnessEndpoint()` - sub-harness pin
+   - Helper functions for calculating element center and bounds:
+     - `getConnectorCenterAndBounds()`
+     - `getCableCenterAndBounds()`
+     - `getComponentCenterAndBounds()`
+     - `getSubHarnessCenterAndBounds()`
+   - `getEndpointWireColor()` - get wire color from endpoint
+
+3. **Created wire drawing state manager (`wire-drawing-manager.ts`)**
+   - `WireDrawingManager` class consolidates ~25 wire drawing state variables
+   - Public API:
+     - `startDrawing(endpoint)` - begin wire drawing from endpoint
+     - `updateMousePosition(x, y)` - update mouse position during drawing
+     - `setHoveredEndpoint(endpoint)` - set potential end endpoint
+     - `completeDrawing()` - finish drawing, returns HarnessConnection or null
+     - `reset()` - cancel drawing operation
+   - Getters: `isDrawing()`, `isDrawingMating()`, `getStartEndpoint()`, etc.
+   - Legacy getters for backward compatibility with old state variable pattern
+   - `isValidEndEndpoint()` - validate if endpoint can be connected
+
+4. **Added improved routing algorithm to wire.ts**
+   - `calculateLeadOutDirection(pinPosition, elementCenter)` - determines lead-out direction based on element center (away from element body)
+   - `WireRoutingContext` interface for routing parameters
+   - `calculateOrthogonalPathV2(context)` - new routing with:
+     - Lead-out direction based on element centers (not destination)
+     - Simple obstacle avoidance via `adjustWaypointForObstacles()`
+     - `isPointInObstacle()` check for collision detection
+     - `cleanPath()` removes collinear and redundant points
+   - Keeps `calculateOrthogonalPath()` for backward compatibility
+
+5. **Updated canvas-renderer.ts exports**
+   - Added exports for new wire routing functions
+   - Added type exports for `WireEndpoint`, `WireDrawingState`, etc.
+   - Added exports for endpoint resolver functions
+   - Exported `WireDrawingManager` class
+
+6. **Integrated new utilities into harness-canvas.ts**
+   - Added imports for new functions and types
+   - Added `wireDrawingManager` instance (not yet fully integrated)
+   - Added helper methods for endpoint creation:
+     - `createConnectorEndpoint()`
+     - `createCableEndpoint()`
+     - `createComponentEndpoint()`
+     - `createSubHarnessEndpoint()`
+   - Added `getWireRoutingContext()` helper
+
+### Notes
+- This is Phase 1 of the wire routing refactoring
+- The new utilities are created and available for use
+- The canvas component still uses old state variables (backward compatible)
+- Full integration would replace the 25+ scattered state variables with WireDrawingManager
+- The improved routing leads wires AWAY from element bodies, not toward destinations
+- Current branch: harness_subassemblies
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:

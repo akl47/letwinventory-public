@@ -36,25 +36,6 @@ async function findParentHarnesses(harnessId) {
   });
 }
 
-// Helper: Get next revision letter (A -> B -> C -> ... -> Z -> AA -> AB)
-function getNextRevision(current) {
-  if (!current) return 'A';
-  const chars = current.toUpperCase().split('');
-  let i = chars.length - 1;
-
-  while (i >= 0) {
-    if (chars[i] === 'Z') {
-      chars[i] = 'A';
-      i--;
-    } else {
-      chars[i] = String.fromCharCode(chars[i].charCodeAt(0) + 1);
-      return chars.join('');
-    }
-  }
-  // All were Z, need to add a new character
-  return 'A' + chars.join('');
-}
-
 // Helper: Cascade release state to all sub-harnesses
 async function cascadeReleaseState(harness, newState, changedBy) {
   const subHarnesses = harness.harnessData?.subHarnesses || [];
@@ -225,7 +206,7 @@ exports.createHarness = async (req, res, next) => {
 
     const harness = await db.WireHarness.create({
       name,
-      revision: revision || 'A',
+      revision: revision || '01',
       description: description || null,
       harnessData: harnessData || {},
       thumbnailBase64: thumbnailBase64 || null,
@@ -608,9 +589,26 @@ exports.getParentHarnesses = async (req, res, next) => {
 
 // ========== Revision Control Endpoints ==========
 
-// Helper to get next revision letter (A -> B -> C -> ... -> Z -> AA -> AB)
-function getNextRevision(current) {
-  if (!current) return 'A';
+// Helper to check if a revision is numeric (00, 01, 02, etc.)
+function isNumericRevision(revision) {
+  return /^\d+$/.test(revision);
+}
+
+// Helper to check if a revision is alphabetic (A, B, C, etc.)
+function isLetterRevision(revision) {
+  return /^[A-Z]+$/.test(revision);
+}
+
+// Helper to get next numeric revision (00 -> 01 -> 02 -> ... -> 99 -> 100)
+function getNextNumericRevision(current) {
+  if (!current || !isNumericRevision(current)) return '01';
+  const num = parseInt(current, 10) + 1;
+  return num.toString().padStart(2, '0');
+}
+
+// Helper to get next letter revision (A -> B -> C -> ... -> Z -> AA -> AB)
+function getNextLetterRevision(current) {
+  if (!current || !isLetterRevision(current)) return 'A';
   const chars = current.toUpperCase().split('');
   let i = chars.length - 1;
 
@@ -625,6 +623,31 @@ function getNextRevision(current) {
   }
   // All were Z, need to add a new character
   return 'A' + chars.join('');
+}
+
+// Helper to find the latest revision of a given type for a harness family
+async function getLatestRevisionOfType(partID, type) {
+  const where = { partID, activeFlag: true };
+  const harnesses = await db.WireHarness.findAll({
+    where,
+    attributes: ['revision'],
+    order: [['createdAt', 'DESC']]
+  });
+
+  for (const h of harnesses) {
+    if (type === 'numeric' && isNumericRevision(h.revision)) {
+      return h.revision;
+    }
+    if (type === 'letter' && isLetterRevision(h.revision)) {
+      return h.revision;
+    }
+  }
+  return null;
+}
+
+// Legacy helper for backward compatibility
+function getNextRevision(current) {
+  return getNextNumericRevision(current);
 }
 
 // Helper to log history entry
@@ -713,7 +736,7 @@ exports.rejectHarness = async (req, res, next) => {
   }
 };
 
-// Release harness (review -> released)
+// Release harness (review -> released) - keeps the same revision number
 exports.releaseHarness = async (req, res, next) => {
   try {
     const harnessId = parseInt(req.params.id);
@@ -743,7 +766,7 @@ exports.releaseHarness = async (req, res, next) => {
     });
 
     // Log with snapshot
-    await logHistory(harnessId, 'released', changedBy, null, harness.harnessData);
+    await logHistory(harnessId, 'released', changedBy, `Released as revision ${harness.revision}`, harness.harnessData);
 
     const result = harness.toJSON();
     result.partNumber = result.Part ? result.Part.name : null;
@@ -752,6 +775,71 @@ exports.releaseHarness = async (req, res, next) => {
     res.json(result);
   } catch (error) {
     next(createError(500, 'Error releasing harness: ' + error.message));
+  }
+};
+
+// Release production revision (creates a letter revision from a released numeric revision)
+exports.releaseProduction = async (req, res, next) => {
+  try {
+    const harnessId = parseInt(req.params.id);
+
+    const harness = await db.WireHarness.findByPk(harnessId, {
+      include: [{ model: db.Part, as: 'Part', attributes: ['id', 'name'] }]
+    });
+
+    if (!harness) {
+      return next(createError(404, 'Harness not found'));
+    }
+
+    if (harness.releaseState !== 'released') {
+      return next(createError(400, 'Harness must be released before creating a production revision'));
+    }
+
+    if (!isNumericRevision(harness.revision)) {
+      return next(createError(400, 'Harness must have a numeric revision to create a production release'));
+    }
+
+    const changedBy = req.user ? req.user.displayName : null;
+    const now = new Date();
+
+    // Calculate the next letter revision
+    const latestLetter = await getLatestRevisionOfType(harness.partID, 'letter');
+    const nextRevision = getNextLetterRevision(latestLetter);
+
+    // Create a new harness record with the production revision
+    const newHarness = await db.WireHarness.create({
+      name: harness.name,
+      revision: nextRevision,
+      description: harness.description,
+      harnessData: harness.harnessData,
+      thumbnailBase64: harness.thumbnailBase64,
+      createdBy: changedBy,
+      partID: harness.partID,
+      releaseState: 'released',
+      releasedAt: now,
+      releasedBy: changedBy,
+      previousRevisionID: harness.id
+    });
+
+    // Log history for the new production revision
+    await db.HarnessRevisionHistory.create({
+      harnessID: newHarness.id,
+      revision: newHarness.revision,
+      releaseState: newHarness.releaseState,
+      changedBy,
+      changeType: 'production_release',
+      changeNotes: `Production release created from revision ${harness.revision}`,
+      snapshotData: newHarness.harnessData,
+      createdAt: now
+    });
+
+    const result = newHarness.toJSON();
+    result.partNumber = harness.Part ? harness.Part.name : null;
+    result.sourceRevision = harness.revision;
+
+    res.json(result);
+  } catch (error) {
+    next(createError(500, 'Error creating production release: ' + error.message));
   }
 };
 

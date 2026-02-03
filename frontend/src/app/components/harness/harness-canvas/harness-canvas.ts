@@ -52,12 +52,24 @@ import {
   getComponentPinPositions,
   getWireControlPoints,
   calculateOrthogonalPath,
+  calculateOrthogonalPathV2,
+  adjustWaypointForObstacles,
   getConnectorDimensions,
   getCableDimensions,
   getComponentDimensions,
   findWaypointInsertIndex,
   getNearestPointOnWire,
   WireObstacle,
+  WireDrawingManager,
+  resolveConnectorEndpoint,
+  resolveConnectorMatingEndpoint,
+  resolveCableEndpoint,
+  resolveComponentEndpoint,
+  resolveSubHarnessEndpoint,
+  resolveFromEndpoint,
+  resolveToEndpoint,
+  WireEndpoint,
+  WireRoutingContext,
 } from '../../../utils/harness/canvas-renderer';
 import {
   drawSubHarnessCollapsed,
@@ -175,6 +187,9 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
   // Sub-harness data cache
   private subHarnessDataCache = new Map<number, WireHarness>();
   private loadingSubHarnesses = new Set<number>();
+
+  // Wire drawing manager (consolidates wire drawing state)
+  private wireDrawingManager = new WireDrawingManager();
 
   // Panning state
   private isPanning = false;
@@ -558,107 +573,49 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         ctx.globalAlpha = 0.3;
       }
       data.connections.forEach(connection => {
-        let fromPos: { x: number; y: number } | null = null;
-        let toPos: { x: number; y: number } | null = null;
+        // Use endpoint resolver to get full endpoint info including element centers
+        const fromEndpoint = resolveFromEndpoint(data, connection, this.subHarnessDataCache);
+        const toEndpoint = resolveToEndpoint(data, connection, this.subHarnessDataCache);
+
+        if (!fromEndpoint || !toEndpoint) return;
+
+        const fromPos = fromEndpoint.position;
+        const toPos = toEndpoint.position;
+        const fromElementCenter = fromEndpoint.elementCenter;
+        const toElementCenter = toEndpoint.elementCenter;
+
+        // Get wire color from cable endpoint if available
         let wireColor = 'BK';
-        const isMatingConnection = connection.connectionType === 'mating';
-
-        // Get from position (connector pin, cable wire, or component pin)
-        if (connection.fromConnector && connection.fromPin) {
-          const fromConnector = data.connectors.find(c => c.id === connection.fromConnector);
-          if (fromConnector) {
-            // For mating connections, get mating pin position
-            const pinSide = isMatingConnection ? 'mating' : 'wire';
-            const fromPins = getConnectorPinPositions(fromConnector, pinSide);
-            const pin = fromPins.find(p => p.pinId === connection.fromPin);
-            if (pin) fromPos = pin;
-          }
-        } else if (connection.fromCable && connection.fromWire && connection.fromSide) {
-          const fromCable = data.cables.find(c => c.id === connection.fromCable);
+        if (fromEndpoint.type === 'cable') {
+          const fromCable = data.cables.find(c => c.id === fromEndpoint.cableId);
           if (fromCable) {
-            const cableWires = getCableWirePositions(fromCable);
-            const wire = cableWires.find(w => w.wireId === connection.fromWire && w.side === connection.fromSide);
-            if (wire) {
-              fromPos = wire;
-              const cableWire = fromCable.wires.find(w => w.id === connection.fromWire);
-              if (cableWire) wireColor = cableWire.colorCode || cableWire.color || 'BK';
-            }
+            const cableWire = fromCable.wires.find(w => w.id === fromEndpoint.wireId);
+            if (cableWire) wireColor = cableWire.colorCode || cableWire.color || 'BK';
           }
-        } else if (connection.fromComponent && connection.fromComponentPin) {
-          const fromComponent = (data.components || []).find(c => c.id === connection.fromComponent);
-          if (fromComponent) {
-            const compPins = getComponentPinPositions(fromComponent);
-            const pin = compPins.find(p => p.pinId === connection.fromComponentPin);
-            if (pin) fromPos = pin;
-          }
-        } else if (connection.fromSubHarness && connection.fromSubConnector && connection.fromPin) {
-          const fromSubHarness = (data.subHarnesses || []).find(s => s.id === connection.fromSubHarness);
-          if (fromSubHarness) {
-            const childHarness = this.subHarnessDataCache.get(fromSubHarness.harnessId);
-            const pinSide = isMatingConnection ? 'mating' : 'wire';
-            const pins = getSubHarnessPinPositions(fromSubHarness, childHarness, pinSide);
-            const pin = pins.find(p => p.connectorId === connection.fromSubConnector && p.connectorPinId === connection.fromPin);
-            if (pin) fromPos = pin;
-          }
-        }
-
-        // Get to position (connector pin, cable wire, or component pin)
-        if (connection.toConnector && connection.toPin) {
-          const toConnector = data.connectors.find(c => c.id === connection.toConnector);
-          if (toConnector) {
-            // For mating connections, get mating pin position
-            const pinSide = isMatingConnection ? 'mating' : 'wire';
-            const toPins = getConnectorPinPositions(toConnector, pinSide);
-            const pin = toPins.find(p => p.pinId === connection.toPin);
-            if (pin) toPos = pin;
-          }
-        } else if (connection.toCable && connection.toWire && connection.toSide) {
-          const toCable = data.cables.find(c => c.id === connection.toCable);
+        } else if (toEndpoint.type === 'cable') {
+          const toCable = data.cables.find(c => c.id === toEndpoint.cableId);
           if (toCable) {
-            const cableWires = getCableWirePositions(toCable);
-            const wire = cableWires.find(w => w.wireId === connection.toWire && w.side === connection.toSide);
-            if (wire) {
-              toPos = wire;
-              if (wireColor === 'BK') {
-                const cableWire = toCable.wires.find(w => w.id === connection.toWire);
-                if (cableWire) wireColor = cableWire.colorCode || cableWire.color || 'BK';
-              }
-            }
-          }
-        } else if (connection.toComponent && connection.toComponentPin) {
-          const toComponent = (data.components || []).find(c => c.id === connection.toComponent);
-          if (toComponent) {
-            const compPins = getComponentPinPositions(toComponent);
-            const pin = compPins.find(p => p.pinId === connection.toComponentPin);
-            if (pin) toPos = pin;
-          }
-        } else if (connection.toSubHarness && connection.toSubConnector && connection.toPin) {
-          const toSubHarness = (data.subHarnesses || []).find(s => s.id === connection.toSubHarness);
-          if (toSubHarness) {
-            const childHarness = this.subHarnessDataCache.get(toSubHarness.harnessId);
-            const pinSide = isMatingConnection ? 'mating' : 'wire';
-            const pins = getSubHarnessPinPositions(toSubHarness, childHarness, pinSide);
-            const pin = pins.find(p => p.connectorId === connection.toSubConnector && p.connectorPinId === connection.toPin);
-            if (pin) toPos = pin;
+            const cableWire = toCable.wires.find(w => w.id === toEndpoint.wireId);
+            if (cableWire) wireColor = cableWire.colorCode || cableWire.color || 'BK';
           }
         }
 
-        // Draw the connection if we have both endpoints
-        if (fromPos && toPos) {
-          const isSelected = this.selectedConnectionId === connection.id || this.selectedIds.has(`connection:${connection.id}`);
-          // Only show control points in nodeEdit mode when wire is selected
-          const showControlPoints = this.activeTool() === 'nodeEdit' && isSelected;
+        const selectedGroupId = this.getSelectedGroupId();
+        const isInSelectedGroup = !!(selectedGroupId && connection.groupId === selectedGroupId);
+        const isSelected = this.selectedConnectionId === connection.id || this.selectedIds.has(`connection:${connection.id}`) || isInSelectedGroup;
+        // Only show control points in nodeEdit mode when wire is selected
+        const showControlPoints = this.activeTool() === 'nodeEdit' && isSelected;
 
-          if (isMatingConnection) {
-            // Draw mating connection as gray dashed orthogonal line
-            drawMatingConnection(ctx, connection, fromPos, toPos, isSelected, this.gridSize(), wireObstacles, showControlPoints);
-          } else {
-            // Draw regular wire
-            if (connection.color) {
-              wireColor = connection.color;
-            }
-            drawWire(ctx, connection, fromPos, toPos, wireColor, isSelected, this.gridSize(), undefined, wireObstacles, showControlPoints);
+        const isMatingConnection = connection.connectionType === 'mating';
+        if (isMatingConnection) {
+          // Draw mating connection as gray dashed orthogonal line
+          drawMatingConnection(ctx, connection, fromPos, toPos, isSelected, this.gridSize(), wireObstacles, showControlPoints, fromElementCenter, toElementCenter);
+        } else {
+          // Draw regular wire
+          if (connection.color) {
+            wireColor = connection.color;
           }
+          drawWire(ctx, connection, fromPos, toPos, wireColor, isSelected, this.gridSize(), undefined, wireObstacles, showControlPoints, fromElementCenter, toElementCenter);
         }
       });
 
@@ -698,6 +655,9 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       const inEditMode = this.editingSubHarnessId() !== null;
       const editingId = this.editingSubHarnessId();
 
+      // Compute highlighted pins based on selected connections
+      const highlightedPins = this.getHighlightedPinsFromSelection(data);
+
       // Draw all elements in zIndex order
       elements.forEach(item => {
         // In edit mode, gray out non-editing elements
@@ -707,13 +667,14 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
 
         if (item.type === 'cable') {
           const isSelected = !inEditMode && (this.selectedCableId === item.element.id || this.selectedIds.has(`cable:${item.element.id}`));
-          drawCable(ctx, item.element, isSelected, this.loadedImages);
+          const cableHighlight = highlightedPins.cables.get(item.element.id);
+          drawCable(ctx, item.element, isSelected, this.loadedImages, cableHighlight?.wireIds, cableHighlight?.side);
         } else if (item.type === 'connector') {
           const isSelected = !inEditMode && (this.selectedConnectorId === item.element.id || this.selectedIds.has(`connector:${item.element.id}`));
-          drawConnector(ctx, item.element, isSelected, this.loadedImages);
+          drawConnector(ctx, item.element, isSelected, this.loadedImages, highlightedPins.connectors.get(item.element.id), highlightedPins.connectorsMating.get(item.element.id));
         } else if (item.type === 'component') {
           const isSelected = !inEditMode && (this.selectedComponentId === item.element.id || this.selectedIds.has(`component:${item.element.id}`));
-          drawComponent(ctx, item.element, isSelected, this.loadedImages);
+          drawComponent(ctx, item.element, isSelected, this.loadedImages, highlightedPins.components.get(item.element.id));
         } else if (item.type === 'subHarness') {
           // In edit mode, don't draw the editing sub-harness with the standard function
           // We'll draw it separately with full editability
@@ -732,7 +693,10 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           } else {
             const isSelected = !inEditMode && (this.selectedSubHarnessId === item.element.id || this.selectedIds.has(`subHarness:${item.element.id}`));
             const childHarness = this.subHarnessDataCache.get(item.element.harnessId);
-            drawSubHarnessCollapsed(ctx, item.element, childHarness, isSelected, this.loadedImages);
+            // Get highlighted pins for this sub-harness
+            const subHighlight = highlightedPins.subHarnesses.get(item.element.id);
+            const subMatingHighlight = highlightedPins.subHarnessesMating.get(item.element.id);
+            drawSubHarnessCollapsed(ctx, item.element, childHarness, isSelected, this.loadedImages, subHighlight, subMatingHighlight);
           }
         }
 
@@ -756,63 +720,58 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         let startX = this.wireEndX;
         let startY = this.wireEndY;
         let startPinPos: { x: number; y: number } | null = null;
+        let startElementCenter: { x: number; y: number } | null = null;
 
         if (this.wireStartConnectorId && this.wireStartPinId) {
-          const startConnector = data.connectors.find(c => c.id === this.wireStartConnectorId);
-          if (startConnector) {
-            // Get pins from the correct side based on whether we're drawing a mating wire
-            const pinSide = this.isDrawingMatingWire ? 'mating' : 'wire';
-            const pins = getConnectorPinPositions(startConnector, pinSide);
-            const startPin = pins.find(p => p.pinId === this.wireStartPinId);
-            if (startPin) {
-              startX = startPin.x;
-              startY = startPin.y;
-              startPinPos = startPin;
-            }
+          const isMating = this.isDrawingMatingWire;
+          const endpoint = isMating
+            ? resolveConnectorMatingEndpoint(data, this.wireStartConnectorId, this.wireStartPinId)
+            : resolveConnectorEndpoint(data, this.wireStartConnectorId, this.wireStartPinId);
+          if (endpoint) {
+            startX = endpoint.position.x;
+            startY = endpoint.position.y;
+            startPinPos = endpoint.position;
+            startElementCenter = endpoint.elementCenter;
           }
         } else if (this.wireStartCableId && this.wireStartWireId && this.wireStartSide) {
-          const startCable = data.cables.find(c => c.id === this.wireStartCableId);
-          if (startCable) {
-            const wires = getCableWirePositions(startCable);
-            const wire = wires.find(w => w.wireId === this.wireStartWireId && w.side === this.wireStartSide);
-            if (wire) {
-              startX = wire.x;
-              startY = wire.y;
-              startPinPos = wire;
-            }
+          const endpoint = resolveCableEndpoint(data, this.wireStartCableId, this.wireStartWireId, this.wireStartSide);
+          if (endpoint) {
+            startX = endpoint.position.x;
+            startY = endpoint.position.y;
+            startPinPos = endpoint.position;
+            startElementCenter = endpoint.elementCenter;
           }
         } else if (this.wireStartComponentId && this.wireStartComponentPinId) {
-          const startComponent = (data.components || []).find(c => c.id === this.wireStartComponentId);
-          if (startComponent) {
-            const pins = getComponentPinPositions(startComponent);
-            const startPin = pins.find(p => p.pinId === this.wireStartComponentPinId);
-            if (startPin) {
-              startX = startPin.x;
-              startY = startPin.y;
-              startPinPos = startPin;
-            }
+          const endpoint = resolveComponentEndpoint(data, this.wireStartComponentId, this.wireStartComponentPinId);
+          if (endpoint) {
+            startX = endpoint.position.x;
+            startY = endpoint.position.y;
+            startPinPos = endpoint.position;
+            startElementCenter = endpoint.elementCenter;
           }
         } else if (this.wireStartSubHarnessId && this.wireStartSubHarnessConnectorId && this.wireStartPinId) {
-          const startSubHarness = (data.subHarnesses || []).find(s => s.id === this.wireStartSubHarnessId);
-          if (startSubHarness) {
-            const childHarness = this.subHarnessDataCache.get(startSubHarness.harnessId);
-            const pinSide = this.isDrawingMatingWire ? 'mating' : 'wire';
-            const pins = getSubHarnessPinPositions(startSubHarness, childHarness, pinSide);
-            const startPin = pins.find(p => p.connectorId === this.wireStartSubHarnessConnectorId && p.connectorPinId === this.wireStartPinId);
-            if (startPin) {
-              startX = startPin.x;
-              startY = startPin.y;
-              startPinPos = startPin;
-            }
+          const endpoint = resolveSubHarnessEndpoint(
+            data,
+            this.wireStartSubHarnessId,
+            this.wireStartSubHarnessConnectorId,
+            this.wireStartPinId,
+            this.isDrawingMatingWire,
+            this.subHarnessDataCache
+          );
+          if (endpoint) {
+            startX = endpoint.position.x;
+            startY = endpoint.position.y;
+            startPinPos = endpoint.position;
+            startElementCenter = endpoint.elementCenter;
           }
         }
 
         if (startX !== this.wireEndX || startY !== this.wireEndY) {
           // Use different preview for mating wire vs regular wire
           if (this.isDrawingMatingWire) {
-            drawMatingWirePreview(ctx, startX, startY, this.wireEndX, this.wireEndY, this.gridSize(), wireObstacles);
+            drawMatingWirePreview(ctx, startX, startY, this.wireEndX, this.wireEndY, this.gridSize(), wireObstacles, startElementCenter);
           } else {
-            drawWirePreview(ctx, startX, startY, this.wireEndX, this.wireEndY, this.gridSize(), wireObstacles);
+            drawWirePreview(ctx, startX, startY, this.wireEndX, this.wireEndY, this.gridSize(), wireObstacles, startElementCenter);
           }
         }
 
@@ -903,7 +862,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
 
       // Helper to get axis-aligned bounds from rotated corners
       const getRotatedBounds = (localMinX: number, localMinY: number, localMaxX: number, localMaxY: number,
-                                 originX: number, originY: number, rotation: number) => {
+        originX: number, originY: number, rotation: number) => {
         const corners = [
           transformPoint(localMinX, localMinY, originX, originY, rotation),
           transformPoint(localMaxX, localMinY, originX, originY, rotation),
@@ -997,14 +956,30 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)';
       const debugWireObstacles = this.getWireObstacles();
       for (const connection of data.connections) {
-        const fromPos = this.getConnectionFromPos(data, connection);
-        const toPos = this.getConnectionToPos(data, connection);
-        if (!fromPos || !toPos) continue;
+        // Use endpoint resolver for consistency with rendering
+        const fromEndpoint = resolveFromEndpoint(data, connection, this.subHarnessDataCache);
+        const toEndpoint = resolveToEndpoint(data, connection, this.subHarnessDataCache);
+        if (!fromEndpoint || !toEndpoint) continue;
 
-        // Get all path points - either stored waypoints or calculated orthogonal path
-        const pathPoints = connection.waypoints?.length
-          ? [fromPos, ...connection.waypoints, toPos]
-          : calculateOrthogonalPath(fromPos, toPos, this.gridSize(), debugWireObstacles);
+        const fromPos = fromEndpoint.position;
+        const toPos = toEndpoint.position;
+
+        // Get all path points using same algorithm as rendering
+        let pathPoints: { x: number; y: number }[];
+        if (connection.waypoints?.length) {
+          pathPoints = [fromPos, ...connection.waypoints, toPos];
+        } else if (fromEndpoint.elementCenter || toEndpoint.elementCenter) {
+          pathPoints = calculateOrthogonalPathV2({
+            fromPosition: fromPos,
+            toPosition: toPos,
+            fromElementCenter: fromEndpoint.elementCenter,
+            toElementCenter: toEndpoint.elementCenter,
+            obstacles: debugWireObstacles,
+            gridSize: this.gridSize()
+          });
+        } else {
+          pathPoints = calculateOrthogonalPath(fromPos, toPos, this.gridSize(), debugWireObstacles);
+        }
 
         let wMinX = Infinity;
         let wMinY = Infinity;
@@ -1020,7 +995,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
 
         ctx.strokeRect(wMinX - 2, wMinY - 2, wMaxX - wMinX + 4, wMaxY - wMinY + 4);
 
-        // Draw circles at endpoints
+        // Draw cyan circles at endpoints
         ctx.fillStyle = 'rgba(0, 255, 255, 0.8)';
         ctx.beginPath();
         ctx.arc(fromPos.x, fromPos.y, 4 / this.zoom(), 0, Math.PI * 2);
@@ -1029,11 +1004,17 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         ctx.arc(toPos.x, toPos.y, 4 / this.zoom(), 0, Math.PI * 2);
         ctx.fill();
 
-        // Draw squares at intermediate path points (waypoints)
-        const s = 6 / this.zoom();
+        // Draw yellow circles at intermediate path points (waypoints)
+        ctx.fillStyle = 'rgba(255, 255, 0, 1)';
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.lineWidth = 1 / this.zoom();
+        const radius = 5 / this.zoom();
         for (let i = 1; i < pathPoints.length - 1; i++) {
           const pt = pathPoints[i];
-          ctx.fillRect(pt.x - s/2, pt.y - s/2, s, s);
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
         }
       }
     }
@@ -1197,12 +1178,16 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     // Node Edit tool - click on control points to drag them
     if (this.activeTool() === 'nodeEdit') {
       // Check all wires (including mating connections) for control point hits
+      const wireObstacles = this.getWireObstacles();
       for (const connection of data.connections) {
-        const fromPos = this.getConnectionFromPos(data, connection);
-        const toPos = this.getConnectionToPos(data, connection);
-        if (!fromPos || !toPos) continue;
+        const fromEndpoint = resolveFromEndpoint(data, connection, this.subHarnessDataCache);
+        const toEndpoint = resolveToEndpoint(data, connection, this.subHarnessDataCache);
+        if (!fromEndpoint || !toEndpoint) continue;
 
-        const cpIndex = hitTestWireControlPoint(connection, fromPos, toPos, x, y, this.gridSize());
+        const cpIndex = hitTestWireControlPoint(
+          connection, fromEndpoint.position, toEndpoint.position, x, y, this.gridSize(),
+          fromEndpoint.elementCenter, toEndpoint.elementCenter, wireObstacles
+        );
         if (cpIndex >= 0) {
           // Start dragging this control point (only if not released)
           if (!releasedMode) {
@@ -1251,84 +1236,84 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         const pinHit = hitTestConnectorPinWithSide(connector, x, y);
         if (pinHit) {
           this.isDrawingWire = true;
-        this.isDrawingMatingWire = pinHit.side === 'mating';
-        this.wireStartConnectorId = connector.id;
-        this.wireStartPinId = pinHit.pinId;
-        this.wireStartCableId = null;
-        this.wireStartWireId = null;
-        this.wireStartSide = null;
-        this.wireStartComponentId = null;
-        this.wireStartComponentPinId = null;
-        this.wireStartSubHarnessId = null;
-        this.wireStartSubHarnessConnectorId = null;
-        this.wireEndX = x;
-        this.wireEndY = y;
-        return;
+          this.isDrawingMatingWire = pinHit.side === 'mating';
+          this.wireStartConnectorId = connector.id;
+          this.wireStartPinId = pinHit.pinId;
+          this.wireStartCableId = null;
+          this.wireStartWireId = null;
+          this.wireStartSide = null;
+          this.wireStartComponentId = null;
+          this.wireStartComponentPinId = null;
+          this.wireStartSubHarnessId = null;
+          this.wireStartSubHarnessConnectorId = null;
+          this.wireEndX = x;
+          this.wireEndY = y;
+          return;
+        }
       }
-    }
 
-    // Check cable wire endpoints (to start wire drawing)
-    for (const cable of data.cables) {
-      if (!cable.position) continue;
-      const hit = hitTestCableWire(cable, x, y);
-      if (hit) {
-        this.isDrawingWire = true;
-        this.wireStartCableId = cable.id;
-        this.wireStartWireId = hit.wireId;
-        this.wireStartSide = hit.side;
-        this.wireStartConnectorId = null;
-        this.wireStartPinId = null;
-        this.wireStartComponentId = null;
-        this.wireStartComponentPinId = null;
-        this.wireStartSubHarnessId = null;
-        this.wireStartSubHarnessConnectorId = null;
-        this.wireEndX = x;
-        this.wireEndY = y;
-        return;
+      // Check cable wire endpoints (to start wire drawing)
+      for (const cable of data.cables) {
+        if (!cable.position) continue;
+        const hit = hitTestCableWire(cable, x, y);
+        if (hit) {
+          this.isDrawingWire = true;
+          this.wireStartCableId = cable.id;
+          this.wireStartWireId = hit.wireId;
+          this.wireStartSide = hit.side;
+          this.wireStartConnectorId = null;
+          this.wireStartPinId = null;
+          this.wireStartComponentId = null;
+          this.wireStartComponentPinId = null;
+          this.wireStartSubHarnessId = null;
+          this.wireStartSubHarnessConnectorId = null;
+          this.wireEndX = x;
+          this.wireEndY = y;
+          return;
+        }
       }
-    }
 
-    // Check component pins (to start wire drawing)
-    for (const component of (data.components || [])) {
-      const hit = hitTestComponentPin(component, x, y);
-      if (hit) {
-        this.isDrawingWire = true;
-        this.wireStartComponentId = component.id;
-        this.wireStartComponentPinId = hit.pinId;
-        this.wireStartConnectorId = null;
-        this.wireStartPinId = null;
-        this.wireStartCableId = null;
-        this.wireStartWireId = null;
-        this.wireStartSide = null;
-        this.wireStartSubHarnessId = null;
-        this.wireStartSubHarnessConnectorId = null;
-        this.wireEndX = x;
-        this.wireEndY = y;
-        return;
+      // Check component pins (to start wire drawing)
+      for (const component of (data.components || [])) {
+        const hit = hitTestComponentPin(component, x, y);
+        if (hit) {
+          this.isDrawingWire = true;
+          this.wireStartComponentId = component.id;
+          this.wireStartComponentPinId = hit.pinId;
+          this.wireStartConnectorId = null;
+          this.wireStartPinId = null;
+          this.wireStartCableId = null;
+          this.wireStartWireId = null;
+          this.wireStartSide = null;
+          this.wireStartSubHarnessId = null;
+          this.wireStartSubHarnessConnectorId = null;
+          this.wireEndX = x;
+          this.wireEndY = y;
+          return;
+        }
       }
-    }
 
-    // Check subharness mating pins only (wire pins are internal to the sub-harness)
-    for (const subHarness of (data.subHarnesses || [])) {
-      const childHarness = this.subHarnessDataCache.get(subHarness.harnessId);
-      const matingPinHit = hitTestSubHarnessPin(subHarness, childHarness, x, y, 'mating');
-      if (matingPinHit) {
-        this.isDrawingWire = true;
-        this.isDrawingMatingWire = true;
-        this.wireStartSubHarnessId = subHarness.id;
-        this.wireStartSubHarnessConnectorId = matingPinHit.connectorId;
-        this.wireStartPinId = matingPinHit.connectorPinId;
-        this.wireStartConnectorId = null;
-        this.wireStartCableId = null;
-        this.wireStartWireId = null;
-        this.wireStartSide = null;
-        this.wireStartComponentId = null;
-        this.wireStartComponentPinId = null;
-        this.wireEndX = x;
-        this.wireEndY = y;
-        return;
+      // Check subharness mating pins only (wire pins are internal to the sub-harness)
+      for (const subHarness of (data.subHarnesses || [])) {
+        const childHarness = this.subHarnessDataCache.get(subHarness.harnessId);
+        const matingPinHit = hitTestSubHarnessPin(subHarness, childHarness, x, y, 'mating');
+        if (matingPinHit) {
+          this.isDrawingWire = true;
+          this.isDrawingMatingWire = true;
+          this.wireStartSubHarnessId = subHarness.id;
+          this.wireStartSubHarnessConnectorId = matingPinHit.connectorId;
+          this.wireStartPinId = matingPinHit.connectorPinId;
+          this.wireStartConnectorId = null;
+          this.wireStartCableId = null;
+          this.wireStartWireId = null;
+          this.wireStartSide = null;
+          this.wireStartComponentId = null;
+          this.wireStartComponentPinId = null;
+          this.wireEndX = x;
+          this.wireEndY = y;
+          return;
+        }
       }
-    }
     } // End of !releasedMode check for wire drawing in select mode
 
     // Create sorted list of all elements by zIndex (highest first for hit testing)
@@ -1680,11 +1665,15 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     if (this.activeTool() === 'nodeEdit' && this.selectedConnectionId) {
       const selectedConnection = data.connections.find(c => c.id === this.selectedConnectionId);
       if (selectedConnection) {
-        const connFromPos = this.getConnectionFromPos(data, selectedConnection);
-        const connToPos = this.getConnectionToPos(data, selectedConnection);
+        const fromEndpoint = resolveFromEndpoint(data, selectedConnection, this.subHarnessDataCache);
+        const toEndpoint = resolveToEndpoint(data, selectedConnection, this.subHarnessDataCache);
 
-        if (connFromPos && connToPos) {
-          const cpIndex = hitTestWireControlPoint(selectedConnection, connFromPos, connToPos, x, y, this.gridSize());
+        if (fromEndpoint && toEndpoint) {
+          const wireObstacles = this.getWireObstacles();
+          const cpIndex = hitTestWireControlPoint(
+            selectedConnection, fromEndpoint.position, toEndpoint.position, x, y, this.gridSize(),
+            fromEndpoint.elementCenter, toEndpoint.elementCenter, wireObstacles
+          );
           if (cpIndex >= 0) {
             this.isDraggingControlPoint = true;
             this.draggedConnectionId = selectedConnection.id;
@@ -1726,6 +1715,10 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         } else if (!alreadySelected) {
           this.clearMultiSelection();
           this.addToSelection('connection', connection.id);
+          // If wire is in a group, select all group members
+          if (connection.groupId) {
+            this.selectGroupMembers(connection.groupId);
+          }
         }
 
         this.selectedConnectionId = connection.id;
@@ -1736,6 +1729,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         this.selectionChanged.emit({
           type: 'wire',
           connection: connection,
+          groupId: connection.groupId,
           selectedIds: Array.from(this.selectedIds).map(s => {
             const [type, id] = s.split(':');
             return { type, id };
@@ -2071,20 +2065,39 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       }
 
       // Update the connection waypoints
+      const wireObstacles = this.getWireObstacles();
       const connections = data.connections.map(conn => {
         if (conn.id === this.draggedConnectionId) {
-          const fromPos = this.getConnectionFromPos(data, conn);
-          const toPos = this.getConnectionToPos(data, conn);
+          const fromEndpoint = resolveFromEndpoint(data, conn, this.subHarnessDataCache);
+          const toEndpoint = resolveToEndpoint(data, conn, this.subHarnessDataCache);
 
-          if (fromPos && toPos) {
-            // Get current path points
-            let currentPoints = conn.waypoints?.length
-              ? [fromPos, ...conn.waypoints, toPos]
-              : calculateOrthogonalPath(fromPos, toPos, this.gridSize());
+          if (fromEndpoint && toEndpoint) {
+            // Get current path points using same algorithm as rendering/hit testing
+            let currentPoints: { x: number; y: number }[];
+            if (conn.waypoints?.length) {
+              currentPoints = [fromEndpoint.position, ...conn.waypoints, toEndpoint.position];
+            } else if (fromEndpoint.elementCenter || toEndpoint.elementCenter) {
+              currentPoints = calculateOrthogonalPathV2({
+                fromPosition: fromEndpoint.position,
+                toPosition: toEndpoint.position,
+                fromElementCenter: fromEndpoint.elementCenter,
+                toElementCenter: toEndpoint.elementCenter,
+                obstacles: wireObstacles,
+                gridSize: this.gridSize()
+              });
+            } else {
+              currentPoints = calculateOrthogonalPath(fromEndpoint.position, toEndpoint.position, this.gridSize());
+            }
 
             // Update the specific control point
             if (this.draggedControlPointIndex > 0 && this.draggedControlPointIndex < currentPoints.length - 1) {
-              currentPoints[this.draggedControlPointIndex] = { x: newX, y: newY };
+              // Adjust position to avoid placing waypoint inside element bounding boxes
+              const adjustedPoint = adjustWaypointForObstacles(
+                { x: newX, y: newY },
+                wireObstacles,
+                this.gridSize()
+              );
+              currentPoints[this.draggedControlPointIndex] = adjustedPoint;
 
               // Extract waypoints (exclude start and end points which are from connectors)
               const newWaypoints = currentPoints.slice(1, -1);
@@ -2270,10 +2283,14 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           if (!found && this.activeTool() === 'nodeEdit' && this.selectedConnectionId) {
             const selectedConnection = data.connections.find(c => c.id === this.selectedConnectionId);
             if (selectedConnection) {
-              const connFromPos = this.getConnectionFromPos(data, selectedConnection);
-              const connToPos = this.getConnectionToPos(data, selectedConnection);
-              if (connFromPos && connToPos) {
-                const cpIndex = hitTestWireControlPoint(selectedConnection, connFromPos, connToPos, x, y, this.gridSize());
+              const fromEndpoint = resolveFromEndpoint(data, selectedConnection, this.subHarnessDataCache);
+              const toEndpoint = resolveToEndpoint(data, selectedConnection, this.subHarnessDataCache);
+              if (fromEndpoint && toEndpoint) {
+                const wireObstacles = this.getWireObstacles();
+                const cpIndex = hitTestWireControlPoint(
+                  selectedConnection, fromEndpoint.position, toEndpoint.position, x, y, this.gridSize(),
+                  fromEndpoint.elementCenter, toEndpoint.elementCenter, wireObstacles
+                );
                 if (cpIndex >= 0) {
                   cursor = 'move';
                   found = true;
@@ -2738,12 +2755,16 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     // Node Edit tool - double-click to add/remove nodes (parent harness)
     if (this.activeTool() === 'nodeEdit') {
       // Check all wires (including mating) for control point hits (to remove node)
+      const wireObstacles = this.getWireObstacles();
       for (const connection of data.connections) {
-        const fromPos = this.getConnectionFromPos(data, connection);
-        const toPos = this.getConnectionToPos(data, connection);
-        if (!fromPos || !toPos) continue;
+        const fromEndpoint = resolveFromEndpoint(data, connection, this.subHarnessDataCache);
+        const toEndpoint = resolveToEndpoint(data, connection, this.subHarnessDataCache);
+        if (!fromEndpoint || !toEndpoint) continue;
 
-        const cpIndex = hitTestWireControlPoint(connection, fromPos, toPos, x, y, this.gridSize());
+        const cpIndex = hitTestWireControlPoint(
+          connection, fromEndpoint.position, toEndpoint.position, x, y, this.gridSize(),
+          fromEndpoint.elementCenter, toEndpoint.elementCenter, wireObstacles
+        );
         if (cpIndex >= 0) {
           // Remove this control point
           this.removeWireControlPoint(connection.id, cpIndex);
@@ -3331,7 +3352,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
 
     // Helper to get axis-aligned bounds from rotated corners
     const getRotatedBounds = (localMinX: number, localMinY: number, localMaxX: number, localMaxY: number,
-                               originX: number, originY: number, rotation: number) => {
+      originX: number, originY: number, rotation: number) => {
       const corners = [
         transformPoint(localMinX, localMinY, originX, originY, rotation),
         transformPoint(localMaxX, localMinY, originX, originY, rotation),
@@ -3489,6 +3510,133 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     return thumbCanvas.toDataURL('image/png', 0.8);
   }
 
+  // Helper to get highlighted pins from selected connections
+  private getHighlightedPinsFromSelection(data: HarnessData): {
+    connectors: Map<string, Set<string>>;
+    connectorsMating: Map<string, Set<string>>;
+    cables: Map<string, { wireIds: Set<string>; side: 'left' | 'right' | 'both' }>;
+    components: Map<string, Set<string>>;
+    // Sub-harness highlights: Map<subHarnessId, Map<connectorId, Set<pinId>>>
+    subHarnesses: Map<string, Map<string, Set<string>>>;
+    subHarnessesMating: Map<string, Map<string, Set<string>>>;
+  } {
+    const connectors = new Map<string, Set<string>>();
+    const connectorsMating = new Map<string, Set<string>>();
+    const cables = new Map<string, { wireIds: Set<string>; side: 'left' | 'right' | 'both' }>();
+    const components = new Map<string, Set<string>>();
+    const subHarnesses = new Map<string, Map<string, Set<string>>>();
+    const subHarnessesMating = new Map<string, Map<string, Set<string>>>();
+
+    // Collect all selected connection IDs
+    const selectedConnectionIds = new Set<string>();
+    if (this.selectedConnectionId) {
+      selectedConnectionIds.add(this.selectedConnectionId);
+    }
+    // Also include connections from multi-selection
+    for (const key of this.selectedIds) {
+      const [type, id] = key.split(':');
+      if (type === 'connection') {
+        selectedConnectionIds.add(id);
+      }
+    }
+
+    if (selectedConnectionIds.size === 0) {
+      return { connectors, connectorsMating, cables, components, subHarnesses, subHarnessesMating };
+    }
+
+    // Process each selected connection
+    for (const connectionId of selectedConnectionIds) {
+      const connection = data.connections.find(c => c.id === connectionId);
+      if (!connection) continue;
+
+      const isMating = connection.connectionType === 'mating';
+      const targetConnectors = isMating ? connectorsMating : connectors;
+      const targetSubHarnesses = isMating ? subHarnessesMating : subHarnesses;
+
+      // Process "from" endpoint
+      if (connection.fromConnector && connection.fromPin) {
+        const connId = connection.fromConnector;
+        if (!targetConnectors.has(connId)) {
+          targetConnectors.set(connId, new Set());
+        }
+        targetConnectors.get(connId)!.add(connection.fromPin);
+      }
+      if (connection.fromSubHarness && connection.fromSubConnector && connection.fromPin) {
+        const subId = connection.fromSubHarness;
+        const connId = connection.fromSubConnector;
+        if (!targetSubHarnesses.has(subId)) {
+          targetSubHarnesses.set(subId, new Map());
+        }
+        const subMap = targetSubHarnesses.get(subId)!;
+        if (!subMap.has(connId)) {
+          subMap.set(connId, new Set());
+        }
+        subMap.get(connId)!.add(connection.fromPin);
+      }
+      if (connection.fromCable && connection.fromWire) {
+        const cableId = connection.fromCable;
+        const side = connection.fromSide || 'right';
+        if (!cables.has(cableId)) {
+          cables.set(cableId, { wireIds: new Set(), side });
+        }
+        const cableHighlight = cables.get(cableId)!;
+        cableHighlight.wireIds.add(connection.fromWire);
+        if (cableHighlight.side !== side && cableHighlight.side !== 'both') {
+          cableHighlight.side = 'both';
+        }
+      }
+      if (connection.fromComponent && connection.fromComponentPin) {
+        const compId = connection.fromComponent;
+        if (!components.has(compId)) {
+          components.set(compId, new Set());
+        }
+        components.get(compId)!.add(connection.fromComponentPin);
+      }
+
+      // Process "to" endpoint
+      if (connection.toConnector && connection.toPin) {
+        const connId = connection.toConnector;
+        if (!targetConnectors.has(connId)) {
+          targetConnectors.set(connId, new Set());
+        }
+        targetConnectors.get(connId)!.add(connection.toPin);
+      }
+      if (connection.toSubHarness && connection.toSubConnector && connection.toPin) {
+        const subId = connection.toSubHarness;
+        const connId = connection.toSubConnector;
+        if (!targetSubHarnesses.has(subId)) {
+          targetSubHarnesses.set(subId, new Map());
+        }
+        const subMap = targetSubHarnesses.get(subId)!;
+        if (!subMap.has(connId)) {
+          subMap.set(connId, new Set());
+        }
+        subMap.get(connId)!.add(connection.toPin);
+      }
+      if (connection.toCable && connection.toWire) {
+        const cableId = connection.toCable;
+        const side = connection.toSide || 'left';
+        if (!cables.has(cableId)) {
+          cables.set(cableId, { wireIds: new Set(), side });
+        }
+        const cableHighlight = cables.get(cableId)!;
+        cableHighlight.wireIds.add(connection.toWire);
+        if (cableHighlight.side !== side && cableHighlight.side !== 'both') {
+          cableHighlight.side = 'both';
+        }
+      }
+      if (connection.toComponent && connection.toComponentPin) {
+        const compId = connection.toComponent;
+        if (!components.has(compId)) {
+          components.set(compId, new Set());
+        }
+        components.get(compId)!.add(connection.toComponentPin);
+      }
+    }
+
+    return { connectors, connectorsMating, cables, components, subHarnesses, subHarnessesMating };
+  }
+
   // Helper to get connection from position
   private getConnectionFromPos(data: HarnessData, connection: HarnessConnection): { x: number; y: number } | null {
     const isMating = connection.connectionType === 'mating';
@@ -3569,6 +3717,80 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       }
     }
     return null;
+  }
+
+  // Helper to create WireEndpoint from a connector pin hit
+  private createConnectorEndpoint(
+    connectorId: string,
+    pinId: string,
+    isMating: boolean
+  ): WireEndpoint | null {
+    const data = this.harnessData();
+    if (!data) return null;
+
+    if (isMating) {
+      return resolveConnectorMatingEndpoint(data, connectorId, pinId);
+    }
+    return resolveConnectorEndpoint(data, connectorId, pinId);
+  }
+
+  // Helper to create WireEndpoint from a cable wire hit
+  private createCableEndpoint(
+    cableId: string,
+    wireId: string,
+    side: 'left' | 'right'
+  ): WireEndpoint | null {
+    const data = this.harnessData();
+    if (!data) return null;
+
+    return resolveCableEndpoint(data, cableId, wireId, side);
+  }
+
+  // Helper to create WireEndpoint from a component pin hit
+  private createComponentEndpoint(
+    componentId: string,
+    pinId: string
+  ): WireEndpoint | null {
+    const data = this.harnessData();
+    if (!data) return null;
+
+    return resolveComponentEndpoint(data, componentId, pinId);
+  }
+
+  // Helper to create WireEndpoint from a sub-harness pin hit
+  private createSubHarnessEndpoint(
+    subHarnessId: string,
+    connectorId: string,
+    pinId: string,
+    isMating: boolean
+  ): WireEndpoint | null {
+    const data = this.harnessData();
+    if (!data) return null;
+
+    return resolveSubHarnessEndpoint(
+      data,
+      subHarnessId,
+      connectorId,
+      pinId,
+      isMating,
+      this.subHarnessDataCache
+    );
+  }
+
+  // Get wire routing context for improved path calculation
+  private getWireRoutingContext(
+    fromEndpoint: WireEndpoint,
+    toEndpoint: WireEndpoint,
+    obstacles: WireObstacle[]
+  ): WireRoutingContext {
+    return {
+      fromPosition: fromEndpoint.position,
+      toPosition: toEndpoint.position,
+      fromElementCenter: fromEndpoint.elementCenter,
+      toElementCenter: toEndpoint.elementCenter,
+      obstacles,
+      gridSize: this.gridSize()
+    };
   }
 
   // Normalize connection so "from" is always the top-left endpoint
@@ -3687,6 +3909,10 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       const subHarness = (data.subHarnesses || []).find(s => s.id === this.selectedSubHarnessId);
       return subHarness?.groupId || null;
     }
+    if (this.selectedConnectionId) {
+      const connection = data.connections.find(c => c.id === this.selectedConnectionId);
+      return connection?.groupId || null;
+    }
     return null;
   }
 
@@ -3726,7 +3952,14 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       return s;
     });
 
-    this.dataChanged.emit({ ...data, connectors, cables, components, subHarnesses });
+    const connections = data.connections.map(c => {
+      if (this.selectedIds.has(`connection:${c.id}`)) {
+        return { ...c, groupId };
+      }
+      return c;
+    });
+
+    this.dataChanged.emit({ ...data, connectors, cables, components, subHarnesses, connections });
     this.clearMultiSelection();
     this.render();
   }
@@ -3772,7 +4005,15 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       return s;
     });
 
-    this.dataChanged.emit({ ...data, connectors, cables, components, subHarnesses });
+    const connections = data.connections.map(c => {
+      if (c.groupId === groupId) {
+        const { groupId: _, ...rest } = c;
+        return rest as HarnessConnection;
+      }
+      return c;
+    });
+
+    this.dataChanged.emit({ ...data, connectors, cables, components, subHarnesses, connections });
     this.render();
   }
 
@@ -3807,6 +4048,22 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       }
     }
 
+    for (const c of data.connections) {
+      if (c.groupId === groupId) {
+        // Connections don't have a direct position, compute midpoint from endpoints
+        const fromPos = this.getConnectionFromPos(data, c);
+        const toPos = this.getConnectionToPos(data, c);
+        if (fromPos && toPos) {
+          const midpoint = { x: (fromPos.x + toPos.x) / 2, y: (fromPos.y + toPos.y) / 2 };
+          members.push({ type: 'connection', id: c.id, position: midpoint });
+        } else if (fromPos) {
+          members.push({ type: 'connection', id: c.id, position: fromPos });
+        } else if (toPos) {
+          members.push({ type: 'connection', id: c.id, position: toPos });
+        }
+      }
+    }
+
     return members;
   }
 
@@ -3818,14 +4075,20 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     let hasMembers = false;
 
-    // Calculate bounding box from all group members
+    // Constants matching the drawing coordinates
+    const ROW_HEIGHT = 20;
+    const CABLE_WIRE_SPACING = 20;
+
+    // Calculate bounding box from all group members using same logic as exportAsPNG
     for (const c of data.connectors) {
       if (c.groupId === groupId && c.position) {
         const dims = getConnectorDimensions(c);
+        const pinCount = c.pins?.length || c.pinCount || 1;
+        const headerAndExtras = dims.height - (pinCount * ROW_HEIGHT);
         minX = Math.min(minX, c.position.x);
-        minY = Math.min(minY, c.position.y - dims.height / 2);
+        minY = Math.min(minY, c.position.y - ROW_HEIGHT / 2 - headerAndExtras);
         maxX = Math.max(maxX, c.position.x + dims.width);
-        maxY = Math.max(maxY, c.position.y + dims.height / 2);
+        maxY = Math.max(maxY, c.position.y - ROW_HEIGHT / 2 + pinCount * ROW_HEIGHT);
         hasMembers = true;
       }
     }
@@ -3833,10 +4096,12 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     for (const c of data.cables) {
       if (c.groupId === groupId && c.position) {
         const dims = getCableDimensions(c);
+        const wireCount = c.wires?.length || c.wireCount || 1;
+        const headerAndExtras = dims.height - (wireCount * CABLE_WIRE_SPACING);
         minX = Math.min(minX, c.position.x);
-        minY = Math.min(minY, c.position.y);
+        minY = Math.min(minY, c.position.y - headerAndExtras - CABLE_WIRE_SPACING / 2);
         maxX = Math.max(maxX, c.position.x + dims.width);
-        maxY = Math.max(maxY, c.position.y + dims.height);
+        maxY = Math.max(maxY, c.position.y + (wireCount - 0.5) * CABLE_WIRE_SPACING);
         hasMembers = true;
       }
     }
@@ -3844,10 +4109,16 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     for (const c of (data.components || [])) {
       if (c.groupId === groupId && c.position) {
         const dims = getComponentDimensions(c);
+        let totalPins = 0;
+        for (const group of c.pinGroups || []) {
+          totalPins += group.pins?.length || 0;
+        }
+        totalPins = Math.max(totalPins, 1);
+        const headerAndExtras = dims.height - (totalPins * ROW_HEIGHT);
         minX = Math.min(minX, c.position.x);
-        minY = Math.min(minY, c.position.y - dims.height / 2);
+        minY = Math.min(minY, c.position.y - ROW_HEIGHT / 2 - headerAndExtras);
         maxX = Math.max(maxX, c.position.x + dims.width);
-        maxY = Math.max(maxY, c.position.y + dims.height / 2);
+        maxY = Math.max(maxY, c.position.y - ROW_HEIGHT / 2 + totalPins * ROW_HEIGHT);
         hasMembers = true;
       }
     }
@@ -3861,6 +4132,36 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         maxX = Math.max(maxX, s.position.x + dims.bounds.maxX);
         maxY = Math.max(maxY, s.position.y + dims.bounds.maxY);
         hasMembers = true;
+      }
+    }
+
+    // Include connections (wires) in the group
+    for (const connection of data.connections) {
+      if (connection.groupId === groupId) {
+        const fromPos = this.getConnectionFromPos(data, connection);
+        const toPos = this.getConnectionToPos(data, connection);
+        if (fromPos) {
+          minX = Math.min(minX, fromPos.x);
+          minY = Math.min(minY, fromPos.y);
+          maxX = Math.max(maxX, fromPos.x);
+          maxY = Math.max(maxY, fromPos.y);
+          hasMembers = true;
+        }
+        if (toPos) {
+          minX = Math.min(minX, toPos.x);
+          minY = Math.min(minY, toPos.y);
+          maxX = Math.max(maxX, toPos.x);
+          maxY = Math.max(maxY, toPos.y);
+        }
+        // Include waypoints
+        if (connection.waypoints) {
+          for (const wp of connection.waypoints) {
+            minX = Math.min(minX, wp.x);
+            minY = Math.min(minY, wp.y);
+            maxX = Math.max(maxX, wp.x);
+            maxY = Math.max(maxY, wp.y);
+          }
+        }
       }
     }
 
@@ -4070,55 +4371,107 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     if (!data) return [];
 
     const obstacles: WireObstacle[] = [];
-    const padding = this.gridSize(); // One grid spacing around obstacles
+    const ROW_HEIGHT = 20;
+    const CABLE_WIRE_SPACING = 20;
+    const padding = this.gridSize() * 0.1; // 0.1 grid space padding around obstacles
 
-    // Add connectors as obstacles
-    for (const c of data.connectors) {
-      if (!c.position) continue;
-      const dims = getConnectorDimensions(c);
-      obstacles.push({
-        minX: c.position.x - padding,
-        minY: c.position.y - dims.height / 2 - padding,
-        maxX: c.position.x + dims.width + padding,
-        maxY: c.position.y + dims.height / 2 + padding
-      });
+    // Helper to rotate a point around origin
+    const transformPoint = (localX: number, localY: number, originX: number, originY: number, rotation: number) => {
+      const rad = (rotation * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      return {
+        x: originX + localX * cos - localY * sin,
+        y: originY + localX * sin + localY * cos
+      };
+    };
+
+    // Helper to get axis-aligned bounds from rotated corners with one grid space padding
+    const getRotatedBounds = (localMinX: number, localMinY: number, localMaxX: number, localMaxY: number,
+      originX: number, originY: number, rotation: number): WireObstacle => {
+      const corners = [
+        transformPoint(localMinX, localMinY, originX, originY, rotation),
+        transformPoint(localMaxX, localMinY, originX, originY, rotation),
+        transformPoint(localMaxX, localMaxY, originX, originY, rotation),
+        transformPoint(localMinX, localMaxY, originX, originY, rotation)
+      ];
+      return {
+        minX: Math.min(...corners.map(c => c.x)) - padding,
+        minY: Math.min(...corners.map(c => c.y)) - padding,
+        maxX: Math.max(...corners.map(c => c.x)) + padding,
+        maxY: Math.max(...corners.map(c => c.y)) + padding
+      };
+    };
+
+    // Add connectors as obstacles (using full visual bounds with rotation)
+    for (const connector of data.connectors) {
+      if (!connector.position) continue;
+      const dims = getConnectorDimensions(connector);
+      const pinCount = connector.pins?.length || connector.pinCount || 1;
+      const headerAndExtras = dims.height - (pinCount * ROW_HEIGHT);
+      const rotation = connector.rotation || 0;
+      // Origin is at (x, y - ROW_HEIGHT/2), local coords relative to that
+      const originX = connector.position.x;
+      const originY = connector.position.y - ROW_HEIGHT / 2;
+      const localMinX = 0;
+      const localMinY = -headerAndExtras;
+      const localMaxX = dims.width;
+      const localMaxY = pinCount * ROW_HEIGHT;
+      obstacles.push(getRotatedBounds(localMinX, localMinY, localMaxX, localMaxY, originX, originY, rotation));
     }
 
-    // Add cables as obstacles
-    for (const c of data.cables) {
-      if (!c.position) continue;
-      const dims = getCableDimensions(c);
-      obstacles.push({
-        minX: c.position.x - padding,
-        minY: c.position.y - padding,
-        maxX: c.position.x + dims.width + padding,
-        maxY: c.position.y + dims.height + padding
-      });
+    // Add cables as obstacles (using full visual bounds with rotation)
+    for (const cable of data.cables) {
+      if (!cable.position) continue;
+      const dims = getCableDimensions(cable);
+      const wireCount = cable.wires?.length || cable.wireCount || 1;
+      const headerAndExtras = dims.height - (wireCount * CABLE_WIRE_SPACING);
+      const rotation = cable.rotation || 0;
+      // Origin is at (x, y), local coords relative to that
+      const originX = cable.position.x;
+      const originY = cable.position.y;
+      const localMinX = 0;
+      const localMinY = -headerAndExtras - CABLE_WIRE_SPACING / 2;
+      const localMaxX = dims.width;
+      const localMaxY = (wireCount - 0.5) * CABLE_WIRE_SPACING;
+      obstacles.push(getRotatedBounds(localMinX, localMinY, localMaxX, localMaxY, originX, originY, rotation));
     }
 
-    // Add components as obstacles
-    for (const c of (data.components || [])) {
-      if (!c.position) continue;
-      const dims = getComponentDimensions(c);
-      obstacles.push({
-        minX: c.position.x - padding,
-        minY: c.position.y - dims.height / 2 - padding,
-        maxX: c.position.x + dims.width + padding,
-        maxY: c.position.y + dims.height / 2 + padding
-      });
+    // Add components as obstacles (using full visual bounds with rotation)
+    for (const component of (data.components || [])) {
+      if (!component.position) continue;
+      const dims = getComponentDimensions(component);
+      let totalPins = 0;
+      for (const group of component.pinGroups || []) {
+        totalPins += group.pins?.length || 0;
+      }
+      totalPins = Math.max(totalPins, 1);
+      const headerAndExtras = dims.height - (totalPins * ROW_HEIGHT);
+      const rotation = component.rotation || 0;
+      // Origin is at (x, y - ROW_HEIGHT/2), local coords relative to that
+      const originX = component.position.x;
+      const originY = component.position.y - ROW_HEIGHT / 2;
+      const localMinX = 0;
+      const localMinY = -headerAndExtras;
+      const localMaxX = dims.width;
+      const localMaxY = totalPins * ROW_HEIGHT;
+      obstacles.push(getRotatedBounds(localMinX, localMinY, localMaxX, localMaxY, originX, originY, rotation));
     }
 
-    // Add sub-harnesses as obstacles
-    for (const s of (data.subHarnesses || [])) {
-      if (!s.position) continue;
-      const childHarness = this.subHarnessDataCache.get(s.harnessId);
-      const dims = getSubHarnessDimensions(s, childHarness);
-      obstacles.push({
-        minX: s.position.x + dims.bounds.minX - padding,
-        minY: s.position.y + dims.bounds.minY - padding,
-        maxX: s.position.x + dims.bounds.maxX + padding,
-        maxY: s.position.y + dims.bounds.maxY + padding
-      });
+    // Add sub-harnesses as obstacles (using full visual bounds with rotation)
+    for (const subHarness of (data.subHarnesses || [])) {
+      if (!subHarness.position) continue;
+      const childHarness = this.subHarnessDataCache.get(subHarness.harnessId);
+      const dims = getSubHarnessDimensions(subHarness, childHarness);
+      const rotation = subHarness.rotation || 0;
+      // Origin is at (x, y), local bounds from dims
+      const originX = subHarness.position.x;
+      const originY = subHarness.position.y;
+      obstacles.push(getRotatedBounds(
+        dims.bounds.minX - originX, dims.bounds.minY - originY,
+        dims.bounds.maxX - originX, dims.bounds.maxY - originY,
+        originX, originY, rotation
+      ));
     }
 
     return obstacles;
@@ -4304,17 +4657,36 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     const result = findWaypointInsertIndex(connection, fromPos, toPos, clickX, clickY, this.gridSize());
 
     // Snap the new point to grid
-    const newPoint = {
+    const snappedPoint = {
       x: true ? Math.round(result.point.x / this.gridSize()) * this.gridSize() : result.point.x,
       y: true ? Math.round(result.point.y / this.gridSize()) * this.gridSize() : result.point.y
     };
+
+    // Adjust to avoid placing waypoint inside element bounding boxes
+    const wireObstacles = this.getWireObstacles();
+    const newPoint = adjustWaypointForObstacles(snappedPoint, wireObstacles, this.gridSize());
 
     // Get current waypoints or calculate from orthogonal path
     let waypoints = connection.waypoints ? [...connection.waypoints] : [];
 
     // If no waypoints exist yet, we need to convert the auto-calculated path to waypoints
     if (waypoints.length === 0) {
-      const autoPath = calculateOrthogonalPath(fromPos, toPos, this.gridSize());
+      // Use same algorithm as rendering for consistency
+      const fromEndpoint = resolveFromEndpoint(data, connection, this.subHarnessDataCache);
+      const toEndpoint = resolveToEndpoint(data, connection, this.subHarnessDataCache);
+      let autoPath: { x: number; y: number }[];
+      if (fromEndpoint?.elementCenter || toEndpoint?.elementCenter) {
+        autoPath = calculateOrthogonalPathV2({
+          fromPosition: fromPos,
+          toPosition: toPos,
+          fromElementCenter: fromEndpoint?.elementCenter || null,
+          toElementCenter: toEndpoint?.elementCenter || null,
+          obstacles: wireObstacles,
+          gridSize: this.gridSize()
+        });
+      } else {
+        autoPath = calculateOrthogonalPath(fromPos, toPos, this.gridSize());
+      }
       // Exclude the first and last points (from/to positions)
       waypoints = autoPath.slice(1, -1);
     }
@@ -4343,16 +4715,30 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     const connection = data.connections.find(c => c.id === connectionId);
     if (!connection) return;
 
-    const fromPos = this.getConnectionFromPos(data, connection);
-    const toPos = this.getConnectionToPos(data, connection);
-    if (!fromPos || !toPos) return;
+    const fromEndpoint = resolveFromEndpoint(data, connection, this.subHarnessDataCache);
+    const toEndpoint = resolveToEndpoint(data, connection, this.subHarnessDataCache);
+    if (!fromEndpoint || !toEndpoint) return;
 
     // Get current waypoints
     let waypoints = connection.waypoints ? [...connection.waypoints] : [];
 
     // If no explicit waypoints, convert auto-path to waypoints first
     if (waypoints.length === 0) {
-      const autoPath = calculateOrthogonalPath(fromPos, toPos, this.gridSize());
+      // Use same algorithm as rendering for consistency
+      let autoPath: { x: number; y: number }[];
+      if (fromEndpoint.elementCenter || toEndpoint.elementCenter) {
+        const wireObstacles = this.getWireObstacles();
+        autoPath = calculateOrthogonalPathV2({
+          fromPosition: fromEndpoint.position,
+          toPosition: toEndpoint.position,
+          fromElementCenter: fromEndpoint.elementCenter,
+          toElementCenter: toEndpoint.elementCenter,
+          obstacles: wireObstacles,
+          gridSize: this.gridSize()
+        });
+      } else {
+        autoPath = calculateOrthogonalPath(fromEndpoint.position, toEndpoint.position, this.gridSize());
+      }
       waypoints = autoPath.slice(1, -1);
     }
 

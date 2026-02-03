@@ -95,7 +95,7 @@ export class HarnessService {
     return this.http.post<WireHarness>(`${this.apiUrl}/${id}/reject`, { notes });
   }
 
-  // Release harness
+  // Release harness (creates numeric revision)
   release(id: number): Observable<WireHarness> {
     return this.http.post<WireHarness>(`${this.apiUrl}/${id}/release`, {});
   }

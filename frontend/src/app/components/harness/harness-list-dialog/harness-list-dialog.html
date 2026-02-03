@@ -34,6 +34,11 @@
           <span class="part-number">{{ harness.partNumber }}</span>
           }
           <span class="revision">Rev {{ harness.revision }}</span>
+          <span class="status-chip" [class.draft]="harness.releaseState === 'draft'"
+                [class.review]="harness.releaseState === 'review'"
+                [class.released]="harness.releaseState === 'released'">
+            {{ harness.releaseState || 'draft' }}
+          </span>
         </div>
         <div class="harness-date">
           Updated: {{ formatDate(harness.updatedAt) }}

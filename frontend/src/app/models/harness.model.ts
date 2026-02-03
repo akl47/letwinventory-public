@@ -135,6 +135,8 @@ export interface HarnessConnection {
   // Termination types for each end
   fromTermination?: string;  // e.g., 'f-pin', 'm-pin', 'ring', 'ferrule', etc.
   toTermination?: string;
+  // Group membership
+  groupId?: string;
 }
 
 export interface HarnessCanvasSettings {
@@ -383,7 +385,7 @@ export function createEmptyHarnessData(name: string = 'New Harness'): HarnessDat
   return {
     name,
     partNumber: '',
-    revision: 'A',
+    revision: '01',
     description: '',
     connectors: [],
     cables: [],

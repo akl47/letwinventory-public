@@ -250,14 +250,15 @@ export function drawPinCircle(
   x: number,
   y: number,
   radius: number,
-  fillColor: string
+  fillColor: string,
+  highlighted: boolean = false
 ): void {
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.fillStyle = fillColor;
+  ctx.fillStyle = highlighted ? '#ffeb3b' : fillColor;  // Yellow when highlighted
   ctx.fill();
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = highlighted ? '#ff9800' : '#ffffff';  // Orange stroke when highlighted
+  ctx.lineWidth = highlighted ? 2.5 : 1.5;
   ctx.stroke();
 }
 

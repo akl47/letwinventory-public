@@ -201,7 +201,9 @@ export function drawSubHarnessCollapsed(
   subHarnessRef: SubHarnessRef,
   childHarness: WireHarness | undefined,
   isSelected: boolean = false,
-  loadedImages?: Map<string, HTMLImageElement>
+  loadedImages?: Map<string, HTMLImageElement>,
+  highlightedPins?: Map<string, Set<string>>,
+  highlightedMatingPins?: Map<string, Set<string>>
 ): void {
   const x = subHarnessRef.position?.x || 0;
   const y = subHarnessRef.position?.y || 0;
@@ -341,7 +343,9 @@ export function drawSubHarnessCollapsed(
 
   // Draw connectors
   for (const connector of data.connectors || []) {
-    drawConnector(ctx, connector, false, loadedImages);
+    const connHighlight = highlightedPins?.get(connector.id);
+    const connMatingHighlight = highlightedMatingPins?.get(connector.id);
+    drawConnector(ctx, connector, false, loadedImages, connHighlight, connMatingHighlight);
   }
 
   // Draw components

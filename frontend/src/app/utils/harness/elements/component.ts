@@ -62,7 +62,8 @@ export function drawComponent(
   ctx: CanvasRenderingContext2D,
   component: HarnessComponent,
   isSelected: boolean = false,
-  loadedImages?: Map<string, HTMLImageElement>
+  loadedImages?: Map<string, HTMLImageElement>,
+  highlightedPinIds?: Set<string>
 ): void {
   const { width, height, hasPartName, hasComponentImage, componentImageHeight, groupHeights } = getComponentDimensions(component);
   const x = component.position?.x || 100;
@@ -156,9 +157,12 @@ export function drawComponent(
         i > 0
       );
 
+      // Check if this pin should be highlighted
+      const isPinHighlighted = highlightedPinIds?.has(pin.id) || false;
+
       // Wire connection point on the right side
       const circleX = left + width + COMPONENT_PIN_RADIUS;
-      drawPinCircle(ctx, circleX, rowCenter, COMPONENT_PIN_RADIUS, COMPONENT_HEADER_COLOR);
+      drawPinCircle(ctx, circleX, rowCenter, COMPONENT_PIN_RADIUS, COMPONENT_HEADER_COLOR, isPinHighlighted);
     }
 
     currentY += group.pins.length * ROW_HEIGHT;

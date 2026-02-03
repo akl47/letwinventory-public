@@ -47,104 +47,26 @@ export interface WireObstacle {
 }
 
 /**
- * Check if a line segment intersects a rectangle
- */
-function lineIntersectsRect(
-  x1: number, y1: number, x2: number, y2: number,
-  rect: WireObstacle
-): boolean {
-  // Check if line is completely outside the rectangle
-  if ((x1 < rect.minX && x2 < rect.minX) || (x1 > rect.maxX && x2 > rect.maxX)) return false;
-  if ((y1 < rect.minY && y2 < rect.minY) || (y1 > rect.maxY && y2 > rect.maxY)) return false;
-
-  // Check if either endpoint is inside the rectangle
-  if (x1 >= rect.minX && x1 <= rect.maxX && y1 >= rect.minY && y1 <= rect.maxY) return true;
-  if (x2 >= rect.minX && x2 <= rect.maxX && y2 >= rect.minY && y2 <= rect.maxY) return true;
-
-  // For orthogonal lines, check if the line crosses the rectangle
-  if (x1 === x2) {
-    // Vertical line
-    const minY = Math.min(y1, y2);
-    const maxY = Math.max(y1, y2);
-    return x1 >= rect.minX && x1 <= rect.maxX && minY <= rect.maxY && maxY >= rect.minY;
-  }
-  if (y1 === y2) {
-    // Horizontal line
-    const minX = Math.min(x1, x2);
-    const maxX = Math.max(x1, x2);
-    return y1 >= rect.minY && y1 <= rect.maxY && minX <= rect.maxX && maxX >= rect.minX;
-  }
-
-  return false;
-}
-
-/**
- * Check if a point is inside an obstacle
- */
-function pointInObstacle(x: number, y: number, obs: WireObstacle): boolean {
-  return x >= obs.minX && x <= obs.maxX && y >= obs.minY && y <= obs.maxY;
-}
-
-/**
- * Find obstacle containing a point (for identifying source/dest obstacles)
- */
-function findObstacleContainingPoint(x: number, y: number, obstacles: WireObstacle[]): WireObstacle | null {
-  for (const obs of obstacles) {
-    if (pointInObstacle(x, y, obs)) {
-      return obs;
-    }
-  }
-  return null;
-}
-
-/**
- * Check if path intersects obstacles, with special handling for source/dest
- * Allows first segment to touch sourceObs and last segment to touch destObs
- */
-function pathIntersectsObstaclesExcludingEndpoints(
-  points: { x: number; y: number }[],
-  obstacles: WireObstacle[],
-  sourceObs: WireObstacle | null,
-  destObs: WireObstacle | null
-): boolean {
-  for (let i = 0; i < points.length - 1; i++) {
-    const isFirstSegment = i === 0;
-    const isLastSegment = i === points.length - 2;
-
-    for (const obs of obstacles) {
-      // Skip source obstacle for first segment
-      if (isFirstSegment && sourceObs && obs === sourceObs) continue;
-      // Skip dest obstacle for last segment
-      if (isLastSegment && destObs && obs === destObs) continue;
-
-      if (lineIntersectsRect(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, obs)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-/**
  * Calculate orthogonal (right-angle) path between two points
- * Wires lead out 1 grid space horizontally before turning
+ * Simple routing: lead out horizontally, then route to destination
  */
 export function calculateOrthogonalPath(
   fromPos: { x: number; y: number },
   toPos: { x: number; y: number },
   gridSize: number = 20,
-  _obstacles: WireObstacle[] = []  // Kept for API compatibility but not used
+  _obstacles: WireObstacle[] = []
 ): { x: number; y: number }[] {
   // Very short distance - direct connection
   if (Math.abs(fromPos.x - toPos.x) < gridSize && Math.abs(fromPos.y - toPos.y) < gridSize) {
     return [{ x: fromPos.x, y: fromPos.y }, { x: toPos.x, y: toPos.y }];
   }
 
-  // Determine lead-out direction: away from the destination horizontally
-  const leadOutDir = fromPos.x <= toPos.x ? 1 : -1;
-  const leadInDir = toPos.x <= fromPos.x ? 1 : -1;
-
+  // Determine lead-out direction: go away from destination horizontally
+  const leadOutDir = fromPos.x <= toPos.x ? -1 : 1;
   const leadOutX = fromPos.x + leadOutDir * gridSize;
+
+  // Determine lead-in direction: go away from source horizontally
+  const leadInDir = toPos.x <= fromPos.x ? -1 : 1;
   const leadInX = toPos.x + leadInDir * gridSize;
 
   const path: { x: number; y: number }[] = [];
@@ -152,16 +74,16 @@ export function calculateOrthogonalPath(
   // Start point
   path.push({ x: fromPos.x, y: fromPos.y });
 
-  // Lead out horizontally 1 grid space
+  // Lead out point
   path.push({ x: leadOutX, y: fromPos.y });
 
-  // Route to destination level
+  // If we need to change Y, add intermediate points
   if (Math.abs(fromPos.y - toPos.y) > 1) {
     // Go vertical to match destination Y
     path.push({ x: leadOutX, y: toPos.y });
   }
 
-  // Lead in horizontally to destination (if needed)
+  // If lead-in X differs from where we are, add point
   if (Math.abs(leadOutX - leadInX) > 1) {
     path.push({ x: leadInX, y: toPos.y });
   }
@@ -169,7 +91,7 @@ export function calculateOrthogonalPath(
   // End point
   path.push({ x: toPos.x, y: toPos.y });
 
-  // Clean up redundant points (same position or collinear)
+  // Clean up redundant points (same position)
   const cleaned: { x: number; y: number }[] = [path[0]];
   for (let i = 1; i < path.length; i++) {
     const prev = cleaned[cleaned.length - 1];
@@ -177,10 +99,226 @@ export function calculateOrthogonalPath(
       cleaned.push(path[i]);
     }
   }
-  // Ensure end point is included
-  const last = cleaned[cleaned.length - 1];
-  if (Math.abs(last.x - toPos.x) > 1 || Math.abs(last.y - toPos.y) > 1) {
-    cleaned.push({ x: toPos.x, y: toPos.y });
+
+  return cleaned;
+}
+
+/**
+ * Calculate lead-out direction based on element center
+ * The wire should lead AWAY from the element center
+ */
+export function calculateLeadOutDirection(
+  pinPosition: { x: number; y: number },
+  elementCenter: { x: number; y: number } | null
+): 'left' | 'right' {
+  if (!elementCenter) {
+    // Default to right if no center provided
+    return 'right';
+  }
+  // Lead out AWAY from element center
+  // If pin is right of center → lead right
+  // If pin is left of center → lead left
+  return pinPosition.x >= elementCenter.x ? 'right' : 'left';
+}
+
+/**
+ * Context for improved wire routing with element awareness
+ */
+export interface WireRoutingContext {
+  fromPosition: { x: number; y: number };
+  toPosition: { x: number; y: number };
+  fromElementCenter: { x: number; y: number } | null;
+  toElementCenter: { x: number; y: number } | null;
+  obstacles: WireObstacle[];
+  gridSize: number;
+}
+
+/**
+ * Check if a point is strictly inside an obstacle bounding box
+ */
+function isPointInObstacle(
+  x: number,
+  y: number,
+  obstacles: WireObstacle[]
+): boolean {
+  for (const obs of obstacles) {
+    if (x > obs.minX && x < obs.maxX &&
+        y > obs.minY && y < obs.maxY) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Adjust a waypoint to avoid obstacles
+ * Shifts the point horizontally or vertically to the nearest grid position outside the obstacle
+ */
+export function adjustWaypointForObstacles(
+  point: { x: number; y: number },
+  obstacles: WireObstacle[],
+  gridSize: number,
+  preferVertical: boolean = false
+): { x: number; y: number } {
+  let adjusted = { ...point };
+
+  for (const obs of obstacles) {
+    // Check if point is strictly inside the obstacle bounding box
+    if (adjusted.x > obs.minX && adjusted.x < obs.maxX &&
+        adjusted.y > obs.minY && adjusted.y < obs.maxY) {
+      // Point is inside obstacle, move to nearest edge (snapped to grid)
+      if (preferVertical) {
+        // Try to adjust Y first
+        const distToTop = adjusted.y - obs.minY;
+        const distToBottom = obs.maxY - adjusted.y;
+        if (distToTop < distToBottom) {
+          // Move to grid position at or above the top edge
+          adjusted.y = Math.floor(obs.minY / gridSize) * gridSize;
+        } else {
+          // Move to grid position at or below the bottom edge
+          adjusted.y = Math.ceil(obs.maxY / gridSize) * gridSize;
+        }
+      } else {
+        // Try to adjust X first
+        const distToLeft = adjusted.x - obs.minX;
+        const distToRight = obs.maxX - adjusted.x;
+        if (distToLeft < distToRight) {
+          // Move to grid position at or left of the left edge
+          adjusted.x = Math.floor(obs.minX / gridSize) * gridSize;
+        } else {
+          // Move to grid position at or right of the right edge
+          adjusted.x = Math.ceil(obs.maxX / gridSize) * gridSize;
+        }
+      }
+    }
+  }
+
+  return adjusted;
+}
+
+/**
+ * Calculate orthogonal path with improved lead-out direction
+ * Uses element centers to determine lead-out direction (away from element body)
+ */
+export function calculateOrthogonalPathV2(context: WireRoutingContext): { x: number; y: number }[] {
+  const { fromPosition, toPosition, fromElementCenter, toElementCenter, obstacles, gridSize } = context;
+
+  // Very short distance - direct connection
+  if (Math.abs(fromPosition.x - toPosition.x) < gridSize &&
+      Math.abs(fromPosition.y - toPosition.y) < gridSize) {
+    return [{ x: fromPosition.x, y: fromPosition.y }, { x: toPosition.x, y: toPosition.y }];
+  }
+
+  // Calculate lead-out direction based on element centers
+  const fromLeadDir = calculateLeadOutDirection(fromPosition, fromElementCenter);
+  const toLeadDir = calculateLeadOutDirection(toPosition, toElementCenter);
+
+  // Calculate lead-out/in X positions
+  const leadOutX = fromLeadDir === 'right'
+    ? fromPosition.x + gridSize
+    : fromPosition.x - gridSize;
+  const leadInX = toLeadDir === 'right'
+    ? toPosition.x + gridSize
+    : toPosition.x - gridSize;
+
+  const path: { x: number; y: number }[] = [];
+
+  // Start point
+  path.push({ x: fromPosition.x, y: fromPosition.y });
+
+  // Lead out point (away from element)
+  let leadOutPoint = { x: leadOutX, y: fromPosition.y };
+  leadOutPoint = adjustWaypointForObstacles(leadOutPoint, obstacles, gridSize);
+  path.push(leadOutPoint);
+
+  // If Y values differ, we need vertical routing
+  if (Math.abs(fromPosition.y - toPosition.y) > 1) {
+    // Decide vertical route X position
+    // Try to use the midpoint, but avoid obstacles
+    let verticalX: number;
+    if (Math.abs(leadOutX - leadInX) < gridSize) {
+      // They're close, use a unified X
+      verticalX = (leadOutX + leadInX) / 2;
+    } else {
+      // Route between the two lead points
+      verticalX = leadOutPoint.x;
+    }
+
+    // Check if the vertical segment would go through obstacles
+    // If so, shift it
+    const testY = (fromPosition.y + toPosition.y) / 2;
+    if (isPointInObstacle(verticalX, testY, obstacles)) {
+      // Try shifting to avoid
+      const leftX = Math.min(leadOutPoint.x, leadInX) - gridSize;
+      const rightX = Math.max(leadOutPoint.x, leadInX) + gridSize;
+      if (!isPointInObstacle(leftX, testY, obstacles)) {
+        verticalX = leftX;
+      } else if (!isPointInObstacle(rightX, testY, obstacles)) {
+        verticalX = rightX;
+      }
+    }
+
+    // Add corner point at same Y as start, different X if needed
+    if (Math.abs(leadOutPoint.x - verticalX) > 1) {
+      let cornerPoint = { x: verticalX, y: leadOutPoint.y };
+      cornerPoint = adjustWaypointForObstacles(cornerPoint, obstacles, gridSize);
+      path.push(cornerPoint);
+    }
+
+    // Add corner point at destination Y
+    let verticalEndPoint = { x: verticalX, y: toPosition.y };
+    verticalEndPoint = adjustWaypointForObstacles(verticalEndPoint, obstacles, gridSize, true);
+    path.push(verticalEndPoint);
+  }
+
+  // Lead in point (if different from where we are)
+  let leadInPoint = { x: leadInX, y: toPosition.y };
+  leadInPoint = adjustWaypointForObstacles(leadInPoint, obstacles, gridSize);
+  const lastPoint = path[path.length - 1];
+  if (Math.abs(leadInPoint.x - lastPoint.x) > 1 || Math.abs(leadInPoint.y - lastPoint.y) > 1) {
+    path.push(leadInPoint);
+  }
+
+  // End point
+  path.push({ x: toPosition.x, y: toPosition.y });
+
+  // Clean up collinear and redundant points
+  return cleanPath(path);
+}
+
+/**
+ * Clean up a path by removing collinear and redundant points
+ */
+function cleanPath(path: { x: number; y: number }[]): { x: number; y: number }[] {
+  if (path.length <= 2) return path;
+
+  const cleaned: { x: number; y: number }[] = [path[0]];
+
+  for (let i = 1; i < path.length - 1; i++) {
+    const prev = cleaned[cleaned.length - 1];
+    const curr = path[i];
+    const next = path[i + 1];
+
+    // Skip if same position as previous
+    if (Math.abs(curr.x - prev.x) < 1 && Math.abs(curr.y - prev.y) < 1) {
+      continue;
+    }
+
+    // Skip if collinear with prev and next
+    // Three points are collinear if (y2-y1)(x3-x2) = (y3-y2)(x2-x1)
+    const cross = (curr.y - prev.y) * (next.x - curr.x) - (next.y - curr.y) * (curr.x - prev.x);
+    if (Math.abs(cross) < 1) {
+      continue;
+    }
+
+    cleaned.push(curr);
+  }
+
+  // Always add the last point
+  const lastPoint = path[path.length - 1];
+  const prevCleaned = cleaned[cleaned.length - 1];
+  if (Math.abs(lastPoint.x - prevCleaned.x) > 1 || Math.abs(lastPoint.y - prevCleaned.y) > 1) {
+    cleaned.push(lastPoint);
   }
 
   return cleaned;
@@ -236,16 +374,31 @@ export function drawWire(
   gridSize: number = 20,
   cableLabel?: string,
   obstacles: WireObstacle[] = [],
-  showControlPoints: boolean = false
+  showControlPoints: boolean = false,
+  fromElementCenter?: { x: number; y: number } | null,
+  toElementCenter?: { x: number; y: number } | null
 ): void {
   const hexColor = getWireColorHex(wireColor);
 
   ctx.save();
 
   // Build orthogonal path
-  const points = connection.waypoints?.length
-    ? [fromPos, ...connection.waypoints, toPos]
-    : calculateOrthogonalPath(fromPos, toPos, gridSize, obstacles);
+  let points: { x: number; y: number }[];
+  if (connection.waypoints?.length) {
+    points = [fromPos, ...connection.waypoints, toPos];
+  } else if (fromElementCenter || toElementCenter) {
+    // Use improved routing with element centers
+    points = calculateOrthogonalPathV2({
+      fromPosition: fromPos,
+      toPosition: toPos,
+      fromElementCenter: fromElementCenter || null,
+      toElementCenter: toElementCenter || null,
+      obstacles,
+      gridSize
+    });
+  } else {
+    points = calculateOrthogonalPath(fromPos, toPos, gridSize, obstacles);
+  }
 
   ctx.lineCap = 'square';
   ctx.lineJoin = 'miter';
@@ -323,8 +476,8 @@ export function drawWire(
   }
 
   // Draw control point handles at direction changes
-  // Only show in nodeEdit mode (showControlPoints=true) and if wire has waypoints
-  if (showControlPoints && points.length > 2 && connection.waypoints?.length) {
+  // Show in nodeEdit mode (showControlPoints=true) for all intermediate points
+  if (showControlPoints && points.length > 2) {
     for (let i = 1; i < points.length - 1; i++) {
       const pt = points[i];
       ctx.beginPath();
@@ -350,7 +503,9 @@ export function drawWirePreview(
   toX: number,
   toY: number,
   gridSize: number = 20,
-  obstacles: WireObstacle[] = []
+  obstacles: WireObstacle[] = [],
+  fromElementCenter?: { x: number; y: number } | null,
+  toElementCenter?: { x: number; y: number } | null
 ): void {
   ctx.save();
   ctx.beginPath();
@@ -360,12 +515,24 @@ export function drawWirePreview(
   ctx.lineCap = 'square';
   ctx.lineJoin = 'miter';
 
-  const points = calculateOrthogonalPath(
-    { x: fromX, y: fromY },
-    { x: toX, y: toY },
-    gridSize,
-    obstacles
-  );
+  let points: { x: number; y: number }[];
+  if (fromElementCenter || toElementCenter) {
+    points = calculateOrthogonalPathV2({
+      fromPosition: { x: fromX, y: fromY },
+      toPosition: { x: toX, y: toY },
+      fromElementCenter: fromElementCenter || null,
+      toElementCenter: toElementCenter || null,
+      obstacles,
+      gridSize
+    });
+  } else {
+    points = calculateOrthogonalPath(
+      { x: fromX, y: fromY },
+      { x: toX, y: toY },
+      gridSize,
+      obstacles
+    );
+  }
 
   ctx.moveTo(points[0].x, points[0].y);
   for (let i = 1; i < points.length; i++) {
@@ -386,17 +553,31 @@ export function drawMatingWirePreview(
   toX: number,
   toY: number,
   gridSize: number = 20,
-  obstacles: WireObstacle[] = []
+  obstacles: WireObstacle[] = [],
+  fromElementCenter?: { x: number; y: number } | null,
+  toElementCenter?: { x: number; y: number } | null
 ): void {
   ctx.save();
 
   // Calculate orthogonal path
-  const points = calculateOrthogonalPath(
-    { x: fromX, y: fromY },
-    { x: toX, y: toY },
-    gridSize,
-    obstacles
-  );
+  let points: { x: number; y: number }[];
+  if (fromElementCenter || toElementCenter) {
+    points = calculateOrthogonalPathV2({
+      fromPosition: { x: fromX, y: fromY },
+      toPosition: { x: toX, y: toY },
+      fromElementCenter: fromElementCenter || null,
+      toElementCenter: toElementCenter || null,
+      obstacles,
+      gridSize
+    });
+  } else {
+    points = calculateOrthogonalPath(
+      { x: fromX, y: fromY },
+      { x: toX, y: toY },
+      gridSize,
+      obstacles
+    );
+  }
 
   ctx.beginPath();
   ctx.strokeStyle = '#888888';
@@ -425,14 +606,28 @@ export function drawMatingConnection(
   isSelected: boolean = false,
   gridSize: number = 20,
   obstacles: WireObstacle[] = [],
-  showControlPoints: boolean = false
+  showControlPoints: boolean = false,
+  fromElementCenter?: { x: number; y: number } | null,
+  toElementCenter?: { x: number; y: number } | null
 ): void {
   ctx.save();
 
   // Build path using waypoints if available, otherwise calculate
-  const points = connection.waypoints?.length
-    ? [fromPos, ...connection.waypoints, toPos]
-    : calculateOrthogonalPath(fromPos, toPos, gridSize, obstacles);
+  let points: { x: number; y: number }[];
+  if (connection.waypoints?.length) {
+    points = [fromPos, ...connection.waypoints, toPos];
+  } else if (fromElementCenter || toElementCenter) {
+    points = calculateOrthogonalPathV2({
+      fromPosition: fromPos,
+      toPosition: toPos,
+      fromElementCenter: fromElementCenter || null,
+      toElementCenter: toElementCenter || null,
+      obstacles,
+      gridSize
+    });
+  } else {
+    points = calculateOrthogonalPath(fromPos, toPos, gridSize, obstacles);
+  }
 
   ctx.beginPath();
   ctx.strokeStyle = isSelected ? '#64b5f6' : '#888888';
@@ -448,8 +643,8 @@ export function drawMatingConnection(
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Draw control point handles in nodeEdit mode (showControlPoints=true) if has waypoints
-  if (showControlPoints && points.length > 2 && connection.waypoints?.length) {
+  // Draw control point handles in nodeEdit mode (showControlPoints=true)
+  if (showControlPoints && points.length > 2) {
     for (let i = 1; i < points.length - 1; i++) {
       const pt = points[i];
       ctx.beginPath();
@@ -526,11 +721,26 @@ export function getWireControlPoints(
   connection: HarnessConnection,
   fromPos: { x: number; y: number },
   toPos: { x: number; y: number },
-  gridSize: number = 20
+  gridSize: number = 20,
+  fromElementCenter?: { x: number; y: number } | null,
+  toElementCenter?: { x: number; y: number } | null,
+  obstacles: WireObstacle[] = []
 ): { x: number; y: number; index: number }[] {
-  const points = connection.waypoints?.length
-    ? [fromPos, ...connection.waypoints, toPos]
-    : calculateOrthogonalPath(fromPos, toPos, gridSize);
+  let points: { x: number; y: number }[];
+  if (connection.waypoints?.length) {
+    points = [fromPos, ...connection.waypoints, toPos];
+  } else if (fromElementCenter || toElementCenter) {
+    points = calculateOrthogonalPathV2({
+      fromPosition: fromPos,
+      toPosition: toPos,
+      fromElementCenter: fromElementCenter || null,
+      toElementCenter: toElementCenter || null,
+      obstacles,
+      gridSize
+    });
+  } else {
+    points = calculateOrthogonalPath(fromPos, toPos, gridSize);
+  }
 
   const controlPoints: { x: number; y: number; index: number }[] = [];
   for (let i = 1; i < points.length - 1; i++) {
@@ -548,9 +758,12 @@ export function hitTestWireControlPoint(
   toPos: { x: number; y: number },
   testX: number,
   testY: number,
-  gridSize: number = 20
+  gridSize: number = 20,
+  fromElementCenter?: { x: number; y: number } | null,
+  toElementCenter?: { x: number; y: number } | null,
+  obstacles: WireObstacle[] = []
 ): number {
-  const controlPoints = getWireControlPoints(connection, fromPos, toPos, gridSize);
+  const controlPoints = getWireControlPoints(connection, fromPos, toPos, gridSize, fromElementCenter, toElementCenter, obstacles);
   const threshold = 8;
 
   for (const cp of controlPoints) {

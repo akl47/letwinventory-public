@@ -1103,12 +1103,14 @@ export class HarnessPage implements OnInit, OnDestroy {
 
   onAddSubHarness() {
     const currentId = this.currentHarnessId();
+    const currentPartNumber = this.harnessData()?.partNumber;
 
     const dialogRef = this.dialog.open(HarnessListDialog, {
       width: '600px',
       maxHeight: '80vh',
       data: {
         excludeHarnessId: currentId,
+        excludePartNumber: currentPartNumber,
         selectMode: true
       }
     });
@@ -1458,11 +1460,11 @@ export class HarnessPage implements OnInit, OnDestroy {
         });
       }
     } else if (currentState === 'review') {
-      // Release the harness
-      if (confirm(`Release "${data?.name}" Rev ${data?.revision || 'A'}? This will lock the harness from further edits.`)) {
+      // Release the harness (creates numeric revision)
+      if (confirm(`Release "${data?.name}"? This will create a numeric revision.`)) {
         this.harnessService.release(id).subscribe({
           next: (result: any) => {
-            let message = 'Harness released';
+            let message = `Harness released as Rev ${result.revision}`;
             let duration = 2000;
             if (result.updatedSubHarnesses?.length > 0) {
               const names = result.updatedSubHarnesses.map((s: any) => s.name).join(', ');
@@ -1470,9 +1472,9 @@ export class HarnessPage implements OnInit, OnDestroy {
               duration = 5000;
             }
             this.snackBar.open(message, 'Close', { duration });
-            // Update local state
+            // Update local state with new revision
             if (data) {
-              this.harnessData.set({ ...data, releaseState: 'released' });
+              this.harnessData.set({ ...data, releaseState: 'released', revision: result.revision });
               this.originalData.set(JSON.stringify(this.harnessData()));
             }
             // Refresh sub-harness data cache to reflect new states
