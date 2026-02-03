@@ -11,6 +11,7 @@
     [activeTool]="activeTool()"
     [canUndo]="canUndo()"
     [canRedo]="canRedo()"
+    [isLocked]="isLocked()"
     (newHarness)="onNewHarness()"
     (openHarness)="onOpenHarness()"
     (save)="onSave()"
@@ -40,6 +41,7 @@
       [activeTool]="activeTool()"
       [gridEnabled]="gridEnabled()"
       [gridSize]="20"
+      [isLocked]="isLocked()"
       (selectionChanged)="onSelectionChanged($event)"
       (dataChanged)="onDataChanged($event)"
       (connectorMoved)="onConnectorMoved($event)"
@@ -68,6 +70,9 @@
     <app-harness-property-panel
       [harnessData]="harnessData()"
       [selection]="currentSelection()"
+      [isReleased]="isReleased()"
+      [isInReview]="isInReview()"
+      [isLocked]="isLocked()"
       (metadataChanged)="onMetadataChanged($event)"
       (connectorChanged)="onConnectorPropertyChanged($event)"
       (connectionChanged)="onConnectionPropertyChanged($event)"
@@ -77,7 +82,10 @@
       (deleteCable)="onDeleteSelected()"
       (deleteComponent)="onDeleteSelected()"
       (deleteConnection)="onDeleteSelected()"
-      (deleteHarness)="onDeleteHarness()">
+      (deleteHarness)="onDeleteHarness()"
+      (releaseHarness)="onReleaseHarness()"
+      (returnToDraft)="onReturnToDraft()"
+      (newRevision)="onNewRevision()">
     </app-harness-property-panel>
   </div>
 </div>

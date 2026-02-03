@@ -171,11 +171,21 @@ export interface ElementGroup {
   }[];
 }
 
+/**
+ * Release state for revision control workflow
+ */
+export type ReleaseState = 'draft' | 'review' | 'released';
+
+/**
+ * Main harness data structure containing all design elements
+ */
 export interface HarnessData {
   name: string;
   partNumber?: string;
   revision?: string;
   description?: string;
+  /** Current release state: draft, review, or released */
+  releaseState?: ReleaseState;
   connectors: HarnessConnector[];
   cables: HarnessCable[];
   components: HarnessComponent[];
@@ -184,9 +194,6 @@ export interface HarnessData {
   groups?: ElementGroup[];
   canvasSettings?: HarnessCanvasSettings;
 }
-
-// Release state for revision control
-export type ReleaseState = 'draft' | 'review' | 'released';
 
 export interface WireHarness {
   id: number;

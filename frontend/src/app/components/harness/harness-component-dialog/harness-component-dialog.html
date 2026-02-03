@@ -1,4 +1,4 @@
-<h2 mat-dialog-title>{{ isEdit() ? 'Edit Component' : 'Add Component' }}</h2>
+<h2 mat-dialog-title>{{ isLocked() ? 'View Component' : (isEdit() ? 'Edit Component' : 'Add Component') }}</h2>
 
 <mat-dialog-content>
   <br />
@@ -38,7 +38,7 @@
   <div class="component-form">
     <mat-form-field appearance="outline" class="full-width">
       <mat-label>Label</mat-label>
-      <input matInput [(ngModel)]="label" placeholder="e.g., U1, IC1, REL1" required>
+      <input matInput [(ngModel)]="label" placeholder="e.g., U1, IC1, REL1" required [disabled]="isLocked()">
     </mat-form-field>
 
     <!-- Read-only component info from part -->
@@ -70,7 +70,7 @@
             @for (pin of group.pins; track pin.id; let i = $index) {
             <div class="pin-row">
               <span class="pin-number">{{ pin.number }}</span>
-              <input class="pin-label-input" [(ngModel)]="pin.label" placeholder="Label">
+              <input class="pin-label-input" [(ngModel)]="pin.label" placeholder="Label" [disabled]="isLocked()">
             </div>
             }
           </div>
@@ -90,8 +90,12 @@
 </mat-dialog-content>
 
 <mat-dialog-actions align="end">
-  <button mat-button mat-dialog-close>Cancel</button>
-  <button mat-raised-button color="primary" (click)="save()" [disabled]="!isValid()">
-    {{ isEdit() ? 'Update' : 'Add' }}
-  </button>
+  @if (isLocked()) {
+    <button mat-raised-button mat-dialog-close>Close</button>
+  } @else {
+    <button mat-button mat-dialog-close>Cancel</button>
+    <button mat-raised-button color="primary" (click)="save()" [disabled]="!isValid()">
+      {{ isEdit() ? 'Update' : 'Add' }}
+    </button>
+  }
 </mat-dialog-actions>

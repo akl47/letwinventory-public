@@ -55,6 +55,48 @@ function getNextRevision(current) {
   return 'A' + chars.join('');
 }
 
+// Helper: Cascade release state to all sub-harnesses
+async function cascadeReleaseState(harness, newState, changedBy) {
+  const subHarnesses = harness.harnessData?.subHarnesses || [];
+  if (subHarnesses.length === 0) return [];
+
+  const updatedSubHarnesses = [];
+
+  for (const subRef of subHarnesses) {
+    const subHarness = await db.WireHarness.findByPk(subRef.harnessId);
+    if (!subHarness) continue;
+
+    // Only update if not already at or past the target state
+    const stateOrder = { draft: 0, review: 1, released: 2 };
+    if (stateOrder[subHarness.releaseState] >= stateOrder[newState]) continue;
+
+    const updateData = { releaseState: newState };
+    if (newState === 'released') {
+      updateData.releasedAt = new Date();
+      updateData.releasedBy = changedBy;
+    }
+
+    await subHarness.update(updateData);
+
+    // Log history for the sub-harness
+    const changeType = newState === 'review' ? 'submitted_review' : 'released';
+    await logHistory(subHarness.id, changeType, changedBy, `Cascaded from parent harness: ${harness.name}`);
+
+    updatedSubHarnesses.push({
+      id: subHarness.id,
+      name: subHarness.name,
+      previousState: subHarness.releaseState,
+      newState: newState
+    });
+
+    // Recursively cascade to nested sub-harnesses
+    const nestedUpdates = await cascadeReleaseState(subHarness, newState, changedBy);
+    updatedSubHarnesses.push(...nestedUpdates);
+  }
+
+  return updatedSubHarnesses;
+}
+
 // Get all harnesses (paginated, with basic info)
 exports.getAllHarnesses = async (req, res, next) => {
   try {
@@ -590,6 +632,9 @@ async function logHistory(harnessId, changeType, changedBy, notes = null, snapsh
   const harness = await db.WireHarness.findByPk(harnessId);
   if (!harness) return;
 
+  // Don't log history for released harnesses (except for the 'released' event itself)
+  if (harness.releaseState === 'released' && changeType !== 'released') return;
+
   await db.HarnessRevisionHistory.create({
     harnessID: harnessId,
     revision: harness.revision,
@@ -618,13 +663,17 @@ exports.submitForReview = async (req, res, next) => {
       return next(createError(400, 'Harness must be in draft state to submit for review'));
     }
 
-    await harness.update({ releaseState: 'review' });
-
     const changedBy = req.user ? req.user.displayName : null;
+
+    // Cascade to sub-harnesses first
+    const updatedSubHarnesses = await cascadeReleaseState(harness, 'review', changedBy);
+
+    await harness.update({ releaseState: 'review' });
     await logHistory(harnessId, 'submitted_review', changedBy);
 
     const result = harness.toJSON();
     result.partNumber = result.Part ? result.Part.name : null;
+    result.updatedSubHarnesses = updatedSubHarnesses;
 
     res.json(result);
   } catch (error) {
@@ -684,6 +733,9 @@ exports.releaseHarness = async (req, res, next) => {
     const changedBy = req.user ? req.user.displayName : null;
     const now = new Date();
 
+    // Cascade to sub-harnesses first
+    const updatedSubHarnesses = await cascadeReleaseState(harness, 'released', changedBy);
+
     await harness.update({
       releaseState: 'released',
       releasedAt: now,
@@ -695,6 +747,7 @@ exports.releaseHarness = async (req, res, next) => {
 
     const result = harness.toJSON();
     result.partNumber = result.Part ? result.Part.name : null;
+    result.updatedSubHarnesses = updatedSubHarnesses;
 
     res.json(result);
   } catch (error) {

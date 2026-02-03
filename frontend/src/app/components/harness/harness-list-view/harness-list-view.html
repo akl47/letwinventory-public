@@ -52,6 +52,16 @@
                     <td mat-cell *matCellDef="let harness">{{ harness.revision || 'A' }}</td>
                 </ng-container>
 
+                <!-- Release State Column -->
+                <ng-container matColumnDef="releaseState">
+                    <th mat-header-cell *matHeaderCellDef mat-sort-header>Status</th>
+                    <td mat-cell *matCellDef="let harness">
+                        <span class="status-chip" [class]="'status-' + (harness.releaseState || 'draft')">
+                            {{ harness.releaseState || 'draft' }}
+                        </span>
+                    </td>
+                </ng-container>
+
                 <!-- Description Column -->
                 <ng-container matColumnDef="description">
                     <th mat-header-cell *matHeaderCellDef mat-sort-header>Description</th>

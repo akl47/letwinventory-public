@@ -85,6 +85,11 @@ export class HarnessPage implements OnInit, OnDestroy {
   canUndo = computed(() => this.historyService.canUndo());
   canRedo = computed(() => this.historyService.canRedo());
 
+  // Release state
+  isReleased = computed(() => this.harnessData()?.releaseState === 'released');
+  isInReview = computed(() => this.harnessData()?.releaseState === 'review');
+  isLocked = computed(() => this.isReleased() || this.isInReview());
+
   // Auto-save
   private autoSave$ = new Subject<void>();
   private destroy$ = new Subject<void>();
@@ -466,7 +471,8 @@ export class HarnessPage implements OnInit, OnDestroy {
           name: harness.name,
           partNumber: harness.partNumber || '',
           revision: harness.revision,
-          description: harness.description || ''
+          description: harness.description || '',
+          releaseState: harness.releaseState || 'draft'
         };
 
         // Fetch connector images for connectors that have partId
@@ -740,7 +746,8 @@ export class HarnessPage implements OnInit, OnDestroy {
       width: '400px',
       data: {
         existingConnectors: this.harnessData()?.connectors || [],
-        editConnector: connector
+        editConnector: connector,
+        isLocked: this.isLocked()
       }
     });
 
@@ -799,7 +806,8 @@ export class HarnessPage implements OnInit, OnDestroy {
       width: '400px',
       data: {
         existingCables: this.harnessData()?.cables || [],
-        editCable: cable
+        editCable: cable,
+        isLocked: this.isLocked()
       }
     });
 
@@ -1143,7 +1151,8 @@ export class HarnessPage implements OnInit, OnDestroy {
       width: '500px',
       data: {
         existingComponents: this.harnessData()?.components || [],
-        editComponent: component
+        editComponent: component,
+        isLocked: this.isLocked()
       }
     });
 
@@ -1410,6 +1419,192 @@ export class HarnessPage implements OnInit, OnDestroy {
         }
       });
     }
+  }
+
+  onReleaseHarness() {
+    const id = this.currentHarnessId();
+    const data = this.harnessData();
+    if (!id) {
+      this.snackBar.open('Harness must be saved before releasing', 'Close', { duration: 3000 });
+      return;
+    }
+
+    const currentState = data?.releaseState || 'draft';
+
+    if (currentState === 'draft') {
+      // Submit for review
+      if (confirm(`Submit "${data?.name}" for review?`)) {
+        this.harnessService.submitForReview(id).subscribe({
+          next: (result: any) => {
+            let message = 'Harness submitted for review';
+            let duration = 2000;
+            if (result.updatedSubHarnesses?.length > 0) {
+              const names = result.updatedSubHarnesses.map((s: any) => s.name).join(', ');
+              message += `. Sub-harnesses also submitted: ${names}`;
+              duration = 5000;
+            }
+            this.snackBar.open(message, 'Close', { duration });
+            // Update local state
+            if (data) {
+              this.harnessData.set({ ...data, releaseState: 'review' });
+              this.originalData.set(JSON.stringify(this.harnessData()));
+            }
+            // Refresh sub-harness data cache to reflect new states
+            this.refreshSubHarnessCache();
+          },
+          error: (err) => {
+            this.snackBar.open(err.error?.error || 'Failed to submit for review', 'Close', { duration: 3000 });
+          }
+        });
+      }
+    } else if (currentState === 'review') {
+      // Release the harness
+      if (confirm(`Release "${data?.name}" Rev ${data?.revision || 'A'}? This will lock the harness from further edits.`)) {
+        this.harnessService.release(id).subscribe({
+          next: (result: any) => {
+            let message = 'Harness released';
+            let duration = 2000;
+            if (result.updatedSubHarnesses?.length > 0) {
+              const names = result.updatedSubHarnesses.map((s: any) => s.name).join(', ');
+              message += `. Sub-harnesses also released: ${names}`;
+              duration = 5000;
+            }
+            this.snackBar.open(message, 'Close', { duration });
+            // Update local state
+            if (data) {
+              this.harnessData.set({ ...data, releaseState: 'released' });
+              this.originalData.set(JSON.stringify(this.harnessData()));
+            }
+            // Refresh sub-harness data cache to reflect new states
+            this.refreshSubHarnessCache();
+          },
+          error: (err) => {
+            this.snackBar.open(err.error?.error || 'Failed to release harness', 'Close', { duration: 3000 });
+          }
+        });
+      }
+    }
+  }
+
+  onReturnToDraft() {
+    const id = this.currentHarnessId();
+    const data = this.harnessData();
+    if (!id) {
+      this.snackBar.open('Harness must be saved first', 'Close', { duration: 3000 });
+      return;
+    }
+
+    if (data?.releaseState !== 'review') {
+      this.snackBar.open('Only harnesses in review can be returned to draft', 'Close', { duration: 3000 });
+      return;
+    }
+
+    if (confirm(`Return "${data?.name}" to draft? This will allow editing again.`)) {
+      this.harnessService.reject(id, 'Returned to draft').subscribe({
+        next: () => {
+          this.snackBar.open('Harness returned to draft', 'Close', { duration: 2000 });
+          if (data) {
+            this.harnessData.set({ ...data, releaseState: 'draft' });
+            this.originalData.set(JSON.stringify(this.harnessData()));
+          }
+        },
+        error: (err) => {
+          this.snackBar.open(err.error?.error || 'Failed to return to draft', 'Close', { duration: 3000 });
+        }
+      });
+    }
+  }
+
+  private refreshSubHarnessCache() {
+    this.harnessCanvas?.refreshSubHarnessCache();
+  }
+
+  onNewRevision() {
+    const id = this.currentHarnessId();
+    const data = this.harnessData();
+    if (!id || !data) {
+      this.snackBar.open('No harness loaded', 'Close', { duration: 3000 });
+      return;
+    }
+
+    if (data.releaseState !== 'released') {
+      this.snackBar.open('Only released harnesses can have new revisions', 'Close', { duration: 3000 });
+      return;
+    }
+
+    // Check if a higher revision already exists
+    this.harnessService.getAllRevisions(id).subscribe({
+      next: (revisions) => {
+        const currentRevision = data.revision || 'A';
+        // Find the highest revision
+        const higherRevisions = revisions.filter(r => this.compareRevisions(r.revision, currentRevision) > 0);
+
+        if (higherRevisions.length > 0) {
+          // Sort to find the highest revision
+          higherRevisions.sort((a, b) => this.compareRevisions(b.revision, a.revision));
+          const latestRevision = higherRevisions[0];
+
+          if (confirm(`A newer revision (Rev ${latestRevision.revision}) already exists. Go to that revision?`)) {
+            this.router.navigate(['/harness/editor', latestRevision.id]);
+          }
+        } else {
+          // No higher revision exists, create one
+          if (confirm(`Create a new revision of "${data.name}"? This will create Rev ${this.getNextRevision(currentRevision)}.`)) {
+            this.harnessService.updateHarness(id, {
+              name: data.name,
+              harnessData: data
+            }).subscribe({
+              next: (newHarness) => {
+                this.snackBar.open(`Created Rev ${newHarness.revision}`, 'Close', { duration: 2000 });
+                this.router.navigate(['/harness/editor', newHarness.id]);
+              },
+              error: (err) => {
+                this.snackBar.open(err.error?.error || 'Failed to create new revision', 'Close', { duration: 3000 });
+              }
+            });
+          }
+        }
+      },
+      error: () => {
+        // If we can't fetch revisions, fall back to creating a new one
+        if (confirm(`Create a new revision of "${data.name}"? This will create Rev ${this.getNextRevision(data.revision || 'A')}.`)) {
+          this.harnessService.updateHarness(id, {
+            name: data.name,
+            harnessData: data
+          }).subscribe({
+            next: (newHarness) => {
+              this.snackBar.open(`Created Rev ${newHarness.revision}`, 'Close', { duration: 2000 });
+              this.router.navigate(['/harness/editor', newHarness.id]);
+            },
+            error: (err) => {
+              this.snackBar.open(err.error?.error || 'Failed to create new revision', 'Close', { duration: 3000 });
+            }
+          });
+        }
+      }
+    });
+  }
+
+  // Compare two revision strings (e.g., 'A' < 'B' < 'Z' < 'AA' < 'AB')
+  // Returns negative if a < b, positive if a > b, 0 if equal
+  private compareRevisions(a: string, b: string): number {
+    if (a.length !== b.length) {
+      return a.length - b.length;
+    }
+    return a.localeCompare(b);
+  }
+
+  private getNextRevision(current: string): string {
+    if (current === 'Z') return 'AA';
+    if (current.length === 1) {
+      return String.fromCharCode(current.charCodeAt(0) + 1);
+    }
+    // Handle AA, AB, etc.
+    const lastChar = current[current.length - 1];
+    if (lastChar === 'Z') {
+      return String.fromCharCode(current.charCodeAt(0) + 1) + 'A';
+    }
+    return current.slice(0, -1) + String.fromCharCode(lastChar.charCodeAt(0) + 1);
   }
 
   // Undo/Redo methods

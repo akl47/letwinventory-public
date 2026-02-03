@@ -1,4 +1,4 @@
-<h2 mat-dialog-title>{{ isEdit() ? 'Edit Cable' : 'Add Cable' }}</h2>
+<h2 mat-dialog-title>{{ isLocked() ? 'View Cable' : (isEdit() ? 'Edit Cable' : 'Add Cable') }}</h2>
 
 <mat-dialog-content>
   <br />
@@ -38,7 +38,7 @@
   <div class="cable-form">
     <mat-form-field appearance="outline" class="full-width">
       <mat-label>Label</mat-label>
-      <input matInput [(ngModel)]="label" placeholder="e.g., W1, CABLE-A" required>
+      <input matInput [(ngModel)]="label" placeholder="e.g., W1, CABLE-A" required [disabled]="isLocked()">
     </mat-form-field>
 
     <!-- Read-only cable info from part -->
@@ -56,9 +56,9 @@
     <!-- Wire colors with drag-and-drop reordering -->
     <div class="wire-colors-section">
       <h3>Wires <span class="drag-hint">(drag to reorder)</span></h3>
-      <div class="wire-list" cdkDropList (cdkDropListDropped)="onWireDrop($event)">
+      <div class="wire-list" cdkDropList (cdkDropListDropped)="onWireDrop($event)" [cdkDropListDisabled]="isLocked()">
         @for (wire of wires(); track wire.id; let i = $index) {
-        <div class="wire-row" cdkDrag>
+        <div class="wire-row" cdkDrag [cdkDragDisabled]="isLocked()">
           <mat-icon class="drag-handle" cdkDragHandle>drag_indicator</mat-icon>
           <span class="wire-index">{{ i + 1 }}</span>
           <span class="color-swatch" [style.backgroundColor]="getWireHex(wire.colorCode || wire.color)"></span>
@@ -68,6 +68,7 @@
             [(ngModel)]="wire.label"
             placeholder="Label"
             matTooltip="Wire label (optional)"
+            [disabled]="isLocked()"
           >
           <div class="drag-placeholder" *cdkDragPlaceholder></div>
         </div>
@@ -78,7 +79,7 @@
     <!-- Cable length in mm -->
     <mat-form-field appearance="outline" class="full-width">
       <mat-label>Cable Length (mm)</mat-label>
-      <input matInput type="number" [(ngModel)]="lengthMm" min="1">
+      <input matInput type="number" [(ngModel)]="lengthMm" min="1" [disabled]="isLocked()">
       <mat-hint>Physical length of the cable</mat-hint>
     </mat-form-field>
   </div>
@@ -91,8 +92,12 @@
 </mat-dialog-content>
 
 <mat-dialog-actions align="end">
-  <button mat-button mat-dialog-close>Cancel</button>
-  <button mat-raised-button color="primary" (click)="save()" [disabled]="!isValid()">
-    {{ isEdit() ? 'Update' : 'Add' }}
-  </button>
+  @if (isLocked()) {
+    <button mat-raised-button mat-dialog-close>Close</button>
+  } @else {
+    <button mat-button mat-dialog-close>Cancel</button>
+    <button mat-raised-button color="primary" (click)="save()" [disabled]="!isValid()">
+      {{ isEdit() ? 'Update' : 'Add' }}
+    </button>
+  }
 </mat-dialog-actions>

@@ -17,7 +17,8 @@ import {
   HarnessComponent,
   HarnessPin,
   HarnessWire,
-  WireEnd
+  WireEnd,
+  ReleaseState
 } from '../../../models/harness.model';
 import { CONNECTOR_TYPES, CONNECTOR_COLORS, WIRE_COLORS, AWG_GAUGES } from '../../../utils/harness/wire-color-map';
 import { CanvasSelection } from '../harness-canvas/harness-canvas';
@@ -47,6 +48,9 @@ export class HarnessPropertyPanel implements OnInit {
   // Inputs
   harnessData = input<HarnessData | null>(null);
   selection = input<CanvasSelection | null>(null);
+  isReleased = input<boolean>(false);
+  isInReview = input<boolean>(false);
+  isLocked = input<boolean>(false);
 
   // Outputs
   metadataChanged = output<{ field: string; value: string }>();
@@ -59,6 +63,9 @@ export class HarnessPropertyPanel implements OnInit {
   deleteComponent = output<void>();
   deleteConnection = output<void>();
   deleteHarness = output<void>();
+  releaseHarness = output<void>();
+  returnToDraft = output<void>();
+  newRevision = output<void>();
 
   // Constants
   connectorTypes = CONNECTOR_TYPES;

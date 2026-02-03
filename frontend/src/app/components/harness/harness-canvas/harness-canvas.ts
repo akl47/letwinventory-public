@@ -101,6 +101,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
   activeTool = input<string>('select');
   gridEnabled = input<boolean>(true);
   gridSize = input<number>(20);
+  isLocked = input<boolean>(false);
 
   // Outputs
   selectionChanged = output<CanvasSelection>();
@@ -159,6 +160,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
   private selectedSubHarnessId: string | null = null;
   // Multi-selection for grouping
   private selectedIds = new Set<string>();  // Format: "type:id" e.g., "connector:conn-1"
+  private previousTool: string | null = null;  // Track previous tool for cleanup on mode change
   private isDragging = false;
   private isDraggingCable = false;
   private isDraggingComponent = false;
@@ -245,6 +247,127 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       this.gridEnabled();
       this.render();
     });
+
+    // React to tool changes (for showing/hiding control points)
+    effect(() => {
+      const tool = this.activeTool();
+      const prevTool = this.previousTool;
+
+      // Cleanup redundant waypoints when entering or exiting nodeEdit mode
+      if (tool === 'nodeEdit' && prevTool !== 'nodeEdit') {
+        // Entering nodeEdit mode
+        this.cleanupRedundantControlPoints();
+      } else if (tool !== 'nodeEdit' && prevTool === 'nodeEdit') {
+        // Exiting nodeEdit mode
+        this.cleanupRedundantControlPoints();
+      }
+
+      this.previousTool = tool;
+      this.render();
+    });
+  }
+
+  /**
+   * Remove waypoints that lie on a straight line between their neighbors.
+   * Called when entering or exiting nodeEdit mode to clean up unnecessary nodes.
+   */
+  private cleanupRedundantControlPoints() {
+    const data = this.harnessData();
+    if (!data || !this.selectedConnectionId) return;
+
+    const connection = data.connections.find(c => c.id === this.selectedConnectionId);
+    if (!connection || !connection.waypoints || connection.waypoints.length < 1) return;
+
+    const fromPos = this.getConnectionFromPos(data, connection);
+    const toPos = this.getConnectionToPos(data, connection);
+    if (!fromPos || !toPos) return;
+
+    // Build full path: start -> waypoints -> end
+    const fullPath = [fromPos, ...connection.waypoints, toPos];
+
+    // Find indices of redundant waypoints
+    const redundantIndices: number[] = [];
+    for (let i = 0; i < connection.waypoints.length; i++) {
+      const prevPoint = fullPath[i]; // Point before this waypoint
+      const currPoint = fullPath[i + 1]; // This waypoint
+      const nextPoint = fullPath[i + 2]; // Point after this waypoint
+
+      if (this.isPointOnLine(prevPoint, currPoint, nextPoint)) {
+        redundantIndices.push(i);
+      }
+    }
+
+    // Remove redundant waypoints
+    if (redundantIndices.length > 0) {
+      const newWaypoints = connection.waypoints.filter((_: { x: number; y: number }, i: number) => !redundantIndices.includes(i));
+      const updatedConnections = data.connections.map(c =>
+        c.id === connection.id ? { ...c, waypoints: newWaypoints } : c
+      );
+      this.dataChanged.emit({ ...data, connections: updatedConnections });
+    }
+  }
+
+  /**
+   * Check if point B lies on the line segment between A and C (with tolerance).
+   */
+  private isPointOnLine(a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }): boolean {
+    // Use cross product to check collinearity
+    // If the cross product of vectors AB and AC is close to zero, points are collinear
+    const crossProduct = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    const tolerance = 1; // 1 pixel tolerance
+    return Math.abs(crossProduct) < tolerance * Math.max(
+      Math.sqrt((c.x - a.x) ** 2 + (c.y - a.y) ** 2),
+      1
+    );
+  }
+
+  /**
+   * Remove redundant waypoints from a wire in a sub-harness.
+   * Called when selecting a wire in nodeEdit mode within sub-harness edit mode.
+   */
+  private cleanupChildRedundantControlPoints() {
+    if (!this.editingChildHarness || !this.editingSubHarnessRef || !this.selectedConnectionId) return;
+
+    const childData = this.editingChildHarness.harnessData;
+    const connection = childData.connections?.find(c => c.id === this.selectedConnectionId);
+    if (!connection || !connection.waypoints || connection.waypoints.length < 1) return;
+
+    const fromPos = this.getChildConnectionFromPos(childData, connection);
+    const toPos = this.getChildConnectionToPos(childData, connection);
+    if (!fromPos || !toPos) return;
+
+    // Build full path: start -> waypoints -> end
+    const fullPath = [fromPos, ...connection.waypoints, toPos];
+
+    // Find indices of redundant waypoints
+    const redundantIndices: number[] = [];
+    for (let i = 0; i < connection.waypoints.length; i++) {
+      const prevPoint = fullPath[i];
+      const currPoint = fullPath[i + 1];
+      const nextPoint = fullPath[i + 2];
+
+      if (this.isPointOnLine(prevPoint, currPoint, nextPoint)) {
+        redundantIndices.push(i);
+      }
+    }
+
+    // Remove redundant waypoints
+    if (redundantIndices.length > 0) {
+      const newWaypoints = connection.waypoints.filter((_: { x: number; y: number }, i: number) => !redundantIndices.includes(i));
+      const updatedConnections = (childData.connections || []).map(c =>
+        c.id === connection.id ? { ...c, waypoints: newWaypoints } : c
+      );
+
+      // Update child harness data
+      this.editingChildHarness.harnessData = { ...childData, connections: updatedConnections };
+      this.subHarnessDataCache.set(this.editingSubHarnessRef.harnessId, this.editingChildHarness);
+
+      // Emit change to save
+      this.subHarnessDataChanged.emit({
+        subHarnessId: this.editingSubHarnessRef.harnessId,
+        data: this.editingChildHarness.harnessData
+      });
+    }
   }
 
   ngAfterViewInit() {
@@ -376,6 +499,25 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         idsToLoad.forEach(id => this.loadingSubHarnesses.delete(id));
       }
     });
+  }
+
+  /**
+   * Refresh the sub-harness data cache to pick up changes (e.g., release state updates)
+   */
+  refreshSubHarnessCache(): void {
+    const data = this.harnessData();
+    if (!data?.subHarnesses?.length) return;
+
+    const idsToRefresh = data.subHarnesses.map(s => s.harnessId);
+
+    // Clear these entries from cache so they get reloaded
+    idsToRefresh.forEach(id => {
+      this.subHarnessDataCache.delete(id);
+      this.loadingSubHarnesses.delete(id);
+    });
+
+    // Reload the data
+    this.loadSubHarnessData(data.subHarnesses);
   }
 
   private render() {
@@ -914,6 +1056,26 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     }
 
     ctx.restore();
+
+    // Draw release state label in top-left corner (in screen space)
+    const releaseState = this.harnessData()?.releaseState;
+    if (releaseState === 'released') {
+      ctx.save();
+      ctx.font = 'bold 24px sans-serif';
+      ctx.fillStyle = '#388e3c';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText('RELEASED', 16, 16);
+      ctx.restore();
+    } else if (releaseState === 'review') {
+      ctx.save();
+      ctx.font = 'bold 24px sans-serif';
+      ctx.fillStyle = '#f9a825';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText('IN REVIEW', 16, 16);
+      ctx.restore();
+    }
   }
 
   // Convert screen coordinates to canvas coordinates
@@ -944,8 +1106,11 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       return;
     }
 
+    // If released, only allow selection (no dragging) - skip to selection handling
+    const releasedMode = this.isLocked();
+
     // Wire drawing tool - check connector pins, cable wire endpoints, and component pins
-    if (this.activeTool() === 'wire') {
+    if (this.activeTool() === 'wire' && !releasedMode) {
       // Check connector pins first (including mating pins)
       for (const connector of data.connectors) {
         const pinHit = hitTestConnectorPinWithSide(connector, x, y);
@@ -1005,10 +1170,9 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           return;
         }
       }
-      // Check subharness pins (both wire and mating sides)
+      // Check subharness mating pins only (wire pins are internal to the sub-harness)
       for (const subHarness of (data.subHarnesses || [])) {
         const childHarness = this.subHarnessDataCache.get(subHarness.harnessId);
-        // Check mating pins first
         const matingPinHit = hitTestSubHarnessPin(subHarness, childHarness, x, y, 'mating');
         if (matingPinHit) {
           this.isDrawingWire = true;
@@ -1016,24 +1180,6 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           this.wireStartSubHarnessId = subHarness.id;
           this.wireStartSubHarnessConnectorId = matingPinHit.connectorId;
           this.wireStartPinId = matingPinHit.connectorPinId;
-          this.wireStartConnectorId = null;
-          this.wireStartCableId = null;
-          this.wireStartWireId = null;
-          this.wireStartSide = null;
-          this.wireStartComponentId = null;
-          this.wireStartComponentPinId = null;
-          this.wireEndX = x;
-          this.wireEndY = y;
-          return;
-        }
-        // Check wire pins
-        const wirePinHit = hitTestSubHarnessPin(subHarness, childHarness, x, y, 'wire');
-        if (wirePinHit) {
-          this.isDrawingWire = true;
-          this.isDrawingMatingWire = false;
-          this.wireStartSubHarnessId = subHarness.id;
-          this.wireStartSubHarnessConnectorId = wirePinHit.connectorId;
-          this.wireStartPinId = wirePinHit.connectorPinId;
           this.wireStartConnectorId = null;
           this.wireStartCableId = null;
           this.wireStartWireId = null;
@@ -1058,13 +1204,17 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
 
         const cpIndex = hitTestWireControlPoint(connection, fromPos, toPos, x, y, this.gridSize());
         if (cpIndex >= 0) {
-          // Start dragging this control point
-          this.isDraggingControlPoint = true;
-          this.draggedConnectionId = connection.id;
-          this.draggedControlPointIndex = cpIndex;
+          // Start dragging this control point (only if not released)
+          if (!releasedMode) {
+            this.isDraggingControlPoint = true;
+            this.draggedConnectionId = connection.id;
+            this.draggedControlPointIndex = cpIndex;
+            this.emitDragStartOnce();
+          }
+          this.selectedIds.clear();
           this.selectedConnectionId = connection.id;
-          this.emitDragStartOnce();
           this.selectionChanged.emit({ type: 'wire', connection });
+          this.render();
           return;
         }
       }
@@ -1075,27 +1225,32 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         if (!fromPos || !toPos) continue;
 
         if (hitTestWire(connection, fromPos, toPos, x, y, this.gridSize())) {
+          this.selectedIds.clear();
           this.selectedConnectionId = connection.id;
           this.selectedConnectorId = null;
           this.selectedCableId = null;
           this.selectedComponentId = null;
           this.selectedSubHarnessId = null;
           this.selectionChanged.emit({ type: 'wire', connection });
+          this.render();
           return;
         }
       }
-      // Clicked on nothing - clear selection
+      // Clicked on nothing - return to select mode
       this.clearSelection();
       this.selectionChanged.emit({ type: 'none' });
+      this.requestToolChange.emit('select');
       return;
     }
 
     // Select tool
     // First check if clicking on a connector pin circle or mating point (to start wire drawing)
-    for (const connector of data.connectors) {
-      const pinHit = hitTestConnectorPinWithSide(connector, x, y);
-      if (pinHit) {
-        this.isDrawingWire = true;
+    // Only allow wire drawing if not released
+    if (!releasedMode) {
+      for (const connector of data.connectors) {
+        const pinHit = hitTestConnectorPinWithSide(connector, x, y);
+        if (pinHit) {
+          this.isDrawingWire = true;
         this.isDrawingMatingWire = pinHit.side === 'mating';
         this.wireStartConnectorId = connector.id;
         this.wireStartPinId = pinHit.pinId;
@@ -1153,10 +1308,9 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       }
     }
 
-    // Check subharness pins (to start wire drawing)
+    // Check subharness mating pins only (wire pins are internal to the sub-harness)
     for (const subHarness of (data.subHarnesses || [])) {
       const childHarness = this.subHarnessDataCache.get(subHarness.harnessId);
-      // Check mating pins first
       const matingPinHit = hitTestSubHarnessPin(subHarness, childHarness, x, y, 'mating');
       if (matingPinHit) {
         this.isDrawingWire = true;
@@ -1174,25 +1328,8 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         this.wireEndY = y;
         return;
       }
-      // Check wire pins
-      const wirePinHit = hitTestSubHarnessPin(subHarness, childHarness, x, y, 'wire');
-      if (wirePinHit) {
-        this.isDrawingWire = true;
-        this.isDrawingMatingWire = false;
-        this.wireStartSubHarnessId = subHarness.id;
-        this.wireStartSubHarnessConnectorId = wirePinHit.connectorId;
-        this.wireStartPinId = wirePinHit.connectorPinId;
-        this.wireStartConnectorId = null;
-        this.wireStartCableId = null;
-        this.wireStartWireId = null;
-        this.wireStartSide = null;
-        this.wireStartComponentId = null;
-        this.wireStartComponentPinId = null;
-        this.wireEndX = x;
-        this.wireEndY = y;
-        return;
-      }
     }
+    } // End of !releasedMode check for wire drawing in select mode
 
     // Create sorted list of all elements by zIndex (highest first for hit testing)
     type HitTestElement =
@@ -1297,17 +1434,20 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           this.selectedCableId = null;
           this.selectedComponentId = null;
           this.selectedSubHarnessId = null;
-          this.isDragging = true;
-          this.isDraggingCable = false;
-          this.isDraggingComponent = false;
-          this.isDraggingSubHarness = false;
-          this.isDraggingGroup = !!item.element.groupId;
-          this.isDraggingMultiSelection = this.selectedIds.size > 1;
-          this.dragStartX = x;
-          this.dragStartY = y;
-          this.dragOffsetX = x - (item.element.position?.x || 0);
-          this.dragOffsetY = y - (item.element.position?.y || 0);
-          this.emitDragStartOnce();
+          // Only enable dragging if not released
+          if (!releasedMode) {
+            this.isDragging = true;
+            this.isDraggingCable = false;
+            this.isDraggingComponent = false;
+            this.isDraggingSubHarness = false;
+            this.isDraggingGroup = !!item.element.groupId;
+            this.isDraggingMultiSelection = this.selectedIds.size > 1;
+            this.dragStartX = x;
+            this.dragStartY = y;
+            this.dragOffsetX = x - (item.element.position?.x || 0);
+            this.dragOffsetY = y - (item.element.position?.y || 0);
+            this.emitDragStartOnce();
+          }
 
           this.selectionChanged.emit({
             type: 'connector',
@@ -1358,17 +1498,20 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           this.selectedConnectionId = null;
           this.selectedComponentId = null;
           this.selectedSubHarnessId = null;
-          this.isDragging = false;
-          this.isDraggingCable = true;
-          this.isDraggingComponent = false;
-          this.isDraggingSubHarness = false;
-          this.isDraggingGroup = !!item.element.groupId;
-          this.isDraggingMultiSelection = this.selectedIds.size > 1;
-          this.dragStartX = x;
-          this.dragStartY = y;
-          this.dragOffsetX = x - (item.element.position?.x || 0);
-          this.dragOffsetY = y - (item.element.position?.y || 0);
-          this.emitDragStartOnce();
+          // Only enable dragging if not released
+          if (!releasedMode) {
+            this.isDragging = false;
+            this.isDraggingCable = true;
+            this.isDraggingComponent = false;
+            this.isDraggingSubHarness = false;
+            this.isDraggingGroup = !!item.element.groupId;
+            this.isDraggingMultiSelection = this.selectedIds.size > 1;
+            this.dragStartX = x;
+            this.dragStartY = y;
+            this.dragOffsetX = x - (item.element.position?.x || 0);
+            this.dragOffsetY = y - (item.element.position?.y || 0);
+            this.emitDragStartOnce();
+          }
 
           this.selectionChanged.emit({
             type: 'cable',
@@ -1419,17 +1562,20 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           this.selectedConnectionId = null;
           this.selectedCableId = null;
           this.selectedSubHarnessId = null;
-          this.isDragging = false;
-          this.isDraggingCable = false;
-          this.isDraggingComponent = true;
-          this.isDraggingSubHarness = false;
-          this.isDraggingGroup = !!item.element.groupId;
-          this.isDraggingMultiSelection = this.selectedIds.size > 1;
-          this.dragStartX = x;
-          this.dragStartY = y;
-          this.dragOffsetX = x - (item.element.position?.x || 0);
-          this.dragOffsetY = y - (item.element.position?.y || 0);
-          this.emitDragStartOnce();
+          // Only enable dragging if not released
+          if (!releasedMode) {
+            this.isDragging = false;
+            this.isDraggingCable = false;
+            this.isDraggingComponent = true;
+            this.isDraggingSubHarness = false;
+            this.isDraggingGroup = !!item.element.groupId;
+            this.isDraggingMultiSelection = this.selectedIds.size > 1;
+            this.dragStartX = x;
+            this.dragStartY = y;
+            this.dragOffsetX = x - (item.element.position?.x || 0);
+            this.dragOffsetY = y - (item.element.position?.y || 0);
+            this.emitDragStartOnce();
+          }
 
           this.selectionChanged.emit({
             type: 'component',
@@ -1481,17 +1627,20 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           this.selectedConnectionId = null;
           this.selectedCableId = null;
           this.selectedComponentId = null;
-          this.isDragging = false;
-          this.isDraggingCable = false;
-          this.isDraggingComponent = false;
-          this.isDraggingSubHarness = true;
-          this.isDraggingGroup = !!item.element.groupId;
-          this.isDraggingMultiSelection = this.selectedIds.size > 1;
-          this.dragStartX = x;
-          this.dragStartY = y;
-          this.dragOffsetX = x - (item.element.position?.x || 0);
-          this.dragOffsetY = y - (item.element.position?.y || 0);
-          this.emitDragStartOnce();
+          // Only enable dragging if not released
+          if (!releasedMode) {
+            this.isDragging = false;
+            this.isDraggingCable = false;
+            this.isDraggingComponent = false;
+            this.isDraggingSubHarness = true;
+            this.isDraggingGroup = !!item.element.groupId;
+            this.isDraggingMultiSelection = this.selectedIds.size > 1;
+            this.dragStartX = x;
+            this.dragStartY = y;
+            this.dragOffsetX = x - (item.element.position?.x || 0);
+            this.dragOffsetY = y - (item.element.position?.y || 0);
+            this.emitDragStartOnce();
+          }
 
           this.selectionChanged.emit({
             type: 'subHarness',
@@ -1641,6 +1790,12 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     // Handle sub-harness edit mode mouse move
     if (this.editingSubHarnessId() && this.editingSubHarnessRef && this.editingChildHarness) {
       this.handleSubHarnessEditModeMouseMove(event, x, y);
+      return;
+    }
+
+    // If released, don't allow any dragging operations
+    if (this.isLocked()) {
+      this.canvasRef.nativeElement.style.cursor = this.activeTool() === 'pan' ? 'grab' : 'default';
       return;
     }
 
@@ -2065,6 +2220,19 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
             for (const component of (data.components || [])) {
               if (hitTestComponent(component, x, y)) {
                 cursor = 'move';
+                found = true;
+                break;
+              }
+            }
+          }
+
+          // Check if over a sub-harness mating pin (for wire drawing)
+          if (!found) {
+            for (const subHarness of (data.subHarnesses || [])) {
+              const childHarness = this.subHarnessDataCache.get(subHarness.harnessId);
+              // Only mating pins allow wire connections (wire pins are internal)
+              if (hitTestSubHarnessPin(subHarness, childHarness, x, y, 'mating')) {
+                cursor = 'crosshair';
                 found = true;
                 break;
               }
@@ -3968,6 +4136,12 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       return;
     }
 
+    // Don't allow editing if sub-harness is released or in review
+    if (childHarness.releaseState === 'released' || childHarness.releaseState === 'review') {
+      console.warn('Cannot enter edit mode: sub-harness is ' + childHarness.releaseState);
+      return;
+    }
+
     this.editingSubHarnessId.set(subHarness.id);
     this.editingSubHarnessRef = subHarness;
     this.editingChildHarness = childHarness;
@@ -4420,6 +4594,12 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
 
     // Delete/Backspace to delete selected elements
     if (event.key === 'Delete' || event.key === 'Backspace') {
+      // Ignore if focus is in an input, textarea, or inside a dialog
+      const target = event.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.closest('mat-dialog-container')) {
+        return;
+      }
+
       const hasSelection = this.selectedIds.size > 0 ||
         this.selectedConnectorId ||
         this.selectedCableId ||
@@ -4570,9 +4750,11 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           this.isDraggingControlPoint = true;
           this.draggedConnectionId = connection.id;
           this.draggedControlPointIndex = cpIndex;
+          this.selectedIds.clear();
           this.selectedConnectionId = connection.id;
           this.emitDragStartOnce();
           this.selectionChanged.emit({ type: 'wire', connection });
+          this.render();
           return;
         }
       }
@@ -4583,17 +4765,21 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         if (!fromPos || !toPos) continue;
 
         if (hitTestWire(connection, fromPos, toPos, localPoint.x, localPoint.y, this.gridSize())) {
+          this.selectedIds.clear();
           this.selectedConnectionId = connection.id;
           this.selectedConnectorId = null;
           this.selectedCableId = null;
           this.selectedComponentId = null;
           this.selectionChanged.emit({ type: 'wire', connection });
+          this.cleanupChildRedundantControlPoints();
+          this.render();
           return;
         }
       }
-      // Clicked on nothing - clear selection
+      // Clicked on nothing - return to select mode
       this.clearSelection();
       this.selectionChanged.emit({ type: 'none' });
+      this.requestToolChange.emit('select');
       return;
     }
 

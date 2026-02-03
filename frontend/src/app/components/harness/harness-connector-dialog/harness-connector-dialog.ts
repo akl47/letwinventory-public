@@ -20,6 +20,7 @@ import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
 interface DialogData {
   existingConnectors?: HarnessConnector[];
   editConnector?: HarnessConnector;
+  isLocked?: boolean;
 }
 
 @Component({
@@ -65,6 +66,7 @@ export class HarnessConnectorDialog implements OnInit {
   pins = signal<HarnessPin[]>([]);
 
   isEdit = signal<boolean>(false);
+  isLocked = signal<boolean>(false);
   private editId: string | null = null;
   private editPosition: { x: number; y: number } = { x: 200, y: 200 };
   private editRotation: 0 | 90 | 180 | 270 = 0;
@@ -76,6 +78,9 @@ export class HarnessConnectorDialog implements OnInit {
   private editPinoutDiagramImage: string | undefined = undefined;
 
   constructor() {
+    if (this.data?.isLocked) {
+      this.isLocked.set(true);
+    }
     if (this.data?.editConnector) {
       // Edit mode - preserve all existing properties
       this.isEdit.set(true);

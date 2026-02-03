@@ -56,112 +56,31 @@ export function getSubHarnessDimensions(
 }
 
 /**
- * Get the rotated bounding box for an element
- * Returns the axis-aligned bounding box after rotation
- */
-function getRotatedBounds(
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  rotation: number,
-  flipped: boolean
-): { minX: number; minY: number; maxX: number; maxY: number } {
-  const rad = ((rotation || 0) * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-
-  // Four corners of the element (relative to position)
-  const corners = [
-    { x: 0, y: 0 },
-    { x: width, y: 0 },
-    { x: width, y: height },
-    { x: 0, y: height }
-  ];
-
-  // Transform each corner
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const corner of corners) {
-    let cx = corner.x;
-    let cy = corner.y;
-
-    if (flipped) {
-      cx = -cx;
-    }
-
-    const rotatedX = cx * cos - cy * sin;
-    const rotatedY = cx * sin + cy * cos;
-
-    minX = Math.min(minX, x + rotatedX);
-    minY = Math.min(minY, y + rotatedY);
-    maxX = Math.max(maxX, x + rotatedX);
-    maxY = Math.max(maxY, y + rotatedY);
-  }
-
-  return { minX, minY, maxX, maxY };
-}
-
-/**
- * Get the visual bounds of a connector in world coordinates (before sub-harness transform)
- * Connector position is at first pin center, so we need to calculate the actual drawn bounds
+ * Get the visual bounds of a connector in world coordinates
+ * Uses same calculation as exportAsPNG for consistency
  */
 function getConnectorVisualBounds(connector: HarnessConnector): { minX: number; minY: number; maxX: number; maxY: number } {
+  if (!connector.position) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+
   const dims = getConnectorDimensions(connector);
-  const x = connector.position?.x || 0;
-  const y = connector.position?.y || 0;
-  const rotation = connector.rotation || 0;
-  const flipped = connector.flipped || false;
+  const x = connector.position.x;
+  const y = connector.position.y;
 
-  // Connector draws at (x, y - ROW_HEIGHT/2) with left=0, top=-HEADER_HEIGHT-connectorImageHeight-partNameRowHeight
-  // So in local space (before rotation): left=0, top = -HEADER_HEIGHT - dims.connectorImageHeight - (dims.hasPartName ? ROW_HEIGHT : 0)
-  const partNameRowHeight = dims.hasPartName ? ROW_HEIGHT : 0;
-  const localTop = -HEADER_HEIGHT - dims.connectorImageHeight - partNameRowHeight;
-  const localLeft = 0;
+  const pinCount = connector.pins?.length || connector.pinCount || 1;
+  const headerAndExtras = dims.height - (pinCount * ROW_HEIGHT);
 
-  // The connector's origin for drawing is at (x, y - ROW_HEIGHT/2)
-  // So in world space (before rotation), the bounds are:
-  const originX = x;
-  const originY = y - ROW_HEIGHT / 2;
-
-  // Get corners in local space
-  const corners = [
-    { x: localLeft, y: localTop },
-    { x: localLeft + dims.width, y: localTop },
-    { x: localLeft + dims.width, y: localTop + dims.height },
-    { x: localLeft, y: localTop + dims.height }
-  ];
-
-  // Transform corners by rotation
-  const rad = (rotation * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const corner of corners) {
-    let cx = corner.x;
-    let cy = corner.y;
-
-    if (flipped) {
-      // Flip horizontally around the center of the connector
-      const centerX = dims.width / 2;
-      cx = 2 * centerX - cx;
-    }
-
-    const rotatedX = cx * cos - cy * sin;
-    const rotatedY = cx * sin + cy * cos;
-
-    minX = Math.min(minX, originX + rotatedX);
-    minY = Math.min(minY, originY + rotatedY);
-    maxX = Math.max(maxX, originX + rotatedX);
-    maxY = Math.max(maxY, originY + rotatedY);
-  }
-
-  return { minX, minY, maxX, maxY };
+  // Position is at first pin center (y - ROW_HEIGHT/2 is the origin for drawing)
+  return {
+    minX: x,
+    minY: y - ROW_HEIGHT / 2 - headerAndExtras,
+    maxX: x + dims.width,
+    maxY: y - ROW_HEIGHT / 2 + pinCount * ROW_HEIGHT
+  };
 }
 
 /**
  * Get the visual bounds of a cable in world coordinates
- * Cable position is at the first wire, body extends upward (negative Y)
+ * Uses same calculation as exportAsPNG for consistency
  */
 function getCableVisualBounds(cable: HarnessCable): { minX: number; minY: number; maxX: number; maxY: number } {
   if (!cable.position) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
@@ -169,56 +88,52 @@ function getCableVisualBounds(cable: HarnessCable): { minX: number; minY: number
   const dims = getCableDimensions(cable);
   const x = cable.position.x;
   const y = cable.position.y;
-  const rotation = cable.rotation || 0;
-  const flipped = cable.flipped || false;
 
-  // Calculate the offset from position to top-left of cable body
-  // Cable body extends upward from the first wire position
-  const hasPartName = !!cable.partName;
-  const hasInfoRow = !!(cable.gaugeAWG || cable.lengthMm);
-  const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
-  const infoRowHeight = hasInfoRow ? ROW_HEIGHT : 0;
-  const topOffset = HEADER_HEIGHT + partNameRowHeight + infoRowHeight + CABLE_WIRE_SPACING / 2;
+  const wireCount = cable.wires?.length || cable.wireCount || 1;
+  const headerAndExtras = dims.height - (wireCount * CABLE_WIRE_SPACING);
 
-  // The actual top-left corner of the cable in local coordinates
-  const localTop = -topOffset;
-
-  // Use the actual visual top as the starting point
-  return getRotatedBounds(x, y + localTop, dims.width, dims.height, rotation, flipped);
+  // Position is at first wire center
+  // Top is position minus header/extras minus half wire spacing
+  // Bottom is position plus remaining wires
+  return {
+    minX: x,
+    minY: y - headerAndExtras - CABLE_WIRE_SPACING / 2,
+    maxX: x + dims.width,
+    maxY: y + (wireCount - 0.5) * CABLE_WIRE_SPACING
+  };
 }
 
 /**
  * Get the visual bounds of a component in world coordinates
- * Component position is also offset like connector
+ * Component position is at first pin center, similar to connector
+ * Uses same calculation as exportAsPNG for consistency
  */
 function getComponentVisualBounds(component: HarnessComponent): { minX: number; minY: number; maxX: number; maxY: number } {
+  if (!component.position) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+
   const dims = getComponentDimensions(component);
-  const x = component.position?.x || 0;
-  const y = component.position?.y || 0;
-  const rotation = component.rotation || 0;
-  const flipped = component.flipped || false;
+  const x = component.position.x;
+  const y = component.position.y;
 
-  // Component draws similar to connector - position is at pin center
-  // For simplicity, use the pin positions to determine bounds
-  const pins = getComponentPinPositions(component);
-  if (pins.length > 0) {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const pin of pins) {
-      minX = Math.min(minX, pin.x);
-      minY = Math.min(minY, pin.y);
-      maxX = Math.max(maxX, pin.x);
-      maxY = Math.max(maxY, pin.y);
-    }
-    // Add margin for component body
-    return {
-      minX: minX - dims.width / 2,
-      minY: minY - HEADER_HEIGHT,
-      maxX: maxX + dims.width / 2,
-      maxY: maxY + ROW_HEIGHT
-    };
+  // Calculate total pins across all pin groups
+  let totalPins = 0;
+  for (const group of component.pinGroups || []) {
+    totalPins += group.pins?.length || 0;
   }
+  totalPins = Math.max(totalPins, 1);
 
-  return getRotatedBounds(x, y, dims.width, dims.height, rotation, flipped);
+  // Header and extras height (everything above the pins)
+  const headerAndExtras = dims.height - (totalPins * ROW_HEIGHT);
+
+  // Position is at first pin center (y - ROW_HEIGHT/2 is the origin for drawing)
+  // Top of component is origin minus header/extras
+  // Bottom is origin plus all pin rows
+  return {
+    minX: x,
+    minY: y - ROW_HEIGHT / 2 - headerAndExtras,
+    maxX: x + dims.width,
+    maxY: y - ROW_HEIGHT / 2 + totalPins * ROW_HEIGHT
+  };
 }
 
 /**
@@ -328,7 +243,8 @@ export function drawSubHarnessCollapsed(
   ctx.setLineDash([]);
 
   // Draw label at top (inside the border)
-  const labelText = childHarness.name;
+  const revision = childHarness.revision || 'A';
+  const labelText = `${childHarness.name} Rev ${revision}`;
   ctx.font = 'bold 12px monospace';
   const labelWidth = ctx.measureText(labelText).width + 16;
   const labelX = bounds.minX;
@@ -344,6 +260,71 @@ export function drawSubHarnessCollapsed(
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText(labelText, labelX + 8, labelY + 6);
+
+  // Draw release state indicator in top-right corner
+  if (childHarness.releaseState === 'released') {
+    const releasedText = 'RELEASED';
+    ctx.font = 'bold 10px monospace';
+    const textWidth = ctx.measureText(releasedText).width;
+    const badgeWidth = textWidth + 24; // Extra space for padlock icon
+    const badgeX = bounds.maxX - badgeWidth;
+    const badgeY = bounds.minY;
+
+    // Released badge background (green)
+    ctx.fillStyle = '#388e3c';
+    roundRect(ctx, badgeX, badgeY, badgeWidth, 14, 4);
+    ctx.fill();
+
+    // Draw padlock icon
+    const lockX = badgeX + 6;
+    const lockY = badgeY + 7;
+    ctx.strokeStyle = '#ffffff';
+    ctx.fillStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    // Lock body
+    ctx.fillRect(lockX, lockY - 2, 6, 5);
+    // Lock shackle (arch)
+    ctx.beginPath();
+    ctx.arc(lockX + 3, lockY - 2, 2.5, Math.PI, 0, false);
+    ctx.stroke();
+
+    // Released badge text
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(releasedText, badgeX + 16, badgeY + 7);
+  } else if (childHarness.releaseState === 'review') {
+    const reviewText = 'IN REVIEW';
+    ctx.font = 'bold 10px monospace';
+    const textWidth = ctx.measureText(reviewText).width;
+    const badgeWidth = textWidth + 24; // Extra space for padlock icon
+    const badgeX = bounds.maxX - badgeWidth;
+    const badgeY = bounds.minY;
+
+    // Review badge background (orange/yellow)
+    ctx.fillStyle = '#f9a825';
+    roundRect(ctx, badgeX, badgeY, badgeWidth, 14, 4);
+    ctx.fill();
+
+    // Draw padlock icon
+    const lockX = badgeX + 6;
+    const lockY = badgeY + 7;
+    ctx.strokeStyle = '#000000';
+    ctx.fillStyle = '#000000';
+    ctx.lineWidth = 1.5;
+    // Lock body
+    ctx.fillRect(lockX, lockY - 2, 6, 5);
+    // Lock shackle (arch)
+    ctx.beginPath();
+    ctx.arc(lockX + 3, lockY - 2, 2.5, Math.PI, 0, false);
+    ctx.stroke();
+
+    // Review badge text
+    ctx.fillStyle = '#000000';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(reviewText, badgeX + 16, badgeY + 7);
+  }
 
   // Draw all child elements at their positions
   const data = childHarness.harnessData;
@@ -432,7 +413,8 @@ export function drawSubHarnessEditMode(
   ctx.setLineDash([]);
 
   // Draw label at top (inside the border)
-  const labelText = childHarness.name;
+  const revision = childHarness.revision || 'A';
+  const labelText = `${childHarness.name} Rev ${revision}`;
   ctx.font = 'bold 12px monospace';
   const labelWidth = ctx.measureText(labelText).width + 16;
   const labelX = bounds.minX;

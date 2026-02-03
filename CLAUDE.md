@@ -575,6 +575,113 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Session: 2026-02-02 (part 3)
+
+### Files Modified
+- `frontend/src/app/components/harness/harness-toolbar/harness-toolbar.scss`
+- `frontend/src/app/components/harness/harness-list-view/harness-list-view.ts`
+- `frontend/src/app/components/harness/harness-list-view/harness-list-view.html`
+- `frontend/src/app/components/harness/harness-list-view/harness-list-view.css`
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.ts`
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.html`
+- `frontend/src/app/components/harness/harness-page/harness-page.ts`
+- `frontend/src/app/components/harness/harness-page/harness-page.html`
+- `frontend/src/app/models/harness.model.ts`
+
+### Changes Made
+
+1. **Styled disabled toolbar buttons darker**
+   - Added `.toolbar-group button:disabled` rule with `color: #505050`
+   - Disabled undo/redo buttons now appear more clearly disabled
+
+2. **Added release status column to harness list view**
+   - Added 'releaseState' to `displayedColumns` array
+   - Added column template with status chip showing draft/review/released
+   - Added CSS styling for status chips:
+     - `.status-draft`: gray background (#424242)
+     - `.status-review`: orange background (#f57c00)
+     - `.status-released`: green background (#388e3c)
+
+3. **Added release button to harness property panel**
+   - Added `releaseHarness` output event
+   - Added release button in harness-actions section
+   - Button text changes based on current state:
+     - Draft → "Release" (starts review workflow)
+     - Review → "In Review" (proceeds to release)
+     - Released → "Released" (disabled)
+
+4. **Implemented release workflow in harness-page**
+   - Added `onReleaseHarness()` method
+   - Draft state: confirms and calls `submitForReview()`
+   - Review state: confirms and calls `release()`
+   - Updates local state after successful API calls
+   - Wired up `(releaseHarness)` event in template
+
+5. **Added releaseState to HarnessData interface**
+   - Added `releaseState?: ReleaseState` field to `HarnessData`
+   - Moved `ReleaseState` type definition before `HarnessData` for proper ordering
+   - Updated `loadHarness()` to include `releaseState` when merging harness data
+
+### Notes
+- Release workflow: Draft → Review → Released
+- Released harnesses are locked from further edits (button disabled)
+- The backend was already implemented in a previous session (Feb 1)
+- Current branch: harness_subassemblies
+
+---
+
+## Session: 2026-02-02 (part 4)
+
+### Files Modified
+- `frontend/src/app/components/harness/harness-toolbar/harness-toolbar.ts`
+- `frontend/src/app/components/harness/harness-toolbar/harness-toolbar.html`
+- `frontend/src/app/components/harness/harness-page/harness-page.ts`
+- `frontend/src/app/components/harness/harness-page/harness-page.html`
+- `frontend/src/app/components/harness/harness-canvas/harness-canvas.ts`
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.ts`
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.html`
+
+### Changes Made
+
+1. **Read-only mode for released harnesses - Toolbar**
+   - Added `isReleased` input to toolbar component
+   - Added `newRevision` output for creating new revisions
+   - Disabled editing tools when released: wire tool, node edit, add elements, rotate, flip, delete, undo/redo, import
+   - Kept enabled: select, pan, zoom, export, grid toggle
+   - Added "New Revision" button that appears when harness is released
+
+2. **Read-only mode for released harnesses - Canvas**
+   - Added `isReleased` input to canvas component
+   - Added early return in `onMouseMove` when released (prevents all dragging)
+   - Prevented wire drawing in select mode when released
+   - Prevented control point dragging in node edit mode when released
+   - Prevented element dragging (connector, cable, component, sub-harness) when released
+   - Selection still works (clicking selects elements without starting drag)
+
+3. **Read-only mode for released harnesses - Property Panel**
+   - Added `isReleased` input to property panel component
+   - Disabled all form fields when released:
+     - Name, description inputs
+     - Wire properties (label, color, gauge, length, terminations)
+     - Delete harness button
+   - Hid bulk wire edit panel when released
+   - Release button shows "Released" and is disabled
+
+4. **New Revision functionality**
+   - Added `isReleased` computed signal to harness-page
+   - Added `onNewRevision()` method that calls `updateHarness()` on released harness
+   - Backend auto-creates new revision when updating a released harness
+   - Navigates to the new revision after creation
+   - Added `getNextRevision()` helper for preview (A→B, Z→AA)
+
+### Notes
+- Selection still works in released mode - can click to view properties
+- Double-click should still open dialogs (read-only)
+- New Revision button appears in toolbar when harness is released
+- Current branch: harness_subassemblies
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:

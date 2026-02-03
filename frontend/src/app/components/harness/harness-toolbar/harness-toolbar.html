@@ -6,14 +6,14 @@
       <mat-icon>near_me</mat-icon>
     </button>
     <button mat-icon-button matTooltip="Edit Wire Nodes (N) - Drag to move, double-click to add/remove"
-      [class.active]="activeTool() === 'nodeEdit'" (click)="setTool('nodeEdit')">
+      [class.active]="activeTool() === 'nodeEdit'" (click)="setTool('nodeEdit')" [disabled]="isLocked()">
       <mat-icon>linear_scale</mat-icon>
     </button>
     <button mat-icon-button matTooltip="Pan (H)" [class.active]="activeTool() === 'pan'" (click)="setTool('pan')">
       <mat-icon>pan_tool</mat-icon>
     </button>
     <button mat-icon-button matTooltip="Draw Wire (W)" [class.active]="activeTool() === 'wire'"
-      (click)="setTool('wire')">
+      (click)="setTool('wire')" [disabled]="isLocked()">
       <mat-icon>cable</mat-icon>
     </button>
 
@@ -23,16 +23,16 @@
 
   <!-- Add elements -->
   <div class="toolbar-group">
-    <button mat-icon-button matTooltip="Add Connector" (click)="addConnector.emit()">
+    <button mat-icon-button matTooltip="Add Connector" (click)="addConnector.emit()" [disabled]="isLocked()">
       <mat-icon>power</mat-icon>
     </button>
-    <button mat-icon-button matTooltip="Add Cable" (click)="addCable.emit()">
+    <button mat-icon-button matTooltip="Add Cable" (click)="addCable.emit()" [disabled]="isLocked()">
       <mat-icon>settings_input_svideo</mat-icon>
     </button>
-    <button mat-icon-button matTooltip="Add Component" (click)="addComponent.emit()">
+    <button mat-icon-button matTooltip="Add Component" (click)="addComponent.emit()" [disabled]="isLocked()">
       <mat-icon>memory</mat-icon>
     </button>
-    <button mat-icon-button matTooltip="Add Harness" (click)="addSubHarness.emit()">
+    <button mat-icon-button matTooltip="Add Harness" (click)="addSubHarness.emit()" [disabled]="isLocked()">
       <mat-icon>electrical_services</mat-icon>
     </button>
   </div>
@@ -67,20 +67,20 @@
 
   <!-- Edit operations -->
   <div class="toolbar-group">
-    <button mat-icon-button matTooltip="Undo (Ctrl+Z)" (click)="undo.emit()" [disabled]="!canUndo()">
+    <button mat-icon-button matTooltip="Undo (Ctrl+Z)" (click)="undo.emit()" [disabled]="!canUndo() || isLocked()">
       <mat-icon>undo</mat-icon>
     </button>
-    <button mat-icon-button matTooltip="Redo (Ctrl+Y)" (click)="redo.emit()" [disabled]="!canRedo()">
+    <button mat-icon-button matTooltip="Redo (Ctrl+Y)" (click)="redo.emit()" [disabled]="!canRedo() || isLocked()">
       <mat-icon>redo</mat-icon>
     </button>
     <button mat-icon-button matTooltip="Rotate 90° (R)" (click)="rotateConnector.emit()"
-      [disabled]="!hasElementSelected()">
+      [disabled]="!hasElementSelected() || isLocked()">
       <mat-icon>rotate_right</mat-icon>
     </button>
-    <button mat-icon-button matTooltip="Mirror (F)" (click)="flipConnector.emit()" [disabled]="!hasElementSelected()">
+    <button mat-icon-button matTooltip="Mirror (F)" (click)="flipConnector.emit()" [disabled]="!hasElementSelected() || isLocked()">
       <mat-icon>flip</mat-icon>
     </button>
-    <button mat-icon-button matTooltip="Delete Selected (Del)" (click)="deleteSelected.emit()">
+    <button mat-icon-button matTooltip="Delete Selected (Del)" (click)="deleteSelected.emit()" [disabled]="isLocked()">
       <mat-icon>delete</mat-icon>
     </button>
   </div>
@@ -101,7 +101,7 @@
         <span>Export PNG</span>
       </button>
     </mat-menu>
-    <button mat-icon-button matTooltip="Import JSON" (click)="importJSON.emit()">
+    <button mat-icon-button matTooltip="Import JSON" (click)="importJSON.emit()" [disabled]="isLocked()">
       <mat-icon>upload</mat-icon>
     </button>
   </div>

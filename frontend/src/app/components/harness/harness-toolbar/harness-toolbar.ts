@@ -39,6 +39,7 @@ export class HarnessToolbar {
   activeTool = input<HarnessTool>('select');
   canUndo = input<boolean>(false);
   canRedo = input<boolean>(false);
+  isLocked = input<boolean>(false);
 
   // Outputs
   newHarness = output<void>();

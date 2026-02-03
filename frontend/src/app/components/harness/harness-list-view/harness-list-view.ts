@@ -49,7 +49,7 @@ export class HarnessListView implements OnInit {
   searchText = signal<string>('');
   showInactive = signal<boolean>(false);
 
-  displayedColumns: string[] = ['name', 'partNumber', 'revision', 'description', 'updatedAt', 'actions'];
+  displayedColumns: string[] = ['name', 'partNumber', 'revision', 'releaseState', 'description', 'updatedAt', 'actions'];
 
   // Pagination
   pageSize = signal<number>(10);

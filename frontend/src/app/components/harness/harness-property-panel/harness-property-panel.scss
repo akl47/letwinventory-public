@@ -295,3 +295,45 @@ mat-form-field {
     color: #ff9800 !important;
   }
 }
+
+// Release Status Panel
+.release-panel {
+  .status-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+
+    &.draft {
+      background: #424242;
+      color: #e0e0e0;
+    }
+
+    &.review {
+      background: #f9a825;
+      color: #000;
+    }
+
+    &.released {
+      background: #388e3c;
+      color: #fff;
+    }
+  }
+}
+
+.release-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+
+  button {
+    width: 100%;
+  }
+
+  mat-icon {
+    margin-right: 8px;
+  }
+}
