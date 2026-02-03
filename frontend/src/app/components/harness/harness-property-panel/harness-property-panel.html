@@ -36,7 +36,79 @@
     </div>
   </mat-expansion-panel>
 
-  @if (selection()?.type === 'wire') {
+  <!-- Bulk Wire Edit Panel - shows when multiple wires selected -->
+  @if (hasMultipleWiresSelected()) {
+  <mat-expansion-panel [expanded]="true" class="bulk-wire-panel">
+    <mat-expansion-panel-header>
+      <mat-panel-title>Bulk Wire Edit ({{ selectedWireIds().length }} wires)</mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="property-group">
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Wire Color</mat-label>
+        <mat-select [value]="selectedWiresCommonValues()?.color || ''"
+          (selectionChange)="updateBulkWires('color', $event.value)">
+          <mat-option value="">Mixed / No change</mat-option>
+          @for (color of wireColors; track color.code) {
+          <mat-option [value]="color.code">
+            <span class="color-option">
+              <span class="color-swatch" [style.backgroundColor]="color.hex"></span>
+              {{ color.name }} ({{ color.code }})
+            </span>
+          </mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Wire Gauge</mat-label>
+        <mat-select [value]="selectedWiresCommonValues()?.gauge || ''"
+          (selectionChange)="updateBulkWires('gauge', $event.value)">
+          <mat-option value="">Mixed / No change</mat-option>
+          @for (gauge of awgGauges; track gauge) {
+          <mat-option [value]="gauge">{{ gauge }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Length (mm)</mat-label>
+        <input matInput type="number" [value]="selectedWiresCommonValues()?.lengthMm || ''"
+          (input)="updateBulkWiresInput('lengthMm', $event)"
+          placeholder="Leave empty to keep individual values" min="1">
+      </mat-form-field>
+
+      <mat-divider></mat-divider>
+
+      <!-- Wire End Terminations -->
+      <div class="termination-row">
+        <mat-form-field appearance="outline" class="half-width">
+          <mat-label>Left End</mat-label>
+          <mat-select [value]="selectedWiresCommonValues()?.fromTermination || ''"
+            (selectionChange)="updateBulkWires('fromTermination', $event.value)">
+            <mat-option value="">Mixed / No change</mat-option>
+            @for (term of terminationTypes(); track term.value) {
+            <mat-option [value]="term.value">{{ term.label }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="half-width">
+          <mat-label>Right End</mat-label>
+          <mat-select [value]="selectedWiresCommonValues()?.toTermination || ''"
+            (selectionChange)="updateBulkWires('toTermination', $event.value)">
+            <mat-option value="">Mixed / No change</mat-option>
+            @for (term of terminationTypes(); track term.value) {
+            <mat-option [value]="term.value">{{ term.label }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+      </div>
+    </div>
+  </mat-expansion-panel>
+  }
+
+  @else if (selection()?.type === 'wire') {
   <mat-expansion-panel [expanded]="true" class="wire-panel">
     <mat-expansion-panel-header>
       <mat-panel-title>Wire Properties</mat-panel-title>

@@ -4,12 +4,13 @@
     [isSaving]="isSaving()"
     [zoomLevel]="zoomLevel()"
     [gridEnabled]="gridEnabled()"
-    [snapToGrid]="snapToGrid()"
     [harnessName]="harnessData()?.name || ''"
     [harnessPartNumber]="harnessData()?.partNumber || ''"
     [harnessRevision]="harnessData()?.revision || ''"
-    [hasElementSelected]="currentSelection()?.type === 'connector' || currentSelection()?.type === 'cable' || currentSelection()?.type === 'component'"
+    [hasElementSelected]="currentSelection()?.type === 'connector' || currentSelection()?.type === 'cable' || currentSelection()?.type === 'component' || currentSelection()?.type === 'subHarness'"
     [activeTool]="activeTool()"
+    [canUndo]="canUndo()"
+    [canRedo]="canRedo()"
     (newHarness)="onNewHarness()"
     (openHarness)="onOpenHarness()"
     (save)="onSave()"
@@ -19,6 +20,7 @@
     (addConnector)="onAddConnector()"
     (addCable)="onAddCable()"
     (addComponent)="onAddComponent()"
+    (addSubHarness)="onAddSubHarness()"
     (deleteSelected)="onDeleteSelected()"
     (rotateConnector)="rotateSelected(90)"
     (flipConnector)="flipSelected()"
@@ -26,8 +28,9 @@
     (zoomOut)="onZoomOut()"
     (resetZoom)="onResetZoom()"
     (gridEnabledChange)="gridEnabled.set($event)"
-    (snapToGridChange)="snapToGrid.set($event)"
-    (toolChanged)="onToolChanged($event)">
+    (toolChanged)="onToolChanged($event)"
+    (undo)="onUndo()"
+    (redo)="onRedo()">
   </app-harness-toolbar>
 
   <div class="main-content">
@@ -36,7 +39,6 @@
       [harnessData]="harnessData()"
       [activeTool]="activeTool()"
       [gridEnabled]="gridEnabled()"
-      [snapToGrid]="snapToGrid()"
       [gridSize]="20"
       (selectionChanged)="onSelectionChanged($event)"
       (dataChanged)="onDataChanged($event)"
@@ -46,13 +48,21 @@
       (editConnector)="onEditConnector($event)"
       (editCable)="onEditCable($event)"
       (editComponent)="onEditComponent($event)"
+      (editChildConnector)="onEditChildConnector($event)"
+      (editChildCable)="onEditChildCable($event)"
+      (editChildComponent)="onEditChildComponent($event)"
       (bringToFront)="onBringToFront()"
       (moveForward)="onMoveForward()"
       (moveBackward)="onMoveBackward()"
       (sendToBack)="onSendToBack()"
       (rotateSelected)="rotateSelected(90)"
       (flipSelected)="flipSelected()"
-      (requestDelete)="onDeleteSelected()">
+      (requestDelete)="onDeleteSelected()"
+      (requestToolChange)="onCanvasToolChangeRequest($event)"
+      (subHarnessDataChanged)="onSubHarnessDataChanged($event)"
+      (subHarnessEditModeChanged)="onSubHarnessEditModeChanged($event)"
+      (dragStart)="onDragStart()"
+      (dragEnd)="onDragEnd()">
     </app-harness-canvas>
 
     <app-harness-property-panel
@@ -61,6 +71,7 @@
       (metadataChanged)="onMetadataChanged($event)"
       (connectorChanged)="onConnectorPropertyChanged($event)"
       (connectionChanged)="onConnectionPropertyChanged($event)"
+      (bulkWiresChanged)="onBulkWiresChanged($event)"
       (pinLabelChanged)="onPinLabelChanged($event)"
       (deleteConnector)="onDeleteSelected()"
       (deleteCable)="onDeleteSelected()"

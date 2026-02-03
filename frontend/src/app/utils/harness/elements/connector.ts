@@ -4,16 +4,16 @@ import {
   ROW_HEIGHT,
   HEADER_HEIGHT,
   PIN_COL_WIDTH,
-  LABEL_COL_WIDTH,
   PIN_CIRCLE_RADIUS,
   EXPAND_BUTTON_SIZE,
   CONNECTOR_IMAGE_WIDTH,
   CONNECTOR_IMAGE_MAX_HEIGHT,
   PINOUT_IMAGE_WIDTH,
-  PINOUT_IMAGE_HEIGHT
+  PINOUT_IMAGE_HEIGHT,
+  ELEMENT_DEFAULT_WIDTH
 } from '../constants';
 import { ConnectorDimensions, PinPosition, CentroidOffset } from '../types';
-import { roundRect, drawExpandButton, calculateMaxLabelWidth } from '../drawing-utils';
+import { roundRect, drawExpandButton } from '../drawing-utils';
 import { worldToLocal } from '../transform-utils';
 import {
   COLORS,
@@ -35,6 +35,9 @@ const CONNECTOR_COLORS = {
   default: '#455a64'
 };
 
+// Mating point constants
+const MATING_POINT_SIZE = 4;  // Square size for mating points
+
 /**
  * Get the header color based on connector type
  */
@@ -43,6 +46,23 @@ function getConnectorHeaderColor(type: string | undefined): string {
   if (type === 'female') return CONNECTOR_COLORS.female;
   if (type === 'splice') return CONNECTOR_COLORS.splice;
   return CONNECTOR_COLORS.default;
+}
+
+/**
+ * Draw a mating point (square) for connector-to-connector connections
+ */
+function drawMatingPoint(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  fillColor: string
+): void {
+  ctx.fillStyle = fillColor;
+  ctx.fillRect(x, y, size, size);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, size, size);
 }
 
 /**
@@ -69,26 +89,8 @@ export function getConnectorDimensions(connector: HarnessConnector): ConnectorDi
   const hasConnectorImage = !!connector.showConnectorImage && !!connector.connectorImage;
   const connectorImageHeight = hasConnectorImage ? CONNECTOR_IMAGE_MAX_HEIGHT : 0;
 
-  // Calculate label width based on longest label and part name
-  const labels = connector.pins?.map(p => p.label) || [];
-  let maxLabelWidth = calculateMaxLabelWidth(labels, '12px monospace', 16);
-  maxLabelWidth = Math.max(maxLabelWidth, LABEL_COL_WIDTH);
-
-  // Also consider part name width
-  if (connector.partName) {
-    const ctx = document.createElement('canvas').getContext('2d');
-    if (ctx) {
-      ctx.font = '11px monospace';
-      const partNameWidth = ctx.measureText(connector.partName).width + 16;
-      maxLabelWidth = Math.max(maxLabelWidth, partNameWidth - PIN_COL_WIDTH);
-    }
-  }
-
-  let width = PIN_COL_WIDTH + maxLabelWidth;
-  // Ensure width is at least enough for the connector image if shown
-  if (hasConnectorImage) {
-    width = Math.max(width, CONNECTOR_IMAGE_WIDTH + 4);
-  }
+  // Fixed width matching cables and components
+  const width = ELEMENT_DEFAULT_WIDTH;
 
   const height = HEADER_HEIGHT + connectorImageHeight + (hasPartName ? ROW_HEIGHT : 0) + (pinCount * ROW_HEIGHT);
 
@@ -181,9 +183,13 @@ export function drawConnector(
       index > 0
     );
 
-    // Wire connection point (circle on the side)
-    const circleX = connector.type === 'male' ? left + width + PIN_CIRCLE_RADIUS : left - PIN_CIRCLE_RADIUS;
-    drawPinCircle(ctx, circleX, rowCenter, PIN_CIRCLE_RADIUS, headerColor);
+    // Wire connection point (circle on the side) - for wire connections
+    const wireCircleX = connector.type === 'male' ? left + width + PIN_CIRCLE_RADIUS : left - PIN_CIRCLE_RADIUS;
+    drawPinCircle(ctx, wireCircleX, rowCenter, PIN_CIRCLE_RADIUS, headerColor);
+
+    // Mating connection point (square on the opposite side) - for connector-to-connector mating
+    const matingX = connector.type === 'male' ? left - MATING_POINT_SIZE : left + width;
+    drawMatingPoint(ctx, matingX, rowCenter - MATING_POINT_SIZE / 2, MATING_POINT_SIZE, headerColor);
   });
 
   // Draw expand buttons if images exist
@@ -194,19 +200,28 @@ export function drawConnector(
   }
 
   if (connector.pinoutDiagramImage) {
-    const pinAreaHeight = pinCount * ROW_HEIGHT;
     const pinoutBtnX = left - EXPAND_BUTTON_SIZE - 4;
-    const pinoutBtnY = top + HEADER_HEIGHT + connectorImageHeight + partNameRowHeight + (pinAreaHeight / 2) - (EXPAND_BUTTON_SIZE / 2);
+    const pinoutBtnY = top + (HEADER_HEIGHT - EXPAND_BUTTON_SIZE) / 2;  // Centered on header
     drawExpandButton(ctx, pinoutBtnX, pinoutBtnY, !!connector.showPinoutDiagram, flipped);
   }
 
   ctx.restore();
 }
 
+// Extended pin position that includes connection side
+export interface ConnectorPinPosition extends PinPosition {
+  side: 'wire' | 'mating';
+}
+
 /**
- * Get pin positions for a connector (wire connection points on the side)
+ * Get pin positions for a connector
+ * @param connector The connector
+ * @param side Which side to get positions for: 'wire' (default), 'mating', or 'both'
  */
-export function getConnectorPinPositions(connector: HarnessConnector): PinPosition[] {
+export function getConnectorPinPositions(
+  connector: HarnessConnector,
+  side: 'wire' | 'mating' | 'both' = 'wire'
+): PinPosition[] {
   const { width } = getConnectorDimensions(connector);
   const ox = connector.position?.x || 100;
   const oy = connector.position?.y || 100;
@@ -216,35 +231,120 @@ export function getConnectorPinPositions(connector: HarnessConnector): PinPositi
   const pinCount = connector.pins?.length || connector.pinCount || 1;
   const pins = connector.pins?.length > 0 ? connector.pins : generateDefaultPins(pinCount);
 
-  return pins.map((pin, index) => {
-    // Calculate local position relative to origin (first pin center)
+  const positions: PinPosition[] = [];
+
+  pins.forEach((pin, index) => {
     const rowCenter = index * ROW_HEIGHT;
 
-    // Wire connection point is on the side based on connector type
-    let localX = connector.type === 'male'
-      ? width + PIN_CIRCLE_RADIUS
-      : -PIN_CIRCLE_RADIUS;
-    let localY = rowCenter;
+    // Wire connection point (circle side)
+    if (side === 'wire' || side === 'both') {
+      let wireX = connector.type === 'male'
+        ? width + PIN_CIRCLE_RADIUS
+        : -PIN_CIRCLE_RADIUS;
+      let wireY = rowCenter;
 
-    // Apply flip around center
-    if (flipped) {
-      const centerX = width / 2;
-      localX = 2 * centerX - localX;
+      if (flipped) {
+        const centerX = width / 2;
+        wireX = 2 * centerX - wireX;
+      }
+
+      const rad = (rotation * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const rotatedWireX = wireX * cos - wireY * sin;
+      const rotatedWireY = wireX * sin + wireY * cos;
+
+      positions.push({
+        pinId: pin.id,
+        x: ox + rotatedWireX,
+        y: oy + rotatedWireY
+      });
     }
 
-    // Apply rotation
+    // Mating connection point (opposite side)
+    if (side === 'mating' || side === 'both') {
+      let matingX = connector.type === 'male'
+        ? -MATING_POINT_SIZE / 2
+        : width + MATING_POINT_SIZE / 2;
+      let matingY = rowCenter;
+
+      if (flipped) {
+        const centerX = width / 2;
+        matingX = 2 * centerX - matingX;
+      }
+
+      const rad = (rotation * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const rotatedMatingX = matingX * cos - matingY * sin;
+      const rotatedMatingY = matingX * sin + matingY * cos;
+
+      positions.push({
+        pinId: side === 'both' ? `${pin.id}:mating` : pin.id,
+        x: ox + rotatedMatingX,
+        y: oy + rotatedMatingY
+      });
+    }
+  });
+
+  return positions;
+}
+
+/**
+ * Get all pin positions with side information
+ */
+export function getConnectorPinPositionsWithSide(connector: HarnessConnector): ConnectorPinPosition[] {
+  const { width } = getConnectorDimensions(connector);
+  const ox = connector.position?.x || 100;
+  const oy = connector.position?.y || 100;
+  const rotation = connector.rotation || 0;
+  const flipped = connector.flipped || false;
+
+  const pinCount = connector.pins?.length || connector.pinCount || 1;
+  const pins = connector.pins?.length > 0 ? connector.pins : generateDefaultPins(pinCount);
+
+  const positions: ConnectorPinPosition[] = [];
+
+  pins.forEach((pin, index) => {
+    const rowCenter = index * ROW_HEIGHT;
     const rad = (rotation * Math.PI) / 180;
     const cos = Math.cos(rad);
     const sin = Math.sin(rad);
-    const rotatedX = localX * cos - localY * sin;
-    const rotatedY = localX * sin + localY * cos;
 
-    return {
+    // Wire connection point
+    let wireX = connector.type === 'male' ? width + PIN_CIRCLE_RADIUS : -PIN_CIRCLE_RADIUS;
+    let wireY = rowCenter;
+    if (flipped) {
+      wireX = width - wireX;
+    }
+    const rotatedWireX = wireX * cos - wireY * sin;
+    const rotatedWireY = wireX * sin + wireY * cos;
+
+    positions.push({
       pinId: pin.id,
-      x: ox + rotatedX,
-      y: oy + rotatedY
-    };
+      x: ox + rotatedWireX,
+      y: oy + rotatedWireY,
+      side: 'wire'
+    });
+
+    // Mating connection point
+    let matingX = connector.type === 'male' ? -MATING_POINT_SIZE / 2 : width + MATING_POINT_SIZE / 2;
+    let matingY = rowCenter;
+    if (flipped) {
+      matingX = width - matingX;
+    }
+    const rotatedMatingX = matingX * cos - matingY * sin;
+    const rotatedMatingY = matingX * sin + matingY * cos;
+
+    positions.push({
+      pinId: pin.id,
+      x: ox + rotatedMatingX,
+      y: oy + rotatedMatingY,
+      side: 'mating'
+    });
   });
+
+  return positions;
 }
 
 /**
@@ -296,20 +396,42 @@ export function hitTestConnector(
     local.y >= top && local.y <= bottom;
 }
 
+// Hit test result with side information
+export interface ConnectorPinHitResult {
+  pinId: string;
+  side: 'wire' | 'mating';
+}
+
 /**
- * Hit test for connector pin
+ * Hit test for connector pin (returns pin ID only, for backward compatibility)
  */
 export function hitTestConnectorPin(
   connector: HarnessConnector,
   testX: number,
   testY: number
 ): string | null {
-  const pinPositions = getConnectorPinPositions(connector);
+  const result = hitTestConnectorPinWithSide(connector, testX, testY);
+  return result ? result.pinId : null;
+}
+
+/**
+ * Hit test for connector pin with side information
+ */
+export function hitTestConnectorPinWithSide(
+  connector: HarnessConnector,
+  testX: number,
+  testY: number
+): ConnectorPinHitResult | null {
+  const pinPositions = getConnectorPinPositionsWithSide(connector);
 
   for (const pin of pinPositions) {
+    const hitRadius = pin.side === 'wire' ? PIN_CIRCLE_RADIUS + 6 : MATING_POINT_SIZE + 4;
     const dist = Math.sqrt(Math.pow(testX - pin.x, 2) + Math.pow(testY - pin.y, 2));
-    if (dist <= PIN_CIRCLE_RADIUS + 6) {
-      return pin.pinId;
+    if (dist <= hitRadius) {
+      return {
+        pinId: pin.pinId,
+        side: pin.side
+      };
     }
   }
   return null;
@@ -354,7 +476,7 @@ export function hitTestConnectorButton(
   // Check pinout diagram button
   if (connector.pinoutDiagramImage) {
     const pinoutBtnX = left - EXPAND_BUTTON_SIZE - 4;
-    const pinoutBtnY = (pinCount - 1) * ROW_HEIGHT / 2 - (EXPAND_BUTTON_SIZE / 2);
+    const pinoutBtnY = top + (HEADER_HEIGHT - EXPAND_BUTTON_SIZE) / 2;  // Centered on header (matches drawing)
 
     if (local.x >= pinoutBtnX && local.x <= pinoutBtnX + EXPAND_BUTTON_SIZE &&
       local.y >= pinoutBtnY && local.y <= pinoutBtnY + EXPAND_BUTTON_SIZE) {

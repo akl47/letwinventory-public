@@ -4,3 +4,4 @@ export * from './base-element';
 export * from './connector';
 export * from './cable';
 export * from './component';
+export * from './sub-harness';

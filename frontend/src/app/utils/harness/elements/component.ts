@@ -4,16 +4,16 @@ import {
   ROW_HEIGHT,
   HEADER_HEIGHT,
   PIN_COL_WIDTH,
-  LABEL_COL_WIDTH,
   EXPAND_BUTTON_SIZE,
   COMPONENT_PIN_RADIUS,
   COMPONENT_IMAGE_WIDTH,
   COMPONENT_IMAGE_MAX_HEIGHT,
   PINOUT_IMAGE_WIDTH,
-  PINOUT_IMAGE_HEIGHT
+  PINOUT_IMAGE_HEIGHT,
+  ELEMENT_DEFAULT_WIDTH
 } from '../constants';
 import { ComponentDimensions, ComponentPinPosition, CentroidOffset } from '../types';
-import { roundRect, drawExpandButton, calculateMaxLabelWidth } from '../drawing-utils';
+import { roundRect, drawExpandButton } from '../drawing-utils';
 import {
   COLORS,
   drawSelectionHighlight,
@@ -37,32 +37,8 @@ export function getComponentDimensions(component: HarnessComponent): ComponentDi
   const hasComponentImage = !!component.showComponentImage && !!component.componentImage;
   const componentImageHeight = hasComponentImage ? COMPONENT_IMAGE_MAX_HEIGHT : 0;
 
-  // Calculate width based on longest label
-  let maxLabelWidth = LABEL_COL_WIDTH;
-  const ctx = document.createElement('canvas').getContext('2d');
-  if (ctx) {
-    ctx.font = '12px monospace';
-    for (const group of component.pinGroups) {
-      const groupWidth = ctx.measureText(group.name || 'Group').width + 16;
-      maxLabelWidth = Math.max(maxLabelWidth, groupWidth);
-      for (const pin of group.pins) {
-        if (pin.label) {
-          const width = ctx.measureText(pin.label).width + 16;
-          maxLabelWidth = Math.max(maxLabelWidth, width);
-        }
-      }
-    }
-    if (component.partName) {
-      ctx.font = '11px monospace';
-      const partNameWidth = ctx.measureText(component.partName).width + 16;
-      maxLabelWidth = Math.max(maxLabelWidth, partNameWidth - PIN_COL_WIDTH);
-    }
-  }
-
-  let width = PIN_COL_WIDTH + maxLabelWidth;
-  if (hasComponentImage) {
-    width = Math.max(width, COMPONENT_IMAGE_WIDTH + 4);
-  }
+  // Fixed width matching connectors and cables
+  const width = ELEMENT_DEFAULT_WIDTH;
 
   // Calculate height based on pin groups
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;

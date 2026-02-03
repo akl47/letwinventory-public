@@ -52,6 +52,7 @@ export class HarnessPropertyPanel implements OnInit {
   metadataChanged = output<{ field: string; value: string }>();
   connectorChanged = output<{ field: string; value: any }>();
   connectionChanged = output<{ field: string; value: any }>();
+  bulkWiresChanged = output<{ connectionIds: string[]; field: string; value: any }>();
   pinLabelChanged = output<{ index: number; label: string }>();
   deleteConnector = output<void>();
   deleteCable = output<void>();
@@ -94,6 +95,37 @@ export class HarnessPropertyPanel implements OnInit {
   totalPins = computed(() => {
     const connectors = this.harnessData()?.connectors || [];
     return connectors.reduce((sum, c) => sum + (c.pinCount || c.pins?.length || 0), 0);
+  });
+
+  // Multi-selection wire detection
+  selectedWireIds = computed(() => {
+    const sel = this.selection();
+    if (!sel?.selectedIds) return [];
+    return sel.selectedIds
+      .filter(s => s.type === 'connection')
+      .map(s => s.id);
+  });
+
+  hasMultipleWiresSelected = computed(() => this.selectedWireIds().length > 1);
+
+  // Get common values across selected wires (for showing in bulk edit)
+  selectedWiresCommonValues = computed(() => {
+    const wireIds = this.selectedWireIds();
+    const data = this.harnessData();
+    if (!data || wireIds.length === 0) return null;
+
+    const wires = data.connections.filter(c => wireIds.includes(c.id));
+    if (wires.length === 0) return null;
+
+    // Check if all wires have the same value for each field
+    const firstWire = wires[0];
+    return {
+      color: wires.every(w => w.color === firstWire.color) ? firstWire.color : undefined,
+      gauge: wires.every(w => w.gauge === firstWire.gauge) ? firstWire.gauge : undefined,
+      lengthMm: wires.every(w => w.lengthMm === firstWire.lengthMm) ? firstWire.lengthMm : undefined,
+      fromTermination: wires.every(w => w.fromTermination === firstWire.fromTermination) ? firstWire.fromTermination : undefined,
+      toTermination: wires.every(w => w.toTermination === firstWire.toTermination) ? firstWire.toTermination : undefined,
+    };
   });
 
   updateMetadata(field: string, event: Event) {
@@ -338,5 +370,21 @@ export class HarnessPropertyPanel implements OnInit {
   updateEndpointTermination(termination: string) {
     const field = this.selectedWireEnd() === 'from' ? 'fromTermination' : 'toTermination';
     this.connectionChanged.emit({ field, value: termination });
+  }
+
+  // Bulk wire update methods
+  updateBulkWires(field: string, value: any) {
+    const wireIds = this.selectedWireIds();
+    if (wireIds.length === 0) return;
+    this.bulkWiresChanged.emit({ connectionIds: wireIds, field, value });
+  }
+
+  updateBulkWiresInput(field: string, event: Event) {
+    const input = event.target as HTMLInputElement;
+    let value: any = input.value;
+    if (field === 'lengthMm') {
+      value = value ? parseInt(value) : undefined;
+    }
+    this.updateBulkWires(field, value);
   }
 }

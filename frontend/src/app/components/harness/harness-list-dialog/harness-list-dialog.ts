@@ -1,7 +1,7 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { MatDialogModule, MatDialogRef } from '@angular/material/dialog';
+import { MatDialogModule, MatDialogRef, MAT_DIALOG_DATA } from '@angular/material/dialog';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
@@ -11,6 +11,11 @@ import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatMenuModule } from '@angular/material/menu';
 import { HarnessService } from '../../../services/harness.service';
 import { WireHarnessSummary, HarnessPagination } from '../../../models/harness.model';
+
+export interface HarnessListDialogData {
+  excludeHarnessId?: number;  // Harness ID to exclude from the list
+  selectMode?: boolean;       // If true, hides delete button and changes title
+}
 
 @Component({
   selector: 'app-harness-list-dialog',
@@ -33,12 +38,17 @@ import { WireHarnessSummary, HarnessPagination } from '../../../models/harness.m
 export class HarnessListDialog implements OnInit {
   private dialogRef = inject(MatDialogRef<HarnessListDialog>);
   private harnessService = inject(HarnessService);
+  private dialogData = inject<HarnessListDialogData>(MAT_DIALOG_DATA, { optional: true });
 
   harnesses = signal<WireHarnessSummary[]>([]);
   pagination = signal<HarnessPagination>({ total: 0, page: 1, limit: 20, totalPages: 0 });
   loading = signal<boolean>(false);
   selectedHarness = signal<WireHarnessSummary | null>(null);
   searchText = '';
+
+  // Expose dialog data for template
+  get excludeHarnessId(): number | undefined { return this.dialogData?.excludeHarnessId; }
+  get selectMode(): boolean { return this.dialogData?.selectMode ?? false; }
 
   private searchTimeout: any;
 
@@ -50,7 +60,12 @@ export class HarnessListDialog implements OnInit {
     this.loading.set(true);
     this.harnessService.getAllHarnesses(page, this.pagination().limit).subscribe({
       next: (response) => {
-        this.harnesses.set(response.harnesses);
+        // Filter out the excluded harness if specified
+        let filtered = response.harnesses;
+        if (this.excludeHarnessId) {
+          filtered = filtered.filter(h => h.id !== this.excludeHarnessId);
+        }
+        this.harnesses.set(filtered);
         this.pagination.set(response.pagination);
         this.loading.set(false);
       },

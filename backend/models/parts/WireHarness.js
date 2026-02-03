@@ -9,6 +9,20 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'partID',
         as: 'Part'
       });
+      // Self-referential association for revision chains
+      WireHarness.belongsTo(models.WireHarness, {
+        foreignKey: 'previousRevisionID',
+        as: 'PreviousRevision'
+      });
+      WireHarness.hasMany(models.WireHarness, {
+        foreignKey: 'previousRevisionID',
+        as: 'NextRevisions'
+      });
+      // History association
+      WireHarness.hasMany(models.HarnessRevisionHistory, {
+        foreignKey: 'harnessID',
+        as: 'History'
+      });
     }
   };
   WireHarness.init({
@@ -56,6 +70,31 @@ module.exports = (sequelize, DataTypes) => {
     createdBy: {
       type: DataTypes.STRING(100),
       allowNull: true
+    },
+    // Revision control fields
+    releaseState: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'draft',
+      validate: {
+        isIn: [['draft', 'review', 'released']]
+      }
+    },
+    releasedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    releasedBy: {
+      type: DataTypes.STRING(100),
+      allowNull: true
+    },
+    previousRevisionID: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'WireHarnesses',
+        key: 'id'
+      }
     },
     createdAt: {
       allowNull: false,

@@ -5,6 +5,10 @@
       (click)="setTool('select')">
       <mat-icon>near_me</mat-icon>
     </button>
+    <button mat-icon-button matTooltip="Edit Wire Nodes (N) - Drag to move, double-click to add/remove"
+      [class.active]="activeTool() === 'nodeEdit'" (click)="setTool('nodeEdit')">
+      <mat-icon>linear_scale</mat-icon>
+    </button>
     <button mat-icon-button matTooltip="Pan (H)" [class.active]="activeTool() === 'pan'" (click)="setTool('pan')">
       <mat-icon>pan_tool</mat-icon>
     </button>
@@ -12,6 +16,7 @@
       (click)="setTool('wire')">
       <mat-icon>cable</mat-icon>
     </button>
+
   </div>
 
   <mat-divider [vertical]="true"></mat-divider>
@@ -22,10 +27,13 @@
       <mat-icon>power</mat-icon>
     </button>
     <button mat-icon-button matTooltip="Add Cable" (click)="addCable.emit()">
-      <mat-icon>cable</mat-icon>
+      <mat-icon>settings_input_svideo</mat-icon>
     </button>
     <button mat-icon-button matTooltip="Add Component" (click)="addComponent.emit()">
       <mat-icon>memory</mat-icon>
+    </button>
+    <button mat-icon-button matTooltip="Add Harness" (click)="addSubHarness.emit()">
+      <mat-icon>electrical_services</mat-icon>
     </button>
   </div>
 
@@ -53,16 +61,18 @@
       matTooltip="Toggle Grid">
       Grid
     </mat-slide-toggle>
-    <mat-slide-toggle [checked]="snapToGrid()" (change)="snapToGridChange.emit($event.checked)"
-      matTooltip="Snap to Grid" [disabled]="!gridEnabled()">
-      Snap
-    </mat-slide-toggle>
   </div>
 
   <mat-divider [vertical]="true"></mat-divider>
 
   <!-- Edit operations -->
   <div class="toolbar-group">
+    <button mat-icon-button matTooltip="Undo (Ctrl+Z)" (click)="undo.emit()" [disabled]="!canUndo()">
+      <mat-icon>undo</mat-icon>
+    </button>
+    <button mat-icon-button matTooltip="Redo (Ctrl+Y)" (click)="redo.emit()" [disabled]="!canRedo()">
+      <mat-icon>redo</mat-icon>
+    </button>
     <button mat-icon-button matTooltip="Rotate 90° (R)" (click)="rotateConnector.emit()"
       [disabled]="!hasElementSelected()">
       <mat-icon>rotate_right</mat-icon>

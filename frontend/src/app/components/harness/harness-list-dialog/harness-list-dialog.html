@@ -1,4 +1,4 @@
-<h2 mat-dialog-title>Open Wire Harness</h2>
+<h2 mat-dialog-title>{{ selectMode ? 'Select Sub-Harness' : 'Open Wire Harness' }}</h2>
 
 <mat-dialog-content>
   <mat-form-field appearance="outline" class="search-field">
@@ -39,6 +39,7 @@
           Updated: {{ formatDate(harness.updatedAt) }}
         </div>
       </div>
+      @if (!selectMode) {
       <button mat-icon-button [matMenuTriggerFor]="itemMenu" (click)="$event.stopPropagation()">
         <mat-icon>more_vert</mat-icon>
       </button>
@@ -48,6 +49,7 @@
           <span>Delete</span>
         </button>
       </mat-menu>
+      }
     </div>
     }
   </div>
@@ -61,6 +63,6 @@
 <mat-dialog-actions align="end">
   <button mat-button mat-dialog-close>Cancel</button>
   <button mat-raised-button color="primary" (click)="openSelected()" [disabled]="!selectedHarness()">
-    Open
+    {{ selectMode ? 'Select' : 'Open' }}
   </button>
 </mat-dialog-actions>

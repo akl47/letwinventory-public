@@ -18,11 +18,12 @@ import {
   drawSelectionHighlight,
   drawElementBody,
   drawElementHeader,
-  drawPartNameRow
+  drawPartNameRow,
+  truncateText
 } from './base-element';
 
 // Cable header color
-const CABLE_HEADER_COLOR = '#6a1b9a';
+const CABLE_HEADER_COLOR = '#696969';
 
 /**
  * Get cable dimensions
@@ -177,9 +178,10 @@ export function drawCable(
     const labelText = labelParts.join(' - ');
 
     if (labelText) {
-      // Measure text for background box
+      // Measure and truncate text for background box
       ctx.font = '10px monospace';
-      const textWidth = ctx.measureText(labelText).width;
+      const truncatedLabel = truncateText(ctx, labelText, width);
+      const textWidth = ctx.measureText(truncatedLabel).width;
       const boxPadding = 4;
       const boxWidth = textWidth + boxPadding * 2;
       const boxHeight = 14;
@@ -199,7 +201,7 @@ export function drawCable(
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const labelX = flipped ? -(width / 2) : (width / 2);
-      ctx.fillText(labelText, labelX, wireY);
+      ctx.fillText(truncatedLabel, labelX, wireY);
       ctx.restore();
     }
   });

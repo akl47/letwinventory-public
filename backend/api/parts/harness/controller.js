@@ -1,5 +1,59 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const { Op } = require('sequelize');
+
+// Helper: Check if adding childId as sub-harness of parentId would create a cycle
+async function wouldCreateCycle(parentId, childId, visited = new Set()) {
+  if (parentId === childId) return true;
+  if (visited.has(childId)) return false;
+  visited.add(childId);
+
+  // Get the child harness and check its sub-harnesses
+  const child = await db.WireHarness.findByPk(childId, {
+    attributes: ['id', 'harnessData']
+  });
+
+  if (!child || !child.harnessData?.subHarnesses) return false;
+
+  for (const subRef of child.harnessData.subHarnesses) {
+    if (subRef.harnessId === parentId) return true;
+    if (await wouldCreateCycle(parentId, subRef.harnessId, visited)) return true;
+  }
+
+  return false;
+}
+
+// Helper: Find all harnesses that reference a given harness as a sub-harness
+async function findParentHarnesses(harnessId) {
+  const allHarnesses = await db.WireHarness.findAll({
+    where: { activeFlag: true },
+    attributes: ['id', 'name', 'harnessData']
+  });
+
+  return allHarnesses.filter(h => {
+    const subHarnesses = h.harnessData?.subHarnesses || [];
+    return subHarnesses.some(sub => sub.harnessId === harnessId);
+  });
+}
+
+// Helper: Get next revision letter (A -> B -> C -> ... -> Z -> AA -> AB)
+function getNextRevision(current) {
+  if (!current) return 'A';
+  const chars = current.toUpperCase().split('');
+  let i = chars.length - 1;
+
+  while (i >= 0) {
+    if (chars[i] === 'Z') {
+      chars[i] = 'A';
+      i--;
+    } else {
+      chars[i] = String.fromCharCode(chars[i].charCodeAt(0) + 1);
+      return chars.join('');
+    }
+  }
+  // All were Z, need to add a new character
+  return 'A' + chars.join('');
+}
 
 // Get all harnesses (paginated, with basic info)
 exports.getAllHarnesses = async (req, res, next) => {
@@ -11,7 +65,7 @@ exports.getAllHarnesses = async (req, res, next) => {
 
     const { count, rows } = await db.WireHarness.findAndCountAll({
       where: whereClause,
-      attributes: ['id', 'name', 'partID', 'revision', 'description', 'thumbnailBase64', 'activeFlag', 'createdBy', 'createdAt', 'updatedAt'],
+      attributes: ['id', 'name', 'partID', 'revision', 'description', 'thumbnailBase64', 'activeFlag', 'createdBy', 'releaseState', 'releasedAt', 'releasedBy', 'createdAt', 'updatedAt'],
       include: [{
         model: db.Part,
         as: 'Part',
@@ -134,7 +188,18 @@ exports.createHarness = async (req, res, next) => {
       harnessData: harnessData || {},
       thumbnailBase64: thumbnailBase64 || null,
       createdBy: req.user ? req.user.displayName : null,
-      partID: linkedPartId
+      partID: linkedPartId,
+      releaseState: 'draft'
+    });
+
+    // Log creation in history
+    await db.HarnessRevisionHistory.create({
+      harnessID: harness.id,
+      revision: harness.revision,
+      releaseState: harness.releaseState,
+      changedBy: req.user ? req.user.displayName : null,
+      changeType: 'created',
+      createdAt: new Date()
     });
 
     // Return with computed partNumber from Part name
@@ -155,7 +220,7 @@ exports.createHarness = async (req, res, next) => {
 // Update harness
 exports.updateHarness = async (req, res, next) => {
   try {
-    const { name, revision, description, harnessData, thumbnailBase64 } = req.body;
+    const { name, revision, description, harnessData, thumbnailBase64, forceNewRevision } = req.body;
 
     const harness = await db.WireHarness.findOne({
       where: { id: req.params.id },
@@ -170,6 +235,43 @@ exports.updateHarness = async (req, res, next) => {
       return next(createError(404, 'Harness not found'));
     }
 
+    const changedBy = req.user ? req.user.displayName : null;
+
+    // If harness is released, create a new revision instead of modifying
+    if (harness.releaseState === 'released' || forceNewRevision) {
+      const nextRev = getNextRevision(harness.revision);
+
+      const newHarness = await db.WireHarness.create({
+        name: name !== undefined ? name : harness.name,
+        revision: nextRev,
+        description: description !== undefined ? description : harness.description,
+        harnessData: harnessData !== undefined ? harnessData : harness.harnessData,
+        thumbnailBase64: thumbnailBase64 !== undefined ? thumbnailBase64 : harness.thumbnailBase64,
+        createdBy: changedBy,
+        partID: harness.partID,
+        releaseState: 'draft',
+        previousRevisionID: harness.id
+      });
+
+      // Log new revision creation
+      await db.HarnessRevisionHistory.create({
+        harnessID: newHarness.id,
+        revision: newHarness.revision,
+        releaseState: newHarness.releaseState,
+        changedBy,
+        changeType: 'new_revision',
+        changeNotes: `Created from revision ${harness.revision}`,
+        createdAt: new Date()
+      });
+
+      const result = newHarness.toJSON();
+      result.partNumber = harness.Part ? harness.Part.name : null;
+      result.isNewRevision = true;
+
+      return res.json(result);
+    }
+
+    // Normal update for draft/review harnesses
     const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (revision !== undefined) updateData.revision = revision;
@@ -179,6 +281,17 @@ exports.updateHarness = async (req, res, next) => {
 
     await db.WireHarness.update(updateData, {
       where: { id: req.params.id }
+    });
+
+    // Log update
+    await db.HarnessRevisionHistory.create({
+      harnessID: harness.id,
+      revision: harness.revision,
+      releaseState: harness.releaseState,
+      changedBy,
+      changeType: 'updated',
+      snapshotData: harnessData || null,
+      createdAt: new Date()
     });
 
     const updatedHarness = await db.WireHarness.findByPk(req.params.id, {
@@ -202,9 +315,10 @@ exports.updateHarness = async (req, res, next) => {
 // Soft delete harness
 exports.deleteHarness = async (req, res, next) => {
   try {
+    const harnessId = parseInt(req.params.id);
     const harness = await db.WireHarness.findOne({
       where: {
-        id: req.params.id,
+        id: harnessId,
         activeFlag: true
       }
     });
@@ -213,9 +327,16 @@ exports.deleteHarness = async (req, res, next) => {
       return next(createError(404, 'Harness not found'));
     }
 
+    // Check if this harness is used as a sub-harness in any other harness
+    const parentHarnesses = await findParentHarnesses(harnessId);
+    if (parentHarnesses.length > 0) {
+      const parentNames = parentHarnesses.map(h => h.name).join(', ');
+      return next(createError(400, `Cannot delete harness: it is used as a sub-harness in: ${parentNames}`));
+    }
+
     await db.WireHarness.update(
       { activeFlag: false },
-      { where: { id: req.params.id } }
+      { where: { id: harnessId } }
     );
 
     res.json({ message: 'Harness deleted successfully' });
@@ -227,7 +348,7 @@ exports.deleteHarness = async (req, res, next) => {
 // Validate JSON without saving
 exports.validateHarness = async (req, res, next) => {
   try {
-    const { harnessData } = req.body;
+    const { harnessData, harnessId } = req.body;
 
     if (!harnessData) {
       return res.json({
@@ -263,28 +384,80 @@ exports.validateHarness = async (req, res, next) => {
       });
     }
 
+    // Validate sub-harnesses array
+    const subHarnessIds = new Set();
+    if (harnessData.subHarnesses && Array.isArray(harnessData.subHarnesses)) {
+      for (let idx = 0; idx < harnessData.subHarnesses.length; idx++) {
+        const sub = harnessData.subHarnesses[idx];
+        if (!sub.id) errors.push(`Sub-harness at index ${idx} missing id`);
+        if (!sub.harnessId) errors.push(`Sub-harness at index ${idx} missing harnessId`);
+
+        subHarnessIds.add(sub.id);
+
+        // Verify referenced harness exists
+        if (sub.harnessId) {
+          const refHarness = await db.WireHarness.findByPk(sub.harnessId, {
+            attributes: ['id', 'activeFlag']
+          });
+          if (!refHarness) {
+            errors.push(`Sub-harness at index ${idx} references non-existent harness ID: ${sub.harnessId}`);
+          } else if (!refHarness.activeFlag) {
+            errors.push(`Sub-harness at index ${idx} references inactive harness ID: ${sub.harnessId}`);
+          }
+
+          // Check for cycles (only if we know the parent harness ID)
+          if (harnessId && sub.harnessId) {
+            const wouldCycle = await wouldCreateCycle(harnessId, sub.harnessId);
+            if (wouldCycle) {
+              errors.push(`Sub-harness at index ${idx} would create a circular reference`);
+            }
+          }
+        }
+      }
+    }
+
     // Validate connections array
     if (!Array.isArray(harnessData.connections)) {
       errors.push('Connections must be an array');
     } else {
       const connectorIds = new Set((harnessData.connectors || []).map(c => c.id));
       const cableIds = new Set((harnessData.cables || []).map(c => c.id));
+      const componentIds = new Set((harnessData.components || []).map(c => c.id));
 
       harnessData.connections.forEach((conn, idx) => {
         if (!conn.id) errors.push(`Connection at index ${idx} missing id`);
 
-        // A connection must have a "from" endpoint (either connector or cable)
-        const hasFromConnector = !!conn.fromConnector;
-        const hasFromCable = !!conn.fromCable;
-        if (!hasFromConnector && !hasFromCable) {
-          errors.push(`Connection at index ${idx} missing fromConnector or fromCable`);
+        const connectionType = conn.connectionType || 'wire';
+
+        // Validate mating connections
+        if (connectionType === 'mating') {
+          // Mating connections must be between two connector pins (direct or via sub-harness)
+          const hasFromConnectorEndpoint = !!conn.fromConnector || !!conn.fromSubConnector;
+          const hasToConnectorEndpoint = !!conn.toConnector || !!conn.toSubConnector;
+          if (!hasFromConnectorEndpoint || !hasToConnectorEndpoint) {
+            errors.push(`Mating connection at index ${idx} must connect two connectors`);
+          }
+          if (conn.fromCable || conn.toCable || conn.fromComponent || conn.toComponent) {
+            errors.push(`Mating connection at index ${idx} cannot involve cables or components`);
+          }
         }
 
-        // A connection must have a "to" endpoint (either connector or cable)
+        // A connection must have a "from" endpoint
+        const hasFromConnector = !!conn.fromConnector;
+        const hasFromCable = !!conn.fromCable;
+        const hasFromComponent = !!conn.fromComponent;
+        const hasFromSubHarness = !!conn.fromSubHarness;
+        if (!hasFromConnector && !hasFromCable && !hasFromComponent && !hasFromSubHarness) {
+          errors.push(`Connection at index ${idx} missing from endpoint`);
+        }
+
+        // A connection must have a "to" endpoint
         const hasToConnector = !!conn.toConnector;
         const hasToCable = !!conn.toCable;
-        if (!hasToConnector && !hasToCable) {
-          errors.push(`Connection at index ${idx} missing toConnector or toCable`);
+        const hasToComponent = !!conn.toComponent;
+        const hasToSubHarness = !!conn.toSubHarness;
+        if (!hasToConnector && !hasToCable && !hasToComponent && !hasToSubHarness) {
+          errors.push(`Connection at index ${idx} missing to endpoint`);
         }
 
         // Validate referenced connectors exist
@@ -303,6 +476,22 @@ exports.validateHarness = async (req, res, next) => {
           errors.push(`Connection at index ${idx} references non-existent toCable: ${conn.toCable}`);
         }
 
+        // Validate referenced components exist
+        if (conn.fromComponent && !componentIds.has(conn.fromComponent)) {
+          errors.push(`Connection at index ${idx} references non-existent fromComponent: ${conn.fromComponent}`);
+        }
+        if (conn.toComponent && !componentIds.has(conn.toComponent)) {
+          errors.push(`Connection at index ${idx} references non-existent toComponent: ${conn.toComponent}`);
+        }
+
+        // Validate referenced sub-harnesses exist
+        if (conn.fromSubHarness && !subHarnessIds.has(conn.fromSubHarness)) {
+          errors.push(`Connection at index ${idx} references non-existent fromSubHarness: ${conn.fromSubHarness}`);
+        }
+        if (conn.toSubHarness && !subHarnessIds.has(conn.toSubHarness)) {
+          errors.push(`Connection at index ${idx} references non-existent toSubHarness: ${conn.toSubHarness}`);
+        }
+
         // Legacy: validate cable field if present
         if (conn.cable && !cableIds.has(conn.cable)) {
           errors.push(`Connection at index ${idx} references non-existent cable: ${conn.cable}`);
@@ -316,5 +505,306 @@ exports.validateHarness = async (req, res, next) => {
     });
   } catch (error) {
     next(createError(500, 'Error Validating Harness: ' + error.message));
+  }
+};
+
+// Batch fetch harness data for sub-harnesses
+exports.getSubHarnessData = async (req, res, next) => {
+  try {
+    const { ids } = req.query;
+
+    if (!ids) {
+      return res.json([]);
+    }
+
+    const harnessIds = ids.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+
+    if (harnessIds.length === 0) {
+      return res.json([]);
+    }
+
+    const harnesses = await db.WireHarness.findAll({
+      where: {
+        id: { [Op.in]: harnessIds },
+        activeFlag: true
+      },
+      include: [{
+        model: db.Part,
+        as: 'Part',
+        attributes: ['id', 'name']
+      }]
+    });
+
+    const result = harnesses.map(h => {
+      const harness = h.toJSON();
+      harness.partNumber = harness.Part ? harness.Part.name : null;
+      return harness;
+    });
+
+    res.json(result);
+  } catch (error) {
+    next(createError(500, 'Error fetching sub-harness data: ' + error.message));
+  }
+};
+
+// Get harnesses that contain this one as a sub-harness
+exports.getParentHarnesses = async (req, res, next) => {
+  try {
+    const harnessId = parseInt(req.params.id);
+    const parentHarnesses = await findParentHarnesses(harnessId);
+
+    const result = parentHarnesses.map(h => ({
+      id: h.id,
+      name: h.name
+    }));
+
+    res.json(result);
+  } catch (error) {
+    next(createError(500, 'Error fetching parent harnesses: ' + error.message));
+  }
+};
+
+// ========== Revision Control Endpoints ==========
+
+// Helper to get next revision letter (A -> B -> C -> ... -> Z -> AA -> AB)
+function getNextRevision(current) {
+  if (!current) return 'A';
+  const chars = current.toUpperCase().split('');
+  let i = chars.length - 1;
+
+  while (i >= 0) {
+    if (chars[i] === 'Z') {
+      chars[i] = 'A';
+      i--;
+    } else {
+      chars[i] = String.fromCharCode(chars[i].charCodeAt(0) + 1);
+      return chars.join('');
+    }
+  }
+  // All were Z, need to add a new character
+  return 'A' + chars.join('');
+}
+
+// Helper to log history entry
+async function logHistory(harnessId, changeType, changedBy, notes = null, snapshotData = null) {
+  const harness = await db.WireHarness.findByPk(harnessId);
+  if (!harness) return;
+
+  await db.HarnessRevisionHistory.create({
+    harnessID: harnessId,
+    revision: harness.revision,
+    releaseState: harness.releaseState,
+    changedBy,
+    changeType,
+    changeNotes: notes,
+    snapshotData,
+    createdAt: new Date()
+  });
+}
+
+// Submit harness for review (draft -> review)
+exports.submitForReview = async (req, res, next) => {
+  try {
+    const harnessId = parseInt(req.params.id);
+    const harness = await db.WireHarness.findByPk(harnessId, {
+      include: [{ model: db.Part, as: 'Part', attributes: ['id', 'name'] }]
+    });
+
+    if (!harness) {
+      return next(createError(404, 'Harness not found'));
+    }
+
+    if (harness.releaseState !== 'draft') {
+      return next(createError(400, 'Harness must be in draft state to submit for review'));
+    }
+
+    await harness.update({ releaseState: 'review' });
+
+    const changedBy = req.user ? req.user.displayName : null;
+    await logHistory(harnessId, 'submitted_review', changedBy);
+
+    const result = harness.toJSON();
+    result.partNumber = result.Part ? result.Part.name : null;
+
+    res.json(result);
+  } catch (error) {
+    next(createError(500, 'Error submitting for review: ' + error.message));
+  }
+};
+
+// Reject harness back to draft (review -> draft)
+exports.rejectHarness = async (req, res, next) => {
+  try {
+    const harnessId = parseInt(req.params.id);
+    const { notes } = req.body;
+
+    const harness = await db.WireHarness.findByPk(harnessId, {
+      include: [{ model: db.Part, as: 'Part', attributes: ['id', 'name'] }]
+    });
+
+    if (!harness) {
+      return next(createError(404, 'Harness not found'));
+    }
+
+    if (harness.releaseState !== 'review') {
+      return next(createError(400, 'Harness must be in review state to reject'));
+    }
+
+    await harness.update({ releaseState: 'draft' });
+
+    const changedBy = req.user ? req.user.displayName : null;
+    await logHistory(harnessId, 'rejected', changedBy, notes);
+
+    const result = harness.toJSON();
+    result.partNumber = result.Part ? result.Part.name : null;
+
+    res.json(result);
+  } catch (error) {
+    next(createError(500, 'Error rejecting harness: ' + error.message));
+  }
+};
+
+// Release harness (review -> released)
+exports.releaseHarness = async (req, res, next) => {
+  try {
+    const harnessId = parseInt(req.params.id);
+
+    const harness = await db.WireHarness.findByPk(harnessId, {
+      include: [{ model: db.Part, as: 'Part', attributes: ['id', 'name'] }]
+    });
+
+    if (!harness) {
+      return next(createError(404, 'Harness not found'));
+    }
+
+    if (harness.releaseState !== 'review') {
+      return next(createError(400, 'Harness must be in review state to release'));
+    }
+
+    const changedBy = req.user ? req.user.displayName : null;
+    const now = new Date();
+
+    await harness.update({
+      releaseState: 'released',
+      releasedAt: now,
+      releasedBy: changedBy
+    });
+
+    // Log with snapshot
+    await logHistory(harnessId, 'released', changedBy, null, harness.harnessData);
+
+    const result = harness.toJSON();
+    result.partNumber = result.Part ? result.Part.name : null;
+
+    res.json(result);
+  } catch (error) {
+    next(createError(500, 'Error releasing harness: ' + error.message));
+  }
+};
+
+// Get revision history for a harness
+exports.getHistory = async (req, res, next) => {
+  try {
+    const harnessId = parseInt(req.params.id);
+
+    const history = await db.HarnessRevisionHistory.findAll({
+      where: { harnessID: harnessId },
+      order: [['createdAt', 'DESC']]
+    });
+
+    res.json(history);
+  } catch (error) {
+    next(createError(500, 'Error fetching history: ' + error.message));
+  }
+};
+
+// Get all revisions of a harness (follows previousRevisionID chain)
+exports.getAllRevisions = async (req, res, next) => {
+  try {
+    const harnessId = parseInt(req.params.id);
+
+    // First, find the root revision (no previousRevisionID)
+    let current = await db.WireHarness.findByPk(harnessId);
+    if (!current) {
+      return next(createError(404, 'Harness not found'));
+    }
+
+    // Walk back to find root
+    while (current.previousRevisionID) {
+      current = await db.WireHarness.findByPk(current.previousRevisionID);
+      if (!current) break;
+    }
+
+    // Now collect all revisions forward
+    const revisions = [];
+    const collectRevisions = async (harness) => {
+      const h = harness.toJSON();
+      const part = await db.Part.findByPk(h.partID);
+      h.partNumber = part ? part.name : null;
+      revisions.push(h);
+
+      // Find next revisions
+      const nextRevs = await db.WireHarness.findAll({
+        where: { previousRevisionID: harness.id }
+      });
+      for (const next of nextRevs) {
+        await collectRevisions(next);
+      }
+    };
+
+    if (current) {
+      await collectRevisions(current);
+    }
+
+    // Sort by revision letter
+    revisions.sort((a, b) => a.revision.localeCompare(b.revision));
+
+    res.json(revisions);
+  } catch (error) {
+    next(createError(500, 'Error fetching revisions: ' + error.message));
+  }
+};
+
+// Revert to a history snapshot
+exports.revertToSnapshot = async (req, res, next) => {
+  try {
+    const harnessId = parseInt(req.params.id);
+    const historyId = parseInt(req.params.historyId);
+
+    const harness = await db.WireHarness.findByPk(harnessId, {
+      include: [{ model: db.Part, as: 'Part', attributes: ['id', 'name'] }]
+    });
+
+    if (!harness) {
+      return next(createError(404, 'Harness not found'));
+    }
+
+    if (harness.releaseState === 'released') {
+      return next(createError(400, 'Cannot revert a released harness. Create a new revision first.'));
+    }
+
+    const historyEntry = await db.HarnessRevisionHistory.findOne({
+      where: { id: historyId, harnessID: harnessId }
+    });
+
+    if (!historyEntry) {
+      return next(createError(404, 'History entry not found'));
+    }
+
+    if (!historyEntry.snapshotData) {
+      return next(createError(400, 'This history entry does not have snapshot data'));
+    }
+
+    await harness.update({ harnessData: historyEntry.snapshotData });
+
+    const changedBy = req.user ? req.user.displayName : null;
+    await logHistory(harnessId, 'updated', changedBy, `Reverted to snapshot from ${historyEntry.createdAt}`);
+
+    const result = harness.toJSON();
+    result.partNumber = result.Part ? result.Part.name : null;
+
+    res.json(result);
+  } catch (error) {
+    next(createError(500, 'Error reverting to snapshot: ' + error.message));
   }
 };

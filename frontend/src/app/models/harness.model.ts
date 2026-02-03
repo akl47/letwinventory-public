@@ -17,6 +17,7 @@ export interface HarnessConnector {
   rotation?: 0 | 90 | 180 | 270;  // Rotation in degrees
   flipped?: boolean;              // Vertical flip
   zIndex?: number;                // Layer order (higher = in front)
+  groupId?: string;               // Group membership
   dbId?: number;                  // Database record ID
   partId?: number;                // Link to inventory Part
   partName?: string;              // Part name for display
@@ -48,6 +49,7 @@ export interface HarnessCable {
   rotation?: 0 | 90 | 180 | 270;  // Rotation in degrees
   flipped?: boolean;              // Vertical flip
   zIndex?: number;                // Layer order (higher = in front)
+  groupId?: string;               // Group membership
   lengthMm?: number;              // Physical length in millimeters
   dbId?: number;                  // Database record ID
   partId?: number;                // Link to inventory Part
@@ -79,6 +81,7 @@ export interface HarnessComponent {
   rotation?: 0 | 90 | 180 | 270;  // Rotation in degrees
   flipped?: boolean;              // Vertical flip
   zIndex?: number;                // Layer order (higher = in front)
+  groupId?: string;               // Group membership
   dbId?: number;                  // Database record ID
   partId?: number;                // Link to inventory Part
   partName?: string;              // Part name for display
@@ -95,6 +98,8 @@ export interface HarnessWaypoint {
 
 export interface HarnessConnection {
   id: string;
+  // Connection type: wire (default) or mating (direct connector-to-connector)
+  connectionType?: 'wire' | 'mating';
   // From endpoint - can be connector pin, cable wire, or component pin
   fromConnector?: string;
   fromPin?: string;
@@ -103,6 +108,9 @@ export interface HarnessConnection {
   fromSide?: 'left' | 'right';  // Which side of cable
   fromComponent?: string;       // Component ID
   fromComponentPin?: string;    // Pin ID within the component
+  // For sub-harness connections
+  fromSubHarness?: string;      // Sub-harness instance ID
+  fromSubConnector?: string;    // Connector ID within the sub-harness
   // To endpoint - can be connector pin, cable wire, or component pin
   toConnector?: string;
   toPin?: string;
@@ -111,6 +119,9 @@ export interface HarnessConnection {
   toSide?: 'left' | 'right';  // Which side of cable
   toComponent?: string;       // Component ID
   toComponentPin?: string;    // Pin ID within the component
+  // For sub-harness connections
+  toSubHarness?: string;        // Sub-harness instance ID
+  toSubConnector?: string;      // Connector ID within the sub-harness
   // Legacy fields for backward compatibility
   cable?: string;
   wire?: string;
@@ -135,6 +146,31 @@ export interface HarnessCanvasSettings {
   panY?: number;
 }
 
+// Sub-harness reference (for nested harnesses)
+// Sub-harnesses are always displayed fully expanded showing all their connectors/components
+export interface SubHarnessRef {
+  id: string;                    // Instance ID (unique within parent, e.g., 'sub-1')
+  harnessId: number;             // DB ID of the referenced harness
+  position: { x: number; y: number };
+  rotation?: 0 | 90 | 180 | 270;
+  flipped?: boolean;
+  zIndex?: number;
+  groupId?: string;              // Group membership
+}
+
+// Element group for keeping elements positioned together
+export interface ElementGroup {
+  id: string;
+  name?: string;
+  // Relative positions of elements within group (offset from group anchor)
+  memberOffsets: {
+    elementType: 'connector' | 'cable' | 'component' | 'subHarness';
+    elementId: string;
+    offsetX: number;
+    offsetY: number;
+  }[];
+}
+
 export interface HarnessData {
   name: string;
   partNumber?: string;
@@ -144,8 +180,13 @@ export interface HarnessData {
   cables: HarnessCable[];
   components: HarnessComponent[];
   connections: HarnessConnection[];
+  subHarnesses?: SubHarnessRef[];
+  groups?: ElementGroup[];
   canvasSettings?: HarnessCanvasSettings;
 }
+
+// Release state for revision control
+export type ReleaseState = 'draft' | 'review' | 'released';
 
 export interface WireHarness {
   id: number;
@@ -160,6 +201,11 @@ export interface WireHarness {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  // Revision control fields
+  releaseState?: ReleaseState;
+  releasedAt?: string | null;
+  releasedBy?: string | null;
+  previousRevisionID?: number | null;
 }
 
 export interface WireHarnessSummary {
@@ -173,6 +219,10 @@ export interface WireHarnessSummary {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  // Revision control fields
+  releaseState?: ReleaseState;
+  releasedAt?: string | null;
+  releasedBy?: string | null;
 }
 
 export interface HarnessPagination {
@@ -190,6 +240,19 @@ export interface HarnessListResponse {
 export interface HarnessValidationResult {
   valid: boolean;
   errors: string[];
+}
+
+// Revision history entry
+export interface HarnessHistoryEntry {
+  id: number;
+  harnessID: number;
+  revision: string;
+  releaseState: string;
+  changedBy: string | null;
+  changeType: 'created' | 'updated' | 'submitted_review' | 'rejected' | 'released' | 'new_revision';
+  changeNotes: string | null;
+  snapshotData: HarnessData | null;
+  createdAt: string;
 }
 
 // Electrical Pin Type (for connector pin styles)
@@ -319,6 +382,7 @@ export function createEmptyHarnessData(name: string = 'New Harness'): HarnessDat
     cables: [],
     components: [],
     connections: [],
+    subHarnesses: [],
     canvasSettings: {
       zoom: 1,
       gridEnabled: true,

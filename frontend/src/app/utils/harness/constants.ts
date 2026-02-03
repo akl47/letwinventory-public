@@ -5,6 +5,7 @@ export const ROW_HEIGHT = 20;
 export const HEADER_HEIGHT = 20;
 export const PIN_COL_WIDTH = 20;
 export const LABEL_COL_WIDTH = 80;
+export const ELEMENT_DEFAULT_WIDTH = 100;
 
 // Wire rendering
 export const WIRE_STROKE_WIDTH = 4;

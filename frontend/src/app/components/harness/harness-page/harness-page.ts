@@ -15,6 +15,7 @@ import { HarnessImportDialog } from '../harness-import-dialog/harness-import-dia
 import { PartEditDialog } from '../../inventory/part-edit-dialog/part-edit-dialog';
 import { HarnessService } from '../../../services/harness.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
+import { HarnessHistoryService } from '../../../services/harness-history.service';
 import { Part } from '../../../models';
 import {
   HarnessData,
@@ -22,6 +23,7 @@ import {
   HarnessCable,
   HarnessComponent,
   WireHarness,
+  SubHarnessRef,
   createEmptyHarnessData
 } from '../../../models/harness.model';
 import {
@@ -50,6 +52,7 @@ export class HarnessPage implements OnInit, OnDestroy {
   private snackBar = inject(MatSnackBar);
   private harnessService = inject(HarnessService);
   private harnessPartsService = inject(HarnessPartsService);
+  private historyService = inject(HarnessHistoryService);
 
   @ViewChild('harnessCanvas') harnessCanvas!: HarnessCanvas;
 
@@ -61,11 +64,26 @@ export class HarnessPage implements OnInit, OnDestroy {
   currentSelection = signal<CanvasSelection | null>(null);
   activeTool = signal<HarnessTool>('select');
   gridEnabled = signal<boolean>(true);
-  snapToGrid = signal<boolean>(true);
   zoomLevel = signal<number>(100);
   clipboardConnector = signal<HarnessConnector | null>(null);
+
+  // Computed properties for grouping
+  hasMultipleSelected = computed(() => {
+    const selection = this.currentSelection();
+    return (selection?.selectedIds?.length || 0) > 1;
+  });
+
+  hasGroupSelected = computed(() => {
+    const selection = this.currentSelection();
+    return !!selection?.groupId;
+  });
   isSaving = signal<boolean>(false);
   autoSaveEnabled = signal<boolean>(true);
+  hasPendingSubHarnessChanges = signal<boolean>(false);
+
+  // Undo/redo state from history service (use computed for proper reactivity)
+  canUndo = computed(() => this.historyService.canUndo());
+  canRedo = computed(() => this.historyService.canRedo());
 
   // Auto-save
   private autoSave$ = new Subject<void>();
@@ -74,7 +92,8 @@ export class HarnessPage implements OnInit, OnDestroy {
   // Computed
   hasUnsavedChanges = computed(() => {
     const current = JSON.stringify(this.harnessData());
-    return current !== this.originalData();
+    const parentChanged = current !== this.originalData();
+    return parentChanged || this.hasPendingSubHarnessChanges();
   });
 
   constructor() {
@@ -142,6 +161,22 @@ export class HarnessPage implements OnInit, OnDestroy {
     }
 
     switch (e.key.toLowerCase()) {
+      case 'z':
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          if (e.shiftKey) {
+            this.onRedo();
+          } else {
+            this.onUndo();
+          }
+        }
+        break;
+      case 'y':
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          this.onRedo();
+        }
+        break;
       case 'v':
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
@@ -162,6 +197,9 @@ export class HarnessPage implements OnInit, OnDestroy {
       case 'w':
         this.activeTool.set('wire');
         break;
+      case 'n':
+        this.activeTool.set('nodeEdit');
+        break;
       case 'delete':
       case 'backspace':
         this.onDeleteSelected();
@@ -178,6 +216,16 @@ export class HarnessPage implements OnInit, OnDestroy {
       case 'f':
         this.flipSelected();
         break;
+      case 'g':
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          if (e.shiftKey) {
+            this.onUngroupSelected();
+          } else {
+            this.onGroupSelected();
+          }
+        }
+        break;
       case 'escape':
         this.activeTool.set('select');
         break;
@@ -188,6 +236,9 @@ export class HarnessPage implements OnInit, OnDestroy {
     const selection = this.currentSelection();
     const data = this.harnessData();
     if (!data) return;
+
+    // Push to history before making changes
+    this.historyService.push(data);
 
     // Handle connector rotation
     if (selection?.connector) {
@@ -271,6 +322,9 @@ export class HarnessPage implements OnInit, OnDestroy {
     const data = this.harnessData();
     if (!data) return;
 
+    // Push to history before making changes
+    this.historyService.push(data);
+
     // Handle connector flip
     if (selection?.connector) {
       const connector = data.connectors.find(c => c.id === selection.connector!.id);
@@ -333,6 +387,9 @@ export class HarnessPage implements OnInit, OnDestroy {
     const data = this.harnessData();
     if (!data) return;
 
+    // Push to history before making changes
+    this.historyService.push(data);
+
     // Create a new connector with a unique ID and offset position
     const newConnector: HarnessConnector = {
       ...JSON.parse(JSON.stringify(clipboard)),
@@ -380,6 +437,9 @@ export class HarnessPage implements OnInit, OnDestroy {
   }
 
   createNewHarness(part?: Part) {
+    // Clear undo/redo history when creating a new harness
+    this.historyService.clear();
+
     const name = part?.name || 'New Harness';
     const data = createEmptyHarnessData(name);
     if (part) {
@@ -393,6 +453,9 @@ export class HarnessPage implements OnInit, OnDestroy {
   }
 
   loadHarness(id: number) {
+    // Clear undo/redo history when loading a different harness
+    this.historyService.clear();
+
     this.harnessService.getHarnessById(id).subscribe({
       next: (harness) => {
         this.currentHarnessId.set(harness.id);
@@ -546,9 +609,32 @@ export class HarnessPage implements OnInit, OnDestroy {
       }
     }
 
-    return id
+    // Save main harness
+    const mainSave$ = id
       ? this.harnessService.updateHarness(id, saveData)
       : this.harnessService.createHarness(saveData);
+
+    // Save any pending sub-harness changes
+    const subHarnessSaves: Array<ReturnType<typeof this.harnessService.updateHarness>> = [];
+    this.pendingSubHarnessChanges.forEach((subData, subId) => {
+      subHarnessSaves.push(
+        this.harnessService.updateHarness(subId, { harnessData: subData })
+      );
+    });
+
+    if (subHarnessSaves.length > 0) {
+      // Save sub-harnesses in parallel with main harness
+      return forkJoin([mainSave$, ...subHarnessSaves]).pipe(
+        switchMap(([mainResult]) => {
+          // Clear pending changes after successful save
+          this.pendingSubHarnessChanges.clear();
+          this.hasPendingSubHarnessChanges.set(false);
+          return of(mainResult);
+        })
+      );
+    }
+
+    return mainSave$;
   }
 
   onSave() {
@@ -637,6 +723,10 @@ export class HarnessPage implements OnInit, OnDestroy {
 
     dialogRef.afterClosed().subscribe((connector: HarnessConnector | undefined) => {
       if (connector) {
+        const data = this.harnessData();
+        if (data) {
+          this.historyService.push(data);
+        }
         // Assign highest zIndex so new connector appears in front
         const newConnector = { ...connector, zIndex: this.getMaxZIndex() + 1 };
         this.harnessCanvas?.addConnector(newConnector);
@@ -679,6 +769,9 @@ export class HarnessPage implements OnInit, OnDestroy {
       if (cable) {
         const data = this.harnessData();
         if (!data) return;
+
+        // Push to history before making changes
+        this.historyService.push(data);
 
         // Assign highest zIndex so new cable appears in front
         const newCable = { ...cable, zIndex: this.getMaxZIndex() + 1 };
@@ -750,6 +843,7 @@ export class HarnessPage implements OnInit, OnDestroy {
     const data = this.harnessData();
     if (!data) return;
 
+    this.historyService.push(data);
     const maxZ = this.getMaxZIndex();
 
     if (selection?.connector) {
@@ -782,6 +876,7 @@ export class HarnessPage implements OnInit, OnDestroy {
     const data = this.harnessData();
     if (!data) return;
 
+    this.historyService.push(data);
     const minZ = this.getMinZIndex();
 
     if (selection?.connector) {
@@ -813,6 +908,8 @@ export class HarnessPage implements OnInit, OnDestroy {
     const selection = this.currentSelection();
     const data = this.harnessData();
     if (!data) return;
+
+    this.historyService.push(data);
 
     if (selection?.connector) {
       const currentZ = selection.connector.zIndex || 0;
@@ -847,6 +944,8 @@ export class HarnessPage implements OnInit, OnDestroy {
     const data = this.harnessData();
     if (!data) return;
 
+    this.historyService.push(data);
+
     if (selection?.connector) {
       const currentZ = selection.connector.zIndex || 0;
       const updated = { ...selection.connector, zIndex: currentZ - 1 };
@@ -876,7 +975,27 @@ export class HarnessPage implements OnInit, OnDestroy {
   }
 
   onDeleteSelected() {
+    const data = this.harnessData();
+    if (data) {
+      this.historyService.push(data);
+    }
     this.harnessCanvas?.deleteSelected();
+  }
+
+  onGroupSelected() {
+    const data = this.harnessData();
+    if (data) {
+      this.historyService.push(data);
+    }
+    this.harnessCanvas?.groupSelected();
+  }
+
+  onUngroupSelected() {
+    const data = this.harnessData();
+    if (data) {
+      this.historyService.push(data);
+    }
+    this.harnessCanvas?.ungroupSelected();
   }
 
   onZoomIn() {
@@ -898,6 +1017,10 @@ export class HarnessPage implements OnInit, OnDestroy {
     this.activeTool.set(tool);
   }
 
+  onCanvasToolChangeRequest(tool: string) {
+    this.activeTool.set(tool as HarnessTool);
+  }
+
   // Canvas events
   onSelectionChanged(selection: CanvasSelection) {
     this.currentSelection.set(selection);
@@ -906,6 +1029,20 @@ export class HarnessPage implements OnInit, OnDestroy {
   onDataChanged(data: HarnessData) {
     this.harnessData.set(data);
     this.triggerAutoSave();
+  }
+
+  // Track pending sub-harness changes for auto-save
+  private pendingSubHarnessChanges = new Map<number, HarnessData>();
+
+  onSubHarnessDataChanged(event: { subHarnessId: number; data: HarnessData }) {
+    // Store the changes for auto-save
+    this.pendingSubHarnessChanges.set(event.subHarnessId, event.data);
+    this.hasPendingSubHarnessChanges.set(true);
+    this.triggerAutoSave();
+  }
+
+  onSubHarnessEditModeChanged(inEditMode: boolean) {
+    // Could update UI state here if needed (e.g., disable certain toolbar buttons)
   }
 
   onConnectorMoved(event: { connector: HarnessConnector; x: number; y: number }) {
@@ -944,11 +1081,60 @@ export class HarnessPage implements OnInit, OnDestroy {
 
     dialogRef.afterClosed().subscribe((component: HarnessComponent | undefined) => {
       if (component) {
+        const data = this.harnessData();
+        if (data) {
+          this.historyService.push(data);
+        }
         // Assign highest zIndex so new component appears in front
         const newComponent = { ...component, zIndex: this.getMaxZIndex() + 1 };
         this.harnessCanvas?.addComponent(newComponent);
         this.updateHarnessComponents([...(this.harnessData()?.components || []), newComponent]);
       }
+    });
+  }
+
+  onAddSubHarness() {
+    const currentId = this.currentHarnessId();
+
+    const dialogRef = this.dialog.open(HarnessListDialog, {
+      width: '600px',
+      maxHeight: '80vh',
+      data: {
+        excludeHarnessId: currentId,
+        selectMode: true
+      }
+    });
+
+    dialogRef.afterClosed().subscribe((selectedHarness: WireHarness | undefined) => {
+      if (!selectedHarness) return;
+
+      const data = this.harnessData();
+      if (!data) return;
+
+      // Push to history before making changes
+      this.historyService.push(data);
+
+      // Generate unique instance ID
+      const existingSubHarnesses = data.subHarnesses || [];
+      const instanceNum = existingSubHarnesses.length + 1;
+      const instanceId = `sub-${Date.now()}-${instanceNum}`;
+
+      // Create the sub-harness reference (always expanded to show full harness)
+      const subHarnessRef: SubHarnessRef = {
+        id: instanceId,
+        harnessId: selectedHarness.id,
+        position: { x: 200, y: 200 },
+        zIndex: this.getMaxZIndex() + 1
+      };
+
+      // Add to harness data
+      this.harnessData.set({
+        ...data,
+        subHarnesses: [...existingSubHarnesses, subHarnessRef]
+      });
+
+      this.triggerAutoSave();
+      this.snackBar.open(`Added "${selectedHarness.name}" as sub-harness`, 'Close', { duration: 2000 });
     });
   }
 
@@ -976,6 +1162,88 @@ export class HarnessPage implements OnInit, OnDestroy {
     });
   }
 
+  // Child harness element edit handlers (for sub-harness edit mode)
+  onEditChildConnector(event: { connector: HarnessConnector; subHarnessId: number; childData: HarnessData }) {
+    const dialogRef = this.dialog.open(HarnessConnectorDialog, {
+      width: '400px',
+      data: {
+        existingConnectors: event.childData.connectors || [],
+        editConnector: event.connector
+      }
+    });
+
+    dialogRef.afterClosed().subscribe((updatedConnector: HarnessConnector | undefined) => {
+      if (updatedConnector) {
+        const updatedChildData: HarnessData = {
+          ...event.childData,
+          connectors: event.childData.connectors.map(c =>
+            c.id === updatedConnector.id ? updatedConnector : c
+          )
+        };
+        // Emit the change to be saved
+        this.pendingSubHarnessChanges.set(event.subHarnessId, updatedChildData);
+        this.hasPendingSubHarnessChanges.set(true);
+        // Update the canvas cache
+        this.harnessCanvas?.updateSubHarnessData(event.subHarnessId, updatedChildData);
+        this.triggerAutoSave();
+      }
+    });
+  }
+
+  onEditChildCable(event: { cable: HarnessCable; subHarnessId: number; childData: HarnessData }) {
+    const dialogRef = this.dialog.open(HarnessAddCableDialog, {
+      width: '400px',
+      data: {
+        existingCables: event.childData.cables || [],
+        editCable: event.cable
+      }
+    });
+
+    dialogRef.afterClosed().subscribe((updatedCable: HarnessCable | undefined) => {
+      if (updatedCable) {
+        const updatedChildData: HarnessData = {
+          ...event.childData,
+          cables: event.childData.cables.map(c =>
+            c.id === updatedCable.id ? updatedCable : c
+          )
+        };
+        // Emit the change to be saved
+        this.pendingSubHarnessChanges.set(event.subHarnessId, updatedChildData);
+        this.hasPendingSubHarnessChanges.set(true);
+        // Update the canvas cache
+        this.harnessCanvas?.updateSubHarnessData(event.subHarnessId, updatedChildData);
+        this.triggerAutoSave();
+      }
+    });
+  }
+
+  onEditChildComponent(event: { component: HarnessComponent; subHarnessId: number; childData: HarnessData }) {
+    const dialogRef = this.dialog.open(HarnessComponentDialog, {
+      width: '500px',
+      data: {
+        existingComponents: event.childData.components || [],
+        editComponent: event.component
+      }
+    });
+
+    dialogRef.afterClosed().subscribe((updatedComponent: HarnessComponent | undefined) => {
+      if (updatedComponent) {
+        const updatedChildData: HarnessData = {
+          ...event.childData,
+          components: (event.childData.components || []).map(c =>
+            c.id === updatedComponent.id ? updatedComponent : c
+          )
+        };
+        // Emit the change to be saved
+        this.pendingSubHarnessChanges.set(event.subHarnessId, updatedChildData);
+        this.hasPendingSubHarnessChanges.set(true);
+        // Update the canvas cache
+        this.harnessCanvas?.updateSubHarnessData(event.subHarnessId, updatedChildData);
+        this.triggerAutoSave();
+      }
+    });
+  }
+
   onComponentMoved(event: { component: HarnessComponent; x: number; y: number }) {
     // Update the harness data with new position
     const data = this.harnessData();
@@ -995,6 +1263,7 @@ export class HarnessPage implements OnInit, OnDestroy {
     const data = this.harnessData();
     if (!data) return;
 
+    this.historyService.push(data);
     this.harnessData.set({
       ...data,
       [event.field]: event.value
@@ -1009,6 +1278,7 @@ export class HarnessPage implements OnInit, OnDestroy {
     const data = this.harnessData();
     if (!data) return;
 
+    this.historyService.push(data);
     const updatedConnector = { ...selection.connector, [event.field]: event.value };
 
     // If pin count changed, regenerate pins
@@ -1044,6 +1314,7 @@ export class HarnessPage implements OnInit, OnDestroy {
     const data = this.harnessData();
     if (!data) return;
 
+    this.historyService.push(data);
     const updatedConnection = { ...selection.connection, [event.field]: event.value };
 
     this.harnessData.set({
@@ -1064,6 +1335,7 @@ export class HarnessPage implements OnInit, OnDestroy {
     const data = this.harnessData();
     if (!data) return;
 
+    this.historyService.push(data);
     const updatedPins = [...selection.connector.pins];
     if (updatedPins[event.index]) {
       updatedPins[event.index] = { ...updatedPins[event.index], label: event.label };
@@ -1073,6 +1345,26 @@ export class HarnessPage implements OnInit, OnDestroy {
     this.updateHarnessConnectors(
       data.connectors.map(c => c.id === updatedConnector.id ? updatedConnector : c)
     );
+  }
+
+  onBulkWiresChanged(event: { connectionIds: string[]; field: string; value: any }) {
+    const data = this.harnessData();
+    if (!data) return;
+
+    this.historyService.push(data);
+    // Update all specified connections with the new field value
+    const updatedConnections = data.connections.map(c => {
+      if (event.connectionIds.includes(c.id)) {
+        return { ...c, [event.field]: event.value };
+      }
+      return c;
+    });
+
+    this.harnessData.set({
+      ...data,
+      connections: updatedConnections
+    });
+    this.triggerAutoSave();
   }
 
   private updateHarnessConnectors(connectors: HarnessConnector[]) {
@@ -1117,6 +1409,41 @@ export class HarnessPage implements OnInit, OnDestroy {
           this.snackBar.open('Failed to delete harness', 'Close', { duration: 3000 });
         }
       });
+    }
+  }
+
+  // Undo/Redo methods
+  onDragStart() {
+    const data = this.harnessData();
+    if (data) {
+      this.historyService.beginTransaction(data);
+    }
+  }
+
+  onDragEnd() {
+    const data = this.harnessData();
+    if (data) {
+      this.historyService.commitTransaction(data);
+    }
+  }
+
+  onUndo() {
+    const data = this.harnessData();
+    if (!data) return;
+    const previous = this.historyService.undo(data);
+    if (previous) {
+      this.harnessData.set(previous);
+      this.triggerAutoSave();
+    }
+  }
+
+  onRedo() {
+    const data = this.harnessData();
+    if (!data) return;
+    const next = this.historyService.redo(data);
+    if (next) {
+      this.harnessData.set(next);
+      this.triggerAutoSave();
     }
   }
 }

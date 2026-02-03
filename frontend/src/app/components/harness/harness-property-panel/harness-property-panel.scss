@@ -287,3 +287,11 @@ mat-form-field {
   height: 16px;
   margin-right: 4px;
 }
+
+.bulk-wire-panel {
+  border-color: #ff9800 !important;
+
+  ::ng-deep .mat-expansion-panel-header-title {
+    color: #ff9800 !important;
+  }
+}

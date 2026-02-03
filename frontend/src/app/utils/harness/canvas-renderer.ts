@@ -45,6 +45,7 @@ export {
   getConnectorCentroidOffset,
   hitTestConnector,
   hitTestConnectorPin,
+  hitTestConnectorPinWithSide,
   hitTestConnectorButton
 } from './elements/connector';
 
@@ -78,14 +79,19 @@ export {
   calculateOrthogonalPath,
   drawWire,
   drawWirePreview,
+  drawMatingWirePreview,
+  drawMatingConnection,
   drawPinHighlight,
   hitTestWire,
   getWireControlPoints,
   hitTestWireControlPoint,
   getPointAlongPath,
   hitTestWireLabelHandle,
-  getPositionFromPoint
+  getPositionFromPoint,
+  findWaypointInsertIndex,
+  getNearestPointOnWire
 } from './wire';
+export type { WireObstacle } from './wire';
 
 // Re-export from grid
 export { drawGrid } from './grid';

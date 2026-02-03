@@ -5,7 +5,8 @@ import {
   WireHarness,
   HarnessListResponse,
   HarnessData,
-  HarnessValidationResult
+  HarnessValidationResult,
+  HarnessHistoryEntry
 } from '../models/harness.model';
 import { environment } from '../../environments/environment';
 
@@ -66,7 +67,51 @@ export class HarnessService {
   }
 
   // Validate harness JSON without saving
-  validateHarness(harnessData: HarnessData): Observable<HarnessValidationResult> {
-    return this.http.post<HarnessValidationResult>(`${this.apiUrl}/validate`, { harnessData });
+  validateHarness(harnessData: HarnessData, harnessId?: number): Observable<HarnessValidationResult> {
+    return this.http.post<HarnessValidationResult>(`${this.apiUrl}/validate`, { harnessData, harnessId });
+  }
+
+  // Batch fetch harness data for sub-harnesses
+  getSubHarnessData(ids: number[]): Observable<WireHarness[]> {
+    if (ids.length === 0) return new Observable(subscriber => subscriber.next([]));
+    const idsParam = ids.join(',');
+    return this.http.get<WireHarness[]>(`${this.apiUrl}/sub-harness-data?ids=${idsParam}`);
+  }
+
+  // Get harnesses that contain this one as a sub-harness
+  getParentHarnesses(id: number): Observable<{ id: number; name: string }[]> {
+    return this.http.get<{ id: number; name: string }[]>(`${this.apiUrl}/${id}/parents`);
+  }
+
+  // === Revision Control Methods ===
+
+  // Submit harness for review
+  submitForReview(id: number): Observable<WireHarness> {
+    return this.http.post<WireHarness>(`${this.apiUrl}/${id}/submit-review`, {});
+  }
+
+  // Reject harness back to draft
+  reject(id: number, notes: string): Observable<WireHarness> {
+    return this.http.post<WireHarness>(`${this.apiUrl}/${id}/reject`, { notes });
+  }
+
+  // Release harness
+  release(id: number): Observable<WireHarness> {
+    return this.http.post<WireHarness>(`${this.apiUrl}/${id}/release`, {});
+  }
+
+  // Get revision history
+  getHistory(id: number): Observable<HarnessHistoryEntry[]> {
+    return this.http.get<HarnessHistoryEntry[]>(`${this.apiUrl}/${id}/history`);
+  }
+
+  // Get all revisions of a harness
+  getAllRevisions(id: number): Observable<WireHarness[]> {
+    return this.http.get<WireHarness[]>(`${this.apiUrl}/${id}/revisions`);
+  }
+
+  // Revert to a snapshot
+  revertToSnapshot(id: number, historyId: number): Observable<WireHarness> {
+    return this.http.post<WireHarness>(`${this.apiUrl}/${id}/revert/${historyId}`, {});
   }
 }
