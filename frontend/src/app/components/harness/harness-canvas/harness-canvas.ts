@@ -70,6 +70,7 @@ import {
   resolveToEndpoint,
   WireEndpoint,
   WireRoutingContext,
+  WIRE_STROKE_WIDTH,
 } from '../../../utils/harness/canvas-renderer';
 import {
   drawSubHarnessCollapsed,
@@ -228,6 +229,10 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
   private hoveredCableSide: 'left' | 'right' | null = null;
   private hoveredComponentId: string | null = null;
   private hoveredComponentPinId: string | null = null;
+
+  // Wire pen mode state - allows clicking on grid to place waypoints before completing wire
+  private isWirePenMode = false;
+  private wirePenWaypoints: { x: number; y: number }[] = [];
 
   // Wire control point dragging state
   private isDraggingControlPoint = false;
@@ -767,11 +772,16 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         }
 
         if (startX !== this.wireEndX || startY !== this.wireEndY) {
-          // Use different preview for mating wire vs regular wire
-          if (this.isDrawingMatingWire) {
-            drawMatingWirePreview(ctx, startX, startY, this.wireEndX, this.wireEndY, this.gridSize(), wireObstacles, startElementCenter);
+          // In pen mode with waypoints, draw path through waypoints
+          if (this.isWirePenMode && this.wirePenWaypoints.length > 0) {
+            this.drawWirePenPreview(ctx, startX, startY, wireObstacles);
           } else {
-            drawWirePreview(ctx, startX, startY, this.wireEndX, this.wireEndY, this.gridSize(), wireObstacles, startElementCenter);
+            // Use different preview for mating wire vs regular wire
+            if (this.isDrawingMatingWire) {
+              drawMatingWirePreview(ctx, startX, startY, this.wireEndX, this.wireEndY, this.gridSize(), wireObstacles, startElementCenter);
+            } else {
+              drawWirePreview(ctx, startX, startY, this.wireEndX, this.wireEndY, this.gridSize(), wireObstacles, startElementCenter);
+            }
           }
         }
 
@@ -1092,11 +1102,113 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
 
     // Wire drawing tool - check connector pins, cable wire endpoints, and component pins
     if (this.activeTool() === 'wire' && !releasedMode) {
-      // Check connector pins first (including mating pins)
+      // If already drawing in pen mode, clicking on grid adds a waypoint
+      if (this.isDrawingWire && this.isWirePenMode) {
+        // Check if clicking on an end pin (to complete the wire)
+        let endPinHit = false;
+
+        // Check connector pins
+        for (const connector of data.connectors) {
+          if (this.wireStartConnectorId && connector.id === this.wireStartConnectorId) continue;
+          const pinHit = hitTestConnectorPinWithSide(connector, x, y);
+          if (pinHit) {
+            // Matched type check: mating wire must end on mating pin
+            if (this.isDrawingMatingWire && pinHit.side !== 'mating') continue;
+            if (!this.isDrawingMatingWire && pinHit.side === 'mating') continue;
+            endPinHit = true;
+            this.completeWirePenMode(data, {
+              type: 'connector',
+              connectorId: connector.id,
+              pinId: pinHit.pinId
+            });
+            return;
+          }
+        }
+
+        // Check cable wire endpoints (only for regular wires)
+        if (!this.isDrawingMatingWire) {
+          for (const cable of data.cables) {
+            if (!cable.position) continue;
+            if (this.wireStartCableId && cable.id === this.wireStartCableId) continue;
+            const hit = hitTestCableWire(cable, x, y);
+            if (hit) {
+              endPinHit = true;
+              this.completeWirePenMode(data, {
+                type: 'cable',
+                cableId: cable.id,
+                wireId: hit.wireId,
+                cableSide: hit.side
+              });
+              return;
+            }
+          }
+        }
+
+        // Check component pins (only for regular wires)
+        if (!this.isDrawingMatingWire) {
+          for (const component of (data.components || [])) {
+            if (this.wireStartComponentId && component.id === this.wireStartComponentId) continue;
+            const hit = hitTestComponentPin(component, x, y);
+            if (hit) {
+              endPinHit = true;
+              this.completeWirePenMode(data, {
+                type: 'component',
+                componentId: component.id,
+                pinId: hit.pinId
+              });
+              return;
+            }
+          }
+        }
+
+        // Check subharness mating pins (only for mating wires)
+        if (this.isDrawingMatingWire) {
+          for (const subHarness of (data.subHarnesses || [])) {
+            if (this.wireStartSubHarnessId && subHarness.id === this.wireStartSubHarnessId) continue;
+            const childHarness = this.subHarnessDataCache.get(subHarness.harnessId);
+            const pinHit = hitTestSubHarnessPin(subHarness, childHarness, x, y, 'mating');
+            if (pinHit) {
+              endPinHit = true;
+              this.completeWirePenMode(data, {
+                type: 'subHarness',
+                subHarnessId: subHarness.id,
+                connectorId: pinHit.connectorId,
+                pinId: pinHit.connectorPinId
+              });
+              return;
+            }
+          }
+        }
+
+        // If no end pin was hit, add a waypoint at the clicked location (snapped to grid)
+        if (!endPinHit) {
+          const gridSize = this.gridSize();
+          const snappedX = Math.round(x / gridSize) * gridSize;
+          const snappedY = Math.round(y / gridSize) * gridSize;
+
+          // Adjust waypoint to avoid obstacles
+          const wireObstacles = this.getWireObstacles();
+          const adjustedPoint = adjustWaypointForObstacles(
+            { x: snappedX, y: snappedY },
+            wireObstacles,
+            gridSize
+          );
+
+          this.wirePenWaypoints.push(adjustedPoint);
+          this.wireEndX = adjustedPoint.x;
+          this.wireEndY = adjustedPoint.y;
+          this.render();
+          return;
+        }
+      }
+
+      // Check connector pins first (including mating pins) - start pen mode
       for (const connector of data.connectors) {
         const pinHit = hitTestConnectorPinWithSide(connector, x, y);
         if (pinHit) {
           this.isDrawingWire = true;
+          this.isWirePenMode = true;
+          this.wirePenWaypoints = [];
           this.isDrawingMatingWire = pinHit.side === 'mating';
           this.wireStartConnectorId = connector.id;
           this.wireStartPinId = pinHit.pinId;
@@ -1118,6 +1230,8 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         const hit = hitTestCableWire(cable, x, y);
         if (hit) {
           this.isDrawingWire = true;
+          this.isWirePenMode = true;
+          this.wirePenWaypoints = [];
           this.wireStartCableId = cable.id;
           this.wireStartWireId = hit.wireId;
           this.wireStartSide = hit.side;
@@ -1137,6 +1251,8 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         const hit = hitTestComponentPin(component, x, y);
         if (hit) {
           this.isDrawingWire = true;
+          this.isWirePenMode = true;
+          this.wirePenWaypoints = [];
           this.wireStartComponentId = component.id;
           this.wireStartComponentPinId = hit.pinId;
           this.wireStartConnectorId = null;
@@ -1157,6 +1273,8 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         const matingPinHit = hitTestSubHarnessPin(subHarness, childHarness, x, y, 'mating');
         if (matingPinHit) {
           this.isDrawingWire = true;
+          this.isWirePenMode = true;
+          this.wirePenWaypoints = [];
           this.isDrawingMatingWire = true;
           this.wireStartSubHarnessId = subHarness.id;
           this.wireStartSubHarnessConnectorId = matingPinHit.connectorId;
@@ -1229,13 +1347,115 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     }
 
     // Select tool
-    // First check if clicking on a connector pin circle or mating point (to start wire drawing)
+    // First check if clicking on a connector pin circle or mating point (to start wire pen mode)
     // Only allow wire drawing if not released
     if (!releasedMode) {
+      // If already in wire pen mode, handle waypoint or end pin
+      if (this.isDrawingWire && this.isWirePenMode) {
+        // Check if clicking on an end pin (to complete the wire)
+        let endPinHit = false;
+
+        // Check connector pins
+        for (const connector of data.connectors) {
+          if (this.wireStartConnectorId && connector.id === this.wireStartConnectorId) continue;
+          const pinHit = hitTestConnectorPinWithSide(connector, x, y);
+          if (pinHit) {
+            if (this.isDrawingMatingWire && pinHit.side !== 'mating') continue;
+            if (!this.isDrawingMatingWire && pinHit.side === 'mating') continue;
+            endPinHit = true;
+            this.completeWirePenMode(data, {
+              type: 'connector',
+              connectorId: connector.id,
+              pinId: pinHit.pinId
+            });
+            return;
+          }
+        }
+
+        // Check cable wire endpoints (only for regular wires)
+        if (!this.isDrawingMatingWire) {
+          for (const cable of data.cables) {
+            if (!cable.position) continue;
+            if (this.wireStartCableId && cable.id === this.wireStartCableId) continue;
+            const hit = hitTestCableWire(cable, x, y);
+            if (hit) {
+              endPinHit = true;
+              this.completeWirePenMode(data, {
+                type: 'cable',
+                cableId: cable.id,
+                wireId: hit.wireId,
+                cableSide: hit.side
+              });
+              return;
+            }
+          }
+        }
+
+        // Check component pins (only for regular wires)
+        if (!this.isDrawingMatingWire) {
+          for (const component of (data.components || [])) {
+            if (this.wireStartComponentId && component.id === this.wireStartComponentId) continue;
+            const hit = hitTestComponentPin(component, x, y);
+            if (hit) {
+              endPinHit = true;
+              this.completeWirePenMode(data, {
+                type: 'component',
+                componentId: component.id,
+                pinId: hit.pinId
+              });
+              return;
+            }
+          }
+        }
+
+        // Check subharness mating pins (only for mating wires)
+        if (this.isDrawingMatingWire) {
+          for (const subHarness of (data.subHarnesses || [])) {
+            if (this.wireStartSubHarnessId && subHarness.id === this.wireStartSubHarnessId) continue;
+            const childHarness = this.subHarnessDataCache.get(subHarness.harnessId);
+            const pinHit = hitTestSubHarnessPin(subHarness, childHarness, x, y, 'mating');
+            if (pinHit) {
+              endPinHit = true;
+              this.completeWirePenMode(data, {
+                type: 'subHarness',
+                subHarnessId: subHarness.id,
+                connectorId: pinHit.connectorId,
+                pinId: pinHit.connectorPinId
+              });
+              return;
+            }
+          }
+        }
+
+        // If no end pin was hit, add a waypoint at the clicked location (snapped to grid)
+        if (!endPinHit) {
+          const gridSize = this.gridSize();
+          const snappedX = Math.round(x / gridSize) * gridSize;
+          const snappedY = Math.round(y / gridSize) * gridSize;
+
+          // Adjust waypoint to avoid obstacles
+          const wireObstacles = this.getWireObstacles();
+          const adjustedPoint = adjustWaypointForObstacles(
+            { x: snappedX, y: snappedY },
+            wireObstacles,
+            gridSize
+          );
+
+          this.wirePenWaypoints.push(adjustedPoint);
+          this.wireEndX = adjustedPoint.x;
+          this.wireEndY = adjustedPoint.y;
+          this.render();
+          return;
+        }
+      }
+
+      // Check connector pins to start wire pen mode
       for (const connector of data.connectors) {
         const pinHit = hitTestConnectorPinWithSide(connector, x, y);
         if (pinHit) {
           this.isDrawingWire = true;
+          this.isWirePenMode = true;
+          this.wirePenWaypoints = [];
           this.isDrawingMatingWire = pinHit.side === 'mating';
           this.wireStartConnectorId = connector.id;
           this.wireStartPinId = pinHit.pinId;
@@ -1252,12 +1472,14 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         }
       }
 
-      // Check cable wire endpoints (to start wire drawing)
+      // Check cable wire endpoints (to start wire pen mode)
       for (const cable of data.cables) {
         if (!cable.position) continue;
         const hit = hitTestCableWire(cable, x, y);
         if (hit) {
           this.isDrawingWire = true;
+          this.isWirePenMode = true;
+          this.wirePenWaypoints = [];
           this.wireStartCableId = cable.id;
           this.wireStartWireId = hit.wireId;
           this.wireStartSide = hit.side;
@@ -1273,11 +1495,13 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         }
       }
 
-      // Check component pins (to start wire drawing)
+      // Check component pins (to start wire pen mode)
       for (const component of (data.components || [])) {
         const hit = hitTestComponentPin(component, x, y);
         if (hit) {
           this.isDrawingWire = true;
+          this.isWirePenMode = true;
+          this.wirePenWaypoints = [];
           this.wireStartComponentId = component.id;
           this.wireStartComponentPinId = hit.pinId;
           this.wireStartConnectorId = null;
@@ -1299,6 +1523,8 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         const matingPinHit = hitTestSubHarnessPin(subHarness, childHarness, x, y, 'mating');
         if (matingPinHit) {
           this.isDrawingWire = true;
+          this.isWirePenMode = true;
+          this.wirePenWaypoints = [];
           this.isDrawingMatingWire = true;
           this.wireStartSubHarnessId = subHarness.id;
           this.wireStartSubHarnessConnectorId = matingPinHit.connectorId;
@@ -2348,8 +2574,9 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       this.render();
     }
 
-    // End wire drawing
-    if (this.isDrawingWire) {
+    // End wire drawing (only for drag-based mode, not pen mode)
+    // In pen mode, wires are completed via click, not drag release
+    if (this.isDrawingWire && !this.isWirePenMode) {
       const { x, y } = this.screenToCanvas(event.clientX, event.clientY);
       const data = this.harnessData();
 
@@ -4067,6 +4294,57 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     return members;
   }
 
+  /**
+   * Draw wire pen mode preview - shows placed waypoints and preview to mouse position
+   */
+  private drawWirePenPreview(
+    ctx: CanvasRenderingContext2D,
+    startX: number,
+    startY: number,
+    wireObstacles: WireObstacle[]
+  ): void {
+    const waypoints = this.wirePenWaypoints;
+    const color = this.isDrawingMatingWire ? '#9e9e9e' : '#64b5f6';
+
+    ctx.save();
+
+    // Draw the main path through waypoints
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = WIRE_STROKE_WIDTH;
+    ctx.setLineDash([8, 4]);
+    ctx.lineCap = 'square';
+    ctx.lineJoin = 'miter';
+
+    // Start from pin position
+    ctx.moveTo(startX, startY);
+
+    // Draw through all waypoints
+    for (const wp of waypoints) {
+      ctx.lineTo(wp.x, wp.y);
+    }
+
+    // Draw to current mouse position
+    ctx.lineTo(this.wireEndX, this.wireEndY);
+    ctx.stroke();
+
+    // Draw circles at each waypoint to show they're placed
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255, 255, 0, 1)';
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.lineWidth = 1;
+    const radius = 5 / this.zoom();
+
+    for (const wp of waypoints) {
+      ctx.beginPath();
+      ctx.arc(wp.x, wp.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
   // Draw a border around a group of selected elements
   private drawGroupBorder(ctx: CanvasRenderingContext2D, groupId: string) {
     const data = this.harnessData();
@@ -4644,6 +4922,106 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Reset wire pen mode state
+   */
+  private resetWirePenMode(): void {
+    this.isWirePenMode = false;
+    this.wirePenWaypoints = [];
+  }
+
+  /**
+   * Complete wire drawing in pen mode with accumulated waypoints
+   */
+  private completeWirePenMode(
+    data: HarnessData,
+    endPoint: {
+      type: 'connector' | 'cable' | 'component' | 'subHarness';
+      connectorId?: string;
+      pinId?: string;
+      cableId?: string;
+      wireId?: string;
+      cableSide?: 'left' | 'right';  // For cable endpoints
+      componentId?: string;
+      subHarnessId?: string;
+    }
+  ): void {
+    // Build the connection object
+    const newConnection: HarnessConnection = {
+      id: `conn-${Date.now()}`,
+      connectionType: this.isDrawingMatingWire ? 'mating' : 'wire',
+      // From endpoint (start)
+      fromConnector: this.wireStartConnectorId || undefined,
+      fromPin: this.wireStartPinId || undefined,
+      fromCable: this.wireStartCableId || undefined,
+      fromWire: this.wireStartWireId || undefined,
+      fromSide: this.wireStartSide || undefined,
+      fromComponent: this.wireStartComponentId || undefined,
+      fromComponentPin: this.wireStartComponentPinId || undefined,
+      fromSubHarness: this.wireStartSubHarnessId || undefined,
+      fromSubConnector: this.wireStartSubHarnessConnectorId || undefined,
+      // Waypoints from pen mode
+      waypoints: this.wirePenWaypoints.length > 0 ? [...this.wirePenWaypoints] : undefined
+    };
+
+    // Set to endpoint based on type
+    switch (endPoint.type) {
+      case 'connector':
+        newConnection.toConnector = endPoint.connectorId;
+        newConnection.toPin = endPoint.pinId;
+        break;
+      case 'cable':
+        newConnection.toCable = endPoint.cableId;
+        newConnection.toWire = endPoint.wireId;
+        newConnection.toSide = endPoint.cableSide;
+        break;
+      case 'component':
+        newConnection.toComponent = endPoint.componentId;
+        newConnection.toComponentPin = endPoint.pinId;
+        break;
+      case 'subHarness':
+        newConnection.toSubHarness = endPoint.subHarnessId;
+        newConnection.toSubConnector = endPoint.connectorId;
+        newConnection.toPin = endPoint.pinId;
+        break;
+    }
+
+    // Normalize so from is always top-left
+    const normalizedConnection = this.normalizeConnection(data, newConnection);
+
+    // Emit the new connection
+    this.dataChanged.emit({
+      ...data,
+      connections: [...data.connections, normalizedConnection]
+    });
+
+    // Reset all wire drawing state
+    this.isDrawingWire = false;
+    this.isDrawingMatingWire = false;
+    this.resetWirePenMode();
+    this.wireStartConnectorId = null;
+    this.wireStartPinId = null;
+    this.wireStartCableId = null;
+    this.wireStartWireId = null;
+    this.wireStartSide = null;
+    this.wireStartComponentId = null;
+    this.wireStartComponentPinId = null;
+    this.wireStartSubHarnessId = null;
+    this.wireStartSubHarnessConnectorId = null;
+    this.hoveredPinConnectorId = null;
+    this.hoveredPinId = null;
+    this.hoveredMatingPinConnectorId = null;
+    this.hoveredMatingPinId = null;
+    this.hoveredMatingSubHarnessId = null;
+    this.hoveredMatingSubHarnessPinId = null;
+    this.hoveredCableId = null;
+    this.hoveredCableWireId = null;
+    this.hoveredCableSide = null;
+    this.hoveredComponentId = null;
+    this.hoveredComponentPinId = null;
+    this.render();
+  }
+
+  /**
    * Add a control point (waypoint) to a wire at the specified position
    */
   private addWireControlPoint(connectionId: string, fromPos: { x: number; y: number }, toPos: { x: number; y: number }, clickX: number, clickY: number): void {
@@ -4922,6 +5300,33 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
    */
   @HostListener('document:keydown', ['$event'])
   onKeyDown(event: KeyboardEvent): void {
+    // Cancel wire pen mode on Escape
+    if (event.key === 'Escape' && this.isWirePenMode) {
+      this.isDrawingWire = false;
+      this.isDrawingMatingWire = false;
+      this.resetWirePenMode();
+      this.wireStartConnectorId = null;
+      this.wireStartPinId = null;
+      this.wireStartCableId = null;
+      this.wireStartWireId = null;
+      this.wireStartSide = null;
+      this.wireStartComponentId = null;
+      this.wireStartComponentPinId = null;
+      this.wireStartSubHarnessId = null;
+      this.wireStartSubHarnessConnectorId = null;
+      this.render();
+      event.preventDefault();
+      return;
+    }
+
+    // Backspace in wire pen mode removes the last waypoint
+    if (event.key === 'Backspace' && this.isWirePenMode && this.wirePenWaypoints.length > 0) {
+      this.wirePenWaypoints.pop();
+      this.render();
+      event.preventDefault();
+      return;
+    }
+
     // Exit sub-harness edit mode on Escape
     if (event.key === 'Escape' && this.editingSubHarnessId()) {
       this.exitSubHarnessEditMode();
