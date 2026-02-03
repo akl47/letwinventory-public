@@ -18,11 +18,12 @@ import {
   drawSelectionHighlight,
   drawElementBody,
   drawElementHeader,
-  drawPartNameRow
+  drawPartNameRow,
+  truncateText
 } from './base-element';
 
 // Cable header color
-const CABLE_HEADER_COLOR = '#6a1b9a';
+const CABLE_HEADER_COLOR = '#696969';
 
 /**
  * Get cable dimensions
@@ -45,7 +46,9 @@ export function drawCable(
   ctx: CanvasRenderingContext2D,
   cable: HarnessCable,
   isSelected: boolean = false,
-  loadedImages?: Map<string, HTMLImageElement>
+  loadedImages?: Map<string, HTMLImageElement>,
+  highlightedWireIds?: Set<string>,
+  highlightedSide?: 'left' | 'right' | 'both'
 ): void {
   const { width, height, hasPartName, hasInfoRow } = getCableDimensions(cable);
   const x = cable.position?.x || 100;
@@ -139,6 +142,9 @@ export function drawCable(
   wires.forEach((wire, index) => {
     const wireY = index * CABLE_WIRE_SPACING;
     const wireColor = getWireColorHex(wire.colorCode || wire.color || 'BK');
+    const isWireHighlighted = highlightedWireIds?.has(wire.id) || false;
+    const highlightLeft = isWireHighlighted && (highlightedSide === 'left' || highlightedSide === 'both');
+    const highlightRight = isWireHighlighted && (highlightedSide === 'right' || highlightedSide === 'both');
 
     // Draw wire line
     ctx.beginPath();
@@ -151,19 +157,19 @@ export function drawCable(
     // Draw left endpoint circle
     ctx.beginPath();
     ctx.arc(left - CABLE_ENDPOINT_RADIUS, wireY, CABLE_ENDPOINT_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle = wireColor;
+    ctx.fillStyle = highlightLeft ? '#ffeb3b' : wireColor;
     ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = highlightLeft ? '#ff9800' : '#ffffff';
+    ctx.lineWidth = highlightLeft ? 2.5 : 1.5;
     ctx.stroke();
 
     // Draw right endpoint circle
     ctx.beginPath();
     ctx.arc(left + width + CABLE_ENDPOINT_RADIUS, wireY, CABLE_ENDPOINT_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle = wireColor;
+    ctx.fillStyle = highlightRight ? '#ffeb3b' : wireColor;
     ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = highlightRight ? '#ff9800' : '#ffffff';
+    ctx.lineWidth = highlightRight ? 2.5 : 1.5;
     ctx.stroke();
 
     // Build wire label text
@@ -177,9 +183,10 @@ export function drawCable(
     const labelText = labelParts.join(' - ');
 
     if (labelText) {
-      // Measure text for background box
+      // Measure and truncate text for background box
       ctx.font = '10px monospace';
-      const textWidth = ctx.measureText(labelText).width;
+      const truncatedLabel = truncateText(ctx, labelText, width);
+      const textWidth = ctx.measureText(truncatedLabel).width;
       const boxPadding = 4;
       const boxWidth = textWidth + boxPadding * 2;
       const boxHeight = 14;
@@ -199,7 +206,7 @@ export function drawCable(
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const labelX = flipped ? -(width / 2) : (width / 2);
-      ctx.fillText(labelText, labelX, wireY);
+      ctx.fillText(truncatedLabel, labelX, wireY);
       ctx.restore();
     }
   });

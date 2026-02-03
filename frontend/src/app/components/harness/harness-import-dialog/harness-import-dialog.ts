@@ -210,11 +210,14 @@ export class HarnessImportDialog {
         return;
       }
 
+      // Deduplicate arrays by ID
+      const deduplicatedData = this.deduplicateHarnessData(data);
+
       // Validate via backend
-      this.harnessService.validateHarness(data).subscribe({
+      this.harnessService.validateHarness(deduplicatedData).subscribe({
         next: (result) => {
           if (result.valid) {
-            this.parsedData.set(data);
+            this.parsedData.set(deduplicatedData);
             this.isValid.set(true);
           } else {
             this.validationErrors.set(result.errors.map(e => ({ message: e })));
@@ -223,7 +226,7 @@ export class HarnessImportDialog {
         },
         error: () => {
           // Fallback - if backend validation fails, accept if basic structure is OK
-          this.parsedData.set(data);
+          this.parsedData.set(deduplicatedData);
           this.isValid.set(true);
           this.validating.set(false);
         }
@@ -246,5 +249,51 @@ export class HarnessImportDialog {
     if (data) {
       this.dialogRef.close(data);
     }
+  }
+
+  /**
+   * Remove duplicate elements by ID from harness data arrays
+   */
+  private deduplicateHarnessData(data: any): any {
+    const dedupeById = <T extends { id: string }>(arr: T[]): T[] => {
+      if (!Array.isArray(arr)) return arr;
+      const seen = new Set<string>();
+      return arr.filter(item => {
+        if (!item.id || seen.has(item.id)) return false;
+        seen.add(item.id);
+        return true;
+      });
+    };
+
+    // Deduplicate connectors and their nested pins
+    const connectors = dedupeById(data.connectors || []).map((conn: any) => ({
+      ...conn,
+      pins: dedupeById(conn.pins || [])
+    }));
+
+    // Deduplicate cables and their nested wires
+    const cables = dedupeById(data.cables || []).map((cable: any) => ({
+      ...cable,
+      wires: dedupeById(cable.wires || [])
+    }));
+
+    // Deduplicate components and their nested pin groups/pins
+    const components = dedupeById(data.components || []).map((comp: any) => ({
+      ...comp,
+      pinGroups: dedupeById(comp.pinGroups || []).map((group: any) => ({
+        ...group,
+        pins: dedupeById(group.pins || [])
+      }))
+    }));
+
+    return {
+      ...data,
+      connectors,
+      cables,
+      components,
+      connections: dedupeById(data.connections || []),
+      subHarnesses: dedupeById(data.subHarnesses || []),
+      groups: dedupeById(data.groups || [])
+    };
   }
 }

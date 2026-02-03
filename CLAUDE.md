@@ -8,6 +8,16 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+## Project-Specific Rules
+
+**Do NOT run builds or migrations:**
+- Do not build the frontend (`ng build`, `npm run build`, etc.)
+- Do not build the backend
+- Do not run database migrations (`sequelize db:migrate`, etc.)
+- Do not run TypeScript compilation checks (`tsc --noEmit`, etc.)
+
+The webapp runs in a Docker container that automatically builds on file changes. The user will report any build errors or issues.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
@@ -395,6 +405,372 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - Keyboard shortcuts 1-9 allow quick project assignment when hovering task cards
 - tagColorHex is stored WITHOUT the # prefix in the database
 - Current branch: minor_fixes
+
+---
+
+## Session: 2026-02-01
+
+### Files Created
+- `backend/migrations/20260201000001-add-harness-release-state.js`
+- `backend/migrations/20260201000002-create-harness-revision-history.js`
+- `backend/models/parts/HarnessRevisionHistory.js`
+- `frontend/src/app/utils/harness/elements/sub-harness.ts`
+
+### Files Modified
+- `docs/harness-features-plan.md`
+- `frontend/src/app/models/harness.model.ts`
+- `frontend/src/app/services/harness.service.ts`
+- `frontend/src/app/utils/harness/elements/index.ts`
+- `frontend/src/app/utils/harness/elements/connector.ts`
+- `backend/api/parts/harness/controller.js`
+- `backend/api/parts/harness/routes.js`
+- `backend/models/parts/WireHarness.js`
+
+### Changes Made
+
+1. **Feature 1: Harness Sub-Assemblies**
+   - Added `SubHarnessRef` interface to harness.model.ts
+   - Added `subHarnesses` array to `HarnessData` interface
+   - Added sub-harness fields to `HarnessConnection` (fromSubHarness, toSubHarness, fromSubConnector, toSubConnector)
+   - Backend: Added cycle detection (`wouldCreateCycle`) and reference validation in validateHarness
+   - Backend: Added delete protection - cannot delete harness used as sub-harness elsewhere
+   - Backend: Added `GET /sub-harness-data?ids=1,2,3` endpoint for batch fetching
+   - Backend: Added `GET /:id/parents` endpoint to find parent harnesses
+   - Frontend: Added `getSubHarnessData()` and `getParentHarnesses()` to harness.service.ts
+   - Created `sub-harness.ts` with drawing and hit-testing functions for collapsed/expanded views
+
+2. **Feature 2: Connector Mating Points**
+   - Each connector pin now has two connection points:
+     - Wire point (circle) - for wire connections (existing behavior)
+     - Mating point (square) - on opposite side for direct connector-to-connector mating
+   - Added `connectionType: 'wire' | 'mating'` to `HarnessConnection` interface
+   - Updated `drawConnector()` to render mating points as small squares
+   - Added `getConnectorPinPositionsWithSide()` returning positions with side info
+   - Added `hitTestConnectorPinWithSide()` returning which side was hit
+   - Backend validation: mating connections must be between two connectors only
+
+3. **Feature 3: Revision Control & Release Cycle**
+   - Added `ReleaseState` type ('draft' | 'review' | 'released')
+   - Added release fields to `WireHarness`: releaseState, releasedAt, releasedBy, previousRevisionID
+   - Created `HarnessRevisionHistory` table and model for tracking changes
+   - Added revision control API endpoints:
+     - `POST /:id/submit-review` - Draft → Review
+     - `POST /:id/reject` - Review → Draft (with notes)
+     - `POST /:id/release` - Review → Released
+     - `GET /:id/history` - Get change history
+     - `GET /:id/revisions` - Get all revisions (A, B, C...)
+     - `POST /:id/revert/:historyId` - Revert to snapshot
+   - `updateHarness` now auto-creates new revision when editing a released harness
+   - `createHarness` logs initial 'created' history entry
+   - Added frontend service methods: submitForReview, reject, release, getHistory, getAllRevisions, revertToSnapshot
+
+### Notes
+- Migrations need to be run: `npx sequelize-cli db:migrate`
+- Sub-harnesses are stored in harnessData JSON, not a separate table
+- Revision letters increment: A → B → C → ... → Z → AA → AB
+- Released harnesses are immutable - edits create new revision
+- Current branch: harness_subassemblies
+
+---
+
+## Session: 2026-02-02
+
+### Files Modified
+- `frontend/src/app/utils/harness/elements/sub-harness.ts`
+- `frontend/src/app/components/harness/harness-canvas/harness-canvas.ts`
+- `frontend/src/app/components/harness/harness-canvas/harness-canvas.html`
+- `frontend/src/app/components/harness/harness-toolbar/harness-toolbar.ts`
+- `frontend/src/app/components/harness/harness-toolbar/harness-toolbar.html`
+- `frontend/src/app/components/harness/harness-page/harness-page.html`
+
+### Changes Made
+
+1. **Fixed cable bounds calculation in sub-harness rendering**
+   - Added `CABLE_WIRE_SPACING` import to sub-harness.ts
+   - Fixed `getCableVisualBounds()` to correctly calculate cable bounds
+   - Cable position is at first wire, body extends upward (negative Y)
+   - Calculates `topOffset` using header, part name row, info row heights
+
+2. **Moved group/ungroup from toolbar to context menu**
+   - Removed group/ungroup buttons from toolbar HTML
+   - Added "Group Selected" option to context menu (shows when multiple items selected)
+   - Added "Ungroup" option to context menu (shows when grouped item selected)
+   - Added group/ungroup action handlers in `onContextMenuAction()`
+   - Removed unused `hasMultipleSelected`, `hasGroupSelected` inputs from toolbar
+   - Removed unused `groupSelected`, `ungroupSelected` outputs from toolbar
+   - Cleaned up bindings in harness-page.html
+
+3. **Fixed sub-harness edit mode selection highlighting and node editing**
+   - Created `SubHarnessEditState` interface with selection and mode state
+   - Created `drawSubHarnessEditMode()` function for edit mode rendering
+   - Created `drawSubHarnessWiresEditMode()` function with selection and control point support
+   - Edit mode now passes selection state to sub-harness drawing:
+     - `selectedConnectorId`, `selectedCableId`, `selectedComponentId`, `selectedConnectionId`
+     - `isNodeEditMode` flag when tool is 'nodeEdit'
+   - Selected elements in sub-harness edit mode now highlight correctly
+   - Wire control points now visible in nodeEdit mode when wire is selected
+
+4. **Fixed shift-click to toggle selection**
+   - Shift-clicking an already-selected item now deselects it
+   - Added `removeFromSelection()` method to canvas component
+   - Updated shift-click handlers for connector, cable, component, subHarness, and connection
+   - All element types now support toggle selection with shift-click
+
+### Notes
+- TypeScript diagnostics may appear stale - the model has all required properties
+- Sub-harness edit mode now functions like normal edit mode for selection/nodes
+- Context menu group/ungroup provides cleaner toolbar
+- Current branch: harness_subassemblies
+
+---
+
+## Session: 2026-02-02 (continued)
+
+### Files Created
+- `frontend/src/app/services/harness-history.service.ts`
+
+### Files Modified
+- `frontend/src/app/components/harness/harness-canvas/harness-canvas.ts`
+- `frontend/src/app/components/harness/harness-toolbar/harness-toolbar.ts`
+- `frontend/src/app/components/harness/harness-toolbar/harness-toolbar.html`
+- `frontend/src/app/components/harness/harness-page/harness-page.ts`
+- `frontend/src/app/components/harness/harness-page/harness-page.html`
+
+### Changes Made
+
+1. **Implemented Undo/Redo for Harness Canvas**
+   - Created `HarnessHistoryService` with past/future stacks of HarnessData states
+   - Maximum 50 history entries (configurable)
+   - Signals `canUndo` and `canRedo` for UI binding
+   - Methods:
+     - `push(state)` - for instant operations (delete, rotate, flip, add element)
+     - `beginTransaction(state)` / `commitTransaction(newState)` - for drag operations
+     - `undo(currentState)` / `redo(currentState)` - returns restored state
+     - `clear()` - clears all history
+
+2. **Added drag lifecycle outputs to canvas**
+   - `dragStart` output emitted when any drag operation begins
+   - `dragEnd` output emitted when any drag operation ends
+   - Added `emitDragStartOnce()` and `emitDragEndIfStarted()` helper methods
+   - Drag events emitted for: connector, cable, component, sub-harness, control point, label dragging
+
+3. **Added toolbar buttons for undo/redo**
+   - Added `canUndo` and `canRedo` inputs to toolbar
+   - Added `undo` and `redo` outputs
+   - Buttons placed in edit operations toolbar group with tooltips
+
+4. **Integrated undo/redo in harness-page**
+   - Injected `HarnessHistoryService`
+   - Added `onDragStart()` and `onDragEnd()` handlers for transaction pattern
+   - Added `onUndo()` and `onRedo()` methods that restore state and trigger auto-save
+   - Added keyboard shortcuts: Ctrl+Z (undo), Ctrl+Y / Ctrl+Shift+Z (redo)
+   - History cleared when loading different harness or creating new harness
+   - History push before: delete, rotate, flip, paste, add connector/cable/component/sub-harness, group/ungroup, bring to front/send to back/move forward/move backward, all property panel changes
+
+### Notes
+- Drag operations use transaction pattern: snapshot on mousedown, commit on mouseup only if data changed
+- Property panel changes also push to history (metadata, connector properties, connection properties, pin labels, bulk wire changes)
+- Undo/redo toolbar buttons are disabled when history stack is empty
+- Current branch: harness_subassemblies
+
+---
+
+## Session: 2026-02-02 (part 3)
+
+### Files Modified
+- `frontend/src/app/components/harness/harness-toolbar/harness-toolbar.scss`
+- `frontend/src/app/components/harness/harness-list-view/harness-list-view.ts`
+- `frontend/src/app/components/harness/harness-list-view/harness-list-view.html`
+- `frontend/src/app/components/harness/harness-list-view/harness-list-view.css`
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.ts`
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.html`
+- `frontend/src/app/components/harness/harness-page/harness-page.ts`
+- `frontend/src/app/components/harness/harness-page/harness-page.html`
+- `frontend/src/app/models/harness.model.ts`
+
+### Changes Made
+
+1. **Styled disabled toolbar buttons darker**
+   - Added `.toolbar-group button:disabled` rule with `color: #505050`
+   - Disabled undo/redo buttons now appear more clearly disabled
+
+2. **Added release status column to harness list view**
+   - Added 'releaseState' to `displayedColumns` array
+   - Added column template with status chip showing draft/review/released
+   - Added CSS styling for status chips:
+     - `.status-draft`: gray background (#424242)
+     - `.status-review`: orange background (#f57c00)
+     - `.status-released`: green background (#388e3c)
+
+3. **Added release button to harness property panel**
+   - Added `releaseHarness` output event
+   - Added release button in harness-actions section
+   - Button text changes based on current state:
+     - Draft → "Release" (starts review workflow)
+     - Review → "In Review" (proceeds to release)
+     - Released → "Released" (disabled)
+
+4. **Implemented release workflow in harness-page**
+   - Added `onReleaseHarness()` method
+   - Draft state: confirms and calls `submitForReview()`
+   - Review state: confirms and calls `release()`
+   - Updates local state after successful API calls
+   - Wired up `(releaseHarness)` event in template
+
+5. **Added releaseState to HarnessData interface**
+   - Added `releaseState?: ReleaseState` field to `HarnessData`
+   - Moved `ReleaseState` type definition before `HarnessData` for proper ordering
+   - Updated `loadHarness()` to include `releaseState` when merging harness data
+
+### Notes
+- Release workflow: Draft → Review → Released
+- Released harnesses are locked from further edits (button disabled)
+- The backend was already implemented in a previous session (Feb 1)
+- Current branch: harness_subassemblies
+
+---
+
+## Session: 2026-02-02 (part 4)
+
+### Files Modified
+- `frontend/src/app/components/harness/harness-toolbar/harness-toolbar.ts`
+- `frontend/src/app/components/harness/harness-toolbar/harness-toolbar.html`
+- `frontend/src/app/components/harness/harness-page/harness-page.ts`
+- `frontend/src/app/components/harness/harness-page/harness-page.html`
+- `frontend/src/app/components/harness/harness-canvas/harness-canvas.ts`
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.ts`
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.html`
+
+### Changes Made
+
+1. **Read-only mode for released harnesses - Toolbar**
+   - Added `isReleased` input to toolbar component
+   - Added `newRevision` output for creating new revisions
+   - Disabled editing tools when released: wire tool, node edit, add elements, rotate, flip, delete, undo/redo, import
+   - Kept enabled: select, pan, zoom, export, grid toggle
+   - Added "New Revision" button that appears when harness is released
+
+2. **Read-only mode for released harnesses - Canvas**
+   - Added `isReleased` input to canvas component
+   - Added early return in `onMouseMove` when released (prevents all dragging)
+   - Prevented wire drawing in select mode when released
+   - Prevented control point dragging in node edit mode when released
+   - Prevented element dragging (connector, cable, component, sub-harness) when released
+   - Selection still works (clicking selects elements without starting drag)
+
+3. **Read-only mode for released harnesses - Property Panel**
+   - Added `isReleased` input to property panel component
+   - Disabled all form fields when released:
+     - Name, description inputs
+     - Wire properties (label, color, gauge, length, terminations)
+     - Delete harness button
+   - Hid bulk wire edit panel when released
+   - Release button shows "Released" and is disabled
+
+4. **New Revision functionality**
+   - Added `isReleased` computed signal to harness-page
+   - Added `onNewRevision()` method that calls `updateHarness()` on released harness
+   - Backend auto-creates new revision when updating a released harness
+   - Navigates to the new revision after creation
+   - Added `getNextRevision()` helper for preview (A→B, Z→AA)
+
+### Notes
+- Selection still works in released mode - can click to view properties
+- Double-click should still open dialogs (read-only)
+- New Revision button appears in toolbar when harness is released
+- Current branch: harness_subassemblies
+
+---
+
+## Session: 2026-02-03
+
+### Files Created
+- `frontend/src/app/utils/harness/wire-endpoint.ts`
+- `frontend/src/app/utils/harness/endpoint-resolver.ts`
+- `frontend/src/app/utils/harness/wire-drawing-manager.ts`
+
+### Files Modified
+- `frontend/src/app/utils/harness/wire.ts`
+- `frontend/src/app/utils/harness/canvas-renderer.ts`
+- `frontend/src/app/components/harness/harness-canvas/harness-canvas.ts`
+
+### Changes Made
+
+1. **Created wire endpoint type definitions (`wire-endpoint.ts`)**
+   - Defined `Point` interface for x, y coordinates
+   - Created discriminated union `WireEndpoint` with types:
+     - `ConnectorEndpoint` - wire side of connector pin
+     - `ConnectorMatingEndpoint` - mating side of connector pin
+     - `CableEndpoint` - cable wire endpoint
+     - `ComponentEndpoint` - component pin endpoint
+     - `SubHarnessEndpoint` - sub-harness connector pin
+   - Each endpoint carries: `position`, `elementCenter`, `elementBounds`
+   - Added `WireDrawingState` interface for consolidated state management
+   - Added `WireRoutingContext` interface for improved path calculation
+   - Helper function `isMatingEndpoint()` to check endpoint type
+
+2. **Created endpoint resolver utilities (`endpoint-resolver.ts`)**
+   - Functions to resolve endpoints from HarnessConnection:
+     - `resolveFromEndpoint(data, connection, cache)` - resolve "from" endpoint
+     - `resolveToEndpoint(data, connection, cache)` - resolve "to" endpoint
+   - Type-specific resolution functions:
+     - `resolveConnectorEndpoint()` - connector wire pin
+     - `resolveConnectorMatingEndpoint()` - connector mating pin
+     - `resolveCableEndpoint()` - cable wire
+     - `resolveComponentEndpoint()` - component pin
+     - `resolveSubHarnessEndpoint()` - sub-harness pin
+   - Helper functions for calculating element center and bounds:
+     - `getConnectorCenterAndBounds()`
+     - `getCableCenterAndBounds()`
+     - `getComponentCenterAndBounds()`
+     - `getSubHarnessCenterAndBounds()`
+   - `getEndpointWireColor()` - get wire color from endpoint
+
+3. **Created wire drawing state manager (`wire-drawing-manager.ts`)**
+   - `WireDrawingManager` class consolidates ~25 wire drawing state variables
+   - Public API:
+     - `startDrawing(endpoint)` - begin wire drawing from endpoint
+     - `updateMousePosition(x, y)` - update mouse position during drawing
+     - `setHoveredEndpoint(endpoint)` - set potential end endpoint
+     - `completeDrawing()` - finish drawing, returns HarnessConnection or null
+     - `reset()` - cancel drawing operation
+   - Getters: `isDrawing()`, `isDrawingMating()`, `getStartEndpoint()`, etc.
+   - Legacy getters for backward compatibility with old state variable pattern
+   - `isValidEndEndpoint()` - validate if endpoint can be connected
+
+4. **Added improved routing algorithm to wire.ts**
+   - `calculateLeadOutDirection(pinPosition, elementCenter)` - determines lead-out direction based on element center (away from element body)
+   - `WireRoutingContext` interface for routing parameters
+   - `calculateOrthogonalPathV2(context)` - new routing with:
+     - Lead-out direction based on element centers (not destination)
+     - Simple obstacle avoidance via `adjustWaypointForObstacles()`
+     - `isPointInObstacle()` check for collision detection
+     - `cleanPath()` removes collinear and redundant points
+   - Keeps `calculateOrthogonalPath()` for backward compatibility
+
+5. **Updated canvas-renderer.ts exports**
+   - Added exports for new wire routing functions
+   - Added type exports for `WireEndpoint`, `WireDrawingState`, etc.
+   - Added exports for endpoint resolver functions
+   - Exported `WireDrawingManager` class
+
+6. **Integrated new utilities into harness-canvas.ts**
+   - Added imports for new functions and types
+   - Added `wireDrawingManager` instance (not yet fully integrated)
+   - Added helper methods for endpoint creation:
+     - `createConnectorEndpoint()`
+     - `createCableEndpoint()`
+     - `createComponentEndpoint()`
+     - `createSubHarnessEndpoint()`
+   - Added `getWireRoutingContext()` helper
+
+### Notes
+- This is Phase 1 of the wire routing refactoring
+- The new utilities are created and available for use
+- The canvas component still uses old state variables (backward compatible)
+- Full integration would replace the 25+ scattered state variables with WireDrawingManager
+- The improved routing leads wires AWAY from element bodies, not toward destinations
+- Current branch: harness_subassemblies
 
 ---
 

@@ -21,6 +21,7 @@ import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
 interface DialogData {
   existingCables?: HarnessCable[];
   editCable?: HarnessCable;
+  isLocked?: boolean;
 }
 
 @Component({
@@ -71,6 +72,7 @@ export class HarnessAddCableDialog implements OnInit {
   cableDiagramImage: string | undefined = undefined;
 
   isEdit = signal<boolean>(false);
+  isLocked = signal<boolean>(false);
   private editId: string | null = null;
   private editPosition: { x: number; y: number } = { x: 300, y: 200 };
   private editPartName: string | undefined = undefined;
@@ -78,6 +80,9 @@ export class HarnessAddCableDialog implements OnInit {
   private editDbId: number | undefined = undefined;
 
   constructor() {
+    if (this.data?.isLocked) {
+      this.isLocked.set(true);
+    }
     if (this.data?.editCable) {
       // Edit mode - preserve all existing properties
       this.isEdit.set(true);

@@ -22,6 +22,40 @@ export const COLORS = {
 };
 
 /**
+ * Truncate text with ellipsis if it exceeds maxWidth
+ */
+export function truncateText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string {
+  if (!text) return '';
+  const measured = ctx.measureText(text);
+  if (measured.width <= maxWidth) return text;
+
+  const ellipsis = '...';
+  const ellipsisWidth = ctx.measureText(ellipsis).width;
+  const availableWidth = maxWidth - ellipsisWidth;
+
+  if (availableWidth <= 0) return ellipsis;
+
+  // Binary search for the right truncation point
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const truncated = text.slice(0, mid);
+    if (ctx.measureText(truncated).width <= availableWidth) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return text.slice(0, low) + ellipsis;
+}
+
+/**
  * Draw selection highlight around an element
  */
 export function drawSelectionHighlight(
@@ -98,8 +132,9 @@ export function drawElementHeader(
   ctx.font = 'bold 13px monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  const truncatedLabel = truncateText(ctx, label, width);
   const textX = flipped ? -(width / 2) : (width / 2);
-  ctx.fillText(label, textX, top + HEADER_HEIGHT / 2);
+  ctx.fillText(truncatedLabel, textX, top + HEADER_HEIGHT / 2);
   ctx.restore();
 }
 
@@ -136,8 +171,9 @@ export function drawPartNameRow(
   ctx.font = '11px monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  const truncatedPartName = truncateText(ctx, partName, width);
   const textX = flipped ? -(width / 2) : (width / 2);
-  ctx.fillText(partName, textX, rowCenter);
+  ctx.fillText(truncatedPartName, textX, rowCenter);
   ctx.restore();
 }
 
@@ -198,8 +234,10 @@ export function drawPinRow(
     ctx.fillStyle = '#b0b0b0';
     ctx.font = '11px monospace';
     ctx.textAlign = flipped ? 'right' : 'left';
+    const maxPinLabelWidth = width - PIN_COL_WIDTH;
+    const truncatedPinLabel = truncateText(ctx, pinLabel, maxPinLabelWidth);
     const labelX = flipped ? -(left + PIN_COL_WIDTH + 8) : (left + PIN_COL_WIDTH + 8);
-    ctx.fillText(pinLabel, labelX, rowCenter);
+    ctx.fillText(truncatedPinLabel, labelX, rowCenter);
   }
   ctx.restore();
 }
@@ -212,14 +250,15 @@ export function drawPinCircle(
   x: number,
   y: number,
   radius: number,
-  fillColor: string
+  fillColor: string,
+  highlighted: boolean = false
 ): void {
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.fillStyle = fillColor;
+  ctx.fillStyle = highlighted ? '#ffeb3b' : fillColor;  // Yellow when highlighted
   ctx.fill();
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = highlighted ? '#ff9800' : '#ffffff';  // Orange stroke when highlighted
+  ctx.lineWidth = highlighted ? 2.5 : 1.5;
   ctx.stroke();
 }
 

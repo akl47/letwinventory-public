@@ -8,7 +8,7 @@
     <div class="property-group">
       <mat-form-field appearance="outline" class="full-width">
         <mat-label>Name</mat-label>
-        <input matInput [value]="harnessData()?.name || ''" (input)="updateMetadata('name', $event)">
+        <input matInput [value]="harnessData()?.name || ''" (input)="updateMetadata('name', $event)" [disabled]="isLocked()">
       </mat-form-field>
 
       <mat-form-field appearance="outline" class="full-width">
@@ -24,11 +24,11 @@
       <mat-form-field appearance="outline" class="full-width">
         <mat-label>Description</mat-label>
         <textarea matInput rows="2" [value]="harnessData()?.description || ''"
-          (input)="updateMetadata('description', $event)"></textarea>
+          (input)="updateMetadata('description', $event)" [disabled]="isLocked()"></textarea>
       </mat-form-field>
 
       <div class="harness-actions">
-        <button mat-stroked-button color="warn" (click)="deleteHarness.emit()">
+        <button mat-stroked-button color="warn" (click)="deleteHarness.emit()" [disabled]="isLocked()">
           <mat-icon>delete</mat-icon>
           Delete Harness
         </button>
@@ -36,7 +36,118 @@
     </div>
   </mat-expansion-panel>
 
-  @if (selection()?.type === 'wire') {
+  <!-- Release Status Panel -->
+  <mat-expansion-panel [expanded]="true" class="release-panel">
+    <mat-expansion-panel-header>
+      <mat-panel-title>Release Status</mat-panel-title>
+      <mat-panel-description>
+        @if (isReleased()) {
+          <span class="status-chip released">Released</span>
+        } @else if (isInReview()) {
+          <span class="status-chip review">In Review</span>
+        } @else {
+          <span class="status-chip draft">Draft</span>
+        }
+      </mat-panel-description>
+    </mat-expansion-panel-header>
+
+    <div class="release-actions">
+      @if (isReleased()) {
+        <button mat-flat-button color="primary" (click)="newRevision.emit()">
+          <mat-icon>add_circle</mat-icon>
+          New Revision
+        </button>
+      } @else if (isInReview()) {
+        <button mat-flat-button color="primary" (click)="releaseHarness.emit()">
+          <mat-icon>publish</mat-icon>
+          Release
+        </button>
+        <button mat-stroked-button (click)="returnToDraft.emit()">
+          <mat-icon>undo</mat-icon>
+          Return to Draft
+        </button>
+      } @else {
+        <button mat-flat-button color="primary" (click)="releaseHarness.emit()">
+          <mat-icon>send</mat-icon>
+          To Review
+        </button>
+      }
+    </div>
+  </mat-expansion-panel>
+
+  <!-- Bulk Wire Edit Panel - shows when multiple wires selected (not in locked mode) -->
+  @if (hasMultipleWiresSelected() && !isLocked()) {
+  <mat-expansion-panel [expanded]="true" class="bulk-wire-panel">
+    <mat-expansion-panel-header>
+      <mat-panel-title>Bulk Wire Edit ({{ selectedWireIds().length }} wires)</mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="property-group">
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Wire Color</mat-label>
+        <mat-select [value]="selectedWiresCommonValues()?.color || ''"
+          (selectionChange)="updateBulkWires('color', $event.value)">
+          <mat-option value="">Mixed / No change</mat-option>
+          @for (color of wireColors; track color.code) {
+          <mat-option [value]="color.code">
+            <span class="color-option">
+              <span class="color-swatch" [style.backgroundColor]="color.hex"></span>
+              {{ color.name }} ({{ color.code }})
+            </span>
+          </mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Wire Gauge</mat-label>
+        <mat-select [value]="selectedWiresCommonValues()?.gauge || ''"
+          (selectionChange)="updateBulkWires('gauge', $event.value)">
+          <mat-option value="">Mixed / No change</mat-option>
+          @for (gauge of awgGauges; track gauge) {
+          <mat-option [value]="gauge">{{ gauge }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Length (mm)</mat-label>
+        <input matInput type="number" [value]="selectedWiresCommonValues()?.lengthMm || ''"
+          (input)="updateBulkWiresInput('lengthMm', $event)"
+          placeholder="Leave empty to keep individual values" min="1">
+      </mat-form-field>
+
+      <mat-divider></mat-divider>
+
+      <!-- Wire End Terminations -->
+      <div class="termination-row">
+        <mat-form-field appearance="outline" class="half-width">
+          <mat-label>Left End</mat-label>
+          <mat-select [value]="selectedWiresCommonValues()?.fromTermination || ''"
+            (selectionChange)="updateBulkWires('fromTermination', $event.value)">
+            <mat-option value="">Mixed / No change</mat-option>
+            @for (term of terminationTypes(); track term.value) {
+            <mat-option [value]="term.value">{{ term.label }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="half-width">
+          <mat-label>Right End</mat-label>
+          <mat-select [value]="selectedWiresCommonValues()?.toTermination || ''"
+            (selectionChange)="updateBulkWires('toTermination', $event.value)">
+            <mat-option value="">Mixed / No change</mat-option>
+            @for (term of terminationTypes(); track term.value) {
+            <mat-option [value]="term.value">{{ term.label }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+      </div>
+    </div>
+  </mat-expansion-panel>
+  }
+
+  @else if (selection()?.type === 'wire') {
   <mat-expansion-panel [expanded]="true" class="wire-panel">
     <mat-expansion-panel-header>
       <mat-panel-title>Wire Properties</mat-panel-title>
@@ -58,13 +169,13 @@
       <mat-form-field appearance="outline" class="full-width">
         <mat-label>Wire Label</mat-label>
         <input matInput [value]="selection()?.connection?.label || ''" (input)="updateConnectionInput('label', $event)"
-          placeholder="e.g., IGN, GND, PWR">
+          placeholder="e.g., IGN, GND, PWR" [disabled]="isLocked()">
       </mat-form-field>
 
       <mat-form-field appearance="outline" class="full-width">
         <mat-label>Wire Color</mat-label>
         <mat-select [value]="selection()?.connection?.color || 'BK'"
-          (selectionChange)="updateConnection('color', $event.value)">
+          (selectionChange)="updateConnection('color', $event.value)" [disabled]="isLocked()">
           @for (color of wireColors; track color.code) {
           <mat-option [value]="color.code">
             <span class="color-option">
@@ -79,7 +190,7 @@
       <mat-form-field appearance="outline" class="full-width">
         <mat-label>Wire Gauge</mat-label>
         <mat-select [value]="selection()?.connection?.gauge || ''"
-          (selectionChange)="updateConnection('gauge', $event.value)">
+          (selectionChange)="updateConnection('gauge', $event.value)" [disabled]="isLocked()">
           <mat-option value="">Not specified</mat-option>
           @for (gauge of awgGauges; track gauge) {
           <mat-option [value]="gauge">{{ gauge }}</mat-option>
@@ -90,14 +201,14 @@
       <mat-form-field appearance="outline" class="full-width">
         <mat-label>Length (mm)</mat-label>
         <input matInput type="number" [value]="selection()?.connection?.lengthMm || ''"
-          (input)="updateConnectionInput('lengthMm', $event)" min="1">
+          (input)="updateConnectionInput('lengthMm', $event)" min="1" [disabled]="isLocked()">
       </mat-form-field>
 
       @if (selection()?.connection?.cable) {
       <mat-form-field appearance="outline" class="full-width">
         <mat-label>Wire in Cable</mat-label>
         <mat-select [value]="selection()?.connection?.wire || ''"
-          (selectionChange)="updateConnection('wire', $event.value)">
+          (selectionChange)="updateConnection('wire', $event.value)" [disabled]="isLocked()">
           @for (wire of getWiresForCable(selection()?.connection?.cable); track wire.id) {
           <mat-option [value]="wire.id">
             <span class="color-option">
@@ -117,7 +228,7 @@
         <mat-form-field appearance="outline" class="half-width">
           <mat-label>Left End</mat-label>
           <mat-select [value]="selection()?.connection?.fromTermination || ''"
-            (selectionChange)="updateConnection('fromTermination', $event.value)">
+            (selectionChange)="updateConnection('fromTermination', $event.value)" [disabled]="isLocked()">
             <mat-option value="">None</mat-option>
             @for (term of terminationTypes(); track term.value) {
             <mat-option [value]="term.value">{{ term.label }}</mat-option>
@@ -128,7 +239,7 @@
         <mat-form-field appearance="outline" class="half-width">
           <mat-label>Right End</mat-label>
           <mat-select [value]="selection()?.connection?.toTermination || ''"
-            (selectionChange)="updateConnection('toTermination', $event.value)">
+            (selectionChange)="updateConnection('toTermination', $event.value)" [disabled]="isLocked()">
             <mat-option value="">None</mat-option>
             @for (term of terminationTypes(); track term.value) {
             <mat-option [value]="term.value">{{ term.label }}</mat-option>
