@@ -442,6 +442,7 @@ gunzip backup_20260123.sql.gz
 PGPASSWORD="password" psql -h localhost -U letwinventory_user letwinventory < backup_20260123.sql
 ```
 
+
 ### Troubleshooting
 
 ```bash
