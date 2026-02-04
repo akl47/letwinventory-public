@@ -14,7 +14,7 @@
         <div class="history-item">
             <div class="user-avatar">
                 @if (item.user?.photoURL) {
-                <img [src]="item.user?.photoURL" [alt]="item.user?.displayName">
+                <img [src]="item.user?.photoURL" [alt]="item.user?.displayName" referrerPolicy="no-referrer">
                 } @else {
                 <div class="avatar-placeholder">{{ item.user?.displayName?.charAt(0) }}</div>
                 }

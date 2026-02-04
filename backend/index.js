@@ -2,6 +2,7 @@ const express = require("express");
 const http = require("http");
 const app = express();
 const bodyParser = require("body-parser");
+const cookieParser = require("cookie-parser");
 const path = require("path");
 const dotenv = require("dotenv");
 const cors = require("cors");
@@ -37,6 +38,9 @@ app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 app.use(bodyParser.text({ limit: '50mb' }));
 app.use(bodyParser.json({ type: "application/vnd.api+json", limit: '50mb' }));
+
+// Cookie parser for refresh tokens
+app.use(cookieParser());
 
 // Initialize Passport
 app.use(passport.initialize());

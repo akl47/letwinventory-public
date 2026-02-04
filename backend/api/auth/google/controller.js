@@ -1,6 +1,7 @@
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const db = require('../../../models');
 const dotenv = require('dotenv');
 const path = require('path');
@@ -57,8 +58,8 @@ exports.handleCallback = (req, res, next) => {
       });
 
       if (user.activeFlag) {
-        // Generate JWT token
-        const token = jwt.sign(
+        // Generate short-lived access token (15 minutes)
+        const accessToken = jwt.sign(
           {
             id: user.id,
             email: user.email,
@@ -66,21 +67,44 @@ exports.handleCallback = (req, res, next) => {
             photoURL: user.photoURL
           },
           process.env.JWT_SECRET,
-          { expiresIn: '24h' }
+          { expiresIn: '15m' }
         );
 
-        // Set token in cookie and redirect to frontend
+        // Generate refresh token (random string, stored hashed in DB)
+        const refreshTokenRaw = crypto.randomBytes(32).toString('hex');
+        const refreshTokenHash = crypto.createHash('sha256').update(refreshTokenRaw).digest('hex');
+        const refreshTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+        // Deactivate any existing refresh tokens for this user
+        await db.RefreshToken.update(
+          { activeFlag: false },
+          { where: { userId: user.id, activeFlag: true } }
+        );
+
+        // Store hashed refresh token in database
+        await db.RefreshToken.create({
+          token: refreshTokenHash,
+          userId: user.id,
+          expiresAt: refreshTokenExpiry
+        });
+
+        // Set tokens in cookies and redirect to frontend
         const redirectUrl = process.env.FRONTEND_URL || '/';
-        res.cookie('auth_token', token, {
-          httpOnly: false,
+        res.cookie('auth_token', accessToken, {
+          httpOnly: false, // Frontend needs to read this
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
-          maxAge: 86400000 // 24 hours
+          maxAge: 15 * 60 * 1000 // 15 minutes
+        }).cookie('refresh_token', refreshTokenRaw, {
+          httpOnly: true, // Not accessible via JavaScript
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
         }).cookie('name', encodeURI(user.displayName), {
           httpOnly: false, // Allow frontend to read the name
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
-          maxAge: 86400000 // 24 hours
+          maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
         }).redirect(redirectUrl);
       } else {
         throw new Error('User is not authorized');
@@ -92,8 +116,33 @@ exports.handleCallback = (req, res, next) => {
   })(req, res, next);
 };
 
-exports.logout = (req, res) => {
-  res.clearCookie('auth_token').json({ message: 'Logged out successfully' });
+exports.logout = async (req, res) => {
+  try {
+    // Get refresh token from cookie and deactivate in database
+    const refreshTokenRaw = req.cookies?.refresh_token;
+    if (refreshTokenRaw) {
+      const refreshTokenHash = crypto.createHash('sha256').update(refreshTokenRaw).digest('hex');
+      await db.RefreshToken.update(
+        { activeFlag: false },
+        { where: { token: refreshTokenHash } }
+      );
+    }
+
+    // Clear all auth cookies
+    res
+      .clearCookie('auth_token')
+      .clearCookie('refresh_token')
+      .clearCookie('name')
+      .json({ message: 'Logged out successfully' });
+  } catch (error) {
+    console.error('Error during logout:', error);
+    // Still clear cookies even if DB operation fails
+    res
+      .clearCookie('auth_token')
+      .clearCookie('refresh_token')
+      .clearCookie('name')
+      .json({ message: 'Logged out successfully' });
+  }
 };
 
 exports.getCurrentUser = async (req, res) => {

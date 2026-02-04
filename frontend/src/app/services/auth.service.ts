@@ -2,7 +2,7 @@ import { Injectable, signal, computed, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { DOCUMENT } from '@angular/common';
-import { Observable, catchError, map, of } from 'rxjs';
+import { Observable, catchError, map, of, Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { TaskViewPreferencesService } from './task-view-preferences.service';
 
@@ -10,6 +10,11 @@ export interface User {
     id: number;
     displayName: string;
     email: string;
+}
+
+interface RefreshResponse {
+    accessToken: string;
+    user: User;
 }
 
 @Injectable({
@@ -23,8 +28,13 @@ export class AuthService {
     private readonly user = signal<User | null>(null);
     private readonly TOKEN_KEY = 'auth_token';
 
+    // Refresh token state
+    private isRefreshing = false;
+    private refreshSubject = new Subject<string | null>();
+
     readonly isAuthenticated = computed(() => this.user() !== null);
     readonly currentUser = computed(() => this.user());
+    readonly refreshComplete$ = this.refreshSubject.asObservable();
 
     constructor() {
         // Check for token in cookie first (from OAuth callback), then localStorage
@@ -105,7 +115,54 @@ export class AuthService {
     }
 
     logout(): void {
-        this.clearToken();
-        this.router.navigate(['/home']);
+        // Call backend to revoke refresh token
+        this.http.post(`${environment.apiUrl}/auth/google/logout`, {}, { withCredentials: true })
+            .pipe(catchError(() => of(null)))
+            .subscribe(() => {
+                this.clearToken();
+                this.router.navigate(['/home']);
+            });
+    }
+
+    /**
+     * Refresh the access token using the httpOnly refresh token cookie.
+     * Returns an observable that emits the new token or null on failure.
+     */
+    refreshAccessToken(): Observable<string | null> {
+        if (this.isRefreshing) {
+            // Return the subject so callers can wait for the refresh to complete
+            return this.refreshComplete$;
+        }
+
+        this.isRefreshing = true;
+
+        return this.http.post<RefreshResponse>(
+            `${environment.apiUrl}/auth/user/refresh`,
+            {},
+            { withCredentials: true }
+        ).pipe(
+            map(response => {
+                this.isRefreshing = false;
+                if (response.accessToken) {
+                    localStorage.setItem(this.TOKEN_KEY, response.accessToken);
+                    this.user.set(response.user);
+                    this.refreshSubject.next(response.accessToken);
+                    return response.accessToken;
+                }
+                this.refreshSubject.next(null);
+                return null;
+            }),
+            catchError(error => {
+                this.isRefreshing = false;
+                this.refreshSubject.next(null);
+                this.clearToken();
+                return of(null);
+            })
+        );
+    }
+
+    /** Check if a refresh is currently in progress */
+    get isRefreshingToken(): boolean {
+        return this.isRefreshing;
     }
 }

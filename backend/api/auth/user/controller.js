@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const db = require("../../../models");
 const { OAuth2Client } = require("google-auth-library");
 const passport = require("../../../auth/passport");
@@ -175,5 +176,98 @@ exports.loginWithGoogle = async (req, res, next) => {
     res.json({ user });
   } catch (error) {
     next(error);
+  }
+};
+
+/**
+ * Refresh access token using refresh token from httpOnly cookie
+ */
+exports.refreshToken = async (req, res) => {
+  try {
+    const refreshTokenRaw = req.cookies?.refresh_token;
+
+    if (!refreshTokenRaw) {
+      return res.status(401).json({ error: 'No refresh token provided' });
+    }
+
+    // Hash the token to compare with database
+    const refreshTokenHash = crypto.createHash('sha256').update(refreshTokenRaw).digest('hex');
+
+    // Find the refresh token in database (must be active)
+    const storedToken = await db.RefreshToken.findOne({
+      where: { token: refreshTokenHash, activeFlag: true },
+      include: [{
+        model: db.User,
+        as: 'user',
+        attributes: ['id', 'email', 'displayName', 'photoURL', 'activeFlag']
+      }]
+    });
+
+    if (!storedToken) {
+      return res.status(401).json({ error: 'Invalid refresh token' });
+    }
+
+    // Check if token is expired
+    if (new Date() > storedToken.expiresAt) {
+      await storedToken.update({ activeFlag: false });
+      return res.status(401).json({ error: 'Refresh token expired' });
+    }
+
+    // Check if user is still active
+    if (!storedToken.user || !storedToken.user.activeFlag) {
+      await storedToken.update({ activeFlag: false });
+      return res.status(401).json({ error: 'User is not active' });
+    }
+
+    const user = storedToken.user;
+
+    // Generate new access token
+    const accessToken = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+        displayName: user.displayName,
+        photoURL: user.photoURL
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '15m' }
+    );
+
+    // Rotate refresh token for better security
+    const newRefreshTokenRaw = crypto.randomBytes(32).toString('hex');
+    const newRefreshTokenHash = crypto.createHash('sha256').update(newRefreshTokenRaw).digest('hex');
+    const newRefreshTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+    // Deactivate old token and create new one
+    await storedToken.update({ activeFlag: false });
+    await db.RefreshToken.create({
+      token: newRefreshTokenHash,
+      userId: user.id,
+      expiresAt: newRefreshTokenExpiry,
+      activeFlag: true
+    });
+
+    // Set new cookies
+    res.cookie('auth_token', accessToken, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 15 * 60 * 1000 // 15 minutes
+    }).cookie('refresh_token', newRefreshTokenRaw, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    }).json({
+      accessToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.displayName
+      }
+    });
+  } catch (error) {
+    console.error('Error refreshing token:', error);
+    res.status(500).json({ error: 'Error refreshing token' });
   }
 };
