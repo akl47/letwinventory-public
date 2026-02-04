@@ -115,7 +115,7 @@
                     <td mat-cell *matCellDef="let item">
                         <div class="user-cell">
                             @if (item.user?.photoURL) {
-                                <img [src]="item.user.photoURL" class="user-avatar" [alt]="item.user?.displayName">
+                                <img [src]="item.user.photoURL" class="user-avatar" [alt]="item.user?.displayName" referrerPolicy="no-referrer">
                             }
                             <span>{{ item.user?.displayName || '-' }}</span>
                         </div>

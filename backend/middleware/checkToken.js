@@ -15,7 +15,6 @@ module.exports = (req, res, next) => {
           }
         }).then(dbUser => {
           if (_.isNull(dbUser)) {
-
             next(new RestError('Error finding user in database', 500))
           } else {
             req.user = dbUser.dataValues;
@@ -26,10 +25,12 @@ module.exports = (req, res, next) => {
           next(new RestError('Error finding user in database', 500));
         })
       } else {
-        next(new RestError('Invalid Token', 403));
+        // Use 401 for all auth failures to trigger token refresh
+        next(new RestError('Invalid or expired token', 401));
       }
     })
   } else {
-    next(new RestError('Request is missing in header.authorization', 400));
+    // Use 401 for missing auth to trigger token refresh
+    next(new RestError('Authentication required', 401));
   }
 }
