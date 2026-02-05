@@ -16,7 +16,8 @@ echo "Building $IMAGE:$VERSION and $IMAGE:latest..."
 docker build \
     -t "$IMAGE:$VERSION" \
     -t "$IMAGE:latest" \
-    -f backend/Dockerfile.prod .
+    -f backend/Dockerfile.prod .\
+    --no-cache
 
 echo "Pushing $IMAGE:$VERSION..."
 docker push "$IMAGE:$VERSION"
