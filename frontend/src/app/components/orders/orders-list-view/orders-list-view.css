@@ -143,6 +143,75 @@ mat-paginator {
     color: #065F46;
 }
 
+/* Filter Button Styles */
+.filter-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 12px;
+    height: 36px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+    color: rgba(255, 255, 255, 0.7);
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.filter-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.filter-btn.has-filter {
+    color: var(--mat-sys-primary);
+    background-color: rgba(var(--mat-sys-primary-rgb), 0.15);
+    border-color: var(--mat-sys-primary);
+}
+
+.filter-btn .dropdown-icon {
+    margin-left: 4px;
+    margin-right: -8px;
+}
+
+/* Filter Badge */
+.filter-badge {
+    background-color: var(--mat-sys-primary);
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin-left: 4px;
+}
+
+/* Filter Menu Styles */
+.menu-section-header {
+    padding: 8px 16px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.menu-header,
+.menu-item {
+    padding: 8px 16px;
+}
+
+.menu-header {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.status-color {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
     .table-header {
