@@ -106,5 +106,12 @@ export const routes: Routes = [
         loadComponent: () =>
             import('./components/harness/harness-page/harness-page').then((m) => m.HarnessPage),
         canActivate: [authGuard],
+    },
+    {
+        path: 'mobile',
+        title: 'Mobile Scanner',
+        loadComponent: () =>
+            import('./components/mobile/mobile-scanner/mobile-scanner').then((m) => m.MobileScanner),
+        canActivate: [authGuard],
     }
 ];

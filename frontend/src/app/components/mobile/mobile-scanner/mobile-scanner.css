@@ -1,0 +1,320 @@
+:host {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: #1a1a1a;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.scanner-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Camera feed */
+video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: none;
+}
+
+video.visible {
+    display: block;
+}
+
+/* Scan overlay */
+.scan-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+}
+
+.scan-frame {
+    width: 260px;
+    height: 160px;
+    border: 3px solid rgba(255, 255, 255, 0.8);
+    border-radius: 12px;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+}
+
+.scan-instruction {
+    margin-top: 24px;
+    padding: 8px 20px;
+    background: rgba(0, 0, 0, 0.7);
+    border-radius: 20px;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.cancel-scan-btn {
+    position: absolute;
+    bottom: 48px;
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+}
+
+/* Center content (loading, result, error, confirm, unsupported) */
+.center-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+    color: #e0e0e0;
+}
+
+.status-text {
+    margin-top: 16px;
+    font-size: 14px;
+    color: #b0b0b0;
+}
+
+/* Result icons */
+.result-icon {
+    font-size: 64px;
+    width: 64px;
+    height: 64px;
+    margin-bottom: 16px;
+}
+
+.result-icon.success {
+    color: #4caf50;
+}
+
+.result-icon.error {
+    color: #f44336;
+}
+
+.result-icon.unsupported {
+    color: #757575;
+    font-size: 72px;
+    width: 72px;
+    height: 72px;
+}
+
+.result-text {
+    font-size: 16px;
+    color: #b0b0b0;
+    max-width: 320px;
+    line-height: 1.5;
+}
+
+/* Display content */
+.display-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 24px 16px;
+    overflow-y: auto;
+}
+
+.item-card {
+    background: #2a2a2a;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 24px;
+}
+
+.item-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.type-badge {
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.badge-location {
+    background: #1565c0;
+    color: #fff;
+}
+
+.badge-box {
+    background: #6a1b9a;
+    color: #fff;
+}
+
+.badge-trace {
+    background: #2e7d32;
+    color: #fff;
+}
+
+.badge-equipment {
+    background: #e65100;
+    color: #fff;
+}
+
+.barcode-string {
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    color: #9fadbc;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.item-name {
+    margin: 0 0 8px;
+    font-size: 22px;
+    font-weight: 500;
+    color: #fff;
+}
+
+.item-description {
+    margin: 0 0 12px;
+    font-size: 14px;
+    color: #9e9e9e;
+    line-height: 1.4;
+}
+
+.item-quantity {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    color: #b0b0b0;
+    margin-bottom: 12px;
+}
+
+.item-quantity mat-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+}
+
+.location-chain {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: #9e9e9e;
+    padding-top: 12px;
+    border-top: 1px solid #383838;
+}
+
+.location-chain mat-icon:first-child {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+    color: #757575;
+}
+
+.chain-item {
+    color: #b0b0b0;
+}
+
+.chain-arrow {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+    color: #616161;
+}
+
+/* Action grid */
+.action-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.action-btn {
+    height: 72px;
+    font-size: 15px;
+    font-weight: 500;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.action-btn mat-icon {
+    font-size: 26px;
+    width: 26px;
+    height: 26px;
+}
+
+.action-move {
+    background: #1565c0 !important;
+    color: #fff !important;
+}
+
+.action-merge {
+    background: #6a1b9a !important;
+    color: #fff !important;
+}
+
+.action-split {
+    background: #e65100 !important;
+    color: #fff !important;
+}
+
+.action-trash {
+    background: #c62828 !important;
+    color: #fff !important;
+}
+
+.scan-again-btn {
+    align-self: center;
+    margin-top: 8px;
+    color: #b0b0b0;
+}
+
+/* Confirm card */
+.confirm-card {
+    background: #2a2a2a;
+    border-radius: 12px;
+    padding: 24px;
+    width: 100%;
+    max-width: 320px;
+    text-align: left;
+}
+
+.confirm-card h3 {
+    margin: 0 0 8px;
+    font-size: 20px;
+    color: #fff;
+}
+
+.confirm-card p {
+    margin: 0 0 20px;
+    font-size: 14px;
+    color: #9e9e9e;
+    line-height: 1.4;
+}
+
+.qty-field {
+    width: 100%;
+    margin-bottom: 8px;
+}
+
+.confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}

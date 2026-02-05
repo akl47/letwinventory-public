@@ -191,6 +191,14 @@ export class InventoryService {
         });
     }
 
+    getTagById(barcodeId: number): Observable<InventoryTag> {
+        return this.http.get<InventoryTag>(`${this.apiUrl}/barcode/tag/${barcodeId}`);
+    }
+
+    getTagChain(barcodeId: number): Observable<InventoryTag[]> {
+        return this.http.get<InventoryTag[]>(`${this.apiUrl}/barcode/tag/chain/${barcodeId}`);
+    }
+
     // Trace action methods
     splitTrace(barcodeId: number, splitQuantity: number): Observable<any> {
         return this.http.post(`${this.apiUrl}/trace/split/${barcodeId}`, { splitQuantity });
