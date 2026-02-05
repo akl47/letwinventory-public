@@ -66,6 +66,13 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'orders/bulk-upload',
+        title: 'Bulk Order Import',
+        loadComponent: () =>
+            import('./components/orders/bulk-upload/bulk-upload').then((m) => m.BulkUploadComponent),
+        canActivate: [authGuard],
+    },
+    {
         path: 'orders/:id',
         title: 'Order Details',
         loadComponent: () =>

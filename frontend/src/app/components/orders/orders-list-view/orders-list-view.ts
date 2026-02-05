@@ -232,6 +232,10 @@ export class OrdersListView implements OnInit {
     });
   }
 
+  openBulkUpload() {
+    this.router.navigate(['/orders/bulk-upload']);
+  }
+
   openOrderLink(link: string) {
     window.open(link, '_blank');
   }
