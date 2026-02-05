@@ -134,6 +134,11 @@ export class BarcodeMovementDialog {
     // First lookup the destination barcode to get its ID
     this.inventoryService.lookupBarcode(barcodeString).subscribe({
       next: (destinationBarcode) => {
+        if (destinationBarcode.id === this.data.barcodeId) {
+          this.isSubmitting.set(false);
+          this.errorMessage.set('A barcode cannot be moved into itself');
+          return;
+        }
         // Now move the barcode to the destination
         this.inventoryService.moveBarcode(this.data.barcodeId, destinationBarcode.id).subscribe({
           next: (result) => {

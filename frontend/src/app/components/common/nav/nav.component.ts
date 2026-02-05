@@ -1,5 +1,5 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
-import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { ChangeDetectionStrategy, Component, inject, signal, OnInit, OnDestroy } from '@angular/core';
+import { Router, RouterLink, RouterLinkActive, RouterOutlet, NavigationEnd } from '@angular/router';
 import { MatSidenavModule } from '@angular/material/sidenav';
 import { MatListModule } from '@angular/material/list';
 import { MatIconModule } from '@angular/material/icon';
@@ -7,6 +7,8 @@ import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatButtonModule } from '@angular/material/button';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { DOCUMENT } from '@angular/common';
+import { Subscription } from 'rxjs';
+import { filter } from 'rxjs/operators';
 import { AuthService } from '../../../services/auth.service';
 import { TaskViewPreferencesService } from '../../../services/task-view-preferences.service';
 import { environment } from '../../../../environments/environment';
@@ -29,16 +31,29 @@ import { APP_VERSION } from '../../../../environments/version';
         MatTooltipModule,
     ],
 })
-export class NavComponent {
+export class NavComponent implements OnInit, OnDestroy {
     private readonly document = inject(DOCUMENT);
     private readonly authService = inject(AuthService);
     private readonly router = inject(Router);
     private readonly taskViewPreferences = inject(TaskViewPreferencesService);
+    private routerSub?: Subscription;
     protected readonly isSidenavCollapsed = signal(false);
+    protected readonly isMobileRoute = signal(false);
     protected readonly isAuthenticated = this.authService.isAuthenticated;
     protected readonly currentUser = this.authService.currentUser;
     protected readonly isDev = !environment.production;
     protected readonly appVersion = APP_VERSION;
+
+    ngOnInit() {
+        this.isMobileRoute.set(this.router.url.startsWith('/mobile'));
+        this.routerSub = this.router.events
+            .pipe(filter((e): e is NavigationEnd => e instanceof NavigationEnd))
+            .subscribe((e) => this.isMobileRoute.set(e.urlAfterRedirects.startsWith('/mobile')));
+    }
+
+    ngOnDestroy() {
+        this.routerSub?.unsubscribe();
+    }
 
     toggleSidenav() {
         this.isSidenavCollapsed.update((collapsed) => !collapsed);

@@ -1,5 +1,5 @@
 <mat-sidenav-container class="sidenav-container" autosize>
-    <mat-sidenav mode="side" opened class="sidenav" [class.collapsed]="isSidenavCollapsed()">
+    <mat-sidenav mode="side" [opened]="!isMobileRoute()" class="sidenav" [class.collapsed]="isSidenavCollapsed()">
         <!-- Sidenav Header -->
         <div class="sidenav-header">
             <div class="logo"><img src="assets/logo.svg" alt="Logo"></div>
@@ -47,6 +47,12 @@
                 <mat-icon matListItemIcon>cable</mat-icon>
                 <span matListItemTitle>Wire Harness</span>
             </a>
+            <a mat-list-item routerLink="/mobile" routerLinkActive="active-link" matTooltip="Scanner"
+                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()"
+                class="mobile-scanner-btn">
+                <mat-icon matListItemIcon>qr_code_scanner</mat-icon>
+                <span matListItemTitle>Scanner</span>
+            </a>
             }
         </mat-nav-list>
 
@@ -57,7 +63,7 @@
     </mat-sidenav>
 
     <mat-sidenav-content class="sidenav-content">
-        <mat-toolbar class="nav-header" [class.dev]="isDev">
+        <mat-toolbar class="nav-header" [class.dev]="isDev" [class.hidden]="isMobileRoute()">
             <button mat-icon-button (click)="toggleSidenav()" aria-label="Toggle sidenav">
                 <mat-icon>menu</mat-icon>
             </button>

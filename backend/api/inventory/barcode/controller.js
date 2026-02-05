@@ -235,6 +235,10 @@ exports.moveBarcodeByID = async (req, res, next) => {
       return next(createError(400, 'Invalid barcode ID or location ID'));
     }
 
+    if (barcodeID === newLocationID) {
+      return next(createError(400, 'A barcode cannot be moved into itself'));
+    }
+
     // Get the current parent barcode ID before updating
     const currentBarcode = await db.Barcode.findOne({
       where: { id: barcodeID, activeFlag: true },

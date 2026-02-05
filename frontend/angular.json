@@ -63,7 +63,8 @@
         "serve": {
           "builder": "@angular/build:dev-server",
           "options": {
-            "poll": 2000
+            "poll": 2000,
+            "allowedHosts": ["dev.letwin.co"]
           },
           "configurations": {
             "production": {

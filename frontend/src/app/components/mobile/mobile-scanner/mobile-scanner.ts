@@ -16,6 +16,7 @@ type ScannerState =
     | 'loading'
     | 'display'
     | 'scanning_second'
+    | 'confirming_second'
     | 'confirming_action'
     | 'executing'
     | 'result'
@@ -56,9 +57,13 @@ export class MobileScanner implements OnInit, OnDestroy {
     // Second scan context
     secondScanAction = signal<SecondScanAction | null>(null);
     secondScanInstruction = signal('');
+    secondScannedBarcode = signal<Barcode | null>(null);
+    secondScannedTag = signal<InventoryTag | null>(null);
 
-    // Split quantity
+    // Split / trash quantity
     splitQuantity = signal<number>(1);
+    trashQuantity = signal<number>(1);
+    trashAll = signal(false);
     confirmAction = signal<'split' | 'trash' | null>(null);
 
     // Camera / detector
@@ -202,25 +207,21 @@ export class MobileScanner implements OnInit, OnDestroy {
     }
 
     private handleSecondScan(barcodeString: string) {
-        this.state.set('executing');
+        this.state.set('loading');
         this.stopCamera();
 
         this.inventoryService.lookupBarcode(barcodeString).subscribe({
             next: (destBarcode) => {
-                const action = this.secondScanAction();
-                const scannedId = this.scannedBarcode()!.id;
-
-                if (action === 'move') {
-                    this.inventoryService.moveBarcode(scannedId, destBarcode.id).subscribe({
-                        next: () => this.showResult(true, 'Item moved successfully.'),
-                        error: (err) => this.showResult(false, err?.error?.message || 'Move failed.'),
-                    });
-                } else if (action === 'merge') {
-                    this.inventoryService.mergeTrace(destBarcode.id, scannedId).subscribe({
-                        next: () => this.showResult(true, 'Items merged successfully.'),
-                        error: (err) => this.showResult(false, err?.error?.message || 'Merge failed.'),
-                    });
-                }
+                this.secondScannedBarcode.set(destBarcode);
+                this.inventoryService.getTagById(destBarcode.id).subscribe({
+                    next: (tag) => {
+                        this.secondScannedTag.set(tag);
+                        this.state.set('confirming_second');
+                    },
+                    error: () => {
+                        this.showResult(false, 'Failed to load destination details.');
+                    },
+                });
             },
             error: () => {
                 this.showResult(false, `Destination barcode "${barcodeString}" not found.`);
@@ -250,8 +251,20 @@ export class MobileScanner implements OnInit, OnDestroy {
     }
 
     startTrash() {
+        this.trashQuantity.set(1);
+        this.trashAll.set(false);
         this.confirmAction.set('trash');
         this.state.set('confirming_action');
+    }
+
+    toggleTrashAll() {
+        const all = !this.trashAll();
+        this.trashAll.set(all);
+        if (all) {
+            this.trashQuantity.set(this.scannedTag()?.quantity ?? 1);
+        } else {
+            this.trashQuantity.set(1);
+        }
     }
 
     confirmSplit() {
@@ -269,8 +282,9 @@ export class MobileScanner implements OnInit, OnDestroy {
         const barcode = this.scannedBarcode()!;
 
         if (tag.type === 'Trace') {
-            this.inventoryService.deleteTrace(barcode.id).subscribe({
-                next: () => this.showResult(true, 'Item trashed.'),
+            const qty = this.trashAll() ? undefined : this.trashQuantity();
+            this.inventoryService.deleteTrace(barcode.id, qty).subscribe({
+                next: () => this.showResult(true, this.trashAll() ? 'All quantity trashed.' : `Trashed ${qty} from item.`),
                 error: (err) => this.showResult(false, err?.error?.message || 'Trash failed.'),
             });
         } else {
@@ -290,6 +304,31 @@ export class MobileScanner implements OnInit, OnDestroy {
         this.state.set('display');
     }
 
+    confirmSecondAction() {
+        this.state.set('executing');
+        const action = this.secondScanAction();
+        const scannedId = this.scannedBarcode()!.id;
+        const destId = this.secondScannedBarcode()!.id;
+
+        if (action === 'move') {
+            this.inventoryService.moveBarcode(scannedId, destId).subscribe({
+                next: () => this.showResult(true, 'Item moved successfully.'),
+                error: (err) => this.showResult(false, err?.error?.message || 'Move failed.'),
+            });
+        } else if (action === 'merge') {
+            this.inventoryService.mergeTrace(destId, scannedId).subscribe({
+                next: () => this.showResult(true, 'Items merged successfully.'),
+                error: (err) => this.showResult(false, err?.error?.message || 'Merge failed.'),
+            });
+        }
+    }
+
+    cancelSecondAction() {
+        this.secondScannedBarcode.set(null);
+        this.secondScannedTag.set(null);
+        this.state.set('display');
+    }
+
     scanAgain() {
         this.resetState();
         this.startCamera();
@@ -305,6 +344,8 @@ export class MobileScanner implements OnInit, OnDestroy {
         this.scannedTag.set(null);
         this.tagChain.set([]);
         this.secondScanAction.set(null);
+        this.secondScannedBarcode.set(null);
+        this.secondScannedTag.set(null);
         this.confirmAction.set(null);
         this.errorMessage.set('');
         this.resultMessage.set('');
