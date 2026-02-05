@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { MatTableModule } from '@angular/material/table';
@@ -11,10 +11,13 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatChipsModule } from '@angular/material/chips';
+import { MatMenuModule } from '@angular/material/menu';
+import { MatCheckboxModule } from '@angular/material/checkbox';
+import { MatDividerModule } from '@angular/material/divider';
 import { MatDialog } from '@angular/material/dialog';
 import { FormsModule } from '@angular/forms';
 import { InventoryService } from '../../../services/inventory.service';
-import { Order } from '../../../models';
+import { Order, OrderStatus } from '../../../models';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { OrderEditDialog } from '../order-edit-dialog/order-edit-dialog';
 
@@ -33,6 +36,9 @@ import { OrderEditDialog } from '../order-edit-dialog/order-edit-dialog';
     MatTooltipModule,
     MatSlideToggleModule,
     MatChipsModule,
+    MatMenuModule,
+    MatCheckboxModule,
+    MatDividerModule,
     FormsModule
   ],
   templateUrl: './orders-list-view.html',
@@ -48,9 +54,12 @@ export class OrdersListView implements OnInit {
   displayedOrders = signal<Order[]>([]);
   searchText = signal<string>('');
   showInactive = signal<boolean>(false);
-  hideReceived = signal<boolean>(false);
 
-  displayedColumns: string[] = ['orderID', 'vendor', 'placedDate', 'status', 'itemCount', 'totalPrice'];
+  // Status filter
+  statuses = signal<OrderStatus[]>([]);
+  selectedStatusIds = signal<Set<number>>(new Set());
+
+  displayedColumns: string[] = ['orderID', 'vendor', 'description', 'placedDate', 'status', 'itemCount', 'totalPrice'];
 
   // Pagination
   pageSize = signal<number>(25);
@@ -61,11 +70,47 @@ export class OrdersListView implements OnInit {
   sortColumn = signal<string>('placedDate');
   sortDirection = signal<'asc' | 'desc'>('desc');
 
+  // Computed: check if all statuses are selected
+  allStatusesSelected = computed(() => {
+    const sts = this.statuses();
+    const selected = this.selectedStatusIds();
+    return sts.length > 0 && sts.every(s => selected.has(s.id));
+  });
+
+  // Computed: check if some but not all statuses are selected
+  someStatusesSelected = computed(() => {
+    const sts = this.statuses();
+    const selected = this.selectedStatusIds();
+    const selectedCount = sts.filter(s => selected.has(s.id)).length;
+    return selectedCount > 0 && selectedCount < sts.length;
+  });
+
+  // Computed: count of hidden statuses (for filter indicator)
+  hiddenStatusCount = computed(() => {
+    const sts = this.statuses();
+    const selected = this.selectedStatusIds();
+    return sts.filter(s => !selected.has(s.id)).length;
+  });
+
   ngOnInit() {
     this.loadOrders();
   }
 
   loadOrders() {
+    this.inventoryService.getOrderStatuses().subscribe({
+      next: (statuses) => {
+        this.statuses.set(statuses);
+        this.selectedStatusIds.set(new Set(statuses.map(s => s.id)));
+        this.fetchOrders();
+      },
+      error: (err) => {
+        this.errorNotification.showHttpError(err, 'Error loading order statuses');
+        this.fetchOrders();
+      }
+    });
+  }
+
+  fetchOrders() {
     this.inventoryService.getAllOrders().subscribe({
       next: (orders) => {
         this.allOrders.set(orders);
@@ -85,9 +130,12 @@ export class OrdersListView implements OnInit {
       filtered = filtered.filter(order => order.activeFlag === true);
     }
 
-    // Filter out received orders if hideReceived is enabled
-    if (this.hideReceived()) {
-      filtered = filtered.filter(order => order.orderStatusID !== 4);
+    // Filter by status
+    const selectedStatuses = this.selectedStatusIds();
+    if (selectedStatuses.size === 0) {
+      filtered = [];
+    } else if (selectedStatuses.size < this.statuses().length) {
+      filtered = filtered.filter(order => selectedStatuses.has(order.orderStatusID));
     }
 
     // Apply search filter
@@ -147,8 +195,31 @@ export class OrdersListView implements OnInit {
     this.applyFiltersAndSort();
   }
 
-  onToggleHideReceived(checked: boolean) {
-    this.hideReceived.set(checked);
+  // Status filter methods
+  isStatusSelected(statusId: number): boolean {
+    return this.selectedStatusIds().has(statusId);
+  }
+
+  toggleStatus(statusId: number): void {
+    const current = this.selectedStatusIds();
+    const newSet = new Set(current);
+    if (newSet.has(statusId)) {
+      newSet.delete(statusId);
+    } else {
+      newSet.add(statusId);
+    }
+    this.selectedStatusIds.set(newSet);
+    this.pageIndex.set(0);
+    this.applyFiltersAndSort();
+  }
+
+  toggleAllStatuses(): void {
+    const sts = this.statuses();
+    if (this.allStatusesSelected()) {
+      this.selectedStatusIds.set(new Set());
+    } else {
+      this.selectedStatusIds.set(new Set(sts.map(s => s.id)));
+    }
     this.pageIndex.set(0);
     this.applyFiltersAndSort();
   }
@@ -158,8 +229,11 @@ export class OrdersListView implements OnInit {
     if (!this.showInactive()) {
       filtered = filtered.filter(order => order.activeFlag === true);
     }
-    if (this.hideReceived()) {
-      filtered = filtered.filter(order => order.orderStatusID !== 4);
+    const selectedStatuses = this.selectedStatusIds();
+    if (selectedStatuses.size === 0) {
+      filtered = [];
+    } else if (selectedStatuses.size < this.statuses().length) {
+      filtered = filtered.filter(order => selectedStatuses.has(order.orderStatusID));
     }
     const search = this.searchText().toLowerCase();
     if (search) {

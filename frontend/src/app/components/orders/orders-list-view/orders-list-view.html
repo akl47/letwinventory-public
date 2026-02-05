@@ -5,18 +5,40 @@
       Orders
     </h2>
     <div class="header-actions">
+      <!-- Status Filter Dropdown -->
+      <button mat-button class="filter-btn" [matMenuTriggerFor]="filterMenu"
+          [class.has-filter]="hiddenStatusCount() > 0">
+        <mat-icon>filter_list</mat-icon>
+        <span>Filter</span>
+        @if (hiddenStatusCount() > 0) {
+          <span class="filter-badge">{{ hiddenStatusCount() }}</span>
+        }
+        <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
+      </button>
+      <mat-menu #filterMenu="matMenu" class="filter-menu">
+        <div class="menu-section-header">Status</div>
+        <div class="menu-header" (click)="$event.stopPropagation()">
+          <mat-checkbox [checked]="allStatusesSelected()" [indeterminate]="someStatusesSelected()"
+              (change)="toggleAllStatuses()">
+            All Statuses
+          </mat-checkbox>
+        </div>
+        @for (status of statuses(); track status.id) {
+          <div class="menu-item" (click)="$event.stopPropagation()">
+            <mat-checkbox [checked]="isStatusSelected(status.id)" (change)="toggleStatus(status.id)">
+              <span class="status-color" [style.background-color]="status.tagColor || '#808080'"></span>
+              {{ status.name }}
+            </mat-checkbox>
+          </div>
+        }
+      </mat-menu>
+
       <mat-form-field appearance="outline" class="search-field">
         <mat-label>Search orders</mat-label>
         <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
                placeholder="Search by order #, vendor, status, or notes">
         <mat-icon matPrefix>search</mat-icon>
       </mat-form-field>
-      <mat-slide-toggle
-        [checked]="hideReceived()"
-        (change)="onToggleHideReceived($event.checked)"
-        color="primary">
-        Hide Received
-      </mat-slide-toggle>
       <mat-slide-toggle
         [checked]="showInactive()"
         (change)="onToggleInactive($event.checked)"
@@ -48,6 +70,12 @@
       <ng-container matColumnDef="vendor">
         <th mat-header-cell *matHeaderCellDef mat-sort-header>Vendor</th>
         <td mat-cell *matCellDef="let order">{{ order.vendor || '-' }}</td>
+      </ng-container>
+
+      <!-- Description Column -->
+      <ng-container matColumnDef="description">
+        <th mat-header-cell *matHeaderCellDef mat-sort-header>Description</th>
+        <td mat-cell *matCellDef="let order">{{ order.description || '-' }}</td>
       </ng-container>
 
       <!-- Placed Date Column -->
