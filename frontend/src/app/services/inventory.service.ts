@@ -19,6 +19,50 @@ import {
 import { Equipment } from '../models/equipment.model';
 import { environment } from '../../environments/environment';
 
+export interface BulkImportPartInfo {
+    id: number | null;
+    name: string;
+    description: string;
+    vendor: string;
+}
+
+export interface BulkImportOrderItem {
+    partId: number | null;
+    partName: string;
+    description: string;
+    quantity: number;
+    price: number;
+    lineTotal: number;
+    isNew: boolean;
+    // Additional part fields for new parts
+    vendor?: string;
+    sku?: string;
+    manufacturer?: string;
+    manufacturerPN?: string;
+    partCategoryID?: number;
+    internalPart?: boolean;
+}
+
+export interface BulkImportOrderData {
+    description?: string;
+    vendor?: string;
+    trackingNumber?: string;
+    link?: string;
+    notes?: string;
+    placedDate?: string;
+    orderStatusID?: number;
+}
+
+export interface BulkImportResult {
+    dryRun: boolean;
+    partsToCreate: BulkImportPartInfo[];
+    partsExisting: BulkImportPartInfo[];
+    partsSkipped: { reason: string; record: any }[];
+    orderItems: BulkImportOrderItem[];
+    orderTotal: number;
+    order: { id: number | null; description: string; vendor: string } | null;
+}
+
 @Injectable({
     providedIn: 'root'
 })
@@ -202,6 +246,22 @@ export class InventoryService {
 
     getOrderLineTypes(): Observable<OrderLineType[]> {
         return this.http.get<OrderLineType[]>(`${this.apiUrl}/order/line-types`);
+    }
+
+    bulkImportOrder(csvContent: string, dryRun: boolean, vendor?: string, orderDescription?: string): Observable<BulkImportResult> {
+        const params = dryRun ? '?dryRun=true' : '';
+        return this.http.post<BulkImportResult>(`${this.apiUrl}/order/bulk-import${params}`, {
+            csvContent,
+            vendor,
+            orderDescription
+        });
+    }
+
+    bulkImportOrderWithEdits(items: BulkImportOrderItem[], orderData: BulkImportOrderData): Observable<BulkImportResult> {
+        return this.http.post<BulkImportResult>(`${this.apiUrl}/order/bulk-import`, {
+            items,
+            orderData
+        });
     }
 
     getPrinters(): Observable<any[]> {

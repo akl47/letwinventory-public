@@ -1,0 +1,234 @@
+<div class="bulk-upload-container">
+    <div class="header">
+        <button mat-icon-button (click)="goBack()" matTooltip="Back">
+            <mat-icon>arrow_back</mat-icon>
+        </button>
+        <h1>Bulk Order Import</h1>
+    </div>
+
+    <mat-card class="upload-card">
+        <mat-card-header>
+            <mat-card-title>Upload CSV File</mat-card-title>
+        </mat-card-header>
+        <mat-card-content>
+            <div class="file-input-row">
+                <input
+                    type="file"
+                    accept=".csv"
+                    (change)="onFileSelected($event)"
+                    #fileInput
+                    style="display: none"
+                />
+                <button mat-stroked-button (click)="fileInput.click()">
+                    <mat-icon>upload_file</mat-icon>
+                    Select CSV File
+                </button>
+                @if (selectedFile()) {
+                    <span class="file-name">{{ selectedFile()!.name }}</span>
+                }
+                @if (isLoading()) {
+                    <mat-spinner diameter="24"></mat-spinner>
+                }
+            </div>
+        </mat-card-content>
+    </mat-card>
+
+    @if (error()) {
+        <mat-card class="error-card">
+            <mat-card-content>
+                <mat-icon>error</mat-icon>
+                <span>{{ error() }}</span>
+            </mat-card-content>
+        </mat-card>
+    }
+
+    @if (editableItems().length > 0) {
+        <!-- Order Details Card -->
+        <mat-card class="order-details-card">
+            <mat-card-header>
+                <mat-card-title>Order Details</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                <div class="order-fields-grid">
+                    <mat-form-field appearance="outline">
+                        <mat-label>Vendor</mat-label>
+                        <input matInput [ngModel]="vendor()" (ngModelChange)="vendor.set($event)" />
+                    </mat-form-field>
+
+                    <mat-form-field appearance="outline">
+                        <mat-label>Order Description</mat-label>
+                        <input matInput [ngModel]="orderDescription()" (ngModelChange)="orderDescription.set($event)" />
+                    </mat-form-field>
+
+                    <mat-form-field appearance="outline">
+                        <mat-label>Placed Date</mat-label>
+                        <input matInput [matDatepicker]="picker" [ngModel]="placedDate()" (ngModelChange)="placedDate.set($event)" />
+                        <mat-datepicker-toggle matIconSuffix [for]="picker"></mat-datepicker-toggle>
+                        <mat-datepicker #picker></mat-datepicker>
+                    </mat-form-field>
+
+                    <mat-form-field appearance="outline">
+                        <mat-label>Tracking Number</mat-label>
+                        <input matInput [ngModel]="trackingNumber()" (ngModelChange)="trackingNumber.set($event)" />
+                    </mat-form-field>
+
+                    <mat-form-field appearance="outline">
+                        <mat-label>Order Link</mat-label>
+                        <input matInput [ngModel]="orderLink()" (ngModelChange)="orderLink.set($event)" placeholder="https://..." />
+                    </mat-form-field>
+
+                    <mat-form-field appearance="outline" class="full-width">
+                        <mat-label>Notes</mat-label>
+                        <textarea matInput [ngModel]="notes()" (ngModelChange)="notes.set($event)" rows="2"></textarea>
+                    </mat-form-field>
+                </div>
+            </mat-card-content>
+        </mat-card>
+
+        <!-- Results Card -->
+        <mat-card class="results-card">
+            <mat-card-header>
+                <mat-card-title>Import Preview</mat-card-title>
+                <mat-card-subtitle>
+                    Click a row to edit values
+                </mat-card-subtitle>
+            </mat-card-header>
+            <mat-card-content>
+                <div class="summary-section">
+                    <div class="summary-grid">
+                        <div class="summary-item">
+                            <span class="label">New Parts</span>
+                            <span class="value highlight-new">{{ newPartsCount() }}</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="label">Existing Parts</span>
+                            <span class="value">{{ existingPartsCount() }}</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="label">Total Items</span>
+                            <span class="value">{{ editableItems().length }}</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="label">Order Total</span>
+                            <span class="value highlight-total">{{ formatTotal(orderTotal()) }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                @if (previewResult()?.partsSkipped?.length) {
+                    <div class="skipped-section">
+                        <h3>Skipped Rows</h3>
+                        @for (skipped of previewResult()!.partsSkipped; track $index) {
+                            <div class="skipped-item">
+                                <mat-icon>warning</mat-icon>
+                                <span>{{ skipped.reason }}</span>
+                            </div>
+                        }
+                    </div>
+                }
+
+                <div class="items-section">
+                    <h3>Order Items</h3>
+                    <div class="table-wrapper">
+                        <table mat-table [dataSource]="editableItems()" class="items-table">
+                            <ng-container matColumnDef="partName">
+                                <th mat-header-cell *matHeaderCellDef>Part Name</th>
+                                <td mat-cell *matCellDef="let item; let i = index" (click)="$event.stopPropagation()">
+                                    @if (isEditing(i) && item.isNew) {
+                                        <input class="inline-input wide" [ngModel]="editingPartName()" (ngModelChange)="editingPartName.set($event)" />
+                                    } @else {
+                                        {{ item.partName }}
+                                    }
+                                </td>
+                            </ng-container>
+
+                            <ng-container matColumnDef="description">
+                                <th mat-header-cell *matHeaderCellDef>Description</th>
+                                <td mat-cell *matCellDef="let item; let i = index" class="description-cell" (click)="$event.stopPropagation()">
+                                    @if (isEditing(i) && item.isNew) {
+                                        <input class="inline-input extra-wide" [ngModel]="editingDescription()" (ngModelChange)="editingDescription.set($event)" />
+                                    } @else {
+                                        {{ item.description }}
+                                    }
+                                </td>
+                            </ng-container>
+
+                            <ng-container matColumnDef="quantity">
+                                <th mat-header-cell *matHeaderCellDef>Qty</th>
+                                <td mat-cell *matCellDef="let item; let i = index" (click)="$event.stopPropagation()">
+                                    @if (isEditing(i)) {
+                                        <input class="inline-input" type="number" [ngModel]="editingQuantity()" (ngModelChange)="onQuantityChange($event)" min="1" />
+                                    } @else {
+                                        {{ item.quantity }}
+                                    }
+                                </td>
+                            </ng-container>
+
+                            <ng-container matColumnDef="price">
+                                <th mat-header-cell *matHeaderCellDef>Unit Price</th>
+                                <td mat-cell *matCellDef="let item; let i = index" (click)="$event.stopPropagation()">
+                                    @if (isEditing(i)) {
+                                        <input class="inline-input" type="number" step="0.00001" [ngModel]="editingPrice()" (ngModelChange)="onPriceChange($event)" />
+                                    } @else {
+                                        {{ formatPrice(item.price) }}
+                                    }
+                                </td>
+                            </ng-container>
+
+                            <ng-container matColumnDef="lineTotal">
+                                <th mat-header-cell *matHeaderCellDef>Line Total</th>
+                                <td mat-cell *matCellDef="let item">{{ formatTotal(item.quantity * item.price) }}</td>
+                            </ng-container>
+
+                            <ng-container matColumnDef="status">
+                                <th mat-header-cell *matHeaderCellDef>Part Status</th>
+                                <td mat-cell *matCellDef="let item">
+                                    <mat-chip [class.new-part]="item.isNew" [class.existing-part]="!item.isNew">
+                                        {{ getStatusLabel(item) }}
+                                    </mat-chip>
+                                </td>
+                            </ng-container>
+
+                            <ng-container matColumnDef="actions">
+                                <th mat-header-cell *matHeaderCellDef></th>
+                                <td mat-cell *matCellDef="let item; let i = index" class="actions-cell">
+                                    @if (isEditing(i)) {
+                                        <button mat-icon-button (click)="saveEdit(); $event.stopPropagation()" matTooltip="Done">
+                                            <mat-icon>check</mat-icon>
+                                        </button>
+                                    } @else {
+                                        <button mat-icon-button (click)="startEdit(i); $event.stopPropagation()" matTooltip="Edit">
+                                            <mat-icon>edit</mat-icon>
+                                        </button>
+                                    }
+                                    <button mat-icon-button (click)="removeItem(i); $event.stopPropagation()" matTooltip="Remove">
+                                        <mat-icon>delete</mat-icon>
+                                    </button>
+                                </td>
+                            </ng-container>
+
+                            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+                            <tr mat-row *matRowDef="let row; columns: displayedColumns; let i = index"
+                                [class.editing-row]="isEditing(i)"
+                                (click)="startEdit(i)"></tr>
+                        </table>
+                    </div>
+                </div>
+            </mat-card-content>
+            <mat-card-actions>
+                <button
+                    mat-flat-button
+                    color="primary"
+                    (click)="executeImport()"
+                    [disabled]="isLoading() || editableItems().length === 0"
+                >
+                    <mat-icon>check_circle</mat-icon>
+                    Create Order & Parts
+                </button>
+                <button mat-stroked-button (click)="reset()" [disabled]="isLoading()">
+                    Cancel
+                </button>
+            </mat-card-actions>
+        </mat-card>
+    }
+</div>
