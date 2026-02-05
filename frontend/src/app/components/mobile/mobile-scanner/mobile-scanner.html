@@ -1,0 +1,223 @@
+<div class="scanner-container">
+    <!-- Camera feed (always in DOM, visibility toggled) -->
+    <video #videoElement autoplay playsinline
+        [class.visible]="state() === 'scanning' || state() === 'scanning_second'"></video>
+
+    <!-- Scan overlay -->
+    @if (state() === 'scanning' || state() === 'scanning_second') {
+    <div class="scan-overlay">
+        <div class="scan-frame"></div>
+        <div class="scan-instruction">
+            @if (state() === 'scanning') {
+            <span>Point camera at barcode</span>
+            } @else {
+            <span>{{ secondScanInstruction() }}</span>
+            }
+        </div>
+        @if (state() === 'scanning_second') {
+        <button mat-flat-button class="cancel-scan-btn" (click)="cancelSecondScan()">
+            <mat-icon>close</mat-icon>
+            Cancel
+        </button>
+        }
+    </div>
+    }
+
+    <!-- Loading -->
+    @if (state() === 'loading' || state() === 'executing') {
+    <div class="center-content">
+        <mat-spinner diameter="48"></mat-spinner>
+        <p class="status-text">
+            @if (state() === 'loading') {
+            Looking up barcode...
+            } @else {
+            Processing...
+            }
+        </p>
+    </div>
+    }
+
+    <!-- Display scanned item -->
+    @if (state() === 'display') {
+    <div class="display-content">
+        <div class="item-card">
+            <div class="item-header">
+                <span class="type-badge" [class]="getTypeBadgeClass()">{{ scannedTag()?.type }}</span>
+                <span class="barcode-string">{{ scannedBarcode()?.barcode }}</span>
+            </div>
+
+            <h2 class="item-name">{{ scannedTag()?.name }}</h2>
+
+            @if (scannedTag()?.description) {
+            <p class="item-description">{{ scannedTag()?.description }}</p>
+            }
+
+            @if (isTrace() && scannedTag()?.quantity != null) {
+            <div class="item-quantity">
+                <mat-icon>inventory_2</mat-icon>
+                <span>Qty: {{ scannedTag()?.quantity }}</span>
+            </div>
+            }
+
+            @if (locationChain().length > 0) {
+            <div class="location-chain">
+                <mat-icon>place</mat-icon>
+                @for (loc of locationChain(); track loc.id; let last = $last) {
+                <span class="chain-item">{{ loc.name }}</span>
+                @if (!last) {
+                <mat-icon class="chain-arrow">chevron_right</mat-icon>
+                }
+                }
+            </div>
+            }
+        </div>
+
+        <div class="action-grid">
+            <button mat-flat-button class="action-btn action-move" (click)="startMove()">
+                <mat-icon>open_with</mat-icon>
+                Move
+            </button>
+            @if (isTrace()) {
+            <button mat-flat-button class="action-btn action-merge" (click)="startMerge()">
+                <mat-icon>merge_type</mat-icon>
+                Merge
+            </button>
+            <button mat-flat-button class="action-btn action-split" (click)="startSplit()">
+                <mat-icon>call_split</mat-icon>
+                Split
+            </button>
+            }
+            <button mat-flat-button class="action-btn action-trash" (click)="startTrash()">
+                <mat-icon>delete</mat-icon>
+                Trash
+            </button>
+        </div>
+
+        <button mat-button class="scan-again-btn" (click)="scanAgain()">
+            <mat-icon>qr_code_scanner</mat-icon>
+            Scan Another
+        </button>
+    </div>
+    }
+
+    <!-- Confirming action (split / trash) -->
+    @if (state() === 'confirming_action') {
+    <div class="center-content">
+        @if (confirmAction() === 'split') {
+        <div class="confirm-card">
+            <h3>Split Quantity</h3>
+            <p>Enter the quantity to split from <strong>{{ scannedTag()?.name }}</strong></p>
+            <mat-form-field appearance="outline" class="qty-field">
+                <mat-label>Quantity</mat-label>
+                <input matInput type="number" min="1" [ngModel]="splitQuantity()"
+                    (ngModelChange)="splitQuantity.set($event)">
+            </mat-form-field>
+            <div class="confirm-actions">
+                <button mat-button (click)="cancelAction()">Cancel</button>
+                <button mat-flat-button class="action-split" (click)="confirmSplit()">
+                    <mat-icon>call_split</mat-icon>
+                    Split
+                </button>
+            </div>
+        </div>
+        } @else if (confirmAction() === 'trash') {
+        <div class="confirm-card">
+            <h3>Confirm Delete</h3>
+            <p>Trash <strong>{{ scannedTag()?.name }}</strong>?</p>
+            @if (isTrace()) {
+            <div class="qty-row">
+                <mat-form-field appearance="outline" class="qty-field">
+                    <mat-label>Quantity</mat-label>
+                    <input matInput type="number" min="1" [max]="scannedTag()?.quantity ?? null"
+                        [disabled]="trashAll()"
+                        [ngModel]="trashQuantity()"
+                        (ngModelChange)="trashQuantity.set($event)">
+                </mat-form-field>
+                <button mat-stroked-button class="all-btn" [class.active]="trashAll()" (click)="toggleTrashAll()">
+                    All
+                </button>
+            </div>
+            }
+            <div class="confirm-actions">
+                <button mat-button (click)="cancelAction()">Cancel</button>
+                <button mat-flat-button class="action-trash" (click)="confirmTrash()">
+                    <mat-icon>delete</mat-icon>
+                    Trash
+                </button>
+            </div>
+        </div>
+        }
+    </div>
+    }
+
+    <!-- Confirming second scan (move/merge destination) -->
+    @if (state() === 'confirming_second') {
+    <div class="center-content">
+        <div class="confirm-card">
+            <h3>{{ secondScanAction() === 'move' ? 'Confirm Move' : 'Confirm Merge' }}</h3>
+
+            <div class="confirm-detail">
+                <span class="confirm-label">Source</span>
+                <span class="confirm-name">{{ scannedTag()?.name }}</span>
+                <span class="confirm-barcode">{{ scannedBarcode()?.barcode }}</span>
+            </div>
+
+            <div class="confirm-arrow">
+                <mat-icon>{{ secondScanAction() === 'move' ? 'arrow_downward' : 'merge_type' }}</mat-icon>
+            </div>
+
+            <div class="confirm-detail">
+                <span class="confirm-label">Destination</span>
+                <span class="confirm-name">{{ secondScannedTag()?.name }}</span>
+                <span class="confirm-barcode">{{ secondScannedBarcode()?.barcode }}</span>
+            </div>
+
+            <div class="confirm-actions">
+                <button mat-button (click)="cancelSecondAction()">Cancel</button>
+                <button mat-flat-button
+                    [class]="secondScanAction() === 'move' ? 'action-move' : 'action-merge'"
+                    (click)="confirmSecondAction()">
+                    <mat-icon>{{ secondScanAction() === 'move' ? 'open_with' : 'merge_type' }}</mat-icon>
+                    {{ secondScanAction() === 'move' ? 'Move' : 'Merge' }}
+                </button>
+            </div>
+        </div>
+    </div>
+    }
+
+    <!-- Result -->
+    @if (state() === 'result') {
+    <div class="center-content">
+        <mat-icon class="result-icon success">check_circle</mat-icon>
+        <p class="result-text">{{ resultMessage() }}</p>
+        <button mat-flat-button class="scan-again-btn" (click)="scanAgain()">
+            <mat-icon>qr_code_scanner</mat-icon>
+            Scan Again
+        </button>
+    </div>
+    }
+
+    <!-- Error -->
+    @if (state() === 'error') {
+    <div class="center-content">
+        <mat-icon class="result-icon error">error</mat-icon>
+        <p class="result-text">{{ errorMessage() || resultMessage() }}</p>
+        <button mat-flat-button class="scan-again-btn" (click)="tryAgain()">
+            <mat-icon>refresh</mat-icon>
+            Try Again
+        </button>
+    </div>
+    }
+
+    <!-- Unsupported browser -->
+    @if (state() === 'unsupported') {
+    <div class="center-content">
+        <mat-icon class="result-icon unsupported">qr_code_scanner</mat-icon>
+        <h3>Barcode Scanner Not Supported</h3>
+        <p class="result-text">
+            Your browser does not support the BarcodeDetector API.
+            Please use Chrome on Android or a Chromium-based browser.
+        </p>
+    </div>
+    }
+</div>

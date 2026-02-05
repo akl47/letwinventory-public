@@ -190,6 +190,22 @@
   margin-right: 8px;
 }
 
+/* Hide toolbar on mobile route */
+.nav-header.hidden {
+  display: none;
+}
+
+/* Mobile scanner nav item - only visible on small screens */
+.sidenav ::ng-deep .mobile-scanner-btn {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .sidenav ::ng-deep .mobile-scanner-btn {
+    display: flex;
+  }
+}
+
 /* Section divider */
 .section-divider {
   height: 1px;

@@ -5,7 +5,11 @@ const { Strategy: GoogleStrategy } = require("passport-google-oauth20");
 const jwt = require("jsonwebtoken");
 const db = require("../models");
 
-dotenv.config({ path: path.join(__dirname, "../../.env") });
+// Load environment-specific .env file
+const envFile = process.env.NODE_ENV === 'production'
+  ? '.env.production'
+  : '.env.development';
+dotenv.config({ path: path.join(__dirname, `../../${envFile}`) });
 
 passport.use(
   new GoogleStrategy(
