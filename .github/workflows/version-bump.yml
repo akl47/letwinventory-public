@@ -26,7 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Use PAT to bypass branch protection. Create a PAT with 'repo' scope
+          # and add it as a repository secret named 'PAT_VERSION_BUMP'
+          token: ${{ secrets.PAT_VERSION_BUMP || secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
