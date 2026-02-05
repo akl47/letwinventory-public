@@ -23,6 +23,10 @@
                     <mat-icon>upload_file</mat-icon>
                     Select CSV File
                 </button>
+                <a mat-stroked-button href="assets/template.csv" download="template.csv">
+                    <mat-icon>download</mat-icon>
+                    Download Template
+                </a>
                 @if (selectedFile()) {
                     <span class="file-name">{{ selectedFile()!.name }}</span>
                 }
