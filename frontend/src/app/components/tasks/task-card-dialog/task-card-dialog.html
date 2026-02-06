@@ -107,7 +107,7 @@
                     </mat-menu>
 
                     <!-- Due Date Label -->
-                    <span class="label date-label clickable-label" [class.overdue]="isOverdue()"
+                    <span class="label date-label clickable-label" [class.overdue]="isOverdue()" [class.due-today]="isDueToday()"
                         [matMenuTriggerFor]="dateMenu" #dateTrigger="matMenuTrigger" (click)="openDateMenu()">
                         <mat-icon class="left-icon">calendar_today</mat-icon>
                         {{ task().dueDate ? (task().dueDate | date:'MMM d, yyyy, h:mm a') : 'Due Date' }}

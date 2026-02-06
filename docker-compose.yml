@@ -47,10 +47,8 @@ services:
     ports:
       - ${PGADMIN_PORT}:80
     volumes:
-      - pgadmin_data:/var/lib/pgadmin
+      - ./data/pgadmin:/var/lib/pgadmin
 
 volumes:
   postgres_data:
-    driver: local
-  pgadmin_data:
     driver: local

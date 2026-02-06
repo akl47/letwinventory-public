@@ -39,10 +39,22 @@ export class TaskCard implements OnInit, OnDestroy {
     return [...this.projects()].sort((a, b) => a.name.localeCompare(b.name));
   });
 
+  isDueToday = computed(() => {
+    const task = this.task();
+    if (!task.dueDate || this.displayDone()) return false;
+    const due = new Date(task.dueDate);
+    const now = new Date();
+    return due.getFullYear() === now.getFullYear() && due.getMonth() === now.getMonth() && due.getDate() === now.getDate();
+  });
+
   isOverdue = computed(() => {
     const task = this.task();
     if (!task.dueDate || this.displayDone()) return false;
-    return new Date(task.dueDate) < new Date();
+    if (this.isDueToday()) return false;
+    const due = new Date(task.dueDate);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    return due < now;
   });
 
   formatEstimate(minutes?: number): string {

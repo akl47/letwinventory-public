@@ -2,8 +2,10 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
-    min-width: 500px;
+    width: 500px;
+    max-width: 100%;
     padding-top: 8px;
+    box-sizing: border-box;
 }
 
 .full-width {

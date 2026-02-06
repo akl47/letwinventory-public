@@ -52,4 +52,5 @@ testem.log
 Thumbs.db
 
 db/*
+data/
 .env

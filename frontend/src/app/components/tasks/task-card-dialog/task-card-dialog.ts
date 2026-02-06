@@ -276,10 +276,22 @@ export class TaskCardDialog implements OnInit, OnDestroy {
     }
   }
 
+  isDueToday(): boolean {
+    const task = this.task();
+    if (!task.dueDate) return false;
+    const due = new Date(task.dueDate);
+    const now = new Date();
+    return due.getFullYear() === now.getFullYear() && due.getMonth() === now.getMonth() && due.getDate() === now.getDate();
+  }
+
   isOverdue(): boolean {
     const task = this.task();
     if (!task.dueDate) return false;
-    return new Date(task.dueDate) < new Date();
+    if (this.isDueToday()) return false;
+    const due = new Date(task.dueDate);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    return due < now;
   }
 
   selectLabel(option: LabelOption): void {

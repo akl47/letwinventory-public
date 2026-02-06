@@ -275,6 +275,11 @@
     color: #b6c2cf;
 }
 
+.due-today {
+    background-color: #f5cd47 !important;
+    color: #1d2125 !important;
+}
+
 .overdue {
     background-color: #f87168 !important;
     color: #1d2125 !important;
