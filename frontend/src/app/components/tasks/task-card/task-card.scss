@@ -91,6 +91,11 @@
         font-size: 14px;
     }
 
+    &.due-today {
+        background-color: #f5cd47;
+        color: #1d2125;
+    }
+
     &.overdue {
         background-color: #f87168;
         color: #1d2125;
@@ -165,4 +170,11 @@
     width: 16px;
     height: 16px;
     color: rgba(255, 255, 255, 0.5);
+}
+
+.tracking-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+    color: rgba(255, 255, 255, 0.4);
 }

@@ -7,10 +7,11 @@
             (click)="$event.preventDefault(); toggleComplete($event)" />
         <div class="task-title" [class.completed]="displayDone()">{{ task().name }}</div>
     </div>
-    @if (task().dueDate || task().timeEstimate || task().subtasks?.length || task().parentTaskID) {
+    @if (task().dueDate || task().timeEstimate || task().subtasks?.length || task().parentTaskID || task().taskTypeEnum
+    === 'tracking') {
     <div class="meta-info">
         @if (task().dueDate) {
-        <span class="due-date-tag" [class.overdue]="isOverdue()">
+        <span class="due-date-tag" [class.overdue]="isOverdue()" [class.due-today]="isDueToday()">
             <mat-icon class="icon-xs">schedule</mat-icon>
             {{ task().dueDate | date:'MMM d' }}
         </span>
@@ -27,6 +28,9 @@
         }
         @if (task().parentTaskID) {
         <mat-icon class="hierarchy-icon" matTooltip="Subtask">subdirectory_arrow_right</mat-icon>
+        }
+        @if (task().taskTypeEnum === 'tracking') {
+        <mat-icon class="tracking-icon" matTooltip="Tracking">package_2</mat-icon>
         }
     </div>
     }

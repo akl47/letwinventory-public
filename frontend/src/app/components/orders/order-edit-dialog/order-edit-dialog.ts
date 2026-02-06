@@ -8,6 +8,7 @@ import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
 import { MatDatepickerModule } from '@angular/material/datepicker';
 import { MatNativeDateModule } from '@angular/material/core';
+import { MatIconModule } from '@angular/material/icon';
 import { InventoryService, Order } from '../../../services/inventory.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { Router } from '@angular/router';
@@ -28,7 +29,8 @@ export interface OrderEditDialogData {
     MatInputModule,
     MatSelectModule,
     MatDatepickerModule,
-    MatNativeDateModule
+    MatNativeDateModule,
+    MatIconModule
   ],
   templateUrl: './order-edit-dialog.html',
   styleUrl: './order-edit-dialog.css'

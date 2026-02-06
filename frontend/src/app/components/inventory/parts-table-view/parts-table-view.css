@@ -72,6 +72,12 @@
     border-color: var(--mat-sys-primary);
 }
 
+.filter-btn .mdc-button__label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
 .filter-btn .dropdown-icon {
     margin-left: 4px;
     margin-right: -8px;
