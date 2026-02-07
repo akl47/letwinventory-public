@@ -50,6 +50,7 @@ export class SubToolbarComponent implements OnInit, OnChanges {
   // Special ID for "No Project" category
   static readonly NO_PROJECT_ID = 0;
 
+  menuExpanded = signal(false);
   projects = signal<Project[]>([]);
   selectedProjectIds = signal<Set<number>>(new Set());
   showNoProject = signal(true);

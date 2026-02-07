@@ -141,3 +141,45 @@
     color: rgba(255, 255, 255, 0.7);
     font-size: 13px;
 }
+
+.mobile-toggle {
+    display: none;
+}
+
+@media (max-width: 768px) {
+    .sub-toolbar {
+        height: auto;
+        padding: 4px 12px;
+    }
+
+    .mobile-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        color: rgba(255, 255, 255, 0.6);
+        cursor: pointer;
+        padding: 4px;
+    }
+
+    .toolbar-content {
+        display: none;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 8px 0;
+    }
+
+    .toolbar-content.expanded {
+        display: flex;
+    }
+
+    .filters-section {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .actions-section .btn-text {
+        display: none;
+    }
+}

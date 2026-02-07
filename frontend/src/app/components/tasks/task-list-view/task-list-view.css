@@ -192,3 +192,25 @@
         background-color: rgba(255, 255, 255, 0.08);
     }
 }
+
+@media (max-width: 768px) {
+    .board-container {
+        scroll-snap-type: x mandatory;
+        -webkit-overflow-scrolling: touch;
+        padding: 0.25rem;
+    }
+
+    .board-container.is-dragging {
+        scroll-snap-type: none;
+    }
+
+    .board-wrapper {
+        min-width: 0;
+        gap: 0;
+        padding-bottom: 0;
+    }
+
+    .add-list-btn-large {
+        min-width: auto;
+    }
+}

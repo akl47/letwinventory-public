@@ -9,6 +9,7 @@ import { MatInputModule } from '@angular/material/input';
 import { forkJoin } from 'rxjs';
 import { InventoryService, InventoryTag, Barcode } from '../../../services/inventory.service';
 import { inject } from '@angular/core';
+import { Location } from '@angular/common';
 
 type ScannerState =
     | 'unsupported'
@@ -41,6 +42,7 @@ type SecondScanAction = 'move' | 'merge';
 })
 export class MobileScanner implements OnInit, OnDestroy {
     private inventoryService = inject(InventoryService);
+    private location = inject(Location);
 
     videoEl = viewChild<ElementRef<HTMLVideoElement>>('videoElement');
 
@@ -356,6 +358,10 @@ export class MobileScanner implements OnInit, OnDestroy {
         this.resultSuccess.set(success);
         this.resultMessage.set(message);
         this.state.set(success ? 'result' : 'error');
+    }
+
+    goBack() {
+        this.location.back();
     }
 
     getTypeBadgeClass(): string {

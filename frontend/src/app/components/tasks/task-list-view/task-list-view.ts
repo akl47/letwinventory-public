@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, ViewChild, ElementRef, NgZone, signal, effect, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
@@ -8,15 +8,15 @@ import { Observable, map, startWith, switchMap, shareReplay } from 'rxjs';
 import { TaskListComponent } from '../task-list/task-list';
 import { SubToolbarComponent } from '../sub-toolbar/sub-toolbar';
 import { HistoryDrawerComponent } from '../history-drawer/history-drawer';
-import { signal } from '@angular/core';
 import { CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
+import { ScrollingModule } from '@angular/cdk/scrolling';
 import { TaskViewPreferencesService } from '../../../services/task-view-preferences.service';
 import { MatIconModule } from '@angular/material/icon';
 
 @Component({
   selector: 'app-task-list-view',
   standalone: true,
-  imports: [CommonModule, FormsModule, TaskListComponent, SubToolbarComponent, HistoryDrawerComponent, DragDropModule, MatIconModule],
+  imports: [CommonModule, FormsModule, TaskListComponent, SubToolbarComponent, HistoryDrawerComponent, DragDropModule, ScrollingModule, MatIconModule],
   templateUrl: './task-list-view.html',
   styleUrl: './task-list-view.css',
 })
@@ -26,7 +26,13 @@ export class TaskListViewComponent implements OnInit {
   isHistoryOpen = signal(false);
   isEditMode = signal(false);
   isAddingList = signal(false);
+  isDragging = signal(false);
   newListName = '';
+
+  @ViewChild('boardContainer') boardContainerRef?: ElementRef<HTMLElement>;
+  private readonly ngZone = inject(NgZone);
+  private autoScrollId = 0;
+  private pointerX = -1;
 
   // Filter state
   selectedProjectIds = signal<number[]>([]);
@@ -51,7 +57,14 @@ export class TaskListViewComponent implements OnInit {
     private router: Router,
     private route: ActivatedRoute,
     private preferencesService: TaskViewPreferencesService
-  ) { }
+  ) {
+    effect((onCleanup) => {
+      if (this.isDragging()) {
+        this.startAutoScroll();
+        onCleanup(() => this.stopAutoScroll());
+      }
+    });
+  }
 
   ngOnInit(): void {
     // Subscribe to query param changes (handles initial load and navigation)
@@ -244,5 +257,41 @@ export class TaskListViewComponent implements OnInit {
       noProject: this.currentNoProjectParam(),
       subtasks: this.currentSubtasksParam()
     });
+  }
+
+  private readonly onPointerMove = (e: TouchEvent | MouseEvent) => {
+    this.pointerX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+  };
+
+  private startAutoScroll() {
+    this.pointerX = -1;
+    this.ngZone.runOutsideAngular(() => {
+      document.addEventListener('touchmove', this.onPointerMove, { passive: true });
+      document.addEventListener('mousemove', this.onPointerMove);
+      const loop = () => {
+        const el = this.boardContainerRef?.nativeElement;
+        if (el && this.pointerX >= 0) {
+          const rect = el.getBoundingClientRect();
+          const edge = 48;
+          const maxSpeed = 12;
+          if (this.pointerX < rect.left + edge) {
+            const intensity = 1 - (this.pointerX - rect.left) / edge;
+            el.scrollLeft -= maxSpeed * Math.max(0, intensity);
+          } else if (this.pointerX > rect.right - edge) {
+            const intensity = 1 - (rect.right - this.pointerX) / edge;
+            el.scrollLeft += maxSpeed * Math.max(0, intensity);
+          }
+        }
+        this.autoScrollId = requestAnimationFrame(loop);
+      };
+      this.autoScrollId = requestAnimationFrame(loop);
+    });
+  }
+
+  private stopAutoScroll() {
+    document.removeEventListener('touchmove', this.onPointerMove);
+    document.removeEventListener('mousemove', this.onPointerMove);
+    cancelAnimationFrame(this.autoScrollId);
+    this.autoScrollId = 0;
   }
 }

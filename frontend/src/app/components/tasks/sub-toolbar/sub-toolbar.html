@@ -1,5 +1,8 @@
 <div class="sub-toolbar">
-    <div class="toolbar-content">
+    <button class="mobile-toggle" (click)="menuExpanded.set(!menuExpanded())">
+        <mat-icon>{{ menuExpanded() ? 'expand_less' : 'tune' }}</mat-icon>
+    </button>
+    <div class="toolbar-content" [class.expanded]="menuExpanded()">
         <!-- Filters on the left -->
         <div class="filters-section">
             <!-- Project Filter Dropdown -->

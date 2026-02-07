@@ -22,7 +22,8 @@
         [cdkDropListConnectedTo]="connectedLists" (cdkDropListDropped)="drop($event)">
 
         @for(task of filteredTasks; track task.id) {
-        <app-task-card [task]="task" [cdkDragData]="task" cdkDrag></app-task-card>
+        <app-task-card [task]="task" [cdkDragData]="task" cdkDrag [cdkDragStartDelay]="dragDelay"
+            (cdkDragStarted)="cardDragStarted.emit()" (cdkDragEnded)="cardDragEnded.emit()"></app-task-card>
         }
 
         @if (isAddingTask()) {

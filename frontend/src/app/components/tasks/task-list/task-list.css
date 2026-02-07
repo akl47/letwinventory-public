@@ -274,3 +274,17 @@
         cursor: grabbing;
     }
 }
+
+@media (max-width: 768px) {
+    :host {
+        scroll-snap-align: center;
+        scroll-snap-stop: always;
+        width: 100vw;
+        align-items: center;
+    }
+
+    .list-container {
+        width: 20rem;
+        margin: 0;
+    }
+}

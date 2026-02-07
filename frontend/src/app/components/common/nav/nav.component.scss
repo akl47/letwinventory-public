@@ -204,6 +204,13 @@
   .sidenav ::ng-deep .mobile-scanner-btn {
     display: flex;
   }
+
+  .sidenav.collapsed {
+    width: 0;
+    min-width: 0;
+    padding: 0;
+    overflow: hidden;
+  }
 }
 
 /* Section divider */
