@@ -1,6 +1,6 @@
 import { Component, OnInit, OnDestroy, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { FormBuilder, ReactiveFormsModule, FormsModule, Validators } from '@angular/forms';
 import { CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
@@ -42,11 +42,13 @@ import { BarcodeTag } from '../../inventory/barcode-tag/barcode-tag';
     MatTableModule,
     MatTooltipModule,
     BarcodeTag,
+    RouterLink,
   ],
   templateUrl: './order-view.html',
   styleUrl: './order-view.css'
 })
 export class OrderView implements OnInit, OnDestroy {
+  tooltipStyle: { [key: string]: string } = {};
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private fb = inject(FormBuilder);

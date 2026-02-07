@@ -14,7 +14,9 @@ import { MatChipsModule } from '@angular/material/chips';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDatepickerModule } from '@angular/material/datepicker';
 import { MatNativeDateModule } from '@angular/material/core';
+import { MatSelectModule } from '@angular/material/select';
 import { InventoryService, BulkImportResult, BulkImportOrderItem, BulkImportOrderData } from '../../../services/inventory.service';
+import { PartCategory } from '../../../models';
 
 interface EditableOrderItem extends BulkImportOrderItem {
     index: number;
@@ -36,7 +38,8 @@ interface EditableOrderItem extends BulkImportOrderItem {
         MatChipsModule,
         MatTooltipModule,
         MatDatepickerModule,
-        MatNativeDateModule
+        MatNativeDateModule,
+        MatSelectModule
     ],
     templateUrl: './bulk-upload.html',
     styleUrl: './bulk-upload.css'
@@ -63,14 +66,24 @@ export class BulkUploadComponent {
     orderLink = signal<string>('');
     notes = signal<string>('');
 
+    // Part categories
+    categories = signal<PartCategory[]>([]);
+
     // Editing state - separate signals for the currently edited row
     editingIndex = signal<number | null>(null);
     editingPartName = signal<string>('');
     editingDescription = signal<string>('');
     editingQuantity = signal<number>(0);
     editingPrice = signal<number>(0);
+    editingPartCategoryID = signal<number>(1);
 
-    displayedColumns = ['partName', 'description', 'quantity', 'price', 'lineTotal', 'status', 'actions'];
+    displayedColumns = ['partName', 'description', 'category', 'quantity', 'price', 'lineTotal', 'status', 'actions'];
+
+    constructor() {
+        this.inventoryService.getPartCategories().subscribe({
+            next: (cats) => this.categories.set(cats)
+        });
+    }
 
     // Computed totals
     orderTotal = computed(() => {
@@ -229,6 +242,7 @@ export class BulkUploadComponent {
         this.editingDescription.set(item.description);
         this.editingQuantity.set(item.quantity);
         this.editingPrice.set(item.price);
+        this.editingPartCategoryID.set(item.partCategoryID || 1);
     }
 
     saveEdit(): void {
@@ -243,6 +257,7 @@ export class BulkUploadComponent {
         item.quantity = this.editingQuantity() || 1;
         item.price = this.editingPrice() || 0;
         item.lineTotal = item.quantity * item.price;
+        item.partCategoryID = this.editingPartCategoryID();
 
         items[index] = item;
         this.editableItems.set(items);
@@ -279,5 +294,26 @@ export class BulkUploadComponent {
 
     isEditing(index: number): boolean {
         return this.editingIndex() === index;
+    }
+
+    getCategory(categoryId: number | undefined): PartCategory | undefined {
+        if (!categoryId) return undefined;
+        return this.categories().find(c => c.id === categoryId);
+    }
+
+    getCategoryName(categoryId: number | undefined): string {
+        return this.getCategory(categoryId)?.name || '-';
+    }
+
+    getCategoryBgColor(hex: string | null | undefined): string {
+        if (!hex) return 'rgba(255, 255, 255, 0.2)';
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        return `rgba(${r}, ${g}, ${b}, 0.2)`;
+    }
+
+    getCategoryTextColor(hex: string | null | undefined): string {
+        return hex || '#808080';
     }
 }

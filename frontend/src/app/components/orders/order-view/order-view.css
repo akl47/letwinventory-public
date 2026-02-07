@@ -317,6 +317,45 @@ mat-card-content {
     vertical-align: middle;
 }
 
+.part-link {
+    color: var(--mat-sys-primary);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.part-link:hover {
+    text-decoration: underline;
+}
+
+.part-name-wrapper {
+    position: relative;
+    display: inline-block;
+}
+
+.part-image-tooltip {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    background: var(--mat-sys-surface-container);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    padding: 8px;
+    max-width: 200px;
+    pointer-events: none;
+    transform: translateY(-100%);
+}
+
+.part-name-wrapper:hover .part-image-tooltip {
+    display: block;
+}
+
+.part-image-tooltip img {
+    max-width: 100%;
+    border-radius: 4px;
+    display: block;
+}
+
 .part-subtitle {
     font-size: 11px;
     color: rgba(255, 255, 255, 0.4);

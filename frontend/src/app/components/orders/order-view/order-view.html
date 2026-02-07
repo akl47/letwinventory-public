@@ -258,7 +258,16 @@
                 } @else {
                 @if (item.Part) {
                 <div class="part-info">
-                  <strong>{{ item.Part.name }}</strong>
+                  <div class="part-name-wrapper" #wrapper
+                    (mouseenter)="tooltipStyle = {'top': wrapper.getBoundingClientRect().top - 8 + 'px', 'left': wrapper.getBoundingClientRect().left + 'px'}"
+                    >
+                    <a [routerLink]="['/parts', item.Part.id, 'edit']" class="part-link">{{ item.Part.name }}</a>
+                    @if (item.Part.imageFile?.data) {
+                    <div class="part-image-tooltip" [ngStyle]="tooltipStyle">
+                      <img [src]="item.Part.imageFile.data" [alt]="item.Part.name">
+                    </div>
+                    }
+                  </div>
                   <div class="part-subtitle">{{ item.Part.description }}</div>
                   @if (item.Part.vendor) {
                   <div class="part-subtitle">SKU: {{ item.Part.sku }} | Vendor: {{ item.Part.vendor }}</div>

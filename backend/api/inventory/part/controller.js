@@ -82,6 +82,11 @@ exports.getAllParts = (req, res, next) => {
       {
         model: db.PartCategory,
         attributes: ['id', 'name', 'tagColorHex']
+      },
+      {
+        model: db.UploadedFile,
+        as: 'imageFile',
+        attributes: ['id', 'filename', 'mimeType', 'data']
       }
     ]
   }).then(parts => {
@@ -100,6 +105,11 @@ exports.getPartByID = (req, res, next) => {
       {
         model: db.PartCategory,
         attributes: ['id', 'name', 'tagColorHex']
+      },
+      {
+        model: db.UploadedFile,
+        as: 'imageFile',
+        attributes: ['id', 'filename', 'mimeType', 'data']
       }
     ]
   }).then(part => {

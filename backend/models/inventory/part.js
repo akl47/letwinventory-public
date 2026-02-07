@@ -17,6 +17,10 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'defaultUnitOfMeasureID',
         as: 'UnitOfMeasure'
       });
+      Part.belongsTo(models.UploadedFile, {
+        foreignKey: 'imageFileID',
+        as: 'imageFile'
+      });
     }
   };
   Part.init({
@@ -85,6 +89,10 @@ module.exports = (sequelize, DataTypes) => {
     },
     manufacturerPN: {
       type: DataTypes.STRING,
+      allowNull: true
+    },
+    imageFileID: {
+      type: DataTypes.INTEGER,
       allowNull: true
     },
     createdAt: {

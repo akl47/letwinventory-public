@@ -157,6 +157,25 @@
                                 </td>
                             </ng-container>
 
+                            <ng-container matColumnDef="category">
+                                <th mat-header-cell *matHeaderCellDef>Category</th>
+                                <td mat-cell *matCellDef="let item; let i = index" (click)="$event.stopPropagation()">
+                                    @if (isEditing(i) && item.isNew) {
+                                        <mat-select class="inline-select" [ngModel]="editingPartCategoryID()" (ngModelChange)="editingPartCategoryID.set($event)">
+                                            @for (cat of categories(); track cat.id) {
+                                                <mat-option [value]="cat.id">{{ cat.name }}</mat-option>
+                                            }
+                                        </mat-select>
+                                    } @else {
+                                        <span class="category-badge"
+                                            [style.background-color]="getCategoryBgColor(getCategory(item.partCategoryID)?.tagColorHex)"
+                                            [style.color]="getCategoryTextColor(getCategory(item.partCategoryID)?.tagColorHex)">
+                                            {{ getCategoryName(item.partCategoryID) }}
+                                        </span>
+                                    }
+                                </td>
+                            </ng-container>
+
                             <ng-container matColumnDef="quantity">
                                 <th mat-header-cell *matHeaderCellDef>Qty</th>
                                 <td mat-cell *matCellDef="let item; let i = index" (click)="$event.stopPropagation()">
