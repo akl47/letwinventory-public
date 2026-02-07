@@ -1,0 +1,109 @@
+<div class="container">
+    <div class="table-header">
+        <div class="title-section">
+            <button mat-icon-button (click)="goBack()" matTooltip="Go back">
+                <mat-icon>arrow_back</mat-icon>
+            </button>
+            <h2>
+                <mat-icon>schedule</mat-icon>
+                Scheduled Tasks
+            </h2>
+        </div>
+        <div class="header-actions">
+            <mat-form-field appearance="outline" class="search-field">
+                <mat-label>Search</mat-label>
+                <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
+                    placeholder="Search by name, schedule, or list">
+                <mat-icon matPrefix>search</mat-icon>
+            </mat-form-field>
+            <mat-slide-toggle [checked]="showInactive()" (change)="onToggleInactive($event.checked)" color="primary">
+                Show Inactive
+            </mat-slide-toggle>
+            <button mat-flat-button color="primary" (click)="openNewDialog()">
+                <mat-icon>add</mat-icon>
+                New Scheduled Task
+            </button>
+        </div>
+    </div>
+
+    <div class="table-wrapper">
+        <table mat-table [dataSource]="displayedItems()" matSort (matSortChange)="onSortChange($event)">
+            <!-- Name Column -->
+            <ng-container matColumnDef="name">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Name</th>
+                <td mat-cell *matCellDef="let item">
+                    <strong>{{ item.name }}</strong>
+                </td>
+            </ng-container>
+
+            <!-- Schedule Column -->
+            <ng-container matColumnDef="cronExpression">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Schedule</th>
+                <td mat-cell *matCellDef="let item">
+                    <code class="cron-badge">{{ item.cronExpression }}</code>
+                </td>
+            </ng-container>
+
+            <!-- Task List Column -->
+            <ng-container matColumnDef="taskList">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Task List</th>
+                <td mat-cell *matCellDef="let item">{{ item.taskList?.name || '-' }}</td>
+            </ng-container>
+
+            <!-- Project Column -->
+            <ng-container matColumnDef="project">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Project</th>
+                <td mat-cell *matCellDef="let item">
+                    @if (item.project) {
+                    <span class="project-chip" [style.background-color]="'#' + (item.project.tagColorHex || '808080')">
+                        {{ item.project.shortName }}
+                    </span>
+                    } @else {
+                    <span>-</span>
+                    }
+                </td>
+            </ng-container>
+
+            <!-- Next Run Column -->
+            <ng-container matColumnDef="nextRunAt">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Next Run</th>
+                <td mat-cell *matCellDef="let item">{{ item.nextRunAt | date:'MMM d, y h:mm a' }}</td>
+            </ng-container>
+
+            <!-- Last Run Column -->
+            <ng-container matColumnDef="lastRunAt">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Last Run</th>
+                <td mat-cell *matCellDef="let item">
+                    {{ item.lastRunAt ? (item.lastRunAt | date:'MMM d, y h:mm a') : 'Never' }}
+                </td>
+            </ng-container>
+
+            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+            <tr mat-row *matRowDef="let row; columns: displayedColumns;"
+                (click)="editItem(row)" class="clickable-row"></tr>
+
+            <!-- No data row -->
+            <tr class="mat-row" *matNoDataRow>
+                <td class="mat-cell" [attr.colspan]="displayedColumns.length">
+                    <div class="no-data">
+                        @if (searchText()) {
+                        <mat-icon>search_off</mat-icon>
+                        <p>No scheduled tasks found matching "{{ searchText() }}"</p>
+                        } @else {
+                        <mat-icon>schedule</mat-icon>
+                        <p>No scheduled tasks yet</p>
+                        <button mat-flat-button color="primary" (click)="openNewDialog()">
+                            <mat-icon>add</mat-icon>
+                            Create Scheduled Task
+                        </button>
+                        }
+                    </div>
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <mat-paginator [length]="getTotalCount()" [pageSize]="pageSize()" [pageIndex]="pageIndex()"
+        [pageSizeOptions]="pageSizeOptions" (page)="onPageChange($event)" showFirstLastButtons>
+    </mat-paginator>
+</div>

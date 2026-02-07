@@ -15,6 +15,7 @@ dotenv.config({ path: path.join(__dirname, `../${envFile}`) });
 
 const { passport } = require("./auth/passport");
 const printAgentService = require("./services/printAgentService");
+const scheduledTaskService = require("./services/scheduledTaskService");
 
 const port = process.env.BACKEND_PORT;
 global.db = require("./models");
@@ -72,5 +73,6 @@ printAgentService.initialize(server);
 server.listen(port, () => {
     db.sequelize.sync().then(() => {
         console.log(`Server listening on the port:${port}`);
+        scheduledTaskService.initialize();
     });
 });

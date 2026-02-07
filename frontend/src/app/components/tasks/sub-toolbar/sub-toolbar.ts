@@ -202,4 +202,8 @@ export class SubToolbarComponent implements OnInit, OnChanges {
   openEditProjects(): void {
     this.router.navigate(['/projects']);
   }
+
+  openScheduledTasks(): void {
+    this.router.navigate(['/scheduled-tasks']);
+  }
 }

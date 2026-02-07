@@ -40,7 +40,12 @@
             <!-- Labels Section -->
             <div class="section labels-section">
                 <div class="labels-container">
-                    <!-- Task Type Label with Dropdown -->
+                    <!-- Task Type Label -->
+                    @if (task().taskTypeEnum === 'scheduled') {
+                    <span class="label" [ngClass]="'label-green'">
+                        Scheduled
+                    </span>
+                    } @else {
                     <span class="label clickable-label" [ngClass]="{
                             'label-blue': task().taskTypeEnum === 'normal',
                             'label-yellow': task().taskTypeEnum === 'tracking',
@@ -53,6 +58,7 @@
                         }
                         <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
                     </span>
+                    }
 
                     <!-- Label Dropdown Menu -->
                     <mat-menu #labelMenu="matMenu" class="label-menu">

@@ -11,7 +11,7 @@ export interface Task {
     timeEstimate?: number;
     parentTaskID?: number;
     rank: number;
-    taskTypeEnum: 'normal' | 'tracking' | 'critical_path';
+    taskTypeEnum: 'normal' | 'tracking' | 'critical_path' | 'scheduled';
     activeFlag: boolean;
     createdAt: Date;
     updatedAt: Date;

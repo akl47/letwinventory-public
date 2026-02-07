@@ -17,7 +17,7 @@ export interface TaskCardDialogData {
   task: Task;
 }
 
-export type TaskTypeEnum = 'normal' | 'tracking' | 'critical_path';
+export type TaskTypeEnum = 'normal' | 'tracking' | 'critical_path' | 'scheduled';
 
 export interface LabelOption {
   value: TaskTypeEnum;
@@ -85,7 +85,7 @@ export class TaskCardDialog implements OnInit, OnDestroy {
   loadTaskTypes(): void {
     this.taskService.getTaskTypes().subscribe({
       next: (types) => {
-        this.labelOptions.set(types);
+        this.labelOptions.set(types.filter((t: any) => t.value !== 'scheduled'));
       },
       error: (err) => console.error('Failed to load task types', err)
     });

@@ -45,6 +45,8 @@
                 }
             </mat-menu>
 
+
+
             <!-- Edit Projects Button (shown in edit mode) -->
             @if (isEditMode) {
             <button mat-button class="edit-projects-btn" (click)="openEditProjects()">
@@ -67,16 +69,23 @@
                 <mat-icon>restore</mat-icon>
                 Default
             </button>
-        </div>
-
-        <!-- Actions on the right -->
-        <div class="actions-section">
             <!-- Save Default View Button -->
             <button mat-button [disabled]="isCurrentViewDefault()" (click)="saveAsDefault.emit()"
                 [matTooltip]="isCurrentViewDefault() ? 'Current view is the default' : 'Save current view as default'">
                 <mat-icon>bookmark</mat-icon>
                 Save Default
             </button>
+        </div>
+
+        <!-- Actions on the right -->
+        <div class="actions-section">
+
+            <!-- Scheduled Tasks Button -->
+            <button mat-button (click)="openScheduledTasks()">
+                <mat-icon>schedule</mat-icon>
+                Scheduled Tasks
+            </button>
+            <!-- Edit Mode Button -->
             <button mat-button [class.active]="isEditMode" (click)="toggleEditMode.emit()">
                 <mat-icon>edit</mat-icon>
                 {{ isEditMode ? 'Done' : 'Edit Lists' }}
