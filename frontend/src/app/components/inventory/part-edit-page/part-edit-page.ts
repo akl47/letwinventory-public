@@ -7,11 +7,11 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatSelectModule } from '@angular/material/select';
-import { CommonModule, TitleCasePipe } from '@angular/common';
+import { CommonModule, Location, TitleCasePipe } from '@angular/common';
 import { forkJoin, of, combineLatest } from 'rxjs';
 import { catchError, take } from 'rxjs/operators';
 import { InventoryService } from '../../../services/inventory.service';
-import { HarnessPartsService, UploadedFileResponse } from '../../../services/harness-parts.service';
+import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { HarnessService } from '../../../services/harness.service';
 import { Part, PartCategory, UnitOfMeasure } from '../../../models';
 import { DbHarnessConnector, DbHarnessWire, DbHarnessCable, DbElectricalComponent, ElectricalPinType, ComponentPinGroup, createEmptyHarnessData } from '../../../models/harness.model';
@@ -44,6 +44,7 @@ export class PartEditPage implements OnInit {
   private harnessPartsService = inject(HarnessPartsService);
   private harnessService = inject(HarnessService);
   private errorNotification = inject(ErrorNotificationService);
+  private location = inject(Location);
 
   isEditMode = false;
   isFormEditMode = signal(false);
@@ -64,35 +65,28 @@ export class PartEditPage implements OnInit {
   existingCable = signal<DbHarnessCable | null>(null);
   existingComponent = signal<DbElectricalComponent | null>(null);
 
-  // Connector images (base64 for preview)
-  connectorImage = signal<string | null>(null);
-  pinoutDiagramImage = signal<string | null>(null);
-  // Connector image files (for upload)
-  connectorImageFile = signal<File | null>(null);
-  pinoutDiagramFile = signal<File | null>(null);
-  // Existing file IDs (from database)
-  connectorImageFileID = signal<number | null>(null);
-  pinoutDiagramFileID = signal<number | null>(null);
-
-  // Component images (base64 for preview)
-  componentImage = signal<string | null>(null);
-  componentPinoutImage = signal<string | null>(null);
-  // Component image files (for upload)
-  componentImageFile = signal<File | null>(null);
-  componentPinoutFile = signal<File | null>(null);
-  // Existing file IDs (from database)
-  componentImageFileID = signal<number | null>(null);
-  componentPinoutFileID = signal<number | null>(null);
-
   // Component pin groups
   componentPinGroups = signal<ComponentPinGroup[]>([]);
 
-  // Cable diagram image (base64 for preview)
+  // Connector pinout diagram
+  pinoutDiagramImage = signal<string | null>(null);
+  pinoutDiagramFile = signal<File | null>(null);
+  pinoutDiagramFileID = signal<number | null>(null);
+
+  // Component pinout diagram
+  componentPinoutImage = signal<string | null>(null);
+  componentPinoutFile = signal<File | null>(null);
+  componentPinoutFileID = signal<number | null>(null);
+
+  // Cable diagram
   cableDiagramImage = signal<string | null>(null);
-  // Cable diagram file (for upload)
   cableDiagramFile = signal<File | null>(null);
-  // Existing file ID (from database)
   cableDiagramFileID = signal<number | null>(null);
+
+  // Part image (base64 for preview)
+  partImage = signal<string | null>(null);
+  partImageFile = signal<File | null>(null);
+  partImageFileID = signal<number | null>(null);
 
   // Cable wire colors
   cableWireColors = signal<{ id: string; color: string; colorCode: string }[]>([]);
@@ -333,6 +327,9 @@ export class PartEditPage implements OnInit {
         });
         this.isLoadingPart = false;
         this.isDataLoaded.set(true);
+        // Load part image
+        this.partImage.set(part.imageFile?.data || null);
+        this.partImageFileID.set(part.imageFileID || null);
         // Load harness-specific data
         this.loadHarnessData(part.id, part.PartCategory?.name);
       },
@@ -358,9 +355,7 @@ export class PartEditPage implements OnInit {
               connectorColor: connector.color || '',
               connectorPinTypeID: connector.electricalPinTypeID || null
             });
-            this.connectorImage.set(connector.connectorImage || null);
             this.pinoutDiagramImage.set(connector.pinoutDiagramImage || null);
-            this.connectorImageFileID.set(connector.connectorImageFileID || null);
             this.pinoutDiagramFileID.set(connector.pinoutDiagramFileID || null);
           }
         }
@@ -409,9 +404,7 @@ export class PartEditPage implements OnInit {
             if (component.pins && component.pins.length > 0) {
               this.componentPinGroups.set(component.pins);
             }
-            this.componentImage.set(component.componentImage || null);
             this.componentPinoutImage.set(component.pinoutDiagramImage || null);
-            this.componentImageFileID.set(component.componentImageFileID || null);
             this.componentPinoutFileID.set(component.pinoutDiagramFileID || null);
           }
         }
@@ -513,16 +506,29 @@ export class PartEditPage implements OnInit {
     return '';
   }
 
-  // Image upload handlers
-  onConnectorImageSelected(event: Event) {
+  private convertToBase64(file: File, callback: (base64: string) => void) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      callback(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  onPartImageSelected(event: Event) {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       const file = input.files[0];
-      this.connectorImageFile.set(file);
+      this.partImageFile.set(file);
       this.convertToBase64(file, (base64) => {
-        this.connectorImage.set(base64);
+        this.partImage.set(base64);
       });
     }
+  }
+
+  removePartImage() {
+    this.partImage.set(null);
+    this.partImageFile.set(null);
+    this.partImageFileID.set(null);
   }
 
   onPinoutDiagramSelected(event: Event) {
@@ -534,20 +540,6 @@ export class PartEditPage implements OnInit {
         this.pinoutDiagramImage.set(base64);
       });
     }
-  }
-
-  private convertToBase64(file: File, callback: (base64: string) => void) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      callback(reader.result as string);
-    };
-    reader.readAsDataURL(file);
-  }
-
-  removeConnectorImage() {
-    this.connectorImage.set(null);
-    this.connectorImageFile.set(null);
-    this.connectorImageFileID.set(null);
   }
 
   removePinoutDiagram() {
@@ -571,23 +563,6 @@ export class PartEditPage implements OnInit {
     this.cableDiagramImage.set(null);
     this.cableDiagramFile.set(null);
     this.cableDiagramFileID.set(null);
-  }
-
-  onComponentImageSelected(event: Event) {
-    const input = event.target as HTMLInputElement;
-    if (input.files && input.files[0]) {
-      const file = input.files[0];
-      this.componentImageFile.set(file);
-      this.convertToBase64(file, (base64) => {
-        this.componentImage.set(base64);
-      });
-    }
-  }
-
-  removeComponentImage() {
-    this.componentImage.set(null);
-    this.componentImageFile.set(null);
-    this.componentImageFileID.set(null);
   }
 
   onComponentPinoutSelected(event: Event) {
@@ -793,7 +768,7 @@ export class PartEditPage implements OnInit {
   }
 
   cancel() {
-    this.router.navigate(['/parts']);
+    this.location.back();
   }
 
   enableEdit() {
@@ -818,6 +793,10 @@ export class PartEditPage implements OnInit {
         manufacturer: this.currentPart.manufacturer || '',
         manufacturerPN: this.currentPart.manufacturerPN || ''
       });
+      // Restore part image state
+      this.partImage.set(this.currentPart.imageFile?.data || null);
+      this.partImageFile.set(null);
+      this.partImageFileID.set(this.currentPart.imageFileID || null);
     }
     this.isFormEditMode.set(false);
   }
@@ -843,7 +822,7 @@ export class PartEditPage implements OnInit {
 
     if (this.form.valid) {
       const formValue = this.form.getRawValue();
-      const partData = {
+      const partData: any = {
         name: formValue.name!,
         description: formValue.description || '',
         internalPart: formValue.internalPart!,
@@ -856,33 +835,51 @@ export class PartEditPage implements OnInit {
         lotNumberRequired: formValue.lotNumberRequired || false,
         defaultUnitOfMeasureID: formValue.defaultUnitOfMeasureID || 1,
         manufacturer: this.form.get('manufacturer')?.value || '',
-        manufacturerPN: this.form.get('manufacturerPN')?.value || ''
+        manufacturerPN: this.form.get('manufacturerPN')?.value || '',
+        imageFileID: this.partImageFileID()
       };
 
-      if (this.isEditMode && this.currentPart?.id) {
-        this.inventoryService.updatePart(this.currentPart.id, partData).subscribe({
-          next: (response: any) => {
-            this.saveHarnessData(response.id || this.currentPart!.id);
-            this.errorNotification.showSuccess('Part updated successfully');
-            this.router.navigate(['/parts']);
+      const savePart = () => {
+        if (this.isEditMode && this.currentPart?.id) {
+          this.inventoryService.updatePart(this.currentPart.id, partData).subscribe({
+            next: (response: any) => {
+              this.saveHarnessData(response.id || this.currentPart!.id);
+              this.errorNotification.showSuccess('Part updated successfully');
+              this.router.navigate(['/parts']);
+            },
+            error: (err) => {
+              this.errorNotification.showHttpError(err, 'Failed to update part');
+            }
+          });
+        } else {
+          this.inventoryService.createPart(partData).subscribe({
+            next: (response: any) => {
+              if (!this.lockedCategoryName || this.lockedCategoryName !== 'Harness') {
+                this.saveHarnessData(response.id);
+              }
+              this.errorNotification.showSuccess('Part created successfully');
+              this.router.navigate(['/parts']);
+            },
+            error: (err) => {
+              this.errorNotification.showHttpError(err, 'Failed to create part');
+            }
+          });
+        }
+      };
+
+      const partImageFile = this.partImageFile();
+      if (partImageFile) {
+        this.harnessPartsService.uploadFile(partImageFile).subscribe({
+          next: (result) => {
+            partData.imageFileID = result.id;
+            savePart();
           },
           error: (err) => {
-            this.errorNotification.showHttpError(err, 'Failed to update part');
+            this.errorNotification.showHttpError(err, 'Failed to upload part image');
           }
         });
       } else {
-        this.inventoryService.createPart(partData).subscribe({
-          next: (response: any) => {
-            if (!this.lockedCategoryName || this.lockedCategoryName !== 'Harness') {
-              this.saveHarnessData(response.id);
-            }
-            this.errorNotification.showSuccess('Part created successfully');
-            this.router.navigate(['/parts']);
-          },
-          error: (err) => {
-            this.errorNotification.showHttpError(err, 'Failed to create part');
-          }
-        });
+        savePart();
       }
     }
   }
@@ -893,36 +890,13 @@ export class PartEditPage implements OnInit {
     const partName = this.form.get('name')?.value || '';
 
     if (categoryName === 'Connector') {
-      const uploads: { connectorImage?: UploadedFileResponse; pinoutDiagram?: UploadedFileResponse } = {};
-      const uploadObservables: { [key: string]: any } = {};
-
-      const connectorImageFile = this.connectorImageFile();
-      const pinoutDiagramFile = this.pinoutDiagramFile();
-
-      if (connectorImageFile) {
-        uploadObservables['connectorImage'] = this.harnessPartsService.uploadFile(connectorImageFile);
-      }
-      if (pinoutDiagramFile) {
-        uploadObservables['pinoutDiagram'] = this.harnessPartsService.uploadFile(pinoutDiagramFile);
-      }
-
-      const saveConnector = (connectorImageFileID: number | null, pinoutDiagramFileID: number | null) => {
-        const connectorData: {
-          label: string;
-          type: 'male' | 'female' | 'terminal' | 'splice';
-          pinCount: number;
-          color?: string;
-          partID: number;
-          connectorImageFileID?: number | null;
-          pinoutDiagramFileID?: number | null;
-          electricalPinTypeID?: number | null;
-        } = {
+      const saveConnector = (pinoutDiagramFileID: number | null) => {
+        const connectorData = {
           label: partName,
           type: this.form.get('connectorType')?.value as 'male' | 'female' | 'terminal' | 'splice',
           pinCount: this.form.get('connectorPinCount')?.value || 1,
           color: this.form.get('connectorColor')?.value || undefined,
           partID: partId,
-          connectorImageFileID,
           pinoutDiagramFileID,
           electricalPinTypeID: this.form.get('connectorPinTypeID')?.value || null
         };
@@ -945,20 +919,16 @@ export class PartEditPage implements OnInit {
         }
       };
 
-      if (Object.keys(uploadObservables).length > 0) {
-        forkJoin(uploadObservables).subscribe({
-          next: (results: any) => {
-            const newConnectorImageFileID = results['connectorImage']?.id || this.connectorImageFileID();
-            const newPinoutDiagramFileID = results['pinoutDiagram']?.id || this.pinoutDiagramFileID();
-            saveConnector(newConnectorImageFileID, newPinoutDiagramFileID);
-          },
+      const pinoutDiagramFile = this.pinoutDiagramFile();
+      if (pinoutDiagramFile) {
+        this.harnessPartsService.uploadFile(pinoutDiagramFile).subscribe({
+          next: (result) => saveConnector(result.id),
           error: (err) => {
-            console.error('Failed to upload images:', err);
-            this.errorNotification.showHttpError(err, 'Failed to upload images');
+            this.errorNotification.showHttpError(err, 'Failed to upload pinout diagram');
           }
         });
       } else {
-        saveConnector(this.connectorImageFileID(), this.pinoutDiagramFileID());
+        saveConnector(this.pinoutDiagramFileID());
       }
     } else if (categoryName === 'Wire') {
       const wireData = {
@@ -976,8 +946,6 @@ export class PartEditPage implements OnInit {
         this.harnessPartsService.createWire(wireData).subscribe();
       }
     } else if (categoryName === 'Cable') {
-      const cableDiagramFile = this.cableDiagramFile();
-
       const saveCable = (cableDiagramFileID: number | null) => {
         const cableData = {
           label: partName,
@@ -1006,13 +974,11 @@ export class PartEditPage implements OnInit {
         }
       };
 
+      const cableDiagramFile = this.cableDiagramFile();
       if (cableDiagramFile) {
         this.harnessPartsService.uploadFile(cableDiagramFile).subscribe({
-          next: (result) => {
-            saveCable(result.id);
-          },
+          next: (result) => saveCable(result.id),
           error: (err) => {
-            console.error('Failed to upload cable diagram:', err);
             this.errorNotification.showHttpError(err, 'Failed to upload cable diagram');
           }
         });
@@ -1020,26 +986,13 @@ export class PartEditPage implements OnInit {
         saveCable(this.cableDiagramFileID());
       }
     } else if (categoryName === 'Electrical Component') {
-      const uploadObservables: { [key: string]: any } = {};
-
-      const componentImageFile = this.componentImageFile();
-      const componentPinoutFile = this.componentPinoutFile();
-
-      if (componentImageFile) {
-        uploadObservables['componentImage'] = this.harnessPartsService.uploadFile(componentImageFile);
-      }
-      if (componentPinoutFile) {
-        uploadObservables['pinoutDiagram'] = this.harnessPartsService.uploadFile(componentPinoutFile);
-      }
-
-      const saveComponent = (componentImageFileID: number | null, pinoutDiagramFileID: number | null) => {
+      const saveComponent = (pinoutDiagramFileID: number | null) => {
         const pinGroups = this.componentPinGroups();
         const componentData = {
           label: partName,
           pinCount: this.getTotalPinCount(),
           pins: pinGroups,
           partID: partId,
-          componentImageFileID,
           pinoutDiagramFileID
         };
 
@@ -1061,20 +1014,16 @@ export class PartEditPage implements OnInit {
         }
       };
 
-      if (Object.keys(uploadObservables).length > 0) {
-        forkJoin(uploadObservables).subscribe({
-          next: (results: any) => {
-            const newComponentImageFileID = results['componentImage']?.id || this.componentImageFileID();
-            const newPinoutDiagramFileID = results['pinoutDiagram']?.id || this.componentPinoutFileID();
-            saveComponent(newComponentImageFileID, newPinoutDiagramFileID);
-          },
+      const componentPinoutFile = this.componentPinoutFile();
+      if (componentPinoutFile) {
+        this.harnessPartsService.uploadFile(componentPinoutFile).subscribe({
+          next: (result) => saveComponent(result.id),
           error: (err) => {
-            console.error('Failed to upload images:', err);
-            this.errorNotification.showHttpError(err, 'Failed to upload images');
+            this.errorNotification.showHttpError(err, 'Failed to upload component pinout diagram');
           }
         });
       } else {
-        saveComponent(this.componentImageFileID(), this.componentPinoutFileID());
+        saveComponent(this.componentPinoutFileID());
       }
     } else if (categoryName === 'Harness') {
       if (!this.isEditMode) {

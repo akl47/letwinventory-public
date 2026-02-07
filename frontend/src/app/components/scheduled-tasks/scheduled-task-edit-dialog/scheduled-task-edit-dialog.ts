@@ -8,7 +8,6 @@ import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
 import { MatIconModule } from '@angular/material/icon';
 import { Subscription } from 'rxjs';
-import cronstrue from 'cronstrue/dist/cronstrue';
 import { ScheduledTaskService } from '../../../services/scheduled-task.service';
 import { TaskService } from '../../../services/task.service';
 import { ProjectService } from '../../../services/project.service';
@@ -103,7 +102,23 @@ export class ScheduledTaskEditDialog implements OnInit, OnDestroy {
       return;
     }
     try {
-      this.cronDescription.set(cronstrue.toString(expr));
+      const parts = expr.trim().split(/\s+/);
+      if (parts.length !== 5) throw new Error();
+      const [min, hour, dom, mon, dow] = parts;
+      const descs: string[] = [];
+      if (min === '0' && hour === '*') descs.push('Every hour');
+      else if (min === '0' && hour !== '*') descs.push(`At ${hour}:00`);
+      else if (min !== '*' && hour !== '*') descs.push(`At ${hour}:${min.padStart(2, '0')}`);
+      else if (min !== '*') descs.push(`At minute ${min}`);
+      else descs.push(`Every minute`);
+      if (dom !== '*') descs.push(`on day ${dom}`);
+      if (mon !== '*') descs.push(`of month ${mon}`);
+      if (dow !== '*') {
+        const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        const dayName = days[parseInt(dow)] || dow;
+        descs.push(`on ${dayName}`);
+      }
+      this.cronDescription.set(descs.join(' '));
     } catch {
       this.cronDescription.set('Invalid cron expression');
     }

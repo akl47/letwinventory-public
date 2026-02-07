@@ -846,6 +846,71 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Session: 2026-02-07
+
+### Files Modified
+- `frontend/src/app/components/tasks/task-list-view/task-list-view.ts`
+- `frontend/src/app/components/tasks/task-list-view/task-list-view.html`
+- `frontend/src/app/components/tasks/task-list-view/task-list-view.css`
+- `frontend/src/app/components/tasks/task-list/task-list.ts`
+- `frontend/src/app/components/tasks/task-list/task-list.html`
+- `frontend/src/app/components/tasks/task-list/task-list.css`
+- `frontend/src/app/components/tasks/task-card/task-card.scss`
+- `frontend/src/app/components/tasks/sub-toolbar/sub-toolbar.ts`
+- `frontend/src/app/components/tasks/sub-toolbar/sub-toolbar.html`
+- `frontend/src/app/components/tasks/sub-toolbar/sub-toolbar.css`
+- `frontend/src/app/components/common/nav/nav.component.ts`
+- `frontend/src/app/components/common/nav/nav.component.scss`
+- `frontend/src/app/components/mobile/mobile-scanner/mobile-scanner.ts`
+- `frontend/src/app/components/mobile/mobile-scanner/mobile-scanner.html`
+- `frontend/src/app/components/mobile/mobile-scanner/mobile-scanner.css`
+
+### Changes Made
+
+1. **Mobile snap-scroll task board columns**
+   - Added `scroll-snap-type: x mandatory` on `.board-container` at `@media (max-width: 768px)`
+   - Each task-list `:host` gets `scroll-snap-align: center; scroll-snap-stop: always; width: 100vw; align-items: center`
+   - List-container fixed at `width: 20rem` (slightly wider than 300px cards), centered within full-width host
+   - Board-wrapper `gap: 0` and `min-width: 0` on mobile so adjacent lists are fully off-screen
+   - Board-container padding reduced to `0.25rem` on mobile
+
+2. **Touch interactions: long-press to drag, tap to open**
+   - Added `dragDelay = { touch: 500, mouse: 0 }` property on task-list component
+   - Bound `[cdkDragStartDelay]="dragDelay"` on `<app-task-card>` in template
+   - 500ms touch delay = standard long-press threshold; mouse drag remains instant
+   - Prevented text selection on mobile task cards via `user-select: none`
+
+3. **Auto-scroll while dragging across lists**
+   - Added `cardDragStarted` / `cardDragEnded` outputs on task-list, bound to `cdkDragStarted` / `cdkDragEnded`
+   - Task-list-view tracks `isDragging` signal, toggles `.is-dragging` class on board-container
+   - `.is-dragging` disables `scroll-snap-type` so free-form scrolling works during drag
+   - Implemented manual auto-scroll: tracks pointer via `touchmove`/`mousemove` listeners, uses `requestAnimationFrame` loop to scroll board-container when pointer is within 48px of edges (speed scales with proximity, max 12px/frame)
+   - Runs outside Angular zone for performance; cleanup via `effect(onCleanup)`
+   - Added `cdkScrollable` directive and `ScrollingModule` import for CDK auto-scroll support
+
+4. **Collapsible sub-toolbar on mobile**
+   - Added `menuExpanded` signal on sub-toolbar component
+   - Added `.mobile-toggle` button (tune/expand_less icon) visible only on mobile
+   - `.toolbar-content` hidden by default on mobile, shown when `.expanded` class applied
+   - Desktop behavior unchanged (toggle button hidden, content always visible)
+
+5. **Sidebar hidden by default on mobile**
+   - Nav component checks `window.innerWidth <= 768` on init, collapses sidebar if true
+   - Combined with existing CSS rule `.sidenav.collapsed { width: 0; min-width: 0; padding: 0; overflow: hidden }` on mobile
+
+6. **Back button on mobile scanner page**
+   - Added back button (arrow_back icon) in top-left corner of scanner page
+   - Circular semi-transparent button (`rgba(0,0,0,0.5)`) with `z-index: 10`, always visible
+   - Uses `Location.back()` from `@angular/common` for navigation
+
+### Notes
+- All mobile changes are behind `@media (max-width: 768px)` media queries
+- Desktop behavior is completely unchanged
+- Auto-scroll uses `NgZone.runOutsideAngular` to avoid triggering change detection every animation frame
+- Current branch: master
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:

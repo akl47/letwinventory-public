@@ -21,11 +21,16 @@ exports.getAllOrders = (req, res, next) => {
         include: [
           {
             model: db.Part,
-            attributes: ['id', 'name', 'description', 'vendor', 'sku', 'partCategoryID'],
+            attributes: ['id', 'name', 'description', 'vendor', 'sku', 'partCategoryID', 'imageFileID'],
             include: [
               {
                 model: db.PartCategory,
                 attributes: ['id', 'name']
+              },
+              {
+                model: db.UploadedFile,
+                as: 'imageFile',
+                attributes: ['id', 'filename', 'mimeType', 'data']
               }
             ]
           },
@@ -63,11 +68,16 @@ exports.getOrderById = (req, res, next) => {
         include: [
           {
             model: db.Part,
-            attributes: ['id', 'name', 'description', 'vendor', 'sku', 'partCategoryID'],
+            attributes: ['id', 'name', 'description', 'vendor', 'sku', 'partCategoryID', 'imageFileID'],
             include: [
               {
                 model: db.PartCategory,
                 attributes: ['id', 'name']
+              },
+              {
+                model: db.UploadedFile,
+                as: 'imageFile',
+                attributes: ['id', 'filename', 'mimeType', 'data']
               }
             ]
           },
@@ -346,7 +356,7 @@ exports.bulkImport = async (req, res, next) => {
           vendor: record.vendor || vendor,
           sku: record.sku || null,
           link: record.link || null,
-          activeFlag: parseBoolean(record.activeFlag !== '' ? record.activeFlag : true),
+          activeFlag: record.activeFlag === undefined || record.activeFlag === '' ? true : parseBoolean(record.activeFlag),
           minimumOrderQuantity: parseIntValue(record.minimumOrderQuantity, 1),
           partCategoryID: parseIntValue(record.partCategoryID, 1),
           serialNumberRequired: parseBoolean(record.serialNumberRequired),
@@ -387,7 +397,13 @@ exports.bulkImport = async (req, res, next) => {
         quantity: qty,
         price: price,
         lineTotal: lineTotal,
-        isNew: !existingPart
+        isNew: !existingPart,
+        partCategoryID: part.partCategoryID,
+        vendor: part.vendor || record.vendor || vendor,
+        sku: part.sku || record.sku || null,
+        manufacturer: part.manufacturer || record.manufacturer || null,
+        manufacturerPN: part.manufacturerPN || record.manufacturerPN || null,
+        internalPart: part.internalPart ?? parseBoolean(record.internalPart)
       });
 
       results.orderTotal += lineTotal;

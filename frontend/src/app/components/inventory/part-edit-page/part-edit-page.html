@@ -284,6 +284,48 @@
             </mat-card-content>
         </mat-card>
 
+        <!-- Part Image -->
+        <mat-card class="category-card">
+            <mat-card-header>
+                <mat-card-title>Part Image</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode() || !isEditMode) {
+                <div class="image-upload-section">
+                    <div class="image-upload-card">
+                        @if (partImage()) {
+                        <div class="image-preview">
+                            <img [src]="partImage()" alt="Part image">
+                            <button mat-icon-button class="remove-image" (click)="removePartImage()">
+                                <mat-icon>close</mat-icon>
+                            </button>
+                        </div>
+                        } @else {
+                        <div class="upload-placeholder" (click)="partImageInput.click()">
+                            <mat-icon>add_photo_alternate</mat-icon>
+                            <span>Click to upload</span>
+                        </div>
+                        }
+                        <input #partImageInput type="file" accept="image/*" hidden
+                            (change)="onPartImageSelected($event)">
+                    </div>
+                </div>
+                } @else {
+                @if (partImage()) {
+                <div class="image-display-row">
+                    <div class="image-display">
+                        <img [src]="partImage()" alt="Part image">
+                    </div>
+                </div>
+                } @else {
+                <div class="view-info">
+                    <div class="info-value">No image uploaded</div>
+                </div>
+                }
+                }
+            </mat-card-content>
+        </mat-card>
+
         <!-- Connector-specific fields -->
         @if (isConnector()) {
         <mat-card class="category-card">
@@ -324,46 +366,6 @@
                             </mat-select>
                         </mat-form-field>
                     </div>
-
-                    <div class="image-uploads-row">
-                        <div class="image-upload-card">
-                            <label class="image-label">Connector Image</label>
-                            @if (connectorImage()) {
-                            <div class="image-preview">
-                                <img [src]="connectorImage()" alt="Connector image">
-                                <button mat-icon-button class="remove-image" (click)="removeConnectorImage()">
-                                    <mat-icon>close</mat-icon>
-                                </button>
-                            </div>
-                            } @else {
-                            <div class="upload-placeholder" (click)="connectorImageInput.click()">
-                                <mat-icon>add_photo_alternate</mat-icon>
-                                <span>Click to upload</span>
-                            </div>
-                            }
-                            <input #connectorImageInput type="file" accept="image/*" hidden
-                                (change)="onConnectorImageSelected($event)">
-                        </div>
-
-                        <div class="image-upload-card">
-                            <label class="image-label">Pinout Diagram</label>
-                            @if (pinoutDiagramImage()) {
-                            <div class="image-preview">
-                                <img [src]="pinoutDiagramImage()" alt="Pinout diagram">
-                                <button mat-icon-button class="remove-image" (click)="removePinoutDiagram()">
-                                    <mat-icon>close</mat-icon>
-                                </button>
-                            </div>
-                            } @else {
-                            <div class="upload-placeholder" (click)="pinoutImageInput.click()">
-                                <mat-icon>add_photo_alternate</mat-icon>
-                                <span>Click to upload</span>
-                            </div>
-                            }
-                            <input #pinoutImageInput type="file" accept="image/*" hidden
-                                (change)="onPinoutDiagramSelected($event)">
-                        </div>
-                    </div>
                 </form>
                 } @else {
                 <div class="view-info">
@@ -385,21 +387,49 @@
                             <div class="info-value">{{ getPinTypeName(existingConnector()?.electricalPinTypeID) }}</div>
                         </div>
                     </div>
-                    <div class="image-display-row">
-                        @if (connectorImage()) {
-                        <div class="image-display">
-                            <label class="image-label">Connector Image</label>
-                            <img [src]="connectorImage()" alt="Connector image">
-                        </div>
-                        }
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+
+        <!-- Connector Pinout Diagram -->
+        <mat-card class="category-card">
+            <mat-card-header>
+                <mat-card-title>Pinout Diagram</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode() || !isEditMode) {
+                <div class="image-upload-section">
+                    <div class="image-upload-card">
                         @if (pinoutDiagramImage()) {
-                        <div class="image-display">
-                            <label class="image-label">Pinout Diagram</label>
+                        <div class="image-preview">
                             <img [src]="pinoutDiagramImage()" alt="Pinout diagram">
+                            <button mat-icon-button class="remove-image" (click)="removePinoutDiagram()">
+                                <mat-icon>close</mat-icon>
+                            </button>
+                        </div>
+                        } @else {
+                        <div class="upload-placeholder" (click)="pinoutDiagramInput.click()">
+                            <mat-icon>add_photo_alternate</mat-icon>
+                            <span>Click to upload pinout diagram</span>
                         </div>
                         }
+                        <input #pinoutDiagramInput type="file" accept="image/*" hidden
+                            (change)="onPinoutDiagramSelected($event)">
                     </div>
                 </div>
+                } @else {
+                @if (pinoutDiagramImage()) {
+                <div class="image-display-row">
+                    <div class="image-display">
+                        <img [src]="pinoutDiagramImage()" alt="Pinout diagram">
+                    </div>
+                </div>
+                } @else {
+                <div class="view-info">
+                    <div class="info-value">No pinout diagram uploaded</div>
+                </div>
+                }
                 }
             </mat-card-content>
         </mat-card>
@@ -503,27 +533,6 @@
                         </div>
                     </div>
                     }
-
-                    <div class="image-upload-section">
-                        <div class="image-upload-card">
-                            <label class="image-label">Cable Diagram</label>
-                            @if (cableDiagramImage()) {
-                            <div class="image-preview">
-                                <img [src]="cableDiagramImage()" alt="Cable diagram">
-                                <button mat-icon-button class="remove-image" (click)="removeCableDiagram()">
-                                    <mat-icon>close</mat-icon>
-                                </button>
-                            </div>
-                            } @else {
-                            <div class="upload-placeholder" (click)="cableDiagramInput.click()">
-                                <mat-icon>add_photo_alternate</mat-icon>
-                                <span>Click to upload</span>
-                            </div>
-                            }
-                            <input #cableDiagramInput type="file" accept="image/*" hidden
-                                (change)="onCableDiagramSelected($event)">
-                        </div>
-                    </div>
                 </form>
                 } @else {
                 <div class="view-info">
@@ -550,15 +559,49 @@
                         </div>
                     </div>
                     }
-                    @if (cableDiagramImage()) {
-                    <div class="image-display-row">
-                        <div class="image-display">
-                            <label class="image-label">Cable Diagram</label>
-                            <img [src]="cableDiagramImage()" alt="Cable diagram">
-                        </div>
-                    </div>
-                    }
                 </div>
+                }
+            </mat-card-content>
+        </mat-card>
+
+        <!-- Cable Diagram -->
+        <mat-card class="category-card">
+            <mat-card-header>
+                <mat-card-title>Cable Diagram</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode() || !isEditMode) {
+                <div class="image-upload-section">
+                    <div class="image-upload-card">
+                        @if (cableDiagramImage()) {
+                        <div class="image-preview">
+                            <img [src]="cableDiagramImage()" alt="Cable diagram">
+                            <button mat-icon-button class="remove-image" (click)="removeCableDiagram()">
+                                <mat-icon>close</mat-icon>
+                            </button>
+                        </div>
+                        } @else {
+                        <div class="upload-placeholder" (click)="cableDiagramInput.click()">
+                            <mat-icon>add_photo_alternate</mat-icon>
+                            <span>Click to upload cable diagram</span>
+                        </div>
+                        }
+                        <input #cableDiagramInput type="file" accept="image/*" hidden
+                            (change)="onCableDiagramSelected($event)">
+                    </div>
+                </div>
+                } @else {
+                @if (cableDiagramImage()) {
+                <div class="image-display-row">
+                    <div class="image-display">
+                        <img [src]="cableDiagramImage()" alt="Cable diagram">
+                    </div>
+                </div>
+                } @else {
+                <div class="view-info">
+                    <div class="info-value">No cable diagram uploaded</div>
+                </div>
+                }
                 }
             </mat-card-content>
         </mat-card>
@@ -650,46 +693,6 @@
                     </div>
                     }
                 </div>
-
-                <div class="image-uploads-row">
-                    <div class="image-upload-card">
-                        <label class="image-label">Component Image</label>
-                        @if (componentImage()) {
-                        <div class="image-preview">
-                            <img [src]="componentImage()" alt="Component image">
-                            <button mat-icon-button class="remove-image" (click)="removeComponentImage()">
-                                <mat-icon>close</mat-icon>
-                            </button>
-                        </div>
-                        } @else {
-                        <div class="upload-placeholder" (click)="componentImageInput.click()">
-                            <mat-icon>add_photo_alternate</mat-icon>
-                            <span>Click to upload</span>
-                        </div>
-                        }
-                        <input #componentImageInput type="file" accept="image/*" hidden
-                            (change)="onComponentImageSelected($event)">
-                    </div>
-
-                    <div class="image-upload-card">
-                        <label class="image-label">Pinout Diagram</label>
-                        @if (componentPinoutImage()) {
-                        <div class="image-preview">
-                            <img [src]="componentPinoutImage()" alt="Pinout diagram">
-                            <button mat-icon-button class="remove-image" (click)="removeComponentPinout()">
-                                <mat-icon>close</mat-icon>
-                            </button>
-                        </div>
-                        } @else {
-                        <div class="upload-placeholder" (click)="componentPinoutInput.click()">
-                            <mat-icon>add_photo_alternate</mat-icon>
-                            <span>Click to upload</span>
-                        </div>
-                        }
-                        <input #componentPinoutInput type="file" accept="image/*" hidden
-                            (change)="onComponentPinoutSelected($event)">
-                    </div>
-                </div>
                 } @else {
                 <div class="view-info">
                     @for (group of componentPinGroups(); track group.id) {
@@ -707,21 +710,49 @@
                         </div>
                     </div>
                     }
-                    <div class="image-display-row">
-                        @if (componentImage()) {
-                        <div class="image-display">
-                            <label class="image-label">Component Image</label>
-                            <img [src]="componentImage()" alt="Component image">
-                        </div>
-                        }
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+
+        <!-- Component Pinout Diagram -->
+        <mat-card class="category-card">
+            <mat-card-header>
+                <mat-card-title>Pinout Diagram</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode() || !isEditMode) {
+                <div class="image-upload-section">
+                    <div class="image-upload-card">
                         @if (componentPinoutImage()) {
-                        <div class="image-display">
-                            <label class="image-label">Pinout Diagram</label>
-                            <img [src]="componentPinoutImage()" alt="Pinout diagram">
+                        <div class="image-preview">
+                            <img [src]="componentPinoutImage()" alt="Component pinout diagram">
+                            <button mat-icon-button class="remove-image" (click)="removeComponentPinout()">
+                                <mat-icon>close</mat-icon>
+                            </button>
+                        </div>
+                        } @else {
+                        <div class="upload-placeholder" (click)="componentPinoutInput.click()">
+                            <mat-icon>add_photo_alternate</mat-icon>
+                            <span>Click to upload pinout diagram</span>
                         </div>
                         }
+                        <input #componentPinoutInput type="file" accept="image/*" hidden
+                            (change)="onComponentPinoutSelected($event)">
                     </div>
                 </div>
+                } @else {
+                @if (componentPinoutImage()) {
+                <div class="image-display-row">
+                    <div class="image-display">
+                        <img [src]="componentPinoutImage()" alt="Component pinout diagram">
+                    </div>
+                </div>
+                } @else {
+                <div class="view-info">
+                    <div class="info-value">No pinout diagram uploaded</div>
+                </div>
+                }
                 }
             </mat-card-content>
         </mat-card>

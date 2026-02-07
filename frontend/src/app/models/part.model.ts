@@ -18,6 +18,8 @@ export interface Part {
     defaultUnitOfMeasureID: number | null;
     manufacturer: string | null;
     manufacturerPN: string | null;
+    imageFileID?: number | null;
+    imageFile?: { id: number; filename: string; mimeType: string; data: string } | null;
     createdAt: string;
     updatedAt: string;
     PartCategory?: PartCategory;

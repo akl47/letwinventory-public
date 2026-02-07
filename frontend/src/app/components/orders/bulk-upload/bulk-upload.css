@@ -234,6 +234,21 @@
     width: 220px;
 }
 
+.inline-select {
+    width: 140px;
+    font-size: 13px;
+}
+
+.category-badge {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
 /* Order details card */
 .order-details-card {
     margin-bottom: 24px;
