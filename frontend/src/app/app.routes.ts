@@ -24,6 +24,13 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'scheduled-tasks',
+        title: 'Scheduled Tasks',
+        loadComponent: () =>
+            import('./components/scheduled-tasks/scheduled-tasks-list-view/scheduled-tasks-list-view').then((m) => m.ScheduledTasksListView),
+        canActivate: [authGuard],
+    },
+    {
         path: 'inventory/barcode-history/:id',
         title: 'Barcode History',
         loadComponent: () =>

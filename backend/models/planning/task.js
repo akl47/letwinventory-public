@@ -82,7 +82,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
     taskTypeEnum: {
-      type: DataTypes.ENUM('normal', 'tracking', 'critical_path'),
+      type: DataTypes.ENUM('normal', 'tracking', 'critical_path', 'scheduled'),
       allowNull: false,
       defaultValue: 'normal'
     },

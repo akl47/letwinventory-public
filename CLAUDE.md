@@ -774,6 +774,78 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Session: 2026-02-06
+
+### Files Created
+- `backend/migrations/20260206000001-create-scheduled-tasks.js`
+- `backend/models/planning/scheduledTask.js`
+- `backend/api/planning/scheduled-task/controller.js`
+- `backend/api/planning/scheduled-task/routes.js`
+- `backend/services/scheduledTaskService.js`
+- `frontend/src/app/models/scheduled-task.model.ts`
+- `frontend/src/app/services/scheduled-task.service.ts`
+- `frontend/src/app/components/scheduled-tasks/scheduled-tasks-list-view/scheduled-tasks-list-view.ts`
+- `frontend/src/app/components/scheduled-tasks/scheduled-tasks-list-view/scheduled-tasks-list-view.html`
+- `frontend/src/app/components/scheduled-tasks/scheduled-tasks-list-view/scheduled-tasks-list-view.css`
+- `frontend/src/app/components/scheduled-tasks/scheduled-task-edit-dialog/scheduled-task-edit-dialog.ts`
+- `frontend/src/app/components/scheduled-tasks/scheduled-task-edit-dialog/scheduled-task-edit-dialog.html`
+- `frontend/src/app/components/scheduled-tasks/scheduled-task-edit-dialog/scheduled-task-edit-dialog.css`
+
+### Files Modified
+- `backend/package.json` - added `cron-parser` dependency
+- `backend/index.js` - imported and initialized `scheduledTaskService` after DB sync
+- `frontend/src/app/app.routes.ts` - added `/scheduled-tasks` route
+- `frontend/src/app/components/tasks/sub-toolbar/sub-toolbar.ts` - added `openScheduledTasks()` method
+- `frontend/src/app/components/tasks/sub-toolbar/sub-toolbar.html` - added "Scheduled Tasks" button in edit mode
+
+### Changes Made
+
+1. **Created ScheduledTasks database table and model**
+   - Migration with columns: id, ownerUserID (FK Users), name, description, taskListID (FK TaskLists), projectID (FK Projects), taskTypeEnum (ENUM), timeEstimate, cronExpression, nextRunAt, lastRunAt, activeFlag, timestamps
+   - Indexes on ownerUserID and (activeFlag, nextRunAt) for scheduler queries
+   - Sequelize model with belongsTo associations: User, TaskList, Project
+
+2. **Created CRUD API at `/api/planning/scheduled-task`**
+   - Create: validates cron expression with `cron-parser`, computes `nextRunAt`, sets `ownerUserID` from auth
+   - List: supports `?includeInactive=true` query param, includes TaskList and Project associations
+   - Update: recomputes `nextRunAt` if cronExpression or activeFlag changes
+   - Delete: soft delete (sets activeFlag=false)
+
+3. **Created scheduler service**
+   - Runs `processScheduledTasks()` on startup and every hour via `setInterval`
+   - Queries active scheduled tasks where `nextRunAt <= NOW()`
+   - Creates task with same rank logic as task controller (last rank + 1000)
+   - Advances `nextRunAt` via cron-parser, no backfilling of missed runs
+   - Wired into `backend/index.js` after `db.sequelize.sync()`
+
+4. **Created frontend model and service**
+   - `ScheduledTask` interface matching backend with included association types
+   - Service with CRUD methods, cache with `shareReplay`, follows `project.service.ts` pattern
+
+5. **Created list view component**
+   - Material table with columns: Name, Schedule (cron in monospace badge), Task List, Project (colored chip), Next Run, Last Run
+   - Search, pagination, sorting, "Show Inactive" toggle
+   - Follows `projects-list-view` pattern
+
+6. **Created edit dialog component**
+   - Form fields: name, description, taskListID (dropdown), projectID (dropdown), taskTypeEnum, timeEstimate, cronExpression
+   - Cron help section with format description and examples
+   - Active/Inactive dropdown shown only in edit mode
+   - Delete button with confirmation in edit mode
+
+7. **Added route and nav link**
+   - Route at `/scheduled-tasks` with authGuard
+   - "Scheduled Tasks" button in task sub-toolbar (edit mode), next to "Edit Projects"
+
+### Notes
+- Migration needs to be run: `npx sequelize-cli db:migrate`
+- cron-parser v4.9.0 installed (zero-dep, just computes next dates)
+- Scheduler checks hourly — for testing, set `nextRunAt` to past and restart backend
+- API auto-discovered by existing `backend/api/index.js` directory scanner
+- Current branch: scheduled_tasks
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:

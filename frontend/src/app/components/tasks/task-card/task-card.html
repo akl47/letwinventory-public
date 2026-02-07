@@ -8,7 +8,7 @@
         <div class="task-title" [class.completed]="displayDone()">{{ task().name }}</div>
     </div>
     @if (task().dueDate || task().timeEstimate || task().subtasks?.length || task().parentTaskID || task().taskTypeEnum
-    === 'tracking') {
+    === 'tracking' || task().taskTypeEnum === 'scheduled') {
     <div class="meta-info">
         @if (task().dueDate) {
         <span class="due-date-tag" [class.overdue]="isOverdue()" [class.due-today]="isDueToday()">
@@ -31,6 +31,9 @@
         }
         @if (task().taskTypeEnum === 'tracking') {
         <mat-icon class="tracking-icon" matTooltip="Tracking">package_2</mat-icon>
+        }
+        @if (task().taskTypeEnum === 'scheduled') {
+        <mat-icon class="tracking-icon" matTooltip="Scheduled" style="color: #4bce97;">schedule</mat-icon>
         }
     </div>
     }

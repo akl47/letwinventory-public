@@ -1,0 +1,80 @@
+.dialog-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 400px;
+    padding: 8px 0;
+}
+
+.full-width {
+    width: 100%;
+}
+
+.form-row {
+    display: flex;
+    gap: 16px;
+}
+
+.form-row mat-form-field {
+    flex: 1;
+}
+
+.cron-field {
+    flex: 1;
+}
+
+.tz-field {
+    flex: 1;
+}
+
+.cron-description {
+    padding: 8px 12px;
+    border-radius: 6px;
+    background-color: var(--mat-sys-primary-container);
+    color: var(--mat-sys-on-primary-container);
+    font-size: 14px;
+    margin-top: -8px;
+}
+
+.cron-help {
+    background-color: var(--mat-sys-surface-container);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-top: -8px;
+}
+
+.help-title {
+    margin: 0 0 4px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.help-examples {
+    font-size: 12px;
+    color: var(--mat-sys-on-surface-variant);
+    line-height: 1.6;
+}
+
+.help-examples code {
+    background-color: var(--mat-sys-surface-container-high);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+}
+
+/* Delete button */
+.mat-custom-error {
+    --mdc-filled-button-container-color: #f44336 !important;
+    --mdc-filled-button-label-text-color: white !important;
+}
+
+@media (max-width: 768px) {
+    .dialog-form {
+        min-width: 280px;
+    }
+
+    .form-row {
+        flex-direction: column;
+    }
+}

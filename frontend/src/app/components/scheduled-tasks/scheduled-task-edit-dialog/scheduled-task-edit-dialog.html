@@ -1,0 +1,119 @@
+<h2 mat-dialog-title>{{ isEditMode ? 'Edit Scheduled Task' : 'New Scheduled Task' }}</h2>
+
+<mat-dialog-content>
+    <form [formGroup]="form" class="dialog-form">
+        <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Task Name</mat-label>
+            <input matInput formControlName="name" required maxlength="100"
+                placeholder="e.g., Weekly inventory check">
+            <mat-hint>Name of the task that will be created</mat-hint>
+            @if (form.get('name')?.hasError('required') && form.get('name')?.touched) {
+            <mat-error>Name is required</mat-error>
+            }
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Description</mat-label>
+            <textarea matInput formControlName="description" rows="2"
+                placeholder="Optional task description"></textarea>
+        </mat-form-field>
+
+        <div class="form-row">
+            <mat-form-field appearance="outline">
+                <mat-label>Task List</mat-label>
+                <mat-select formControlName="taskListID" required>
+                    @for (list of taskLists(); track list.id) {
+                    <mat-option [value]="list.id">{{ list.name }}</mat-option>
+                    }
+                </mat-select>
+                @if (form.get('taskListID')?.hasError('required') && form.get('taskListID')?.touched) {
+                <mat-error>Task list is required</mat-error>
+                }
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+                <mat-label>Project</mat-label>
+                <mat-select formControlName="projectID">
+                    <mat-option [value]="null">None</mat-option>
+                    @for (project of projects(); track project.id) {
+                    <mat-option [value]="project.id">{{ project.name }}</mat-option>
+                    }
+                </mat-select>
+            </mat-form-field>
+        </div>
+
+        <div class="form-row">
+            <mat-form-field appearance="outline">
+                <mat-label>Time Estimate (min)</mat-label>
+                <input matInput type="number" formControlName="timeEstimate" min="0"
+                    placeholder="e.g., 30">
+            </mat-form-field>
+
+            <mat-form-field appearance="outline">
+                <mat-label>Due Date (hours after creation)</mat-label>
+                <input matInput type="number" formControlName="dueDateOffsetHours" min="0"
+                    placeholder="e.g., 48">
+                <mat-hint>Leave empty for no due date</mat-hint>
+            </mat-form-field>
+        </div>
+
+        <div class="form-row">
+            <mat-form-field appearance="outline" class="cron-field">
+                <mat-label>Cron Expression</mat-label>
+                <input matInput formControlName="cronExpression" required
+                    placeholder="e.g., 0 9 * * 1">
+                @if (form.get('cronExpression')?.hasError('required') && form.get('cronExpression')?.touched) {
+                <mat-error>Cron expression is required</mat-error>
+                }
+            </mat-form-field>
+
+            <mat-form-field appearance="outline" class="tz-field">
+                <mat-label>Timezone</mat-label>
+                <mat-select formControlName="timezone" required>
+                    @for (tz of timezones; track tz) {
+                    <mat-option [value]="tz">{{ tz }}</mat-option>
+                    }
+                </mat-select>
+            </mat-form-field>
+        </div>
+        @if (cronDescription()) {
+        <div class="cron-description">
+            {{ cronDescription() }}
+        </div>
+        }
+        <div class="cron-help">
+            <p class="help-title">Cron format: minute hour day-of-month month day-of-week</p>
+            <div class="help-examples">
+                <code>0 9 * * 1</code> Mon at 9am &nbsp;|&nbsp;
+                <code>0 9 1 * *</code> 1st of month at 9am &nbsp;|&nbsp;
+                <code>0 9 * * 1-5</code> Weekdays at 9am &nbsp;|&nbsp;
+                <code>0 0 * * 0</code> Sunday midnight
+            </div>
+        </div>
+
+        @if (isEditMode) {
+        <div class="form-row">
+            <mat-form-field appearance="outline">
+                <mat-label>Active</mat-label>
+                <mat-select formControlName="activeFlag">
+                    <mat-option [value]="true">Active</mat-option>
+                    <mat-option [value]="false">Inactive</mat-option>
+                </mat-select>
+            </mat-form-field>
+        </div>
+        }
+    </form>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+    @if (isEditMode) {
+    <button mat-flat-button class="mat-custom-error" (click)="delete()">
+        <mat-icon>delete</mat-icon>
+        Delete
+    </button>
+    }
+    <button mat-button mat-dialog-close>Cancel</button>
+    <button mat-flat-button color="primary" (click)="save()">
+        {{ isEditMode ? 'Save' : 'Create' }}
+    </button>
+</mat-dialog-actions>
