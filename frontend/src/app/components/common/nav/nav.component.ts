@@ -45,6 +45,9 @@ export class NavComponent implements OnInit, OnDestroy {
     protected readonly appVersion = APP_VERSION;
 
     ngOnInit() {
+        if (window.innerWidth <= 768) {
+            this.isSidenavCollapsed.set(true);
+        }
         this.isMobileRoute.set(this.router.url.startsWith('/mobile'));
         this.routerSub = this.router.events
             .pipe(filter((e): e is NavigationEnd => e instanceof NavigationEnd))

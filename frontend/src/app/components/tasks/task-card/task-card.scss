@@ -178,3 +178,11 @@
     height: 14px;
     color: rgba(255, 255, 255, 0.4);
 }
+
+@media (max-width: 768px) {
+    .task-card {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+    }
+}

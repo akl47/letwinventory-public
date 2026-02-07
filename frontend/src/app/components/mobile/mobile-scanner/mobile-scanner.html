@@ -1,4 +1,8 @@
 <div class="scanner-container">
+    <button class="back-btn" (click)="goBack()">
+        <mat-icon>arrow_back</mat-icon>
+    </button>
+
     <!-- Camera feed (always in DOM, visibility toggled) -->
     <video #videoElement autoplay playsinline
         [class.visible]="state() === 'scanning' || state() === 'scanning_second'"></video>

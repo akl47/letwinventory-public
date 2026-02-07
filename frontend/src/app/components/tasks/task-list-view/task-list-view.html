@@ -7,7 +7,7 @@
     [currentSubtasks]="currentSubtasksParam()"
     (revertToDefault)="onRevertToDefault()" (saveAsDefault)="onSaveAsDefault()"></app-sub-toolbar>
 <app-history-drawer [isOpen]="isHistoryOpen()" (close)="toggleHistory()"></app-history-drawer>
-<div class="board-container">
+<div class="board-container" #boardContainer [class.is-dragging]="isDragging()" cdkScrollable>
     @if (isEditMode()) {
     <!-- Edit Mode: Use local copy with drag/drop -->
     <div class="board-wrapper" cdkDropList cdkDropListOrientation="horizontal" [cdkDropListData]="taskListsLocal()"
@@ -15,7 +15,8 @@
         @for(list of taskListsLocal(); track list.id) {
         <app-task-list [taskList]="list" [connectedLists]="(connectedListIds$ | async) || []" [isEditMode]="true"
             [filterProjectIds]="selectedProjectIds()" [showNoProject]="showNoProject()" [showChildTasks]="showChildTasks()"
-            (listRenamed)="onListRenamed(list.id, $event)" (listDeleted)="onListDeleted(list.id)" cdkDrag></app-task-list>
+            (listRenamed)="onListRenamed(list.id, $event)" (listDeleted)="onListDeleted(list.id)"
+            (cardDragStarted)="isDragging.set(true)" (cardDragEnded)="isDragging.set(false)" cdkDrag></app-task-list>
         }
 
         <!-- Add New List -->
@@ -43,7 +44,8 @@
         @if (taskLists$ | async; as taskLists) {
         @for(list of taskLists; track list.id) {
         <app-task-list [taskList]="list" [connectedLists]="(connectedListIds$ | async) || []"
-            [filterProjectIds]="selectedProjectIds()" [showNoProject]="showNoProject()" [showChildTasks]="showChildTasks()"></app-task-list>
+            [filterProjectIds]="selectedProjectIds()" [showNoProject]="showNoProject()" [showChildTasks]="showChildTasks()"
+            (cardDragStarted)="isDragging.set(true)" (cardDragEnded)="isDragging.set(false)"></app-task-list>
         }
         } @else {
         <div class="loading-wrapper">

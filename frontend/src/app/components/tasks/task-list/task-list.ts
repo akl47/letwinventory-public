@@ -24,8 +24,12 @@ export class TaskListComponent implements OnChanges {
   @Input() showChildTasks = true;
   @Output() listRenamed = new EventEmitter<string>();
   @Output() listDeleted = new EventEmitter<void>();
+  @Output() cardDragStarted = new EventEmitter<void>();
+  @Output() cardDragEnded = new EventEmitter<void>();
 
   private readonly taskService = inject(TaskService);
+
+  readonly dragDelay = { touch: 500, mouse: 0 };
 
   protected isAddingTask = signal(false);
   protected newTaskName = '';
