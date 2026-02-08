@@ -350,7 +350,7 @@ exports.bulkImport = async (req, res, next) => {
         record.description = existingPart.description;
       } else {
         const partData = {
-          name: partName.substring(0, 16),
+          name: partName.substring(0, 32),
           description: (record.description || '')?.substring(0, 62),
           internalPart: parseBoolean(record.internalPart),
           vendor: record.vendor || vendor,

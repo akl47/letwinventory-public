@@ -911,6 +911,72 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Session: 2026-02-08
+
+### Files Created
+- `.github/workflows/deploy.yml`
+
+### Files Modified
+- `backend/scripts/digikey-lookup.js`
+- `frontend/src/app/components/orders/orders-list-view/orders-list-view.ts`
+- `frontend/src/app/components/inventory/equipment-table-view/equipment-table-view.ts`
+- `frontend/src/app/components/harness/harness-list-view/harness-list-view.ts`
+- `frontend/src/app/components/inventory/parts-table-view/parts-table-view.ts`
+- `frontend/src/app/components/inventory/parts-table-view/parts-table-view.html`
+- `frontend/src/app/components/inventory/parts-table-view/parts-table-view.css`
+- `frontend/src/app/components/inventory/part-edit-page/part-edit-page.ts`
+
+### Changes Made
+
+1. **Created GitHub Actions deploy workflow**
+   - New `.github/workflows/deploy.yml` triggers on `v*` tag push (from version-bump workflow)
+   - Uses `docker/build-push-action` with `file: backend/Dockerfile.prod`, `context: .`
+   - Pushes to DockerHub (`akl47/letwinventory`) with both version and `latest` tags
+   - Requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets
+
+2. **Refactored digikey-lookup.js to use API instead of direct DB**
+   - Removed Sequelize/model imports, replaced all DB calls with fetch to letwinventory API
+   - `GET /api/inventory/part` for listing, `GET /api/inventory/part/:id` for single part
+   - `PUT /api/inventory/part/:id` for updates (fetches full part first, merges changes, sends all required fields)
+   - `POST /api/files` for image uploads
+   - Auth via `--token <jwt>` flag (required) — user provides JWT from browser's `auth_token` cookie
+   - `--prod` flag derives API URL from `FRONTEND_URL` env var; dev uses `localhost:$BACKEND_PORT`
+   - `--all` flag now filters for `vendor === 'Digi-Key'` (all active Digi-Key parts, not just missing links)
+   - "Already up to date" message now shows image status: `has image`, `image available`, or `no image`
+
+3. **Added URL query param sync to orders list view**
+   - Imported `ActivatedRoute`, added `applyQueryParams()` and `updateQueryParams()` methods
+   - Syncs: `search`, `inactive`, `statuses` (comma-separated IDs), `sort`/`dir`, `page`/`pageSize`
+   - Defaults: sort `placedDate`/`desc`, pageSize 25
+
+4. **Added URL query param sync to equipment table view**
+   - Same pattern as orders/parts tables
+   - Syncs: `search`, `inactive`, `sort`/`dir`, `page`/`pageSize`
+   - Defaults: sort `name`/`asc`, pageSize 10
+
+5. **Added URL query param sync to harness list view**
+   - Same pattern as other tables
+   - Syncs: `search`, `inactive`, `sort`/`dir`, `page`/`pageSize`
+   - Defaults: sort `updatedAt`/`desc`, pageSize 10
+
+6. **Added image preview hover to parts table**
+   - Added `image` column as first column in parts table
+   - Shows image icon for parts with `imageFile.data`
+   - Hover shows fixed-position tooltip with image preview (same pattern as order-view)
+   - Uses `getBoundingClientRect()` on `mouseenter` for positioning, `transform: translateY(-100%)` to show above
+
+7. **Part edit page stays on part after save**
+   - Changed update success handler to call `this.isFormEditMode.set(false)` and `this.loadPart(partId)` instead of navigating to `/parts`
+   - Creating a new part still navigates to `/parts`
+
+### Notes
+- Deploy workflow automates the manual `scripts/deploy.sh` step
+- DigiKey script no longer needs direct DB access — only requires the backend server running
+- All four list views (parts, orders, equipment, harness) now have URL query param persistence
+- Current branch: master
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:
