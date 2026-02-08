@@ -1,6 +1,6 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Router } from '@angular/router';
+import { Router, ActivatedRoute } from '@angular/router';
 import { MatTableModule } from '@angular/material/table';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatSortModule, Sort } from '@angular/material/sort';
@@ -42,6 +42,7 @@ import { Part, PartCategory } from '../../../models';
 export class PartsTableView implements OnInit {
   private inventoryService = inject(InventoryService);
   private router = inject(Router);
+  private route = inject(ActivatedRoute);
 
   allParts = signal<Part[]>([]);
   displayedParts = signal<Part[]>([]);
@@ -116,6 +117,8 @@ export class PartsTableView implements OnInit {
     return count;
   });
 
+  private initializedFromQuery = false;
+
   ngOnInit() {
     this.loadData();
   }
@@ -127,15 +130,60 @@ export class PartsTableView implements OnInit {
         this.categories.set(categories);
         // Select all categories by default
         this.selectedCategoryIds.set(new Set(categories.map(c => c.id)));
+        // Apply query params after categories are loaded
+        this.applyQueryParams();
         // Now load parts after categories are ready
         this.loadParts();
       },
       error: (err) => {
         console.error('Error loading categories:', err);
+        this.applyQueryParams();
         // Still try to load parts even if categories fail
         this.loadParts();
       }
     });
+  }
+
+  private applyQueryParams() {
+    const params = this.route.snapshot.queryParams;
+    if (params['search']) this.searchText.set(params['search']);
+    if (params['inactive'] === 'true') this.showInactive.set(true);
+    if (params['internal'] !== undefined) this.showInternal.set(params['internal'] !== 'false');
+    if (params['vendor'] !== undefined) this.showVendor.set(params['vendor'] !== 'false');
+    if (params['sort']) this.sortColumn.set(params['sort']);
+    if (params['dir'] === 'asc' || params['dir'] === 'desc') this.sortDirection.set(params['dir']);
+    if (params['page']) this.pageIndex.set(parseInt(params['page'], 10) || 0);
+    if (params['pageSize']) this.pageSize.set(parseInt(params['pageSize'], 10) || 10);
+    if (params['categories']) {
+      const ids = params['categories'].split(',').map((s: string) => parseInt(s, 10)).filter((n: number) => !isNaN(n));
+      this.selectedCategoryIds.set(new Set(ids));
+    }
+    this.initializedFromQuery = true;
+  }
+
+  private updateQueryParams() {
+    if (!this.initializedFromQuery) return;
+    const params: Record<string, string> = {};
+    const search = this.searchText();
+    if (search) params['search'] = search;
+    if (this.showInactive()) params['inactive'] = 'true';
+    if (!this.showInternal()) params['internal'] = 'false';
+    if (!this.showVendor()) params['vendor'] = 'false';
+    const sortCol = this.sortColumn();
+    const sortDir = this.sortDirection();
+    if (sortCol !== 'name' || sortDir !== 'asc') {
+      params['sort'] = sortCol;
+      params['dir'] = sortDir;
+    }
+    if (this.pageIndex() > 0) params['page'] = String(this.pageIndex());
+    if (this.pageSize() !== 10) params['pageSize'] = String(this.pageSize());
+    // Only include categories param if not all selected
+    const allCats = this.categories();
+    const selected = this.selectedCategoryIds();
+    if (allCats.length > 0 && selected.size < allCats.length) {
+      params['categories'] = Array.from(selected).join(',');
+    }
+    this.router.navigate([], { relativeTo: this.route, queryParams: params, replaceUrl: true });
   }
 
   loadParts() {
@@ -219,26 +267,30 @@ export class PartsTableView implements OnInit {
 
   onSearchChange(value: string) {
     this.searchText.set(value);
-    this.pageIndex.set(0); // Reset to first page
+    this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   onPageChange(event: PageEvent) {
     this.pageIndex.set(event.pageIndex);
     this.pageSize.set(event.pageSize);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   onSortChange(sort: Sort) {
     this.sortColumn.set(sort.active);
     this.sortDirection.set(sort.direction as 'asc' | 'desc' || 'asc');
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   onToggleInactive(checked: boolean) {
     this.showInactive.set(checked);
-    this.pageIndex.set(0); // Reset to first page
+    this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   // Category filter methods
@@ -257,19 +309,19 @@ export class PartsTableView implements OnInit {
     this.selectedCategoryIds.set(newSet);
     this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   toggleAllCategories(): void {
     const cats = this.categories();
     if (this.allCategoriesSelected()) {
-      // Deselect all
       this.selectedCategoryIds.set(new Set());
     } else {
-      // Select all
       this.selectedCategoryIds.set(new Set(cats.map(c => c.id)));
     }
     this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   // Part type filter methods
@@ -277,12 +329,14 @@ export class PartsTableView implements OnInit {
     this.showInternal.update(v => !v);
     this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   toggleVendor(): void {
     this.showVendor.update(v => !v);
     this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   toggleAllTypes(): void {
@@ -295,6 +349,7 @@ export class PartsTableView implements OnInit {
     }
     this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   getTotalCount(): number {
