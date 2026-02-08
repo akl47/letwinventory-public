@@ -31,7 +31,7 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.INTEGER
     },
     name:{
-      type: DataTypes.STRING(16),
+      type: DataTypes.STRING(32),
       allowNull:false,
       unique:true
     },

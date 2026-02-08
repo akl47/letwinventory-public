@@ -191,7 +191,7 @@ async function importOrderFromCSV(csvFilePath) {
       } else {
         // Prepare part data
         const partData = {
-          name: partName.substring(0, 16), // Max 16 chars
+          name: partName.substring(0, 32), // Max 32 chars
           description: record.description?.substring(0, 62) || '', // Max 62 chars
           internalPart: parseBoolean(record.internalPart),
           vendor: record.vendor || vendor,

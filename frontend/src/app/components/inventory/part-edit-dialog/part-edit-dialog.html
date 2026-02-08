@@ -4,7 +4,7 @@
     <form [formGroup]="form" class="dialog-form">
         <mat-form-field appearance="outline">
             <mat-label>Part Number</mat-label>
-            <input matInput formControlName="name" placeholder="e.g. 000011" maxlength="16" required>
+            <input matInput formControlName="name" placeholder="e.g. 000011" maxlength="32" required>
             @if (!isEditMode && suggestedPartNumber) {
             <mat-hint>Suggested next: {{ suggestedPartNumber }}</mat-hint>
             } @else {
@@ -13,7 +13,7 @@
             @if (form.get('name')?.hasError('required') && form.get('name')?.touched) {
             <mat-error>Part number is required</mat-error>
             } @else if (form.get('name')?.hasError('maxlength')) {
-            <mat-error>Part number must be 16 characters or less</mat-error>
+            <mat-error>Part number must be 32 characters or less</mat-error>
             } @else if (isPartNameTaken() && form.get('name')?.touched) {
             <mat-error>This part name is already in use</mat-error>
             }

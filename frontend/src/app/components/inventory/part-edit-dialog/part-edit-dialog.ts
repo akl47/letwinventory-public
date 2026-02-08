@@ -97,7 +97,7 @@ export class PartEditDialog implements OnInit {
   });
 
   form = this.fb.group({
-    name: ['', [Validators.required, Validators.maxLength(16)]],
+    name: ['', [Validators.required, Validators.maxLength(32)]],
     description: ['', Validators.maxLength(62)],
     internalPart: [false, Validators.required],
     vendor: [''],
@@ -489,7 +489,7 @@ export class PartEditDialog implements OnInit {
       return 'Part name is required';
     }
     if (nameControl?.hasError('maxlength')) {
-      return 'Part name must be 16 characters or less';
+      return 'Part name must be 32 characters or less';
     }
     if (this.isPartNameTaken()) {
       return 'This part name is already in use';
