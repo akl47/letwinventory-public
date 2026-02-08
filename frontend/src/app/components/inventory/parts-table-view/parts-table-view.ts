@@ -48,6 +48,7 @@ export class PartsTableView implements OnInit {
   displayedParts = signal<Part[]>([]);
   searchText = signal<string>('');
   showInactive = signal<boolean>(false);
+  imageTooltipStyle: Record<string, string> = {};
 
   // Category filter
   categories = signal<PartCategory[]>([]);
@@ -57,7 +58,7 @@ export class PartsTableView implements OnInit {
   showInternal = signal<boolean>(true);
   showVendor = signal<boolean>(true);
 
-  displayedColumns: string[] = ['name', 'description', 'category', 'vendor', 'sku', 'minimumOrderQuantity', 'internalPart', 'createdAt'];
+  displayedColumns: string[] = ['image', 'name', 'description', 'category', 'vendor', 'sku', 'minimumOrderQuantity', 'internalPart', 'createdAt'];
 
   // Pagination
   pageSize = signal<number>(10);
