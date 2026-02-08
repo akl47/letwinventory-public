@@ -281,7 +281,8 @@ async function processPart(part) {
   const skuSame = part.sku && part.sku === match.sku;
   const linkSame = part.link && part.link === match.link;
   if (skuSame && linkSame) {
-    console.log(`    Already up to date (sku and link match)`);
+    const imageStatus = part.imageFileID ? 'has image' : match.photoUrl ? 'image available' : 'no image';
+    console.log(`    Already up to date (sku and link match, ${imageStatus})`);
     if (!pullImages || !match.photoUrl || part.imageFileID) {
       return { status: 'skipped', part };
     }
@@ -356,9 +357,9 @@ async function main() {
   if (all) {
     const allParts = await apiGet('/inventory/part');
     parts = allParts
-      .filter(p => p.activeFlag === true && !p.link && p.vendor === 'Digi-Key')
+      .filter(p => p.activeFlag === true && p.vendor === 'Digi-Key')
       .sort((a, b) => a.id - b.id);
-    console.log(`Found ${parts.length} Digi-Key parts with empty link`);
+    console.log(`Found ${parts.length} Digi-Key parts`);
   } else {
     parts = [];
     for (const id of partIds) {
