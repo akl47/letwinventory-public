@@ -10,7 +10,8 @@
  *   node backend/scripts/digikey-lookup.js --all              All parts with empty link
  *   node backend/scripts/digikey-lookup.js --all --dry-run    Preview without saving
  *   node backend/scripts/digikey-lookup.js --all --image      Also download product images
- *   node backend/scripts/digikey-lookup.js --all --prod       Use production database
+ *   node backend/scripts/digikey-lookup.js --all --prod       Use production API
+ *   node backend/scripts/digikey-lookup.js --all --token <jwt> Provide auth token manually
  */
 
 const path = require('path');
@@ -22,14 +23,18 @@ const dryRun = args.includes('--dry-run');
 const all = args.includes('--all');
 const pullImages = args.includes('--image');
 const useProduction = args.includes('--prod');
-const partIds = args.filter(arg => !arg.startsWith('--'));
+const tokenIdx = args.indexOf('--token');
+const token = tokenIdx !== -1 ? args[tokenIdx + 1] : null;
+const partIds = args.filter((arg, i) => !arg.startsWith('--') && i !== tokenIdx + 1);
+
+if (!token) {
+  console.error('Error: --token <jwt> is required. Get your token from the auth_token cookie in the browser.');
+  process.exit(1);
+}
 
 // Load environment variables
 const envFile = useProduction ? '.env.production' : '.env.development';
 require('dotenv').config({ path: path.join(__dirname, '../../', envFile) });
-
-const db = require('../models');
-const { Part, UploadedFile, sequelize } = db;
 
 if (!all && partIds.length === 0) {
   console.error('Usage: node backend/scripts/digikey-lookup.js <partID...> [--dry-run]');
@@ -45,10 +50,50 @@ if (!DIGIKEY_CLIENT_ID || !DIGIKEY_CLIENT_SECRET) {
   process.exit(1);
 }
 
-let cachedToken = null;
+// --- Letwinventory API helpers ---
 
-async function getToken() {
-  if (cachedToken) return cachedToken;
+const API_URL = useProduction
+  ? `${process.env.FRONTEND_URL}/api`
+  : `http://localhost:${process.env.BACKEND_PORT || 3000}/api`;
+
+const authHeaders = {
+  'Authorization': `Bearer ${token}`,
+  'Content-Type': 'application/json',
+};
+
+async function apiGet(path) {
+  const res = await fetch(`${API_URL}${path}`, { headers: authHeaders });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API GET ${path} failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+async function apiPut(path, body) {
+  const res = await fetch(`${API_URL}${path}`, { method: 'PUT', headers: authHeaders, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API PUT ${path} failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+async function apiPost(path, body) {
+  const res = await fetch(`${API_URL}${path}`, { method: 'POST', headers: authHeaders, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API POST ${path} failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+// --- DigiKey API helpers ---
+
+let cachedDigiKeyToken = null;
+
+async function getDigiKeyToken() {
+  if (cachedDigiKeyToken) return cachedDigiKeyToken;
 
   const res = await fetch('https://api.digikey.com/v1/oauth2/token', {
     method: 'POST',
@@ -66,12 +111,12 @@ async function getToken() {
   }
 
   const data = await res.json();
-  cachedToken = data.access_token;
-  return cachedToken;
+  cachedDigiKeyToken = data.access_token;
+  return cachedDigiKeyToken;
 }
 
 async function searchDigiKey(keyword) {
-  const token = await getToken();
+  const token = await getDigiKeyToken();
 
   const res = await fetch('https://api.digikey.com/products/v4/search/keyword', {
     method: 'POST',
@@ -146,13 +191,10 @@ async function downloadImage(photoUrl, partName) {
   const base64 = buffer.toString('base64');
   const ext = contentType.includes('png') ? 'png' : 'jpg';
 
-  const file = await UploadedFile.create({
+  const file = await apiPost('/files', {
     filename: `${partName}.${ext}`,
     mimeType: contentType,
-    fileSize: buffer.length,
     data: `data:${contentType};base64,${base64}`,
-    uploadedBy: null,
-    activeFlag: true,
   });
 
   return file.id;
@@ -160,6 +202,29 @@ async function downloadImage(photoUrl, partName) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function updatePart(partId, updateData) {
+  // API validator requires all non-null fields, so fetch full part and merge
+  const part = await apiGet(`/inventory/part/${partId}`);
+  const body = {
+    name: part.name,
+    internalPart: part.internalPart,
+    vendor: part.vendor,
+    minimumOrderQuantity: part.minimumOrderQuantity,
+    partCategoryID: part.partCategoryID,
+    serialNumberRequired: part.serialNumberRequired,
+    lotNumberRequired: part.lotNumberRequired,
+    description: part.description,
+    sku: part.sku,
+    link: part.link,
+    defaultUnitOfMeasureID: part.defaultUnitOfMeasureID,
+    manufacturer: part.manufacturer,
+    manufacturerPN: part.manufacturerPN,
+    imageFileID: part.imageFileID,
+    ...updateData,
+  };
+  return apiPut(`/inventory/part/${partId}`, body);
 }
 
 async function processPart(part) {
@@ -212,7 +277,7 @@ async function processPart(part) {
   console.log(`      link:  ${match.link}`);
   console.log(`      image: ${match.photoUrl}`);
 
-  // Check if sku/link already match what's in the DB
+  // Check if sku/link already match
   const skuSame = part.sku && part.sku === match.sku;
   const linkSame = part.link && part.link === match.link;
   if (skuSame && linkSame) {
@@ -223,34 +288,34 @@ async function processPart(part) {
     // Fall through to image handling below
   }
 
-  const updateData = {};
+  const changes = {};
 
   // Only update fields that are currently empty; prompt on conflicts
   if (!part.sku) {
-    updateData.sku = match.sku;
+    changes.sku = match.sku;
   } else if (!skuSame) {
     console.log(`    SKU conflict:`);
     console.log(`      1) Keep existing: ${part.sku}`);
     console.log(`      2) Use DigiKey:   ${match.sku}`);
     if (!dryRun) {
       const answer = await prompt('    Select [1]: ');
-      if (answer === '2') updateData.sku = match.sku;
+      if (answer === '2') changes.sku = match.sku;
     }
   }
 
   if (!part.link) {
-    updateData.link = match.link;
+    changes.link = match.link;
   } else if (!linkSame) {
     console.log(`    Link conflict:`);
     console.log(`      1) Keep existing: ${part.link}`);
     console.log(`      2) Use DigiKey:   ${match.link}`);
     if (!dryRun) {
       const answer = await prompt('    Select [1]: ');
-      if (answer === '2') updateData.link = match.link;
+      if (answer === '2') changes.link = match.link;
     }
   }
 
-  if (!part.vendor) updateData.vendor = 'DigiKey';
+  if (!part.vendor) changes.vendor = 'DigiKey';
 
   // Image handling
   if (pullImages && match.photoUrl) {
@@ -259,7 +324,7 @@ async function processPart(part) {
     } else if (!dryRun) {
       try {
         const fileId = await downloadImage(match.photoUrl, part.name);
-        updateData.imageFileID = fileId;
+        changes.imageFileID = fileId;
         console.log(`    Image saved (fileID: ${fileId})`);
       } catch (err) {
         console.log(`    Image download failed: ${err.message}`);
@@ -270,7 +335,7 @@ async function processPart(part) {
   }
 
   if (!dryRun) {
-    await part.update(updateData);
+    await updatePart(part.id, changes);
     console.log(`    UPDATED`);
   } else {
     console.log(`    [dry-run] Would update`);
@@ -280,6 +345,8 @@ async function processPart(part) {
 }
 
 async function main() {
+  console.log(`Using API: ${API_URL}`);
+
   if (dryRun) {
     console.log('*** DRY RUN - No changes will be made ***');
   }
@@ -287,20 +354,21 @@ async function main() {
   let parts;
 
   if (all) {
-    parts = await Part.findAll({
-      where: { link: null, activeFlag: true },
-      order: [['id', 'ASC']],
-    });
-    console.log(`Found ${parts.length} parts with empty link`);
+    const allParts = await apiGet('/inventory/part');
+    parts = allParts
+      .filter(p => p.activeFlag === true && !p.link && p.vendor === 'Digi-Key')
+      .sort((a, b) => a.id - b.id);
+    console.log(`Found ${parts.length} Digi-Key parts with empty link`);
   } else {
     parts = [];
     for (const id of partIds) {
-      const part = await Part.findByPk(id);
-      if (!part) {
-        console.error(`Error: Part ${id} not found`);
+      try {
+        const part = await apiGet(`/inventory/part/${id}`);
+        parts.push(part);
+      } catch (err) {
+        console.error(`Error fetching part ${id}: ${err.message}`);
         process.exit(1);
       }
-      parts.push(part);
     }
   }
 
