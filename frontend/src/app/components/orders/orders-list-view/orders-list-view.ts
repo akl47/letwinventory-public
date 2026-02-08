@@ -1,6 +1,6 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Router } from '@angular/router';
+import { Router, ActivatedRoute } from '@angular/router';
 import { MatTableModule } from '@angular/material/table';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatSortModule, Sort } from '@angular/material/sort';
@@ -48,6 +48,7 @@ export class OrdersListView implements OnInit {
   private inventoryService = inject(InventoryService);
   private errorNotification = inject(ErrorNotificationService);
   private router = inject(Router);
+  private route = inject(ActivatedRoute);
   private dialog = inject(MatDialog);
 
   allOrders = signal<Order[]>([]);
@@ -92,6 +93,8 @@ export class OrdersListView implements OnInit {
     return sts.filter(s => !selected.has(s.id)).length;
   });
 
+  private initializedFromQuery = false;
+
   ngOnInit() {
     this.loadOrders();
   }
@@ -101,13 +104,53 @@ export class OrdersListView implements OnInit {
       next: (statuses) => {
         this.statuses.set(statuses);
         this.selectedStatusIds.set(new Set(statuses.map(s => s.id)));
+        this.applyQueryParams();
         this.fetchOrders();
       },
       error: (err) => {
         this.errorNotification.showHttpError(err, 'Error loading order statuses');
+        this.applyQueryParams();
         this.fetchOrders();
       }
     });
+  }
+
+  private applyQueryParams() {
+    const params = this.route.snapshot.queryParams;
+    if (params['search']) this.searchText.set(params['search']);
+    if (params['inactive'] === 'true') this.showInactive.set(true);
+    if (params['sort']) this.sortColumn.set(params['sort']);
+    if (params['dir'] === 'asc' || params['dir'] === 'desc') this.sortDirection.set(params['dir']);
+    if (params['page']) this.pageIndex.set(parseInt(params['page'], 10) || 0);
+    if (params['pageSize']) this.pageSize.set(parseInt(params['pageSize'], 10) || 25);
+    if (params['statuses']) {
+      const ids = params['statuses'].split(',').map((s: string) => parseInt(s, 10)).filter((n: number) => !isNaN(n));
+      this.selectedStatusIds.set(new Set(ids));
+    }
+    this.initializedFromQuery = true;
+  }
+
+  private updateQueryParams() {
+    if (!this.initializedFromQuery) return;
+    const params: Record<string, string> = {};
+    const search = this.searchText();
+    if (search) params['search'] = search;
+    if (this.showInactive()) params['inactive'] = 'true';
+    const sortCol = this.sortColumn();
+    const sortDir = this.sortDirection();
+    if (sortCol !== 'placedDate' || sortDir !== 'desc') {
+      params['sort'] = sortCol;
+      params['dir'] = sortDir;
+    }
+    if (this.pageIndex() > 0) params['page'] = String(this.pageIndex());
+    if (this.pageSize() !== 25) params['pageSize'] = String(this.pageSize());
+    // Only include statuses param if not all selected
+    const allStatuses = this.statuses();
+    const selected = this.selectedStatusIds();
+    if (allStatuses.length > 0 && selected.size < allStatuses.length) {
+      params['statuses'] = Array.from(selected).join(',');
+    }
+    this.router.navigate([], { relativeTo: this.route, queryParams: params, replaceUrl: true });
   }
 
   fetchOrders() {
@@ -175,24 +218,28 @@ export class OrdersListView implements OnInit {
     this.searchText.set(value);
     this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   onPageChange(event: PageEvent) {
     this.pageIndex.set(event.pageIndex);
     this.pageSize.set(event.pageSize);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   onSortChange(sort: Sort) {
     this.sortColumn.set(sort.active);
     this.sortDirection.set(sort.direction as 'asc' | 'desc' || 'asc');
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   onToggleInactive(checked: boolean) {
     this.showInactive.set(checked);
     this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   // Status filter methods
@@ -211,6 +258,7 @@ export class OrdersListView implements OnInit {
     this.selectedStatusIds.set(newSet);
     this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   toggleAllStatuses(): void {
@@ -222,6 +270,7 @@ export class OrdersListView implements OnInit {
     }
     this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   getTotalCount(): number {

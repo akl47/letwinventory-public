@@ -10,24 +10,26 @@
  *   node backend/scripts/digikey-lookup.js --all              All parts with empty link
  *   node backend/scripts/digikey-lookup.js --all --dry-run    Preview without saving
  *   node backend/scripts/digikey-lookup.js --all --image      Also download product images
+ *   node backend/scripts/digikey-lookup.js --all --prod       Use production database
  */
 
 const path = require('path');
 const readline = require('readline');
 
-// Load environment variables
-const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
-require('dotenv').config({ path: path.join(__dirname, '../../', envFile) });
-
-const db = require('../models');
-const { Part, UploadedFile, sequelize } = db;
-
-// Parse command line arguments
+// Parse command line arguments (before env loading so --prod is available)
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const all = args.includes('--all');
 const pullImages = args.includes('--image');
+const useProduction = args.includes('--prod');
 const partIds = args.filter(arg => !arg.startsWith('--'));
+
+// Load environment variables
+const envFile = useProduction ? '.env.production' : '.env.development';
+require('dotenv').config({ path: path.join(__dirname, '../../', envFile) });
+
+const db = require('../models');
+const { Part, UploadedFile, sequelize } = db;
 
 if (!all && partIds.length === 0) {
   console.error('Usage: node backend/scripts/digikey-lookup.js <partID...> [--dry-run]');

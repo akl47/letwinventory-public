@@ -1,5 +1,6 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Router, ActivatedRoute } from '@angular/router';
 import { MatTableModule } from '@angular/material/table';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatSortModule, Sort } from '@angular/material/sort';
@@ -38,6 +39,8 @@ import { BarcodeTag } from '../barcode-tag/barcode-tag';
 })
 export class EquipmentTableView implements OnInit {
   private inventoryService = inject(InventoryService);
+  private router = inject(Router);
+  private route = inject(ActivatedRoute);
   private dialog = inject(MatDialog);
 
   allEquipment = signal<Equipment[]>([]);
@@ -56,8 +59,39 @@ export class EquipmentTableView implements OnInit {
   sortColumn = signal<string>('name');
   sortDirection = signal<'asc' | 'desc'>('asc');
 
+  private initializedFromQuery = false;
+
   ngOnInit() {
+    this.applyQueryParams();
     this.loadEquipment();
+  }
+
+  private applyQueryParams() {
+    const params = this.route.snapshot.queryParams;
+    if (params['search']) this.searchText.set(params['search']);
+    if (params['inactive'] === 'true') this.showInactive.set(true);
+    if (params['sort']) this.sortColumn.set(params['sort']);
+    if (params['dir'] === 'asc' || params['dir'] === 'desc') this.sortDirection.set(params['dir']);
+    if (params['page']) this.pageIndex.set(parseInt(params['page'], 10) || 0);
+    if (params['pageSize']) this.pageSize.set(parseInt(params['pageSize'], 10) || 10);
+    this.initializedFromQuery = true;
+  }
+
+  private updateQueryParams() {
+    if (!this.initializedFromQuery) return;
+    const params: Record<string, string> = {};
+    const search = this.searchText();
+    if (search) params['search'] = search;
+    if (this.showInactive()) params['inactive'] = 'true';
+    const sortCol = this.sortColumn();
+    const sortDir = this.sortDirection();
+    if (sortCol !== 'name' || sortDir !== 'asc') {
+      params['sort'] = sortCol;
+      params['dir'] = sortDir;
+    }
+    if (this.pageIndex() > 0) params['page'] = String(this.pageIndex());
+    if (this.pageSize() !== 10) params['pageSize'] = String(this.pageSize());
+    this.router.navigate([], { relativeTo: this.route, queryParams: params, replaceUrl: true });
   }
 
   loadEquipment() {
@@ -109,26 +143,30 @@ export class EquipmentTableView implements OnInit {
 
   onSearchChange(value: string) {
     this.searchText.set(value);
-    this.pageIndex.set(0); // Reset to first page
+    this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   onPageChange(event: PageEvent) {
     this.pageIndex.set(event.pageIndex);
     this.pageSize.set(event.pageSize);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   onSortChange(sort: Sort) {
     this.sortColumn.set(sort.active);
     this.sortDirection.set(sort.direction as 'asc' | 'desc' || 'asc');
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   onToggleInactive(checked: boolean) {
     this.showInactive.set(checked);
-    this.pageIndex.set(0); // Reset to first page
+    this.pageIndex.set(0);
     this.applyFiltersAndSort();
+    this.updateQueryParams();
   }
 
   getTotalCount(): number {
