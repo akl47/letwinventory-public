@@ -843,9 +843,11 @@ export class PartEditPage implements OnInit {
         if (this.isEditMode && this.currentPart?.id) {
           this.inventoryService.updatePart(this.currentPart.id, partData).subscribe({
             next: (response: any) => {
-              this.saveHarnessData(response.id || this.currentPart!.id);
+              const partId = response.id || this.currentPart!.id;
+              this.saveHarnessData(partId);
               this.errorNotification.showSuccess('Part updated successfully');
-              this.router.navigate(['/parts']);
+              this.isFormEditMode.set(false);
+              this.loadPart(partId);
             },
             error: (err) => {
               this.errorNotification.showHttpError(err, 'Failed to update part');
