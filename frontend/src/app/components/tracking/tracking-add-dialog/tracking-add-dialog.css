@@ -1,0 +1,49 @@
+.dialog-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 350px;
+}
+
+.full-width {
+    width: 100%;
+}
+
+.carrier-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-right: 4px;
+}
+
+.carrier-indicator mat-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+}
+
+.carrier-usps {
+    background-color: #1a3668;
+    color: #ffffff;
+}
+
+.carrier-ups {
+    background-color: #351c15;
+    color: #ffb500;
+}
+
+.carrier-fedex {
+    background-color: #4d148c;
+    color: #ff6200;
+}
+
+.carrier-dhl {
+    background-color: #ffcc00;
+    color: #d40511;
+}

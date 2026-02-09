@@ -1,0 +1,145 @@
+<div class="tracking-table-container">
+    <div class="table-header">
+        <h2>
+            <mat-icon>local_shipping</mat-icon>
+            Package Tracking
+        </h2>
+        <div class="header-actions">
+            <mat-form-field appearance="outline" class="search-field">
+                <mat-label>Search trackings</mat-label>
+                <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
+                    placeholder="Search by tracking #, carrier, status, or vendor">
+                <mat-icon matPrefix>search</mat-icon>
+            </mat-form-field>
+            <mat-slide-toggle [checked]="showInactive()" (change)="onToggleInactive($event.checked)" color="primary">
+                Show Inactive
+            </mat-slide-toggle>
+            <button mat-flat-button color="primary" (click)="openAddDialog()">
+                <mat-icon>add</mat-icon>
+                Add Tracking
+            </button>
+        </div>
+    </div>
+
+    <div class="table-wrapper">
+        <table mat-table [dataSource]="displayedTrackings()" matSort (matSortChange)="onSortChange($event)"
+            class="tracking-table">
+
+            <!-- Tracking Number Column -->
+            <ng-container matColumnDef="trackingNumber">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Tracking Number</th>
+                <td mat-cell *matCellDef="let t">
+                    <span class="tracking-number">{{ t.trackingNumber }}</span>
+                </td>
+            </ng-container>
+
+            <!-- Carrier Column -->
+            <ng-container matColumnDef="carrier">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Carrier</th>
+                <td mat-cell *matCellDef="let t">
+                    <span class="carrier-chip carrier-{{ t.carrier }}">
+                        <mat-icon class="carrier-icon">{{ getCarrierIcon(t.carrier) }}</mat-icon>
+                        {{ getCarrierLabel(t.carrier) }}
+                    </span>
+                </td>
+            </ng-container>
+
+            <!-- Status Column -->
+            <ng-container matColumnDef="status">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Status</th>
+                <td mat-cell *matCellDef="let t">
+                    <span class="status-chip" [ngClass]="getStatusClass(t.status)">
+                        {{ t.status || 'Pending' }}
+                    </span>
+                    @if (t.statusDetail) {
+                    <div class="status-detail">{{ t.statusDetail }}</div>
+                    }
+                </td>
+            </ng-container>
+
+            <!-- Order Column -->
+            <ng-container matColumnDef="order">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Order</th>
+                <td mat-cell *matCellDef="let t">
+                    @if (t.Order) {
+                    <a class="order-link" (click)="viewOrder(t.Order.id, $event)">
+                        #{{ t.Order.id }} - {{ t.Order.vendor || t.Order.description || '' }}
+                    </a>
+                    } @else {
+                    <span class="no-order">-</span>
+                    }
+                </td>
+            </ng-container>
+
+            <!-- Last Checked Column -->
+            <ng-container matColumnDef="lastCheckedAt">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Last Updated</th>
+                <td mat-cell *matCellDef="let t">
+                    @if (t.lastCheckedAt) {
+                    {{ t.lastCheckedAt | date: 'short' }}
+                    } @else {
+                    -
+                    }
+                </td>
+            </ng-container>
+
+            <!-- Estimated Delivery Column -->
+            <ng-container matColumnDef="estimatedDelivery">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Est. Delivery</th>
+                <td mat-cell *matCellDef="let t">
+                    @if (t.deliveredAt) {
+                    <span class="delivered-date">
+                        <mat-icon class="delivered-icon">check_circle</mat-icon>
+                        {{ t.deliveredAt | date: 'mediumDate' }}
+                    </span>
+                    } @else if (t.estimatedDelivery) {
+                    {{ t.estimatedDelivery | date: 'mediumDate' }}
+                    } @else {
+                    -
+                    }
+                </td>
+            </ng-container>
+
+            <!-- Actions Column -->
+            <ng-container matColumnDef="actions">
+                <th mat-header-cell *matHeaderCellDef>Actions</th>
+                <td mat-cell *matCellDef="let t">
+                    <button mat-icon-button (click)="refreshTracking(t, $event)"
+                        [disabled]="refreshingIds().has(t.id)"
+                        matTooltip="Refresh tracking status">
+                        <mat-icon [class.spinning]="refreshingIds().has(t.id)">refresh</mat-icon>
+                    </button>
+                    <button mat-icon-button color="warn" (click)="deleteTracking(t, $event)" matTooltip="Delete">
+                        <mat-icon>delete</mat-icon>
+                    </button>
+                </td>
+            </ng-container>
+
+            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+            <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+
+            <!-- No data row -->
+            <tr class="mat-row" *matNoDataRow>
+                <td class="mat-cell" [attr.colspan]="displayedColumns.length">
+                    <div class="no-data">
+                        @if (searchText()) {
+                        <mat-icon>search_off</mat-icon>
+                        <p>No trackings found matching "{{ searchText() }}"</p>
+                        } @else {
+                        <mat-icon>local_shipping</mat-icon>
+                        <p>No package trackings yet</p>
+                        <button mat-flat-button color="primary" (click)="openAddDialog()">
+                            <mat-icon>add</mat-icon>
+                            Add Tracking
+                        </button>
+                        }
+                    </div>
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <mat-paginator [length]="getTotalCount()" [pageSize]="pageSize()" [pageIndex]="pageIndex()"
+        [pageSizeOptions]="pageSizeOptions" (page)="onPageChange($event)" showFirstLastButtons>
+    </mat-paginator>
+</div>

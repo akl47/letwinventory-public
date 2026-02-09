@@ -1,5 +1,6 @@
 import { OrderStatus } from './order-status.model';
 import { OrderItem } from './order-item.model';
+import { ShipmentTracking } from './tracking.model';
 
 export interface Order {
     id: number;
@@ -16,4 +17,5 @@ export interface Order {
     updatedAt: string;
     OrderStatus?: OrderStatus;
     OrderItems?: OrderItem[];
+    ShipmentTracking?: ShipmentTracking;
 }

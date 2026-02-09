@@ -22,6 +22,8 @@ import { OrderItemDialog } from '../order-item-dialog/order-item-dialog';
 import { ReceiveLineItemDialog, ReceiveLineItemDialogResult } from '../receive-line-item-dialog/receive-line-item-dialog';
 import { BarcodeDialog } from '../../inventory/barcode-dialog/barcode-dialog';
 import { BarcodeTag } from '../../inventory/barcode-tag/barcode-tag';
+import { ShipmentTracking, TrackingEvent } from '../../../models/tracking.model';
+import { TrackingService } from '../../../services/tracking.service';
 
 @Component({
   selector: 'app-order-view',
@@ -55,6 +57,7 @@ export class OrderView implements OnInit, OnDestroy {
   private inventoryService = inject(InventoryService);
   private errorNotification = inject(ErrorNotificationService);
   private dialog = inject(MatDialog);
+  private trackingService = inject(TrackingService);
   private paramSubscription?: Subscription;
 
   orderId = signal<number | null>(null);
@@ -82,6 +85,10 @@ export class OrderView implements OnInit, OnDestroy {
   orderLineTypes = signal<any[]>([]);
 
   printers = signal<any[]>([]);
+
+  // Tracking
+  trackingExpanded = signal(false);
+  refreshingTracking = signal(false);
 
   hasNextStatus = computed(() => {
     const order = this.currentOrder();
@@ -885,6 +892,51 @@ export class OrderView implements OnInit, OnDestroy {
       this.errorNotification.showError('Failed to reorder line items');
       // Reload to reset to original order if the update failed
       this.loadOrder();
+    });
+  }
+
+  // Tracking methods
+  getTrackingStatusClass(status: string | null): string {
+    if (!status) return 'status-unknown';
+    switch (status) {
+      case 'Delivered': return 'status-delivered';
+      case 'In Transit': return 'status-in-transit';
+      case 'Out for Delivery': return 'status-out-for-delivery';
+      case 'Exception': return 'status-exception';
+      case 'Pre-Shipment': return 'status-pre-shipment';
+      case 'Accepted': return 'status-accepted';
+      default: return 'status-unknown';
+    }
+  }
+
+  getCarrierLabel(carrier: string): string {
+    switch (carrier) {
+      case 'usps': return 'USPS';
+      case 'ups': return 'UPS';
+      case 'fedex': return 'FedEx';
+      case 'dhl': return 'DHL';
+      default: return 'Unknown';
+    }
+  }
+
+  toggleTrackingTimeline() {
+    this.trackingExpanded.update(v => !v);
+  }
+
+  refreshOrderTracking() {
+    const tracking = this.currentOrder()?.ShipmentTracking;
+    if (!tracking) return;
+    this.refreshingTracking.set(true);
+
+    this.trackingService.refresh(tracking.id).subscribe({
+      next: () => {
+        this.refreshingTracking.set(false);
+        this.loadOrder();
+      },
+      error: (err) => {
+        this.refreshingTracking.set(false);
+        this.errorNotification.showHttpError(err, 'Error refreshing tracking');
+      }
     });
   }
 }

@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const { detectCarrier, refreshTracking } = require('../../../services/trackingService');
 
 exports.getAllOrders = (req, res, next) => {
   db.Order.findAll({
@@ -108,6 +109,10 @@ exports.getOrderById = (req, res, next) => {
             ]
           }
         ]
+      },
+      {
+        model: db.ShipmentTracking,
+        attributes: ['id', 'trackingNumber', 'carrier', 'status', 'statusDetail', 'estimatedDelivery', 'deliveredAt', 'lastCheckedAt', 'trackingData', 'activeFlag']
       }
     ]
   }).then(order => {
@@ -130,7 +135,22 @@ exports.createNewOrder = (req, res, next) => {
     placedDate: req.body.placedDate,
     receivedDate: req.body.receivedDate,
     orderStatusID: req.body.orderStatusID
-  }).then(order => {
+  }).then(async (order) => {
+    // Auto-create ShipmentTracking if tracking number provided
+    if (req.body.trackingNumber && req.user?.id) {
+      try {
+        const carrier = detectCarrier(req.body.trackingNumber);
+        const tracking = await db.ShipmentTracking.create({
+          trackingNumber: req.body.trackingNumber.trim(),
+          carrier,
+          orderID: order.id,
+          ownerUserID: req.user.id
+        });
+        refreshTracking(tracking).catch(() => {});
+      } catch (err) {
+        console.error('[Order] Auto-create tracking failed:', err.message);
+      }
+    }
     res.json(order);
   }).catch(error => {
     next(createError(500, 'Error Creating Order: ' + error));
@@ -143,7 +163,42 @@ exports.updateOrderByID = (req, res, next) => {
       id: req.params.id
     },
     returning: true
-  }).then(updated => {
+  }).then(async (updated) => {
+    // Auto-create/update ShipmentTracking if tracking number changed
+    if (req.body.trackingNumber && req.user?.id) {
+      try {
+        const existing = await db.ShipmentTracking.findOne({
+          where: { orderID: req.params.id, activeFlag: true }
+        });
+        if (existing) {
+          if (existing.trackingNumber !== req.body.trackingNumber.trim()) {
+            const carrier = detectCarrier(req.body.trackingNumber);
+            await existing.update({
+              trackingNumber: req.body.trackingNumber.trim(),
+              carrier,
+              status: null,
+              statusDetail: null,
+              trackingData: null,
+              lastCheckedAt: null,
+              deliveredAt: null,
+              estimatedDelivery: null
+            });
+            refreshTracking(existing).catch(() => {});
+          }
+        } else {
+          const carrier = detectCarrier(req.body.trackingNumber);
+          const tracking = await db.ShipmentTracking.create({
+            trackingNumber: req.body.trackingNumber.trim(),
+            carrier,
+            orderID: parseInt(req.params.id),
+            ownerUserID: req.user.id
+          });
+          refreshTracking(tracking).catch(() => {});
+        }
+      } catch (err) {
+        console.error('[Order] Auto-update tracking failed:', err.message);
+      }
+    }
     res.json(updated[1]);
   }).catch(error => {
     next(createError(500, 'Error Updating Order: ' + error));

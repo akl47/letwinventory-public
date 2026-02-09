@@ -42,6 +42,11 @@
                 <mat-icon matListItemIcon>shopping_cart</mat-icon>
                 <span matListItemTitle>Orders</span>
             </a>
+            <a mat-list-item routerLink="/tracking" routerLinkActive="active-link" matTooltip="Tracking"
+                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
+                <mat-icon matListItemIcon>local_shipping</mat-icon>
+                <span matListItemTitle>Tracking</span>
+            </a>
             <a mat-list-item routerLink="/harness" routerLinkActive="active-link" matTooltip="Wire Harness"
                 matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
                 <mat-icon matListItemIcon>cable</mat-icon>

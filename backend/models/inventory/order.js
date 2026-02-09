@@ -14,6 +14,10 @@ module.exports = (sequelize, DataTypes) => {
         sourceKey: 'id',
         onDelete: 'CASCADE'
       });
+      Order.hasOne(models.ShipmentTracking, {
+        foreignKey: 'orderID',
+        onDelete: 'SET NULL'
+      });
     }
   };
   Order.init({

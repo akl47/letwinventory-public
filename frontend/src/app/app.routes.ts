@@ -94,6 +94,13 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'tracking',
+        title: 'Package Tracking',
+        loadComponent: () =>
+            import('./components/tracking/tracking-list-view/tracking-list-view').then((m) => m.TrackingListView),
+        canActivate: [authGuard],
+    },
+    {
         path: 'harness',
         title: 'Wire Harnesses',
         loadComponent: () =>

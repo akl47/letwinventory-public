@@ -1,0 +1,39 @@
+<h2 mat-dialog-title>Add Package Tracking</h2>
+
+<mat-dialog-content>
+    <form [formGroup]="form" class="dialog-form">
+        <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Tracking Number</mat-label>
+            <input matInput formControlName="trackingNumber" placeholder="Enter tracking number">
+            @if (detectedCarrier() !== 'unknown') {
+            <div matSuffix class="carrier-indicator carrier-{{ detectedCarrier() }}">
+                <mat-icon>{{ getCarrierIcon(detectedCarrier()) }}</mat-icon>
+                <span>{{ getCarrierLabel(detectedCarrier()) }}</span>
+            </div>
+            }
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Link to Order (optional)</mat-label>
+            <mat-select formControlName="orderID">
+                <mat-option [value]="null">None</mat-option>
+                @for (order of orders(); track order.id) {
+                <mat-option [value]="order.id">
+                    #{{ order.id }} - {{ order.vendor || order.description || 'Order' }}
+                </mat-option>
+                }
+            </mat-select>
+        </mat-form-field>
+    </form>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+    <button mat-button (click)="cancel()">Cancel</button>
+    <button mat-flat-button color="primary" (click)="save()" [disabled]="!form.valid || saving()">
+        @if (saving()) {
+        Adding...
+        } @else {
+        Add Tracking
+        }
+    </button>
+</mat-dialog-actions>

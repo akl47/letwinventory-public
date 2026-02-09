@@ -977,6 +977,110 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Session: 2026-02-08 (part 2)
+
+### Files Created
+- `backend/migrations/20260208000002-create-shipment-tracking.js`
+- `backend/models/inventory/shipmentTracking.js`
+- `backend/services/trackingService.js`
+- `backend/api/inventory/tracking/controller.js`
+- `backend/api/inventory/tracking/routes.js`
+- `frontend/src/app/models/tracking.model.ts`
+- `frontend/src/app/services/tracking.service.ts`
+- `frontend/src/app/components/tracking/tracking-list-view/tracking-list-view.ts`
+- `frontend/src/app/components/tracking/tracking-list-view/tracking-list-view.html`
+- `frontend/src/app/components/tracking/tracking-list-view/tracking-list-view.css`
+- `frontend/src/app/components/tracking/tracking-add-dialog/tracking-add-dialog.ts`
+- `frontend/src/app/components/tracking/tracking-add-dialog/tracking-add-dialog.html`
+- `frontend/src/app/components/tracking/tracking-add-dialog/tracking-add-dialog.css`
+
+### Files Modified
+- `backend/index.js` — imported and initialized trackingService after DB sync
+- `backend/models/inventory/order.js` — added hasOne ShipmentTracking association
+- `backend/api/inventory/order/controller.js` — auto-create/update tracking on order create/update, include ShipmentTracking in getOrderById
+- `.env.development` — added carrier API credential placeholders
+- `.env.production` — added carrier API credential placeholders
+- `frontend/src/app/models/index.ts` — added tracking model export
+- `frontend/src/app/models/order.model.ts` — added ShipmentTracking to Order interface
+- `frontend/src/app/app.routes.ts` — added `/tracking` route
+- `frontend/src/app/components/common/nav/nav.component.html` — added Tracking nav link
+- `frontend/src/app/components/orders/order-view/order-view.ts` — added tracking status display, refresh, timeline toggle
+- `frontend/src/app/components/orders/order-view/order-view.html` — added tracking status badge, carrier label, event timeline
+- `frontend/src/app/components/orders/order-view/order-view.css` — added tracking section styles
+
+### Changes Made
+
+1. **Created ShipmentTrackings database table and model**
+   - Migration creates table with: id, orderID (FK Orders, nullable), ownerUserID (FK Users), trackingNumber, carrier (ENUM), status, statusDetail, estimatedDelivery, deliveredAt, lastCheckedAt, trackingData (JSON), activeFlag
+   - Indexes on ownerUserID, orderID, and (activeFlag, status)
+   - Sequelize model with belongsTo Order and User associations
+
+2. **Created multi-carrier tracking service**
+   - `detectCarrier(trackingNumber)` — regex-based carrier detection for UPS, USPS, FedEx, DHL
+   - OAuth2 token management for USPS, UPS, and FedEx (with caching)
+   - Carrier-specific fetch functions: fetchUSPS (v3 API), fetchUPS, fetchFedEx, fetchDHL
+   - `normalizeStatus()` — standardizes carrier status strings to consistent values
+   - `pollTrackings()` — queries all active non-delivered trackings, updates from carrier APIs
+   - `refreshTracking()` — single tracking refresh
+   - `initialize()` — runs poll on startup + every 2 hours via setInterval
+
+3. **Created tracking CRUD API at `/api/inventory/tracking`**
+   - GET `/` — list all trackings for authenticated user (with Order association)
+   - GET `/:id` — get single tracking
+   - POST `/` — create tracking (auto-detect carrier, fetch initial status)
+   - PUT `/:id` — update tracking
+   - DELETE `/:id` — soft delete
+   - POST `/:id/refresh` — force re-fetch from carrier API
+   - All endpoints enforce user ownership via ownerUserID
+
+4. **Integrated tracking with orders**
+   - Order model has hasOne ShipmentTracking association
+   - getOrderById includes ShipmentTracking in response
+   - createNewOrder auto-creates ShipmentTracking when trackingNumber is provided
+   - updateOrderByID auto-creates/updates ShipmentTracking when trackingNumber changes
+   - Tracking refresh happens asynchronously (non-blocking)
+
+5. **Created frontend tracking model and service**
+   - `ShipmentTracking` and `TrackingEvent` interfaces
+   - `CarrierType` union type
+   - Service with CRUD + refresh methods, cache with shareReplay
+
+6. **Created tracking list view page**
+   - Material table with columns: Tracking Number, Carrier (colored chip), Status (colored badge), Order (link), Last Updated, Est. Delivery, Actions
+   - Search, pagination, sorting, URL query param sync
+   - "Show Inactive" toggle
+   - Per-row refresh button with spinning animation
+   - Add Tracking button opens dialog
+   - Empty state with add button
+
+7. **Created tracking add dialog**
+   - Tracking number input with real-time carrier auto-detection
+   - Carrier indicator badge shown as suffix when detected
+   - Optional order dropdown to link tracking to existing order
+   - Creates tracking and fetches initial status on save
+
+8. **Updated order view with tracking status**
+   - Tracking status badge displayed next to tracking number in read mode
+   - Carrier label shown
+   - Refresh button to re-fetch tracking status
+   - Estimated delivery / delivered date display
+   - Collapsible tracking event timeline with dot-timeline UI
+   - Timeline shows status, description, location, and timestamp for each event
+
+9. **Added tracking nav link and route**
+   - `/tracking` route with lazy loading and authGuard
+   - "Tracking" nav link with local_shipping icon, placed after Orders
+
+### Notes
+- Migration needs to be run: `npx sequelize-cli db:migrate`
+- Carrier API credentials must be filled in `.env.development` / `.env.production`
+- API auto-discovered by existing `backend/api/index.js` directory scanner
+- Polling runs every 2 hours, skips "Delivered" trackings
+- Carrier detection uses same regex patterns in both backend and frontend (for real-time UI feedback)
+- Current branch: package-tracking
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:

@@ -1,0 +1,273 @@
+:host {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.tracking-table-container {
+    padding: 24px;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.table-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.table-header h2 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 28px;
+    font-weight: 500;
+}
+
+.table-header h2 mat-icon {
+    font-size: 32px;
+    width: 32px;
+    height: 32px;
+}
+
+.header-actions {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex: 1;
+    justify-content: flex-end;
+}
+
+.search-field {
+    min-width: 300px;
+    flex: 1;
+    max-width: 500px;
+}
+
+.table-wrapper {
+    flex: 1;
+    overflow: auto;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+    margin-bottom: 16px;
+}
+
+.tracking-table {
+    width: 100%;
+}
+
+.tracking-table th {
+    background-color: var(--mat-sys-surface-container);
+    font-weight: 600;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.tracking-table td {
+    font-size: 14px;
+}
+
+.tracking-table tr:hover {
+    background-color: var(--mat-sys-surface-container-low);
+}
+
+.tracking-number {
+    font-family: monospace;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+}
+
+/* Carrier chips */
+.carrier-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.carrier-icon {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+}
+
+.carrier-usps {
+    background-color: #1a3668;
+    color: #ffffff;
+}
+
+.carrier-ups {
+    background-color: #351c15;
+    color: #ffb500;
+}
+
+.carrier-fedex {
+    background-color: #4d148c;
+    color: #ff6200;
+}
+
+.carrier-dhl {
+    background-color: #ffcc00;
+    color: #d40511;
+}
+
+.carrier-unknown {
+    background-color: #424242;
+    color: #ffffff;
+}
+
+/* Status chips */
+.status-chip {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+.status-delivered {
+    background-color: #388e3c;
+    color: #ffffff;
+}
+
+.status-in-transit {
+    background-color: #1976d2;
+    color: #ffffff;
+}
+
+.status-out-for-delivery {
+    background-color: #0288d1;
+    color: #ffffff;
+}
+
+.status-exception {
+    background-color: #f57c00;
+    color: #ffffff;
+}
+
+.status-pre-shipment {
+    background-color: #616161;
+    color: #ffffff;
+}
+
+.status-accepted {
+    background-color: #7b1fa2;
+    color: #ffffff;
+}
+
+.status-unknown {
+    background-color: #424242;
+    color: #ffffff;
+}
+
+.status-detail {
+    font-size: 11px;
+    color: var(--mat-sys-on-surface-variant);
+    margin-top: 2px;
+    max-width: 300px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Order link */
+.order-link {
+    color: var(--mat-sys-primary);
+    cursor: pointer;
+    text-decoration: none;
+    font-size: 13px;
+}
+
+.order-link:hover {
+    text-decoration: underline;
+}
+
+.no-order {
+    color: var(--mat-sys-on-surface-variant);
+}
+
+/* Delivered date */
+.delivered-date {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #4CAF50;
+    font-weight: 500;
+}
+
+.delivered-icon {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+}
+
+/* Spinning refresh icon */
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.spinning {
+    animation: spin 1s linear infinite;
+}
+
+/* No data */
+.no-data {
+    text-align: center;
+    padding: 48px 24px;
+    color: rgba(255, 255, 255, 0.54);
+}
+
+.no-data mat-icon {
+    font-size: 64px;
+    width: 64px;
+    height: 64px;
+    margin-bottom: 16px;
+    opacity: 0.3;
+}
+
+.no-data p {
+    margin: 0 0 16px 0;
+    font-size: 16px;
+}
+
+mat-paginator {
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .table-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .search-field {
+        max-width: 100%;
+    }
+
+    .tracking-table {
+        font-size: 12px;
+    }
+
+    .tracking-table th,
+    .tracking-table td {
+        padding: 8px 4px;
+    }
+}

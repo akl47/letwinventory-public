@@ -132,7 +132,21 @@
           <div class="info-row">
             <div class="info-item">
               <div class="info-label">Tracking Number</div>
-              <div class="info-value">{{ currentOrder()?.trackingNumber || '-' }}</div>
+              <div class="info-value tracking-value">
+                {{ currentOrder()?.trackingNumber || '-' }}
+                @if (currentOrder()?.ShipmentTracking; as tracking) {
+                  <span class="tracking-status-badge" [ngClass]="getTrackingStatusClass(tracking.status)">
+                    {{ tracking.status || 'Pending' }}
+                  </span>
+                  <span class="tracking-carrier">{{ getCarrierLabel(tracking.carrier) }}</span>
+                  <button mat-icon-button class="tracking-refresh-btn"
+                    (click)="refreshOrderTracking()"
+                    [disabled]="refreshingTracking()"
+                    matTooltip="Refresh tracking status">
+                    <mat-icon [class.spinning]="refreshingTracking()">refresh</mat-icon>
+                  </button>
+                }
+              </div>
             </div>
             <div class="info-item">
               <div class="info-label">Link</div>
@@ -147,6 +161,50 @@
               </div>
             </div>
           </div>
+
+          @if (currentOrder()?.ShipmentTracking; as tracking) {
+          <div class="tracking-section">
+            @if (tracking.estimatedDelivery && !tracking.deliveredAt) {
+            <div class="tracking-est-delivery">
+              <mat-icon>schedule</mat-icon>
+              Estimated delivery: {{ tracking.estimatedDelivery | date: 'mediumDate' }}
+            </div>
+            }
+            @if (tracking.deliveredAt) {
+            <div class="tracking-delivered">
+              <mat-icon>check_circle</mat-icon>
+              Delivered: {{ tracking.deliveredAt | date: 'medium' }}
+            </div>
+            }
+            @if (tracking.trackingData?.length) {
+            <button mat-button class="timeline-toggle" (click)="toggleTrackingTimeline()">
+              <mat-icon>{{ trackingExpanded() ? 'expand_less' : 'expand_more' }}</mat-icon>
+              {{ trackingExpanded() ? 'Hide' : 'Show' }} Tracking History ({{ tracking.trackingData.length }} events)
+            </button>
+            @if (trackingExpanded()) {
+            <div class="tracking-timeline">
+              @for (event of tracking.trackingData; track $index) {
+              <div class="timeline-event">
+                <div class="timeline-dot"></div>
+                <div class="timeline-content">
+                  <div class="timeline-status">{{ event.status }}</div>
+                  <div class="timeline-desc">{{ event.description }}</div>
+                  <div class="timeline-meta">
+                    @if (event.location) {
+                    <span>{{ event.location }}</span>
+                    }
+                    @if (event.timestamp) {
+                    <span>{{ event.timestamp | date: 'medium' }}</span>
+                    }
+                  </div>
+                </div>
+              </div>
+              }
+            </div>
+            }
+            }
+          </div>
+          }
 
           <div class="info-row">
             <div class="info-item">
