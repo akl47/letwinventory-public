@@ -1,8 +1,8 @@
 import { test, expect, devices } from '@playwright/test';
 
-test.describe('Mobile', () => {
-  test.use({ ...devices['iPhone 13'] });
+test.use({ ...devices['iPhone 13'] });
 
+test.describe('Mobile', () => {
   test('sidebar is collapsed on mobile', async ({ page }) => {
     await page.goto('/#/tasks');
     // Sidebar should be collapsed (width 0 or hidden)
