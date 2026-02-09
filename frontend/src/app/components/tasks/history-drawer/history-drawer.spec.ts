@@ -1,18 +1,18 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 
-import { HistoryDrawer } from './history-drawer';
+import { HistoryDrawerComponent } from './history-drawer';
 
-describe('HistoryDrawer', () => {
-  let component: HistoryDrawer;
-  let fixture: ComponentFixture<HistoryDrawer>;
+describe('HistoryDrawerComponent', () => {
+  let component: HistoryDrawerComponent;
+  let fixture: ComponentFixture<HistoryDrawerComponent>;
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
-      imports: [HistoryDrawer]
+      imports: [HistoryDrawerComponent]
     })
     .compileComponents();
 
-    fixture = TestBed.createComponent(HistoryDrawer);
+    fixture = TestBed.createComponent(HistoryDrawerComponent);
     component = fixture.componentInstance;
     await fixture.whenStable();
   });

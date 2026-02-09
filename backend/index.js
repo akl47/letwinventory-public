@@ -8,17 +8,18 @@ const dotenv = require("dotenv");
 const cors = require("cors");
 
 // Load environment-specific .env file BEFORE requiring modules that need env vars
-const envFile = process.env.NODE_ENV === 'production'
-    ? '.env.production'
-    : '.env.development';
-dotenv.config({ path: path.join(__dirname, `../${envFile}`) });
+if (process.env.NODE_ENV !== 'test') {
+    const envFile = process.env.NODE_ENV === 'production'
+        ? '.env.production'
+        : '.env.development';
+    dotenv.config({ path: path.join(__dirname, `../${envFile}`) });
+}
 
 const { passport } = require("./auth/passport");
-const printAgentService = require("./services/printAgentService");
-const scheduledTaskService = require("./services/scheduledTaskService");
 
-const port = process.env.BACKEND_PORT;
-global.db = require("./models");
+if (!global.db) {
+    global.db = require("./models");
+}
 global.RestError = require("./util/RestError");
 global._ = require("lodash");
 
@@ -30,10 +31,12 @@ app.use(cors({
     allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization']
 }));
 
-app.use((req, res, next) => {
-    console.log("Request URL:", req.method, req.url);
-    next();
-});
+if (process.env.NODE_ENV !== 'test') {
+    app.use((req, res, next) => {
+        console.log("Request URL:", req.method, req.url);
+        next();
+    });
+}
 
 // BODY PARSER - increased limit for base64 image uploads
 app.use(bodyParser.json({ limit: '50mb' }));
@@ -64,15 +67,22 @@ if (process.env.NODE_ENV === 'production') {
 
 app.use(require("./util/errorHandler"));
 
-// Create HTTP server and initialize WebSocket for print agent
-const server = http.createServer(app);
+// Export app for testing
+module.exports = app;
 
-// Initialize print agent WebSocket service
-printAgentService.initialize(server);
+// Only start server when run directly (not when imported for testing)
+if (require.main === module) {
+    const printAgentService = require("./services/printAgentService");
+    const scheduledTaskService = require("./services/scheduledTaskService");
+    const port = process.env.BACKEND_PORT;
 
-server.listen(port, () => {
-    db.sequelize.sync().then(() => {
-        console.log(`Server listening on the port:${port}`);
-        scheduledTaskService.initialize();
+    const server = http.createServer(app);
+    printAgentService.initialize(server);
+
+    server.listen(port, () => {
+        db.sequelize.sync().then(() => {
+            console.log(`Server listening on the port:${port}`);
+            scheduledTaskService.initialize();
+        });
     });
-});
+}
