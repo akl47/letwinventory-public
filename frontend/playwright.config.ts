@@ -12,6 +12,12 @@ export default defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
+  webServer: {
+    command: 'npx ng serve --port 4200',
+    url: 'http://localhost:4200',
+    reuseExistingServer: !process.env.CI,
+    timeout: 120000,
+  },
   projects: [
     {
       name: 'setup',
