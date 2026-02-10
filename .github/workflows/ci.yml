@@ -62,6 +62,9 @@ jobs:
       DB_LOGGING: "false"
       JWT_SECRET: e2e-test-secret
       FRONTEND_URL: http://localhost:4201
+      GOOGLE_CLIENT_ID: ci-placeholder
+      GOOGLE_CLIENT_SECRET: ci-placeholder
+      GOOGLE_CALLBACK_URL: http://localhost:3000/api/auth/google/callback
     services:
       postgres:
         image: postgres:16
