@@ -10,4 +10,9 @@ router.get("/callback", controller.handleCallback);
 router.post("/logout", verifyToken, controller.logout);
 router.get("/me", verifyToken, controller.getCurrentUser);
 
+// Dev-only test login (no Google OAuth required)
+if (process.env.NODE_ENV !== 'production') {
+  router.post("/test-login", controller.testLogin);
+}
+
 module.exports = router;

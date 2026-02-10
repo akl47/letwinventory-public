@@ -51,6 +51,31 @@ jobs:
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
+    env:
+      BACKEND_PORT: 3000
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: letwinventory_test
+      DB_USERNAME: testuser
+      DB_PASSWORD: testpass
+      DB_DIALECT: postgres
+      DB_LOGGING: "false"
+      JWT_SECRET: e2e-test-secret
+      FRONTEND_URL: http://localhost:4201
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: letwinventory_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -58,9 +83,36 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
 
-      - name: Install dependencies
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Start backend
+        run: nohup node index.js > /tmp/backend.log 2>&1 &
+        working-directory: backend
+
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/api/auth/user/checkToken 2>/dev/null; then
+              echo "Backend is ready"
+              break
+            fi
+            echo "Waiting for backend... ($i/30)"
+            sleep 2
+          done
+          # Show backend logs if it didn't start
+          if ! curl -sf http://localhost:3000/api/auth/user/checkToken 2>/dev/null; then
+            echo "Backend failed to start. Logs:"
+            cat /tmp/backend.log
+            exit 1
+          fi
+
+      - name: Install frontend dependencies
         run: npm install
         working-directory: frontend
 
@@ -79,3 +131,7 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 14
+
+      - name: Show backend logs
+        if: ${{ failure() }}
+        run: cat /tmp/backend.log 2>/dev/null || true
