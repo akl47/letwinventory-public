@@ -30,11 +30,11 @@ rclone copy "$BACKUP_PATH" "${RCLONE_REMOTE}:${RCLONE_PATH}/" --progress
 echo "[$(date)] Upload complete"
 
 # --- Clean up old local backups ---
-find "$BACKUP_DIR" -name "${DB_NAME}_*.dump" -mtime +${RETENTION_DAYS} -delete
-echo "[$(date)] Cleaned local backups older than ${RETENTION_DAYS} days"
+# find "$BACKUP_DIR" -name "${DB_NAME}_*.dump" -mtime +${RETENTION_DAYS} -delete
+# echo "[$(date)] Cleaned local backups older than ${RETENTION_DAYS} days"
 
-# --- Clean up old remote backups ---
-rclone delete "${RCLONE_REMOTE}:${RCLONE_PATH}/" --min-age "${RETENTION_DAYS}d"
-echo "[$(date)] Cleaned remote backups older than ${RETENTION_DAYS} days"
+# # --- Clean up old remote backups ---
+# rclone delete "${RCLONE_REMOTE}:${RCLONE_PATH}/" --min-age "${RETENTION_DAYS}d"
+# echo "[$(date)] Cleaned remote backups older than ${RETENTION_DAYS} days"
 
 echo "[$(date)] Backup complete: ${FILENAME}"
