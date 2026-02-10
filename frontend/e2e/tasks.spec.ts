@@ -11,11 +11,10 @@ test.describe('Tasks Board', () => {
     await expect(board.first()).toBeVisible();
   });
 
-  test('displays task list columns', async ({ page }) => {
-    // Task list components should render
-    const columns = page.locator('app-task-list');
-    // Wait for at least one column to appear
-    await expect(columns.first()).toBeVisible({ timeout: 10000 });
+  test('displays task list view', async ({ page }) => {
+    // Task list view component should render (columns only appear with data)
+    const view = page.locator('app-task-list-view');
+    await expect(view).toBeVisible({ timeout: 10000 });
   });
 
   test('sub-toolbar is visible', async ({ page }) => {
