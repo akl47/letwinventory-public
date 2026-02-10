@@ -13,6 +13,8 @@ else
   exit 1
 fi
 
+# pg_dump runs on the host, not in Docker — use localhost
+DB_HOST=localhost
 : "${BACKUP_DIR:=/home/letwinco/backups}"
 : "${RETENTION_DAYS:=30}"
 
