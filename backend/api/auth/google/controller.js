@@ -145,6 +145,47 @@ exports.logout = async (req, res) => {
   }
 };
 
+// Dev-only: login without Google OAuth
+exports.testLogin = async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  try {
+    const { email, displayName } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'email is required' });
+    }
+
+    const [user, created] = await db.User.findOrCreate({
+      where: { email },
+      defaults: {
+        displayName: displayName || email.split('@')[0],
+        email,
+        googleID: `test-${Date.now()}`,
+        photoURL: '',
+        activeFlag: true,
+      },
+    });
+
+    // Ensure existing user is active
+    if (!created && !user.activeFlag) {
+      await user.update({ activeFlag: true });
+    }
+
+    const accessToken = jwt.sign(
+      { id: user.id, email: user.email, displayName: user.displayName, photoURL: user.photoURL },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    res.json({ accessToken, user: { id: user.id, email: user.email, displayName: user.displayName } });
+  } catch (error) {
+    console.error('Test login error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 exports.getCurrentUser = async (req, res) => {
   try {
     const user = await db.User.findByPk(req.user.id, {
