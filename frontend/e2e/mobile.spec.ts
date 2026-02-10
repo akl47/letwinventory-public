@@ -1,6 +1,7 @@
 import { test, expect, devices } from '@playwright/test';
 
-test.use({ ...devices['iPhone 13'] });
+const { defaultBrowserType, ...iPhone13 } = devices['iPhone 13'];
+test.use({ ...iPhone13 });
 
 test.describe('Mobile', () => {
   test('sidebar is collapsed on mobile', async ({ page }) => {
@@ -17,15 +18,15 @@ test.describe('Mobile', () => {
   });
 
   test('scanner page loads', async ({ page }) => {
-    await page.goto('/#/scanner');
-    // Scanner component should render
+    await page.goto('/#/mobile');
+    // Scanner component should render (shows unsupported message in headless browser)
     const scanner = page.locator('app-mobile-scanner');
     await expect(scanner).toBeVisible({ timeout: 10000 });
   });
 
   test('scanner has back button', async ({ page }) => {
-    await page.goto('/#/scanner');
-    const backBtn = page.locator('.back-button, button:has(mat-icon:text("arrow_back"))');
-    await expect(backBtn.first()).toBeVisible({ timeout: 10000 });
+    await page.goto('/#/mobile');
+    const backBtn = page.locator('.back-btn');
+    await expect(backBtn).toBeVisible({ timeout: 10000 });
   });
 });
