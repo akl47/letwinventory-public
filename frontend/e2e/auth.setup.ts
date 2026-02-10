@@ -57,5 +57,7 @@ setup('authenticate', async ({ page, request }) => {
   }
 
   const fs = await import('fs');
+  const path = await import('path');
+  fs.mkdirSync(path.dirname(AUTH_FILE), { recursive: true });
   fs.writeFileSync(AUTH_FILE, JSON.stringify(state, null, 2));
 });
