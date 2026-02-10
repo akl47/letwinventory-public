@@ -65,5 +65,7 @@ log "[$(date)] Backup created: $(du -h "$BACKUP_PATH" | cut -f1)"
 # find "$BACKUP_DIR" -name "${DB_NAME}_*.dump" -mtime +${RETENTION_DAYS} -delete
 # log "[$(date)] Cleaned local backups older than ${RETENTION_DAYS} days"
 
+DISK_FREE=$(df -h "$BACKUP_DIR" | awk 'NR==2 {print $4}')
+log "[$(date)] Disk: ${DISK_USAGE}% used, ${DISK_FREE} free"
 log "[$(date)] Backup complete: ${FILENAME}"
 send_email "[OK] DB Backup - ${FILENAME}"
