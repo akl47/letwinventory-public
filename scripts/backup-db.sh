@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Configuration (override via environment or .env file) ---
-: "${DB_HOST:=localhost}"
-: "${DB_PORT:=5432}"
-: "${DB_NAME:=letwinventory}"
-: "${DB_USERNAME:=letwinventoy_user}"
+# --- Load .env.production ---
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/../.env.production"
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  source "$ENV_FILE"
+  set +a
+else
+  echo "[$(date)] ERROR: ${ENV_FILE} not found"
+  exit 1
+fi
+
 : "${BACKUP_DIR:=/home/letwinco/backups}"
 : "${RETENTION_DAYS:=30}"
 
@@ -17,6 +24,7 @@ BACKUP_PATH="${BACKUP_DIR}/${FILENAME}"
 mkdir -p "$BACKUP_DIR"
 
 # --- Dump database ---
+export PGPASSWORD="$DB_PASSWORD"
 echo "[$(date)] Starting backup: ${FILENAME}"
 pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" \
   -Fc --no-owner --no-acl -f "$BACKUP_PATH"
