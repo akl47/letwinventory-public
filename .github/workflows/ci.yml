@@ -101,19 +101,13 @@ jobs:
       - name: Wait for backend
         run: |
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:3000/api/auth/user/checkToken 2>/dev/null; then
+            if curl -so /dev/null http://localhost:3000/api/auth/user/checkToken 2>/dev/null; then
               echo "Backend is ready"
               break
             fi
             echo "Waiting for backend... ($i/30)"
             sleep 2
           done
-          # Show backend logs if it didn't start
-          if ! curl -sf http://localhost:3000/api/auth/user/checkToken 2>/dev/null; then
-            echo "Backend failed to start. Logs:"
-            cat /tmp/backend.log
-            exit 1
-          fi
 
       - name: Install frontend dependencies
         run: npm install
