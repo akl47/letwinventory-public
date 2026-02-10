@@ -977,6 +977,72 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Session: 2026-02-10
+
+### Files Created
+- `frontend/src/environments/environment.e2e.ts`
+- `frontend/proxy.conf.e2e.json`
+
+### Files Modified
+- `frontend/angular.json`
+- `frontend/playwright.config.ts`
+- `frontend/e2e/auth.setup.ts`
+- `frontend/e2e/mobile.spec.ts`
+- `frontend/e2e/tasks.spec.ts`
+- `backend/api/auth/google/controller.js`
+- `.github/workflows/ci.yml`
+- `.gitignore`
+
+### Changes Made
+
+1. **Fixed E2E test authentication — wrong API URL**
+   - `environment.ts` pointed to `https://dev.letwin.co/api` but E2E tests use the local backend
+   - Created `frontend/src/environments/environment.e2e.ts` with `apiUrl: '/api'` (relative path)
+   - Created `frontend/proxy.conf.e2e.json` to proxy `/api` → `http://localhost:3000`
+   - Added `e2e` build and serve configurations in `angular.json` with fileReplacement and proxyConfig
+   - All API calls from the E2E browser go through the Angular dev server proxy, avoiding CORS entirely
+
+2. **Separated E2E server from dev server**
+   - Changed Playwright to use port 4201 (not 4200) so it never reuses the dev server
+   - `playwright.config.ts` uses `E2E_PORT = 4201` for webServer and baseURL
+   - Dev server on port 4200 continues to work independently
+
+3. **Fixed test user `activeFlag` defaulting to `false`**
+   - User model has `activeFlag: { defaultValue: false }`
+   - `testLogin` endpoint now sets `activeFlag: true` on user creation
+   - Also activates existing test users if their `activeFlag` was `false`
+   - Without this, `checkToken` couldn't find the test user (filters by `activeFlag: true`)
+
+4. **Fixed mobile E2E tests**
+   - Stripped `defaultBrowserType: 'webkit'` from `devices['iPhone 13']` — E2E only installs chromium
+   - Fixed route from `/#/scanner` to `/#/mobile` (matching `app.routes.ts`)
+   - Fixed back button selector from `.back-button` to `.back-btn` (matching template)
+
+5. **Fixed tasks E2E test for empty databases**
+   - Changed "displays task list columns" test to check for `app-task-list-view` (always renders)
+   - Previously checked for `app-task-list` which only renders when task lists exist in the database
+
+6. **Updated auth.setup.ts for CI compatibility**
+   - Added `fs.mkdirSync` with `recursive: true` to create `e2e/.auth/` directory (gitignored, doesn't exist in CI)
+   - Auth setup now calls test-login through the Angular proxy (port 4201) instead of directly to port 3000
+
+7. **Updated CI workflow for E2E tests**
+   - Added PostgreSQL 16 service container for the backend database
+   - Backend starts with `nohup` and job-level env vars (persist across steps)
+   - Added dummy `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` so Passport initializes without real credentials
+   - Health check uses `curl -so /dev/null` (checks connectivity, ignores HTTP 401 from checkToken)
+   - Backend logs saved to `/tmp/backend.log` and shown on failure for debugging
+   - `FRONTEND_URL` set to `http://localhost:4201` for CORS
+
+### Notes
+- E2E tests: 31 tests, all passing locally and in CI
+- E2E auth flow: test-login endpoint → JWT token → storageState → all tests authenticated
+- The Angular proxy approach avoids all CORS issues between frontend (4201) and backend (3000)
+- CI uses a fresh PostgreSQL database — tests must not depend on existing data
+- Current branch: testing
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:
