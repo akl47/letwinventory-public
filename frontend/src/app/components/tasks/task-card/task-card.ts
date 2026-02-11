@@ -39,6 +39,13 @@ export class TaskCard implements OnInit, OnDestroy {
     return [...this.projects()].sort((a, b) => a.name.localeCompare(b.name));
   });
 
+  checklistProgress = computed(() => {
+    const items = this.task().checklist;
+    if (!items?.length) return null;
+    const checked = items.filter(i => i.checked).length;
+    return `${checked}/${items.length}`;
+  });
+
   isDueToday = computed(() => {
     const task = this.task();
     if (!task.dueDate || this.displayDone()) return false;

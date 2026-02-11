@@ -93,6 +93,11 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       defaultValue: 0
     },
+    checklist: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      defaultValue: null
+    },
     activeFlag: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

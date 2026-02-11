@@ -32,4 +32,26 @@ describe('TaskCardDialog', () => {
   it('should create', () => {
     expect(component).toBeTruthy();
   });
+
+  it('should create with checklist data', async () => {
+    const dialogFixture = TestBed.createComponent(TaskCardDialog);
+    const dialogComponent = dialogFixture.componentInstance;
+    dialogComponent.data = {
+      task: {
+        id: 10, name: 'CL Task', doneFlag: false, taskListID: 1,
+        ownerUserID: 1, projectID: 1, rank: 1000, taskTypeEnum: 'normal',
+        activeFlag: true, createdAt: new Date(), updatedAt: new Date(),
+        completeWithChildren: false,
+        checklist: [
+          { id: 'x1', text: 'First', checked: false },
+          { id: 'x2', text: 'Second', checked: true },
+        ]
+      }
+    };
+    dialogComponent.task.set(dialogComponent.data.task);
+    await dialogFixture.whenStable();
+    expect(dialogComponent.checklist().length).toBe(2);
+    expect(dialogComponent.checklistProgress()).toBe('1/2');
+    expect(dialogComponent.checklistProgressPercent()).toBe(50);
+  });
 });

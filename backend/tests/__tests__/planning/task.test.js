@@ -155,6 +155,72 @@ describe('Task API', () => {
     });
   });
 
+  describe('Task Checklist', () => {
+    it('creates task with checklist items', async () => {
+      const auth = await authenticatedRequest();
+      const list = await createTestTaskList({ name: 'Checklist List' });
+      const checklist = [
+        { id: 'a1', text: 'Item 1', checked: false },
+        { id: 'a2', text: 'Item 2', checked: true },
+      ];
+
+      const res = await auth.post('/api/planning/task')
+        .send({ name: 'Checklist Task', taskListID: list.id, checklist });
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.checklist).toEqual(checklist);
+    });
+
+    it('updates task to add checklist', async () => {
+      const auth = await authenticatedRequest();
+      const task = await createTestTask(auth.user, { name: 'No Checklist' });
+      const checklist = [{ id: 'b1', text: 'New item', checked: false }];
+
+      const res = await auth.put(`/api/planning/task/${task.id}`)
+        .send({ checklist });
+      expect(res.status).toBe(200);
+
+      const updated = await db.Task.findByPk(task.id);
+      expect(updated.checklist).toEqual(checklist);
+    });
+
+    it('updates task to toggle checklist item', async () => {
+      const auth = await authenticatedRequest();
+      const checklist = [{ id: 'c1', text: 'Toggle me', checked: false }];
+      const task = await createTestTask(auth.user, { name: 'Toggle Task', checklist });
+
+      const toggled = [{ id: 'c1', text: 'Toggle me', checked: true }];
+      const res = await auth.put(`/api/planning/task/${task.id}`)
+        .send({ checklist: toggled });
+      expect(res.status).toBe(200);
+
+      const updated = await db.Task.findByPk(task.id);
+      expect(updated.checklist[0].checked).toBe(true);
+    });
+
+    it('updates task to remove checklist', async () => {
+      const auth = await authenticatedRequest();
+      const checklist = [{ id: 'd1', text: 'Remove me', checked: false }];
+      const task = await createTestTask(auth.user, { name: 'Remove CL Task', checklist });
+
+      const res = await auth.put(`/api/planning/task/${task.id}`)
+        .send({ checklist: null });
+      expect(res.status).toBe(200);
+
+      const updated = await db.Task.findByPk(task.id);
+      expect(updated.checklist).toBeNull();
+    });
+
+    it('returns checklist in GET response', async () => {
+      const auth = await authenticatedRequest();
+      const checklist = [{ id: 'e1', text: 'GET item', checked: false }];
+      const task = await createTestTask(auth.user, { name: 'GET CL Task', checklist });
+
+      const res = await auth.get(`/api/planning/task/${task.id}`);
+      expect(res.status).toBe(200);
+      expect(res.body.checklist).toEqual(checklist);
+    });
+  });
+
   describe('DELETE /api/planning/task/:id', () => {
     it('soft deletes a task', async () => {
       const auth = await authenticatedRequest();

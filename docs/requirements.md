@@ -980,6 +980,15 @@
 - **Verification:** Mobile viewport renders single column with snap-scroll. Long-press initiates drag.
 - **Validation:** On mobile, user swipes between columns, long-presses to drag tasks.
 
+### REQ-PLN-013
+- **Description:** Tasks shall support an inline checklist stored as a JSONB column on the Task model.
+- **Rationale:** Lightweight checklists enable task decomposition without creating full subtask objects.
+- **Parameters:** `ChecklistItem { id: string (UUID), text: string, checked: boolean }`. Stored as `checklist` JSONB column, nullable, default null. Task card shows progress badge (`checked/total`). Task dialog provides add, toggle, delete operations with progress bar.
+- **Parent Req:** REQ-PLN-002
+- **Derived Reqs:** None
+- **Verification:** Backend tests: `task.test.js` checklist describe block. Frontend tests: `task-card.spec.ts`, `task-card-dialog.spec.ts`. E2E: `tasks.spec.ts` Task Checklist describe block.
+- **Validation:** User opens task dialog, clicks Checklist, adds items, checks/unchecks them, sees progress badge on task card.
+
 ---
 
 ## 9. File Management
@@ -1342,6 +1351,7 @@ Status key:
 | REQ-PLN-010 | Scheduled tasks from cron expressions | Met | |
 | REQ-PLN-011 | Task time tracking (calendar integration) | Met | |
 | REQ-PLN-012 | Mobile responsive layout | Met | |
+| REQ-PLN-013 | Task inline checklist (JSONB) | Met | |
 
 ### 9. File Management
 

@@ -6,7 +6,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatDatepickerModule } from '@angular/material/datepicker';
-import { Task } from '../../../models/task.model';
+import { Task, ChecklistItem } from '../../../models/task.model';
 import { CommonModule } from '@angular/common';
 import { TaskService } from '../../../services/task.service';
 import { TaskList } from '../../../models/task-list.model';
@@ -51,6 +51,21 @@ export class TaskCardDialog implements OnInit, OnDestroy {
   searchQuery = signal('');
   isEditingTitle = signal(false);
   titleDraft = signal('');
+  showChecklist = signal(false);
+  checklistDraft = signal('');
+
+  checklist = computed(() => this.task().checklist || []);
+  checklistProgress = computed(() => {
+    const items = this.checklist();
+    if (!items.length) return '';
+    const checked = items.filter(i => i.checked).length;
+    return `${checked}/${items.length}`;
+  });
+  checklistProgressPercent = computed(() => {
+    const items = this.checklist();
+    if (!items.length) return 0;
+    return (items.filter(i => i.checked).length / items.length) * 100;
+  });
 
   currentListName = computed(() => {
     const lists = this.taskLists();
@@ -80,6 +95,9 @@ export class TaskCardDialog implements OnInit, OnDestroy {
     this.loadAvailableTasks();
     this.descriptionDraft.set(this.task().description || '');
     this.titleDraft.set(this.task().name);
+    if (this.task().checklist?.length) {
+      this.showChecklist.set(true);
+    }
   }
 
   loadTaskTypes(): void {
@@ -124,6 +142,45 @@ export class TaskCardDialog implements OnInit, OnDestroy {
 
   toggleSubtasks(): void {
     this.showSubtasks.set(true);
+  }
+
+  toggleChecklist(): void {
+    this.showChecklist.set(true);
+  }
+
+  addChecklistItem(): void {
+    const text = this.checklistDraft().trim();
+    if (!text) return;
+
+    const item: ChecklistItem = {
+      id: crypto.randomUUID(),
+      text,
+      checked: false
+    };
+    const newChecklist = [...this.checklist(), item];
+    this.checklistDraft.set('');
+    this.updateChecklist(newChecklist);
+  }
+
+  toggleChecklistItem(id: string): void {
+    const newChecklist = this.checklist().map(item =>
+      item.id === id ? { ...item, checked: !item.checked } : item
+    );
+    this.updateChecklist(newChecklist);
+  }
+
+  deleteChecklistItem(id: string): void {
+    const newChecklist = this.checklist().filter(item => item.id !== id);
+    this.updateChecklist(newChecklist.length ? newChecklist : null as any);
+  }
+
+  private updateChecklist(checklist: ChecklistItem[] | null): void {
+    const task = this.task();
+    this.task.set({ ...task, checklist: checklist as any });
+    this.taskService.updateTask(task.id, { checklist } as any).subscribe({
+      next: () => this.taskService.triggerRefresh(),
+      error: (err) => console.error('Failed to update checklist', err)
+    });
   }
 
   addSubtask(): void {

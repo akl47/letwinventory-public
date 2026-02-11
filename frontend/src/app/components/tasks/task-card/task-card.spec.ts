@@ -26,4 +26,22 @@ describe('TaskCard', () => {
   it('should create', () => {
     expect(component).toBeTruthy();
   });
+
+  it('should display checklist badge when task has checklist items', () => {
+    fixture.componentRef.setInput('task', {
+      id: 2, name: 'CL Task', doneFlag: false, taskListID: 1,
+      checklist: [
+        { id: 'a', text: 'Item 1', checked: true },
+        { id: 'b', text: 'Item 2', checked: false },
+      ]
+    });
+    fixture.detectChanges();
+    expect(component.checklistProgress()).toBe('1/2');
+  });
+
+  it('should not display checklist badge when no checklist', () => {
+    fixture.componentRef.setInput('task', { id: 3, name: 'No CL', doneFlag: false, taskListID: 1 });
+    fixture.detectChanges();
+    expect(component.checklistProgress()).toBeNull();
+  });
 });

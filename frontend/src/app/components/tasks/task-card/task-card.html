@@ -7,7 +7,7 @@
             (click)="$event.preventDefault(); toggleComplete($event)" />
         <div class="task-title" [class.completed]="displayDone()">{{ task().name }}</div>
     </div>
-    @if (task().dueDate || task().timeEstimate || task().subtasks?.length || task().parentTaskID || task().taskTypeEnum
+    @if (task().dueDate || task().timeEstimate || task().checklist?.length || task().subtasks?.length || task().parentTaskID || task().taskTypeEnum
     === 'tracking' || task().taskTypeEnum === 'scheduled') {
     <div class="meta-info">
         @if (task().dueDate) {
@@ -20,6 +20,12 @@
         <span class="time-estimate-badge">
             <mat-icon class="icon-xs">timer</mat-icon>
             {{ formatEstimate(task().timeEstimate) }}
+        </span>
+        }
+        @if (checklistProgress()) {
+        <span class="checklist-badge">
+            <mat-icon class="icon-xs">checklist</mat-icon>
+            {{ checklistProgress() }}
         </span>
         }
         <span class="spacer"></span>

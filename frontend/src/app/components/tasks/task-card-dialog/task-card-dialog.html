@@ -184,6 +184,17 @@
                         &nbsp;
                         <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
                     </span>
+
+                    <!-- Checklist Label -->
+                    <span class="label clickable-label subtask-add-label" (click)="toggleChecklist()">
+                        <mat-icon class="left-icon">checklist</mat-icon>
+                        Checklist
+                        @if (checklistProgress()) {
+                        &nbsp;({{ checklistProgress() }})
+                        }
+                        &nbsp;
+                        <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
+                    </span>
                 </div>
             </div>
 
@@ -244,6 +255,49 @@
                         @if (subtaskDraft().trim()) {
                         <div class="subtask-controls">
                             <button mat-raised-button color="primary" (click)="addSubtask()">Add</button>
+                        </div>
+                        }
+                    </div>
+                </div>
+            </div>
+            }
+
+            <!-- Checklist Section -->
+            @if (showChecklist()) {
+            <div class="section checklist-section">
+                <div class="section-header">
+                    <mat-icon>checklist</mat-icon>
+                    <h3 class="section-title">Checklist</h3>
+                    @if (checklist().length > 0) {
+                    <span class="checklist-count">{{ checklistProgress() }}</span>
+                    }
+                </div>
+
+                @if (checklist().length > 0) {
+                <div class="checklist-progress-bar">
+                    <div class="checklist-progress-fill" [style.width.%]="checklistProgressPercent()"></div>
+                </div>
+                }
+
+                <div class="checklist-list">
+                    @for (item of checklist(); track item.id) {
+                    <div class="checklist-item">
+                        <input type="checkbox" class="checklist-checkbox" [checked]="item.checked"
+                            (change)="toggleChecklistItem(item.id)" />
+                        <span class="checklist-text" [class.completed]="item.checked"
+                            (click)="toggleChecklistItem(item.id)">{{ item.text }}</span>
+                        <button mat-icon-button class="delete-checklist-btn" (click)="deleteChecklistItem(item.id)">
+                            <mat-icon>close</mat-icon>
+                        </button>
+                    </div>
+                    }
+
+                    <div class="add-checklist-form">
+                        <input type="text" class="checklist-input" [(ngModel)]="checklistDraft"
+                            (keyup.enter)="addChecklistItem()" placeholder="Add an item..." />
+                        @if (checklistDraft().trim()) {
+                        <div class="checklist-controls">
+                            <button mat-raised-button color="primary" (click)="addChecklistItem()">Add</button>
                         </div>
                         }
                     </div>
