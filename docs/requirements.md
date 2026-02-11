@@ -1140,7 +1140,7 @@ These requirements support the design, build, and implementation of the software
 ### REQ-DEV-003
 - **Description:** The system shall containerize the production deployment using Docker with automatic rebuilds on file changes.
 - **Rationale:** Consistent deployment environment and developer experience.
-- **Parameters:** `docker-compose.prod.yml` with backend Dockerfile. Build context at project root. Image pushed to DockerHub (`akl47/letwinventory`).
+- **Parameters:** `docker-compose.prod.yml` with backend Dockerfile. Build context at project root. Image pushed to DockerHub (`<DOCKERHUB_USER>/letwinventory`).
 - **Parent Req:** REQ-SYS-001
 - **Derived Reqs:** REQ-DEV-004
 - **Verification:** Docker build succeeds. Container starts and serves application.

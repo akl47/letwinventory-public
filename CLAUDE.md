@@ -96,7 +96,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 1. **Created environment-specific configuration files**
    - Created `.env.development` with development database host (`letwinventory-postgres`)
-   - Created `.env.production` with production database host (`10.50.10.98`)
+   - Created `.env.production` with production database host (`<PRODUCTION_DB_HOST>`)
 
 2. **Updated backend to use environment-specific .env files**
    - Modified `backend/index.js` to load `.env.production` when `NODE_ENV=production`, otherwise `.env.development`
@@ -135,7 +135,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
    - **Note:** Both callback URLs must be added to Google Cloud Console OAuth credentials
 
 ### Notes
-- Production PostgreSQL server is now configured at `10.50.10.98`
+- Production PostgreSQL server is now configured at `<PRODUCTION_DB_HOST>`
 - Development environment continues to use the Docker container `letwinventory-postgres`
 - The application automatically selects the correct .env file based on NODE_ENV
 - All database configuration now comes from environment files (no hardcoded values)
@@ -931,7 +931,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 1. **Created GitHub Actions deploy workflow**
    - New `.github/workflows/deploy.yml` triggers on `v*` tag push (from version-bump workflow)
    - Uses `docker/build-push-action` with `file: backend/Dockerfile.prod`, `context: .`
-   - Pushes to DockerHub (`akl47/letwinventory`) with both version and `latest` tags
+   - Pushes to DockerHub (`<DOCKERHUB_USER>/letwinventory`) with both version and `latest` tags
    - Requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets
 
 2. **Refactored digikey-lookup.js to use API instead of direct DB**
@@ -1040,6 +1040,65 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - The Angular proxy approach avoids all CORS issues between frontend (4201) and backend (3000)
 - CI uses a fresh PostgreSQL database — tests must not depend on existing data
 - Current branch: testing
+
+---
+
+## Session: 2026-02-10 (continued)
+
+### Files Created
+- `scripts/backup-db.sh`
+- `scripts/pull-backup.sh`
+- `scripts/setup-readynas.sh`
+- `scripts/test-email.txt`
+- `.env.readynas.example`
+
+### Files Modified
+- `.env.production` — added `SMTP_EMAIL`, `SMTP_PASSWORD`, `NOTIFY_EMAIL` for backup email notifications
+
+### Changes Made
+
+1. **Created automated PostgreSQL backup script (`scripts/backup-db.sh`)**
+   - Sources `.env.production` for database credentials
+   - Overrides `DB_HOST` to `localhost` (pg_dump runs on VPS host, not in Docker)
+   - Uses `pg_dump -Fc` (custom format, compressed) with `--no-owner --no-acl`
+   - Checks disk usage before backup — skips if >= 90% full
+   - Change detection via `pg_stat_user_tables` hash — only backs up if data changed since last backup
+   - Stores hash in `$BACKUP_DIR/.last_backup_hash`
+   - Reports disk usage (% used, free space) in output
+   - Email notifications via Gmail SMTP (curl, no Postfix needed):
+     - `[OK]` on success
+     - `[FAILED]` on error (via `trap ERR`)
+
+2. **Created backup pull script for ReadyNAS (`scripts/pull-backup.sh`)**
+   - Runs on home network ReadyNAS, pulls latest backup from VPS via SCP
+   - Sources `.env.readynas` for VPS connection details (host, user, port)
+   - Skips download if latest file already exists locally
+   - Deletes backup from VPS after successful download
+   - Email notifications via Gmail SMTP:
+     - `[OK]` on successful download
+     - `[SKIP]` when already have latest backup
+     - `[FAILED]` on error or no backups found
+
+3. **Created ReadyNAS setup script (`scripts/setup-readynas.sh`)**
+   - Generates ed25519 SSH key, copies to VPS, tests connection
+   - Copies pull-backup.sh from VPS, runs first backup pull
+   - Sets up hourly cron job
+
+4. **Added Gmail SMTP credentials to `.env.production`**
+   - `SMTP_EMAIL`, `SMTP_PASSWORD` (Gmail app password), `NOTIFY_EMAIL`
+   - Used by backup script for email notifications via `curl` to `smtps://smtp.gmail.com:465`
+
+5. **Created `.env.readynas.example`**
+   - Template for ReadyNAS pull script configuration
+   - VPS connection (host, user, port), backup paths, SMTP credentials
+
+### Notes
+- VPS cron: `* 2 * * *` (daily backup, skips if no changes)
+- ReadyNAS cron: `10 2 * * *` (daily pull at 2:10 AM)
+- VPS doesn't support TUN/TAP devices, so OpenVPN wasn't possible — using pull-over-SSH instead
+- ReadyNAS SSH uses ed25519 key (older ssh-rsa keys rejected by VPS)
+- ReadyNAS keeps all backups indefinitely (no retention cleanup)
+- Current branch: master
 
 ---
 

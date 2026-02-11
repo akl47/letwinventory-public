@@ -9,7 +9,7 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
-IMAGE="akl47/letwinventory"
+IMAGE="${DOCKERHUB_USER:-your-dockerhub-user}/letwinventory"
 
 echo "Building $IMAGE:$VERSION and $IMAGE:latest..."
 

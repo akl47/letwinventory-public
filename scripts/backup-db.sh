@@ -37,7 +37,7 @@ fi
 
 # pg_dump runs on the host, not in Docker — use localhost
 DB_HOST=localhost
-: "${BACKUP_DIR:=/home/letwinco/backups}"
+: "${BACKUP_DIR:=$HOME/backups}"
 : "${RETENTION_DAYS:=30}"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
