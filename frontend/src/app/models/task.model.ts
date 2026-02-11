@@ -1,3 +1,9 @@
+export interface ChecklistItem {
+    id: string;
+    text: string;
+    checked: boolean;
+}
+
 export interface Task {
     id: number;
     ownerUserID: number;
@@ -15,5 +21,6 @@ export interface Task {
     activeFlag: boolean;
     createdAt: Date;
     updatedAt: Date;
+    checklist?: ChecklistItem[];
     subtasks?: Task[];
 }

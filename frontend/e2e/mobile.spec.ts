@@ -6,9 +6,9 @@ test.use({ ...iPhone13 });
 test.describe('Mobile', () => {
   test('sidebar is collapsed on mobile', async ({ page }) => {
     await page.goto('/#/tasks');
-    // Sidebar should be collapsed (width 0 or hidden)
-    const sidebar = page.locator('.sidenav.collapsed, .sidenav');
-    await expect(sidebar.first()).toBeVisible();
+    // Sidebar should exist with collapsed class (width 0 / hidden on mobile)
+    const sidebar = page.locator('.sidenav.collapsed');
+    await expect(sidebar).toHaveCount(1);
   });
 
   test('task board has snap-scroll on mobile', async ({ page }) => {
