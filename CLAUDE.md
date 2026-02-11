@@ -96,7 +96,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 1. **Created environment-specific configuration files**
    - Created `.env.development` with development database host (`letwinventory-postgres`)
-   - Created `.env.production` with production database host (`10.50.10.98`)
+   - Created `.env.production` with production database host (`<PRODUCTION_DB_HOST>`)
 
 2. **Updated backend to use environment-specific .env files**
    - Modified `backend/index.js` to load `.env.production` when `NODE_ENV=production`, otherwise `.env.development`
@@ -135,7 +135,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
    - **Note:** Both callback URLs must be added to Google Cloud Console OAuth credentials
 
 ### Notes
-- Production PostgreSQL server is now configured at `10.50.10.98`
+- Production PostgreSQL server is now configured at `<PRODUCTION_DB_HOST>`
 - Development environment continues to use the Docker container `letwinventory-postgres`
 - The application automatically selects the correct .env file based on NODE_ENV
 - All database configuration now comes from environment files (no hardcoded values)
@@ -931,7 +931,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 1. **Created GitHub Actions deploy workflow**
    - New `.github/workflows/deploy.yml` triggers on `v*` tag push (from version-bump workflow)
    - Uses `docker/build-push-action` with `file: backend/Dockerfile.prod`, `context: .`
-   - Pushes to DockerHub (`akl47/letwinventory`) with both version and `latest` tags
+   - Pushes to DockerHub (`<DOCKERHUB_USER>/letwinventory`) with both version and `latest` tags
    - Requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets
 
 2. **Refactored digikey-lookup.js to use API instead of direct DB**
@@ -973,6 +973,131 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - Deploy workflow automates the manual `scripts/deploy.sh` step
 - DigiKey script no longer needs direct DB access — only requires the backend server running
 - All four list views (parts, orders, equipment, harness) now have URL query param persistence
+- Current branch: master
+
+---
+
+## Session: 2026-02-10
+
+### Files Created
+- `frontend/src/environments/environment.e2e.ts`
+- `frontend/proxy.conf.e2e.json`
+
+### Files Modified
+- `frontend/angular.json`
+- `frontend/playwright.config.ts`
+- `frontend/e2e/auth.setup.ts`
+- `frontend/e2e/mobile.spec.ts`
+- `frontend/e2e/tasks.spec.ts`
+- `backend/api/auth/google/controller.js`
+- `.github/workflows/ci.yml`
+- `.gitignore`
+
+### Changes Made
+
+1. **Fixed E2E test authentication — wrong API URL**
+   - `environment.ts` pointed to `https://dev.letwin.co/api` but E2E tests use the local backend
+   - Created `frontend/src/environments/environment.e2e.ts` with `apiUrl: '/api'` (relative path)
+   - Created `frontend/proxy.conf.e2e.json` to proxy `/api` → `http://localhost:3000`
+   - Added `e2e` build and serve configurations in `angular.json` with fileReplacement and proxyConfig
+   - All API calls from the E2E browser go through the Angular dev server proxy, avoiding CORS entirely
+
+2. **Separated E2E server from dev server**
+   - Changed Playwright to use port 4201 (not 4200) so it never reuses the dev server
+   - `playwright.config.ts` uses `E2E_PORT = 4201` for webServer and baseURL
+   - Dev server on port 4200 continues to work independently
+
+3. **Fixed test user `activeFlag` defaulting to `false`**
+   - User model has `activeFlag: { defaultValue: false }`
+   - `testLogin` endpoint now sets `activeFlag: true` on user creation
+   - Also activates existing test users if their `activeFlag` was `false`
+   - Without this, `checkToken` couldn't find the test user (filters by `activeFlag: true`)
+
+4. **Fixed mobile E2E tests**
+   - Stripped `defaultBrowserType: 'webkit'` from `devices['iPhone 13']` — E2E only installs chromium
+   - Fixed route from `/#/scanner` to `/#/mobile` (matching `app.routes.ts`)
+   - Fixed back button selector from `.back-button` to `.back-btn` (matching template)
+
+5. **Fixed tasks E2E test for empty databases**
+   - Changed "displays task list columns" test to check for `app-task-list-view` (always renders)
+   - Previously checked for `app-task-list` which only renders when task lists exist in the database
+
+6. **Updated auth.setup.ts for CI compatibility**
+   - Added `fs.mkdirSync` with `recursive: true` to create `e2e/.auth/` directory (gitignored, doesn't exist in CI)
+   - Auth setup now calls test-login through the Angular proxy (port 4201) instead of directly to port 3000
+
+7. **Updated CI workflow for E2E tests**
+   - Added PostgreSQL 16 service container for the backend database
+   - Backend starts with `nohup` and job-level env vars (persist across steps)
+   - Added dummy `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` so Passport initializes without real credentials
+   - Health check uses `curl -so /dev/null` (checks connectivity, ignores HTTP 401 from checkToken)
+   - Backend logs saved to `/tmp/backend.log` and shown on failure for debugging
+   - `FRONTEND_URL` set to `http://localhost:4201` for CORS
+
+### Notes
+- E2E tests: 31 tests, all passing locally and in CI
+- E2E auth flow: test-login endpoint → JWT token → storageState → all tests authenticated
+- The Angular proxy approach avoids all CORS issues between frontend (4201) and backend (3000)
+- CI uses a fresh PostgreSQL database — tests must not depend on existing data
+- Current branch: testing
+
+---
+
+## Session: 2026-02-10 (continued)
+
+### Files Created
+- `scripts/backup-db.sh`
+- `scripts/pull-backup.sh`
+- `scripts/setup-readynas.sh`
+- `scripts/test-email.txt`
+- `.env.readynas.example`
+
+### Files Modified
+- `.env.production` — added `SMTP_EMAIL`, `SMTP_PASSWORD`, `NOTIFY_EMAIL` for backup email notifications
+
+### Changes Made
+
+1. **Created automated PostgreSQL backup script (`scripts/backup-db.sh`)**
+   - Sources `.env.production` for database credentials
+   - Overrides `DB_HOST` to `localhost` (pg_dump runs on VPS host, not in Docker)
+   - Uses `pg_dump -Fc` (custom format, compressed) with `--no-owner --no-acl`
+   - Checks disk usage before backup — skips if >= 90% full
+   - Change detection via `pg_stat_user_tables` hash — only backs up if data changed since last backup
+   - Stores hash in `$BACKUP_DIR/.last_backup_hash`
+   - Reports disk usage (% used, free space) in output
+   - Email notifications via Gmail SMTP (curl, no Postfix needed):
+     - `[OK]` on success
+     - `[FAILED]` on error (via `trap ERR`)
+
+2. **Created backup pull script for ReadyNAS (`scripts/pull-backup.sh`)**
+   - Runs on home network ReadyNAS, pulls latest backup from VPS via SCP
+   - Sources `.env.readynas` for VPS connection details (host, user, port)
+   - Skips download if latest file already exists locally
+   - Deletes backup from VPS after successful download
+   - Email notifications via Gmail SMTP:
+     - `[OK]` on successful download
+     - `[SKIP]` when already have latest backup
+     - `[FAILED]` on error or no backups found
+
+3. **Created ReadyNAS setup script (`scripts/setup-readynas.sh`)**
+   - Generates ed25519 SSH key, copies to VPS, tests connection
+   - Copies pull-backup.sh from VPS, runs first backup pull
+   - Sets up hourly cron job
+
+4. **Added Gmail SMTP credentials to `.env.production`**
+   - `SMTP_EMAIL`, `SMTP_PASSWORD` (Gmail app password), `NOTIFY_EMAIL`
+   - Used by backup script for email notifications via `curl` to `smtps://smtp.gmail.com:465`
+
+5. **Created `.env.readynas.example`**
+   - Template for ReadyNAS pull script configuration
+   - VPS connection (host, user, port), backup paths, SMTP credentials
+
+### Notes
+- VPS cron: `* 2 * * *` (daily backup, skips if no changes)
+- ReadyNAS cron: `10 2 * * *` (daily pull at 2:10 AM)
+- VPS doesn't support TUN/TAP devices, so OpenVPN wasn't possible — using pull-over-SSH instead
+- ReadyNAS SSH uses ed25519 key (older ssh-rsa keys rejected by VPS)
+- ReadyNAS keeps all backups indefinitely (no retention cleanup)
 - Current branch: master
 
 ---
