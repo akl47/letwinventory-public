@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Configuration ---
+# --- Load .env.readynas if present ---
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/../.env.readynas"
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  source "$ENV_FILE"
+  set +a
+fi
+
+# --- Configuration (defaults if not in .env) ---
 : "${VPS_HOST:=185.148.129.180}"
 : "${VPS_USER:=letwinventory}"
-: "${VPS_BACKUP_DIR:=/home/letwinventory/backups}"
-: "${LOCAL_BACKUP_DIR:=/backup/letwinventory}"
+: "${VPS_BACKUP_DIR:=/home/letwinco/backups}"
+: "${LOCAL_BACKUP_DIR:=/data/letwinventory-backups}"
 : "${RETENTION_DAYS:=30}"
 
 # --- Create local backup directory ---
@@ -33,8 +42,8 @@ echo "[$(date)] Downloading ${FILENAME}..."
 scp "${VPS_USER}@${VPS_HOST}:${LATEST}" "${LOCAL_BACKUP_DIR}/${FILENAME}"
 echo "[$(date)] Downloaded: $(du -h "${LOCAL_BACKUP_DIR}/${FILENAME}" | cut -f1)"
 
-# --- Clean up old local backups ---
-find "$LOCAL_BACKUP_DIR" -name "*.dump" -mtime +${RETENTION_DAYS} -delete
-echo "[$(date)] Cleaned backups older than ${RETENTION_DAYS} days"
+# --- Delete from VPS after successful download ---
+ssh "${VPS_USER}@${VPS_HOST}" "rm -f ${LATEST}"
+echo "[$(date)] Deleted ${FILENAME} from VPS"
 
 echo "[$(date)] Pull complete: ${FILENAME}"
