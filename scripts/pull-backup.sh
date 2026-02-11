@@ -33,11 +33,11 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 # --- Configuration (defaults if not in .env) ---
-# : "${VPS_HOST:=}"
-# : "${VPS_USER:=}"
-# : "${VPS_PORT:=22}"
-# : "${VPS_BACKUP_DIR:=/backups}"
-# : "${LOCAL_BACKUP_DIR:=/backups}"
+# : "${VPS_HOST:=185.148.129.180}"
+# : "${VPS_USER:=letwinco}"
+# : "${VPS_PORT:=7822}"
+# : "${VPS_BACKUP_DIR:=/home/letwinco/backups}"
+# : "${LOCAL_BACKUP_DIR:=/data/letwinventory-backups}"
 
 # # --- Create local backup directory ---
 # mkdir -p "$LOCAL_BACKUP_DIR"

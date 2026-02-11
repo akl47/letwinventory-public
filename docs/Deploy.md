@@ -101,7 +101,7 @@ sudo systemctl enable postgresql
 ```bash
 # Clone repository
 cd /home/letwinco
-git clone https://github.com/<GITHUB_USER>/letwinventory.git
+git clone https://github.com/akl47/letwinventory.git
 cd letwinventory
 
 # Create production environment file

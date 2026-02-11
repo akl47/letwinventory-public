@@ -1,6 +1,6 @@
 services:
   letwinventory-backend:
-    image: ${DOCKERHUB_USER:-your-dockerhub-user}/letwinventory:latest
+    image: akl47/letwinventory:latest
     env_file:
       - .env.production
     environment:

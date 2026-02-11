@@ -31,5 +31,5 @@ jobs:
           file: backend/Dockerfile.prod
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/letwinventory:${{ steps.version.outputs.version }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/letwinventory:latest
+            akl47/letwinventory:${{ steps.version.outputs.version }}
+            akl47/letwinventory:latest

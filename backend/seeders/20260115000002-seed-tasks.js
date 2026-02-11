@@ -4,7 +4,7 @@ module.exports = {
   up: async (queryInterface, Sequelize) => {
     const { User, Project, TaskList, Task } = require('../models');
 
-    const user = await User.findOne({ where: { email: 'user@example.com' }, attributes: ['id'], raw: true });
+    const user = await User.findOne({ where: { email: 'alexanderletwin@gmail.com' }, attributes: ['id'], raw: true });
     if (!user) {
       console.log('User not found, skipping task seeding');
       return;
