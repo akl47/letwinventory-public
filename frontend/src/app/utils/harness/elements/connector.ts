@@ -190,12 +190,12 @@ export function drawConnector(
     const isPinHighlighted = highlightedPinIds?.has(pin.id) || false;
     const isMatingPinHighlighted = highlightedMatingPinIds?.has(pin.id) || false;
 
-    // Wire connection point (circle on the side) - for wire connections
-    const wireCircleX = connector.type === 'male' ? left + width + PIN_CIRCLE_RADIUS : left - PIN_CIRCLE_RADIUS;
+    // Wire connection point (circle on left side) - for wire connections
+    const wireCircleX = left - PIN_CIRCLE_RADIUS;
     drawPinCircle(ctx, wireCircleX, rowCenter, PIN_CIRCLE_RADIUS, headerColor, isPinHighlighted);
 
-    // Mating connection point (square on the opposite side) - for connector-to-connector mating
-    const matingX = connector.type === 'male' ? left - MATING_POINT_SIZE : left + width;
+    // Mating connection point (square on right side) - for connector-to-connector mating
+    const matingX = left + width;
     drawMatingPoint(ctx, matingX, rowCenter - MATING_POINT_SIZE / 2, MATING_POINT_SIZE, headerColor, isMatingPinHighlighted);
   });
 
@@ -244,11 +244,9 @@ export function getConnectorPinPositions(
   pins.forEach((pin, index) => {
     const rowCenter = index * ROW_HEIGHT + ROW_HEIGHT / 2;
 
-    // Wire connection point (circle side)
+    // Wire connection point (always left side)
     if (side === 'wire' || side === 'both') {
-      let wireX = connector.type === 'male'
-        ? width + PIN_CIRCLE_RADIUS
-        : -PIN_CIRCLE_RADIUS;
+      let wireX = -PIN_CIRCLE_RADIUS;
       let wireY = rowCenter;
 
       if (flipped) {
@@ -269,11 +267,9 @@ export function getConnectorPinPositions(
       });
     }
 
-    // Mating connection point (opposite side)
+    // Mating connection point (always right side)
     if (side === 'mating' || side === 'both') {
-      let matingX = connector.type === 'male'
-        ? -MATING_POINT_SIZE / 2
-        : width + MATING_POINT_SIZE / 2;
+      let matingX = width + MATING_POINT_SIZE / 2;
       let matingY = rowCenter;
 
       if (flipped) {
@@ -321,7 +317,8 @@ export function getConnectorPinPositionsWithSide(connector: HarnessConnector): C
     const sin = Math.sin(rad);
 
     // Wire connection point
-    let wireX = connector.type === 'male' ? width + PIN_CIRCLE_RADIUS : -PIN_CIRCLE_RADIUS;
+    // Wire connection point (always left side)
+    let wireX = -PIN_CIRCLE_RADIUS;
     let wireY = rowCenter;
     if (flipped) {
       wireX = width - wireX;
@@ -336,8 +333,8 @@ export function getConnectorPinPositionsWithSide(connector: HarnessConnector): C
       side: 'wire'
     });
 
-    // Mating connection point
-    let matingX = connector.type === 'male' ? -MATING_POINT_SIZE / 2 : width + MATING_POINT_SIZE / 2;
+    // Mating connection point (always right side)
+    let matingX = width + MATING_POINT_SIZE / 2;
     let matingY = rowCenter;
     if (flipped) {
       matingX = width - matingX;

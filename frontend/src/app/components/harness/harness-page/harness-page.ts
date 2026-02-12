@@ -729,9 +729,9 @@ export class HarnessPage implements OnInit, OnDestroy {
           connectors: updatedData.connectors.map(conn => {
             if (conn.id !== change.elementId) return conn;
 
-            // Regenerate pins if count changed
+            // Regenerate pins if count or array length changed
             let pins = conn.pins;
-            if (db.pinCount !== conn.pinCount && db.pins) {
+            if ((db.pinCount !== conn.pinCount || db.pins?.length !== conn.pins.length) && db.pins) {
               pins = db.pins.map((dbPin, i) => {
                 const existing = conn.pins[i];
                 return {
