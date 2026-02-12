@@ -185,8 +185,10 @@ exports.loginWithGoogle = async (req, res, next) => {
 exports.refreshToken = async (req, res) => {
   try {
     const refreshTokenRaw = req.cookies?.refresh_token;
+    console.log('[REFRESH] Attempt | cookie present:', !!refreshTokenRaw, '| cookies:', Object.keys(req.cookies || {}));
 
     if (!refreshTokenRaw) {
+      console.log('[REFRESH] FAIL: No refresh_token cookie');
       return res.status(401).json({ error: 'No refresh token provided' });
     }
 
@@ -204,17 +206,20 @@ exports.refreshToken = async (req, res) => {
     });
 
     if (!storedToken) {
+      console.log('[REFRESH] FAIL: Token hash not found in DB (invalid or already rotated)');
       return res.status(401).json({ error: 'Invalid refresh token' });
     }
 
     // Check if token is expired
     if (new Date() > storedToken.expiresAt) {
+      console.log('[REFRESH] FAIL: Token expired at', storedToken.expiresAt, '| now:', new Date());
       await storedToken.update({ activeFlag: false });
       return res.status(401).json({ error: 'Refresh token expired' });
     }
 
     // Check if user is still active
     if (!storedToken.user || !storedToken.user.activeFlag) {
+      console.log('[REFRESH] FAIL: User not active | user:', storedToken.user?.id);
       await storedToken.update({ activeFlag: false });
       return res.status(401).json({ error: 'User is not active' });
     }
@@ -266,8 +271,9 @@ exports.refreshToken = async (req, res) => {
         displayName: user.displayName
       }
     });
+    console.log('[REFRESH] OK: New tokens issued for user', user.id, user.email);
   } catch (error) {
-    console.error('Error refreshing token:', error);
+    console.error('[REFRESH] ERROR:', error);
     res.status(500).json({ error: 'Error refreshing token' });
   }
 };

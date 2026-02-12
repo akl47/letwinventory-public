@@ -26,10 +26,12 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
     catchError((error: HttpErrorResponse) => {
       // Only attempt refresh for 401 errors on non-refresh requests
       if (error.status === 401 && !isRefreshRequest) {
+        console.log('[AUTH] 401 received, attempting refresh | URL:', req.url);
         return handleTokenRefresh(authService, router, req, next);
       }
 
       if (error.status === 403) {
+        console.log('[AUTH] 403 received, clearing token | URL:', req.url);
         authService.clearToken();
         router.navigate(['/home']);
       }
@@ -47,6 +49,7 @@ function handleTokenRefresh(
 ) {
   // If already refreshing, wait for the refresh to complete
   if (authService.isRefreshingToken) {
+    console.log('[AUTH] Refresh already in progress, queuing request:', req.url);
     return authService.refreshComplete$.pipe(
       filter(token => token !== null),
       take(1),
