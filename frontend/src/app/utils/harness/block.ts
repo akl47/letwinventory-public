@@ -35,7 +35,7 @@ export function connectorToBlock(c: HarnessConnector): HarnessBlock {
   const pins: HarnessBlockPin[] = [];
 
   const existingPins = c.pins?.length > 0 ? c.pins : generateDefaultPins(pinCount);
-  const pinSide: 'left' | 'right' = c.type === 'female' ? 'left' : 'right';
+  const pinSide: 'left' | 'right' = 'left';
 
   for (const p of existingPins) {
     pins.push({
