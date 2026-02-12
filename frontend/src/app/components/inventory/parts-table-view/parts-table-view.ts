@@ -415,6 +415,19 @@ export class PartsTableView implements OnInit {
     this.router.navigate(['/parts', part.id, 'edit']);
   }
 
+  onRowMouseDown(event: MouseEvent) {
+    if (event.button === 1) {
+      event.preventDefault();
+    }
+  }
+
+  onRowAuxClick(event: MouseEvent, part: Part) {
+    if (event.button === 1) {
+      event.preventDefault();
+      window.open(`/#/parts/${part.id}/edit`, '_blank');
+    }
+  }
+
   deletePart(part: Part) {
     // This method is kept for potential future use, but delete is handled in the dialog
     console.log('Delete part:', part);

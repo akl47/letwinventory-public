@@ -159,7 +159,7 @@
             </ng-container>
 
             <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-            <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="editPart(row)" class="clickable-row">
+            <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="editPart(row)" (mousedown)="onRowMouseDown($event)" (auxclick)="onRowAuxClick($event, row)" class="clickable-row">
             </tr>
 
             <!-- No data row -->

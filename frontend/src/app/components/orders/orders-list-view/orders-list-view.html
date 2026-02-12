@@ -127,7 +127,7 @@
       </ng-container>
 
       <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-      <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="viewOrder(row)" class="clickable-row"></tr>
+      <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="viewOrder(row)" (mousedown)="onRowMouseDown($event)" (auxclick)="onRowAuxClick($event, row)" class="clickable-row"></tr>
 
       <!-- No data row -->
       <tr class="mat-row" *matNoDataRow>

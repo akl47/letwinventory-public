@@ -130,11 +130,12 @@ export class AuthService {
      */
     refreshAccessToken(): Observable<string | null> {
         if (this.isRefreshing) {
-            // Return the subject so callers can wait for the refresh to complete
+            console.log('[AUTH] refreshAccessToken called but already refreshing, returning subject');
             return this.refreshComplete$;
         }
 
         this.isRefreshing = true;
+        console.log('[AUTH] Refreshing access token...');
 
         return this.http.post<RefreshResponse>(
             `${environment.apiUrl}/auth/user/refresh`,
@@ -144,16 +145,19 @@ export class AuthService {
             map(response => {
                 this.isRefreshing = false;
                 if (response.accessToken) {
+                    console.log('[AUTH] Refresh OK, new token received');
                     localStorage.setItem(this.TOKEN_KEY, response.accessToken);
                     this.user.set(response.user);
                     this.refreshSubject.next(response.accessToken);
                     return response.accessToken;
                 }
+                console.log('[AUTH] Refresh response missing accessToken');
                 this.refreshSubject.next(null);
                 return null;
             }),
             catchError(error => {
                 this.isRefreshing = false;
+                console.log('[AUTH] Refresh FAILED:', error.status, error.message || error.statusText);
                 this.refreshSubject.next(null);
                 this.clearToken();
                 return of(null);

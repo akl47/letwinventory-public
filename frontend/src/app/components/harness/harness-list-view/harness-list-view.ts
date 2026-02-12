@@ -232,6 +232,19 @@ export class HarnessListView implements OnInit {
     this.router.navigate(['/harness/editor', harness.id]);
   }
 
+  onRowMouseDown(event: MouseEvent) {
+    if (event.button === 1) {
+      event.preventDefault();
+    }
+  }
+
+  onRowAuxClick(event: MouseEvent, harness: WireHarnessSummary) {
+    if (event.button === 1) {
+      event.preventDefault();
+      window.open(`/#/harness/editor/${harness.id}`, '_blank');
+    }
+  }
+
   formatDate(dateString: string): string {
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', {

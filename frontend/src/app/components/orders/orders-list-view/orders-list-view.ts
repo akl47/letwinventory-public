@@ -338,6 +338,19 @@ export class OrdersListView implements OnInit {
     this.router.navigate(['/orders', order.id]);
   }
 
+  onRowMouseDown(event: MouseEvent) {
+    if (event.button === 1) {
+      event.preventDefault();
+    }
+  }
+
+  onRowAuxClick(event: MouseEvent, order: Order) {
+    if (event.button === 1) {
+      event.preventDefault();
+      window.open(`/#/orders/${order.id}`, '_blank');
+    }
+  }
+
   createNewOrder() {
     const dialogRef = this.dialog.open(OrderEditDialog, {
       width: '600px',

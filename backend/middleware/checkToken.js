@@ -6,7 +6,6 @@ module.exports = (req, res, next) => {
     let token = req.headers.authorization.replace('Bearer ', '');
     jwt.verify(token, process.env.JWT_SECRET, (err, jwtUser) => {
       if (_.isNull(err)) {
-        // console.log(jwtUser)
         db.User.findOne({
           attributes: ['id', 'displayName', 'email'],
           where: {
@@ -25,12 +24,12 @@ module.exports = (req, res, next) => {
           next(new RestError('Error finding user in database', 500));
         })
       } else {
-        // Use 401 for all auth failures to trigger token refresh
+        console.log('[AUTH] Token verify failed:', err.name, err.message, '| URL:', req.method, req.originalUrl);
         next(new RestError('Invalid or expired token', 401));
       }
     })
   } else {
-    // Use 401 for missing auth to trigger token refresh
+    console.log('[AUTH] No Authorization header | URL:', req.method, req.originalUrl);
     next(new RestError('Authentication required', 401));
   }
 }
