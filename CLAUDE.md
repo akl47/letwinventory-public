@@ -1288,6 +1288,54 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Session: 2026-02-12 (continued)
+
+### Files Created
+- `frontend/src/app/components/harness/harness-sync-dialog/harness-sync-dialog.ts`
+- `frontend/src/app/components/harness/harness-sync-dialog/harness-sync-dialog.html`
+- `frontend/src/app/components/harness/harness-sync-dialog/harness-sync-dialog.css`
+
+### Files Modified
+- `backend/api/inventory/part/controller.js` — added `imageFile` include to `searchPartsByCategory`
+- `frontend/src/app/components/harness/harness-connector-dialog/harness-connector-dialog.html` — added thumbnail
+- `frontend/src/app/components/harness/harness-connector-dialog/harness-connector-dialog.scss` — thumbnail CSS
+- `frontend/src/app/components/harness/harness-component-dialog/harness-component-dialog.html` — added thumbnail
+- `frontend/src/app/components/harness/harness-component-dialog/harness-component-dialog.scss` — thumbnail CSS
+- `frontend/src/app/components/harness/harness-add-cable-dialog/harness-add-cable-dialog.html` — added thumbnail
+- `frontend/src/app/components/harness/harness-add-cable-dialog/harness-add-cable-dialog.scss` — thumbnail CSS
+- `frontend/src/app/components/harness/harness-page/harness-page.ts` — replaced `loadConnectorImages()` with `syncPartsFromDatabase()`
+
+### Changes Made
+
+1. **Part image thumbnails in add dialogs**
+   - Added `imageFile` association (UploadedFile) to `searchPartsByCategory` backend endpoint
+   - Updated all three dialog templates (connector, component, cable) to show thumbnail image in autocomplete dropdown
+   - Changed `.part-option` CSS from column layout to row layout with 36x36px thumbnail
+   - Parts with images show the image; parts without images show text only (no placeholder)
+
+2. **Harness sync check on load**
+   - Created `HarnessSyncDialog` component that lists detected structural changes between harness elements and current database values
+   - Each change has a checkbox (default checked) — user picks which to accept
+   - Replaced `loadConnectorImages()` with `syncPartsFromDatabase()` in harness-page.ts
+   - New method fetches ALL linked parts (connectors, cables, components) from database on load
+   - Compares structural fields: type, pinCount, color, pins, gaugeAWG, wireCount, wires, pinGroups
+   - Images always sync silently (no prompt) — only structural changes prompt the user
+   - If no structural changes: loads normally with refreshed images
+   - If structural changes found: opens sync dialog listing changes with old→new descriptions
+   - Accept: updates element with new DB values, preserves existing pin/wire IDs where possible
+   - Reject: keeps existing structural data, still refreshes images
+   - Individual fetch failures are caught with `catchError` — one failed part doesn't block others
+
+### Notes
+- `SyncChange` interface: elementType, elementId, label, changes[], dbData, accepted
+- Structural change detection for connectors: type, pinCount, color, pins length
+- Structural change detection for cables: gaugeAWG, wireCount, wires length
+- Structural change detection for components: pinCount, pinGroups length
+- When pin/wire counts change, new IDs are generated for new entries; existing entries preserve their IDs
+- Current branch: bugfix
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:

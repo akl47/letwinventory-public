@@ -23,8 +23,13 @@
         @for (part of filteredParts(); track part.id) {
         <mat-option [value]="part">
           <span class="part-option">
-            <strong>{{ part.name }}</strong>
-            <span class="part-desc">{{ part.description || 'No description' }}</span>
+            @if (part.imageFile?.data) {
+              <img [src]="part.imageFile?.data" class="part-thumbnail" />
+            }
+            <span class="part-text">
+              <strong>{{ part.name }}</strong>
+              <span class="part-desc">{{ part.description || 'No description' }}</span>
+            </span>
           </span>
         </mat-option>
         }

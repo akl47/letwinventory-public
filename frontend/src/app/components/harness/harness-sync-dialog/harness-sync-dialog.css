@@ -1,0 +1,60 @@
+.sync-description {
+  color: #b0b0b0;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.sync-item {
+  border: 1px solid #404040;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.sync-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.type-icon {
+  font-size: 18px;
+  width: 18px;
+  height: 18px;
+  color: #888;
+}
+
+.item-label {
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.item-type {
+  font-size: 11px;
+  color: #888;
+  background: #2d2d2d;
+  padding: 2px 6px;
+  border-radius: 3px;
+  margin-left: auto;
+}
+
+.sync-item-changes {
+  margin-left: 40px;
+}
+
+.change-row {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+
+.change-field {
+  color: #888;
+  white-space: nowrap;
+}
+
+.change-desc {
+  color: #b0b0b0;
+}

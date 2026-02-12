@@ -44,6 +44,14 @@
                 </td>
             </ng-container>
 
+            <!-- Cron Description Column -->
+            <ng-container matColumnDef="cronDescription">
+                <th mat-header-cell *matHeaderCellDef>Description</th>
+                <td mat-cell *matCellDef="let item">
+                    <span class="cron-description">{{ cronToEnglish(item.cronExpression) }}</span>
+                </td>
+            </ng-container>
+
             <!-- Task List Column -->
             <ng-container matColumnDef="taskList">
                 <th mat-header-cell *matHeaderCellDef mat-sort-header>Task List</th>
@@ -61,6 +69,16 @@
                     } @else {
                     <span>-</span>
                     }
+                </td>
+            </ng-container>
+
+            <!-- Notify Column -->
+            <ng-container matColumnDef="notifyOnCreate">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Notify</th>
+                <td mat-cell *matCellDef="let item">
+                    <mat-icon class="notify-icon" [class.notify-on]="item.notifyOnCreate" [class.notify-off]="!item.notifyOnCreate">
+                        {{ item.notifyOnCreate ? 'notifications_active' : 'notifications_off' }}
+                    </mat-icon>
                 </td>
             </ng-container>
 

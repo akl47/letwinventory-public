@@ -227,8 +227,8 @@ export class HarnessConnectorDialog implements OnInit {
       dbId: linked?.id || this.editDbId,
       partId: this.selectedPart()?.id || this.editPartId,
       partName: this.selectedPart()?.name || this.editPartName,
-      // Include images from linked connector or preserve from edit
-      connectorImage: linked?.connectorImage || this.editConnectorImage,
+      // Use Part image, fall back to linked connector image or preserved edit image
+      connectorImage: this.selectedPart()?.imageFile?.data || linked?.connectorImage || this.editConnectorImage,
       pinoutDiagramImage: linked?.pinoutDiagramImage || this.editPinoutDiagramImage
     };
 

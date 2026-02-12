@@ -45,7 +45,7 @@ export class ScheduledTasksListView implements OnInit {
   searchText = signal<string>('');
   showInactive = signal<boolean>(false);
 
-  displayedColumns: string[] = ['name', 'cronExpression', 'taskList', 'project', 'nextRunAt', 'lastRunAt'];
+  displayedColumns: string[] = ['name', 'cronExpression', 'cronDescription', 'taskList', 'project', 'notifyOnCreate', 'nextRunAt', 'lastRunAt'];
 
   // Pagination
   pageSize = signal<number>(10);
@@ -181,6 +181,31 @@ export class ScheduledTasksListView implements OnInit {
         this.loadData();
       }
     });
+  }
+
+  cronToEnglish(expr: string): string {
+    if (!expr?.trim()) return '';
+    try {
+      const parts = expr.trim().split(/\s+/);
+      if (parts.length !== 5) return expr;
+      const [min, hour, dom, mon, dow] = parts;
+      const descs: string[] = [];
+      if (min === '0' && hour === '*') descs.push('Every hour');
+      else if (min === '0' && hour !== '*') descs.push(`At ${hour}:00`);
+      else if (min !== '*' && hour !== '*') descs.push(`At ${hour}:${min.padStart(2, '0')}`);
+      else if (min !== '*') descs.push(`At minute ${min}`);
+      else descs.push('Every minute');
+      if (dom !== '*') descs.push(`on day ${dom}`);
+      if (mon !== '*') descs.push(`of month ${mon}`);
+      if (dow !== '*') {
+        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const dayName = days[parseInt(dow)] || dow;
+        descs.push(`on ${dayName}`);
+      }
+      return descs.join(' ');
+    } catch {
+      return expr;
+    }
   }
 
   private getSortValue(item: ScheduledTask, column: string): string | number | null {

@@ -49,17 +49,86 @@ exports.searchPartsByCategory = async (req, res, next) => {
       ];
     }
 
+    // Build includes - always include Part's own imageFile
+    const includes = [
+      {
+        model: db.PartCategory,
+        attributes: ['id', 'name', 'tagColorHex']
+      },
+      {
+        model: db.UploadedFile,
+        as: 'imageFile',
+        attributes: ['id', 'filename', 'mimeType', 'data']
+      }
+    ];
+
+    // Include the electrical model with its image based on category
+    const categoryLower = category.toLowerCase();
+    if (categoryLower === 'connector') {
+      includes.push({
+        model: db.ElectricalConnector,
+        as: 'electricalConnector',
+        required: false,
+        attributes: ['id'],
+        include: [{
+          model: db.UploadedFile,
+          as: 'connectorImageFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }]
+      });
+    } else if (categoryLower === 'cable') {
+      includes.push({
+        model: db.Cable,
+        as: 'cable',
+        required: false,
+        attributes: ['id'],
+        include: [{
+          model: db.UploadedFile,
+          as: 'cableDiagramFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }]
+      });
+    } else if (categoryLower === 'electrical component') {
+      includes.push({
+        model: db.ElectricalComponent,
+        as: 'electricalComponent',
+        required: false,
+        attributes: ['id'],
+        include: [{
+          model: db.UploadedFile,
+          as: 'componentImageFile',
+          attributes: ['id', 'filename', 'mimeType', 'data']
+        }]
+      });
+    }
+
     const parts = await db.Part.findAll({
       where: whereClause,
       order: [['name', 'ASC']],
       limit: 20,
-      include: [{
-        model: db.PartCategory,
-        attributes: ['id', 'name', 'tagColorHex']
-      }]
+      include: includes
     });
 
-    res.json(parts);
+    // Post-process: if Part has no imageFile, use the electrical part's image
+    const result = parts.map(p => {
+      const json = p.toJSON();
+      if (!json.imageFile) {
+        if (json.electricalConnector?.connectorImageFile) {
+          json.imageFile = json.electricalConnector.connectorImageFile;
+        } else if (json.cable?.cableDiagramFile) {
+          json.imageFile = json.cable.cableDiagramFile;
+        } else if (json.electricalComponent?.componentImageFile) {
+          json.imageFile = json.electricalComponent.componentImageFile;
+        }
+      }
+      // Remove nested electrical data from response
+      delete json.electricalConnector;
+      delete json.cable;
+      delete json.electricalComponent;
+      return json;
+    });
+
+    res.json(result);
   } catch (error) {
     next(createError(500, 'Error searching parts: ' + error.message));
   }

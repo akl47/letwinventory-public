@@ -215,26 +215,35 @@ export function drawCable(
   if (cable.showCableDiagram && cable.cableDiagramImage) {
     const diagramImg = loadedImages?.get(`cable-diagram-${cable.id}`);
     if (diagramImg) {
+      // Fit image within max bounds while preserving aspect ratio
+      const aspectRatio = diagramImg.width / diagramImg.height;
+      let drawWidth = CABLE_DIAGRAM_WIDTH;
+      let drawHeight = drawWidth / aspectRatio;
+      if (drawHeight > CABLE_DIAGRAM_HEIGHT) {
+        drawHeight = CABLE_DIAGRAM_HEIGHT;
+        drawWidth = drawHeight * aspectRatio;
+      }
+
       const diagramY = (wireCount - 1) * CABLE_WIRE_SPACING + CABLE_WIRE_SPACING / 2 + 10;
-      const imgX = left + (width - CABLE_DIAGRAM_WIDTH) / 2;
+      const imgX = left + (width - drawWidth) / 2;
       const imgY = diagramY;
 
       // Draw image background
       ctx.fillStyle = COLORS.imageBackground;
       ctx.strokeStyle = COLORS.border;
       ctx.lineWidth = 1;
-      roundRect(ctx, imgX - 4, imgY - 4, CABLE_DIAGRAM_WIDTH + 8, CABLE_DIAGRAM_HEIGHT + 8, 4);
+      roundRect(ctx, imgX - 4, imgY - 4, drawWidth + 8, drawHeight + 8, 4);
       ctx.fill();
       ctx.stroke();
 
       // Draw image
       ctx.save();
       if (flipped) {
-        ctx.translate(imgX + CABLE_DIAGRAM_WIDTH / 2, imgY + CABLE_DIAGRAM_HEIGHT / 2);
+        ctx.translate(imgX + drawWidth / 2, imgY + drawHeight / 2);
         ctx.scale(-1, 1);
-        ctx.translate(-(imgX + CABLE_DIAGRAM_WIDTH / 2), -(imgY + CABLE_DIAGRAM_HEIGHT / 2));
+        ctx.translate(-(imgX + drawWidth / 2), -(imgY + drawHeight / 2));
       }
-      ctx.drawImage(diagramImg, imgX, imgY, CABLE_DIAGRAM_WIDTH, CABLE_DIAGRAM_HEIGHT);
+      ctx.drawImage(diagramImg, imgX, imgY, drawWidth, drawHeight);
       ctx.restore();
     }
   }
