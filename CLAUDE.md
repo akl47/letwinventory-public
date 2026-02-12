@@ -1102,6 +1102,192 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Session: 2026-02-11
+
+### Files Created
+- `backend/migrations/20260211000001-add-checklist-to-tasks.js`
+- `scripts/run-tests.sh`
+
+### Files Modified
+- `backend/models/planning/task.js`
+- `frontend/src/app/models/task.model.ts`
+- `frontend/src/app/components/tasks/task-card/task-card.ts`
+- `frontend/src/app/components/tasks/task-card/task-card.html`
+- `frontend/src/app/components/tasks/task-card/task-card.scss`
+- `frontend/src/app/components/tasks/task-card-dialog/task-card-dialog.ts`
+- `frontend/src/app/components/tasks/task-card-dialog/task-card-dialog.html`
+- `frontend/src/app/components/tasks/task-card-dialog/task-card-dialog.css`
+- `docs/requirements.md`
+- `backend/tests/__tests__/planning/task.test.js`
+- `frontend/src/app/components/tasks/task-card/task-card.spec.ts`
+- `frontend/src/app/components/tasks/task-card-dialog/task-card-dialog.spec.ts`
+- `frontend/e2e/tasks.spec.ts`
+- `frontend/e2e/mobile.spec.ts`
+
+### Changes Made
+
+1. **Task checklist feature**
+   - Added `checklist` JSONB column to Tasks table via migration
+   - Updated backend Task model with `checklist` field (JSONB, defaultValue: [])
+   - Updated frontend `Task` interface with `ChecklistItem` type (text, checked)
+   - Added checklist badge on task card showing completion count (e.g., "2/5")
+   - Added full checklist UI in task card dialog: add items, toggle checked, delete items
+   - Added progress bar in dialog showing checklist completion percentage
+
+2. **Created `scripts/run-tests.sh`**
+   - Unified test runner script for backend, frontend, and E2E tests
+   - Runs all test suites and displays summary of pass/fail results
+
+3. **Fixed mobile E2E test**
+   - Changed sidebar collapsed assertion from `toBeVisible()` to `toHaveCount(1)`
+   - More reliable check for sidebar presence on mobile
+
+4. **Fixed E2E checklist test**
+   - Corrected API route from `task-list` to `tasklist` (matching backend routes)
+   - Added navigation before `page.evaluate` calls
+   - Implemented UI-driven test flow for checklist interactions
+
+### Notes
+- Migration needs to be run: `npx sequelize-cli db:migrate`
+- Checklist is stored as JSONB array in the task row (no separate table)
+- Current branch: bug_fix
+
+---
+
+## Session: 2026-02-11 (continued)
+
+### Files Modified
+- `frontend/src/app/components/inventory/parts-table-view/parts-table-view.ts`
+- `frontend/src/app/components/inventory/parts-table-view/parts-table-view.html`
+- `frontend/src/app/components/orders/orders-list-view/orders-list-view.ts`
+- `frontend/src/app/components/orders/orders-list-view/orders-list-view.html`
+- `frontend/src/app/components/harness/harness-list-view/harness-list-view.ts`
+- `frontend/src/app/components/harness/harness-list-view/harness-list-view.html`
+- `backend/middleware/checkToken.js`
+- `backend/api/auth/user/controller.js`
+- `frontend/src/app/interceptors/auth.interceptor.ts`
+- `frontend/src/app/services/auth.service.ts`
+
+### Changes Made
+
+1. **Middle-click opens in new tab**
+   - Added `(auxclick)` and `(mousedown)` event handlers to table rows in parts, orders, and harness list views
+   - Middle-click (button === 1) on a row opens the item in a new browser tab
+   - Prevents default middle-click scroll behavior with `(mousedown)` handler
+
+2. **JWT refresh token debugging**
+   - Added `[AUTH]` console logs to `checkToken.js` middleware for token validation flow
+   - Added `[REFRESH]` console logs to user controller refresh endpoint
+   - Added debugging logs to frontend `auth.interceptor.ts` for 401 handling and token refresh
+   - Added debugging logs to frontend `auth.service.ts` for auth status checks
+
+### Notes
+- Middle-click uses `window.open()` with hash routing URLs
+- OAuth debugging logs prefixed with `[AUTH]` and `[REFRESH]` for easy filtering
+- Current branch: bug_fix
+
+---
+
+## Session: 2026-02-12
+
+### Files Created
+- `backend/migrations/20260212000001-create-push-subscriptions.js`
+- `backend/migrations/20260212000002-create-notification-preferences.js`
+- `backend/migrations/20260212000003-add-due-date-notified-at-to-tasks.js`
+- `backend/models/common/pushSubscription.js`
+- `backend/models/common/notificationPreference.js`
+- `backend/api/config/controller.js`
+- `backend/api/config/routes.js`
+- `backend/api/config/push-subscription/controller.js`
+- `backend/api/config/push-subscription/routes.js`
+- `backend/api/config/notification-preference/controller.js`
+- `backend/api/config/notification-preference/routes.js`
+- `backend/services/notificationService.js`
+- `frontend/public/manifest.webmanifest`
+- `frontend/public/sw.js`
+- `frontend/src/app/models/notification.model.ts`
+- `frontend/src/app/services/notification.service.ts`
+- `frontend/src/app/components/notifications/notification-settings-dialog/notification-settings-dialog.ts`
+- `frontend/src/app/components/notifications/notification-settings-dialog/notification-settings-dialog.html`
+- `frontend/src/app/components/notifications/notification-settings-dialog/notification-settings-dialog.css`
+
+### Files Modified
+- `backend/models/planning/task.js` — added `dueDateNotifiedAt` field
+- `backend/index.js` — added notificationService initialization
+- `backend/services/scheduledTaskService.js` — added notification call after task creation
+- `backend/package.json` — added `web-push` dependency
+- `.env.development` — added VAPID keys
+- `.env.production` — added VAPID keys
+- `frontend/src/index.html` — added manifest link
+- `frontend/src/main.ts` — added service worker registration
+- `frontend/src/app/components/common/nav/nav.component.ts` — added notification bell handler
+- `frontend/src/app/components/common/nav/nav.component.html` — added notification bell button
+
+### Changes Made
+
+1. **Database: PushSubscriptions table**
+   - Stores push subscription endpoints per user (userID, endpoint, p256dh, auth, userAgent)
+   - Endpoint is unique, userID indexed
+   - ON DELETE CASCADE from Users
+
+2. **Database: NotificationPreferences table**
+   - One row per user (userID is UNIQUE)
+   - `taskDueReminder` (bool, default true), `taskDueReminderMinutes` (int, default 60)
+   - `scheduledTaskCreated` (bool, default true)
+
+3. **Database: dueDateNotifiedAt on Tasks**
+   - Prevents duplicate due-date reminder notifications
+   - Set to NOW() after notification is sent
+
+4. **Backend API endpoints**
+   - `GET /api/config/vapid-public-key` — returns VAPID public key (no auth)
+   - `POST /api/config/push-subscription` — register subscription (upsert by endpoint)
+   - `GET /api/config/push-subscription` — list current user's subscriptions
+   - `DELETE /api/config/push-subscription/:id` — remove subscription
+   - `GET /api/config/notification-preference` — get preferences (defaults if no row)
+   - `PUT /api/config/notification-preference` — upsert preferences
+
+5. **Notification service (`backend/services/notificationService.js`)**
+   - Configures web-push with VAPID keys from environment
+   - Runs `checkDueTaskReminders()` every minute
+   - Finds tasks due within user's reminder window where `dueDateNotifiedAt IS NULL`
+   - Sends push notifications, marks tasks as notified
+   - Cleans up expired subscriptions (410 Gone)
+   - `sendScheduledTaskNotification()` called from scheduledTaskService after task creation
+
+6. **PWA setup**
+   - `manifest.webmanifest` for Add to Home Screen / standalone display
+   - `sw.js` service worker handles push events and notification clicks
+   - Service worker registered in `main.ts`
+
+7. **Frontend notification service**
+   - VAPID key fetch, subscription CRUD, preferences CRUD
+   - `subscribeToPush()` — requests permission, subscribes via Push API, saves to backend
+   - `urlBase64ToUint8Array()` for VAPID key conversion
+
+8. **Notification settings dialog**
+   - Material dialog opened from nav toolbar bell icon
+   - Shows permission state (granted/denied/default)
+   - Enable Notifications button triggers browser permission prompt
+   - Task due reminder toggle + lead time selector (15m, 30m, 1h, 2h, 1d)
+   - Scheduled task creation toggle
+   - Registered devices list with remove button
+   - Save button persists preferences
+
+9. **VAPID keys**
+   - Separate keys generated for dev and production
+   - Stored in `.env.development` and `.env.production`
+
+### Notes
+- Migrations need to be run: `npx sequelize-cli db:migrate`
+- `web-push` v3.6.7 needs to be installed: `npm install` in backend
+- Web Push requires HTTPS (works on dev.letwin.co and production)
+- iOS requires "Add to Home Screen" for web push to work
+- VAPID keys are permanent — changing them invalidates all existing subscriptions
+- Current branch: pwa
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:

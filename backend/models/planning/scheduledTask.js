@@ -76,6 +76,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.DATE,
       allowNull: true
     },
+    notifyOnCreate: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true
+    },
     activeFlag: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

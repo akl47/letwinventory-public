@@ -71,6 +71,10 @@
             <span class="title-text">{{ isDev ? 'Letwinventory-dev' : 'Letwinventory' }}</span>
             <span class="spacer"></span>
             @if (isAuthenticated()) {
+            <button mat-icon-button (click)="openSettings()" matTooltip="Settings"
+                aria-label="Settings">
+                <mat-icon>settings</mat-icon>
+            </button>
             <span class="user-name">{{ currentUser()?.displayName }}</span>
             <button mat-button (click)="logout()" aria-label="Logout">
                 <mat-icon>logout</mat-icon>
