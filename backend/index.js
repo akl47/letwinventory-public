@@ -74,6 +74,7 @@ module.exports = app;
 if (require.main === module) {
     const printAgentService = require("./services/printAgentService");
     const scheduledTaskService = require("./services/scheduledTaskService");
+    const notificationService = require("./services/notificationService");
     const port = process.env.BACKEND_PORT;
 
     const server = http.createServer(app);
@@ -83,6 +84,7 @@ if (require.main === module) {
         db.sequelize.sync().then(() => {
             console.log(`Server listening on the port:${port}`);
             scheduledTaskService.initialize();
+            notificationService.initialize();
         });
     });
 }

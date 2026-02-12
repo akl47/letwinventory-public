@@ -481,6 +481,30 @@ export class TaskCardDialog implements OnInit, OnDestroy {
     });
   }
 
+  reminderOptions = [
+    { value: 15, label: '15 minutes before' },
+    { value: 30, label: '30 minutes before' },
+    { value: 60, label: '1 hour before' },
+    { value: 120, label: '2 hours before' },
+    { value: 1440, label: '1 day before' },
+  ];
+
+  formatReminder(minutes?: number): string {
+    if (!minutes) return '';
+    if (minutes >= 1440) return `${minutes / 1440}d before`;
+    if (minutes >= 60) return `${minutes / 60}h before`;
+    return `${minutes}m before`;
+  }
+
+  updateReminder(minutes: number | null): void {
+    const task = this.task();
+    this.task.set({ ...task, reminderMinutes: minutes as any });
+    this.taskService.updateTask(task.id, { reminderMinutes: minutes } as any).subscribe({
+      next: () => this.taskService.triggerRefresh(),
+      error: (err) => console.error('Failed to update reminder', err)
+    });
+  }
+
   // Time estimates: minutes up to 8h, then days, weeks, month
   estimateOptions = [
     15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480,  // Up to 8 hours

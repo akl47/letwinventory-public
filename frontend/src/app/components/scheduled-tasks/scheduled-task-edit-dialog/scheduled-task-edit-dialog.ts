@@ -7,6 +7,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
 import { MatIconModule } from '@angular/material/icon';
+import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { Subscription } from 'rxjs';
 import { ScheduledTaskService } from '../../../services/scheduled-task.service';
 import { TaskService } from '../../../services/task.service';
@@ -31,7 +32,8 @@ export interface ScheduledTaskEditDialogData {
     MatFormFieldModule,
     MatInputModule,
     MatSelectModule,
-    MatIconModule
+    MatIconModule,
+    MatSlideToggleModule
   ],
   templateUrl: './scheduled-task-edit-dialog.html',
   styleUrl: './scheduled-task-edit-dialog.css',
@@ -61,6 +63,7 @@ export class ScheduledTaskEditDialog implements OnInit, OnDestroy {
     dueDateOffsetHours: [null as number | null],
     cronExpression: ['', Validators.required],
     timezone: ['America/Los_Angeles', Validators.required],
+    notifyOnCreate: [true],
     activeFlag: [true]
   });
 
@@ -79,6 +82,7 @@ export class ScheduledTaskEditDialog implements OnInit, OnDestroy {
         dueDateOffsetHours: st.dueDateOffsetHours ?? null,
         cronExpression: st.cronExpression,
         timezone: st.timezone || 'UTC',
+        notifyOnCreate: st.notifyOnCreate !== false,
         activeFlag: st.activeFlag
       });
     }
@@ -153,6 +157,7 @@ export class ScheduledTaskEditDialog implements OnInit, OnDestroy {
       dueDateOffsetHours: this.form.value.dueDateOffsetHours ?? undefined,
       cronExpression: this.form.value.cronExpression!,
       timezone: this.form.value.timezone!,
+      notifyOnCreate: this.form.value.notifyOnCreate ?? true,
       activeFlag: this.form.value.activeFlag ?? true
     };
 

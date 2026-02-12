@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const cronParser = require('cron-parser');
+const notificationService = require('./notificationService');
 
 const ONE_MIN_MS = 60 * 1000;
 
@@ -56,6 +57,7 @@ async function processScheduledTasks() {
                     nextRunAt: nextRun
                 });
 
+                notificationService.sendScheduledTaskNotification(scheduled.ownerUserID, scheduled.name, scheduled.notifyOnCreate);
                 console.log(`[ScheduledTasks] Created task "${scheduled.name}", next run: ${nextRun.toISOString()}`);
             } catch (err) {
                 console.error(`[ScheduledTasks] Error processing scheduled task ${scheduled.id}:`, err.message);

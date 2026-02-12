@@ -98,6 +98,16 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
       defaultValue: null
     },
+    reminderMinutes: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: null
+    },
+    dueDateNotifiedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      defaultValue: null
+    },
     activeFlag: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

@@ -4,3 +4,9 @@ import { App } from './app/app';
 
 bootstrapApplication(App, appConfig)
   .catch((err) => console.error(err));
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js')
+    .then(reg => console.log('[SW] Registered, scope:', reg.scope))
+    .catch(err => console.error('[SW] Registration failed:', err));
+}

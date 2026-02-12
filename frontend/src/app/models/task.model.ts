@@ -21,6 +21,7 @@ export interface Task {
     activeFlag: boolean;
     createdAt: Date;
     updatedAt: Date;
+    reminderMinutes?: number;
     checklist?: ChecklistItem[];
     subtasks?: Task[];
 }

@@ -115,6 +115,13 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'settings',
+        title: 'Settings',
+        loadComponent: () =>
+            import('./components/settings/settings-page/settings-page').then((m) => m.SettingsPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'mobile',
         title: 'Mobile Scanner',
         loadComponent: () =>

@@ -79,5 +79,9 @@ export class NavComponent implements OnInit, OnDestroy {
     logout() {
         this.authService.logout();
     }
+
+    openSettings() {
+        this.router.navigate(['/settings']);
+    }
 }
 

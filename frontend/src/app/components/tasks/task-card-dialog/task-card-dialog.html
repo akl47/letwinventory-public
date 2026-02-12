@@ -146,6 +146,37 @@
                         </div>
                     </mat-menu>
 
+                    <!-- Reminder Label -->
+                    @if (task().dueDate) {
+                    <span class="label clickable-label" [matMenuTriggerFor]="reminderMenu"
+                        #reminderTrigger="matMenuTrigger">
+                        <mat-icon class="left-icon">notifications</mat-icon>
+                        {{ task().reminderMinutes ? formatReminder(task().reminderMinutes) : 'Reminder' }}
+                        &nbsp;
+                        <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
+                    </span>
+
+                    <mat-menu #reminderMenu="matMenu" class="reminder-menu">
+                        <div class="menu-header">Reminder</div>
+                        <button mat-menu-item (click)="updateReminder(null); reminderTrigger.closeMenu()"
+                            [class.selected]="!task().reminderMinutes">
+                            None
+                            @if (!task().reminderMinutes) {
+                            <mat-icon class="check-icon">check</mat-icon>
+                            }
+                        </button>
+                        @for (opt of reminderOptions; track opt.value) {
+                        <button mat-menu-item (click)="updateReminder(opt.value); reminderTrigger.closeMenu()"
+                            [class.selected]="task().reminderMinutes === opt.value">
+                            {{ opt.label }}
+                            @if (task().reminderMinutes === opt.value) {
+                            <mat-icon class="check-icon">check</mat-icon>
+                            }
+                        </button>
+                        }
+                    </mat-menu>
+                    }
+
                     <!-- Time Estimate Label -->
                     <span class="label estimate-label clickable-label" [matMenuTriggerFor]="estimateMenu"
                         #estimateTrigger="matMenuTrigger">

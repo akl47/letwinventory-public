@@ -12,6 +12,7 @@ export interface ScheduledTask {
     timezone: string;
     nextRunAt: Date;
     lastRunAt?: Date;
+    notifyOnCreate: boolean;
     activeFlag: boolean;
     createdAt: Date;
     updatedAt: Date;
