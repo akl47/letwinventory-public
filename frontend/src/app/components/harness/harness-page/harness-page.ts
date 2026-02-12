@@ -34,6 +34,7 @@ import {
   getConnectorCentroidOffset,
   getCableCentroidOffset,
   getComponentCentroidOffset,
+  getBlockCentroidOffset,
   rotateAroundCentroid
 } from '../../../utils/harness/canvas-renderer';
 
@@ -249,76 +250,82 @@ export class HarnessPage implements OnInit, OnDestroy {
     // Push to history before making changes
     this.historyService.push(data);
 
-    // Handle connector rotation
-    if (selection?.connector) {
+    // Use block for unified rotation if available
+    if (selection?.block) {
+      const block = selection.block;
+      const currentRotation = block.rotation || 0;
+      let newRotation = (currentRotation + delta) % 360;
+      if (newRotation < 0) newRotation += 360;
+
+      const centroidOffset = getBlockCentroidOffset(block);
+      const currentPos = block.position;
+      const newPos = rotateAroundCentroid(currentPos, centroidOffset, currentRotation, newRotation);
+
+      if (block.blockType === 'connector') {
+        const updatedConnector = {
+          ...data.connectors.find(c => c.id === block.id)!,
+          rotation: newRotation as 0 | 90 | 180 | 270,
+          position: newPos
+        };
+        this.updateHarnessConnectors(
+          data.connectors.map(c => c.id === block.id ? updatedConnector : c)
+        );
+        this.currentSelection.set({ type: 'connector', connector: updatedConnector, block: { ...block, rotation: newRotation, position: newPos } });
+      } else if (block.blockType === 'cable') {
+        const updatedCable = {
+          ...data.cables.find(c => c.id === block.id)!,
+          rotation: newRotation as 0 | 90 | 180 | 270,
+          position: newPos
+        };
+        this.updateHarnessCables(
+          data.cables.map(c => c.id === block.id ? updatedCable : c)
+        );
+        this.currentSelection.set({ type: 'cable', cable: updatedCable, block: { ...block, rotation: newRotation, position: newPos } });
+      } else if (block.blockType === 'component') {
+        const updatedComponent = {
+          ...((data.components || []).find(c => c.id === block.id))!,
+          rotation: newRotation as 0 | 90 | 180 | 270,
+          position: newPos
+        };
+        this.updateHarnessComponents(
+          (data.components || []).map(c => c.id === block.id ? updatedComponent : c)
+        );
+        this.currentSelection.set({ type: 'component', component: updatedComponent, block: { ...block, rotation: newRotation, position: newPos } });
+      }
+    }
+    // Legacy fallback for selections without block (e.g. sub-harness edit mode)
+    else if (selection?.connector) {
       const connector = data.connectors.find(c => c.id === selection.connector!.id);
       if (!connector) return;
-
       const currentRotation = connector.rotation || 0;
       let newRotation = (currentRotation + delta) % 360;
       if (newRotation < 0) newRotation += 360;
-
-      // Calculate new position to rotate around centroid
       const centroidOffset = getConnectorCentroidOffset(connector);
-      const currentPos = connector.position || { x: 100, y: 100 };
-      const newPos = rotateAroundCentroid(currentPos, centroidOffset, currentRotation, newRotation);
-
-      const updatedConnector = {
-        ...connector,
-        rotation: newRotation as 0 | 90 | 180 | 270,
-        position: newPos
-      };
-      this.updateHarnessConnectors(
-        data.connectors.map(c => c.id === updatedConnector.id ? updatedConnector : c)
-      );
+      const newPos = rotateAroundCentroid(connector.position || { x: 100, y: 100 }, centroidOffset, currentRotation, newRotation);
+      const updatedConnector = { ...connector, rotation: newRotation as 0 | 90 | 180 | 270, position: newPos };
+      this.updateHarnessConnectors(data.connectors.map(c => c.id === updatedConnector.id ? updatedConnector : c));
       this.currentSelection.set({ type: 'connector', connector: updatedConnector });
-    }
-    // Handle cable rotation
-    else if (selection?.cable) {
+    } else if (selection?.cable) {
       const cable = data.cables.find(c => c.id === selection.cable!.id);
       if (!cable) return;
-
       const currentRotation = cable.rotation || 0;
       let newRotation = (currentRotation + delta) % 360;
       if (newRotation < 0) newRotation += 360;
-
-      // Calculate new position to rotate around centroid
       const centroidOffset = getCableCentroidOffset(cable);
-      const currentPos = cable.position || { x: 100, y: 100 };
-      const newPos = rotateAroundCentroid(currentPos, centroidOffset, currentRotation, newRotation);
-
-      const updatedCable = {
-        ...cable,
-        rotation: newRotation as 0 | 90 | 180 | 270,
-        position: newPos
-      };
-      this.updateHarnessCables(
-        data.cables.map(c => c.id === updatedCable.id ? updatedCable : c)
-      );
+      const newPos = rotateAroundCentroid(cable.position || { x: 100, y: 100 }, centroidOffset, currentRotation, newRotation);
+      const updatedCable = { ...cable, rotation: newRotation as 0 | 90 | 180 | 270, position: newPos };
+      this.updateHarnessCables(data.cables.map(c => c.id === updatedCable.id ? updatedCable : c));
       this.currentSelection.set({ type: 'cable', cable: updatedCable });
-    }
-    // Handle component rotation
-    else if (selection?.component) {
+    } else if (selection?.component) {
       const component = (data.components || []).find(c => c.id === selection.component!.id);
       if (!component) return;
-
       const currentRotation = component.rotation || 0;
       let newRotation = (currentRotation + delta) % 360;
       if (newRotation < 0) newRotation += 360;
-
-      // Calculate new position to rotate around centroid
       const centroidOffset = getComponentCentroidOffset(component);
-      const currentPos = component.position || { x: 100, y: 100 };
-      const newPos = rotateAroundCentroid(currentPos, centroidOffset, currentRotation, newRotation);
-
-      const updatedComponent = {
-        ...component,
-        rotation: newRotation as 0 | 90 | 180 | 270,
-        position: newPos
-      };
-      this.updateHarnessComponents(
-        (data.components || []).map(c => c.id === updatedComponent.id ? updatedComponent : c)
-      );
+      const newPos = rotateAroundCentroid(component.position || { x: 100, y: 100 }, centroidOffset, currentRotation, newRotation);
+      const updatedComponent = { ...component, rotation: newRotation as 0 | 90 | 180 | 270, position: newPos };
+      this.updateHarnessComponents((data.components || []).map(c => c.id === updatedComponent.id ? updatedComponent : c));
       this.currentSelection.set({ type: 'component', component: updatedComponent });
     }
 
@@ -334,40 +341,43 @@ export class HarnessPage implements OnInit, OnDestroy {
     // Push to history before making changes
     this.historyService.push(data);
 
-    // Handle connector flip
-    if (selection?.connector) {
+    // Use block for unified flip if available
+    if (selection?.block) {
+      const block = selection.block;
+      const newFlipped = !block.flipped;
+
+      if (block.blockType === 'connector') {
+        const updatedConnector = { ...data.connectors.find(c => c.id === block.id)!, flipped: newFlipped };
+        this.updateHarnessConnectors(data.connectors.map(c => c.id === block.id ? updatedConnector : c));
+        this.currentSelection.set({ type: 'connector', connector: updatedConnector, block: { ...block, flipped: newFlipped } });
+      } else if (block.blockType === 'cable') {
+        const updatedCable = { ...data.cables.find(c => c.id === block.id)!, flipped: newFlipped };
+        this.updateHarnessCables(data.cables.map(c => c.id === block.id ? updatedCable : c));
+        this.currentSelection.set({ type: 'cable', cable: updatedCable, block: { ...block, flipped: newFlipped } });
+      } else if (block.blockType === 'component') {
+        const updatedComponent = { ...(data.components || []).find(c => c.id === block.id)!, flipped: newFlipped };
+        this.updateHarnessComponents((data.components || []).map(c => c.id === block.id ? updatedComponent : c));
+        this.currentSelection.set({ type: 'component', component: updatedComponent, block: { ...block, flipped: newFlipped } });
+      }
+    }
+    // Legacy fallback
+    else if (selection?.connector) {
       const connector = data.connectors.find(c => c.id === selection.connector!.id);
       if (!connector) return;
-
-      const currentFlipped = connector.flipped || false;
-      const updatedConnector = { ...connector, flipped: !currentFlipped };
-      this.updateHarnessConnectors(
-        data.connectors.map(c => c.id === updatedConnector.id ? updatedConnector : c)
-      );
+      const updatedConnector = { ...connector, flipped: !(connector.flipped || false) };
+      this.updateHarnessConnectors(data.connectors.map(c => c.id === updatedConnector.id ? updatedConnector : c));
       this.currentSelection.set({ type: 'connector', connector: updatedConnector });
-    }
-    // Handle cable flip
-    else if (selection?.cable) {
+    } else if (selection?.cable) {
       const cable = data.cables.find(c => c.id === selection.cable!.id);
       if (!cable) return;
-
-      const currentFlipped = cable.flipped || false;
-      const updatedCable = { ...cable, flipped: !currentFlipped };
-      this.updateHarnessCables(
-        data.cables.map(c => c.id === updatedCable.id ? updatedCable : c)
-      );
+      const updatedCable = { ...cable, flipped: !(cable.flipped || false) };
+      this.updateHarnessCables(data.cables.map(c => c.id === updatedCable.id ? updatedCable : c));
       this.currentSelection.set({ type: 'cable', cable: updatedCable });
-    }
-    // Handle component flip
-    else if (selection?.component) {
+    } else if (selection?.component) {
       const component = (data.components || []).find(c => c.id === selection.component!.id);
       if (!component) return;
-
-      const currentFlipped = component.flipped || false;
-      const updatedComponent = { ...component, flipped: !currentFlipped };
-      this.updateHarnessComponents(
-        (data.components || []).map(c => c.id === updatedComponent.id ? updatedComponent : c)
-      );
+      const updatedComponent = { ...component, flipped: !(component.flipped || false) };
+      this.updateHarnessComponents((data.components || []).map(c => c.id === updatedComponent.id ? updatedComponent : c));
       this.currentSelection.set({ type: 'component', component: updatedComponent });
     }
 
@@ -549,7 +559,7 @@ export class HarnessPage implements OnInit, OnDestroy {
           if (db.pinCount && db.pinCount !== conn.pinCount) {
             changes.push({ field: 'Pin Count', description: `${conn.pinCount} → ${db.pinCount}` });
           }
-          if (db.color !== undefined && db.color !== conn.color) {
+          if ((db.color || null) !== (conn.color || null)) {
             changes.push({ field: 'Color', description: `${conn.color || 'none'} → ${db.color || 'none'}` });
           }
           if (db.pins && db.pins.length !== conn.pins.length) {
@@ -574,7 +584,7 @@ export class HarnessPage implements OnInit, OnDestroy {
           if (!db) continue;
           const changes: { field: string; description: string }[] = [];
 
-          if (db.gaugeAWG !== undefined && db.gaugeAWG !== cable.gaugeAWG) {
+          if ((db.gaugeAWG || null) !== (cable.gaugeAWG || null)) {
             changes.push({ field: 'Gauge', description: `${cable.gaugeAWG || 'none'} → ${db.gaugeAWG || 'none'}` });
           }
           if (db.wireCount && db.wireCount !== cable.wireCount) {
@@ -787,6 +797,7 @@ export class HarnessPage implements OnInit, OnDestroy {
                   name: dbGroup.name,
                   pinTypeID: dbGroup.pinTypeID,
                   pinTypeName: dbGroup.pinTypeName,
+                  matingConnector: dbGroup.matingConnector,
                   pins: dbGroup.pins.map((dbPin, pi) => {
                     const existingPin = existing?.pins?.[pi];
                     return {

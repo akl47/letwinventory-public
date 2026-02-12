@@ -1,6 +1,6 @@
 // Shared types for harness canvas rendering
 
-import { HarnessConnector, HarnessConnection, HarnessCable, HarnessComponent } from '../../models/harness.model';
+import { HarnessConnector, HarnessConnection, HarnessCable, HarnessComponent, HarnessBlock } from '../../models/harness.model';
 
 // Base position interface for pins and wire endpoints
 export interface PinPosition {
@@ -65,6 +65,26 @@ export interface HarnessElement {
   rotation?: 0 | 90 | 180 | 270;
   flipped?: boolean;
   zIndex?: number;
+}
+
+// Block dimensions (unified)
+export interface BlockDimensions {
+  width: number;
+  height: number;
+  hasPartName: boolean;
+  hasInfoRow: boolean;
+  hasPrimaryImage: boolean;
+  primaryImageHeight: number;
+  groupHeights: number[];
+}
+
+// Block pin position (unified)
+export interface BlockPinPosition {
+  pinId: string;
+  x: number;
+  y: number;
+  side: 'left' | 'right' | 'mating';
+  groupId?: string;
 }
 
 // Transform parameters for coordinate conversion

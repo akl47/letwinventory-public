@@ -62,6 +62,7 @@ export interface HarnessComponentPin {
   id: string;
   number: string;
   label?: string;
+  hidden?: boolean;
 }
 
 export interface HarnessComponentPinGroup {
@@ -69,6 +70,8 @@ export interface HarnessComponentPinGroup {
   name: string;
   pinTypeID: number | null;
   pinTypeName?: string;
+  matingConnector?: boolean;
+  hidden?: boolean;
   pins: HarnessComponentPin[];
 }
 
@@ -269,6 +272,7 @@ export interface ElectricalPinType {
   id: number;
   name: string;
   description?: string;
+  matingConnector?: boolean;
 }
 
 // Wire End / Termination Type
@@ -345,6 +349,7 @@ export interface ComponentPinGroup {
   name: string;
   pinTypeID: number | null;
   pinTypeName?: string;  // For display purposes
+  matingConnector?: boolean;
   pins: ComponentPin[];
 }
 
@@ -379,6 +384,81 @@ export interface UploadedFileRef {
 export type DbHarnessConnector = DbElectricalConnector;
 export type DbHarnessWire = DbWire;
 export type DbHarnessCable = DbCable;
+
+// === Unified HarnessBlock types (internal adapter for canvas rendering) ===
+
+export interface HarnessBlockPin {
+  id: string;
+  number: string;
+  label?: string;
+  side: 'left' | 'right' | 'both';
+  groupId?: string;
+  // Cable wire visuals
+  wireColor?: string;
+  wireColorCode?: string;
+  wireLabel?: string;
+  // Cable wire pairing
+  pairedPinId?: string;
+  // Wire metadata
+  wireDbId?: number;
+  wirePartId?: number;
+  // Visibility
+  hidden?: boolean;
+}
+
+export interface HarnessBlockPinGroup {
+  id: string;
+  name: string;
+  pinIds: string[];
+  pinTypeID?: number | null;
+  pinTypeName?: string;
+  matingConnector?: boolean;
+  hidden?: boolean;
+}
+
+export interface HarnessBlock {
+  id: string;
+  blockType: 'connector' | 'cable' | 'component';
+  label: string;
+  position: { x: number; y: number };
+  rotation: number;
+  flipped: boolean;
+  zIndex: number;
+  groupId?: string;
+
+  // Part metadata
+  dbId?: number;
+  partId?: number;
+  partName?: string;
+
+  // Pin layout
+  pins: HarnessBlockPin[];
+  pinGroups?: HarnessBlockPinGroup[];
+  pinSide: 'right' | 'left' | 'both';
+  hasMatingPoints: boolean;
+
+  // Header
+  headerColor: string;
+
+  // Optional display sections
+  gaugeAWG?: string;
+  lengthMm?: number;
+  connectorType?: 'male' | 'female' | 'terminal' | 'splice';
+  color?: string;
+
+  // Images
+  primaryImage?: string;
+  showPrimaryImage?: boolean;
+  pinoutDiagramImage?: string;
+  showPinoutDiagram?: boolean;
+}
+
+export interface NormalizedConnection extends HarnessConnection {
+  fromBlock?: string;
+  fromBlockPin?: string;
+  toBlock?: string;
+  toBlockPin?: string;
+}
 
 // Default empty harness data factory
 export function createEmptyHarnessData(name: string = 'New Harness'): HarnessData {

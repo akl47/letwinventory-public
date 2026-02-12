@@ -240,8 +240,9 @@ export function getConnectorPinPositions(
 
   const positions: PinPosition[] = [];
 
+  // Local coordinates are relative to the drawing origin at (ox, oy - ROW_HEIGHT/2)
   pins.forEach((pin, index) => {
-    const rowCenter = index * ROW_HEIGHT;
+    const rowCenter = index * ROW_HEIGHT + ROW_HEIGHT / 2;
 
     // Wire connection point (circle side)
     if (side === 'wire' || side === 'both') {
@@ -264,7 +265,7 @@ export function getConnectorPinPositions(
       positions.push({
         pinId: pin.id,
         x: ox + rotatedWireX,
-        y: oy + rotatedWireY
+        y: (oy - ROW_HEIGHT / 2) + rotatedWireY
       });
     }
 
@@ -289,7 +290,7 @@ export function getConnectorPinPositions(
       positions.push({
         pinId: side === 'both' ? `${pin.id}:mating` : pin.id,
         x: ox + rotatedMatingX,
-        y: oy + rotatedMatingY
+        y: (oy - ROW_HEIGHT / 2) + rotatedMatingY
       });
     }
   });
@@ -312,8 +313,9 @@ export function getConnectorPinPositionsWithSide(connector: HarnessConnector): C
 
   const positions: ConnectorPinPosition[] = [];
 
+  // Local coordinates are relative to the drawing origin at (ox, oy - ROW_HEIGHT/2)
   pins.forEach((pin, index) => {
-    const rowCenter = index * ROW_HEIGHT;
+    const rowCenter = index * ROW_HEIGHT + ROW_HEIGHT / 2;
     const rad = (rotation * Math.PI) / 180;
     const cos = Math.cos(rad);
     const sin = Math.sin(rad);
@@ -330,7 +332,7 @@ export function getConnectorPinPositionsWithSide(connector: HarnessConnector): C
     positions.push({
       pinId: pin.id,
       x: ox + rotatedWireX,
-      y: oy + rotatedWireY,
+      y: (oy - ROW_HEIGHT / 2) + rotatedWireY,
       side: 'wire'
     });
 
@@ -346,7 +348,7 @@ export function getConnectorPinPositionsWithSide(connector: HarnessConnector): C
     positions.push({
       pinId: pin.id,
       x: ox + rotatedMatingX,
-      y: oy + rotatedMatingY,
+      y: (oy - ROW_HEIGHT / 2) + rotatedMatingY,
       side: 'mating'
     });
   });

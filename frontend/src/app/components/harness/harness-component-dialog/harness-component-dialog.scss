@@ -122,6 +122,26 @@ mat-dialog-content {
   color: #666;
 }
 
+.hide-toggle {
+  width: 28px;
+  height: 28px;
+  line-height: 28px;
+
+  mat-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+  }
+}
+
+.pin-group.hidden {
+  opacity: 0.5;
+
+  .pin-list {
+    display: none;
+  }
+}
+
 .pin-list {
   display: flex;
   flex-direction: column;
@@ -152,6 +172,23 @@ mat-dialog-content {
   color: #e0e0e0;
   font-size: 13px;
   height: 24px;
+}
+
+.pin-hide-toggle {
+  width: 24px;
+  height: 24px;
+  line-height: 24px;
+  flex-shrink: 0;
+
+  mat-icon {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.pin-row.hidden {
+  opacity: 0.4;
 }
 
 .pin-label-input::placeholder {

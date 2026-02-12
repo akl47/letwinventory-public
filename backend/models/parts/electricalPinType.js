@@ -30,6 +30,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       allowNull: true
     },
+    matingConnector: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
     activeFlag: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
