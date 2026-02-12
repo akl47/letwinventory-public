@@ -128,6 +128,17 @@ export {
 // Re-export from wire-drawing-manager
 export { WireDrawingManager } from './wire-drawing-manager';
 
+// Re-export from elements/block-renderer
+export {
+  drawBlock,
+  getBlockDimensions,
+  getBlockPinPositions,
+  getBlockCentroidOffset,
+  hitTestBlock,
+  hitTestBlockPin,
+  hitTestBlockButton
+} from './elements/block-renderer';
+
 // Re-export from grid
 export { drawGrid } from './grid';
 

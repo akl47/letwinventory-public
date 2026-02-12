@@ -620,7 +620,8 @@ export class PartEditPage implements OnInit {
       groups[groupIndex] = {
         ...groups[groupIndex],
         pinTypeID,
-        pinTypeName: pinType?.name
+        pinTypeName: pinType?.name,
+        matingConnector: pinType?.matingConnector || false
       };
       this.componentPinGroups.set(groups);
     }

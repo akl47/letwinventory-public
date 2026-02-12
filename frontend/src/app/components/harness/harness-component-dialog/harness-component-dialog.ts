@@ -137,6 +137,7 @@ export class HarnessComponentDialog implements OnInit {
             name: group.name,
             pinTypeID: group.pinTypeID,
             pinTypeName: group.pinTypeName,
+            matingConnector: group.matingConnector,
             pins: group.pins.map((p, pi) => ({
               id: `pin-${Date.now()}-${gi}-${pi + 1}`,
               number: p.number || String(pi + 1),
@@ -165,6 +166,16 @@ export class HarnessComponentDialog implements OnInit {
       counter++;
     }
     return `${baseLabel}-${counter}`;
+  }
+
+  toggleGroupHidden(group: HarnessComponentPinGroup) {
+    group.hidden = !group.hidden;
+    this.pinGroups.set([...this.pinGroups()]);
+  }
+
+  togglePinHidden(pin: { hidden?: boolean }) {
+    pin.hidden = !pin.hidden;
+    this.pinGroups.set([...this.pinGroups()]);
   }
 
   clearSelectedPart() {

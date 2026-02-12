@@ -164,7 +164,8 @@ function getComponentCenterAndBounds(component: HarnessComponent): { center: Poi
 
   let totalPins = 0;
   for (const group of component.pinGroups || []) {
-    totalPins += group.pins?.length || 0;
+    if (group.hidden) continue;
+    totalPins += group.pins?.filter(p => !p.hidden).length || 0;
   }
   totalPins = Math.max(totalPins, 1);
 

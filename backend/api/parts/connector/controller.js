@@ -19,7 +19,7 @@ exports.getAllConnectors = async (req, res, next) => {
         ...(db.ElectricalPinType ? [{
           model: db.ElectricalPinType,
           as: 'pinType',
-          attributes: ['id', 'name']
+          attributes: ['id', 'name', 'matingConnector']
         }] : []),
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
@@ -53,7 +53,7 @@ exports.getConnectorById = async (req, res, next) => {
         ...(db.ElectricalPinType ? [{
           model: db.ElectricalPinType,
           as: 'pinType',
-          attributes: ['id', 'name']
+          attributes: ['id', 'name', 'matingConnector']
         }] : []),
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
@@ -159,7 +159,7 @@ exports.updateConnector = async (req, res, next) => {
         ...(db.ElectricalPinType ? [{
           model: db.ElectricalPinType,
           as: 'pinType',
-          attributes: ['id', 'name']
+          attributes: ['id', 'name', 'matingConnector']
         }] : []),
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
@@ -193,7 +193,7 @@ exports.getConnectorByPartId = async (req, res, next) => {
         ...(db.ElectricalPinType ? [{
           model: db.ElectricalPinType,
           as: 'pinType',
-          attributes: ['id', 'name']
+          attributes: ['id', 'name', 'matingConnector']
         }] : []),
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
@@ -223,7 +223,7 @@ exports.getAllPinTypes = async (req, res, next) => {
     const pinTypes = await db.ElectricalPinType.findAll({
       where: { activeFlag: true },
       order: [['name', 'ASC']],
-      attributes: ['id', 'name', 'description']
+      attributes: ['id', 'name', 'description', 'matingConnector']
     });
 
     res.json(pinTypes);

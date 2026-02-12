@@ -40,12 +40,14 @@ export function getComponentDimensions(component: HarnessComponent): ComponentDi
   // Fixed width matching connectors and cables
   const width = ELEMENT_DEFAULT_WIDTH;
 
-  // Calculate height based on pin groups
+  // Calculate height based on visible pin groups and pins
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
   const groupHeights: number[] = [];
   let totalPinHeight = 0;
   for (const group of component.pinGroups) {
-    const groupHeight = group.pins.length * ROW_HEIGHT;
+    if (group.hidden) continue;
+    const visiblePins = group.pins.filter(p => !p.hidden);
+    const groupHeight = visiblePins.length * ROW_HEIGHT;
     groupHeights.push(groupHeight);
     totalPinHeight += groupHeight;
   }
@@ -199,17 +201,19 @@ export function getComponentPinPositions(component: HarnessComponent): Component
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
   const positions: ComponentPinPosition[] = [];
 
+  // Local coordinates are relative to the drawing origin at (ox, oy - ROW_HEIGHT/2)
   let currentLocalY = componentImageHeight + partNameRowHeight + HEADER_HEIGHT;
 
   for (const group of component.pinGroups) {
-    for (let pi = 0; pi < group.pins.length; pi++) {
-      const pin = group.pins[pi];
+    if (group.hidden) continue;
+    const visiblePins = group.pins.filter(p => !p.hidden);
+    for (let pi = 0; pi < visiblePins.length; pi++) {
+      const pin = visiblePins[pi];
       const localPinY = currentLocalY + (pi * ROW_HEIGHT) + ROW_HEIGHT / 2;
 
       // Pin connection is on the right side
-      // Subtract ROW_HEIGHT/2 to account for drawing origin offset
       let localX = width + COMPONENT_PIN_RADIUS;
-      let localY = localPinY - HEADER_HEIGHT - componentImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
+      let localY = localPinY - HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
 
       // Apply flip
       if (flipped) {
@@ -228,11 +232,11 @@ export function getComponentPinPositions(component: HarnessComponent): Component
         pinId: pin.id,
         groupId: group.id,
         x: ox + rotatedX,
-        y: oy + rotatedY
+        y: (oy - ROW_HEIGHT / 2) + rotatedY
       });
     }
 
-    currentLocalY += group.pins.length * ROW_HEIGHT;
+    currentLocalY += visiblePins.length * ROW_HEIGHT;
   }
 
   return positions;

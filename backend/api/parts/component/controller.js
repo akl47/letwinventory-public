@@ -1,6 +1,23 @@
 const db = require('../../../models');
 const createError = require('http-errors');
 
+// Enrich component pin groups with matingConnector from ElectricalPinType
+async function enrichPinGroups(component) {
+  if (!component || !component.pins || !component.pins.length) return component;
+  const pinTypeIds = [...new Set(component.pins.map(g => g.pinTypeID).filter(Boolean))];
+  if (!pinTypeIds.length) return component;
+  const pinTypes = await db.ElectricalPinType.findAll({
+    where: { id: pinTypeIds },
+    attributes: ['id', 'matingConnector']
+  });
+  const ptMap = new Map(pinTypes.map(pt => [pt.id, pt.matingConnector]));
+  component.pins = component.pins.map(g => ({
+    ...g,
+    matingConnector: g.pinTypeID ? (ptMap.get(g.pinTypeID) || false) : false
+  }));
+  return component;
+}
+
 // Get all components
 exports.getAllComponents = async (req, res, next) => {
   try {
@@ -28,7 +45,8 @@ exports.getAllComponents = async (req, res, next) => {
       ]
     });
 
-    res.json(components);
+    const enriched = await Promise.all(components.map(c => enrichPinGroups(c.toJSON())));
+    res.json(enriched);
   } catch (error) {
     next(createError(500, 'Error Getting Components: ' + error.message));
   }
@@ -61,7 +79,7 @@ exports.getComponentById = async (req, res, next) => {
       return next(createError(404, 'Component not found'));
     }
 
-    res.json(component);
+    res.json(await enrichPinGroups(component.toJSON()));
   } catch (error) {
     next(createError(500, 'Error Getting Component: ' + error.message));
   }
@@ -97,7 +115,7 @@ exports.createComponent = async (req, res, next) => {
       componentImageFileID: componentImageFileID || null
     });
 
-    res.status(201).json(component);
+    res.status(201).json(await enrichPinGroups(component.toJSON()));
   } catch (error) {
     next(createError(500, 'Error Creating Component: ' + error.message));
   }
@@ -147,7 +165,7 @@ exports.updateComponent = async (req, res, next) => {
       ]
     });
 
-    res.json(updatedComponent);
+    res.json(await enrichPinGroups(updatedComponent.toJSON()));
   } catch (error) {
     next(createError(500, 'Error Updating Component: ' + error.message));
   }
@@ -180,7 +198,7 @@ exports.getComponentByPartId = async (req, res, next) => {
       return res.json(null);
     }
 
-    res.json(component);
+    res.json(await enrichPinGroups(component.toJSON()));
   } catch (error) {
     next(createError(500, 'Error Getting Component by Part ID: ' + error.message));
   }

@@ -5,3 +5,4 @@ export * from './connector';
 export * from './cable';
 export * from './component';
 export * from './sub-harness';
+export * from './block-renderer';

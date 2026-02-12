@@ -63,19 +63,31 @@
       <h3>Pin Groups</h3>
       <div class="pin-groups-list">
         @for (group of pinGroups(); track group.id) {
-        <div class="pin-group">
+        <div class="pin-group" [class.hidden]="group.hidden">
           <div class="pin-group-header">
             <span class="group-name">{{ group.name }}</span>
             @if (group.pinTypeName) {
             <span class="group-type">{{ group.pinTypeName }}</span>
             }
             <span class="group-count">{{ group.pins.length }} pins</span>
+            @if (!isLocked()) {
+            <button mat-icon-button class="hide-toggle" (click)="toggleGroupHidden(group)"
+              [matTooltip]="group.hidden ? 'Show group on canvas' : 'Hide group on canvas'">
+              <mat-icon>{{ group.hidden ? 'visibility_off' : 'visibility' }}</mat-icon>
+            </button>
+            }
           </div>
           <div class="pin-list">
             @for (pin of group.pins; track pin.id; let i = $index) {
-            <div class="pin-row">
+            <div class="pin-row" [class.hidden]="pin.hidden">
               <span class="pin-number">{{ pin.number }}</span>
               <input class="pin-label-input" [(ngModel)]="pin.label" placeholder="Label" [disabled]="isLocked()">
+              @if (!isLocked()) {
+              <button mat-icon-button class="pin-hide-toggle" (click)="togglePinHidden(pin)"
+                [matTooltip]="pin.hidden ? 'Show pin on canvas' : 'Hide pin on canvas'">
+                <mat-icon>{{ pin.hidden ? 'visibility_off' : 'visibility' }}</mat-icon>
+              </button>
+              }
             </div>
             }
           </div>

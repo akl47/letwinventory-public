@@ -104,21 +104,43 @@ export function calculateOrthogonalPath(
 }
 
 /**
- * Calculate lead-out direction based on element center
- * The wire should lead AWAY from the element center
+ * Calculate lead-out direction based on element bounds and center
+ * The wire should lead AWAY from the element body
+ * Uses bounds to determine which face the pin protrudes from
  */
 export function calculateLeadOutDirection(
   pinPosition: { x: number; y: number },
-  elementCenter: { x: number; y: number } | null
-): 'left' | 'right' {
+  elementCenter: { x: number; y: number } | null,
+  elementBounds?: WireObstacle | null
+): 'left' | 'right' | 'up' | 'down' {
   if (!elementCenter) {
-    // Default to right if no center provided
     return 'right';
   }
-  // Lead out AWAY from element center
-  // If pin is right of center → lead right
-  // If pin is left of center → lead left
-  return pinPosition.x >= elementCenter.x ? 'right' : 'left';
+
+  // If bounds are available, determine which face the pin extends beyond
+  // This handles elongated elements correctly (e.g. tall component at 0° rotation)
+  if (elementBounds) {
+    const outsideRight = pinPosition.x - elementBounds.maxX;
+    const outsideLeft = elementBounds.minX - pinPosition.x;
+    const outsideBottom = pinPosition.y - elementBounds.maxY;
+    const outsideTop = elementBounds.minY - pinPosition.y;
+    const maxOutside = Math.max(outsideRight, outsideLeft, outsideBottom, outsideTop);
+
+    if (maxOutside > -2) {
+      if (outsideRight >= outsideLeft && outsideRight >= outsideBottom && outsideRight >= outsideTop) return 'right';
+      if (outsideLeft >= outsideRight && outsideLeft >= outsideBottom && outsideLeft >= outsideTop) return 'left';
+      if (outsideBottom >= outsideRight && outsideBottom >= outsideLeft && outsideBottom >= outsideTop) return 'down';
+      return 'up';
+    }
+  }
+
+  // Fallback: use center offset
+  const dx = pinPosition.x - elementCenter.x;
+  const dy = pinPosition.y - elementCenter.y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? 'right' : 'left';
+  }
+  return dy >= 0 ? 'down' : 'up';
 }
 
 /**
@@ -129,6 +151,8 @@ export interface WireRoutingContext {
   toPosition: { x: number; y: number };
   fromElementCenter: { x: number; y: number } | null;
   toElementCenter: { x: number; y: number } | null;
+  fromElementBounds?: WireObstacle | null;
+  toElementBounds?: WireObstacle | null;
   obstacles: WireObstacle[];
   gridSize: number;
 }
@@ -197,11 +221,35 @@ export function adjustWaypointForObstacles(
 }
 
 /**
+ * Get the lead-out offset point for a given direction
+ */
+function getLeadPoint(
+  position: { x: number; y: number },
+  direction: 'left' | 'right' | 'up' | 'down',
+  gridSize: number
+): { x: number; y: number } {
+  switch (direction) {
+    case 'right': return { x: position.x + gridSize, y: position.y };
+    case 'left':  return { x: position.x - gridSize, y: position.y };
+    case 'down':  return { x: position.x, y: position.y + gridSize };
+    case 'up':    return { x: position.x, y: position.y - gridSize };
+  }
+}
+
+/**
+ * Whether a lead direction is horizontal
+ */
+function isHorizontalDir(dir: 'left' | 'right' | 'up' | 'down'): boolean {
+  return dir === 'left' || dir === 'right';
+}
+
+/**
  * Calculate orthogonal path with improved lead-out direction
  * Uses element centers to determine lead-out direction (away from element body)
+ * Supports horizontal and vertical lead-out/lead-in
  */
 export function calculateOrthogonalPathV2(context: WireRoutingContext): { x: number; y: number }[] {
-  const { fromPosition, toPosition, fromElementCenter, toElementCenter, obstacles, gridSize } = context;
+  const { fromPosition, toPosition, fromElementCenter, toElementCenter, fromElementBounds, toElementBounds, obstacles, gridSize } = context;
 
   // Very short distance - direct connection
   if (Math.abs(fromPosition.x - toPosition.x) < gridSize &&
@@ -209,80 +257,75 @@ export function calculateOrthogonalPathV2(context: WireRoutingContext): { x: num
     return [{ x: fromPosition.x, y: fromPosition.y }, { x: toPosition.x, y: toPosition.y }];
   }
 
-  // Calculate lead-out direction based on element centers
-  const fromLeadDir = calculateLeadOutDirection(fromPosition, fromElementCenter);
-  const toLeadDir = calculateLeadOutDirection(toPosition, toElementCenter);
+  const fromLeadDir = calculateLeadOutDirection(fromPosition, fromElementCenter, fromElementBounds);
+  const toLeadDir = calculateLeadOutDirection(toPosition, toElementCenter, toElementBounds);
+  const fromHoriz = isHorizontalDir(fromLeadDir);
+  const toHoriz = isHorizontalDir(toLeadDir);
 
-  // Calculate lead-out/in X positions
-  const leadOutX = fromLeadDir === 'right'
-    ? fromPosition.x + gridSize
-    : fromPosition.x - gridSize;
-  const leadInX = toLeadDir === 'right'
-    ? toPosition.x + gridSize
-    : toPosition.x - gridSize;
+  let leadOutPoint = getLeadPoint(fromPosition, fromLeadDir, gridSize);
+  leadOutPoint = adjustWaypointForObstacles(leadOutPoint, obstacles, gridSize);
+
+  let leadInPoint = getLeadPoint(toPosition, toLeadDir, gridSize);
+  leadInPoint = adjustWaypointForObstacles(leadInPoint, obstacles, gridSize);
 
   const path: { x: number; y: number }[] = [];
-
-  // Start point
   path.push({ x: fromPosition.x, y: fromPosition.y });
-
-  // Lead out point (away from element)
-  let leadOutPoint = { x: leadOutX, y: fromPosition.y };
-  leadOutPoint = adjustWaypointForObstacles(leadOutPoint, obstacles, gridSize);
   path.push(leadOutPoint);
 
-  // If Y values differ, we need vertical routing
-  if (Math.abs(fromPosition.y - toPosition.y) > 1) {
-    // Decide vertical route X position
-    // Try to use the midpoint, but avoid obstacles
-    let verticalX: number;
-    if (Math.abs(leadOutX - leadInX) < gridSize) {
-      // They're close, use a unified X
-      verticalX = (leadOutX + leadInX) / 2;
-    } else {
-      // Route between the two lead points
-      verticalX = leadOutPoint.x;
-    }
+  // Route from leadOutPoint to leadInPoint with orthogonal segments
+  const dx = Math.abs(leadInPoint.x - leadOutPoint.x);
+  const dy = Math.abs(leadInPoint.y - leadOutPoint.y);
 
-    // Check if the vertical segment would go through obstacles
-    // If so, shift it
-    const testY = (fromPosition.y + toPosition.y) / 2;
-    if (isPointInObstacle(verticalX, testY, obstacles)) {
-      // Try shifting to avoid
-      const leftX = Math.min(leadOutPoint.x, leadInX) - gridSize;
-      const rightX = Math.max(leadOutPoint.x, leadInX) + gridSize;
-      if (!isPointInObstacle(leftX, testY, obstacles)) {
-        verticalX = leftX;
-      } else if (!isPointInObstacle(rightX, testY, obstacles)) {
-        verticalX = rightX;
+  if (dx > 1 || dy > 1) {
+    if (fromHoriz && toHoriz) {
+      // Both horizontal: route via vertical segment in between
+      if (dy > 1) {
+        let midX = leadOutPoint.x;
+        const testY = (leadOutPoint.y + leadInPoint.y) / 2;
+        if (isPointInObstacle(midX, testY, obstacles)) {
+          const altX = leadInPoint.x;
+          if (!isPointInObstacle(altX, testY, obstacles)) {
+            midX = altX;
+          }
+        }
+        if (Math.abs(midX - leadOutPoint.x) > 1) {
+          path.push({ x: midX, y: leadOutPoint.y });
+        }
+        path.push({ x: midX, y: leadInPoint.y });
       }
+    } else if (!fromHoriz && !toHoriz) {
+      // Both vertical: route via horizontal segment in between
+      if (dx > 1) {
+        let midY = leadOutPoint.y;
+        const testX = (leadOutPoint.x + leadInPoint.x) / 2;
+        if (isPointInObstacle(testX, midY, obstacles)) {
+          const altY = leadInPoint.y;
+          if (!isPointInObstacle(testX, altY, obstacles)) {
+            midY = altY;
+          }
+        }
+        if (Math.abs(midY - leadOutPoint.y) > 1) {
+          path.push({ x: leadOutPoint.x, y: midY });
+        }
+        path.push({ x: leadInPoint.x, y: midY });
+      }
+    } else if (fromHoriz && !toHoriz) {
+      // From horizontal, to vertical: one corner connects them
+      path.push({ x: leadInPoint.x, y: leadOutPoint.y });
+    } else {
+      // From vertical, to horizontal: one corner connects them
+      path.push({ x: leadOutPoint.x, y: leadInPoint.y });
     }
-
-    // Add corner point at same Y as start, different X if needed
-    if (Math.abs(leadOutPoint.x - verticalX) > 1) {
-      let cornerPoint = { x: verticalX, y: leadOutPoint.y };
-      cornerPoint = adjustWaypointForObstacles(cornerPoint, obstacles, gridSize);
-      path.push(cornerPoint);
-    }
-
-    // Add corner point at destination Y
-    let verticalEndPoint = { x: verticalX, y: toPosition.y };
-    verticalEndPoint = adjustWaypointForObstacles(verticalEndPoint, obstacles, gridSize, true);
-    path.push(verticalEndPoint);
   }
 
-  // Lead in point (if different from where we are)
-  let leadInPoint = { x: leadInX, y: toPosition.y };
-  leadInPoint = adjustWaypointForObstacles(leadInPoint, obstacles, gridSize);
+  // Add lead-in point if not redundant
   const lastPoint = path[path.length - 1];
   if (Math.abs(leadInPoint.x - lastPoint.x) > 1 || Math.abs(leadInPoint.y - lastPoint.y) > 1) {
     path.push(leadInPoint);
   }
 
-  // End point
   path.push({ x: toPosition.x, y: toPosition.y });
 
-  // Clean up collinear and redundant points
   return cleanPath(path);
 }
 
@@ -332,31 +375,38 @@ function drawTerminationBox(
   x: number,
   y: number,
   label: string,
-  side: 'left' | 'right'
+  direction: 'left' | 'right' | 'up' | 'down'
 ): void {
   ctx.save();
   ctx.font = 'bold 9px monospace';
   const textWidth = ctx.measureText(label).width;
   const boxWidth = textWidth + 6;
   const boxHeight = 14;
+  const gap = 8;
 
-  // Position box to the side of the endpoint
-  const offsetX = side === 'left' ? -boxWidth - 8 : 8;
-  const boxX = x + offsetX;
-  const boxY = y - boxHeight / 2;
+  // Translate to endpoint, rotate for vertical directions, then draw horizontally
+  ctx.translate(x, y);
+  if (direction === 'up') {
+    ctx.rotate(-Math.PI / 2);
+  } else if (direction === 'down') {
+    ctx.rotate(Math.PI / 2);
+  }
 
-  // Draw box background
+  // After rotation, draw in the positive-X direction (away from element)
+  // 'left' is the only case where we draw in the negative-X direction
+  const drawSide = direction === 'left' ? 'left' : 'right';
+  const offsetX = drawSide === 'left' ? -boxWidth - gap : gap;
+
   ctx.fillStyle = '#1a1a1a';
   ctx.strokeStyle = '#666';
   ctx.lineWidth = 1;
-  ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
-  ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+  ctx.fillRect(offsetX, -boxHeight / 2, boxWidth, boxHeight);
+  ctx.strokeRect(offsetX, -boxHeight / 2, boxWidth, boxHeight);
 
-  // Draw label text
   ctx.fillStyle = '#e0e0e0';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, boxX + boxWidth / 2, y);
+  ctx.fillText(label, offsetX + boxWidth / 2, 0);
 
   ctx.restore();
 }
@@ -376,7 +426,9 @@ export function drawWire(
   obstacles: WireObstacle[] = [],
   showControlPoints: boolean = false,
   fromElementCenter?: { x: number; y: number } | null,
-  toElementCenter?: { x: number; y: number } | null
+  toElementCenter?: { x: number; y: number } | null,
+  fromElementBounds?: WireObstacle | null,
+  toElementBounds?: WireObstacle | null
 ): void {
   const hexColor = getWireColorHex(wireColor);
 
@@ -393,6 +445,8 @@ export function drawWire(
       toPosition: toPos,
       fromElementCenter: fromElementCenter || null,
       toElementCenter: toElementCenter || null,
+      fromElementBounds: fromElementBounds || null,
+      toElementBounds: toElementBounds || null,
       obstacles,
       gridSize
     });
@@ -432,12 +486,14 @@ export function drawWire(
   ctx.arc(toPos.x, toPos.y, 4, 0, Math.PI * 2);
   ctx.fill();
 
-  // Draw termination boxes at ends if set
+  // Draw termination boxes at ends — along the wire's lead-out direction
   if (connection.fromTermination && TERMINATION_LABELS[connection.fromTermination]) {
-    drawTerminationBox(ctx, fromPos.x, fromPos.y, TERMINATION_LABELS[connection.fromTermination], 'right');
+    const fromDir = calculateLeadOutDirection(fromPos, fromElementCenter || null, fromElementBounds);
+    drawTerminationBox(ctx, fromPos.x, fromPos.y, TERMINATION_LABELS[connection.fromTermination], fromDir);
   }
   if (connection.toTermination && TERMINATION_LABELS[connection.toTermination]) {
-    drawTerminationBox(ctx, toPos.x, toPos.y, TERMINATION_LABELS[connection.toTermination], 'left');
+    const toDir = calculateLeadOutDirection(toPos, toElementCenter || null, toElementBounds);
+    drawTerminationBox(ctx, toPos.x, toPos.y, TERMINATION_LABELS[connection.toTermination], toDir);
   }
 
   // Draw wire label at the specified position along the wire
@@ -449,6 +505,8 @@ export function drawWire(
     let angle = labelPos.angle;
     if (angle > Math.PI / 2) angle -= Math.PI;
     if (angle < -Math.PI / 2) angle += Math.PI;
+    // For vertical segments, always use +90° so text consistently reads top-to-bottom
+    if (Math.abs(angle + Math.PI / 2) < 0.01) angle = Math.PI / 2;
 
     ctx.save();
     ctx.translate(labelPos.x, labelPos.y);
@@ -505,7 +563,9 @@ export function drawWirePreview(
   gridSize: number = 20,
   obstacles: WireObstacle[] = [],
   fromElementCenter?: { x: number; y: number } | null,
-  toElementCenter?: { x: number; y: number } | null
+  toElementCenter?: { x: number; y: number } | null,
+  fromElementBounds?: WireObstacle | null,
+  toElementBounds?: WireObstacle | null
 ): void {
   ctx.save();
   ctx.beginPath();
@@ -522,6 +582,8 @@ export function drawWirePreview(
       toPosition: { x: toX, y: toY },
       fromElementCenter: fromElementCenter || null,
       toElementCenter: toElementCenter || null,
+      fromElementBounds: fromElementBounds || null,
+      toElementBounds: toElementBounds || null,
       obstacles,
       gridSize
     });
@@ -555,7 +617,9 @@ export function drawMatingWirePreview(
   gridSize: number = 20,
   obstacles: WireObstacle[] = [],
   fromElementCenter?: { x: number; y: number } | null,
-  toElementCenter?: { x: number; y: number } | null
+  toElementCenter?: { x: number; y: number } | null,
+  fromElementBounds?: WireObstacle | null,
+  toElementBounds?: WireObstacle | null
 ): void {
   ctx.save();
 
@@ -567,6 +631,8 @@ export function drawMatingWirePreview(
       toPosition: { x: toX, y: toY },
       fromElementCenter: fromElementCenter || null,
       toElementCenter: toElementCenter || null,
+      fromElementBounds: fromElementBounds || null,
+      toElementBounds: toElementBounds || null,
       obstacles,
       gridSize
     });
@@ -608,7 +674,9 @@ export function drawMatingConnection(
   obstacles: WireObstacle[] = [],
   showControlPoints: boolean = false,
   fromElementCenter?: { x: number; y: number } | null,
-  toElementCenter?: { x: number; y: number } | null
+  toElementCenter?: { x: number; y: number } | null,
+  fromElementBounds?: WireObstacle | null,
+  toElementBounds?: WireObstacle | null
 ): void {
   ctx.save();
 
@@ -622,6 +690,8 @@ export function drawMatingConnection(
       toPosition: toPos,
       fromElementCenter: fromElementCenter || null,
       toElementCenter: toElementCenter || null,
+      fromElementBounds: fromElementBounds || null,
+      toElementBounds: toElementBounds || null,
       obstacles,
       gridSize
     });
@@ -697,11 +767,30 @@ export function hitTestWire(
   testX: number,
   testY: number,
   gridSize: number = 20,
-  threshold: number = 8
+  threshold: number = 8,
+  fromElementCenter?: { x: number; y: number } | null,
+  toElementCenter?: { x: number; y: number } | null,
+  obstacles: WireObstacle[] = [],
+  fromElementBounds?: WireObstacle | null,
+  toElementBounds?: WireObstacle | null
 ): boolean {
-  const points = connection.waypoints?.length
-    ? [fromPos, ...connection.waypoints, toPos]
-    : calculateOrthogonalPath(fromPos, toPos, gridSize);
+  let points: { x: number; y: number }[];
+  if (connection.waypoints?.length) {
+    points = [fromPos, ...connection.waypoints, toPos];
+  } else if (fromElementCenter || toElementCenter) {
+    points = calculateOrthogonalPathV2({
+      fromPosition: fromPos,
+      toPosition: toPos,
+      fromElementCenter: fromElementCenter || null,
+      toElementCenter: toElementCenter || null,
+      fromElementBounds: fromElementBounds || null,
+      toElementBounds: toElementBounds || null,
+      obstacles,
+      gridSize
+    });
+  } else {
+    points = calculateOrthogonalPath(fromPos, toPos, gridSize);
+  }
 
   for (let i = 0; i < points.length - 1; i++) {
     const p1 = points[i];
@@ -724,7 +813,9 @@ export function getWireControlPoints(
   gridSize: number = 20,
   fromElementCenter?: { x: number; y: number } | null,
   toElementCenter?: { x: number; y: number } | null,
-  obstacles: WireObstacle[] = []
+  obstacles: WireObstacle[] = [],
+  fromElementBounds?: WireObstacle | null,
+  toElementBounds?: WireObstacle | null
 ): { x: number; y: number; index: number }[] {
   let points: { x: number; y: number }[];
   if (connection.waypoints?.length) {
@@ -735,6 +826,8 @@ export function getWireControlPoints(
       toPosition: toPos,
       fromElementCenter: fromElementCenter || null,
       toElementCenter: toElementCenter || null,
+      fromElementBounds: fromElementBounds || null,
+      toElementBounds: toElementBounds || null,
       obstacles,
       gridSize
     });
@@ -873,6 +966,8 @@ export function hitTestWireLabelHandle(
   let angle = labelPos.angle;
   if (angle > Math.PI / 2) angle -= Math.PI;
   if (angle < -Math.PI / 2) angle += Math.PI;
+  // For vertical segments, always use +90° so text consistently reads top-to-bottom
+  if (Math.abs(angle + Math.PI / 2) < 0.01) angle = Math.PI / 2;
 
   // Transform test point to label's local coordinate system
   const dx = testX - labelPos.x;
