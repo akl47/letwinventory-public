@@ -21,6 +21,18 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'imageFileID',
         as: 'imageFile'
       });
+      Part.hasOne(models.ElectricalConnector, {
+        foreignKey: 'partID',
+        as: 'electricalConnector'
+      });
+      Part.hasOne(models.Cable, {
+        foreignKey: 'partID',
+        as: 'cable'
+      });
+      Part.hasOne(models.ElectricalComponent, {
+        foreignKey: 'partID',
+        as: 'electricalComponent'
+      });
     }
   };
   Part.init({

@@ -206,8 +206,8 @@ export class HarnessComponentDialog implements OnInit {
       dbId: linked?.id || this.editDbId,
       partId: this.selectedPart()?.id || this.editPartId,
       partName: this.selectedPart()?.name || this.editPartName,
-      // Include images from linked component or preserve from edit
-      componentImage: linked?.componentImage || this.editComponentImage,
+      // Use Part image, fall back to linked component image or preserved edit image
+      componentImage: this.selectedPart()?.imageFile?.data || linked?.componentImage || this.editComponentImage,
       pinoutDiagramImage: linked?.pinoutDiagramImage || this.editPinoutDiagramImage
     };
 

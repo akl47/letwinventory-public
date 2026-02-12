@@ -275,25 +275,34 @@ export function drawPinoutDiagram(
 ): void {
   if (!image) return;
 
-  const imgX = left - PINOUT_IMAGE_WIDTH - 10;
-  const imgY = top + (height - PINOUT_IMAGE_HEIGHT) / 2;
+  // Fit image within max bounds while preserving aspect ratio
+  const aspectRatio = image.width / image.height;
+  let imgWidth = PINOUT_IMAGE_WIDTH;
+  let imgHeight = imgWidth / aspectRatio;
+  if (imgHeight > PINOUT_IMAGE_HEIGHT) {
+    imgHeight = PINOUT_IMAGE_HEIGHT;
+    imgWidth = imgHeight * aspectRatio;
+  }
+
+  const imgX = left - imgWidth - 10;
+  const imgY = top + (height - imgHeight) / 2;
 
   // Image background
   ctx.fillStyle = COLORS.imageBackground;
   ctx.strokeStyle = COLORS.border;
   ctx.lineWidth = 1;
-  roundRect(ctx, imgX - 4, imgY - 4, PINOUT_IMAGE_WIDTH + 8, PINOUT_IMAGE_HEIGHT + 8, 4);
+  roundRect(ctx, imgX - 4, imgY - 4, imgWidth + 8, imgHeight + 8, 4);
   ctx.fill();
   ctx.stroke();
 
   // Draw image (counter-flip if element is flipped)
   ctx.save();
   if (flipped) {
-    ctx.translate(imgX + PINOUT_IMAGE_WIDTH / 2, imgY + PINOUT_IMAGE_HEIGHT / 2);
+    ctx.translate(imgX + imgWidth / 2, imgY + imgHeight / 2);
     ctx.scale(-1, 1);
-    ctx.translate(-(imgX + PINOUT_IMAGE_WIDTH / 2), -(imgY + PINOUT_IMAGE_HEIGHT / 2));
+    ctx.translate(-(imgX + imgWidth / 2), -(imgY + imgHeight / 2));
   }
-  ctx.drawImage(image, imgX, imgY, PINOUT_IMAGE_WIDTH, PINOUT_IMAGE_HEIGHT);
+  ctx.drawImage(image, imgX, imgY, imgWidth, imgHeight);
   ctx.restore();
 }
 

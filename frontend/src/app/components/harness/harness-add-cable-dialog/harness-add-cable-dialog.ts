@@ -215,7 +215,8 @@ export class HarnessAddCableDialog implements OnInit {
       dbId: linked?.id || this.editDbId,
       partId: this.selectedPart()?.id || this.editPartId,
       partName: this.selectedPart()?.name || this.editPartName,
-      cableDiagramImage: this.cableDiagramImage
+      // Use Part image, fall back to cable diagram image
+      cableDiagramImage: this.selectedPart()?.imageFile?.data || this.cableDiagramImage
     };
 
     this.dialogRef.close(cable);

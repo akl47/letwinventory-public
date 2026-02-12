@@ -1,0 +1,32 @@
+<h2 mat-dialog-title>Parts Updated in Database</h2>
+
+<mat-dialog-content>
+  <p class="sync-description">
+    The following parts have changed since this harness was last saved.
+    Select which changes to accept.
+  </p>
+
+  @for (change of data.changes; track change.elementId) {
+  <div class="sync-item">
+    <div class="sync-item-header">
+      <mat-checkbox [(ngModel)]="change.accepted" color="primary"></mat-checkbox>
+      <mat-icon class="type-icon">{{ getTypeIcon(change.elementType) }}</mat-icon>
+      <span class="item-label">{{ change.label }}</span>
+      <span class="item-type">{{ change.elementType }}</span>
+    </div>
+    <div class="sync-item-changes">
+      @for (c of change.changes; track c.field) {
+      <div class="change-row">
+        <span class="change-field">{{ c.field }}:</span>
+        <span class="change-desc">{{ c.description }}</span>
+      </div>
+      }
+    </div>
+  </div>
+  }
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button (click)="keepAll()">Keep All Existing</button>
+  <button mat-raised-button color="primary" (click)="acceptSelected()">Accept Selected</button>
+</mat-dialog-actions>

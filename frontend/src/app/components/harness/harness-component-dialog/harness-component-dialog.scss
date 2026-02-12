@@ -15,8 +15,23 @@ mat-dialog-content {
 
 .part-option {
   display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.part-thumbnail {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.part-text {
+  display: flex;
   flex-direction: column;
   line-height: 1.3;
+  min-width: 0;
 }
 
 .part-desc {

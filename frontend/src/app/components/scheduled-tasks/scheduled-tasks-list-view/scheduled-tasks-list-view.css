@@ -100,6 +100,26 @@ table tr.clickable-row:hover {
     font-family: monospace;
 }
 
+.cron-description {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
+    font-style: italic;
+}
+
+.notify-icon {
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+}
+
+.notify-on {
+    color: #66bb6a;
+}
+
+.notify-off {
+    color: rgba(255, 255, 255, 0.25);
+}
+
 .project-chip {
     display: inline-flex;
     align-items: center;

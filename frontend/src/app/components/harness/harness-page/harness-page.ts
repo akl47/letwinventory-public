@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { MatDialog } from '@angular/material/dialog';
 import { MatSnackBar } from '@angular/material/snack-bar';
-import { Subject, debounceTime, filter, switchMap, forkJoin, of } from 'rxjs';
+import { Subject, debounceTime, filter, switchMap, forkJoin, of, catchError } from 'rxjs';
 import { HarnessCanvas, CanvasSelection } from '../harness-canvas/harness-canvas';
 import { HarnessToolbar, HarnessTool } from '../harness-toolbar/harness-toolbar';
 import { HarnessPropertyPanel } from '../harness-property-panel/harness-property-panel';
@@ -12,6 +12,7 @@ import { HarnessAddCableDialog } from '../harness-add-cable-dialog/harness-add-c
 import { HarnessComponentDialog } from '../harness-component-dialog/harness-component-dialog';
 import { HarnessListDialog } from '../harness-list-dialog/harness-list-dialog';
 import { HarnessImportDialog } from '../harness-import-dialog/harness-import-dialog';
+import { HarnessSyncDialog, SyncChange } from '../harness-sync-dialog/harness-sync-dialog';
 import { PartEditDialog } from '../../inventory/part-edit-dialog/part-edit-dialog';
 import { HarnessService } from '../../../services/harness.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
@@ -24,6 +25,9 @@ import {
   HarnessComponent,
   WireHarness,
   SubHarnessRef,
+  DbElectricalConnector,
+  DbCable,
+  DbElectricalComponent,
   createEmptyHarnessData
 } from '../../../models/harness.model';
 import {
@@ -475,8 +479,8 @@ export class HarnessPage implements OnInit, OnDestroy {
           releaseState: harness.releaseState || 'draft'
         };
 
-        // Fetch connector images for connectors that have partId
-        this.loadConnectorImages(data);
+        // Sync all linked parts (connectors, cables, components) from database
+        this.syncPartsFromDatabase(data);
       },
       error: (err) => {
         this.snackBar.open('Failed to load harness', 'Close', { duration: 3000 });
@@ -485,61 +489,327 @@ export class HarnessPage implements OnInit, OnDestroy {
     });
   }
 
-  private loadConnectorImages(data: HarnessData) {
+  private syncPartsFromDatabase(data: HarnessData) {
     const connectorsWithPartId = data.connectors.filter(c => c.partId);
+    const cablesWithPartId = data.cables.filter(c => c.partId);
+    const componentsWithPartId = (data.components || []).filter(c => c.partId);
 
-    if (connectorsWithPartId.length === 0) {
-      // No connectors with partId, just set the data
+    // If no elements have partId, just set the data
+    if (connectorsWithPartId.length === 0 && cablesWithPartId.length === 0 && componentsWithPartId.length === 0) {
       this.harnessData.set(data);
       this.originalData.set(JSON.stringify(data));
       return;
     }
 
-    // Fetch connector details for each connector with partId
-    // Map partId to the request so we can match results later
-    const requestsWithPartId = connectorsWithPartId.map(c => ({
-      partId: c.partId!,
-      request: this.harnessPartsService.getConnectorByPartId(c.partId!)
-    }));
+    // Batch-fetch all linked parts from database
+    const connectorRequests = connectorsWithPartId.map(c =>
+      this.harnessPartsService.getConnectorByPartId(c.partId!).pipe(catchError(() => of(null)))
+    );
+    const cableRequests = cablesWithPartId.map(c =>
+      this.harnessPartsService.getCableByPartId(c.partId!).pipe(catchError(() => of(null)))
+    );
+    const componentRequests = componentsWithPartId.map(c =>
+      this.harnessPartsService.getComponentByPartId(c.partId!).pipe(catchError(() => of(null)))
+    );
 
-    forkJoin(requestsWithPartId.map(r => r.request)).subscribe({
-      next: (dbConnectors) => {
-        // Create a map of partId to dbConnector
-        const imageMap = new Map<number, { connectorImage?: string; pinoutDiagramImage?: string }>();
-        dbConnectors.forEach((dbConnector, idx) => {
-          if (dbConnector) {
-            imageMap.set(requestsWithPartId[idx].partId, {
-              connectorImage: dbConnector.connectorImage || undefined,
-              pinoutDiagramImage: dbConnector.pinoutDiagramImage || undefined
+    forkJoin([
+      connectorRequests.length > 0 ? forkJoin(connectorRequests) : of([]),
+      cableRequests.length > 0 ? forkJoin(cableRequests) : of([]),
+      componentRequests.length > 0 ? forkJoin(componentRequests) : of([])
+    ]).subscribe({
+      next: ([dbConnectors, dbCables, dbComponents]) => {
+        // Build lookup maps: partId -> db record
+        const connectorMap = new Map<number, DbElectricalConnector>();
+        dbConnectors.forEach((db, idx) => {
+          if (db) connectorMap.set(connectorsWithPartId[idx].partId!, db);
+        });
+
+        const cableMap = new Map<number, DbCable>();
+        dbCables.forEach((db, idx) => {
+          if (db) cableMap.set(cablesWithPartId[idx].partId!, db);
+        });
+
+        const componentMap = new Map<number, DbElectricalComponent>();
+        dbComponents.forEach((db, idx) => {
+          if (db) componentMap.set(componentsWithPartId[idx].partId!, db);
+        });
+
+        // Detect structural changes (images always sync silently)
+        const structuralChanges: SyncChange[] = [];
+
+        // Check connectors
+        for (const conn of connectorsWithPartId) {
+          const db = connectorMap.get(conn.partId!);
+          if (!db) continue;
+          const changes: { field: string; description: string }[] = [];
+
+          if (db.type && db.type !== conn.type) {
+            changes.push({ field: 'Type', description: `${conn.type} → ${db.type}` });
+          }
+          if (db.pinCount && db.pinCount !== conn.pinCount) {
+            changes.push({ field: 'Pin Count', description: `${conn.pinCount} → ${db.pinCount}` });
+          }
+          if (db.color !== undefined && db.color !== conn.color) {
+            changes.push({ field: 'Color', description: `${conn.color || 'none'} → ${db.color || 'none'}` });
+          }
+          if (db.pins && db.pins.length !== conn.pins.length) {
+            changes.push({ field: 'Pins', description: `${conn.pins.length} pins → ${db.pins.length} pins` });
+          }
+
+          if (changes.length > 0) {
+            structuralChanges.push({
+              elementType: 'connector',
+              elementId: conn.id,
+              label: conn.label,
+              changes,
+              dbData: db,
+              accepted: true
             });
           }
-        });
+        }
 
-        // Merge images into connectors
-        const updatedConnectors = data.connectors.map(connector => {
-          if (!connector.partId) return connector;
+        // Check cables
+        for (const cable of cablesWithPartId) {
+          const db = cableMap.get(cable.partId!);
+          if (!db) continue;
+          const changes: { field: string; description: string }[] = [];
 
-          const images = imageMap.get(connector.partId);
-          if (images) {
-            return {
-              ...connector,
-              connectorImage: images.connectorImage,
-              pinoutDiagramImage: images.pinoutDiagramImage
-            };
+          if (db.gaugeAWG !== undefined && db.gaugeAWG !== cable.gaugeAWG) {
+            changes.push({ field: 'Gauge', description: `${cable.gaugeAWG || 'none'} → ${db.gaugeAWG || 'none'}` });
           }
-          return connector;
+          if (db.wireCount && db.wireCount !== cable.wireCount) {
+            changes.push({ field: 'Wire Count', description: `${cable.wireCount} → ${db.wireCount}` });
+          }
+          if (db.wires && db.wires.length !== cable.wires.length) {
+            changes.push({ field: 'Wires', description: `${cable.wires.length} wires → ${db.wires.length} wires` });
+          }
+
+          if (changes.length > 0) {
+            structuralChanges.push({
+              elementType: 'cable',
+              elementId: cable.id,
+              label: cable.label,
+              changes,
+              dbData: db,
+              accepted: true
+            });
+          }
+        }
+
+        // Check components
+        for (const comp of componentsWithPartId) {
+          const db = componentMap.get(comp.partId!);
+          if (!db) continue;
+          const changes: { field: string; description: string }[] = [];
+
+          if (db.pinCount && db.pinCount !== comp.pinCount) {
+            changes.push({ field: 'Pin Count', description: `${comp.pinCount} → ${db.pinCount}` });
+          }
+          if (db.pins && db.pins.length !== comp.pinGroups.length) {
+            changes.push({ field: 'Pin Groups', description: `${comp.pinGroups.length} groups → ${db.pins.length} groups` });
+          }
+
+          if (changes.length > 0) {
+            structuralChanges.push({
+              elementType: 'component',
+              elementId: comp.id,
+              label: comp.label,
+              changes,
+              dbData: db,
+              accepted: true
+            });
+          }
+        }
+
+        // Always silently update images first
+        let updatedData = this.applyImageUpdates(data, connectorMap, cableMap, componentMap);
+
+        if (structuralChanges.length === 0) {
+          // No structural changes — just set data with refreshed images
+          this.harnessData.set(updatedData);
+          this.originalData.set(JSON.stringify(updatedData));
+          return;
+        }
+
+        // Show sync dialog for structural changes
+        const dialogRef = this.dialog.open(HarnessSyncDialog, {
+          width: '500px',
+          maxHeight: '80vh',
+          data: { changes: structuralChanges }
         });
 
-        const updatedData = { ...data, connectors: updatedConnectors };
-        this.harnessData.set(updatedData);
-        this.originalData.set(JSON.stringify(updatedData));
+        dialogRef.afterClosed().subscribe((result: SyncChange[] | undefined) => {
+          if (!result) {
+            // Dialog dismissed — keep existing data with refreshed images
+            this.harnessData.set(updatedData);
+            this.originalData.set(JSON.stringify(updatedData));
+            return;
+          }
+
+          // Apply accepted structural changes
+          updatedData = this.applyStructuralChanges(updatedData, result);
+          this.harnessData.set(updatedData);
+          this.originalData.set(JSON.stringify(updatedData));
+        });
       },
       error: () => {
-        // If fetching images fails, still load the harness without images
+        // If fetching fails, still load the harness
         this.harnessData.set(data);
         this.originalData.set(JSON.stringify(data));
       }
     });
+  }
+
+  private applyImageUpdates(
+    data: HarnessData,
+    connectorMap: Map<number, DbElectricalConnector>,
+    cableMap: Map<number, DbCable>,
+    componentMap: Map<number, DbElectricalComponent>
+  ): HarnessData {
+    const updatedConnectors = data.connectors.map(conn => {
+      if (!conn.partId) return conn;
+      const db = connectorMap.get(conn.partId);
+      if (!db) return conn;
+      return {
+        ...conn,
+        connectorImage: db.connectorImage || undefined,
+        pinoutDiagramImage: db.pinoutDiagramImage || undefined
+      };
+    });
+
+    const updatedCables = data.cables.map(cable => {
+      if (!cable.partId) return cable;
+      const db = cableMap.get(cable.partId);
+      if (!db) return cable;
+      return {
+        ...cable,
+        cableDiagramImage: db.cableDiagramImage || undefined
+      };
+    });
+
+    const updatedComponents = (data.components || []).map(comp => {
+      if (!comp.partId) return comp;
+      const db = componentMap.get(comp.partId);
+      if (!db) return comp;
+      return {
+        ...comp,
+        componentImage: db.componentImage || undefined,
+        pinoutDiagramImage: db.pinoutDiagramImage || undefined
+      };
+    });
+
+    return {
+      ...data,
+      connectors: updatedConnectors,
+      cables: updatedCables,
+      components: updatedComponents
+    };
+  }
+
+  private applyStructuralChanges(data: HarnessData, changes: SyncChange[]): HarnessData {
+    let updatedData = { ...data };
+
+    for (const change of changes) {
+      if (!change.accepted) continue;
+
+      if (change.elementType === 'connector') {
+        const db = change.dbData as DbElectricalConnector;
+        updatedData = {
+          ...updatedData,
+          connectors: updatedData.connectors.map(conn => {
+            if (conn.id !== change.elementId) return conn;
+
+            // Regenerate pins if count changed
+            let pins = conn.pins;
+            if (db.pinCount !== conn.pinCount && db.pins) {
+              pins = db.pins.map((dbPin, i) => {
+                const existing = conn.pins[i];
+                return {
+                  id: existing?.id || `pin-${Date.now()}-${i + 1}`,
+                  number: dbPin.number || String(i + 1),
+                  label: existing?.label || dbPin.label || ''
+                };
+              });
+            }
+
+            return {
+              ...conn,
+              type: db.type || conn.type,
+              pinCount: db.pinCount || conn.pinCount,
+              color: db.color !== undefined ? (db.color || undefined) : conn.color,
+              pins
+            };
+          })
+        };
+      } else if (change.elementType === 'cable') {
+        const db = change.dbData as DbCable;
+        updatedData = {
+          ...updatedData,
+          cables: updatedData.cables.map(cable => {
+            if (cable.id !== change.elementId) return cable;
+
+            // Regenerate wires if count changed
+            let wires = cable.wires;
+            if (db.wireCount !== cable.wireCount && db.wires) {
+              wires = db.wires.map((dbWire, i) => {
+                const existing = cable.wires[i];
+                return {
+                  id: existing?.id || `wire-${Date.now()}-${i + 1}`,
+                  color: dbWire.color,
+                  colorCode: dbWire.colorCode,
+                  label: existing?.label || ''
+                };
+              });
+            }
+
+            return {
+              ...cable,
+              gaugeAWG: db.gaugeAWG !== undefined ? (db.gaugeAWG || undefined) : cable.gaugeAWG,
+              wireCount: db.wireCount || cable.wireCount,
+              wires
+            };
+          })
+        };
+      } else if (change.elementType === 'component') {
+        const db = change.dbData as DbElectricalComponent;
+        updatedData = {
+          ...updatedData,
+          components: (updatedData.components || []).map(comp => {
+            if (comp.id !== change.elementId) return comp;
+
+            // Regenerate pin groups if structure changed
+            let pinGroups = comp.pinGroups;
+            if (db.pins && db.pins.length !== comp.pinGroups.length) {
+              pinGroups = db.pins.map((dbGroup, gi) => {
+                const existing = comp.pinGroups[gi];
+                return {
+                  id: existing?.id || `group-${Date.now()}-${gi + 1}`,
+                  name: dbGroup.name,
+                  pinTypeID: dbGroup.pinTypeID,
+                  pinTypeName: dbGroup.pinTypeName,
+                  pins: dbGroup.pins.map((dbPin, pi) => {
+                    const existingPin = existing?.pins?.[pi];
+                    return {
+                      id: existingPin?.id || `pin-${Date.now()}-${gi}-${pi}`,
+                      number: dbPin.number || String(pi + 1),
+                      label: existingPin?.label || dbPin.label || ''
+                    };
+                  })
+                };
+              });
+            }
+
+            return {
+              ...comp,
+              pinCount: db.pinCount || comp.pinCount,
+              pinGroups
+            };
+          })
+        };
+      }
+    }
+
+    return updatedData;
   }
 
   // Toolbar events
