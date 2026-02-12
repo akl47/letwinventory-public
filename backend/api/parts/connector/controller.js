@@ -14,7 +14,7 @@ exports.getAllConnectors = async (req, res, next) => {
         ...(db.Part ? [{
           model: db.Part,
           as: 'part',
-          attributes: ['id', 'name', 'matingConnector']
+          attributes: ['id', 'name']
         }] : []),
         ...(db.ElectricalPinType ? [{
           model: db.ElectricalPinType,
@@ -48,7 +48,7 @@ exports.getConnectorById = async (req, res, next) => {
         ...(db.Part ? [{
           model: db.Part,
           as: 'part',
-          attributes: ['id', 'name', 'matingConnector']
+          attributes: ['id', 'name']
         }] : []),
         ...(db.ElectricalPinType ? [{
           model: db.ElectricalPinType,
@@ -154,7 +154,7 @@ exports.updateConnector = async (req, res, next) => {
         ...(db.Part ? [{
           model: db.Part,
           as: 'part',
-          attributes: ['id', 'name', 'matingConnector']
+          attributes: ['id', 'name']
         }] : []),
         ...(db.ElectricalPinType ? [{
           model: db.ElectricalPinType,
@@ -188,7 +188,7 @@ exports.getConnectorByPartId = async (req, res, next) => {
         ...(db.Part ? [{
           model: db.Part,
           as: 'part',
-          attributes: ['id', 'name', 'matingConnector']
+          attributes: ['id', 'name']
         }] : []),
         ...(db.ElectricalPinType ? [{
           model: db.ElectricalPinType,
