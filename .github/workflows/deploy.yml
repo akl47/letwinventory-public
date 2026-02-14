@@ -33,3 +33,18 @@ jobs:
           tags: |
             akl47/letwinventory:${{ steps.version.outputs.version }}
             akl47/letwinventory:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd ~/src/letwinventory-public
+            git pull origin master
+            ./scripts/deploy-update.sh

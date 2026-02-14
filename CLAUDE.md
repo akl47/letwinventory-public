@@ -1336,6 +1336,56 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Session: 2026-02-12 (part 3)
+
+### Files Modified
+- `frontend/src/app/utils/harness/wire.ts` — consistent vertical wire label orientation
+- `backend/api/parts/connector/controller.js` — removed `matingConnector` from Part includes
+- `frontend/src/app/components/harness/harness-canvas/harness-canvas.ts` — removed debug bounding boxes from PNG export
+- `frontend/src/app/components/harness/harness-page/harness-page.ts` — fixed sync pin regeneration condition
+- `frontend/src/app/utils/harness/block.ts` — connector pinSide always 'left'
+- `frontend/src/app/utils/harness/elements/connector.ts` — wire pins always left, mating always right
+- `frontend/src/app/utils/harness/elements/block-renderer.ts` — no changes needed (uses block.pinSide which is now correct)
+
+### Changes Made
+
+1. **Consistent vertical wire label text orientation**
+   - Wire labels on vertical segments were inconsistent: down-segments used +π/2 rotation, up-segments used -π/2
+   - Added normalization: `if (Math.abs(angle + Math.PI / 2) < 0.01) angle = Math.PI / 2`
+   - Vertical labels now always read top-to-bottom regardless of wire direction
+   - Applied same fix to `hitTestWireLabelHandle()` to keep drawing and hit testing in sync
+
+2. **Fixed connector test failures (500 errors)**
+   - All connector API endpoints included `attributes: ['id', 'name', 'matingConnector']` on the Part association
+   - The Part model does NOT have a `matingConnector` column — that's on ElectricalPinType
+   - Removed `matingConnector` from Part includes across all 4 endpoints (getAll, getById, update, getByPartId)
+   - ElectricalPinType includes correctly keep `matingConnector`
+
+3. **Removed debug bounding boxes from PNG export**
+   - Lines 2954-3103 in harness-canvas.ts drew colored bounding boxes unconditionally during export
+   - Red (connectors), green (cables), blue (components), magenta (sub-harnesses), cyan (wires), yellow (overall)
+   - Removed entire debug block — export now renders clean output
+
+4. **Fixed connector sync "Pins: 0 → 4" not applying**
+   - `applyStructuralChanges()` only regenerated pins when `db.pinCount !== conn.pinCount`
+   - In the reported case, both pinCount were 4 but `conn.pins` was `[]` (empty array)
+   - Changed condition to: `(db.pinCount !== conn.pinCount || db.pins?.length !== conn.pins.length) && db.pins`
+   - Accepting the sync change now correctly regenerates the pins array
+
+5. **Standardized connector pin sides — wire left, mating right**
+   - All connector types now have wire pins on the left and mating pins on the right (before flip)
+   - Previously, pin side depended on connector type (male→right, female→left)
+   - Updated `block.ts`: `pinSide` is always `'left'` for connectors
+   - Updated `connector.ts`: all 6 instances of type-conditional logic replaced with fixed left/right positions
+   - Drawing, position calculation, and hit testing are all consistent across both code paths
+
+### Notes
+- Connector pin side is no longer type-dependent — all connectors: wire=left, mating=right
+- The block-renderer already used `block.pinSide` so it required no code changes, just the correct `pinSide` value from block.ts
+- Current branch: bugfix
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:

@@ -32,6 +32,20 @@ test.describe('Tasks Board', () => {
 });
 
 test.describe('Task Checklist', () => {
+  let createdTaskId: number | null = null;
+
+  test.afterEach(async ({ page }) => {
+    // Clean up the created task so retries don't accumulate duplicates
+    if (createdTaskId) {
+      await page.evaluate(async (id) => {
+        const token = localStorage.getItem('auth_token');
+        const headers: any = { 'Authorization': 'Bearer ' + token };
+        await fetch(`/api/planning/task/${id}`, { method: 'DELETE', headers });
+      }, createdTaskId);
+      createdTaskId = null;
+    }
+  });
+
   test('can add and toggle checklist items via UI', async ({ page }) => {
     await page.goto('/#/tasks');
 
@@ -62,10 +76,11 @@ test.describe('Task Checklist', () => {
     });
 
     expect(taskId).toBeTruthy();
+    createdTaskId = taskId;
 
     // Reload and open the task dialog
     await page.goto('/#/tasks');
-    const card = page.locator('app-task-card', { hasText: 'CL Test Task' });
+    const card = page.locator('app-task-card', { hasText: 'CL Test Task' }).first();
     await expect(card).toBeVisible({ timeout: 10000 });
     await card.click();
 
