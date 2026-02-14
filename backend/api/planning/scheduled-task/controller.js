@@ -1,5 +1,5 @@
 const { ScheduledTask, TaskList, Project } = require('../../../models');
-const cronParser = require('cron-parser');
+const { computeNextRun } = require('../../../services/scheduledTaskService');
 
 const includeAssociations = [
     {
@@ -14,17 +14,12 @@ const includeAssociations = [
     }
 ];
 
-function computeNextRunAt(cronExpression, timezone = 'America/Los_Angeles') {
-    const interval = cronParser.parseExpression(cronExpression, { tz: timezone });
-    return interval.next().toDate();
-}
-
 exports.create = async (req, res) => {
     try {
         // Validate cron expression
         let nextRunAt;
         try {
-            nextRunAt = computeNextRunAt(req.body.cronExpression, req.body.timezone);
+            nextRunAt = computeNextRun(req.body.cronExpression, req.body.timezone);
         } catch (e) {
             return res.status(400).json({ error: 'Invalid cron expression: ' + e.message });
         }
@@ -93,7 +88,7 @@ exports.update = async (req, res) => {
         if ((updates.cronExpression && updates.cronExpression !== scheduledTask.cronExpression) ||
             (updates.timezone && updates.timezone !== scheduledTask.timezone)) {
             try {
-                updates.nextRunAt = computeNextRunAt(updates.cronExpression || scheduledTask.cronExpression, tz);
+                updates.nextRunAt = computeNextRun(updates.cronExpression || scheduledTask.cronExpression, tz);
             } catch (e) {
                 return res.status(400).json({ error: 'Invalid cron expression: ' + e.message });
             }
@@ -101,7 +96,7 @@ exports.update = async (req, res) => {
         if (updates.activeFlag === true && !scheduledTask.activeFlag) {
             // Reactivating — recompute next run
             try {
-                updates.nextRunAt = computeNextRunAt(updates.cronExpression || scheduledTask.cronExpression, tz);
+                updates.nextRunAt = computeNextRun(updates.cronExpression || scheduledTask.cronExpression, tz);
             } catch (e) {
                 return res.status(400).json({ error: 'Invalid cron expression: ' + e.message });
             }

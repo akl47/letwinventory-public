@@ -203,7 +203,8 @@ export function drawSubHarnessCollapsed(
   isSelected: boolean = false,
   loadedImages?: Map<string, HTMLImageElement>,
   highlightedPins?: Map<string, Set<string>>,
-  highlightedMatingPins?: Map<string, Set<string>>
+  highlightedMatingPins?: Map<string, Set<string>>,
+  showBounds: boolean = true
 ): void {
   const x = subHarnessRef.position?.x || 0;
   const y = subHarnessRef.position?.y || 0;
@@ -236,32 +237,34 @@ export function drawSubHarnessCollapsed(
   const width = bounds.maxX - bounds.minX;
   const height = bounds.maxY - bounds.minY;
 
-  // Draw selection highlight / border
-  ctx.strokeStyle = isSelected ? SUB_HARNESS_COLORS.borderSelected : SUB_HARNESS_COLORS.border;
-  ctx.lineWidth = isSelected ? 3 : 2;
-  ctx.setLineDash([8, 4]);
-  roundRect(ctx, bounds.minX, bounds.minY, width, height, 8);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  if (showBounds || isSelected) {
+    // Draw selection highlight / border
+    ctx.strokeStyle = isSelected ? SUB_HARNESS_COLORS.borderSelected : SUB_HARNESS_COLORS.border;
+    ctx.lineWidth = isSelected ? 3 : 2;
+    ctx.setLineDash([8, 4]);
+    roundRect(ctx, bounds.minX, bounds.minY, width, height, 8);
+    ctx.stroke();
+    ctx.setLineDash([]);
 
-  // Draw label at top (inside the border)
-  const revision = childHarness.revision || 'A';
-  const labelText = `${childHarness.name} Rev ${revision}`;
-  ctx.font = 'bold 12px monospace';
-  const labelWidth = ctx.measureText(labelText).width + 16;
-  const labelX = bounds.minX;
-  const labelY = bounds.minY;
+    // Draw label at top (inside the border)
+    const revision = childHarness.revision || 'A';
+    const labelText = `${childHarness.name} Rev ${revision}`;
+    ctx.font = 'bold 12px monospace';
+    const labelWidth = ctx.measureText(labelText).width + 16;
+    const labelX = bounds.minX;
+    const labelY = bounds.minY;
 
-  // Label background
-  ctx.fillStyle = SUB_HARNESS_COLORS.labelBg;
-  roundRect(ctx, labelX, labelY, labelWidth, 12, 4);
-  ctx.fill();
+    // Label background
+    ctx.fillStyle = SUB_HARNESS_COLORS.labelBg;
+    roundRect(ctx, labelX, labelY, labelWidth, 12, 4);
+    ctx.fill();
 
-  // Label text
-  ctx.fillStyle = SUB_HARNESS_COLORS.labelText;
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(labelText, labelX + 8, labelY + 6);
+    // Label text
+    ctx.fillStyle = SUB_HARNESS_COLORS.labelText;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(labelText, labelX + 8, labelY + 6);
+  }
 
   // Draw release state indicator in top-right corner
   if (childHarness.releaseState === 'released') {

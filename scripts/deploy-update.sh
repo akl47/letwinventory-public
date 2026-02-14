@@ -34,7 +34,7 @@ else
   exit 1
 fi
 
-trap 'send_email "[FAILED] Deploy Update - $(date +%Y-%m-%d\ %H:%M)"' ERR
+trap 'send_email "[FAILED] Deploy Update - $(date +%Y-%m-%d_%H:%M)"' ERR
 
 CONTAINER_NAME="letwinventory-backend-prod"
 COMPOSE_FILE="${PROJECT_DIR}/docker-compose.prod.yml"
@@ -46,7 +46,7 @@ if [ -f "$LOCK_FILE" ]; then
   exit 1
 fi
 echo $$ > "$LOCK_FILE"
-trap 'rm -f "$LOCK_FILE"; send_email "[FAILED] Deploy Update - $(date +%Y-%m-%d\ %H:%M)"' ERR
+trap 'rm -f "$LOCK_FILE"; send_email "[FAILED] Deploy Update - $(date +%Y-%m-%d_%H:%M)"' ERR
 trap 'rm -f "$LOCK_FILE"' EXIT
 
 # --- Backup database ---

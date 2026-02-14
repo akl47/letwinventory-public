@@ -61,6 +61,10 @@
       matTooltip="Toggle Grid">
       Grid
     </mat-slide-toggle>
+    <mat-slide-toggle [checked]="showSubHarnessBounds()" (change)="showSubHarnessBoundsChange.emit($event.checked)"
+      matTooltip="Toggle Sub-Harness Bounds">
+      Bounds
+    </mat-slide-toggle>
   </div>
 
   <mat-divider [vertical]="true"></mat-divider>

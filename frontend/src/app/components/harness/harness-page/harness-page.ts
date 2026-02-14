@@ -69,6 +69,7 @@ export class HarnessPage implements OnInit, OnDestroy {
   currentSelection = signal<CanvasSelection | null>(null);
   activeTool = signal<HarnessTool>('select');
   gridEnabled = signal<boolean>(true);
+  showSubHarnessBounds = signal<boolean>(true);
   zoomLevel = signal<number>(100);
   clipboardConnector = signal<HarnessConnector | null>(null);
 
@@ -559,8 +560,8 @@ export class HarnessPage implements OnInit, OnDestroy {
           if (db.pinCount && db.pinCount !== conn.pinCount) {
             changes.push({ field: 'Pin Count', description: `${conn.pinCount} → ${db.pinCount}` });
           }
-          if ((db.color || null) !== (conn.color || null)) {
-            changes.push({ field: 'Color', description: `${conn.color || 'none'} → ${db.color || 'none'}` });
+          if (db.color && db.color !== conn.color) {
+            changes.push({ field: 'Color', description: `${conn.color || 'none'} → ${db.color}` });
           }
           if (db.pins && db.pins.length !== conn.pins.length) {
             changes.push({ field: 'Pins', description: `${conn.pins.length} pins → ${db.pins.length} pins` });
@@ -859,6 +860,15 @@ export class HarnessPage implements OnInit, OnDestroy {
     });
   }
 
+  private stripImageData(data: HarnessData): HarnessData {
+    return {
+      ...data,
+      connectors: data.connectors.map(({ connectorImage, pinoutDiagramImage, ...rest }) => rest as any),
+      cables: data.cables.map(({ cableDiagramImage, ...rest }) => rest as any),
+      components: (data.components || []).map(({ componentImage, pinoutDiagramImage, ...rest }) => rest as any),
+    };
+  }
+
   private performSave() {
     const data = this.harnessData();
     if (!data) {
@@ -883,7 +893,7 @@ export class HarnessPage implements OnInit, OnDestroy {
       name: data.name,
       revision: data.revision,
       description: data.description,
-      harnessData: data,
+      harnessData: this.stripImageData(data),
       thumbnailBase64: thumbnail
     };
 
@@ -905,7 +915,7 @@ export class HarnessPage implements OnInit, OnDestroy {
     const subHarnessSaves: Array<ReturnType<typeof this.harnessService.updateHarness>> = [];
     this.pendingSubHarnessChanges.forEach((subData, subId) => {
       subHarnessSaves.push(
-        this.harnessService.updateHarness(subId, { harnessData: subData })
+        this.harnessService.updateHarness(subId, { harnessData: this.stripImageData(subData) })
       );
     });
 
@@ -1017,7 +1027,6 @@ export class HarnessPage implements OnInit, OnDestroy {
         // Assign highest zIndex so new connector appears in front
         const newConnector = { ...connector, zIndex: this.getMaxZIndex() + 1 };
         this.harnessCanvas?.addConnector(newConnector);
-        this.updateHarnessConnectors([...this.harnessData()?.connectors || [], newConnector]);
       }
     });
   }
@@ -1377,7 +1386,6 @@ export class HarnessPage implements OnInit, OnDestroy {
         // Assign highest zIndex so new component appears in front
         const newComponent = { ...component, zIndex: this.getMaxZIndex() + 1 };
         this.harnessCanvas?.addComponent(newComponent);
-        this.updateHarnessComponents([...(this.harnessData()?.components || []), newComponent]);
       }
     });
   }
