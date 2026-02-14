@@ -28,7 +28,9 @@
     (zoomIn)="onZoomIn()"
     (zoomOut)="onZoomOut()"
     (resetZoom)="onResetZoom()"
+    [showSubHarnessBounds]="showSubHarnessBounds()"
     (gridEnabledChange)="gridEnabled.set($event)"
+    (showSubHarnessBoundsChange)="showSubHarnessBounds.set($event)"
     (toolChanged)="onToolChanged($event)"
     (undo)="onUndo()"
     (redo)="onRedo()">
@@ -42,6 +44,7 @@
       [gridEnabled]="gridEnabled()"
       [gridSize]="20"
       [isLocked]="isLocked()"
+      [showSubHarnessBounds]="showSubHarnessBounds()"
       (selectionChanged)="onSelectionChanged($event)"
       (dataChanged)="onDataChanged($event)"
       (connectorMoved)="onConnectorMoved($event)"

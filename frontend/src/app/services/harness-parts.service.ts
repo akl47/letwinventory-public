@@ -66,7 +66,7 @@ export class HarnessPartsService {
     return {
       ...connector,
       pinoutDiagramImage: this.extractImageData(connector.pinoutDiagramFile),
-      connectorImage: this.extractImageData(connector.connectorImageFile)
+      connectorImage: this.extractImageData(connector.connectorImageFile) || this.extractImageData(connector.part?.imageFile)
     };
   }
 
@@ -74,7 +74,7 @@ export class HarnessPartsService {
   private transformCable(cable: DbCable): DbCable {
     return {
       ...cable,
-      cableDiagramImage: this.extractImageData(cable.cableDiagramFile)
+      cableDiagramImage: this.extractImageData(cable.cableDiagramFile) || this.extractImageData(cable.part?.imageFile)
     };
   }
 
@@ -83,7 +83,7 @@ export class HarnessPartsService {
     return {
       ...component,
       pinoutDiagramImage: this.extractImageData(component.pinoutDiagramFile),
-      componentImage: this.extractImageData(component.componentImageFile)
+      componentImage: this.extractImageData(component.componentImageFile) || this.extractImageData(component.part?.imageFile)
     };
   }
 

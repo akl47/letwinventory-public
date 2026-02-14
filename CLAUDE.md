@@ -1386,6 +1386,83 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Session: 2026-02-14
+
+### Files Modified
+- `scripts/deploy-update.sh`
+- `backend/services/scheduledTaskService.js`
+- `backend/api/planning/scheduled-task/controller.js`
+
+### Changes Made
+
+1. **Fixed deploy script health check and date formatting**
+   - Health check now retries up to 6 times with 5s intervals (30s total) instead of single attempt
+   - Fixed `date` format error on success email: quoted format string `$(date '+%Y-%m-%d %H:%M')`
+   - Fixed `date` format error in trap lines: changed `%Y-%m-%d\ %H:%M` to `%Y-%m-%d_%H:%M`
+
+2. **Fixed scheduled task cron AND logic for DOM + DOW**
+   - POSIX cron (and `cron-parser`) ORs day-of-month and day-of-week when both are specified
+   - Added `computeNextRun()` in scheduledTaskService that applies AND logic instead
+   - Iterates through cron-parser candidates and filters for dates matching BOTH DOM and DOW
+   - Controller now imports shared `computeNextRun()` from service (removed duplicate `computeNextRunAt`)
+
+3. **Fixed timezone bug in DOM/DOW matching**
+   - `candidate.getDate()`/`candidate.getDay()` used server system timezone, not cron timezone
+   - Added `getDatePartsInTimezone()` using `Intl.DateTimeFormat` to get day/weekday in the cron's timezone
+   - Handles cron DOW quirk where both 0 and 7 mean Sunday
+   - Supports ranges (`8-14`), lists (`1-7,15-21`), and single values in cron fields
+
+### Notes
+- `computeNextRun()` is the single source of truth for next-run computation (service + controller)
+- Existing scheduled tasks need to be re-saved to recompute `nextRunAt` with fixed logic
+- `matchesCronField()` handles comma-separated ranges (e.g., `1-7,15-21`)
+- Current branch: CD
+
+---
+
+## Session: 2026-02-14 (continued)
+
+### Files Modified
+- `frontend/src/app/components/harness/harness-page/harness-page.ts`
+- `frontend/src/app/services/harness-parts.service.ts`
+- `frontend/src/app/models/harness.model.ts`
+- `backend/api/parts/connector/controller.js`
+- `backend/api/parts/cable/controller.js`
+- `backend/api/parts/component/controller.js`
+
+### Changes Made
+
+1. **Strip image data from harness JSON before saving**
+   - Added `stripImageData()` helper in harness-page.ts that removes `connectorImage`, `pinoutDiagramImage`, `cableDiagramImage`, `componentImage` from connectors/cables/components before saving
+   - Uses destructuring rest syntax to exclude image fields (no deep clone)
+   - Applied to both main harness save and sub-harness saves in `performSave()`
+   - In-memory `harnessData` signal keeps images for canvas display; they just aren't persisted to JSON
+   - On reload, `syncPartsFromDatabase()` re-fetches images from the database
+
+2. **Fixed connector/component doubling on add**
+   - `onAddConnector()` and `onAddComponent()` were calling both `harnessCanvas.addConnector()` (which emits `dataChanged` → updates `harnessData`) AND `updateHarnessConnectors([...existing, new])` — appending the element twice
+   - Removed the redundant `updateHarnessConnectors`/`updateHarnessComponents` calls
+   - `onAddCable()` was already correct (only called `harnessCanvas.addCable()`)
+
+3. **Fixed image reload from database on harness load**
+   - Backend `getConnectorByPartId`, `getCableByPartId`, `getComponentByPartId` now include nested `Part.imageFile` association
+   - Frontend transform functions (`transformConnector`, `transformCable`, `transformComponent`) now fall back to `part.imageFile.data` when the specific image file (e.g., `connectorImageFile`) is null
+   - This matches the dialog behavior which uses `Part.imageFile.data` as the primary image source
+   - Updated `DbElectricalConnector`, `DbCable`, `DbElectricalComponent` interfaces to include `imageFile` on the `part` field
+
+4. **Fixed false color sync detection on reload**
+   - `syncPartsFromDatabase()` was flagging "Color: GY → none" when the DB connector had no color but the harness connector did
+   - Changed color comparison to only flag when DB has an actual non-null color that differs
+   - A null DB color no longer overrides a locally-set harness color
+
+### Notes
+- Harness JSON size is significantly reduced (no more inline base64 images)
+- Images are transient in-memory data, always re-fetched from the parts database on load
+- The `syncPartsFromDatabase()` flow handles image restoration transparently
+- Current branch: bug_fix
+
+---
+
 ## Instructions for Future Sessions
 
 Each session should:

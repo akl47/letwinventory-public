@@ -123,6 +123,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
   gridEnabled = input<boolean>(true);
   gridSize = input<number>(20);
   isLocked = input<boolean>(false);
+  showSubHarnessBounds = input<boolean>(true);
 
   // Outputs
   selectionChanged = output<CanvasSelection>();
@@ -740,7 +741,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
             const childHarness = this.subHarnessDataCache.get(item.element.harnessId);
             const subHighlight = highlightedPins.subHarnesses.get(item.element.id);
             const subMatingHighlight = highlightedPins.subHarnessesMating.get(item.element.id);
-            drawSubHarnessCollapsed(ctx, item.element, childHarness, isSelected, this.loadedImages, subHighlight, subMatingHighlight);
+            drawSubHarnessCollapsed(ctx, item.element, childHarness, isSelected, this.loadedImages, subHighlight, subMatingHighlight, this.showSubHarnessBounds());
           }
         }
 

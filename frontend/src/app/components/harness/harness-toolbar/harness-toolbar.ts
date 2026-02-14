@@ -40,6 +40,7 @@ export class HarnessToolbar {
   canUndo = input<boolean>(false);
   canRedo = input<boolean>(false);
   isLocked = input<boolean>(false);
+  showSubHarnessBounds = input<boolean>(true);
 
   // Outputs
   newHarness = output<void>();
@@ -59,6 +60,7 @@ export class HarnessToolbar {
   zoomOut = output<void>();
   resetZoom = output<void>();
   gridEnabledChange = output<boolean>();
+  showSubHarnessBoundsChange = output<boolean>();
   toolChanged = output<HarnessTool>();
   undo = output<void>();
   redo = output<void>();

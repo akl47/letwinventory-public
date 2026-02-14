@@ -152,7 +152,12 @@ exports.getCableByPartId = async (req, res, next) => {
         ...(db.Part ? [{
           model: db.Part,
           as: 'part',
-          attributes: ['id', 'name']
+          attributes: ['id', 'name'],
+          include: db.UploadedFile ? [{
+            model: db.UploadedFile,
+            as: 'imageFile',
+            attributes: ['id', 'filename', 'mimeType', 'data']
+          }] : []
         }] : []),
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
