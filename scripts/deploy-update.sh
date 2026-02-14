@@ -88,13 +88,20 @@ log "[$(date)] Migrations complete"
 
 # --- Health check ---
 HEALTH_URL="http://localhost:${BACKEND_PORT:-3000}/api/auth/user/check-token"
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || true)
-if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "200" ]; then
-  log "[$(date)] Health check passed (HTTP ${HTTP_CODE})"
-else
-  log "[$(date)] WARNING: Health check returned HTTP ${HTTP_CODE} (expected 401)"
-fi
+log "[$(date)] Waiting for backend to accept connections..."
+for i in $(seq 1 6); do
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || true)
+  if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "200" ]; then
+    log "[$(date)] Health check passed (HTTP ${HTTP_CODE})"
+    break
+  fi
+  if [ "$i" -eq 6 ]; then
+    log "[$(date)] WARNING: Health check returned HTTP ${HTTP_CODE} after 30s (expected 401)"
+    break
+  fi
+  sleep 5
+done
 
 IMAGE_ID=$(docker inspect --format='{{.Image}}' "$CONTAINER_NAME" 2>/dev/null | cut -c8-19)
 log "[$(date)] Deploy complete. Image: ${IMAGE_ID}"
-send_email "[OK] Deploy Update - $(date +%Y-%m-%d %H:%M)"
+send_email "[OK] Deploy Update - $(date '+%Y-%m-%d %H:%M')"
