@@ -11,9 +11,9 @@ import { PinPosition, ElementDimensions } from '../types';
 import { roundRect } from '../drawing-utils';
 import { worldToLocal } from '../transform-utils';
 // Note: COLORS, drawSelectionHighlight, drawElementBody, drawElementHeader available from './base-element' if needed
-import { drawConnector, getConnectorPinPositions, getConnectorDimensions } from './connector';
-import { drawCable, getCableWirePositions, getCableDimensions } from './cable';
-import { drawComponent, getComponentPinPositions, getComponentDimensions } from './component';
+import { drawConnector, getConnectorPinPositions, getConnectorDimensions, hitTestConnectorButton } from './connector';
+import { drawCable, getCableWirePositions, getCableDimensions, hitTestCableButton } from './cable';
+import { drawComponent, getComponentPinPositions, getComponentDimensions, hitTestComponentButton } from './component';
 import { drawWire } from '../wire';
 
 // Sub-harness colors
@@ -735,6 +735,67 @@ export function hitTestSubHarnessPin(
     const dist = Math.sqrt(Math.pow(testX - pin.x, 2) + Math.pow(testY - pin.y, 2));
     if (dist <= hitRadius) {
       return pin;
+    }
+  }
+
+  return null;
+}
+
+export interface SubHarnessButtonHit {
+  elementType: 'connector' | 'cable' | 'component';
+  elementId: string;
+  button: string;
+}
+
+/**
+ * Hit test for expand buttons on child elements within a sub-harness.
+ * Transforms world coordinates to sub-harness local space, then tests each child element's buttons.
+ */
+export function hitTestSubHarnessButton(
+  subHarnessRef: SubHarnessRef,
+  childHarness: WireHarness | undefined,
+  testX: number,
+  testY: number
+): SubHarnessButtonHit | null {
+  if (!childHarness?.harnessData) return null;
+
+  const x = subHarnessRef.position?.x || 0;
+  const y = subHarnessRef.position?.y || 0;
+  const rotation = subHarnessRef.rotation || 0;
+  const flipped = subHarnessRef.flipped || false;
+  const { bounds } = getSubHarnessDimensions(subHarnessRef, childHarness);
+
+  // Transform world coords to sub-harness local space
+  const local = worldToLocal(testX, testY, {
+    ox: x, oy: y, rotation, flipped,
+    width: bounds.maxX - bounds.minX
+  });
+
+  const data = childHarness.harnessData;
+
+  // Test connectors
+  for (const connector of data.connectors || []) {
+    const hit = hitTestConnectorButton(connector, local.x, local.y);
+    if (hit) {
+      return { elementType: 'connector', elementId: connector.id, button: hit };
+    }
+  }
+
+  // Test cables
+  for (const cable of data.cables || []) {
+    if (cable.position) {
+      const hit = hitTestCableButton(cable, local.x, local.y);
+      if (hit) {
+        return { elementType: 'cable', elementId: cable.id, button: hit };
+      }
+    }
+  }
+
+  // Test components
+  for (const component of data.components || []) {
+    const hit = hitTestComponentButton(component, local.x, local.y);
+    if (hit) {
+      return { elementType: 'component', elementId: component.id, button: hit };
     }
   }
 
