@@ -42,33 +42,44 @@ fi
 # # --- Create local backup directory ---
 # mkdir -p "$LOCAL_BACKUP_DIR"
 
-# # --- Find latest backup on VPS ---
-log "[$(date)] Finding latest backup on ${VPS_HOST}..."
-LATEST=$(ssh -p "$VPS_PORT" "${VPS_USER}@${VPS_HOST}" "ls -t ${VPS_BACKUP_DIR}/*.dump 2>/dev/null | head -1")
+# # --- Find all backups on VPS ---
+log "[$(date)] Finding backups on ${VPS_HOST}..."
+ALL_FILES=$(ssh -p "$VPS_PORT" "${VPS_USER}@${VPS_HOST}" "ls -t ${VPS_BACKUP_DIR}/*.dump 2>/dev/null")
 
-if [ -z "$LATEST" ]; then
-  log "[$(date)] ERROR: No backups found on VPS"
-  send_email "[FAILED] Backup Pull - No backups on VPS"
-  exit 1
-fi
-log "[$(date)] Latest backup found: ${LATEST}"
-FILENAME=$(basename "$LATEST")
-
-# # --- Skip if already downloaded ---
-if [ -f "${LOCAL_BACKUP_DIR}/${FILENAME}" ]; then
-  log "[$(date)] Already have ${FILENAME}, skipping"
-  send_email "[SKIP] Backup Pull - ${FILENAME}"
+if [ -z "$ALL_FILES" ]; then
+  log "[$(date)] No backups found on VPS"
+  send_email "[SKIP] Backup Pull - No backups on VPS"
   exit 0
 fi
 
-# # --- Download ---
-log "[$(date)] Downloading ${FILENAME}..."
-scp -P "$VPS_PORT" "${VPS_USER}@${VPS_HOST}:${LATEST}" "${LOCAL_BACKUP_DIR}/${FILENAME}"
-log "[$(date)] Downloaded: $(du -h "${LOCAL_BACKUP_DIR}/${FILENAME}" | cut -f1)"
+PULLED=0
+SKIPPED=0
+TO_DELETE=""
 
-# # --- Delete from VPS after successful download ---
-ssh -p "$VPS_PORT" "${VPS_USER}@${VPS_HOST}" "rm -f ${LATEST}"
-log "[$(date)] Deleted ${FILENAME} from VPS"
+while IFS= read -r REMOTE_PATH; do
+  FILENAME=$(basename "$REMOTE_PATH")
 
-log "[$(date)] Pull complete: ${FILENAME}"
-send_email "[OK] Backup Pull - ${FILENAME}"
+  if [ -f "${LOCAL_BACKUP_DIR}/${FILENAME}" ]; then
+    log "[$(date)] Already have ${FILENAME}, skipping"
+    SKIPPED=$((SKIPPED + 1))
+    continue
+  fi
+
+  log "[$(date)] Downloading ${FILENAME}..."
+  if scp -P "$VPS_PORT" "${VPS_USER}@${VPS_HOST}:${REMOTE_PATH}" "${LOCAL_BACKUP_DIR}/${FILENAME}"; then
+    log "[$(date)] Downloaded: $(du -h "${LOCAL_BACKUP_DIR}/${FILENAME}" | cut -f1)"
+    TO_DELETE+=" ${REMOTE_PATH}"
+    PULLED=$((PULLED + 1))
+  else
+    log "[$(date)] FAILED to download ${FILENAME}, keeping on VPS"
+  fi
+done <<< "$ALL_FILES"
+
+# # --- Delete successfully pulled files from VPS ---
+if [ -n "$TO_DELETE" ]; then
+  ssh -p "$VPS_PORT" "${VPS_USER}@${VPS_HOST}" "rm -f ${TO_DELETE}"
+  log "[$(date)] Deleted ${PULLED} file(s) from VPS"
+fi
+
+log "[$(date)] Pull complete: ${PULLED} downloaded, ${SKIPPED} skipped"
+send_email "[OK] Backup Pull - ${PULLED} downloaded, ${SKIPPED} skipped"

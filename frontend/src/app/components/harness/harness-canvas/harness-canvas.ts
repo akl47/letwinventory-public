@@ -37,6 +37,8 @@ import {
   getBlockCentroidOffset,
 } from '../../../utils/harness/elements/block-renderer';
 import { HarnessService } from '../../../services/harness.service';
+import { HarnessPartsService } from '../../../services/harness-parts.service';
+import { forkJoin, of, catchError } from 'rxjs';
 import {
   drawWire,
   drawWirePreview,
@@ -85,6 +87,8 @@ import {
   SubHarnessEditState,
   hitTestSubHarness,
   hitTestSubHarnessPin,
+  hitTestSubHarnessButton,
+  SubHarnessButtonHit,
   getSubHarnessPinPositions,
   getSubHarnessDimensions,
 } from '../../../utils/harness/elements/sub-harness';
@@ -113,6 +117,7 @@ export interface CanvasSelection {
 export class HarnessCanvas implements AfterViewInit, OnDestroy {
   private platformId = inject(PLATFORM_ID);
   private harnessService = inject(HarnessService);
+  private harnessPartsService = inject(HarnessPartsService);
 
   @ViewChild('canvasContainer') canvasContainer!: ElementRef<HTMLDivElement>;
   @ViewChild('mainCanvas') canvasRef!: ElementRef<HTMLCanvasElement>;
@@ -527,6 +532,8 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           this.loadingSubHarnesses.delete(h.id);
         });
         this.render();
+        // Fetch images for sub-harness elements from parts database
+        this.syncSubHarnessImages(harnesses);
       },
       error: () => {
         idsToLoad.forEach(id => this.loadingSubHarnesses.delete(id));
@@ -551,6 +558,69 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
 
     // Reload the data
     this.loadSubHarnessData(data.subHarnesses);
+  }
+
+  /**
+   * Fetch images from parts database for sub-harness elements and preload them.
+   * Images are stripped from saved harness JSON, so we re-fetch them by partId.
+   */
+  private syncSubHarnessImages(harnesses: WireHarness[]): void {
+    for (const harness of harnesses) {
+      const data = harness.harnessData;
+      if (!data) continue;
+
+      const connectorsWithPartId = data.connectors.filter(c => c.partId);
+      const cablesWithPartId = data.cables.filter(c => c.partId);
+      const componentsWithPartId = (data.components || []).filter(c => c.partId);
+
+      if (connectorsWithPartId.length === 0 && cablesWithPartId.length === 0 && componentsWithPartId.length === 0) continue;
+
+      const connectorReqs = connectorsWithPartId.map(c =>
+        this.harnessPartsService.getConnectorByPartId(c.partId!).pipe(catchError(() => of(null)))
+      );
+      const cableReqs = cablesWithPartId.map(c =>
+        this.harnessPartsService.getCableByPartId(c.partId!).pipe(catchError(() => of(null)))
+      );
+      const componentReqs = componentsWithPartId.map(c =>
+        this.harnessPartsService.getComponentByPartId(c.partId!).pipe(catchError(() => of(null)))
+      );
+
+      forkJoin([
+        connectorReqs.length > 0 ? forkJoin(connectorReqs) : of([]),
+        cableReqs.length > 0 ? forkJoin(cableReqs) : of([]),
+        componentReqs.length > 0 ? forkJoin(componentReqs) : of([])
+      ]).subscribe(([dbConnectors, dbCables, dbComponents]) => {
+        let changed = false;
+
+        dbConnectors.forEach((db, idx) => {
+          if (!db) return;
+          const conn = connectorsWithPartId[idx];
+          if (db.connectorImage) { conn.connectorImage = db.connectorImage; changed = true; }
+          if (db.pinoutDiagramImage) { conn.pinoutDiagramImage = db.pinoutDiagramImage; changed = true; }
+        });
+
+        dbCables.forEach((db, idx) => {
+          if (!db) return;
+          const cable = cablesWithPartId[idx];
+          if (db.cableDiagramImage) { cable.cableDiagramImage = db.cableDiagramImage; changed = true; }
+        });
+
+        dbComponents.forEach((db, idx) => {
+          if (!db) return;
+          const comp = componentsWithPartId[idx];
+          if (db.componentImage) { comp.componentImage = db.componentImage; changed = true; }
+          if (db.pinoutDiagramImage) { comp.pinoutDiagramImage = db.pinoutDiagramImage; changed = true; }
+        });
+
+        if (changed) {
+          // Preload the images and re-render
+          this.preloadConnectorImages(data.connectors);
+          this.preloadCableImages(data.cables);
+          this.preloadComponentImages(data.components || []);
+          this.render();
+        }
+      });
+    }
   }
 
   private render() {
@@ -1477,6 +1547,13 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         const buttonHit = hitTestBlockButton(item.block, x, y);
         if (buttonHit) {
           this.handleBlockButtonClick(data, item.block, buttonHit);
+          return;
+        }
+      } else if (item.type === 'subHarness') {
+        const childHarness = this.subHarnessDataCache.get(item.element.harnessId);
+        const buttonHit = hitTestSubHarnessButton(item.element, childHarness, x, y);
+        if (buttonHit) {
+          this.handleSubHarnessButtonClick(item.element, childHarness, buttonHit);
           return;
         }
       }
@@ -4143,6 +4220,41 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       const components = (data.components || []).map(c => c.id === block.id ? updatedComponent : c);
       this.dataChanged.emit({ ...data, components });
     }
+  }
+
+  /**
+   * Handle expand button clicks on child elements within a sub-harness.
+   * Toggles image visibility on the sub-harness's cached data and re-renders.
+   */
+  private handleSubHarnessButtonClick(
+    subRef: SubHarnessRef,
+    childHarness: WireHarness | undefined,
+    hit: SubHarnessButtonHit
+  ): void {
+    if (!childHarness?.harnessData) return;
+    const data = childHarness.harnessData;
+
+    if (hit.elementType === 'connector') {
+      const conn = data.connectors.find(c => c.id === hit.elementId);
+      if (!conn) return;
+      if (hit.button === 'pinout') conn.showPinoutDiagram = !conn.showPinoutDiagram;
+      else if (hit.button === 'connectorImage') conn.showConnectorImage = !conn.showConnectorImage;
+    } else if (hit.elementType === 'cable') {
+      const cable = data.cables.find(c => c.id === hit.elementId);
+      if (!cable) return;
+      cable.showCableDiagram = !cable.showCableDiagram;
+    } else if (hit.elementType === 'component') {
+      const comp = (data.components || []).find(c => c.id === hit.elementId);
+      if (!comp) return;
+      if (hit.button === 'pinout') comp.showPinoutDiagram = !comp.showPinoutDiagram;
+      else if (hit.button === 'componentImage') comp.showComponentImage = !comp.showComponentImage;
+    }
+
+    // Preload any newly-visible images and re-render
+    this.preloadConnectorImages(data.connectors);
+    this.preloadCableImages(data.cables);
+    this.preloadComponentImages(data.components || []);
+    this.render();
   }
 
   /**
