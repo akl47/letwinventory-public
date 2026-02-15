@@ -107,8 +107,12 @@ export class AuthService {
                     return false;
                 }
             }),
-            catchError(() => {
-                this.clearToken();
+            catchError((error) => {
+                // Only clear tokens on explicit auth failures (401/403)
+                // Network errors (status 0) mean backend is unreachable — don't destroy tokens
+                if (error?.status === 401 || error?.status === 403) {
+                    this.clearToken();
+                }
                 return of(false);
             })
         );
