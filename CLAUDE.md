@@ -199,3 +199,73 @@ Each session should:
 ### Changes Made
 1. **Cleaned up debug logging in backend** — removed ~24 debug `console.log` statements from production code; kept intentional prefixed logs (`[AUTH]`, `[REFRESH]`, `[ScheduledTasks]`) and `console.error` in catch blocks; added `--silent` to Jest to suppress remaining console output during tests
 2. **Fixed harness E2E tests** — corrected route path to `/#/harness/editor/${id}` (matching `app.routes.ts`), rewrote export test to use correct `download` icon selector and proper `waitForEvent` ordering
+
+## Session: 2026-02-15 (Design Requirements Feature)
+
+### Files Created
+- `backend/migrations/20260215120000-create-requirement-categories.js` — RequirementCategories table migration
+- `backend/migrations/20260215120001-create-design-requirements.js` — DesignRequirements table migration with FK indexes
+- `backend/models/design/requirementCategory.js` — RequirementCategory model with hasMany association
+- `backend/models/design/designRequirement.js` — DesignRequirement model with self-referencing hierarchy, User, Project, Category associations
+- `backend/api/design/requirement-category/controller.js` — CRUD controller for categories
+- `backend/api/design/requirement-category/routes.js` — Routes with checkToken
+- `backend/api/design/requirement/controller.js` — CRUD + approve/unapprove controller
+- `backend/api/design/requirement/routes.js` — Routes with checkToken
+- `backend/tests/__tests__/design/requirement-category.test.js` — 12 tests for category CRUD
+- `backend/tests/__tests__/design/design-requirement.test.js` — 19 tests for requirement CRUD + hierarchy + approval
+- `frontend/src/app/models/design-requirement.model.ts` — DesignRequirement and RequirementCategory interfaces
+- `frontend/src/app/services/design-requirement.service.ts` — CRUD + approve/unapprove service with cache
+- `frontend/src/app/services/requirement-category.service.ts` — CRUD service with cache
+- `frontend/src/app/components/design/requirements-list-view/` — Tree table list view (ts, html, css)
+- `frontend/src/app/components/design/requirement-edit-page/` — Create/edit page (ts, html, css)
+- `frontend/src/app/components/design/category-manage-dialog/` — Category management dialog (ts, html, css)
+
+### Files Modified
+- `frontend/src/app/app.routes.ts` — added 3 routes: `/requirements`, `/requirements/new`, `/requirements/:id/edit`
+- `frontend/src/app/components/common/nav/nav.component.html` — added "Requirements" nav link with checklist icon
+- `backend/tests/setup.js` — added DesignRequirement and RequirementCategory to tablesToClean
+- `docs/requirements.md` — added section 14 (REQ-DES-001 through REQ-DES-007) with test file references
+
+### Changes Made
+1. **Design Requirements feature** — full-stack implementation following CLAUDE.md workflow (requirements → tests → implementation)
+2. **Backend** — new `design/` API category auto-discovered by existing route scanner; RequirementCategories lookup table + DesignRequirements table with hierarchical parent-child, project FK, category FK, approval workflow
+3. **Frontend** — tree table list view with expand/collapse, project filter, search; separate create/edit pages with view-first pattern; category management dialog
+4. **Tests** — 31 new backend tests (29 suites / 273 tests total, all passing)
+
+### Decisions
+- API lives under `/api/design/requirement` and `/api/design/requirement-category` (new `design/` group)
+- Sidebar link placed between "Wire Harness" and "Scanner" using `checklist` material icon
+- Tree table uses flat data source with indentation rather than nested mat-tree (matches existing mat-table patterns)
+- Categories managed via dialog opened from edit page (not a separate route)
+
+## Session: 2026-02-15 (Requirement History / QMS Audit Trail)
+
+### Files Created
+- `backend/migrations/20260215120002-create-requirement-history.js` — RequirementHistory table migration with FK indexes
+- `backend/models/design/requirementHistory.js` — RequirementHistory model (immutable, no updatedAt, User FK)
+- `backend/tests/__tests__/design/requirement-history.test.js` — 15 tests for history on create/update/approve/unapprove/delete + GET endpoint + lifecycle
+
+### Files Modified
+- `backend/api/design/requirement/controller.js` — added `recordHistory` helper, history recording on all 5 mutation types, `getHistory` endpoint
+- `backend/api/design/requirement/routes.js` — added `GET /:id/history` route
+- `backend/tests/setup.js` — added `RequirementHistory` to tablesToClean
+- `frontend/src/app/models/design-requirement.model.ts` — added `RequirementHistoryEntry` interface
+- `frontend/src/app/services/design-requirement.service.ts` — added `getHistory()` method
+- `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.ts` — added history signal, toggle, load, helper methods
+- `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.html` — added collapsible history timeline section
+- `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.css` — added history timeline styles
+- `docs/requirements.md` — added REQ-DES-008 through REQ-DES-011, updated REQ-DES-001 derived reqs
+
+### Changes Made
+1. **Requirement History audit trail** — immutable `RequirementHistory` table following HarnessRevisionHistory pattern with User FK improvement
+2. **Auto-recording** — all 5 mutation types (create/update/approve/unapprove/delete) automatically log history with field-level diffs
+3. **History API** — `GET /api/design/requirement/:id/history` returns entries DESC with changedBy user association
+4. **Frontend timeline** — collapsible history section on edit page with change type icons, user, timestamp, notes, and field diffs
+5. **Tests** — 15 new tests (30 suites / 285 tests total, all passing)
+
+### Decisions
+- Follows HarnessRevisionHistory pattern: `timestamps: false`, `freezeTableName: true`, hardcoded enum validation
+- Improvement over HarnessRevisionHistory: uses `changedByUserID` FK to Users instead of string `changedBy`
+- Update diffs only tracked for content fields (not approved/activeFlag which have dedicated change types)
+- No history record created when update has no actual field changes
+- `changeNotes` supported on update for optional user-provided change reasons

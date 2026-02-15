@@ -1,64 +1,97 @@
 <mat-sidenav-container class="sidenav-container" autosize>
-    <mat-sidenav mode="side" [opened]="!isMobileRoute()" class="sidenav" [class.collapsed]="isSidenavCollapsed()">
-        <!-- Sidenav Header -->
-        <div class="sidenav-header">
-            <div class="logo"><img src="assets/logo.svg" alt="Logo"></div>
-            <span class="title">Letwinventory</span>
-        </div>
+    <mat-sidenav mode="side" [opened]="!isMobileRoute()" class="nav-rail" [class.collapsed]="isSidenavCollapsed()">
+        <div class="nav-rail-wrapper" (click)="$event.stopPropagation()">
+            <!-- Rail -->
+            <div class="rail">
+                <!-- Logo -->
+                <div class="rail-header">
+                    <div class="logo"><img src="assets/logo.svg" alt="Logo"></div>
+                </div>
 
-        <!-- Navigation Items -->
-        <mat-nav-list>
+                @if (!isAuthenticated()) {
+                <a class="rail-item" routerLink="/home" routerLinkActive="active">
+                    <div class="rail-icon-container">
+                        <mat-icon>home</mat-icon>
+                    </div>
+                    <span class="rail-label">Home</span>
+                </a>
+                }
+                @if (isAuthenticated()) {
+                <!-- Tasks - direct link -->
+                <a class="rail-item" routerLink="/tasks" routerLinkActive="active" (click)="navigateToTasks($event)">
+                    <div class="rail-icon-container">
+                        <mat-icon>task</mat-icon>
+                    </div>
+                    <span class="rail-label">Tasks</span>
+                </a>
 
-            @if (!isAuthenticated()) {
-            <a mat-list-item routerLink="/home" routerLinkActive="active-link" matTooltip="Home"
-                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
-                <mat-icon matListItemIcon>home</mat-icon>
-                <span matListItemTitle>Home</span>
-            </a>
+                <!-- Inventory - group toggle -->
+                <div class="rail-item" [class.active]="isGroupActive('inventory')" (click)="toggleGroup('inventory')">
+                    <div class="rail-icon-container">
+                        <mat-icon>inventory_2</mat-icon>
+                    </div>
+                    <span class="rail-label">Inventory</span>
+                </div>
+
+                <!-- Design - group toggle -->
+                <div class="rail-item" [class.active]="isGroupActive('design')" (click)="toggleGroup('design')">
+                    <div class="rail-icon-container">
+                        <mat-icon>design_services</mat-icon>
+                    </div>
+                    <span class="rail-label">Design</span>
+                </div>
+
+                <!-- Scanner - direct link, mobile only -->
+                <a class="rail-item mobile-scanner-btn" routerLink="/mobile" routerLinkActive="active">
+                    <div class="rail-icon-container">
+                        <mat-icon>qr_code_scanner</mat-icon>
+                    </div>
+                    <span class="rail-label">Scanner</span>
+                </a>
+                }
+
+                <!-- Version Footer -->
+                <div class="version-footer">
+                    <span class="version-text">v{{ appVersion }}</span>
+                </div>
+            </div>
+
+            <!-- Flyout Panel -->
+            @if (openGroup()) {
+            <div class="flyout-panel">
+                <div class="flyout-header">{{ openGroup() === 'inventory' ? 'Inventory' : 'Design' }}</div>
+                <mat-nav-list>
+                    @if (openGroup() === 'inventory') {
+                    <a mat-list-item routerLink="/inventory" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>account_tree</mat-icon>
+                        <span matListItemTitle>Hierarchy</span>
+                    </a>
+                    <a mat-list-item routerLink="/parts" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>widgets</mat-icon>
+                        <span matListItemTitle>Parts</span>
+                    </a>
+                    <a mat-list-item routerLink="/equipment" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>build</mat-icon>
+                        <span matListItemTitle>Equipment</span>
+                    </a>
+                    <a mat-list-item routerLink="/orders" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>shopping_cart</mat-icon>
+                        <span matListItemTitle>Orders</span>
+                    </a>
+                    }
+                    @if (openGroup() === 'design') {
+                    <a mat-list-item routerLink="/requirements" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>checklist</mat-icon>
+                        <span matListItemTitle>Requirements</span>
+                    </a>
+                    <a mat-list-item routerLink="/harness" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>cable</mat-icon>
+                        <span matListItemTitle>Harness Design</span>
+                    </a>
+                    }
+                </mat-nav-list>
+            </div>
             }
-            @if (isAuthenticated()) {
-            <a mat-list-item routerLink="/tasks" (click)="navigateToTasks($event)" routerLinkActive="active-link"
-                matTooltip="Tasks" matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
-                <mat-icon matListItemIcon>task</mat-icon>
-                <span matListItemTitle>Tasks</span>
-            </a>
-            <a mat-list-item routerLink="/inventory" routerLinkActive="active-link" matTooltip="Inventory"
-                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
-                <mat-icon matListItemIcon>inventory</mat-icon>
-                <span matListItemTitle>Inventory</span>
-            </a>
-            <a mat-list-item routerLink="/parts" routerLinkActive="active-link" matTooltip="Parts"
-                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
-                <mat-icon matListItemIcon>widgets</mat-icon>
-                <span matListItemTitle>Parts</span>
-            </a>
-            <a mat-list-item routerLink="/equipment" routerLinkActive="active-link" matTooltip="Equipment"
-                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
-                <mat-icon matListItemIcon>build</mat-icon>
-                <span matListItemTitle>Equipment</span>
-            </a>
-            <a mat-list-item routerLink="/orders" routerLinkActive="active-link" matTooltip="Orders"
-                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
-                <mat-icon matListItemIcon>shopping_cart</mat-icon>
-                <span matListItemTitle>Orders</span>
-            </a>
-            <a mat-list-item routerLink="/harness" routerLinkActive="active-link" matTooltip="Wire Harness"
-                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()">
-                <mat-icon matListItemIcon>cable</mat-icon>
-                <span matListItemTitle>Wire Harness</span>
-            </a>
-            <a mat-list-item routerLink="/mobile" routerLinkActive="active-link" matTooltip="Scanner"
-                matTooltipPosition="right" [matTooltipDisabled]="!isSidenavCollapsed()"
-                class="mobile-scanner-btn">
-                <mat-icon matListItemIcon>qr_code_scanner</mat-icon>
-                <span matListItemTitle>Scanner</span>
-            </a>
-            }
-        </mat-nav-list>
-
-        <!-- Version Footer -->
-        <div class="version-footer" [class.collapsed]="isSidenavCollapsed()">
-            <span class="version-text">v{{ appVersion }}</span>
         </div>
     </mat-sidenav>
 

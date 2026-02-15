@@ -1,0 +1,149 @@
+<div class="requirements-list-container">
+    <div class="list-header">
+        <h2>
+            <mat-icon>checklist</mat-icon>
+            Design Requirements
+        </h2>
+        <div class="header-actions">
+            <mat-form-field appearance="outline" class="search-field">
+                <mat-label>Search requirements</mat-label>
+                <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
+                    placeholder="Search by description, rationale, category, or owner">
+                <mat-icon matPrefix>search</mat-icon>
+            </mat-form-field>
+            <mat-form-field appearance="outline" class="project-filter">
+                <mat-label>Project</mat-label>
+                <mat-select [ngModel]="selectedProjectID()" (ngModelChange)="onProjectFilterChange($event)">
+                    <mat-option [value]="null">All Projects</mat-option>
+                    @for (project of projects(); track project.id) {
+                    <mat-option [value]="project.id">{{ project.name }}</mat-option>
+                    }
+                </mat-select>
+            </mat-form-field>
+            <mat-slide-toggle [checked]="approvedOnly()" (change)="toggleApprovedOnly()" color="primary">
+                Approved Only
+            </mat-slide-toggle>
+            <mat-slide-toggle [checked]="hideChildren()" (change)="toggleHideChildren()" color="primary">
+                Hide Children
+            </mat-slide-toggle>
+            <button mat-flat-button color="primary" (click)="createNew()">
+                <mat-icon>add</mat-icon>
+                New Requirement
+            </button>
+        </div>
+    </div>
+
+    @if (isLoading()) {
+    <div class="loading-state">
+        <mat-spinner diameter="48"></mat-spinner>
+        <p>Loading requirements...</p>
+    </div>
+    } @else if (displayedRows().length === 0) {
+    <div class="no-data">
+        @if (searchText()) {
+        <mat-icon>search_off</mat-icon>
+        <p>No requirements found matching "{{ searchText() }}"</p>
+        } @else {
+        <mat-icon>checklist</mat-icon>
+        <h3>No Design Requirements</h3>
+        <p>Create your first design requirement to get started</p>
+        <button mat-raised-button color="primary" (click)="createNew()">
+            <mat-icon>add</mat-icon>
+            Create Requirement
+        </button>
+        }
+    </div>
+    } @else {
+    <div class="cards-wrapper">
+        @for (row of displayedRows(); track row.requirement.id) {
+        <div class="card-row" [style.margin-left]="getIndentPx(row.level)">
+            <mat-accordion>
+                <mat-expansion-panel>
+                    <mat-expansion-panel-header>
+                        <mat-panel-title>
+                            <span class="card-description">{{ row.requirement.description }}</span>
+                        </mat-panel-title>
+                        <mat-panel-description>
+
+                            @if (row.requirement.category) {
+                            <span class="category-badge">{{ row.requirement.category.name }}</span>
+                            }
+                            @if (row.requirement.project) {
+                            <span class="project-tag"
+                                [style.background-color]="'#' + row.requirement.project.tagColorHex">
+                                {{ row.requirement.project.shortName }}
+                            </span>
+                            }
+                            @if (row.requirement.approved) {
+                            <mat-icon class="status-icon-approved"
+                                [matTooltip]="'Approved by ' + (row.requirement.approvedBy?.displayName || 'Unknown')">check_circle</mat-icon>
+                            } @else {
+                            <mat-icon class="status-icon-draft" matTooltip="Draft">pending</mat-icon>
+                            }
+                            <button mat-icon-button class="edit-btn"
+                                (click)="openRequirement(row.requirement); $event.stopPropagation()" matTooltip="Edit">
+                                <mat-icon>edit</mat-icon>
+                            </button>
+                        </mat-panel-description>
+                    </mat-expansion-panel-header>
+
+                    <div class="detail-grid">
+                        <div class="detail-field full-width">
+                            <span class="detail-label">Description</span>
+                            <span class="detail-value">{{ row.requirement.description }}</span>
+                        </div>
+
+                        <div class="detail-field full-width">
+                            <span class="detail-label">Rationale</span>
+                            <span class="detail-value">{{ row.requirement.rationale }}</span>
+                        </div>
+
+                        <div class="detail-field full-width">
+                            <span class="detail-label">Parameters</span>
+                            <span class="detail-value">{{ row.requirement.parameter }}</span>
+                        </div>
+                        <div class="detail-field">
+                            <span class="detail-label">Verification</span>
+                            <span class="detail-value">{{ row.requirement.verification }}</span>
+                        </div>
+                        <div class="detail-field">
+                            <span class="detail-label">Validation</span>
+                            <span class="detail-value">{{ row.requirement.validation }}</span>
+                        </div>
+
+                    </div>
+
+                    <div class="card-footer">
+                        @if (row.hasChildren) {
+                        <button mat-button class="tree-toggle" (click)="toggleExpand(row)">
+                            <mat-icon>{{ row.expanded ? 'expand_less' : 'expand_more' }}</mat-icon>
+                            {{ row.expanded ? 'Hide' : 'Show' }} Children
+                        </button>
+                        }
+                        @if (row.requirement.owner) {
+                        <span class="footer-item">
+                            <span class="footer-label">Owner:</span>
+                            {{ row.requirement.owner.displayName }}
+                        </span>
+                        }
+                        @if (row.requirement.approved && row.requirement.approvedBy) {
+                        <span class="footer-item">
+                            <span class="footer-label">Approved by:</span>
+                            {{ row.requirement.approvedBy.displayName }}
+                        </span>
+                        }
+                        @if (row.requirement.approved && row.requirement.updatedAt) {
+                        <span class="footer-item">
+                            <span class="footer-label">Approved:</span>
+                            {{ formatDate(row.requirement.updatedAt) }}
+                        </span>
+                        }
+
+                    </div>
+                </mat-expansion-panel>
+            </mat-accordion>
+        </div>
+        }
+    </div>
+    }
+</div>

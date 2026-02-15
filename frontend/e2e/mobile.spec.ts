@@ -7,7 +7,7 @@ test.describe('Mobile', () => {
   test('sidebar is collapsed on mobile', async ({ page }) => {
     await page.goto('/#/tasks');
     // Sidebar should exist with collapsed class (width 0 / hidden on mobile)
-    const sidebar = page.locator('.sidenav.collapsed');
+    const sidebar = page.locator('.nav-rail.collapsed');
     await expect(sidebar).toHaveCount(1);
   });
 

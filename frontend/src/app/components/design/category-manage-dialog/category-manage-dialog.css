@@ -1,0 +1,44 @@
+.add-category {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.add-field {
+    flex: 1;
+}
+
+.category-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+}
+
+.category-name {
+    flex: 1;
+}
+
+.category-actions {
+    display: flex;
+    gap: 0;
+}
+
+.edit-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    width: 100%;
+}
+
+.edit-field {
+    flex: 1;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 24px;
+    color: #888;
+    font-size: 14px;
+}

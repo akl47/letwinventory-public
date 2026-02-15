@@ -1,0 +1,359 @@
+:host {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.loading-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 80px 24px;
+    color: #888;
+}
+
+.edit-page-container {
+    flex: 1;
+    overflow-y: auto;
+    background-color: var(--mat-sys-surface-container-lowest);
+    padding: 0;
+}
+
+/* Sticky header — matches order page */
+.header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 24px;
+    background-color: var(--mat-sys-surface);
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+    box-shadow: 0 2px 4px rgba(255, 255, 255, 0.05);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.header h2 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 400;
+    color: var(--mat-sys-on-surface);
+}
+
+.spacer {
+    flex: 1;
+}
+
+/* Content wrapper — matches order page */
+.content-wrapper {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* Approval banner */
+.approval-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    background-color: var(--mat-sys-surface-container);
+    color: var(--mat-sys-on-surface-variant);
+    font-size: 14px;
+}
+
+.approval-banner.approved {
+    background-color: #1b5e20;
+    color: #a5d6a7;
+}
+
+.approval-banner mat-icon {
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+}
+
+/* Cards — matches order page */
+.info-card {
+    box-shadow: 0 1px 3px rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    margin-bottom: 20px;
+    padding: 16px;
+}
+
+mat-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+}
+
+mat-card-title {
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--mat-sys-on-surface);
+}
+
+mat-card-content {
+    padding: 0;
+}
+
+/* Form — matches order page */
+.req-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.form-row {
+    display: flex;
+    gap: 12px;
+}
+
+.form-row mat-form-field {
+    flex: 1;
+}
+
+.full-width {
+    width: 100%;
+}
+
+mat-form-field {
+    font-size: 14px;
+}
+
+/* View mode — matches order page info styles */
+.req-view-info {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.info-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+}
+
+.info-row.three-col {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+.info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.info-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.info-value {
+    font-size: 14px;
+    color: var(--mat-sys-on-surface);
+    line-height: 1.4;
+}
+
+.description-text {
+    white-space: pre-wrap;
+    padding: 8px;
+    background-color: var(--mat-sys-surface-container-lowest);
+    border-radius: 4px;
+    border-left: 2px solid var(--mat-sys-outline-variant);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+/* Owner take-ownership */
+.owner-value {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.take-ownership-btn {
+    font-size: 11px;
+    padding: 0 8px;
+    height: 24px;
+    line-height: 24px;
+    min-height: unset;
+}
+
+.take-ownership-btn mat-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+    margin-left: 2px;
+    margin-right: 2px;
+}
+
+/* History card header */
+.clickable-header {
+    cursor: pointer;
+}
+
+.clickable-header:hover mat-card-title {
+    color: var(--mat-sys-primary);
+}
+
+.header-toggle-icon {
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+    vertical-align: middle;
+    margin-right: 4px;
+}
+
+/* History timeline */
+.history-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.history-entry {
+    padding: 12px 16px;
+    border-radius: 8px;
+    background-color: var(--mat-sys-surface-container-lowest);
+    border-left: 3px solid var(--mat-sys-outline-variant);
+}
+
+.history-entry-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.history-type-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+}
+
+.history-type-icon.type-created { color: #4caf50; }
+.history-type-icon.type-updated { color: #2196f3; }
+.history-type-icon.type-approved { color: #66bb6a; }
+.history-type-icon.type-unapproved { color: #ff9800; }
+.history-type-icon.type-deleted { color: #f44336; }
+
+.history-type-label {
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.history-user {
+    color: var(--mat-sys-on-surface-variant);
+    font-size: 13px;
+}
+
+.history-timestamp {
+    color: var(--mat-sys-outline);
+    font-size: 12px;
+    margin-left: auto;
+}
+
+.history-notes {
+    margin-top: 6px;
+    padding: 6px 8px;
+    background-color: var(--mat-sys-surface-container);
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--mat-sys-on-surface-variant);
+    font-style: italic;
+}
+
+.history-diffs {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.history-diff {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    flex-wrap: wrap;
+}
+
+.diff-field {
+    color: var(--mat-sys-on-surface-variant);
+    font-weight: 500;
+    min-width: 80px;
+}
+
+.diff-from {
+    color: #ef9a9a;
+    word-break: break-word;
+    max-width: 300px;
+}
+
+.diff-arrow {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+    color: var(--mat-sys-outline);
+    flex-shrink: 0;
+}
+
+.diff-to {
+    color: #a5d6a7;
+    word-break: break-word;
+    max-width: 300px;
+}
+
+.history-empty {
+    color: var(--mat-sys-on-surface-variant);
+    font-size: 14px;
+    padding: 12px 0;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .header {
+        padding: 12px 16px;
+    }
+
+    .header h2 {
+        font-size: 20px;
+    }
+
+    .content-wrapper {
+        padding: 12px;
+    }
+
+    .form-row {
+        flex-direction: column;
+    }
+
+    .info-row {
+        grid-template-columns: 1fr;
+    }
+
+    .info-row.three-col {
+        grid-template-columns: 1fr;
+    }
+
+    mat-card-title {
+        font-size: 16px;
+    }
+
+    .info-card {
+        padding: 12px;
+    }
+}

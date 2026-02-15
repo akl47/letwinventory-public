@@ -1192,6 +1192,109 @@
 
 ---
 
+## 14. Design Requirements
+
+### REQ-DES-001
+- **Description:** The system shall provide CRUD operations for design requirements (create, read, update, soft-delete).
+- **Rationale:** 21 CFR 820.30 and ISO 13485:2016 §7.3 require documented design inputs, outputs, and traceability. First-class design requirement management enables regulatory compliance.
+- **Parameters:** `DesignRequirements` table with fields: id, description (TEXT, required), rationale (TEXT), parameter (TEXT), verification (TEXT), validation (TEXT), ownerUserID (FK → Users), approved (BOOLEAN, default false), approvedByUserID (FK → Users), activeFlag (BOOLEAN, default true). API endpoints: `POST /api/design/requirement`, `GET /api/design/requirement`, `GET /api/design/requirement/:id`, `PUT /api/design/requirement/:id`, `DELETE /api/design/requirement/:id` (soft delete).
+- **Parent Req:** REQ-SYS-DC-001
+- **Derived Reqs:** REQ-DES-002, REQ-DES-003, REQ-DES-006, REQ-DES-007, REQ-DES-008
+- **Verification:** Verified by: `backend/tests/__tests__/design/design-requirement.test.js` (POST create, GET getAll, GET getById, PUT update, DELETE soft delete, 401 without auth).
+- **Validation:** User can create, view, edit, and delete design requirements through the UI.
+
+### REQ-DES-002
+- **Description:** Design requirements shall support hierarchical parent-child relationships via `parentRequirementID`.
+- **Rationale:** Requirements naturally decompose into sub-requirements; hierarchy enables traceability from high-level to detailed requirements per ISO 13485:2016 §7.3.3.
+- **Parameters:** `parentRequirementID` (INTEGER, nullable, FK → DesignRequirements.id). Self-referencing: `belongsTo` parent, `hasMany` children. GET endpoint includes parent and child associations.
+- **Parent Req:** REQ-DES-001
+- **Derived Reqs:** None
+- **Verification:** Verified by: `backend/tests/__tests__/design/design-requirement.test.js` — "Hierarchy" describe block (creates child with parentRequirementID, GET returns parent association).
+- **Validation:** User creates parent and child requirements; tree view displays hierarchy with expand/collapse.
+
+### REQ-DES-003
+- **Description:** The system shall provide an approval workflow for design requirements (approve/unapprove with user tracking).
+- **Rationale:** 21 CFR 820.30(c) requires design input review and approval. ISO 13485:2016 §7.3.2 requires review at suitable stages.
+- **Parameters:** `approved` (BOOLEAN, default false), `approvedByUserID` (INTEGER, nullable, FK → Users). Endpoints: `PUT /api/design/requirement/:id/approve` sets approved=true and records approver, `PUT /api/design/requirement/:id/unapprove` resets approval. Any authenticated user can approve.
+- **Parent Req:** REQ-DES-001
+- **Derived Reqs:** None
+- **Verification:** Verified by: `backend/tests/__tests__/design/design-requirement.test.js` — "Approval" describe block (approve sets approved=true and approvedByUserID, unapprove clears both, GET includes approvedBy association, 404 for nonexistent).
+- **Validation:** User approves a requirement; approval status and approver name display in the UI.
+
+### REQ-DES-004
+- **Description:** The frontend shall display design requirements in a tree table with expandable/collapsible hierarchy.
+- **Rationale:** Tree view enables users to see requirement decomposition at a glance and navigate complex hierarchies.
+- **Parameters:** `mat-table` with flat data source built from hierarchical data. Rows indented by nesting level. Expand/collapse toggle for rows with children. Columns: expand toggle, description (indented), project, category, owner, approved status, actions. Project filter dropdown in toolbar.
+- **Parent Req:** REQ-DES-001
+- **Derived Reqs:** None
+- **Verification:** Frontend tests verify tree building from flat array, expand/collapse state management, project filtering, navigation on row click.
+- **Validation:** User sees hierarchical requirement list, expands/collapses nodes, filters by project, clicks to navigate to edit page.
+
+### REQ-DES-005
+- **Description:** The system shall provide separate create and edit pages for design requirements with form validation.
+- **Rationale:** Dedicated pages allow focused requirement authoring with full validation context.
+- **Parameters:** Routes: `/requirements/new` (create mode), `/requirements/:id/edit` (edit mode with view-first pattern). Form fields: Project (required dropdown), Category (optional dropdown), Description (required textarea), Rationale, Parameter, Parent Requirement (dropdown), Verification, Validation. Edit mode shows read-only view first with Edit button. Header buttons: Back, Edit/Cancel, Save/Create, Delete, Approve/Unapprove.
+- **Parent Req:** REQ-DES-001
+- **Derived Reqs:** None
+- **Verification:** Frontend tests verify create vs edit mode detection, form validation (description and project required), save/cancel/delete actions, approve/unapprove button behavior.
+- **Validation:** User creates a new requirement with required fields, edits an existing one, approves it.
+
+### REQ-DES-006
+- **Description:** Each design requirement must belong to a project (`projectID` FK → Projects).
+- **Rationale:** Project association enables filtering and organization of requirements per product/project, supporting ISO 13485:2016 §7.3.1 planning.
+- **Parameters:** `projectID` (INTEGER, NOT NULL, FK → Projects.id). GET endpoint supports `?projectID=` query filter. Project displayed in list view and required in create/edit form.
+- **Parent Req:** REQ-DES-001
+- **Derived Reqs:** None
+- **Verification:** Verified by: `backend/tests/__tests__/design/design-requirement.test.js` — "rejects missing projectID", "filters by projectID", "includes owner, project, and category associations".
+- **Validation:** User selects project when creating requirement; list view filters by project.
+
+### REQ-DES-007
+- **Description:** The system shall support user-defined requirement categories via a `RequirementCategories` lookup table with CRUD.
+- **Rationale:** Categories enable grouping requirements by type (e.g., functional, performance, safety) for organized review.
+- **Parameters:** `RequirementCategories` table: id, name (STRING 100, NOT NULL, UNIQUE), description (TEXT), activeFlag (BOOLEAN, default true). API: `POST /api/design/requirement-category`, `GET /api/design/requirement-category`, `PUT /api/design/requirement-category/:id`, `DELETE /api/design/requirement-category/:id`. Each DesignRequirement has optional `categoryID` (FK → RequirementCategories.id). Category management via dialog from edit page.
+- **Parent Req:** REQ-DES-001
+- **Derived Reqs:** None
+- **Verification:** Verified by: `backend/tests/__tests__/design/requirement-category.test.js` (POST create, duplicate name rejection, missing name rejection, GET list active, PUT update, DELETE soft delete, 401 without auth).
+- **Validation:** User creates categories via manage dialog, assigns category to requirement, sees category in list view.
+
+### REQ-DES-008
+- **Description:** The system shall maintain an immutable audit trail (`RequirementHistory` table) for all design requirement mutations.
+- **Rationale:** 21 CFR 820.30 and ISO 13485:2016 §7.3 require traceable change history for design inputs. An immutable audit trail ensures QMS compliance with ALCOA principles.
+- **Parameters:** `RequirementHistory` table: id (PK), requirementID (FK → DesignRequirements, CASCADE), changedByUserID (FK → Users, CASCADE), changeType (STRING 20, enum: created/updated/approved/unapproved/deleted), changes (JSONB, field-level diffs as `{field: {from, to}}`), changeNotes (TEXT, nullable), createdAt (DATE). No updatedAt. Immutable — no update or delete operations.
+- **Parent Req:** REQ-DES-001
+- **Derived Reqs:** REQ-DES-009, REQ-DES-010, REQ-DES-011
+- **Verification:** Verified by: `backend/tests/__tests__/design/requirement-history.test.js` (table creation, association with User FK).
+- **Validation:** History records persist and cannot be modified after creation.
+
+### REQ-DES-009
+- **Description:** The system shall automatically record history entries on all design requirement mutations: create, update, approve, unapprove, and delete.
+- **Rationale:** Automated recording ensures no mutation goes untracked, eliminating human error in audit trail maintenance.
+- **Parameters:** `create` logs initial field values as `{field: {from: null, to: value}}`. `update` logs field-level from/to diffs for tracked fields (description, rationale, parameter, verification, validation, parentRequirementID, projectID, categoryID); no record if nothing changed; supports optional changeNotes. `approve` logs `{approved: {from: false, to: true}, approvedByUserID: {from: null, to: id}}`. `unapprove` logs `{approved: {from: true, to: false}, approvedByUserID: {from: id, to: null}}`. `delete` logs `{activeFlag: {from: true, to: false}}`.
+- **Parent Req:** REQ-DES-008
+- **Derived Reqs:** None
+- **Verification:** Verified by: `backend/tests/__tests__/design/requirement-history.test.js` (history on create, update with diffs, no record when nothing changed, changeNotes support, approve/unapprove history, delete history, full lifecycle audit trail).
+- **Validation:** User creates, edits, approves, unapproves, and deletes a requirement; each action produces a corresponding history entry.
+
+### REQ-DES-010
+- **Description:** The system shall provide a `GET /api/design/requirement/:id/history` endpoint returning all history entries ordered by createdAt DESC, including the changedBy user association.
+- **Rationale:** Enables frontend display and external audit review of requirement change history.
+- **Parameters:** Returns array of RequirementHistory entries with `changedBy` user association (id, displayName, email, photoURL). Ordered by `createdAt DESC`. Returns 404 for nonexistent requirement. Returns 401 without authentication.
+- **Parent Req:** REQ-DES-008
+- **Derived Reqs:** None
+- **Verification:** Verified by: `backend/tests/__tests__/design/requirement-history.test.js` (GET returns entries DESC, includes changedBy user, 404 for missing, 401 without auth).
+- **Validation:** API returns complete, ordered history with user attribution for a given requirement.
+
+### REQ-DES-011
+- **Description:** The frontend shall display a collapsible history timeline on the requirement edit page showing change type, user, timestamp, notes, and field-level diffs.
+- **Rationale:** In-context history display enables quick review of requirement evolution without leaving the edit page.
+- **Parameters:** Collapsible section below metadata on edit page. Each entry shows: change type icon and label, user display name, timestamp, optional change notes, and field-level from/to diffs for update entries. Toggle button to show/hide history.
+- **Parent Req:** REQ-DES-008
+- **Derived Reqs:** None
+- **Verification:** Frontend component includes history signal, toggle, load method, and timeline rendering.
+- **Validation:** User expands history section on edit page and sees chronological list of all changes with details.
+
+---
+
 ## Appendix A: Development Requirements
 
 These requirements support the design, build, and implementation of the software system. They are not system-level QMS requirements but are necessary for efficient development and deployment.
