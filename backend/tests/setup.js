@@ -127,6 +127,7 @@ beforeAll(async () => {
 // Clean up user-created data between tests (keep reference data)
 afterEach(async () => {
   const tablesToClean = [
+    'RequirementHistory', 'DesignRequirement', 'RequirementCategory',
     'HarnessRevisionHistory', 'WireHarness', 'WireEnd',
     'ElectricalComponent', 'Cable', 'Wire', 'ElectricalConnector',
     'TaskTimeTracking', 'TaskHistory', 'Task', 'ScheduledTask',

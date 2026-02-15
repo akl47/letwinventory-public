@@ -3,67 +3,54 @@
   height: 100vh;
 }
 
-/* Sidenav - M3 Navigation Drawer styling */
-.sidenav {
-  width: 240px;
+/* Navigation Rail - narrow fixed sidebar */
+.nav-rail {
+  width: 72px;
   background-color: var(--mat-sys-surface-container-low);
   border-right: none;
-  padding: 12px;
+  padding: 0;
   box-sizing: border-box;
-  transition: width 0.2s ease;
+  overflow: visible !important;
+
+  ::ng-deep .mat-drawer-inner-container {
+    overflow: visible !important;
+  }
 
   &.collapsed {
-    width: 90px;
-    overflow-x: hidden;
-
-    /* Hide header title when collapsed */
-    .sidenav-header .title {
-      display: none;
-    }
-
-    /* Center the header */
-    .sidenav-header {
-      justify-content: center;
-      padding: 16px 8px 28px 8px;
-    }
-
-    /* Hide nav item text when collapsed */
-    ::ng-deep .mat-mdc-list-item-title {
-      display: none;
-    }
-
-    /* Make nav items circular icon buttons */
-    ::ng-deep .mat-mdc-list-item {
-      width: 56px;
-      min-width: 56px;
-      padding: 0;
-      margin: 0 auto 4px auto;
-      justify-content: center;
-    }
-
-    /* Center icons and remove margin */
-    ::ng-deep .mat-mdc-list-item .mat-icon {
-      margin-right: 0;
-    }
-
-    /* Center the nav list */
-    ::ng-deep .mat-mdc-nav-list {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
+    width: 0;
+    min-width: 0;
+    overflow: hidden !important;
   }
 }
 
-/* Header section with logo/title */
-.sidenav-header {
+/* Wrapper contains both rail and flyout */
+.nav-rail-wrapper {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px 16px 28px 16px;
+  height: 100%;
+  position: relative;
 }
 
-.sidenav-header .logo {
+/* The rail column */
+.rail {
+  width: 72px;
+  min-width: 72px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 8px;
+  box-sizing: border-box;
+  height: 100%;
+}
+
+/* Rail header - logo only */
+.rail-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 0 20px 0;
+}
+
+.rail-header .logo {
   width: 32px;
   height: 32px;
   border-radius: 8px;
@@ -71,9 +58,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--mat-sys-on-primary);
-  font-weight: 500;
-  font-size: 14px;
   overflow: hidden;
 
   img {
@@ -83,85 +67,148 @@
   }
 }
 
-.sidenav-header .title {
+/* Rail item - icon + label stacked */
+.rail-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 64px;
+  padding: 4px 0;
+  margin-bottom: 12px;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  border: none;
+  background: none;
+  -webkit-tap-highlight-color: transparent;
+
+  &:hover .rail-icon-container {
+    background-color: var(--mat-sys-surface-container-highest);
+  }
+
+  &.active .rail-icon-container {
+    background-color: var(--mat-sys-secondary-container);
+  }
+
+  &.active .rail-icon-container mat-icon {
+    color: var(--mat-sys-on-secondary-container);
+  }
+
+  &.active .rail-label {
+    color: var(--mat-sys-on-surface);
+    font-weight: 600;
+  }
+}
+
+/* Pill-shaped icon container */
+.rail-icon-container {
+  width: 56px;
+  height: 32px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease;
+
+  mat-icon {
+    color: var(--mat-sys-on-surface-variant);
+    font-size: 24px;
+    width: 24px;
+    height: 24px;
+  }
+}
+
+/* Label below icon */
+.rail-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--mat-sys-on-surface-variant);
+  margin-top: 4px;
+  text-align: center;
+  line-height: 1.2;
+  letter-spacing: 0.4px;
+}
+
+/* Flyout panel - slides out to the right of the rail */
+.flyout-panel {
+  position: fixed;
+  left: 72px;
+  top: 0;
+  bottom: 0;
+  width: 220px;
+  background-color: var(--mat-sys-surface-container-low);
+  box-shadow: 4px 0 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  overflow-y: auto;
+}
+
+.flyout-header {
+  padding: 20px 16px 12px;
   font: var(--mat-sys-title-small);
-  color: var(--mat-sys-on-surface);
+  color: var(--mat-sys-on-surface-variant);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 11px;
   font-weight: 500;
 }
 
-/* Development environment indicator */
-.dev {
-  background-color: #d32f2f !important;
+/* Flyout list items */
+.flyout-panel ::ng-deep .mat-mdc-nav-list {
+  padding: 0 8px;
 }
 
-/* M3 Navigation list styling */
-.sidenav ::ng-deep .mat-mdc-nav-list {
-  padding: 0;
-}
-
-/* M3 Navigation item - pill-shaped with proper states */
-.sidenav ::ng-deep .mat-mdc-list-item {
+.flyout-panel ::ng-deep .mat-mdc-list-item {
   border-radius: 28px;
   margin-bottom: 4px;
-  height: 56px;
-  padding: 0 24px 0 16px;
-  transition: background-color 0.2s ease;
+  height: 48px;
 }
 
-/* Hover state */
-.sidenav ::ng-deep .mat-mdc-list-item:hover {
+.flyout-panel ::ng-deep .mat-mdc-list-item:hover {
   background-color: var(--mat-sys-surface-container-high);
 }
 
-/* Active link - M3 style with secondary container */
-.sidenav ::ng-deep .active-link {
+.flyout-panel ::ng-deep .active-link {
   background-color: var(--mat-sys-secondary-container) !important;
 }
 
-.sidenav ::ng-deep .active-link .mat-mdc-list-item-title {
+.flyout-panel ::ng-deep .active-link .mat-mdc-list-item-title {
   color: var(--mat-sys-on-secondary-container);
   font-weight: 500;
 }
 
-.sidenav ::ng-deep .active-link .mat-icon {
+.flyout-panel ::ng-deep .active-link .mat-icon {
   color: var(--mat-sys-on-secondary-container);
 }
 
-/* Icon styling */
-.sidenav ::ng-deep .mat-mdc-list-item .mat-icon {
+.flyout-panel ::ng-deep .mat-mdc-list-item .mat-icon {
   color: var(--mat-sys-on-surface-variant);
   margin-right: 12px;
 }
 
-/* Title text styling */
-.sidenav ::ng-deep .mat-mdc-list-item-title {
+.flyout-panel ::ng-deep .mat-mdc-list-item-title {
   font: var(--mat-sys-label-large);
   color: var(--mat-sys-on-surface-variant);
   font-weight: 500;
 }
 
-/* Main content area - Disable default scroll */
+/* Main content area */
 .sidenav-content {
   display: flex;
   flex-direction: column;
   background-color: var(--mat-sys-surface);
   overflow: hidden;
-  /* Prevent body scroll */
 }
 
-/* Content padding - Enable inner scroll */
 .content {
   flex: 1;
   min-height: 0;
-  /* Critical: allows flex child to shrink below content size */
   padding: 0;
   background-color: var(--mat-sys-surface);
   overflow: hidden;
-  /* Disable page scroll, let children scroll */
   position: relative;
 }
 
-/* Top app bar - M3 styling */
+/* Top app bar */
 .nav-header {
   background-color: var(--mat-sys-surface);
   color: var(--mat-sys-on-surface);
@@ -173,84 +220,62 @@
   margin-left: 8px;
 }
 
-/* Spacer for flexbox alignment */
 .spacer {
   flex: 1 1 auto;
 }
 
-/* Login/Logout button styling */
 .nav-header button {
   color: var(--mat-sys-primary);
 }
 
-/* User name display */
 .nav-header .user-name {
   font: var(--mat-sys-label-large);
   color: var(--mat-sys-on-surface);
   margin-right: 8px;
 }
 
-/* Hide toolbar on mobile route */
 .nav-header.hidden {
   display: none;
 }
 
-/* Mobile scanner nav item - only visible on small screens */
-.sidenav ::ng-deep .mobile-scanner-btn {
+/* Development environment indicator */
+.dev {
+  background-color: #d32f2f !important;
+}
+
+/* Version footer at bottom of rail */
+.version-footer {
+  margin-top: auto;
+  padding: 12px 0;
+  text-align: center;
+  width: 100%;
+
+  .version-text {
+    font-size: 10px;
+    color: var(--mat-sys-on-surface-variant);
+    opacity: 0.6;
+  }
+}
+
+/* Mobile scanner - hidden by default */
+.mobile-scanner-btn {
   display: none;
 }
 
 @media (max-width: 768px) {
-  .sidenav ::ng-deep .mobile-scanner-btn {
+  .mobile-scanner-btn {
     display: flex;
   }
 
-  .sidenav.collapsed {
+  .nav-rail.collapsed {
     width: 0;
     min-width: 0;
-    padding: 0;
-    overflow: hidden;
-  }
-}
-
-/* Section divider */
-.section-divider {
-  height: 1px;
-  background-color: var(--mat-sys-outline-variant);
-  margin: 16px 16px;
-}
-
-/* Section label */
-.section-label {
-  font: var(--mat-sys-title-small);
-  color: var(--mat-sys-on-surface-variant);
-  padding: 16px 16px 8px 16px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-/* Version footer at bottom of sidenav */
-.version-footer {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  padding: 12px 16px;
-  text-align: center;
-
-  .version-text {
-    font-size: 11px;
-    color: var(--mat-sys-on-surface-variant);
-    opacity: 0.6;
+    overflow: hidden !important;
   }
 
-  &.collapsed {
-    padding: 12px 8px;
-
-    .version-text {
-      font-size: 10px;
-    }
+  .flyout-panel {
+    left: 0;
+    width: 100%;
+    box-shadow: none;
   }
 }

@@ -1,0 +1,300 @@
+@if (!isDataLoaded()) {
+<div class="loading-state">
+    <mat-spinner diameter="48"></mat-spinner>
+    <p>Loading...</p>
+</div>
+} @else {
+<div class="edit-page-container">
+    <!-- Header -->
+    <div class="header">
+        <button mat-icon-button (click)="goBack()">
+            <mat-icon>arrow_back</mat-icon>
+        </button>
+        <h2>
+            @if (isEditMode) {
+            Requirement #{{ currentRequirement?.id }}
+            } @else {
+            New Requirement
+            }
+        </h2>
+        <span class="spacer"></span>
+        @if (isEditMode && currentRequirement) {
+        @if (currentRequirement.approved) {
+        <button mat-stroked-button (click)="unapprove()">
+            <mat-icon>undo</mat-icon>
+            Unapprove
+        </button>
+        } @else {
+        <button mat-flat-button color="primary" (click)="approve()">
+            <mat-icon>check_circle</mat-icon>
+            Approve
+        </button>
+        }
+        }
+        @if (isFormEditMode()) {
+        @if (isEditMode) {
+        <button mat-flat-button class="mat-custom-error" (click)="deleteRequirement()">
+            <mat-icon>delete</mat-icon>
+            Delete
+        </button>
+        }
+        <button mat-button (click)="cancelEdit()">
+            <mat-icon>close</mat-icon>
+            Cancel
+        </button>
+        <button mat-flat-button color="primary" (click)="save()" [disabled]="form.invalid">
+            <mat-icon>save</mat-icon>
+            {{ isEditMode ? (currentRequirement?.approved && hasFormChanges() ? 'Save and Reset Approval' : 'Save') :
+            'Create' }}
+        </button>
+        } @else {
+        <button mat-button (click)="enableEdit()">
+            <mat-icon>edit</mat-icon>
+            Edit
+        </button>
+        }
+    </div>
+
+    <div class="content-wrapper">
+        <!-- Approval Status -->
+        @if (isEditMode && currentRequirement) {
+        <div class="approval-banner" [class.approved]="currentRequirement.approved">
+            @if (currentRequirement.approved) {
+            <mat-icon>check_circle</mat-icon>
+            <span>Approved by {{ currentRequirement.approvedBy?.displayName || 'Unknown' }} on {{ currentRequirement.approvedAt | date:'medium' }}</span>
+            } @else {
+            <mat-icon>pending</mat-icon>
+            <span>Draft — Not yet approved</span>
+            }
+        </div>
+        }
+
+        <!-- Requirement Info Card -->
+        <mat-card class="info-card">
+            <mat-card-header>
+                <mat-card-title>Requirement Information</mat-card-title>
+                @if (isFormEditMode()) {
+                <div class="category-action">
+                    <button mat-icon-button type="button" (click)="openCategoryManager()"
+                        matTooltip="Manage Categories">
+                        <mat-icon>settings</mat-icon>
+                    </button>
+                </div>
+                }
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode()) {
+                <form [formGroup]="form" class="req-form">
+                    <div class="form-row">
+                        <mat-form-field appearance="outline">
+                            <mat-label>Project</mat-label>
+                            <mat-select formControlName="projectID">
+                                @for (project of projects(); track project.id) {
+                                <mat-option [value]="project.id">{{ project.name }}</mat-option>
+                                }
+                            </mat-select>
+                            @if (form.get('projectID')?.hasError('required') && form.get('projectID')?.touched) {
+                            <mat-error>Project is required</mat-error>
+                            }
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>Parent Requirement</mat-label>
+                            <input matInput
+                                [matAutocomplete]="parentAuto"
+                                [value]="displayParentFn(form.get('parentRequirementID')?.value ?? null)"
+                                (input)="onParentSearch($event)"
+                                placeholder="Search by # or description">
+                            @if (form.get('parentRequirementID')?.value) {
+                            <button matSuffix mat-icon-button type="button" (click)="clearParent()">
+                                <mat-icon>close</mat-icon>
+                            </button>
+                            }
+                            <mat-autocomplete #parentAuto="matAutocomplete"
+                                [displayWith]="displayParentFn"
+                                (optionSelected)="onParentSelected($event)">
+                                @for (req of filteredParentOptions(); track req.id) {
+                                <mat-option [value]="req.id">#{{ req.id }} — {{ req.description | slice:0:60 }}</mat-option>
+                                }
+                            </mat-autocomplete>
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>Category</mat-label>
+                            <mat-select formControlName="categoryID">
+                                <mat-option [value]="null">None</mat-option>
+                                @for (cat of categories(); track cat.id) {
+                                <mat-option [value]="cat.id">{{ cat.name }}</mat-option>
+                                }
+                            </mat-select>
+                        </mat-form-field>
+                    </div>
+
+                    <mat-form-field appearance="outline" class="full-width">
+                        <mat-label>Description</mat-label>
+                        <textarea matInput formControlName="description" rows="3"
+                            placeholder="The system shall..."></textarea>
+                        @if (form.get('description')?.hasError('required') && form.get('description')?.touched) {
+                        <mat-error>Description is required</mat-error>
+                        }
+                    </mat-form-field>
+
+                    <mat-form-field appearance="outline" class="full-width">
+                        <mat-label>Rationale</mat-label>
+                        <textarea matInput formControlName="rationale" rows="2"
+                            placeholder="Why is this requirement needed?"></textarea>
+                    </mat-form-field>
+
+                    <mat-form-field appearance="outline" class="full-width">
+                        <mat-label>Parameter</mat-label>
+                        <textarea matInput formControlName="parameter" rows="2"
+                            placeholder="Measurable parameters and acceptance criteria"></textarea>
+                    </mat-form-field>
+
+                    <div class="form-row">
+                        <mat-form-field appearance="outline">
+                            <mat-label>Verification</mat-label>
+                            <textarea matInput formControlName="verification" rows="2"
+                                placeholder="How will this requirement be verified?"></textarea>
+                        </mat-form-field>
+
+                        <mat-form-field appearance="outline">
+                            <mat-label>Validation</mat-label>
+                            <textarea matInput formControlName="validation" rows="2"
+                                placeholder="How will this requirement be validated?"></textarea>
+                        </mat-form-field>
+                    </div>
+                </form>
+                } @else {
+                <div class="req-view-info">
+                    <div class="info-row three-col">
+                        <div class="info-item">
+                            <div class="info-label">Project</div>
+                            <div class="info-value">{{ currentRequirement?.project?.name || '-' }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Parent Requirement</div>
+                            <div class="info-value">
+                                @if (currentRequirement?.parentRequirement) {
+                                #{{ currentRequirement?.parentRequirement?.id }} — {{ currentRequirement?.parentRequirement?.description | slice:0:80 }}
+                                } @else {
+                                None (Top-level)
+                                }
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Category</div>
+                            <div class="info-value">{{ currentRequirement?.category?.name || '-' }}</div>
+                        </div>
+                    </div>
+
+                    <div class="info-item">
+                        <div class="info-label">Description</div>
+                        <div class="info-value description-text">{{ currentRequirement?.description || '-' }}</div>
+                    </div>
+
+                    <div class="info-item">
+                        <div class="info-label">Rationale</div>
+                        <div class="info-value description-text">{{ currentRequirement?.rationale || '-' }}</div>
+                    </div>
+
+                    <div class="info-item">
+                        <div class="info-label">Parameter</div>
+                        <div class="info-value description-text">{{ currentRequirement?.parameter || '-' }}</div>
+                    </div>
+
+                    <div class="info-row">
+                        <div class="info-item">
+                            <div class="info-label">Verification</div>
+                            <div class="info-value description-text">{{ currentRequirement?.verification || '-' }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Validation</div>
+                            <div class="info-value description-text">{{ currentRequirement?.validation || '-' }}</div>
+                        </div>
+                    </div>
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+
+        <!-- Metadata Card -->
+        @if (isEditMode && currentRequirement) {
+        <mat-card class="info-card">
+            <mat-card-header>
+                <mat-card-title>Details</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                <div class="info-row three-col">
+                    <div class="info-item">
+                        <div class="info-label">Owner</div>
+                        <div class="info-value owner-value">
+                            {{ currentRequirement.owner?.displayName || 'Unknown' }}
+                            @if (isFormEditMode() && !isOwner()) {
+                            <button mat-stroked-button class="take-ownership-btn" (click)="takeOwnership()">
+                                <mat-icon>person_add</mat-icon>
+                                Take Ownership
+                            </button>
+                            }
+                        </div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Created</div>
+                        <div class="info-value">{{ currentRequirement.createdAt | date:'medium' }}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Updated</div>
+                        <div class="info-value">{{ currentRequirement.updatedAt | date:'medium' }}</div>
+                    </div>
+                </div>
+            </mat-card-content>
+        </mat-card>
+
+        <!-- History Card -->
+        <mat-card class="info-card">
+            <mat-card-header class="clickable-header" (click)="toggleHistory()">
+                <mat-card-title>
+                    <mat-icon class="header-toggle-icon">{{ showHistory() ? 'expand_less' : 'expand_more' }}</mat-icon>
+                    Change History
+                </mat-card-title>
+            </mat-card-header>
+            @if (showHistory()) {
+            <mat-card-content>
+                <div class="history-timeline">
+                    @for (entry of history(); track entry.id) {
+                    <div class="history-entry">
+                        <div class="history-entry-header">
+                            <mat-icon class="history-type-icon" [class]="'type-' + entry.changeType">{{
+                                getChangeTypeIcon(entry.changeType) }}</mat-icon>
+                            <span class="history-type-label">{{ getChangeTypeLabel(entry.changeType) }}</span>
+                            <span class="history-user">{{ entry.changedBy?.displayName || 'Unknown' }}</span>
+                            <span class="history-timestamp">{{ entry.createdAt | date:'medium' }}</span>
+                        </div>
+                        @if (entry.changeNotes) {
+                        <div class="history-notes">{{ entry.changeNotes }}</div>
+                        }
+                        @if (entry.changeType === 'updated' || entry.changeType === 'created') {
+                        <div class="history-diffs">
+                            @for (field of getChangedFields(entry.changes); track field) {
+                            <div class="history-diff">
+                                <span class="diff-field">{{ getFieldLabel(field) }}:</span>
+                                <span class="diff-from">{{ entry.changes[field].fromName ?? entry.changes[field].from ?? '(empty)' }}</span>
+                                <mat-icon class="diff-arrow">arrow_forward</mat-icon>
+                                <span class="diff-to">{{ entry.changes[field].toName ?? entry.changes[field].to ?? '(empty)' }}</span>
+                            </div>
+                            }
+                        </div>
+                        }
+                    </div>
+                    }
+                    @if (history().length === 0) {
+                    <div class="history-empty">No history entries found.</div>
+                    }
+                </div>
+            </mat-card-content>
+            }
+        </mat-card>
+        }
+    </div>
+</div>
+}

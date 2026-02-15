@@ -1,0 +1,51 @@
+<h2 mat-dialog-title>Manage Requirement Categories</h2>
+
+<mat-dialog-content>
+    <div class="add-category">
+        <mat-form-field appearance="outline" class="add-field">
+            <mat-label>New category name</mat-label>
+            <input matInput [(ngModel)]="newCategoryName" (keyup.enter)="addCategory()" placeholder="e.g. Functional, Safety, Performance">
+        </mat-form-field>
+        <button mat-icon-button color="primary" (click)="addCategory()" [disabled]="!newCategoryName.trim()">
+            <mat-icon>add_circle</mat-icon>
+        </button>
+    </div>
+
+    <mat-list>
+        @for (cat of categories(); track cat.id) {
+            <mat-list-item>
+                @if (editingId() === cat.id) {
+                    <div class="edit-row">
+                        <mat-form-field appearance="outline" class="edit-field">
+                            <input matInput [(ngModel)]="editingName" (keyup.enter)="saveEdit(cat)">
+                        </mat-form-field>
+                        <button mat-icon-button color="primary" (click)="saveEdit(cat)">
+                            <mat-icon>check</mat-icon>
+                        </button>
+                        <button mat-icon-button (click)="cancelEdit()">
+                            <mat-icon>close</mat-icon>
+                        </button>
+                    </div>
+                } @else {
+                    <div class="category-row">
+                        <span class="category-name">{{ cat.name }}</span>
+                        <div class="category-actions">
+                            <button mat-icon-button (click)="startEdit(cat)">
+                                <mat-icon>edit</mat-icon>
+                            </button>
+                            <button mat-icon-button color="warn" (click)="deleteCategory(cat)">
+                                <mat-icon>delete</mat-icon>
+                            </button>
+                        </div>
+                    </div>
+                }
+            </mat-list-item>
+        } @empty {
+            <div class="empty-state">No categories yet. Add one above.</div>
+        }
+    </mat-list>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+    <button mat-button (click)="close()">Done</button>
+</mat-dialog-actions>

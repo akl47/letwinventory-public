@@ -115,6 +115,27 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'requirements',
+        title: 'Design Requirements',
+        loadComponent: () =>
+            import('./components/design/requirements-list-view/requirements-list-view').then((m) => m.RequirementsListView),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'requirements/new',
+        title: 'New Requirement',
+        loadComponent: () =>
+            import('./components/design/requirement-edit-page/requirement-edit-page').then((m) => m.RequirementEditPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'requirements/:id/edit',
+        title: 'Edit Requirement',
+        loadComponent: () =>
+            import('./components/design/requirement-edit-page/requirement-edit-page').then((m) => m.RequirementEditPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'settings',
         title: 'Settings',
         loadComponent: () =>
