@@ -51,7 +51,8 @@ export class OrderEditDialog implements OnInit {
     placedDate: [new Date(), Validators.required],
     receivedDate: [null as Date | null],
     orderStatusID: [1, Validators.required],
-    description: ['']
+    description: [''],
+    notes: ['']
   });
 
   isEditMode = signal<boolean>(false);
@@ -75,7 +76,8 @@ export class OrderEditDialog implements OnInit {
         placedDate: order.placedDate ? new Date(order.placedDate) : new Date(),
         receivedDate: order.receivedDate ? new Date(order.receivedDate) : null,
         orderStatusID: order.orderStatusID,
-        description: order.description || ''
+        description: order.description || '',
+        notes: order.notes || ''
       });
     }
   }
@@ -93,7 +95,8 @@ export class OrderEditDialog implements OnInit {
       placedDate: formValue.placedDate?.toISOString(),
       receivedDate: formValue.receivedDate?.toISOString() || null,
       orderStatusID: formValue.orderStatusID!,
-      description: formValue.description || null
+      description: formValue.description || null,
+      notes: formValue.notes || null
     };
 
     if (this.isEditMode() && this.data?.order) {

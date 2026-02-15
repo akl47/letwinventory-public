@@ -4227,7 +4227,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
    * Toggles image visibility on the sub-harness's cached data and re-renders.
    */
   private handleSubHarnessButtonClick(
-    subRef: SubHarnessRef,
+    _subRef: SubHarnessRef,
     childHarness: WireHarness | undefined,
     hit: SubHarnessButtonHit
   ): void {

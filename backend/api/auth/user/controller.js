@@ -77,7 +77,6 @@ exports.checkToken = async (req, res, next) => {
       }
     });
   } catch (error) {
-    console.log("Token verification error:", error);
     res.status(401).json({
       valid: false,
       error: 'Invalid token'
@@ -146,9 +145,6 @@ exports.updateUser = async (req, res, next) => {
 };
 
 const doGoogleLogin = async (credentials) => {
-  console.log("-----DO GOOGLE LOGIN-----");
-  console.log("Credentials: ", credentials);
-
   const { idToken } = credentials;
   if (!idToken) {
     throw new RestError('Missing ID token', 400);
@@ -170,8 +166,6 @@ const doGoogleLogin = async (credentials) => {
 
 exports.loginWithGoogle = async (req, res, next) => {
   try {
-    console.log("-----LOGIN WITH GOOGLE-----");
-    // console.log("Request Body: ", req.body);
     const user = await doGoogleLogin(req.body);
     res.json({ user });
   } catch (error) {

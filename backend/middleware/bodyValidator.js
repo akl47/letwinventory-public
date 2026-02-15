@@ -8,7 +8,6 @@ exports.location = (req,res,next) => {
     ignore.push('barcodeID')
     return_body = {}
     let error_message = ''
-    console.log(req.body)
     Object.keys(model).forEach(attribute=>{
         if(!ignore.includes(attribute)) {
             if(!model[attribute].allowNull) {
@@ -80,8 +79,6 @@ exports.location = (req,res,next) => {
             } catch(error) {
                 error_message += ' ' + attribute + ' is a '+typeof req.body[attribute]+'. should be a boolean.'
             }
-        } else {
-            console.log("UNCAUGHT TYPE",type)
         }
     }
 }
@@ -92,7 +89,6 @@ exports.box = (req,res,next) => {
     ignore.push('barcodeID')
     return_body = {}
     let error_message = ''
-    console.log(req.body)
     Object.keys(model).forEach(attribute=>{
         if(!ignore.includes(attribute)) {
             if(!model[attribute].allowNull) {
@@ -164,8 +160,6 @@ exports.box = (req,res,next) => {
             } catch(error) {
                 error_message += ' ' + attribute + ' is a '+typeof req.body[attribute]+'. should be a boolean.'
             }
-        } else {
-            console.log("UNCAUGHT TYPE",type)
         }
     }
 }
@@ -177,7 +171,6 @@ exports.trace = (req,res,next) => {
     ignore.push('parentBarcodeID')
     return_body = {}
     let error_message = ''
-    console.log(req.body)
     Object.keys(model).forEach(attribute=>{
         if(!ignore.includes(attribute)) {
             if(!model[attribute].allowNull) {
@@ -237,8 +230,6 @@ exports.trace = (req,res,next) => {
             } catch(error) {
                 error_message += ' ' + attribute + ' is a '+typeof req.body[attribute]+'. should be a boolean.'
             }
-        } else {
-            console.log("UNCAUGHT TYPE",type)
         }
     }
 }
@@ -248,7 +239,6 @@ exports.part = (req,res,next) => {
     let ignore = [...ignore_all]
     return_body = {}
     let error_message = ''
-    console.log(req.body)
     Object.keys(model).forEach(attribute=>{
         if(!ignore.includes(attribute)) {
             if(!model[attribute].allowNull) {
@@ -308,8 +298,6 @@ exports.part = (req,res,next) => {
             } catch(error) {
                 error_message += ' ' + attribute + ' is a '+typeof req.body[attribute]+'. Should be a boolean.'
             }
-        } else {
-            console.log("UNCAUGHT TYPE",type)
         }
     }
 }
@@ -320,7 +308,6 @@ exports.order = (req,res,next) => {
     ignore.push('orderID', 'uuid', 'status', 'procurifyUserID', 'itemCount', 'totalPrice', 'date')
     return_body = {}
     let error_message = ''
-    console.log(req.body)
     Object.keys(model).forEach(attribute=>{
         if(!ignore.includes(attribute)) {
             if(!model[attribute].allowNull) {
@@ -377,8 +364,6 @@ exports.order = (req,res,next) => {
             }
         } else if (type=="DATE") {
             return_body[attribute] = req.body[attribute]
-        } else {
-            console.log("UNCAUGHT TYPE",type)
         }
     }
 }
@@ -389,7 +374,6 @@ exports.orderItem = (req,res,next) => {
     ignore.push('orderItemID', 'unit', 'unitPrice', 'status', 'sku', 'vendor', 'receivedQuantity')
     return_body = {}
     let error_message = ''
-    console.log(req.body)
 
     // For updates (PUT requests), only validate fields that are actually being updated
     const isUpdate = req.method === 'PUT' || req.method === 'PATCH';
@@ -471,8 +455,6 @@ exports.orderItem = (req,res,next) => {
             } catch (error) {
                 error_message += ' ' + attribute + ' is a '+typeof req.body[attribute]+'. Should be a number.'
             }
-        } else {
-            console.log("UNCAUGHT TYPE",type)
         }
     }
 }

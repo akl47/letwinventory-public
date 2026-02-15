@@ -1,4 +1,4 @@
-const { authenticatedRequest, createTestEquipment } = require('../../helpers');
+const { authenticatedRequest, createTestEquipment, createTestBarcode } = require('../../helpers');
 
 describe('Equipment API', () => {
   describe('GET /api/inventory/equipment', () => {
@@ -42,6 +42,38 @@ describe('Equipment API', () => {
   // using a PostgreSQL-specific sequence query hook, so they can't be tested
   // with SQLite in-memory. Those endpoints are covered by the Barcode auto-generation.
   // We test the CRUD operations that work with pre-created equipment instead.
+
+  describe('POST /api/inventory/equipment', () => {
+    it.skip('creates equipment with auto-generated barcode (requires PostgreSQL)', async () => {
+      const auth = await authenticatedRequest();
+      const parentBarcode = await createTestBarcode({ barcodeCategoryID: 2 });
+      const res = await auth.post('/api/inventory/equipment')
+        .send({
+          name: 'EQUIP-NEW',
+          description: 'New test equipment',
+          parentBarcodeID: parentBarcode.id,
+        });
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.id).toBeDefined();
+      expect(res.body.name).toBe('EQUIP-NEW');
+      expect(res.body.barcodeID).toBeDefined();
+    });
+  });
+
+  describe('POST /api/inventory/equipment/receive', () => {
+    it.skip('receives equipment with auto-generated barcode (requires PostgreSQL)', async () => {
+      const auth = await authenticatedRequest();
+      const parentBarcode = await createTestBarcode({ barcodeCategoryID: 2 });
+      const res = await auth.post('/api/inventory/equipment/receive')
+        .send({
+          name: 'EQUIP-RECV',
+          description: 'Received equipment',
+          parentBarcodeID: parentBarcode.id,
+        });
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.id).toBeDefined();
+    });
+  });
 
   describe('PUT /api/inventory/equipment/:id', () => {
     it('updates equipment', async () => {

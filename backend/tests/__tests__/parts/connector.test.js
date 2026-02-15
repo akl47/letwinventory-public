@@ -1,4 +1,4 @@
-const { authenticatedRequest, createTestConnector, createTestPart } = require('../../helpers');
+const { authenticatedRequest, createTestConnector, createTestPart, createTestFile } = require('../../helpers');
 
 describe('Connector API', () => {
   describe('GET /api/parts/connector', () => {
@@ -43,6 +43,27 @@ describe('Connector API', () => {
       const res = await auth.get(`/api/parts/connector/by-part/${part.id}`);
       expect(res.status).toBe(200);
       expect(res.body.label).toBe('J-Part');
+    });
+
+    it('includes part imageFile in response', async () => {
+      const auth = await authenticatedRequest();
+      const file = await createTestFile({ filename: 'conn-img.png' });
+      const part = await createTestPart({ name: 'ConnImgPart', imageFileID: file.id });
+      await createTestConnector({ label: 'J-Img', partID: part.id });
+
+      const res = await auth.get(`/api/parts/connector/by-part/${part.id}`);
+      expect(res.status).toBe(200);
+      expect(res.body.part).toBeDefined();
+      expect(res.body.part.imageFile).toBeDefined();
+      expect(res.body.part.imageFile.id).toBe(file.id);
+      expect(res.body.part.imageFile.data).toBeDefined();
+    });
+
+    it('returns null for nonexistent part id', async () => {
+      const auth = await authenticatedRequest();
+      const res = await auth.get('/api/parts/connector/by-part/99999');
+      expect(res.status).toBe(200);
+      expect(res.body).toBeNull();
     });
   });
 

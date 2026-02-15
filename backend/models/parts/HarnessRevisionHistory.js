@@ -42,7 +42,7 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING(50),
       allowNull: false,
       validate: {
-        isIn: [['created', 'updated', 'submitted_review', 'rejected', 'released', 'new_revision']]
+        isIn: [['created', 'updated', 'submitted_review', 'rejected', 'released', 'new_revision', 'production_release']]
       }
     },
     changeNotes: {

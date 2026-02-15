@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { HttpErrorResponse } from '@angular/common/http';
+import { vi } from 'vitest';
 import { ErrorNotificationService } from './error-notification.service';
 
 describe('ErrorNotificationService', () => {

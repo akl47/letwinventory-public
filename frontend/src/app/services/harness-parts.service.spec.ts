@@ -23,6 +23,31 @@ describe('HarnessPartsService', () => {
 
   // --- File Upload ---
 
+  it('uploadFile reads file and POSTs base64 data', async () => {
+    const fileContent = 'test file content';
+    const blob = new Blob([fileContent], { type: 'image/png' });
+    const file = new File([blob], 'test.png', { type: 'image/png' });
+
+    const resultPromise = new Promise<void>((resolve) => {
+      service.uploadFile(file).subscribe(result => {
+        expect(result.id).toBe(1);
+        expect(result.filename).toBe('test.png');
+        resolve();
+      });
+    });
+
+    // FileReader is async — wait for it to fire then check the HTTP request
+    await new Promise(r => setTimeout(r, 100));
+    const req = httpMock.expectOne(`${API}/files`);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body.filename).toBe('test.png');
+    expect(req.request.body.mimeType).toBe('image/png');
+    expect(req.request.body.data).toBeTruthy();
+    req.flush({ id: 1, filename: 'test.png', mimeType: 'image/png', fileSize: 100, createdAt: '2026-01-01' });
+
+    await resultPromise;
+  });
+
   it('deleteFile sends DELETE to /files/:id', () => {
     service.deleteFile(5).subscribe();
     const req = httpMock.expectOne(`${API}/files/5`);

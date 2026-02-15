@@ -23,7 +23,21 @@ describe('Location API', () => {
   });
 
   // Note: POST /location internally creates Barcode using PostgreSQL sequence hook.
-  // Tested via factory at DB level instead.
+  describe('POST /api/inventory/location', () => {
+    it.skip('creates a location with auto-generated barcode (requires PostgreSQL)', async () => {
+      const auth = await authenticatedRequest();
+      const res = await auth.post('/api/inventory/location')
+        .send({
+          name: 'LOC-NEW',
+          description: 'New test location',
+          parentBarcodeID: 0,
+        });
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.id).toBeDefined();
+      expect(res.body.name).toBe('LOC-NEW');
+      expect(res.body.barcodeID).toBeDefined();
+    });
+  });
 
   describe('PUT /api/inventory/location/:id', () => {
     it('updates a location', async () => {

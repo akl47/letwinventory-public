@@ -52,6 +52,8 @@ frontend/playwright-report/
 frontend/test-results/
 frontend/e2e/.auth/
 backend/coverage/
+failed_tests.txt
+test_log.txt
 
 # System Files
 .DS_Store
