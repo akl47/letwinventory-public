@@ -156,11 +156,47 @@ describe('Auth - Google OAuth', () => {
     });
   });
 
+  describe('GET /api/auth/google/me', () => {
+    it('returns current user profile', async () => {
+      const auth = await authenticatedRequest();
+      const res = await auth.get('/api/auth/google/me');
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe(auth.user.id);
+      expect(res.body.email).toBe(auth.user.email);
+      expect(res.body.displayName).toBe(auth.user.displayName);
+    });
+
+    it('returns 401 without auth', async () => {
+      const res = await request(getApp()).get('/api/auth/google/me');
+      expect(res.status).toBe(401);
+    });
+  });
+
   describe('POST /api/auth/google/logout', () => {
     it('clears auth cookies', async () => {
       const auth = await authenticatedRequest();
       const res = await auth.post('/api/auth/google/logout');
       expect(res.status).toBe(200);
+    });
+  });
+});
+
+describe('Auth - Addon Token Exchange', () => {
+  describe('POST /api/auth/addon/token', () => {
+    it('returns 400 without idToken', async () => {
+      const res = await request(getApp())
+        .post('/api/auth/addon/token')
+        .send({});
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('idToken');
+    });
+
+    it('returns 401/500 with invalid idToken', async () => {
+      const res = await request(getApp())
+        .post('/api/auth/addon/token')
+        .send({ idToken: 'invalid-google-id-token' });
+      // Google verification will fail with invalid token
+      expect([401, 500]).toContain(res.status);
     });
   });
 });

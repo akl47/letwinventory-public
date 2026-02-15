@@ -19,7 +19,6 @@ exports.getQueuedUpdatedByID = async (req, res, next) => {
 };
 
 exports.printBarcodeByID = async (req, res, next) => {
-  console.log("Print barcode request received");
   try {
     const barcodeID = req.params.id;
     const { labelSize, printerIP: customPrinterIP } = req.body;
@@ -398,7 +397,6 @@ function sendToPrinter(zpl, printerIP = "10.50.20.91") {
     client.on('error', (error) => {
       reject(new Error(`Printer connection error: ${error.message}`));
     });
-    console.log(zpl)
 
     client.connect({ port: 9100, host: printerIP }, () => {
       client.write(zpl);
@@ -576,7 +574,6 @@ function generateZPLDetailsSection(name, description, labelSize = '3x1', qty = n
   d = name.length < 8 ? 8 : name.length
   font_size = Math.floor(800 / d)
   desc_height = Math.floor(110 + 5 * (d - 8))
-  console.log("Font size:", font_size, "Desc height:", desc_height)
   label_text = `
           ^FO30,${desc_height}^A0N,${font_size},${font_size}^FD${name}^FS
           ^CF0,34,34

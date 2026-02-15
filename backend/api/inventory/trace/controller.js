@@ -3,9 +3,6 @@ const createError = require('http-errors');
 
 
 exports.createNewTrace = async (req, res, next) => {
-  console.log("Create New Trace")
-  console.log(req.body)
-
   try {
     const barcodeCategory = await db.BarcodeCategory.findOne({
       where: { activeFlag: true, prefix: "AKL" }
@@ -92,8 +89,6 @@ exports.getTracesByPartID = (req, res, next) => {
     },
     include: { all: true },
   }).then(trace => {
-    console.log("Get Trace by part id")
-    console.log(trace)
     res.json(trace)
   }).catch(error => {
     next(createError(500, 'Error Finding Trace:' + error))

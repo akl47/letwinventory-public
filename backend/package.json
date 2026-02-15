@@ -2,7 +2,7 @@
   "main": "index.js",
   "scripts": {
     "start": "nodemon index -L",
-    "test": "jest --runInBand",
+    "test": "jest --runInBand --silent",
     "test:watch": "jest --watch --runInBand",
     "test:coverage": "jest --coverage --runInBand"
   },

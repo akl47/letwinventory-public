@@ -133,7 +133,7 @@ afterEach(async () => {
     'TaskList', 'Project',
     'BarcodeHistory', 'Trace', 'Equipment', 'OrderItem', 'Order',
     'Box', 'Location', 'Barcode',
-    'Part', 'UploadedFile', 'RefreshToken', 'User',
+    'Part', 'UploadedFile', 'PushSubscription', 'Printer', 'RefreshToken', 'User',
   ];
 
   for (const table of tablesToClean) {

@@ -1,4 +1,4 @@
-const { authenticatedRequest, createTestHarness } = require('../../helpers');
+const { authenticatedRequest, createTestHarness, createTestPart } = require('../../helpers');
 
 describe('Harness API', () => {
   describe('GET /api/parts/harness', () => {
@@ -175,6 +175,179 @@ describe('Harness API', () => {
       const res = await auth.get(`/api/parts/harness/${harness.id}/parents`);
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
+    });
+  });
+
+  describe('POST /api/parts/harness/:id/release-production', () => {
+    it('creates production release from released numeric-revision harness', async () => {
+      const auth = await authenticatedRequest();
+      const part = await createTestPart({ name: 'Harness Part' });
+      const harness = await createTestHarness({
+        name: 'Prod Release Harness',
+        revision: '01',
+        releaseState: 'released',
+        releasedAt: new Date(),
+        partID: part.id,
+        harnessData: { connectors: [], cables: [] },
+      });
+
+      const res = await auth.post(`/api/parts/harness/${harness.id}/release-production`);
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBeDefined();
+      expect(res.body.id).not.toBe(harness.id);
+      expect(res.body.revision).toBe('A');
+      expect(res.body.releaseState).toBe('released');
+      expect(res.body.previousRevisionID).toBe(harness.id);
+    });
+
+    it('rejects production release from draft harness', async () => {
+      const auth = await authenticatedRequest();
+      const harness = await createTestHarness({
+        name: 'Draft Harness',
+        revision: '01',
+        releaseState: 'draft',
+      });
+
+      const res = await auth.post(`/api/parts/harness/${harness.id}/release-production`);
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects production release from letter-revision harness', async () => {
+      const auth = await authenticatedRequest();
+      const harness = await createTestHarness({
+        name: 'Letter Rev Harness',
+        revision: 'A',
+        releaseState: 'released',
+        releasedAt: new Date(),
+      });
+
+      const res = await auth.post(`/api/parts/harness/${harness.id}/release-production`);
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 404 for nonexistent harness', async () => {
+      const auth = await authenticatedRequest();
+      const res = await auth.post('/api/parts/harness/99999/release-production');
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/parts/harness/:id/revert/:historyId', () => {
+    it('reverts draft harness to a history snapshot', async () => {
+      const auth = await authenticatedRequest();
+      // Create via API to get auto-generated history with snapshot
+      const createRes = await auth.post('/api/parts/harness')
+        .send({
+          name: 'Revert Harness',
+          revision: 'A',
+          harnessData: { connectors: [{ id: 'c1', label: 'J1' }], cables: [] },
+        });
+      expect(createRes.status).toBe(201);
+      const harnessId = createRes.body.id;
+
+      // Update the harness data
+      await auth.put(`/api/parts/harness/${harnessId}`)
+        .send({ harnessData: { connectors: [{ id: 'c1', label: 'J1-MODIFIED' }], cables: [] } });
+
+      // Get history to find the snapshot
+      const historyRes = await auth.get(`/api/parts/harness/${harnessId}/history`);
+      expect(historyRes.status).toBe(200);
+      const snapshotEntry = historyRes.body.find(h => h.snapshotData);
+
+      if (snapshotEntry) {
+        const res = await auth.post(`/api/parts/harness/${harnessId}/revert/${snapshotEntry.id}`);
+        expect(res.status).toBe(200);
+        expect(res.body.harnessData).toBeDefined();
+      }
+    });
+
+    it('rejects revert on released harness', async () => {
+      const auth = await authenticatedRequest();
+      const harness = await createTestHarness({
+        name: 'Released Revert',
+        releaseState: 'released',
+        releasedAt: new Date(),
+      });
+
+      // Create a fake history entry
+      const history = await db.HarnessRevisionHistory.create({
+        harnessID: harness.id,
+        revision: 'A',
+        releaseState: 'draft',
+        changedBy: 'test',
+        changeType: 'created',
+        snapshotData: { connectors: [] },
+        createdAt: new Date(),
+      });
+
+      const res = await auth.post(`/api/parts/harness/${harness.id}/revert/${history.id}`);
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 404 for nonexistent history entry', async () => {
+      const auth = await authenticatedRequest();
+      const harness = await createTestHarness({ name: 'Revert 404' });
+      const res = await auth.post(`/api/parts/harness/${harness.id}/revert/99999`);
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 for nonexistent harness', async () => {
+      const auth = await authenticatedRequest();
+      const res = await auth.post('/api/parts/harness/99999/revert/1');
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('Harness Data Persistence', () => {
+    it('preserves harnessData through save and load', async () => {
+      const auth = await authenticatedRequest();
+      const harnessData = {
+        name: 'Test Harness',
+        connectors: [
+          { id: 'c1', label: 'J1', type: 'male', pinCount: 2, pins: [], position: { x: 0, y: 0 } }
+        ],
+        cables: [],
+        components: [],
+        connections: []
+      };
+
+      const createRes = await auth.post('/api/parts/harness')
+        .send({ name: 'Persist Harness', revision: 'A', harnessData });
+      expect(createRes.status).toBe(201);
+
+      const getRes = await auth.get(`/api/parts/harness/${createRes.body.id}`);
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.harnessData.connectors).toHaveLength(1);
+      expect(getRes.body.harnessData.connectors[0].label).toBe('J1');
+    });
+
+    it('stores harnessData without image fields when stripped by frontend', async () => {
+      const auth = await authenticatedRequest();
+      // Simulate frontend stripping: no image fields in saved data
+      const harnessData = {
+        name: 'Stripped Harness',
+        connectors: [
+          { id: 'c1', label: 'J1', type: 'male', pinCount: 2, pins: [], position: { x: 0, y: 0 }, showConnectorImage: true }
+        ],
+        cables: [
+          { id: 'cb1', label: 'C1', wireCount: 2, wires: [], position: { x: 100, y: 0 }, showCableDiagram: true }
+        ],
+        components: [],
+        connections: []
+      };
+
+      const createRes = await auth.post('/api/parts/harness')
+        .send({ name: 'No Image Harness', revision: 'A', harnessData });
+      expect(createRes.status).toBe(201);
+
+      const getRes = await auth.get(`/api/parts/harness/${createRes.body.id}`);
+      expect(getRes.status).toBe(200);
+      // Show flags are preserved
+      expect(getRes.body.harnessData.connectors[0].showConnectorImage).toBe(true);
+      expect(getRes.body.harnessData.cables[0].showCableDiagram).toBe(true);
+      // Image data fields are absent (stripped by frontend before save)
+      expect(getRes.body.harnessData.connectors[0].connectorImage).toBeUndefined();
+      expect(getRes.body.harnessData.cables[0].cableDiagramImage).toBeUndefined();
     });
   });
 

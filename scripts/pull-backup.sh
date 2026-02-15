@@ -21,7 +21,7 @@ ${LOG}
 MAIL
 }
 
-trap 'send_email "[FAILED] Backup Pull - $(date +%Y-%m-%d %H:%M)"' ERR
+trap 'send_email "[FAILED] Backup Pull - $(date "+%Y-%m-%d %H:%M")"' ERR
 
 # --- Load .env.readynas if present ---
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

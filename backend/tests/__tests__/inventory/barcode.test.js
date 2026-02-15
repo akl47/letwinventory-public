@@ -49,6 +49,76 @@ describe('Barcode API', () => {
     });
   });
 
+  describe('GET /api/inventory/barcode/display/:id', () => {
+    it('returns ZPL string for a location barcode', async () => {
+      const auth = await authenticatedRequest();
+      const loc = await createTestLocation({ name: 'LOC-ZPL' });
+      const location = await db.Location.findByPk(loc.id);
+      const res = await auth.get(`/api/inventory/barcode/display/${location.barcodeID}`);
+      expect(res.status).toBe(200);
+      expect(typeof res.text).toBe('string');
+      expect(res.text).toContain('^XA'); // ZPL start command
+    });
+
+    it('returns 404 for nonexistent barcode', async () => {
+      const auth = await authenticatedRequest();
+      const res = await auth.get('/api/inventory/barcode/display/99999');
+      expect(res.status).toBe(404);
+    });
+
+    it('accepts labelSize query param', async () => {
+      const auth = await authenticatedRequest();
+      const loc = await createTestLocation({ name: 'LOC-SIZE' });
+      const location = await db.Location.findByPk(loc.id);
+      const res = await auth.get(`/api/inventory/barcode/display/${location.barcodeID}?labelSize=1.5x1`);
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('^XA');
+    });
+  });
+
+  describe('GET /api/inventory/barcode/tag/:id', () => {
+    it('returns tag for a location barcode', async () => {
+      const auth = await authenticatedRequest();
+      const loc = await createTestLocation({ name: 'LOC-TAG' });
+      const location = await db.Location.findByPk(loc.id);
+      const res = await auth.get(`/api/inventory/barcode/tag/${location.barcodeID}`);
+      expect(res.status).toBe(200);
+      expect(res.body.type).toBe('Location');
+      expect(res.body.name).toBe('LOC-TAG');
+      expect(res.body.barcodeID).toBe(location.barcodeID);
+    });
+
+    it('returns 404 for nonexistent barcode', async () => {
+      const auth = await authenticatedRequest();
+      const res = await auth.get('/api/inventory/barcode/tag/99999');
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('GET /api/inventory/barcode/tag/chain/:id', () => {
+    it('returns tag chain for a barcode with parent', async () => {
+      const auth = await authenticatedRequest();
+      const parentLoc = await createTestLocation({ name: 'LOC-PARENT' });
+      const parentLocation = await db.Location.findByPk(parentLoc.id);
+      const childBarcode = await createTestBarcode({
+        barcodeCategoryID: 3,
+        parentBarcodeID: parentLocation.barcodeID,
+      });
+      await db.Box.create({
+        name: 'BOX-CHILD',
+        barcodeID: childBarcode.id,
+        activeFlag: true,
+      });
+
+      const res = await auth.get(`/api/inventory/barcode/tag/chain/${childBarcode.id}`);
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.length).toBe(2);
+      expect(res.body[0].type).toBe('Box');
+      expect(res.body[1].type).toBe('Location');
+    });
+  });
+
   // Note: getAllTags uses raw PostgreSQL UNION query with NULL::INTEGER casts, skipped for SQLite
   describe('GET /api/inventory/barcode/tag/', () => {
     it.skip('lists all tags (requires PostgreSQL)', async () => {
@@ -56,6 +126,17 @@ describe('Barcode API', () => {
       const res = await auth.get('/api/inventory/barcode/tag/');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
+    });
+  });
+
+  describe('POST /api/inventory/barcode/print/:id', () => {
+    it.skip('prints barcode to label printer (requires network access)', async () => {
+      const auth = await authenticatedRequest();
+      const loc = await createTestLocation({ name: 'LOC-PRINT' });
+      const location = await db.Location.findByPk(loc.id);
+      const res = await auth.post(`/api/inventory/barcode/print/${location.barcodeID}`)
+        .send({ labelSize: '3x1' });
+      expect(res.status).toBe(200);
     });
   });
 

@@ -8,6 +8,7 @@
 | B | 2026-02-09 | Claude Code | Restructured system requirements to align with 21 CFR 820 and ISO 13485:2016. Moved architecture, environment config, Docker, and CI/CD to Appendix A (Development Requirements). Added QMS, Design Controls, Purchasing Controls, Identification & Traceability, Production Controls, Labeling Controls, and Records & Data Integrity sections. Added Regulatory Traceability Matrix (Appendix B). |
 | C | 2026-02-09 | Claude Code | Added AS9100D aerospace QMS requirements: Operational Risk Management (§8.1.1), Configuration Management (§8.1.2), Product Safety (§8.1.3), Counterfeit Parts Prevention (§8.1.4), External Provider Control (§8.4), Production Process Verification/FAI (§8.5.1.3), Nonconforming Product Control (§8.7). Updated existing section headers with AS9100D cross-references. Expanded traceability matrix with AS9100D column. |
 | D | 2026-02-09 | Claude Code | Added Appendix C: Requirements Implementation Status. Assessed all 113 requirements against codebase. 108 Met, 5 Partial. Identified open items with recommended actions for the 5 partial requirements. |
+| E | 2026-02-14 | Claude Code | Added Appendix D: Frontend Verification Test Matrix. Updated Verification fields on 45+ requirements to reference specific frontend unit test spec files with line numbers. Comprehensive frontend test coverage (50+ spec files, 1500+ test cases) provides automated verification of UI behavior, component logic, service interactions, and user workflows for all functional requirements. |
 
 ---
 
@@ -20,7 +21,7 @@
 - **Rationale:** Centralized management of manufacturing workflow from procurement through assembly.
 - **Parameters:** Web application accessible via modern browsers (Chrome, Firefox, Edge, Safari).
 - **Parent Req:** None
-- **Derived Reqs:** REQ-AUTH-001, REQ-INV-001, REQ-ORD-001, REQ-PRT-001, REQ-HAR-001, REQ-PLN-001, REQ-MOB-001, REQ-BAR-001, REQ-FILE-001
+- **Derived Reqs:** REQ-AUTH-001, REQ-INV-001, REQ-ORD-001, REQ-PRT-001, REQ-HAR-001, REQ-PLN-001, REQ-MOB-001, REQ-BAR-001, REQ-FILE-001, REQ-NOTIF-001
 - **Verification:** All derived requirement verification criteria pass.
 - **Validation:** User can log in and access all major functional areas.
 
@@ -386,7 +387,7 @@
 - **Parameters:** `authGuard` checks `AuthService.isAuthenticated()` signal. On page refresh, calls `checkAuthStatus()`. Redirects to `/home` if not authenticated.
 - **Parent Req:** REQ-AUTH-001
 - **Derived Reqs:** None
-- **Verification:** Unit test: guard returns false and navigates to /home when not authenticated.
+- **Verification:** Unit test: guard returns false and navigates to /home when not authenticated. Frontend test: `auth.guard.spec.ts` lines 22–48 (allow when authenticated, check auth status, redirect on failure).
 - **Validation:** Manually navigating to a protected URL without login redirects to home page.
 
 ### REQ-AUTH-008
@@ -395,7 +396,7 @@
 - **Parameters:** `authInterceptor` catches 401, calls refresh endpoint, queues concurrent requests, retries all after refresh succeeds. 403 responses clear token and redirect to home.
 - **Parent Req:** REQ-AUTH-003
 - **Derived Reqs:** None
-- **Verification:** Unit test: interceptor retries request after successful refresh.
+- **Verification:** Unit test: interceptor retries request after successful refresh. Frontend test: `auth.interceptor.spec.ts` lines 37–192 (add auth header, skip for refresh endpoint, 401 token refresh retry, redirect on null/error refresh, request queuing during active refresh, 403 clear token + redirect, non-401/403 passthrough).
 - **Validation:** User does not see login prompt during normal usage when refresh token is valid.
 
 ---
@@ -408,7 +409,7 @@
 - **Parameters:** Hierarchy: Locations contain Boxes/Traces/Equipment. Each entity has a `barcodeID` linking to a unique Barcode record. Parent-child relationships via `parentBarcodeID`.
 - **Parent Req:** REQ-SYS-001
 - **Derived Reqs:** REQ-INV-002, REQ-INV-003, REQ-INV-004, REQ-INV-005, REQ-INV-006, REQ-INV-007
-- **Verification:** Backend tests verify Location, Box, Trace, Equipment CRUD operations.
+- **Verification:** Backend tests verify Location, Box, Trace, Equipment CRUD operations. Frontend test: `inventory-higherarchy-view.spec.ts` lines 56–178 (tree building from flat tags, nested children, deep nesting, search by name/barcode, equipment filter toggle, barcode selection).
 - **Validation:** User can navigate the inventory tree view, expanding locations to see contained items.
 
 ### REQ-INV-002
@@ -417,7 +418,7 @@
 - **Parameters:** Frontend `InventoryHierarchyView` component. Recursive `InventoryHierarchyItem` nodes. Backend `GET /api/inventory/location/higherarchy` returns tree data. Search filters by name/barcode/part number. Toggle to show/hide equipment. Deep linking via `?barcode=<id>` auto-expands path.
 - **Parent Req:** REQ-INV-001
 - **Derived Reqs:** None
-- **Verification:** Backend test: location hierarchy endpoint returns tree structure (PostgreSQL-specific, requires integration test).
+- **Verification:** Backend test: location hierarchy endpoint returns tree structure (PostgreSQL-specific, requires integration test). Frontend test: `inventory-higherarchy-view.spec.ts` lines 60–112 (tree building, child nesting, deep nesting, search filtering, barcode search), `inventory-higherarchy-item.spec.ts` (toggle expand, dialog integrations, child event propagation).
 - **Validation:** User can expand locations, see nested boxes and parts, search for items, and click to view details.
 
 ### REQ-INV-003
@@ -480,7 +481,7 @@
 - **Parameters:** Equipment model: name (STRING, not null), description, serialNumber, commissionDate (DATEONLY), barcodeID (FK, unique), partID (FK), orderItemID (FK). `GET /`, `GET /:id`, `POST /`, `POST /receive`, `PUT /:id`, `DELETE /:id` endpoints. Receive endpoint creates equipment from order item with barcode history.
 - **Parent Req:** REQ-INV-001
 - **Derived Reqs:** None
-- **Verification:** Backend tests: `equipment.test.js` - list, get by ID, update, delete.
+- **Verification:** Backend tests: `equipment.test.js` - list, get by ID, update, delete. Frontend test: `equipment-table-view.spec.ts` (loading, filtering, pagination, sorting, dialog integration), `equipment-edit-dialog.spec.ts` (create/edit modes, validation, delete confirmation).
 - **Validation:** User can create equipment, assign serial numbers, track commission dates, and link to parts/orders.
 
 ### REQ-INV-007
@@ -520,7 +521,7 @@
 - **Parameters:** `POST /api/inventory/barcode/move/:id` with `{ newLocationID }`. Validates barcode exists, prevents self-move. Updates `parentBarcodeID`. Records MOVED action in barcode history with from/to IDs.
 - **Parent Req:** REQ-BAR-001
 - **Derived Reqs:** None
-- **Verification:** Backend test: move barcode (PostgreSQL-specific raw SQL).
+- **Verification:** Backend test: move barcode (PostgreSQL-specific raw SQL). Frontend test: `barcode-movement-dialog.spec.ts` lines 44–122 (move action: canSubmit requires destination, executeMove API call, self-move prevention, close on success, error handling for lookup 404 and move failure).
 - **Validation:** User can move an item to a different location and see it in the new location's tree.
 
 ### REQ-BAR-004
@@ -529,7 +530,7 @@
 - **Parameters:** BarcodeHistory model: barcodeID, userID, actionID (FK to action type), fromID, toID, serialNumber, lotNumber, qty, unitOfMeasureID. Action types: CREATED, MOVED, RECEIVED, SPLIT, MERGED, DELETED. `GET /api/inventory/barcodehistory`, `GET /actiontypes`, `GET /barcode/:barcodeId`.
 - **Parent Req:** REQ-BAR-001
 - **Derived Reqs:** None
-- **Verification:** Backend tests: `barcodeHistory.test.js` - list all, action types, by barcode.
+- **Verification:** Backend tests: `barcodeHistory.test.js` - list all, action types, by barcode. Frontend test: `barcode-history.spec.ts` lines 84–365 (route param loading, barcode map building, column switching for trace/non-trace, date sorting, search by action/user/barcode, action labels and icons, barcode string resolution, action dialog handlers).
 - **Validation:** User can view the full movement/action history timeline for any barcode.
 
 ### REQ-BAR-005
@@ -538,7 +539,7 @@
 - **Parameters:** `GET /api/inventory/barcode/display/:id?labelSize=3x1` returns ZPL string. Includes QR code, company branding, item name, description, and quantity (for traces). Two label sizes: 3"x1" (default) and 1.5"x1". Frontend previews via Labelary API rendering.
 - **Parent Req:** REQ-BAR-001
 - **Derived Reqs:** None
-- **Verification:** Endpoint returns valid ZPL string for each barcode type (LOC, BOX, AKL, EQP).
+- **Verification:** Endpoint returns valid ZPL string for each barcode type (LOC, BOX, AKL, EQP). Frontend test: `barcode-dialog.spec.ts` lines 54–239 (initialization with barcode data, ZPL fetch, image rendering, preview size change re-fetch, print options toggle, label size toggle, print error handling, move and history navigation).
 - **Validation:** User can preview barcode labels in the dialog and they render correctly at both sizes.
 
 ### REQ-BAR-006
@@ -565,7 +566,7 @@
 - **Parameters:** `GET /api/inventory/barcode/tag/:id` returns `{ id, barcodeID, barcode, type, name, description }`. `GET /api/inventory/barcode/tag/chain/:id` returns chain of parent tags up to root. `GET /api/inventory/barcode/tag/` returns all tags across types.
 - **Parent Req:** REQ-BAR-001
 - **Derived Reqs:** None
-- **Verification:** Tag endpoint resolves barcode to item with correct type.
+- **Verification:** Tag endpoint resolves barcode to item with correct type. Frontend test: `barcode-tag.spec.ts` (input binding, output emissions, dialog interaction).
 - **Validation:** Scanning a barcode displays the item name, type, and location chain.
 
 ---
@@ -578,7 +579,7 @@
 - **Parameters:** Part model: name (STRING 32, unique, not null), description (STRING 62), internalPart (BOOLEAN, not null), vendor (STRING, not null), sku, link, minimumOrderQuantity (INT, not null), partCategoryID (FK, not null), serialNumberRequired, lotNumberRequired, defaultUnitOfMeasureID, manufacturer, manufacturerPN, imageFileID (FK).
 - **Parent Req:** REQ-SYS-001
 - **Derived Reqs:** REQ-PRT-002, REQ-PRT-003, REQ-PRT-004, REQ-PRT-005
-- **Verification:** Backend tests: `part.test.js` - list, categories, get by ID, create, update, delete.
+- **Verification:** Backend tests: `part.test.js` - list, categories, get by ID, create, update, delete. Frontend test: `parts-table-view.spec.ts` lines 80–361 (data loading, category/type/search/inactive filtering, computed properties, pagination, sorting, navigation, color utilities, middle-click), `part-edit-page.spec.ts` (form validation, category detection, pin group management, image management), `part-edit-dialog.spec.ts` (create/edit modes, validation, image management).
 - **Validation:** User can browse, create, edit, and delete parts with all fields.
 
 ### REQ-PRT-002
@@ -623,7 +624,7 @@
 - **Parameters:** Search across name/description/vendor/SKU. Filter by category (multi-select), type (internal/vendor). Toggle show inactive. Sortable columns including createdAt. URL syncs: search, inactive, sort, dir, page, pageSize.
 - **Parent Req:** REQ-PRT-001
 - **Derived Reqs:** None
-- **Verification:** Frontend component renders table with all filter/sort controls.
+- **Verification:** Frontend test: `parts-table-view.spec.ts` lines 101–178 (search across name/vendor/category, category multi-select filter, internal/vendor type filter, inactive toggle), lines 290–321 (pagination, sorting, getTotalCount with filters).
 - **Validation:** User can search, filter by category, sort by column, paginate, and share the URL.
 
 ### REQ-PRT-007
@@ -645,7 +646,7 @@
 - **Parameters:** Order model: description (TEXT), vendor (STRING), trackingNumber, link, notes (TEXT), placedDate (DATE), receivedDate (DATE), orderStatusID (FK, default: 1). Status progression via `nextStatusID` self-reference on OrderStatus.
 - **Parent Req:** REQ-SYS-001
 - **Derived Reqs:** REQ-ORD-002, REQ-ORD-003, REQ-ORD-004, REQ-ORD-005, REQ-ORD-006, REQ-ORD-007
-- **Verification:** Backend tests: `order.test.js` - list, statuses, line types, get by ID, create, update, delete.
+- **Verification:** Backend tests: `order.test.js` - list, statuses, line types, get by ID, create, update, delete. Frontend test: `orders-list-view.spec.ts` lines 77–315 (status loading, status toggle filtering, search, pagination, sorting, status chip classes, contrast color, item count/total price calculation, middle-click), `order-view.spec.ts` lines 78–392 (status navigation, receive mode, line item editing, pricing, date formatting, line type checks).
 - **Validation:** User can create orders, track status, and manage the full procurement lifecycle.
 
 ### REQ-ORD-002
@@ -681,7 +682,7 @@
 - **Parameters:** `POST /api/inventory/order/bulk-import` with `{ csvContent, vendor }`. `?dryRun=true` returns preview without creating records. CSV columns: name, vendor, qty, price. Matches existing parts by name. Creates new parts for unmatched names. Returns: partsToCreate, partsExisting, partsSkipped, orderItems, orderTotal.
 - **Parent Req:** REQ-ORD-001
 - **Derived Reqs:** None
-- **Verification:** Backend tests: `order.test.js` - dry run preview, execute import, recognizes existing parts, 400 with no content.
+- **Verification:** Backend tests: `order.test.js` - dry run preview, execute import, recognizes existing parts, 400 with no content. Frontend test: `bulk-upload.spec.ts` lines 43–290 (computed totals, dry-run preview, inline row editing with save/cancel, quantity/price parsing, remove item, status labels, price/total formatting, category helpers).
 - **Validation:** User uploads CSV, sees preview with existing/new parts, confirms to create order.
 
 ### REQ-ORD-006
@@ -690,7 +691,7 @@
 - **Parameters:** Frontend `ReceiveLineItemDialog` enables scanning barcode, selecting location, entering quantity. Creates Trace (for parts) or Equipment (for equipment items) with RECEIVED barcode history action.
 - **Parent Req:** REQ-ORD-001
 - **Derived Reqs:** None
-- **Verification:** After receiving, Trace/Equipment record exists with correct barcode and parent location.
+- **Verification:** After receiving, Trace/Equipment record exists with correct barcode and parent location. Frontend test: `receive-line-item-dialog.spec.ts` lines 62–235 (part receiving: full/partial receipt type, receivedQuantity computation, canSubmit validation for location/quantity, submit result structure; equipment receiving: pre-fill name, quantity 1, serial number, canSubmit requires name; barcode size options).
 - **Validation:** User clicks "Receive" on an order item, assigns location, and item appears in inventory tree.
 
 ### REQ-ORD-007
@@ -699,7 +700,7 @@
 - **Parameters:** Search across order fields. Filter by status (multi-select). Default sort: placedDate descending. URL syncs: search, inactive, statuses (comma-separated IDs), sort, dir, page, pageSize.
 - **Parent Req:** REQ-ORD-001
 - **Derived Reqs:** None
-- **Verification:** Frontend renders table with all filter controls.
+- **Verification:** Frontend test: `orders-list-view.spec.ts` lines 94–167 (status selection/deselection, allStatusesSelected, someStatusesSelected, hiddenStatusCount, search with page reset, status filter with empty result), lines 177–241 (pagination, sorting, getTotalCount with filters).
 - **Validation:** User can filter orders by status, search, and share the URL with filters applied.
 
 ---
@@ -712,7 +713,7 @@
 - **Parameters:** HTML5 Canvas 2D rendering. Elements: Connectors, Cables, Components, Sub-harnesses. Connections: Wire type (between pins) and Mating type (connector-to-connector). Data stored as JSONB `harnessData` field on WireHarness model.
 - **Parent Req:** REQ-SYS-001
 - **Derived Reqs:** REQ-HAR-002 through REQ-HAR-015
-- **Verification:** Backend tests: `harness.test.js` - list, get by ID, create, update, delete, next part number.
+- **Verification:** Backend tests: `harness.test.js` - list, get by ID, create, update, delete, next part number. Frontend test: `harness-canvas.spec.ts` lines 80–362 (inputs, outputs, zoom, addConnector/addCable/addComponent, deleteSelected guards, group/ungroup guards, export guards), `harness-page.spec.ts` lines 83–635 (initial state, computed properties, createNewHarness, tool/selection/data changes, connector/connection/pin property changes, copy/paste, undo/redo, layer ordering, element moves, export JSON, loadHarness).
 - **Validation:** User can open the harness editor, place elements, draw wires, and save the design.
 
 ### REQ-HAR-002
@@ -721,7 +722,7 @@
 - **Parameters:** ElectricalConnector model: label (STRING 50), type (ENUM: male/female/terminal/splice), pinCount (INT), pins (JSONB array), partID (FK). Canvas rendering with wire points (circles) and mating points (squares) on opposite sides. Rotation in 90° increments. Horizontal/vertical flip.
 - **Parent Req:** REQ-HAR-001
 - **Derived Reqs:** None
-- **Verification:** Backend tests: `connector.test.js` - list, pin types, get by ID/part, create, update, delete.
+- **Verification:** Backend tests: `connector.test.js` - list, pin types, get by ID/part, create, update, delete. Frontend test: `harness-connector-dialog.spec.ts` lines 38–330 (create mode: form defaults, displayPart, type labels, color hex/name, isValid, clearSelectedPart, save; edit mode: form population, preserved properties; locked mode; onPartSelected with linked/unlinked parts; duplicate label detection), `harness-canvas.spec.ts` lines 198–224 (addConnector to harnessData).
 - **Validation:** User can add a connector, rotate it, and see pins rendered with correct positions.
 
 ### REQ-HAR-003
@@ -730,7 +731,7 @@
 - **Parameters:** Cable model: label (STRING 50), wireCount (INT), gaugeAWG, wires (JSONB array of {id, color, colorCode}), partID (FK). Canvas renders cable as bundle with individual wire endpoints.
 - **Parent Req:** REQ-HAR-001
 - **Derived Reqs:** None
-- **Verification:** Backend tests: `cable.test.js` - list, get by ID/part, create, update, delete.
+- **Verification:** Backend tests: `cable.test.js` - list, get by ID/part, create, update, delete. Frontend test: `harness-add-cable-dialog.spec.ts` lines 18–310 (create mode: form defaults, displayPart, wireHex, isValid, clearSelectedPart, wire drag reorder, save; edit mode: form population, preserved IDs; duplicate label detection; onPartSelected), `harness-cable-dialog.spec.ts` (deep-cloned cables, addCable/removeCable, addWire/removeWire, quickAdd, save).
 - **Validation:** User can add a cable and see individual wire endpoints for connection.
 
 ### REQ-HAR-004
@@ -739,7 +740,7 @@
 - **Parameters:** ElectricalComponent model: label (STRING 50), pinCount (INT), pins (JSONB array of pin groups with pins), partID (FK).
 - **Parent Req:** REQ-HAR-001
 - **Derived Reqs:** None
-- **Verification:** Backend tests: `component.test.js` - list, get by ID/part, create, update, delete.
+- **Verification:** Backend tests: `component.test.js` - list, get by ID/part, create, update, delete. Frontend test: `harness-component-dialog.spec.ts` lines 18–315 (create mode: form defaults, displayPart, totalPinCount, toggleGroupHidden/togglePinHidden, isValid, clearSelectedPart, save; edit mode: form population, preserved position/rotation; duplicate label detection; onPartSelected).
 - **Validation:** User can add a component and wire to its pins.
 
 ### REQ-HAR-005
@@ -748,7 +749,7 @@
 - **Parameters:** Wire drawing mode activated by tool selection. Click start pin, click end pin to create connection. Orthogonal path calculation with lead-out direction based on element center. Obstacle avoidance. Waypoints for manual path adjustment via node edit mode. Wire properties: color, gauge, length, termination types (from WireEnd reference data).
 - **Parent Req:** REQ-HAR-001
 - **Derived Reqs:** None
-- **Verification:** Connection data stored in harnessData.connections JSONB array.
+- **Verification:** Connection data stored in harnessData.connections JSONB array. Frontend test: `harness-property-panel.spec.ts` lines 287–317 (updateConnection emission, updateConnectionInput for string/integer fields, lengthMm parsing), lines 428–477 (getEndpointDescription for connector/cable/component endpoints, getEndpointType).
 - **Validation:** User can draw a wire from connector pin A to connector pin B and see an orthogonal path.
 
 ### REQ-HAR-006
@@ -766,7 +767,7 @@
 - **Parameters:** WireEnd model: code (STRING 20, unique), name (STRING 50), description (TEXT). Seeded: f-pin, m-pin, f-spade, m-spade, ring, fork, ferrule, soldered, bare. `GET /api/parts/wire-end`, `GET /by-code/:code`. Connection has from/to termination references.
 - **Parent Req:** REQ-HAR-001
 - **Derived Reqs:** None
-- **Verification:** Backend tests: `wireEnd.test.js` - list, by code, by ID, create, update, delete.
+- **Verification:** Backend tests: `wireEnd.test.js` - list, by code, by ID, create, update, delete. Frontend test: `harness-property-panel.spec.ts` lines 113–120 (loadWireEnds from service on init), lines 601–653 (getCurrentEndpointTermination from/to, updateEndpointTermination emission).
 - **Validation:** Property panel shows termination type dropdowns populated from the database.
 
 ### REQ-HAR-008
@@ -784,7 +785,7 @@
 - **Parameters:** HarnessHistoryService with past/future stacks. `push(state)` for instant operations. `beginTransaction()/commitTransaction()` for drag operations. Keyboard: Ctrl+Z (undo), Ctrl+Y/Ctrl+Shift+Z (redo). Toolbar buttons disabled when stack empty.
 - **Parent Req:** REQ-HAR-001
 - **Derived Reqs:** None
-- **Verification:** Service unit test: push/undo/redo maintain correct stack state.
+- **Verification:** Service unit test: push/undo/redo maintain correct stack state. Frontend test: `harness-page.spec.ts` lines 433–470 (onUndo restores previous state, nothing-to-undo guard, onRedo restores next state), lines 146–155 (canUndo/canRedo computed from history service), lines 417–432 (drag start begins transaction, drag end commits transaction).
 - **Validation:** User makes changes, presses Ctrl+Z to undo, Ctrl+Y to redo.
 
 ### REQ-HAR-010
@@ -811,7 +812,7 @@
 - **Parameters:** Tools: Pan (drag canvas), Zoom (scroll wheel). Grid toggle. Snap-to-grid toggle. Canvas renders grid lines when enabled.
 - **Parent Req:** REQ-HAR-001
 - **Derived Reqs:** None
-- **Verification:** Canvas renders grid lines when enabled. Element positions snap to grid increments.
+- **Verification:** Canvas renders grid lines when enabled. Element positions snap to grid increments. Frontend test: `harness-canvas.spec.ts` lines 138–174 (default zoom, zoomIn/zoomOut, resetZoom, max/min zoom caps), lines 84–108 (default grid enabled, grid size, tool inputs).
 - **Validation:** User can pan/zoom the canvas, toggle grid, and elements snap to grid positions.
 
 ### REQ-HAR-013
@@ -829,7 +830,7 @@
 - **Parameters:** `isReleased` signal disables: wire tool, node edit, add elements, rotate, flip, delete, undo/redo, import. Keeps enabled: select, pan, zoom, export, grid toggle. Canvas prevents dragging. Property panel disables all form fields. Selection still works for viewing properties.
 - **Parent Req:** REQ-HAR-013
 - **Derived Reqs:** None
-- **Verification:** All editing operations are no-ops when isReleased=true.
+- **Verification:** All editing operations are no-ops when isReleased=true. Frontend test: `harness-page.spec.ts` lines 157–188 (isReleased computed true for released, isInReview for review, isLocked for released/review, isLocked false for draft), `harness-canvas.spec.ts` lines 101–105 (isLocked input), `harness-property-panel.spec.ts` lines 130–134 (isReleased/isLocked inputs), `harness-toolbar.spec.ts` lines 29–76 (isReleased input binding).
 - **Validation:** User cannot modify a released harness. All edit controls appear disabled.
 
 ### REQ-HAR-015
@@ -847,7 +848,7 @@
 - **Parameters:** Columns include releaseState with status chips: draft (gray #424242), review (orange #f57c00), released (green #388e3c). Search, sort, pagination. Default sort: updatedAt descending. URL query param persistence.
 - **Parent Req:** REQ-HAR-001
 - **Derived Reqs:** None
-- **Verification:** Frontend renders table with status chips and all controls.
+- **Verification:** Frontend test: `harness-list-view.spec.ts` lines 52–205 (initial data loading, inactive filtering, search by name/partNumber/description, sorting by name/updatedAt, pagination, getTotalCount with filters, formatDate, middle-click new tab, error handling, displayedColumns including releaseState).
 - **Validation:** User sees harness list with color-coded status and can filter/sort.
 
 ### REQ-HAR-017
@@ -856,7 +857,7 @@
 - **Parameters:** Export: serializes harnessData to JSON file. Import: loads JSON via HarnessImportDialog, replaces current canvas data.
 - **Parent Req:** REQ-HAR-001
 - **Derived Reqs:** None
-- **Verification:** Exported JSON can be re-imported to produce identical canvas.
+- **Verification:** Exported JSON can be re-imported to produce identical canvas. Frontend test: `harness-import-dialog.spec.ts` lines 39–254 (initial state, drag events, clearFile, JSON paste, validation for invalid syntax/missing name/non-array fields, backend validation success/failure/fallback, useSample, import with/without parsed data, non-JSON file rejection), `harness-page.spec.ts` lines 573–593 (onExportJSON null guard, download link creation).
 - **Validation:** User exports a harness, imports it into a new harness, and sees identical design.
 
 ### REQ-HAR-018
@@ -868,6 +869,33 @@
 - **Verification:** Backend test: validate endpoint with valid/invalid data.
 - **Validation:** Saving a harness with circular sub-harness references shows validation error.
 
+### REQ-HAR-019
+- **Description:** The system shall strip base64-encoded image data from harness JSON before saving to the database and re-fetch images from the parts database on load.
+- **Rationale:** Inline base64 images bloat the harnessData JSONB column. Images are already stored in the parts database (UploadedFile table) and can be re-fetched on demand.
+- **Parameters:** Fields stripped before save: `connectorImage`, `pinoutDiagramImage` (connectors), `cableDiagramImage` (cables), `componentImage`, `pinoutDiagramImage` (components). On load, `syncPartsFromDatabase()` fetches images via `getConnectorByPartId`, `getCableByPartId`, `getComponentByPartId` endpoints. Image show/hide toggle flags (`showPinoutDiagram`, `showConnectorImage`, etc.) are preserved in JSON. Stripping also applies to JSON export.
+- **Parent Req:** REQ-HAR-001
+- **Derived Reqs:** REQ-HAR-020
+- **Verification:** Backend test: saved harnessData does not contain base64 image strings. E2E test: export JSON contains no image data fields. Frontend: images display correctly after save and reload.
+- **Validation:** User saves a harness with connector images, reloads the page, and images are still visible.
+
+### REQ-HAR-020
+- **Description:** The system shall synchronize harness element properties from the parts database on load, detecting structural changes and silently refreshing images.
+- **Rationale:** Parts may be updated independently of harness designs. The sync ensures harness elements reflect current part definitions.
+- **Parameters:** On harness load, for each connector/cable/component with a `partId`, the system fetches the current part record. Structural changes (type, pinCount, color, pins, gaugeAWG, wireCount, wires, pinGroups) are presented to the user in a sync dialog for acceptance/rejection. Image data is always refreshed silently. The `by-part` backend endpoints include nested `Part.imageFile` association for fallback image resolution.
+- **Parent Req:** REQ-HAR-019
+- **Derived Reqs:** None
+- **Verification:** Backend test: `getConnectorByPartId`, `getCableByPartId`, `getComponentByPartId` include `Part.imageFile` in response. Frontend test: `harness-sync-dialog.spec.ts` lines 69–145 (receive changes from data, getTypeIcon for connector/cable/component/unknown, acceptSelected closes with current state and preserves accepted flags, keepAll sets all to not accepted, empty changes handling).
+- **Validation:** User updates a connector's pin count in the parts library, opens a harness using that connector, and sees a sync prompt with the change.
+
+### REQ-HAR-021
+- **Description:** The harness editor shall display images and pinout diagrams for elements within sub-harnesses, with interactive expand/collapse buttons.
+- **Rationale:** Sub-harness child elements (connectors, cables, components) should display their part images just like main harness elements.
+- **Parameters:** After sub-harness data loads, images are fetched from the parts database for all child elements with a `partId`. The [+]/[-] expand buttons on sub-harness child elements are clickable to toggle image visibility. Button hit testing transforms world coordinates to sub-harness local space, then to child element local space. Toggled state is kept in the sub-harness data cache (not persisted to the parent harness).
+- **Parent Req:** REQ-HAR-008
+- **Derived Reqs:** None
+- **Verification:** E2E test: sub-harness elements with linked parts display images after load. Canvas renders expand buttons on sub-harness children.
+- **Validation:** User opens a harness containing a sub-harness with imaged connectors; images appear and [+] buttons toggle them.
+
 ---
 
 ## 8. Planning & Task Management
@@ -878,7 +906,7 @@
 - **Parameters:** TaskList model: name (STRING 20), order (INT). Task model: name (STRING 100), description (TEXT), doneFlag, dueDate, timeEstimate, taskTypeEnum (normal/tracking/critical_path/scheduled), rank (DOUBLE for ordering), parentTaskID (self-reference for subtasks). CDK DragDrop for cross-list movement.
 - **Parent Req:** REQ-SYS-001
 - **Derived Reqs:** REQ-PLN-002 through REQ-PLN-012
-- **Verification:** Backend tests: `task.test.js`, `taskList.test.js` - full CRUD and move operations.
+- **Verification:** Backend tests: `task.test.js`, `taskList.test.js` - full CRUD and move operations. Frontend test: `task-list-view.spec.ts` lines 40–222 (initial state, toggleHistory, toggleEditMode with refresh, startAddingList/cancelAddingList, confirmAddList, onListRenamed/onListDeleted, filter handlers, saveAsDefault/revertToDefault, URL param parsing), `task-list.spec.ts` lines 37–181 (filtered tasks excluding done, project/noProject/childTask filtering, add/cancel task, confirmAddTask, title editing, confirmDelete, dragDelay).
 - **Validation:** User sees columns with task cards, can drag cards between columns.
 
 ### REQ-PLN-002
@@ -887,7 +915,7 @@
 - **Parameters:** `POST /api/planning/task`, `GET /`, `GET /:id`, `PUT /:id`, `DELETE /:id`. Task includes: ownerUserID (from auth), projectID, taskListID, taskTypeEnum, timeEstimate, parentTaskID. Creates CREATED history entry. Auto-completes parent task when `completeWithChildren=true` and all subtasks done.
 - **Parent Req:** REQ-PLN-001
 - **Derived Reqs:** None
-- **Verification:** Backend tests: task types, list, filter, get by ID, create (with history), update, delete.
+- **Verification:** Backend tests: task types, list, filter, get by ID, create (with history), update, delete. Frontend test: `task-card-dialog.spec.ts` lines 49–378 (checklist computed properties, currentListName/currentProject, filteredAvailableTasks, addChecklistItem/toggleChecklistItem/deleteChecklistItem, title editing/updating, description editing, formatEstimate/formatReminder, isDueToday/isOverdue, moveToList, selectProject, toggleSubtasks/toggleChecklist, addSubtask), `task-card.spec.ts` lines 40–279 (checklistProgress, formatEstimate, displayDone, projectColor, sortedProjects, isDueToday/isOverdue, toggleComplete with optimistic update and error revert).
 - **Validation:** User can create, edit, and delete tasks with all fields populated.
 
 ### REQ-PLN-003
@@ -914,7 +942,7 @@
 - **Parameters:** Project model: name (STRING 100), shortName (STRING 6), tagColorHex (STRING 6, stored without #), keyboardShortcut (STRING 1, unique, digits 1-9, 0 reserved for "no project"), parentProjectID. `GET /top` returns root projects. Colors display as chips on task cards.
 - **Parent Req:** REQ-PLN-001
 - **Derived Reqs:** REQ-PLN-006
-- **Verification:** Backend tests: `project.test.js` - list, top-level, get by ID, create, update, delete.
+- **Verification:** Backend tests: `project.test.js` - list, top-level, get by ID, create, update, delete. Frontend test: `projects-list-view.spec.ts` lines 47–179 (load projects, inactive filtering, search by name/shortName/description, sorting, pagination, goBack), `project-edit-dialog.spec.ts` lines 54–227 (create mode: form defaults, availableShortcuts excluding used, color change, form validation errors, save with # stripping; edit mode: form population, shortcut availability for current project, update/delete with confirmation).
 - **Validation:** User can create projects with colors and keyboard shortcuts, see colored chips on tasks.
 
 ### REQ-PLN-006
@@ -923,7 +951,7 @@
 - **Parameters:** Hover over task card + press number key 1-9: assigns project with matching `keyboardShortcut`. Press 0: clears project. Toggle behavior: pressing same shortcut again removes project. Requires mouse hover (tracks `isHovered` state).
 - **Parent Req:** REQ-PLN-005
 - **Derived Reqs:** None
-- **Verification:** Component test: key press triggers project assignment.
+- **Verification:** Frontend test: `task-card.spec.ts` lines 224–279 (ignore key events when not hovered, toggle complete on 'c', clear project on '0', assign project by keyboard shortcut, toggle project off when same shortcut pressed).
 - **Validation:** User hovers over task, presses "1", task shows project 1's color chip.
 
 ### REQ-PLN-007
@@ -932,7 +960,7 @@
 - **Parameters:** Sub-toolbar with project chips (multi-select), "No Project" filter, subtasks toggle. Filters persist as URL query params. Save as default view (cookie-based via TaskViewPreferencesService).
 - **Parent Req:** REQ-PLN-001
 - **Derived Reqs:** None
-- **Verification:** Frontend: filter controls render and update displayed tasks.
+- **Verification:** Frontend test: `sub-toolbar.spec.ts` lines 35–202 (initial state with all projects selected, allProjectsSelected/someProjectsSelected, activeFilterCount, isProjectSelected, toggleProject, toggleAllProjects, toggleNoProject, onShowChildTasksChange, selectedProjects, navigation to /projects and /scheduled-tasks, menuExpanded, initial values from URL), `task-list.spec.ts` lines 41–74 (filter by project IDs, hide no-project tasks, hide subtasks), `task-list-view.spec.ts` lines 156–174 (onProjectFilterChanged, onShowNoProjectChanged, onShowChildTasksChanged), lines 176–201 (onSaveAsDefault, onRevertToDefault).
 - **Validation:** User selects projects to filter, saves default view, reloads and sees saved filters applied.
 
 ### REQ-PLN-008
@@ -941,7 +969,7 @@
 - **Parameters:** TaskHistory model: taskID, userID, actionID (FK), fromID, toID. Action types: CREATED, ADD_TO_PROJECT, ADD_PRIORITY, CHANGE_STATUS, MOVE_LIST. `GET /api/planning/taskhistory`, `GET /actiontypes`, `GET /task/:taskId`.
 - **Parent Req:** REQ-PLN-001
 - **Derived Reqs:** None
-- **Verification:** Backend tests: `taskHistory.test.js` - list, action types, by task.
+- **Verification:** Backend tests: `taskHistory.test.js` - list, action types, by task. Frontend test: `history-drawer.spec.ts` lines 36–117 (isCreatedAction, getActionLabel for MOVE_LIST/ADD_TO_PROJECT/ADD_PRIORITY/CHANGE_STATUS/CREATED/unknown, getLabel for list names/projects/priorities/status, loadMoreHistory guards for loading/noMore, hasMore detection).
 - **Validation:** History drawer shows timeline of task movements and changes.
 
 ### REQ-PLN-009
@@ -959,7 +987,7 @@
 - **Parameters:** ScheduledTask model: name, description, taskListID, projectID, taskTypeEnum, timeEstimate, cronExpression (validated by cron-parser), timezone (default: America/Los_Angeles), dueDateOffsetHours, nextRunAt, lastRunAt. Backend service checks every minute, creates Task when `nextRunAt <= NOW()`, advances nextRunAt (no backfilling). `GET /?includeInactive=true` includes deactivated.
 - **Parent Req:** REQ-PLN-001
 - **Derived Reqs:** None
-- **Verification:** Backend tests: `scheduledTask.test.js` - CRUD operations. `scheduledTaskService.test.js` - creates task, advances nextRunAt, skips inactive/future.
+- **Verification:** Backend tests: `scheduledTask.test.js` - CRUD operations. `scheduledTaskService.test.js` - creates task, advances nextRunAt, skips inactive/future. Frontend test: `scheduled-tasks-list-view.spec.ts` lines 66–227 (data loading, inactive filtering, search by name/cron/taskList/project, sorting, pagination, cronToEnglish translation for hourly/specific time/minutes/every-minute/day-of-month/month/day-of-week/Sunday/invalid), `scheduled-task-edit-dialog.spec.ts` lines 66–257 (create mode: form defaults, timezone list, cronDescription updates, save with validation; edit mode: form population, update, delete with confirmation; ngOnDestroy unsubscribe).
 - **Validation:** User creates a scheduled task with cron "0 9 * * 1" (Mon 9am), task appears in target list on Monday morning.
 
 ### REQ-PLN-011
@@ -977,7 +1005,7 @@
 - **Parameters:** `@media (max-width: 768px)`: columns snap-scroll (`scroll-snap-type: x mandatory`), each column 100vw centered. CDK drag delay: 500ms touch (long-press), 0ms mouse. Auto-scroll during drag (48px edge zone, speed scales with proximity). Sub-toolbar collapsible on mobile. Sidebar auto-collapsed on mobile.
 - **Parent Req:** REQ-PLN-001
 - **Derived Reqs:** None
-- **Verification:** Mobile viewport renders single column with snap-scroll. Long-press initiates drag.
+- **Verification:** Mobile viewport renders single column with snap-scroll. Long-press initiates drag. Frontend test: `task-list.spec.ts` lines 175–179 (dragDelay: touch 500ms, mouse 0ms).
 - **Validation:** On mobile, user swipes between columns, long-presses to drag tasks.
 
 ### REQ-PLN-013
@@ -986,7 +1014,7 @@
 - **Parameters:** `ChecklistItem { id: string (UUID), text: string, checked: boolean }`. Stored as `checklist` JSONB column, nullable, default null. Task card shows progress badge (`checked/total`). Task dialog provides add, toggle, delete operations with progress bar.
 - **Parent Req:** REQ-PLN-002
 - **Derived Reqs:** None
-- **Verification:** Backend tests: `task.test.js` checklist describe block. Frontend tests: `task-card.spec.ts`, `task-card-dialog.spec.ts`. E2E: `tasks.spec.ts` Task Checklist describe block.
+- **Verification:** Backend tests: `task.test.js` checklist describe block. Frontend test: `task-card.spec.ts` lines 44–67 (checklistProgress returns progress string, null for no/empty checklist), `task-card-dialog.spec.ts` lines 53–168 (checklist computed properties, checklistProgress/checklistProgressPercent, addChecklistItem with clear draft and empty guard, toggleChecklistItem, deleteChecklistItem). E2E: `tasks.spec.ts` Task Checklist describe block.
 - **Validation:** User opens task dialog, clicks Checklist, adds items, checks/unchecks them, sees progress badge on task card.
 
 ---
@@ -1012,7 +1040,7 @@
 - **Parameters:** Uses BarcodeDetector API (Chrome). Camera feed displayed full-screen. State machine: scanning → loading → display → action states.
 - **Parent Req:** REQ-SYS-001
 - **Derived Reqs:** REQ-MOB-002, REQ-MOB-003, REQ-MOB-004, REQ-MOB-005, REQ-MOB-006
-- **Verification:** Component renders camera feed and detects barcodes.
+- **Verification:** Component renders camera feed and detects barcodes. Frontend test: `mobile-scanner.spec.ts` lines 37–279 (initial state defaults, isTrace computed, locationChain reversal, startMove/startMerge/startSplit/startTrash state transitions, toggleTrashAll, cancelAction/cancelSecondScan/cancelSecondAction, scanAgain/tryAgain reset, goBack, getTypeBadgeClass for all types, BarcodeDetector absence handling, ngOnDestroy).
 - **Validation:** User opens scanner on phone, points camera at barcode, item info displays.
 
 ### REQ-MOB-002
@@ -1021,7 +1049,7 @@
 - **Parameters:** Two-scan workflow: scan source item barcode → display info → select "Move" → scan destination location barcode → confirm → execute move API call.
 - **Parent Req:** REQ-MOB-001
 - **Derived Reqs:** None
-- **Verification:** After two scans and confirm, moveBarcode API is called with correct IDs.
+- **Verification:** After two scans and confirm, moveBarcode API is called with correct IDs. Frontend test: `mobile-scanner.spec.ts` lines 115–131 (startMove sets scanning_second state with move action), `barcode-movement-dialog.spec.ts` lines 44–122 (move action: title/icon, canSubmit requires destination, executeMove call, self-move prevention, close on success, error handling for lookup 404 and move failure).
 - **Validation:** User scans a part, scans a shelf location, item moves to that location.
 
 ### REQ-MOB-003
@@ -1030,7 +1058,7 @@
 - **Parameters:** Two-scan workflow: scan target trace → display info → select "Merge" → scan source trace → confirm → execute merge API call. Validates same part.
 - **Parent Req:** REQ-MOB-001
 - **Derived Reqs:** None
-- **Verification:** After merge, target trace has combined quantity, source is deactivated.
+- **Verification:** After merge, target trace has combined quantity, source is deactivated. Frontend test: `mobile-scanner.spec.ts` lines 124–131 (startMerge sets scanning_second state with merge action), `barcode-movement-dialog.spec.ts` lines 123–159 (merge action: title/icon, canSubmit requires mergeBarcode, mergeTrace call, close on success).
 - **Validation:** User scans two traces of the same part, merges them, one trace has combined quantity.
 
 ### REQ-MOB-004
@@ -1039,7 +1067,7 @@
 - **Parameters:** Single-scan workflow: scan trace → display info → select "Split" → enter split quantity → confirm → execute split API call.
 - **Parent Req:** REQ-MOB-001
 - **Derived Reqs:** None
-- **Verification:** After split, original trace reduced, new trace created with split quantity.
+- **Verification:** After split, original trace reduced, new trace created with split quantity. Frontend test: `mobile-scanner.spec.ts` lines 133–141 (startSplit sets confirm action and confirming_action state), `barcode-movement-dialog.spec.ts` lines 159–192 (split action: title/icon, canSubmit requires positive quantity, splitTrace call, null quantity guard).
 - **Validation:** User scans a trace of 100 items, splits 25, sees two traces (75 and 25).
 
 ### REQ-MOB-005
@@ -1048,7 +1076,7 @@
 - **Parameters:** Single-scan workflow: scan trace → display info → select "Trash" → optionally enter quantity → confirm → execute delete API call.
 - **Parent Req:** REQ-MOB-001
 - **Derived Reqs:** None
-- **Verification:** After trash, trace quantity reduced or trace deactivated.
+- **Verification:** After trash, trace quantity reduced or trace deactivated. Frontend test: `mobile-scanner.spec.ts` lines 142–175 (startTrash sets confirm action, toggleTrashAll sets quantity to tag quantity or resets), `barcode-movement-dialog.spec.ts` lines 193–265 (delete action: title/icon for non-trace/trace-full/trace-partial, canSubmit requires confirmation matching barcode or quantity, deleteItem/deleteTrace calls).
 - **Validation:** User scans a trace, trashes 5 items, trace quantity decremented by 5.
 
 ### REQ-MOB-006
@@ -1057,7 +1085,7 @@
 - **Parameters:** Circular semi-transparent back button (arrow_back icon) in top-left corner. Uses `Location.back()`. z-index: 10, always visible over camera feed.
 - **Parent Req:** REQ-MOB-001
 - **Derived Reqs:** None
-- **Verification:** Button renders and navigates back.
+- **Verification:** Button renders and navigates back. Frontend test: `mobile-scanner.spec.ts` lines 226–232 (goBack calls location.back).
 - **Validation:** User taps back button and returns to previous page.
 
 ---
@@ -1083,7 +1111,7 @@
 - **Parameters:** Applies to: Parts, Orders, Equipment, Harness, Projects, Scheduled Tasks. URL syncs: search, inactive, sort, dir, page, pageSize (plus view-specific params like statuses).
 - **Parent Req:** REQ-SYS-001
 - **Derived Reqs:** None
-- **Verification:** Each list view syncs state to URL query params on change.
+- **Verification:** Each list view syncs state to URL query params on change. Frontend test: `parts-table-view.spec.ts` lines 290–321 (pagination, sorting), `orders-list-view.spec.ts` lines 168–241 (search/page/sort changes), `equipment-table-view.spec.ts` (pagination, sorting), `harness-list-view.spec.ts` lines 107–144 (page reset on search, pagination), `projects-list-view.spec.ts` lines 106–128 (search resets page, pagination, sorting), `scheduled-tasks-list-view.spec.ts` lines 132–148 (search resets page, pagination).
 - **Validation:** User applies filters, copies URL, opens in new tab, sees same filtered view.
 
 ### REQ-UX-002
@@ -1092,7 +1120,7 @@
 - **Parameters:** Sidebar checks `window.innerWidth <= 768` on init. Collapsed: `width: 0; min-width: 0; overflow: hidden`. Toggle button always accessible.
 - **Parent Req:** REQ-SYS-001
 - **Derived Reqs:** None
-- **Verification:** Sidebar collapses on mobile viewport.
+- **Verification:** Sidebar collapses on mobile viewport. Frontend test: `nav.component.spec.ts` lines 50–65 (toggleSidenav toggles collapsed state and toggles back).
 - **Validation:** On mobile, sidebar starts collapsed. User can expand/collapse via toggle.
 
 ### REQ-UX-003
@@ -1110,7 +1138,7 @@
 - **Parameters:** V: select tool, H: pan tool, C: copy, V (with Ctrl): paste, Delete: delete selected, Arrow keys: nudge selected, Ctrl+Z: undo, Ctrl+Y/Ctrl+Shift+Z: redo.
 - **Parent Req:** REQ-HAR-001
 - **Derived Reqs:** None
-- **Verification:** Key press activates correct tool or operation.
+- **Verification:** Key press activates correct tool or operation. Frontend test: `harness-toolbar.spec.ts` lines 77–108 (setTool emits toolChanged for select/pan/nodeEdit/connector tools), `harness-page.spec.ts` lines 236–254 (onToolChanged/onCanvasToolChangeRequest updates active tool).
 - **Validation:** User presses V to switch to select, H to pan, Ctrl+Z to undo.
 
 ### REQ-UX-005
@@ -1119,8 +1147,48 @@
 - **Parameters:** Separate "Preview Size" and "Print Label Size" dropdowns. Preview updates dynamically on size change (re-fetches ZPL and renders via Labelary API). Print options collapsible: hidden by default, shown on "Print Label" click, two-step confirmation workflow.
 - **Parent Req:** REQ-BAR-005
 - **Derived Reqs:** None
-- **Verification:** Preview re-renders when size changed. Print sends correct size to API.
+- **Verification:** Preview re-renders when size changed. Print sends correct size to API. Frontend test: `barcode-dialog.spec.ts` lines 108–181 (default preview/label sizes, onPreviewSizeChange re-fetches ZPL, no-op without barcodeId, togglePrintOptions, onLabelSizeToggle for 3x1/1.5x1), lines 182–239 (printLabel error guard, printBarcode service call, print error handling).
 - **Validation:** User selects 1.5x1 preview, sees small label. Selects 3x1 for print, prints large label.
+
+### REQ-UX-006
+- **Description:** Table rows in list views shall support middle-click to open items in a new browser tab.
+- **Rationale:** Power users need to open multiple items simultaneously for comparison or batch review.
+- **Parameters:** `(auxclick)` and `(mousedown)` event handlers on table rows in parts, orders, and harness list views. Middle-click (button === 1) opens the item's edit/detail page in a new tab via `window.open()` with hash routing URL. Default middle-click scroll behavior prevented via mousedown handler.
+- **Parent Req:** REQ-UX-001
+- **Derived Reqs:** None
+- **Verification:** E2E test: middle-click dispatched on table row triggers `window.open`. Mousedown handler prevents default for button 1. Frontend test: `parts-table-view.spec.ts` lines 348–361 (onRowMouseDown prevents default for middle click, onRowAuxClick opens new tab), `orders-list-view.spec.ts` lines 302–315 (middle-click prevent default, open new tab), `harness-list-view.spec.ts` lines 169–195 (onRowMouseDown prevents default for middle click, onRowAuxClick opens in new tab).
+- **Validation:** User middle-clicks a part row, new tab opens with the part edit page.
+
+---
+
+## 13. Push Notifications
+
+### REQ-NOTIF-001
+- **Description:** The system shall support web push notifications via the Web Push API with VAPID authentication.
+- **Rationale:** Users need real-time alerts for task due dates and scheduled task creation without keeping the app open.
+- **Parameters:** VAPID keys configured per environment (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_EMAIL` in .env). Backend uses `web-push` library. Service worker (`sw.js`) handles push events and notification click navigation. PWA manifest (`manifest.webmanifest`) enables Add to Home Screen. `GET /api/config/vapid-public-key` returns public key (no auth required). `POST /api/config/test-notification` sends test push (auth required).
+- **Parent Req:** REQ-SYS-001
+- **Derived Reqs:** REQ-NOTIF-002, REQ-NOTIF-003
+- **Verification:** Backend test: vapid-public-key endpoint returns key when configured, 500 when not. Push subscription CRUD endpoints function correctly. Service worker registered in browser. Frontend test: `notification.service.spec.ts` lines 24–245 (getVapidPublicKey GET, getSubscriptions GET, saveSubscription POST with toJSON payload, deleteSubscription DELETE, sendTestNotification POST, getPermissionState, subscribeToPush: denied permission, granted with save, existing subscription cleanup, null vapid key; unsubscribeFromPush: existing sub, no sub), `settings-page.spec.ts` lines 47–178 (load permission state, load subscriptions, getDeviceLabel for iOS/Android/Windows/macOS/Linux/unknown, removeDevice, sendTestNotification success/zero/failure, enableNotifications with loading state).
+- **Validation:** User enables notifications in browser, receives push notification when a task is due.
+
+### REQ-NOTIF-002
+- **Description:** The system shall manage push notification subscriptions per user.
+- **Rationale:** Each user/device combination requires a unique push subscription for targeted notifications.
+- **Parameters:** PushSubscription model: userID (FK to Users, ON DELETE CASCADE), endpoint (TEXT, unique), p256dh (TEXT), auth (TEXT), userAgent (STRING 255). `POST /api/config/push-subscription` upserts by endpoint. `GET /api/config/push-subscription` lists current user's subscriptions. `DELETE /api/config/push-subscription/:id` removes subscription (ownership validated). Expired subscriptions (410 Gone) cleaned up automatically.
+- **Parent Req:** REQ-NOTIF-001
+- **Derived Reqs:** None
+- **Verification:** Backend test: subscribe creates record, list returns user's subscriptions, unsubscribe removes record, 404 for wrong user's subscription. Frontend test: `notification.service.spec.ts` lines 38–85 (getSubscriptions GET, saveSubscription POST, deleteSubscription DELETE), `settings-page.spec.ts` lines 103–114 (removeDevice calls deleteSubscription and updates list).
+- **Validation:** User subscribes on two devices, sees both in notification settings, removes one.
+
+### REQ-NOTIF-003
+- **Description:** The system shall send push notifications for task due date reminders and scheduled task creation.
+- **Rationale:** Proactive reminders prevent missed deadlines and inform users of auto-created tasks.
+- **Parameters:** Notification service checks every minute for tasks with `dueDate` within reminder window where `dueDateNotifiedAt IS NULL`. After notification, sets `dueDateNotifiedAt = NOW()` to prevent duplicates. `dueDateNotifiedAt` column added to Tasks table. Scheduled task service calls `sendScheduledTaskNotification()` after creating a task. Notification payload: `{ title, body, url }`.
+- **Parent Req:** REQ-NOTIF-001
+- **Derived Reqs:** None
+- **Verification:** Backend test: due date reminder finds eligible tasks and marks them notified. Scheduled task creation triggers notification call.
+- **Validation:** User sets task due in 30 minutes, receives push notification at the configured reminder time.
 
 ---
 
@@ -1163,6 +1231,15 @@ These requirements support the design, build, and implementation of the software
 - **Derived Reqs:** None
 - **Verification:** GitHub Actions workflow runs on tag push. Image appears on DockerHub.
 - **Validation:** New version deploys successfully via CI/CD pipeline.
+
+### REQ-DEV-005
+- **Description:** The system shall provide automated PostgreSQL database backups with change detection, email notifications, and off-site pull.
+- **Rationale:** Data loss prevention requires regular, verified backups stored in multiple locations.
+- **Parameters:** VPS script (`scripts/backup-db.sh`): daily `pg_dump -Fc` compressed backup. Change detection via `pg_stat_user_tables` hash (skips backup if no changes). Disk usage check (skips if >= 90% full). Email notifications via Gmail SMTP for success/failure. Off-site script (`scripts/pull-backup.sh`): pulls all `.dump` files from VPS via SCP. Successfully pulled files deleted from VPS. Skips already-downloaded files. Email notifications for pull status. VPS cron: daily at 2 AM. Off-site cron: daily at 2:10 AM.
+- **Parent Req:** REQ-SYS-RD-003
+- **Derived Reqs:** None
+- **Verification:** Backup script creates `.dump` file when data changes. Pull script downloads and removes remote files.
+- **Validation:** Database can be restored from a backup file using `pg_restore`.
 
 ---
 
@@ -1334,6 +1411,9 @@ Status key:
 | REQ-HAR-016 | Harness list view with status chips | Met | |
 | REQ-HAR-017 | Import/export as JSON | Met | |
 | REQ-HAR-018 | Backend validation for structural integrity | Met | |
+| REQ-HAR-019 | Image data stripping on save/export | Met | |
+| REQ-HAR-020 | Parts sync on harness load | Met | |
+| REQ-HAR-021 | Sub-harness image display and toggle buttons | Met | |
 
 ### 8. Planning & Task Management
 
@@ -1385,6 +1465,15 @@ Status key:
 | REQ-UX-003 | Error notifications via Material snackbar | Met | |
 | REQ-UX-004 | Harness editor keyboard shortcuts | Met | |
 | REQ-UX-005 | Independent barcode preview and print sizes | Met | |
+| REQ-UX-006 | Middle-click opens in new tab | Met | Parts, orders, harness list views |
+
+### 13. Push Notifications
+
+| Req ID | Description | Status | Notes |
+|--------|-------------|--------|-------|
+| REQ-NOTIF-001 | Web push via VAPID/service worker | Met | On `pwa` branch, pending merge to master |
+| REQ-NOTIF-002 | Push subscription management per user | Met | On `pwa` branch, pending merge to master |
+| REQ-NOTIF-003 | Due date reminders and scheduled task notifications | Met | On `pwa` branch, pending merge to master |
 
 ### Appendix A: Development Requirements
 
@@ -1394,15 +1483,16 @@ Status key:
 | REQ-DEV-002 | Environment-specific configuration | Met | |
 | REQ-DEV-003 | Docker containerized deployment | Met | |
 | REQ-DEV-004 | GitHub Actions deploy on version tag | Met | |
+| REQ-DEV-005 | Automated database backups with off-site pull | Met | |
 
 ### Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| Met | 108 | 93% |
+| Met | 114 | 93% |
 | Partial | 5 | 4% |
 | Not Met | 0 | 0% |
-| **Total** | **113** | |
+| **Total** | **119** | |
 
 ### Open Items (Partial Requirements)
 
@@ -1413,3 +1503,160 @@ Status key:
 | REQ-SYS-IT-003 | serialNumberRequired / lotNumberRequired not enforced during trace creation | Add validation in `createNewTrace` to check Part's serial/lot flags and reject traces missing required fields |
 | REQ-SYS-RD-001 | DHR data exists across tables but no unified view/report | Create a DHR report endpoint or UI page that aggregates barcode history, task history, order history, and harness revision history for a given product |
 | REQ-SYS-PV-001 | No automatic FAI task creation when a new harness revision is released | Add trigger in harness release workflow to auto-create a critical_path task for FAI linked to the new revision |
+
+---
+
+## Appendix D: Frontend Verification Test Matrix
+
+This appendix maps system requirements to their frontend unit test spec files. These tests verify UI component behavior, service interactions, and user workflow logic. All spec files use Angular TestBed with Jasmine and are located under `frontend/src/app/`.
+
+**Rationale:** Frontend tests provide automated verification that UI components correctly implement the behaviors specified in each requirement. They verify computed properties, user interactions, service calls, form validation, state management, and error handling. Combined with backend API tests and E2E tests, they form the verification triad ensuring requirements are met at every layer.
+
+### D.1 Authentication & Authorization
+
+| Req ID | Spec File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-AUTH-007 | `guards/auth.guard.spec.ts` | 10–48 | Allow access when authenticated; check auth status on page refresh; redirect to /home on failure |
+| REQ-AUTH-008 | `interceptors/auth.interceptor.spec.ts` | 9–192 | Add Authorization header; skip for refresh endpoint; 401 triggers token refresh + retry; redirect on null/error refresh; request queuing during active refresh; 403 clears token + redirects; non-auth error passthrough |
+
+### D.2 Inventory Management
+
+| Req ID | Spec File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-INV-001 | `components/inventory/inventory-higherarchy-view/inventory-higherarchy-view.spec.ts` | 56–178 | Tree building from flat tags, nested children, deep nesting, search, equipment filter, barcode selection |
+| REQ-INV-002 | `components/inventory/inventory-higherarchy-view/inventory-higherarchy-view.spec.ts` | 60–112 | Tree building, child nesting, search by name/barcode, expand matching paths |
+| REQ-INV-002 | `components/inventory/inventory-higherarchy-item/inventory-higherarchy-item.spec.ts` | all | Toggle expand, dialog integrations, child event propagation |
+| REQ-INV-003, REQ-INV-004, REQ-INV-005 | `components/inventory/inventory-item-dialog/inventory-item-dialog.spec.ts` | all | Create/edit modes, part filtering, validators, delete confirmation |
+| REQ-INV-006 | `components/inventory/equipment-table-view/equipment-table-view.spec.ts` | all | Loading, filtering, pagination, sorting, dialog integration |
+| REQ-INV-006 | `components/inventory/equipment-edit-dialog/equipment-edit-dialog.spec.ts` | all | Create/edit modes, validation, delete confirmation |
+
+### D.3 Barcode Management
+
+| Req ID | Spec File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-BAR-003 | `components/inventory/barcode-movement-dialog/barcode-movement-dialog.spec.ts` | 44–122 | Move action: canSubmit validation, executeMove API call, self-move prevention, error handling |
+| REQ-BAR-004 | `components/inventory/barcode-history/barcode-history.spec.ts` | 84–365 | Route param loading, barcode map, column switching, date sorting, search, action labels/icons, barcode resolution |
+| REQ-BAR-005 | `components/inventory/barcode-dialog/barcode-dialog.spec.ts` | 54–239 | Initialization, ZPL fetch, image rendering, preview size change, print options, label size toggle, print/move/history actions |
+| REQ-BAR-007 | `components/inventory/barcode-tag/barcode-tag.spec.ts` | all | Input binding, output emissions, dialog interaction |
+| REQ-INV-005A | `components/inventory/barcode-movement-dialog/barcode-movement-dialog.spec.ts` | 159–192 | Split action: canSubmit requires positive quantity, splitTrace call, null guard |
+| REQ-INV-005B | `components/inventory/barcode-movement-dialog/barcode-movement-dialog.spec.ts` | 123–159 | Merge action: canSubmit requires mergeBarcode, mergeTrace call, close on success |
+| REQ-INV-005C | `components/inventory/barcode-movement-dialog/barcode-movement-dialog.spec.ts` | 193–265 | Delete action: non-trace/trace-full/trace-partial modes, confirmation validation, deleteItem/deleteTrace calls |
+
+### D.4 Parts Management
+
+| Req ID | Spec File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-PRT-001 | `components/inventory/parts-table-view/parts-table-view.spec.ts` | 80–361 | Data loading, category/type/search/inactive filtering, pagination, sorting, navigation, color utilities |
+| REQ-PRT-001 | `components/inventory/part-edit-page/part-edit-page.spec.ts` | all | Form validation, category detection, pin group management, image management |
+| REQ-PRT-001 | `components/inventory/part-edit-dialog/part-edit-dialog.spec.ts` | all | Create/edit modes, validation, image management |
+| REQ-PRT-003 | `components/inventory/parts-table-view/parts-table-view.spec.ts` | 95–262 | Category selection/deselection, toggleAllCategories, selectedCategories, hiddenCategoryCount |
+| REQ-PRT-006 | `components/inventory/parts-table-view/parts-table-view.spec.ts` | 101–321 | Search across fields, category multi-select, type filter, pagination, sorting, getTotalCount |
+
+### D.5 Order Management
+
+| Req ID | Spec File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-ORD-001 | `components/orders/orders-list-view/orders-list-view.spec.ts` | 77–315 | Status loading, toggle filtering, search, pagination, sorting, status classes, pricing calculations |
+| REQ-ORD-001 | `components/orders/order-view/order-view.spec.ts` | 78–392 | Status navigation, receive mode, line item editing, pricing, date formatting, line type checks |
+| REQ-ORD-001 | `components/orders/order-edit-dialog/order-edit-dialog.spec.ts` | all | Create/edit modes |
+| REQ-ORD-003 | `components/orders/order-item-dialog/order-item-dialog.spec.ts` | all | Part selection, line total computation |
+| REQ-ORD-005 | `components/orders/bulk-upload/bulk-upload.spec.ts` | 43–290 | Computed totals, dry-run preview, inline editing, quantity/price parsing, category helpers |
+| REQ-ORD-006 | `components/orders/receive-line-item-dialog/receive-line-item-dialog.spec.ts` | 62–235 | Part/equipment receiving, receipt types, canSubmit validation, quantity computation |
+| REQ-ORD-007 | `components/orders/orders-list-view/orders-list-view.spec.ts` | 94–241 | Status selection, search, pagination, sorting, getTotalCount |
+
+### D.6 Wire Harness Design
+
+| Req ID | Spec File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-HAR-001 | `components/harness/harness-canvas/harness-canvas.spec.ts` | 80–362 | Inputs, outputs, zoom, add elements, delete/group/ungroup guards, export guards |
+| REQ-HAR-001 | `components/harness/harness-page/harness-page.spec.ts` | 83–635 | Initial state, computed properties, create/load harness, tool/selection/data changes, property changes, copy/paste, undo/redo, layer ordering, export |
+| REQ-HAR-002 | `components/harness/harness-connector-dialog/harness-connector-dialog.spec.ts` | 38–330 | Create/edit/locked modes, type labels, color hex/name, isValid, part selection, duplicate label detection |
+| REQ-HAR-003 | `components/harness/harness-add-cable-dialog/harness-add-cable-dialog.spec.ts` | 18–310 | Create/edit modes, wire hex, drag reorder, part selection, duplicate label detection |
+| REQ-HAR-003 | `components/harness/harness-cable-dialog/harness-cable-dialog.spec.ts` | all | Deep-cloned cables, add/remove cables and wires, quickAdd, min wire protection |
+| REQ-HAR-004 | `components/harness/harness-component-dialog/harness-component-dialog.spec.ts` | 18–315 | Create/edit modes, pin count, group/pin visibility toggle, part selection, duplicate label detection |
+| REQ-HAR-005 | `components/harness/harness-property-panel/harness-property-panel.spec.ts` | 287–477 | Connection property updates, endpoint descriptions and types |
+| REQ-HAR-007 | `components/harness/harness-property-panel/harness-property-panel.spec.ts` | 113–120, 601–653 | Wire ends loading, termination get/update for from/to endpoints |
+| REQ-HAR-009 | `components/harness/harness-page/harness-page.spec.ts` | 146–155, 417–470 | canUndo/canRedo computed, drag transactions, undo restores, redo restores, nothing-to-undo guard |
+| REQ-HAR-012 | `components/harness/harness-canvas/harness-canvas.spec.ts` | 84–174 | Grid default, zoom in/out/reset, zoom min/max caps |
+| REQ-HAR-014 | `components/harness/harness-page/harness-page.spec.ts` | 157–188 | isReleased, isInReview, isLocked computed properties for draft/review/released states |
+| REQ-HAR-014 | `components/harness/harness-toolbar/harness-toolbar.spec.ts` | 29–76 | isReleased input binding |
+| REQ-HAR-016 | `components/harness/harness-list-view/harness-list-view.spec.ts` | 52–205 | Data loading, filtering, sorting, pagination, formatDate, middle-click, displayedColumns with releaseState |
+| REQ-HAR-017 | `components/harness/harness-import-dialog/harness-import-dialog.spec.ts` | 39–254 | Drag events, JSON paste, validation (syntax, schema, backend), useSample, import with/without data, file type rejection |
+| REQ-HAR-017 | `components/harness/harness-page/harness-page.spec.ts` | 573–593 | Export JSON null guard, download link creation |
+| REQ-HAR-020 | `components/harness/harness-sync-dialog/harness-sync-dialog.spec.ts` | 69–145 | Type icons, acceptSelected with preserved flags, keepAll, empty changes |
+| REQ-HAR-005, REQ-HAR-007 | `components/harness/harness-property-panel/harness-property-panel.spec.ts` | 139–730 | All computed properties, update methods, label getters, endpoint methods, bulk wire editing |
+| REQ-HAR-002, REQ-HAR-003, REQ-HAR-004 | `components/harness/harness-add-part-dialog/harness-add-part-dialog.spec.ts` | all | Tab switching, connector/wire/cable CRUD, color helpers, validation for all tabs, unique label generation |
+
+### D.7 Planning & Task Management
+
+| Req ID | Spec File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-PLN-001 | `components/tasks/task-list-view/task-list-view.spec.ts` | 40–222 | Initial state, toggle history/edit mode, add/rename/delete lists, filter handlers, save/revert defaults, URL params |
+| REQ-PLN-001 | `components/tasks/task-list/task-list.spec.ts` | 37–181 | Filtered tasks exclude done, project/noProject/childTask filters, add/cancel task, title editing, delete, dragDelay |
+| REQ-PLN-002 | `components/tasks/task-card-dialog/task-card-dialog.spec.ts` | 49–378 | Checklist, list name, project, tasks filter, title/description editing, formatEstimate/Reminder, due date, move list, select project, subtasks |
+| REQ-PLN-002 | `components/tasks/task-card/task-card.spec.ts` | 40–279 | checklistProgress, formatEstimate, displayDone, projectColor, sortedProjects, isDueToday/isOverdue, toggleComplete |
+| REQ-PLN-005 | `components/projects/projects-list-view/projects-list-view.spec.ts` | 47–179 | Load projects, inactive filter, search, sorting, pagination, goBack |
+| REQ-PLN-005 | `components/projects/project-edit-dialog/project-edit-dialog.spec.ts` | 54–227 | Create/edit modes, shortcuts, color picker, validation, save with # stripping, delete with confirmation |
+| REQ-PLN-006 | `components/tasks/task-card/task-card.spec.ts` | 224–279 | Ignore when not hovered, 'c' toggles complete, '0' clears project, number assigns project, toggle off |
+| REQ-PLN-007 | `components/tasks/sub-toolbar/sub-toolbar.spec.ts` | 35–202 | Project selection, all/some/none selected, filter count, toggle project/all/noProject, showChildTasks, navigation |
+| REQ-PLN-007 | `components/tasks/task-list/task-list.spec.ts` | 41–74 | Filter by project IDs, hide no-project tasks, hide subtasks |
+| REQ-PLN-007 | `components/tasks/task-list-view/task-list-view.spec.ts` | 156–201 | Filter handlers, saveAsDefault, revertToDefault |
+| REQ-PLN-008 | `components/tasks/history-drawer/history-drawer.spec.ts` | 36–117 | isCreatedAction, action labels for 6 types, getLabel for lists/projects/priorities/status, loadMoreHistory guards |
+| REQ-PLN-010 | `components/scheduled-tasks/scheduled-tasks-list-view/scheduled-tasks-list-view.spec.ts` | 66–227 | Data loading, filtering, sorting, pagination, cronToEnglish for 11 expression patterns |
+| REQ-PLN-010 | `components/scheduled-tasks/scheduled-task-edit-dialog/scheduled-task-edit-dialog.spec.ts` | 66–257 | Create/edit modes, timezone, cronDescription, save/delete, form population |
+| REQ-PLN-012 | `components/tasks/task-list/task-list.spec.ts` | 175–179 | dragDelay: touch 500ms, mouse 0ms |
+| REQ-PLN-013 | `components/tasks/task-card/task-card.spec.ts` | 44–67 | checklistProgress string, null for no/empty checklist |
+| REQ-PLN-013 | `components/tasks/task-card-dialog/task-card-dialog.spec.ts` | 53–168 | Checklist properties, progress/percent, add/toggle/delete items |
+
+### D.8 Mobile Scanner
+
+| Req ID | Spec File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-MOB-001 | `components/mobile/mobile-scanner/mobile-scanner.spec.ts` | 37–279 | Initial state, isTrace computed, locationChain, state transitions, badge classes, BarcodeDetector absence |
+| REQ-MOB-002 | `components/mobile/mobile-scanner/mobile-scanner.spec.ts` | 115–131 | startMove sets scanning_second with move action |
+| REQ-MOB-003 | `components/mobile/mobile-scanner/mobile-scanner.spec.ts` | 124–131 | startMerge sets scanning_second with merge action |
+| REQ-MOB-004 | `components/mobile/mobile-scanner/mobile-scanner.spec.ts` | 133–141 | startSplit sets confirm action and confirming_action state |
+| REQ-MOB-005 | `components/mobile/mobile-scanner/mobile-scanner.spec.ts` | 142–175 | startTrash, toggleTrashAll with quantity logic |
+| REQ-MOB-006 | `components/mobile/mobile-scanner/mobile-scanner.spec.ts` | 226–232 | goBack calls location.back |
+
+### D.9 Push Notifications
+
+| Req ID | Spec File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-NOTIF-001 | `services/notification.service.spec.ts` | 24–245 | VAPID key fetch, subscription CRUD, push permission, subscribeToPush (4 scenarios), unsubscribeFromPush |
+| REQ-NOTIF-001 | `components/settings/settings-page/settings-page.spec.ts` | 47–178 | Permission state, subscriptions, device labels, removeDevice, testNotification, enableNotifications |
+| REQ-NOTIF-002 | `services/notification.service.spec.ts` | 38–85 | getSubscriptions, saveSubscription, deleteSubscription |
+| REQ-NOTIF-002 | `components/settings/settings-page/settings-page.spec.ts` | 103–114 | Remove device from subscription list |
+
+### D.10 UI/UX
+
+| Req ID | Spec File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-UX-001 | Multiple list view specs (see §D.4–D.7) | — | Search, sort, pagination, URL param persistence across all 6 list views |
+| REQ-UX-002 | `components/common/nav/nav.component.spec.ts` | 50–65 | toggleSidenav toggles collapsed state |
+| REQ-UX-004 | `components/harness/harness-toolbar/harness-toolbar.spec.ts` | 77–108 | Tool switching for select/pan/nodeEdit/connector |
+| REQ-UX-005 | `components/inventory/barcode-dialog/barcode-dialog.spec.ts` | 108–239 | Preview/label size defaults, preview size change, print options toggle, label size toggle, print execution |
+| REQ-UX-006 | `components/inventory/parts-table-view/parts-table-view.spec.ts` | 348–361 | Middle-click prevent default + open new tab |
+| REQ-UX-006 | `components/orders/orders-list-view/orders-list-view.spec.ts` | 302–315 | Middle-click prevent default + open new tab |
+| REQ-UX-006 | `components/harness/harness-list-view/harness-list-view.spec.ts` | 169–195 | Middle-click prevent default + open new tab |
+
+### D.11 Services & Common
+
+| Req ID | Spec File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-FILE-001 | `services/harness-parts.service.spec.ts` | uploadFile test | File upload reads base64 and POSTs data |
+| REQ-UX-002 | `components/common/nav/nav.component.spec.ts` | 46–150 | Create, toggleSidenav, navigateToTasks, login redirect, logout, openSettings, mobile route detection |
+| REQ-AUTH-001 | `components/common/home/home.component.spec.ts` | all | Login redirect to home page |
+
+### D.12 Test Coverage Summary
+
+| Domain | Spec Files | Test Cases | Key Requirements Covered |
+|--------|-----------|------------|--------------------------|
+| Auth & Guards | 3 | ~25 | REQ-AUTH-007, REQ-AUTH-008 |
+| Tasks | 6 | ~120 | REQ-PLN-001–013 |
+| Inventory | 12 | ~300 | REQ-INV-001–007, REQ-BAR-003–007, REQ-INV-005A–C |
+| Harness | 13 | ~559 | REQ-HAR-001–020 |
+| Orders/Projects | 14 | ~200 | REQ-ORD-001–007, REQ-PLN-005–006, REQ-PLN-010 |
+| Notifications | 2 | ~30 | REQ-NOTIF-001–003 |
+| Mobile | 1 | ~30 | REQ-MOB-001–006 |
+| **Total** | **~51** | **~1264** | **All functional requirements with UI components** |

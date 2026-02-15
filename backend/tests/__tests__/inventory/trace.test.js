@@ -80,6 +80,56 @@ describe('Trace API', () => {
     });
   });
 
+  describe('POST /api/inventory/trace/merge/:barcodeId', () => {
+    it('merges two traces of the same part', async () => {
+      const auth = await authenticatedRequest();
+      const part = await createTestPart({ name: 'TracePart-Merge' });
+      const target = await createTestTrace({ partID: part.id, quantity: 30 });
+      const source = await createTestTrace({ partID: part.id, quantity: 20 });
+
+      const res = await auth.post(`/api/inventory/trace/merge/${target.barcodeID}`)
+        .send({ mergeBarcodeId: source.barcodeID });
+      expect(res.status).toBe(200);
+      expect(res.body.targetTrace.newQuantity).toBe(50);
+
+      // Source trace should be deactivated
+      const deletedSource = await db.Trace.findByPk(source.id);
+      expect(deletedSource.activeFlag).toBe(false);
+
+      // Target trace should have combined quantity
+      const updatedTarget = await db.Trace.findByPk(target.id);
+      expect(updatedTarget.quantity).toBe(50);
+    });
+
+    it('rejects merging traces of different parts', async () => {
+      const auth = await authenticatedRequest();
+      const partA = await createTestPart({ name: 'TracePart-A' });
+      const partB = await createTestPart({ name: 'TracePart-B' });
+      const target = await createTestTrace({ partID: partA.id, quantity: 10 });
+      const source = await createTestTrace({ partID: partB.id, quantity: 10 });
+
+      const res = await auth.post(`/api/inventory/trace/merge/${target.barcodeID}`)
+        .send({ mergeBarcodeId: source.barcodeID });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 404 for nonexistent target trace', async () => {
+      const auth = await authenticatedRequest();
+      const source = await createTestTrace({ quantity: 10 });
+      const res = await auth.post('/api/inventory/trace/merge/99999')
+        .send({ mergeBarcodeId: source.barcodeID });
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 for nonexistent source trace', async () => {
+      const auth = await authenticatedRequest();
+      const target = await createTestTrace({ quantity: 10 });
+      const res = await auth.post(`/api/inventory/trace/merge/${target.barcodeID}`)
+        .send({ mergeBarcodeId: 99999 });
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('DELETE /api/inventory/trace/barcode/:barcodeId', () => {
     it('deletes trace by barcode', async () => {
       const auth = await authenticatedRequest();

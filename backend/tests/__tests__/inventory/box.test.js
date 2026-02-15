@@ -28,7 +28,22 @@ describe('Box API', () => {
   });
 
   // Note: POST /box internally creates Barcode using PostgreSQL sequence hook.
-  // Tested via factory at DB level instead.
+  // The barcode auto-generation requires a PostgreSQL sequence, so skipped for SQLite.
+  describe('POST /api/inventory/box', () => {
+    it.skip('creates a box with auto-generated barcode (requires PostgreSQL)', async () => {
+      const parentBarcode = await createTestBarcode({ barcodeCategoryID: 2 });
+      const res = await auth.post('/api/inventory/box')
+        .send({
+          name: 'BOX-NEW',
+          description: 'New test box',
+          parentBarcodeID: parentBarcode.id,
+        });
+      expect([200, 201]).toContain(res.status);
+      expect(res.body.id).toBeDefined();
+      expect(res.body.name).toBe('BOX-NEW');
+      expect(res.body.barcodeID).toBeDefined();
+    });
+  });
 
   describe('PUT /api/inventory/box/:id', () => {
     it('updates a box', async () => {

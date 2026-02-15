@@ -42,6 +42,16 @@ describe('Parts API', () => {
   });
 
   // Note: searchPartsByCategory uses Op.iLike (PostgreSQL only), skipped for SQLite.
+  describe('GET /api/inventory/part/search', () => {
+    it.skip('searches parts by category and query (requires PostgreSQL Op.iLike)', async () => {
+      const auth = await authenticatedRequest();
+      await createTestPart({ name: 'Resistor 10k', partCategoryID: 2 });
+      const res = await auth.get('/api/inventory/part/search?categoryID=2&query=Resistor');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.length).toBeGreaterThanOrEqual(1);
+    });
+  });
 
   describe('GET /api/inventory/part/:id', () => {
     it('gets part by id', async () => {

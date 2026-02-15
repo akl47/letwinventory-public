@@ -744,7 +744,7 @@ export function hitTestSubHarnessPin(
 export interface SubHarnessButtonHit {
   elementType: 'connector' | 'cable' | 'component';
   elementId: string;
-  button: string;
+  button: 'pinout' | 'connectorImage' | 'cableDiagram' | 'componentImage';
 }
 
 /**

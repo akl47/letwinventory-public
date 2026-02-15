@@ -3,6 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { Router } from '@angular/router';
 import { DOCUMENT } from '@angular/common';
+import { vi } from 'vitest';
 import { AuthService } from './auth.service';
 import { TaskViewPreferencesService } from './task-view-preferences.service';
 
