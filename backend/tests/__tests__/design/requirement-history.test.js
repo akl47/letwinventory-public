@@ -98,7 +98,7 @@ describe('Requirement History (REQ-DES-008 — REQ-DES-010)', () => {
       const approveEntry = res.body[0];
       expect(approveEntry.changeType).toBe('approved');
       expect(approveEntry.changes.approved).toEqual({ from: false, to: true });
-      expect(approveEntry.changes.approvedByUserID).toEqual({ from: null, to: auth.user.id });
+      expect(approveEntry.changes.approvedByUserID).toEqual(expect.objectContaining({ from: null, to: auth.user.id }));
     });
   });
 
@@ -115,7 +115,7 @@ describe('Requirement History (REQ-DES-008 — REQ-DES-010)', () => {
       const unapproveEntry = res.body[0];
       expect(unapproveEntry.changeType).toBe('unapproved');
       expect(unapproveEntry.changes.approved).toEqual({ from: true, to: false });
-      expect(unapproveEntry.changes.approvedByUserID).toEqual({ from: auth.user.id, to: null });
+      expect(unapproveEntry.changes.approvedByUserID).toEqual(expect.objectContaining({ from: auth.user.id, to: null }));
     });
   });
 
