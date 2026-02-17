@@ -37,6 +37,12 @@
   </app-harness-toolbar>
 
   <div class="main-content">
+    @if (isViewOnly()) {
+    <div class="view-only-badge">
+      <mat-icon>visibility</mat-icon>
+      View Only
+    </div>
+    }
     <app-harness-canvas
       #harnessCanvas
       [harnessData]="harnessData()"
@@ -76,6 +82,7 @@
       [isReleased]="isReleased()"
       [isInReview]="isInReview()"
       [isLocked]="isLocked()"
+      [isViewOnly]="isViewOnly()"
       (metadataChanged)="onMetadataChanged($event)"
       (connectorChanged)="onConnectorPropertyChanged($event)"
       (connectionChanged)="onConnectionPropertyChanged($event)"

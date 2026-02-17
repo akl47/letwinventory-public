@@ -9,6 +9,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatAutocompleteModule, MatAutocompleteSelectedEvent } from '@angular/material/autocomplete';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatCardModule } from '@angular/material/card';
 import { MatDialog } from '@angular/material/dialog';
 import { forkJoin, take } from 'rxjs';
@@ -34,6 +35,7 @@ import { AuthService } from '../../../services/auth.service';
         MatAutocompleteModule,
         MatIconModule,
         MatProgressSpinnerModule,
+        MatTooltipModule,
         MatCardModule,
     ],
     templateUrl: './requirement-edit-page.html',
@@ -49,6 +51,7 @@ export class RequirementEditPage implements OnInit {
     private categoryService = inject(RequirementCategoryService);
     private projectService = inject(ProjectService);
     private authService = inject(AuthService);
+    canWrite = computed(() => this.authService.hasPermission('requirements', 'write'));
 
     isEditMode = false;
     isFormEditMode = signal(false);

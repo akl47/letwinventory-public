@@ -10,11 +10,16 @@ function getApp() {
 }
 
 /**
- * Create authenticated supertest agent with Bearer token
+ * Create authenticated supertest agent with Bearer token.
+ * By default grants all permissions so existing tests keep working.
+ * Pass { grantPermissions: false } for permission-enforcement tests.
  */
-async function authenticatedRequest(user) {
+async function authenticatedRequest(user, { grantPermissions = true } = {}) {
   if (!user) {
     user = await createTestUser();
+  }
+  if (grantPermissions) {
+    await assignAllPermissions(user.id);
   }
   const token = generateToken(user);
   const app = getApp();
@@ -231,6 +236,33 @@ async function createTestWireEnd(overrides = {}) {
   });
 }
 
+async function createTestGroup(overrides = {}) {
+  return db.UserGroup.create({
+    name: overrides.name || `Group-${Date.now()}`,
+    description: overrides.description || null,
+    activeFlag: true,
+    ...overrides,
+  });
+}
+
+async function addUserToGroup(userId, groupId) {
+  return db.UserGroupMember.create({ userID: userId, groupID: groupId });
+}
+
+async function assignGroupPermission(groupId, permissionId) {
+  return db.GroupPermission.create({ groupID: groupId, permissionID: permissionId });
+}
+
+async function assignUserPermission(userId, permissionId) {
+  return db.UserPermission.create({ userID: userId, permissionID: permissionId });
+}
+
+async function assignAllPermissions(userId) {
+  const perms = await db.Permission.findAll();
+  const rows = perms.map(p => ({ userID: userId, permissionID: p.id }));
+  await db.UserPermission.bulkCreate(rows, { ignoreDuplicates: true });
+}
+
 module.exports = {
   getApp,
   authenticatedRequest,
@@ -251,4 +283,9 @@ module.exports = {
   createTestComponent,
   createTestHarness,
   createTestWireEnd,
+  createTestGroup,
+  addUserToGroup,
+  assignGroupPermission,
+  assignUserPermission,
+  assignAllPermissions,
 };

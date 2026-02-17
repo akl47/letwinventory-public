@@ -101,6 +101,11 @@ exports.update = async (req, res) => {
       return res.status(404).json({ error: 'Requirement not found' });
     }
 
+    // Strip approval fields — must use dedicated approve/unapprove endpoints
+    delete req.body.approved;
+    delete req.body.approvedByUserID;
+    delete req.body.approvedAt;
+
     const changes = {};
     for (const field of TRACKED_FIELDS) {
       if (field in req.body) {

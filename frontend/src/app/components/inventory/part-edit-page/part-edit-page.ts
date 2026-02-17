@@ -11,12 +11,14 @@ import { CommonModule, Location, TitleCasePipe } from '@angular/common';
 import { forkJoin, of, combineLatest } from 'rxjs';
 import { catchError, take } from 'rxjs/operators';
 import { InventoryService } from '../../../services/inventory.service';
+import { AuthService } from '../../../services/auth.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { HarnessService } from '../../../services/harness.service';
 import { Part, PartCategory, UnitOfMeasure } from '../../../models';
 import { DbHarnessConnector, DbHarnessWire, DbHarnessCable, DbElectricalComponent, ElectricalPinType, ComponentPinGroup, createEmptyHarnessData } from '../../../models/harness.model';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { MatIconModule } from '@angular/material/icon';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { WIRE_COLORS } from '../../../utils/harness/wire-color-map';
 
 @Component({
@@ -31,7 +33,8 @@ import { WIRE_COLORS } from '../../../utils/harness/wire-color-map';
     MatInputModule,
     MatCheckboxModule,
     MatSelectModule,
-    MatIconModule
+    MatIconModule,
+    MatTooltipModule
   ],
   templateUrl: './part-edit-page.html',
   styleUrl: './part-edit-page.css',
@@ -41,10 +44,12 @@ export class PartEditPage implements OnInit {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private inventoryService = inject(InventoryService);
+  private authService = inject(AuthService);
   private harnessPartsService = inject(HarnessPartsService);
   private harnessService = inject(HarnessService);
   private errorNotification = inject(ErrorNotificationService);
   private location = inject(Location);
+  canWrite = computed(() => this.authService.hasPermission('parts', 'write'));
 
   isEditMode = false;
   isFormEditMode = signal(false);

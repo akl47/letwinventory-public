@@ -1,0 +1,118 @@
+:host {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.groups-container {
+    padding: 24px;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.page-header h2 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 28px;
+    font-weight: 500;
+}
+
+.page-header h2 mat-icon {
+    font-size: 32px;
+    width: 32px;
+    height: 32px;
+}
+
+.table-wrapper {
+    flex: 1;
+    overflow: auto;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+}
+
+.mat-mdc-table {
+    width: 100%;
+}
+
+.mat-mdc-table th {
+    background-color: var(--mat-sys-surface-container);
+    font-weight: 600;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.mat-mdc-table td {
+    font-size: 14px;
+}
+
+.mat-mdc-table tr:hover {
+    background-color: var(--mat-sys-surface-container-low);
+}
+
+.actions-cell {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.loading-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex: 1;
+}
+
+.no-data {
+    text-align: center;
+    padding: 48px 24px;
+    color: rgba(255, 255, 255, 0.54);
+}
+
+.no-data > mat-icon {
+    font-size: 64px;
+    width: 64px;
+    height: 64px;
+    margin-bottom: 16px;
+    opacity: 0.3;
+}
+
+.no-data button mat-icon {
+    font-size: 24px;
+    width: 24px;
+    height: 24px;
+}
+
+.no-data p {
+    margin: 0 0 16px 0;
+    font-size: 16px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .page-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .mat-mdc-table th,
+    .mat-mdc-table td {
+        padding: 8px 4px;
+    }
+}

@@ -9,6 +9,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { MatChipsModule } from '@angular/material/chips';
 import { MatDividerModule } from '@angular/material/divider';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import {
   HarnessConnector,
   HarnessConnection,
@@ -37,7 +38,8 @@ import { HarnessPartsService } from '../../../services/harness-parts.service';
     MatIconModule,
     MatExpansionModule,
     MatChipsModule,
-    MatDividerModule
+    MatDividerModule,
+    MatTooltipModule
   ],
   templateUrl: './harness-property-panel.html',
   styleUrls: ['./harness-property-panel.scss'],
@@ -51,6 +53,7 @@ export class HarnessPropertyPanel implements OnInit {
   isReleased = input<boolean>(false);
   isInReview = input<boolean>(false);
   isLocked = input<boolean>(false);
+  isViewOnly = input<boolean>(false);
 
   // Outputs
   metadataChanged = output<{ field: string; value: string }>();

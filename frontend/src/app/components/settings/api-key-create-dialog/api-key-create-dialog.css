@@ -1,0 +1,57 @@
+::ng-deep .cdk-overlay-pane:has(app-api-key-create-dialog) {
+    max-width: 90vw !important;
+}
+
+.full-width {
+    width: 100%;
+}
+
+.field-group {
+    margin-bottom: 16px;
+}
+
+.field-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--mat-sys-on-surface-variant);
+    margin-bottom: 8px;
+}
+
+.expiration-options {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 8px;
+}
+
+.date-field {
+    width: 100%;
+    margin-top: 8px;
+}
+
+/* Key created state */
+.key-created {
+    padding: 8px 0;
+}
+
+.key-warning {
+    font-size: 13px;
+    font-weight: 500;
+    color: #f57c00;
+    margin-bottom: 12px;
+}
+
+.key-value-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--mat-sys-surface-container);
+    border-radius: 8px;
+    padding: 12px;
+}
+
+.key-value {
+    font-family: monospace;
+    font-size: 13px;
+    word-break: break-all;
+    flex: 1;
+}

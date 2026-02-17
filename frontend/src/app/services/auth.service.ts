@@ -5,6 +5,7 @@ import { DOCUMENT } from '@angular/common';
 import { Observable, catchError, map, of, Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { TaskViewPreferencesService } from './task-view-preferences.service';
+import { Permission } from '../models/permission.model';
 
 export interface User {
     id: number;
@@ -12,9 +13,19 @@ export interface User {
     email: string;
 }
 
+export interface ApiKey {
+    id: number;
+    name: string;
+    lastUsedAt: string | null;
+    expiresAt: string | null;
+    createdAt: string;
+    permissions?: { id: number; resource: string; action: string }[];
+}
+
 interface RefreshResponse {
     accessToken: string;
     user: User;
+    permissions?: string[];
 }
 
 @Injectable({
@@ -26,7 +37,10 @@ export class AuthService {
     private readonly document = inject(DOCUMENT);
     private readonly taskViewPreferences = inject(TaskViewPreferencesService);
     private readonly user = signal<User | null>(null);
+    private readonly _permissions = signal<Set<string>>(new Set());
+    private readonly _isImpersonating = signal(false);
     private readonly TOKEN_KEY = 'auth_token';
+    private readonly ORIGINAL_TOKEN_KEY = 'original_auth_token';
 
     // Refresh token state
     private isRefreshing = false;
@@ -34,7 +48,24 @@ export class AuthService {
 
     readonly isAuthenticated = computed(() => this.user() !== null);
     readonly currentUser = computed(() => this.user());
+    readonly isImpersonating = computed(() => this._isImpersonating());
     readonly refreshComplete$ = this.refreshSubject.asObservable();
+
+    /** Check if user has a specific permission */
+    hasPermission(resource: string, action: string): boolean {
+        return this._permissions().has(`${resource}.${action}`);
+    }
+
+    /** Check if user has any permission for a resource (for nav visibility) */
+    hasAnyPermission(resource: string): boolean {
+        for (const p of this._permissions()) {
+            if (p.startsWith(`${resource}.`)) return true;
+        }
+        return false;
+    }
+
+    /** Get all permissions as a readonly signal */
+    readonly permissions = computed(() => this._permissions());
 
     constructor() {
         // Check for token in cookie first (from OAuth callback), then localStorage
@@ -84,8 +115,11 @@ export class AuthService {
 
     clearToken(): void {
         localStorage.removeItem(this.TOKEN_KEY);
+        localStorage.removeItem(this.ORIGINAL_TOKEN_KEY);
         this.deleteCookie(this.TOKEN_KEY);
         this.user.set(null);
+        this._permissions.set(new Set());
+        this._isImpersonating.set(false);
     }
 
     checkAuthStatus(): Observable<boolean> {
@@ -95,12 +129,14 @@ export class AuthService {
             return of(false);
         }
 
-        return this.http.get<{ valid: boolean; user: User }>(`${environment.apiUrl}/auth/user/checkToken`, {
+        return this.http.get<{ valid: boolean; user: User; permissions?: string[]; impersonatedBy?: number }>(`${environment.apiUrl}/auth/user/checkToken`, {
             headers: { Authorization: `Bearer ${token}` }
         }).pipe(
             map(response => {
                 if (response.valid) {
                     this.user.set(response.user);
+                    this._permissions.set(new Set(response.permissions || []));
+                    this._isImpersonating.set(!!response.impersonatedBy || !!localStorage.getItem(this.ORIGINAL_TOKEN_KEY));
                     return true;
                 } else {
                     this.clearToken();
@@ -152,6 +188,7 @@ export class AuthService {
                     console.log('[AUTH] Refresh OK, new token received');
                     localStorage.setItem(this.TOKEN_KEY, response.accessToken);
                     this.user.set(response.user);
+                    this._permissions.set(new Set(response.permissions || []));
                     this.refreshSubject.next(response.accessToken);
                     return response.accessToken;
                 }
@@ -172,5 +209,47 @@ export class AuthService {
     /** Check if a refresh is currently in progress */
     get isRefreshingToken(): boolean {
         return this.isRefreshing;
+    }
+
+    startImpersonation(token: string, user: User, permissions: string[]): void {
+        localStorage.setItem(this.ORIGINAL_TOKEN_KEY, localStorage.getItem(this.TOKEN_KEY)!);
+        localStorage.setItem(this.TOKEN_KEY, token);
+        this.user.set(user);
+        this._permissions.set(new Set(permissions));
+        this._isImpersonating.set(true);
+        this.router.navigate(['/tasks']);
+    }
+
+    stopImpersonating(): void {
+        const originalToken = localStorage.getItem(this.ORIGINAL_TOKEN_KEY);
+        if (originalToken) {
+            localStorage.setItem(this.TOKEN_KEY, originalToken);
+        }
+        localStorage.removeItem(this.ORIGINAL_TOKEN_KEY);
+        this._isImpersonating.set(false);
+        this.checkAuthStatus().subscribe();
+        this.router.navigate(['/admin/users']);
+    }
+
+    getMyPermissionSources(): Observable<Record<string, string[]>> {
+        return this.http.get<Record<string, string[]>>(`${environment.apiUrl}/auth/user/my-permissions`);
+    }
+
+    getApiKeys(): Observable<ApiKey[]> {
+        return this.http.get<ApiKey[]>(`${environment.apiUrl}/auth/api-key`);
+    }
+
+    createApiKey(data: { name: string; permissionIds?: number[]; expiresAt?: string | null }): Observable<{ id: number; name: string; key: string; createdAt: string }> {
+        return this.http.post<{ id: number; name: string; key: string; createdAt: string }>(
+            `${environment.apiUrl}/auth/api-key`, data
+        );
+    }
+
+    revokeApiKey(id: number): Observable<void> {
+        return this.http.delete<void>(`${environment.apiUrl}/auth/api-key/${id}`);
+    }
+
+    getApiKeyPermissions(id: number): Observable<Permission[]> {
+        return this.http.get<Permission[]>(`${environment.apiUrl}/auth/api-key/${id}/permissions`);
     }
 }

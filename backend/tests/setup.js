@@ -116,6 +116,28 @@ async function seedReferenceData() {
     { id: 1, name: 'Signal', activeFlag: true },
     { id: 2, name: 'Power', activeFlag: true },
   ]);
+
+  // Permissions (9 resources x 3 actions + extras)
+  const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin'];
+  const actions = ['read', 'write', 'delete'];
+  let permId = 1;
+  const permRows = [];
+  for (const resource of resources) {
+    for (const action of actions) {
+      permRows.push({ id: permId++, resource, action });
+    }
+  }
+  permRows.push({ id: permId++, resource: 'requirements', action: 'approve' });
+  permRows.push({ id: permId++, resource: 'admin', action: 'impersonate' });
+  await db.Permission.bulkCreate(permRows);
+
+  // Admin group with all permissions
+  const adminGroup = await db.UserGroup.create({ id: 1, name: 'Admin', description: 'Full access' });
+  const groupPermRows = permRows.map(p => ({ groupID: adminGroup.id, permissionID: p.id }));
+  await db.GroupPermission.bulkCreate(groupPermRows);
+
+  // Default group (no permissions)
+  await db.UserGroup.create({ id: 2, name: 'Default', description: 'Default group for all new users' });
 }
 
 // Sync all models and seed reference data before all tests
@@ -127,6 +149,7 @@ beforeAll(async () => {
 // Clean up user-created data between tests (keep reference data)
 afterEach(async () => {
   const tablesToClean = [
+    'UserPermission', 'GroupPermission', 'UserGroupMember', 'UserGroup',
     'RequirementHistory', 'DesignRequirement', 'RequirementCategory',
     'HarnessRevisionHistory', 'WireHarness', 'WireEnd',
     'ElectricalComponent', 'Cable', 'Wire', 'ElectricalConnector',
@@ -134,7 +157,7 @@ afterEach(async () => {
     'TaskList', 'Project',
     'BarcodeHistory', 'Trace', 'Equipment', 'OrderItem', 'Order',
     'Box', 'Location', 'Barcode',
-    'Part', 'UploadedFile', 'PushSubscription', 'Printer', 'RefreshToken', 'User',
+    'Part', 'UploadedFile', 'PushSubscription', 'Printer', 'ApiKeyPermission', 'ApiKey', 'RefreshToken', 'User',
   ];
 
   for (const table of tablesToClean) {
@@ -157,11 +180,13 @@ function generateToken(user) {
   );
 }
 
+let _testUserSeq = 0;
 async function createTestUser(overrides = {}) {
+  const seq = ++_testUserSeq;
   const user = await db.User.create({
-    googleID: overrides.googleID || 'google-test-' + Date.now(),
+    googleID: overrides.googleID || `google-test-${Date.now()}-${seq}`,
     displayName: overrides.displayName || 'Test User',
-    email: overrides.email || `test-${Date.now()}@example.com`,
+    email: overrides.email || `test-${Date.now()}-${seq}@example.com`,
     activeFlag: true,
     ...overrides,
   });

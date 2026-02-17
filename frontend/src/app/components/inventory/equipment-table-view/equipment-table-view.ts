@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router, ActivatedRoute } from '@angular/router';
 import { MatTableModule } from '@angular/material/table';
@@ -13,6 +13,7 @@ import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { FormsModule } from '@angular/forms';
 import { MatDialog } from '@angular/material/dialog';
 import { InventoryService } from '../../../services/inventory.service';
+import { AuthService } from '../../../services/auth.service';
 import { Equipment } from '../../../models/equipment.model';
 import { EquipmentEditDialog } from '../equipment-edit-dialog/equipment-edit-dialog';
 import { BarcodeTag } from '../barcode-tag/barcode-tag';
@@ -39,9 +40,11 @@ import { BarcodeTag } from '../barcode-tag/barcode-tag';
 })
 export class EquipmentTableView implements OnInit {
   private inventoryService = inject(InventoryService);
+  private authService = inject(AuthService);
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private dialog = inject(MatDialog);
+  canWrite = computed(() => this.authService.hasPermission('equipment', 'write'));
 
   allEquipment = signal<Equipment[]>([]);
   displayedEquipment = signal<Equipment[]>([]);

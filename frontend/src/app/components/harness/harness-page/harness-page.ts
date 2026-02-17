@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { MatDialog } from '@angular/material/dialog';
 import { MatSnackBar } from '@angular/material/snack-bar';
+import { MatIconModule } from '@angular/material/icon';
 import { Subject, debounceTime, filter, switchMap, forkJoin, of, catchError } from 'rxjs';
 import { HarnessCanvas, CanvasSelection } from '../harness-canvas/harness-canvas';
 import { HarnessToolbar, HarnessTool } from '../harness-toolbar/harness-toolbar';
@@ -17,6 +18,7 @@ import { PartEditDialog } from '../../inventory/part-edit-dialog/part-edit-dialo
 import { HarnessService } from '../../../services/harness.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { HarnessHistoryService } from '../../../services/harness-history.service';
+import { AuthService } from '../../../services/auth.service';
 import { Part } from '../../../models';
 import {
   HarnessData,
@@ -43,6 +45,7 @@ import {
   standalone: true,
   imports: [
     CommonModule,
+    MatIconModule,
     HarnessCanvas,
     HarnessToolbar,
     HarnessPropertyPanel
@@ -58,6 +61,8 @@ export class HarnessPage implements OnInit, OnDestroy {
   private harnessService = inject(HarnessService);
   private harnessPartsService = inject(HarnessPartsService);
   private historyService = inject(HarnessHistoryService);
+  private authService = inject(AuthService);
+  private canWrite = computed(() => this.authService.hasPermission('harness', 'write'));
 
   @ViewChild('harnessCanvas') harnessCanvas!: HarnessCanvas;
 
@@ -94,7 +99,8 @@ export class HarnessPage implements OnInit, OnDestroy {
   // Release state
   isReleased = computed(() => this.harnessData()?.releaseState === 'released');
   isInReview = computed(() => this.harnessData()?.releaseState === 'review');
-  isLocked = computed(() => this.isReleased() || this.isInReview());
+  isViewOnly = computed(() => !this.canWrite());
+  isLocked = computed(() => this.isReleased() || this.isInReview() || this.isViewOnly());
 
   // Auto-save
   private autoSave$ = new Subject<void>();
@@ -111,7 +117,7 @@ export class HarnessPage implements OnInit, OnDestroy {
     // Set up auto-save with debounce
     this.autoSave$.pipe(
       debounceTime(1500), // Wait 1.5 seconds after last change
-      filter(() => this.autoSaveEnabled() && this.hasUnsavedChanges() && !this.isSaving()),
+      filter(() => this.autoSaveEnabled() && this.hasUnsavedChanges() && !this.isSaving() && !this.isLocked()),
       switchMap(() => {
         this.isSaving.set(true);
         return this.performSave();
@@ -171,10 +177,13 @@ export class HarnessPage implements OnInit, OnDestroy {
       return;
     }
 
+    const locked = this.isLocked();
+
     switch (e.key.toLowerCase()) {
       case 'z':
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
+          if (locked) return;
           if (e.shiftKey) {
             this.onRedo();
           } else {
@@ -185,12 +194,14 @@ export class HarnessPage implements OnInit, OnDestroy {
       case 'y':
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
+          if (locked) return;
           this.onRedo();
         }
         break;
       case 'v':
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
+          if (locked) return;
           this.pasteConnector();
         } else {
           this.activeTool.set('select');
@@ -206,30 +217,37 @@ export class HarnessPage implements OnInit, OnDestroy {
         this.activeTool.set('pan');
         break;
       case 'w':
+        if (locked) return;
         this.activeTool.set('wire');
         break;
       case 'n':
+        if (locked) return;
         this.activeTool.set('nodeEdit');
         break;
       case 'delete':
       case 'backspace':
+        if (locked) return;
         this.onDeleteSelected();
         break;
       case 's':
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
+          if (locked) return;
           this.onSave();
         }
         break;
       case 'r':
+        if (locked) return;
         this.rotateSelected(e.shiftKey ? -90 : 90);
         break;
       case 'f':
+        if (locked) return;
         this.flipSelected();
         break;
       case 'g':
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
+          if (locked) return;
           if (e.shiftKey) {
             this.onUngroupSelected();
           } else {

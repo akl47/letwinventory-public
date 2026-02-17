@@ -1,0 +1,124 @@
+@if (loading()) {
+<div class="loading-state">
+    <p>Loading...</p>
+</div>
+} @else {
+<div class="edit-page-container">
+    <!-- Header -->
+    <div class="header">
+        <button mat-icon-button (click)="goBack()">
+            <mat-icon>arrow_back</mat-icon>
+        </button>
+        <h2>{{ isNew() ? 'New Group' : group()?.name }}</h2>
+        <span class="spacer"></span>
+        @if (isFormEditMode()) {
+            @if (!isNew()) {
+            <button mat-button (click)="cancelEdit()">Cancel</button>
+            }
+            <button mat-flat-button color="primary" (click)="save()" [disabled]="!name()">
+                <mat-icon>save</mat-icon>
+                {{ isNew() ? 'Create' : 'Save' }}
+            </button>
+        } @else {
+            <button mat-flat-button color="primary" (click)="enableEdit()">
+                <mat-icon>edit</mat-icon>
+                Edit
+            </button>
+        }
+    </div>
+
+    <div class="content-wrapper">
+        <!-- Group Details Card -->
+        <mat-card class="group-info-card">
+            <mat-card-header>
+                <mat-card-title>Group Details</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode()) {
+                <div class="group-form">
+                    <mat-form-field appearance="outline" class="full-width">
+                        <mat-label>Name</mat-label>
+                        <input matInput [ngModel]="name()" (ngModelChange)="name.set($event)" required>
+                    </mat-form-field>
+                    <mat-form-field appearance="outline" class="full-width">
+                        <mat-label>Description</mat-label>
+                        <textarea matInput [ngModel]="description()" (ngModelChange)="description.set($event)" rows="3"></textarea>
+                    </mat-form-field>
+                </div>
+                } @else {
+                <div class="group-view-info">
+                    <div class="info-item">
+                        <div class="info-label">Name</div>
+                        <div class="info-value">{{ name() || '-' }}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Description</div>
+                        <div class="info-value description-text">{{ description() || '-' }}</div>
+                    </div>
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+
+        <!-- Members Card (existing groups only) -->
+        @if (!isNew()) {
+        <mat-card class="members-card">
+            <mat-card-header>
+                <mat-card-title>Members</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                <table mat-table [dataSource]="group()?.members || []" class="members-table">
+                    <ng-container matColumnDef="displayName">
+                        <th mat-header-cell *matHeaderCellDef>Name</th>
+                        <td mat-cell *matCellDef="let member">{{ member.displayName }}</td>
+                    </ng-container>
+                    <ng-container matColumnDef="email">
+                        <th mat-header-cell *matHeaderCellDef>Email</th>
+                        <td mat-cell *matCellDef="let member">{{ member.email }}</td>
+                    </ng-container>
+                    <ng-container matColumnDef="actions">
+                        <th mat-header-cell *matHeaderCellDef></th>
+                        <td mat-cell *matCellDef="let member">
+                            <button mat-icon-button color="warn" (click)="removeMember(member.id)">
+                                <mat-icon>remove_circle</mat-icon>
+                            </button>
+                        </td>
+                    </ng-container>
+                    <tr mat-header-row *matHeaderRowDef="memberColumns()"></tr>
+                    <tr mat-row *matRowDef="let row; columns: memberColumns();"></tr>
+                </table>
+                @if ((group()?.members || []).length === 0) {
+                <div class="empty-state">No members yet.</div>
+                }
+                @if (isFormEditMode()) {
+                <div class="add-member-row">
+                    <mat-form-field appearance="outline" class="add-member-select">
+                        <mat-label>Add Member</mat-label>
+                        <mat-select [ngModel]="selectedUserId()" (ngModelChange)="selectedUserId.set($event)">
+                            @for (user of availableUsers(); track user.id) {
+                            <mat-option [value]="user.id">{{ user.displayName }} ({{ user.email }})</mat-option>
+                            }
+                        </mat-select>
+                    </mat-form-field>
+                    <button mat-flat-button color="primary" (click)="addMember(selectedUserId())" [disabled]="!selectedUserId()">
+                        <mat-icon>person_add</mat-icon>
+                        Add
+                    </button>
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+        }
+
+        <!-- Permissions Card -->
+        <mat-card class="permissions-card">
+            <mat-card-header>
+                <mat-card-title>Permissions</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                <app-permission-grid [permissions]="allPermissions()" [(selectedIds)]="selectedPermissionIds" [disabled]="!isFormEditMode()" />
+            </mat-card-content>
+        </mat-card>
+    </div>
+</div>
+}

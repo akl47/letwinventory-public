@@ -38,7 +38,7 @@ describe('HarnessPartsService', () => {
 
     // FileReader is async — wait for it to fire then check the HTTP request
     await new Promise(r => setTimeout(r, 100));
-    const req = httpMock.expectOne(`${API}/files`);
+    const req = httpMock.expectOne(`${API}/inventory/part/upload`);
     expect(req.request.method).toBe('POST');
     expect(req.request.body.filename).toBe('test.png');
     expect(req.request.body.mimeType).toBe('image/png');
@@ -50,7 +50,7 @@ describe('HarnessPartsService', () => {
 
   it('deleteFile sends DELETE to /files/:id', () => {
     service.deleteFile(5).subscribe();
-    const req = httpMock.expectOne(`${API}/files/5`);
+    const req = httpMock.expectOne(`${API}/inventory/part/upload/5`);
     expect(req.request.method).toBe('DELETE');
     req.flush({ message: 'deleted' });
   });

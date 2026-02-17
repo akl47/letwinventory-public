@@ -5,7 +5,20 @@ const {
 
 module.exports = (sequelize, DataTypes) => {
   class User extends Model {
-    static associate(models) { }
+    static associate(models) {
+      User.belongsToMany(models.UserGroup, {
+        through: models.UserGroupMember,
+        foreignKey: 'userID',
+        otherKey: 'groupID',
+        as: 'groups'
+      });
+      User.belongsToMany(models.Permission, {
+        through: models.UserPermission,
+        foreignKey: 'userID',
+        otherKey: 'permissionID',
+        as: 'directPermissions'
+      });
+    }
   };
   User.init({
     id: {

@@ -13,6 +13,9 @@ async function createTestRequirement(auth, projectID, overrides = {}) {
   const res = await auth.post('/api/design/requirement')
     .send({
       description: 'Test requirement',
+      rationale: 'Test rationale',
+      verification: 'Test verification',
+      validation: 'Test validation',
       projectID,
       ...overrides,
     });
@@ -29,6 +32,8 @@ describe('Design Requirements API', () => {
         .send({
           description: 'The system shall do X',
           rationale: 'Because Y',
+          verification: 'Verify via test',
+          validation: 'Validate via review',
           parameter: 'Param Z',
           projectID: project.id,
         });
@@ -49,6 +54,9 @@ describe('Design Requirements API', () => {
       const res = await auth.post('/api/design/requirement')
         .send({
           description: 'Categorized requirement',
+          rationale: 'Test rationale',
+          verification: 'Test verification',
+          validation: 'Test validation',
           projectID: project.id,
           categoryID: category.id,
         });

@@ -7,10 +7,12 @@
         <span class="spacer"></span>
         @if (isDataLoaded()) {
         @if (isEditMode && !isFormEditMode()) {
-        <button mat-button (click)="enableEdit()">
-            <mat-icon>edit</mat-icon>
-            Edit
-        </button>
+        <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+            <button mat-button (click)="enableEdit()" [disabled]="!canWrite()">
+                <mat-icon>edit</mat-icon>
+                Edit
+            </button>
+        </span>
         }
         @if (isFormEditMode() || !isEditMode) {
         @if (isFormEditMode() && isEditMode) {

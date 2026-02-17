@@ -1,0 +1,63 @@
+@if (!createdKey()) {
+<h2 mat-dialog-title>Generate API Key</h2>
+
+<mat-dialog-content>
+    <!-- Name -->
+    <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Key name</mat-label>
+        <input matInput [ngModel]="name()" (ngModelChange)="name.set($event)" placeholder="e.g. CI Script">
+    </mat-form-field>
+
+    <!-- Expiration -->
+    <div class="field-group">
+        <div class="field-label">Expiration</div>
+        <mat-radio-group [(ngModel)]="expirationMode" class="expiration-options">
+            <mat-radio-button value="never">Never expires</mat-radio-button>
+            <mat-radio-button value="date">Expires on date</mat-radio-button>
+        </mat-radio-group>
+        @if (expirationMode === 'date') {
+        <mat-form-field appearance="outline" class="date-field">
+            <mat-label>Expiration date</mat-label>
+            <input matInput [matDatepicker]="picker" [(ngModel)]="expiresAt" [min]="minDate">
+            <mat-datepicker-toggle matIconSuffix [for]="picker"></mat-datepicker-toggle>
+            <mat-datepicker #picker></mat-datepicker>
+        </mat-form-field>
+        }
+    </div>
+
+    <!-- Permissions -->
+    <div class="field-group">
+        <div class="field-label">Permissions</div>
+        <app-permission-grid [permissions]="allPermissions()" [(selectedIds)]="selectedPermissionIds"
+                              [showAllColumn]="true" [showCount]="true" />
+    </div>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+    <button mat-button (click)="close()">Cancel</button>
+    <button mat-flat-button color="primary" (click)="create()" [disabled]="!canCreate()">
+        <mat-icon>add</mat-icon>
+        Generate
+    </button>
+</mat-dialog-actions>
+
+} @else {
+
+<h2 mat-dialog-title>API Key Created</h2>
+
+<mat-dialog-content>
+    <div class="key-created">
+        <div class="key-warning">Copy this key now. It won't be shown again.</div>
+        <div class="key-value-row">
+            <code class="key-value">{{ createdKey() }}</code>
+            <button mat-icon-button (click)="copyKey()">
+                <mat-icon>content_copy</mat-icon>
+            </button>
+        </div>
+    </div>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+    <button mat-flat-button color="primary" (click)="close()">Done</button>
+</mat-dialog-actions>
+}

@@ -149,7 +149,7 @@ describe('authInterceptor', () => {
         (authService as any).isRefreshing = false;
     });
 
-    it('should clear token and redirect on 403 error', () => {
+    it('should propagate 403 error without clearing token (insufficient permissions)', () => {
         localStorage.setItem('auth_token', 'test-token');
         vi.spyOn(authService, 'clearToken');
         vi.spyOn(router, 'navigate');
@@ -163,8 +163,8 @@ describe('authInterceptor', () => {
         const req = httpMock.expectOne('/api/forbidden');
         req.flush(null, { status: 403, statusText: 'Forbidden' });
 
-        expect(authService.clearToken).toHaveBeenCalled();
-        expect(router.navigate).toHaveBeenCalledWith(['/home']);
+        expect(authService.clearToken).not.toHaveBeenCalled();
+        expect(router.navigate).not.toHaveBeenCalled();
     });
 
     it('should propagate non-401/403 errors without refresh', () => {

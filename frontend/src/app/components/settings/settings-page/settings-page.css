@@ -1,40 +1,158 @@
+:host {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
 .settings-container {
-    max-width: 600px;
-    margin: 0 auto;
     padding: 24px;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 .page-header {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
     margin-bottom: 24px;
 }
 
 .page-header h2 {
     margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 28px;
+    font-weight: 500;
 }
 
-.settings-content {
+.page-header h2 mat-icon {
+    font-size: 32px;
+    width: 32px;
+    height: 32px;
+}
+
+/* Cards wrapper — matches requirements pattern */
+.cards-wrapper {
+    flex: 1;
+    overflow: auto;
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 6px;
+    padding-bottom: 8px;
 }
 
-.section {
+.card-row mat-accordion {
+    display: block;
+}
+
+/* Panel appearance — match requirements flat style */
+::ng-deep .card-row .mat-expansion-panel {
+    box-shadow: none !important;
+    border: 1px solid #404040;
+    background: #2d2d2d !important;
+    border-radius: 6px !important;
+}
+
+::ng-deep .card-row .mat-expansion-panel:hover {
+    border-color: #555;
+}
+
+::ng-deep .card-row .mat-expansion-panel-header-title {
+    color: #e0e0e0 !important;
+}
+
+::ng-deep .card-row .mat-expansion-panel-header-description {
+    color: #999 !important;
+}
+
+::ng-deep .card-row .mat-expansion-indicator::after {
+    color: #888 !important;
+}
+
+::ng-deep .card-row .mat-expansion-panel-header {
+    padding: 0 16px;
+}
+
+mat-expansion-panel-header mat-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+    margin-right: 12px;
+}
+
+mat-expansion-panel-header mat-panel-description {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    justify-content: flex-end;
+    margin-right: 4px;
+}
+
+.card-title {
+    font-size: 14px;
+    font-weight: 500;
+}
+
+/* Status chips in panel header */
+.status-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.status-chip.granted {
+    background-color: rgba(76, 175, 80, 0.15);
+    color: #4caf50;
+}
+
+.status-chip.denied {
+    background-color: rgba(244, 67, 54, 0.15);
+    color: #f44336;
+}
+
+.status-chip.default {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* Panel content sections */
+.panel-section {
     display: flex;
     flex-direction: column;
     gap: 12px;
+    padding: 8px 0;
 }
 
-.section-header {
-    font-size: 13px;
-    font-weight: 500;
+.panel-section + .panel-section {
+    border-top: 1px solid #404040;
+}
+
+.section-label {
+    font-size: 11px;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: var(--mat-sys-on-surface-variant);
+    color: rgba(255, 255, 255, 0.4);
 }
 
+.action-btn {
+    align-self: flex-start;
+}
+
+/* Notifications */
 .status-row {
     display: flex;
     align-items: center;
@@ -68,13 +186,48 @@
     color: #f44336;
 }
 
+/* Devices */
 .device-date {
     font-size: 12px;
     color: var(--mat-sys-on-surface-variant);
 }
 
+/* API Keys */
+.key-meta {
+    font-size: 12px;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.empty-state {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.54);
+    padding: 16px 0;
+}
+
+.expired-icon {
+    color: var(--mat-sys-error) !important;
+}
+
+.expired-text {
+    text-decoration: line-through;
+    opacity: 0.6;
+}
+
+.expired-badge {
+    color: var(--mat-sys-error);
+    font-weight: 500;
+}
+
 @media (max-width: 768px) {
     .settings-container {
         padding: 16px;
+    }
+
+    .page-header h2 {
+        font-size: 22px;
+    }
+
+    mat-expansion-panel-header mat-panel-description {
+        display: none;
     }
 }

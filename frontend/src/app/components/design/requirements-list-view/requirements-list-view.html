@@ -26,10 +26,12 @@
             <mat-slide-toggle [checked]="hideChildren()" (change)="toggleHideChildren()" color="primary">
                 Hide Children
             </mat-slide-toggle>
-            <button mat-flat-button color="primary" (click)="createNew()">
-                <mat-icon>add</mat-icon>
-                New Requirement
-            </button>
+            <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+                <button mat-flat-button color="primary" (click)="createNew()" [disabled]="!canWrite()">
+                    <mat-icon>add</mat-icon>
+                    New Requirement
+                </button>
+            </span>
         </div>
     </div>
 
@@ -47,10 +49,12 @@
         <mat-icon>checklist</mat-icon>
         <h3>No Design Requirements</h3>
         <p>Create your first design requirement to get started</p>
-        <button mat-raised-button color="primary" (click)="createNew()">
-            <mat-icon>add</mat-icon>
-            Create Requirement
-        </button>
+        <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+            <button mat-raised-button color="primary" (click)="createNew()" [disabled]="!canWrite()">
+                <mat-icon>add</mat-icon>
+                Create Requirement
+            </button>
+        </span>
         }
     </div>
     } @else {
@@ -80,10 +84,12 @@
                             } @else {
                             <mat-icon class="status-icon-draft" matTooltip="Draft">pending</mat-icon>
                             }
-                            <button mat-icon-button class="edit-btn"
-                                (click)="openRequirement(row.requirement); $event.stopPropagation()" matTooltip="Edit">
-                                <mat-icon>edit</mat-icon>
-                            </button>
+                            <span [matTooltip]="canWrite() ? 'Edit' : 'You do not have permission'">
+                                <button mat-icon-button class="edit-btn"
+                                    (click)="openRequirement(row.requirement); $event.stopPropagation()" [disabled]="!canWrite()">
+                                    <mat-icon>edit</mat-icon>
+                                </button>
+                            </span>
                         </mat-panel-description>
                     </mat-expansion-panel-header>
 

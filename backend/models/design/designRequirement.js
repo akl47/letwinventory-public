@@ -43,7 +43,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     rationale: {
       type: DataTypes.TEXT,
-      allowNull: true
+      allowNull: false
     },
     parameter: {
       type: DataTypes.TEXT,
@@ -63,11 +63,11 @@ module.exports = (sequelize, DataTypes) => {
     },
     verification: {
       type: DataTypes.TEXT,
-      allowNull: true
+      allowNull: false
     },
     validation: {
       type: DataTypes.TEXT,
-      allowNull: true
+      allowNull: false
     },
     ownerUserID: {
       type: DataTypes.INTEGER,

@@ -18,7 +18,7 @@
             }
         </h2>
         <span class="spacer"></span>
-        @if (isEditMode && currentRequirement) {
+        @if (isEditMode && currentRequirement && canWrite()) {
         @if (currentRequirement.approved) {
         <button mat-stroked-button (click)="unapprove()">
             <mat-icon>undo</mat-icon>
@@ -48,10 +48,12 @@
             'Create' }}
         </button>
         } @else {
-        <button mat-button (click)="enableEdit()">
-            <mat-icon>edit</mat-icon>
-            Edit
-        </button>
+        <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+            <button mat-button (click)="enableEdit()" [disabled]="!canWrite()">
+                <mat-icon>edit</mat-icon>
+                Edit
+            </button>
+        </span>
         }
     </div>
 

@@ -9,6 +9,7 @@
 | C | 2026-02-09 | Claude Code | Added AS9100D aerospace QMS requirements: Operational Risk Management (§8.1.1), Configuration Management (§8.1.2), Product Safety (§8.1.3), Counterfeit Parts Prevention (§8.1.4), External Provider Control (§8.4), Production Process Verification/FAI (§8.5.1.3), Nonconforming Product Control (§8.7). Updated existing section headers with AS9100D cross-references. Expanded traceability matrix with AS9100D column. |
 | D | 2026-02-09 | Claude Code | Added Appendix C: Requirements Implementation Status. Assessed all 113 requirements against codebase. 108 Met, 5 Partial. Identified open items with recommended actions for the 5 partial requirements. |
 | E | 2026-02-14 | Claude Code | Added Appendix D: Frontend Verification Test Matrix. Updated Verification fields on 45+ requirements to reference specific frontend unit test spec files with line numbers. Comprehensive frontend test coverage (50+ spec files, 1500+ test cases) provides automated verification of UI behavior, component logic, service interactions, and user workflows for all functional requirements. |
+| F | 2026-02-15 | Claude Code | Added Section 14 (Design Requirements, REQ-DES-001–011) and Section 15 (Permissions & User Groups, REQ-PERM-001–010). Updated Appendix C implementation status with 21 new Met requirements (135 total). Added Appendix D.12 backend test matrix for permissions (3 test files, ~45 tests). |
 
 ---
 
@@ -21,7 +22,7 @@
 - **Rationale:** Centralized management of manufacturing workflow from procurement through assembly.
 - **Parameters:** Web application accessible via modern browsers (Chrome, Firefox, Edge, Safari).
 - **Parent Req:** None
-- **Derived Reqs:** REQ-AUTH-001, REQ-INV-001, REQ-ORD-001, REQ-PRT-001, REQ-HAR-001, REQ-PLN-001, REQ-MOB-001, REQ-BAR-001, REQ-FILE-001, REQ-NOTIF-001
+- **Derived Reqs:** REQ-AUTH-001, REQ-INV-001, REQ-ORD-001, REQ-PRT-001, REQ-HAR-001, REQ-PLN-001, REQ-MOB-001, REQ-BAR-001, REQ-FILE-001, REQ-NOTIF-001, REQ-PERM-001
 - **Verification:** All derived requirement verification criteria pass.
 - **Validation:** User can log in and access all major functional areas.
 
@@ -1293,6 +1294,98 @@
 - **Verification:** Frontend component includes history signal, toggle, load method, and timeline rendering.
 - **Validation:** User expands history section on edit page and sees chronological list of all changes with details.
 
+## 15. Permissions & User Groups
+
+### REQ-PERM-001
+- **Description:** The system shall define a `Permissions` table with 28 seed permissions across 7 resources (inventory, orders, harness, planning, design, files, admin), each with 4 CRUD actions (create, read, update, delete).
+- **Rationale:** Action-level permission granularity enables fine-grained access control per ISO 13485:2016 §6.2 and 21 CFR 820.20(b)(1) (personnel competence and access control). Seed data ensures all resources are covered at system initialization.
+- **Parameters:** `Permissions` table: id (PK), resource (STRING 50), action (STRING 50), description (TEXT), createdAt (DATE). UNIQUE(resource, action). No updatedAt. 28 records seeded via migration.
+- **Parent Req:** REQ-SYS-001
+- **Derived Reqs:** REQ-PERM-002, REQ-PERM-003, REQ-PERM-005
+- **Verification:** Verified by: `backend/tests/__tests__/admin/user-permission.test.js` lines 14–37 (lists all permissions, each has resource and action).
+- **Validation:** Admin user can view all 28 permissions in the permission reference list.
+
+### REQ-PERM-002
+- **Description:** The system shall support user groups (`UserGroups` table) with many-to-many user membership (`UserGroupMembers` junction) and many-to-many permission assignment (`GroupPermissions` junction).
+- **Rationale:** Group-based permission assignment simplifies administration for organizations with role-based access patterns.
+- **Parameters:** `UserGroups`: id, name (STRING 100, UNIQUE, NOT NULL), description (TEXT), activeFlag (BOOLEAN, default true), createdAt, updatedAt. `UserGroupMembers`: userID (FK→Users, CASCADE), groupID (FK→UserGroups, CASCADE), UNIQUE(userID, groupID). `GroupPermissions`: groupID (FK→UserGroups, CASCADE), permissionID (FK→Permissions, CASCADE), UNIQUE(groupID, permissionID). An "Admin" group seeded with all 28 permissions.
+- **Parent Req:** REQ-PERM-001
+- **Derived Reqs:** REQ-PERM-006
+- **Verification:** Verified by: `backend/tests/__tests__/admin/user-group.test.js` lines 14–218 (group CRUD, member add/remove, permission assignment, soft delete, duplicate rejection).
+- **Validation:** Admin can create groups, add/remove members, assign permissions to groups.
+
+### REQ-PERM-003
+- **Description:** The system shall enforce permissions on all API endpoints via `checkPermission(resource, action)` middleware, applied after authentication (`checkToken`). The middleware loads the union of group permissions (from active groups) and direct user permissions, and returns 403 if the required permission is not in the set.
+- **Rationale:** Centralized permission enforcement ensures consistent access control across all endpoints per 21 CFR 820.20(b)(1).
+- **Parameters:** Middleware factory `checkPermission(resource, action)`. Loaded permissions cached on `req._effectivePermissions` per request. Resource mapping: inventory/* → `inventory`, order/orderitem → `orders`, parts/* → `harness`, planning/* → `planning`, design/* → `design`, files → `files`, admin/* → `admin`. Action mapping: GET→read, POST→create, PUT→update, DELETE→delete.
+- **Parent Req:** REQ-PERM-001
+- **Derived Reqs:** REQ-PERM-004
+- **Verification:** Verified by: `backend/tests/__tests__/admin/permission-enforcement.test.js` lines 47–71 (direct permissions: correct allows, wrong resource denies, wrong action denies), lines 73–106 (group permissions: active group allows, missing permission denies, inactive group denies), lines 156–228 (action-level enforcement, resource mapping for orders/harness/planning/design).
+- **Validation:** User with specific permission can access the corresponding endpoint; user without it receives 403.
+
+### REQ-PERM-004
+- **Description:** Users with no group memberships and no direct permissions shall have zero permissions — all permission-checked endpoints return 403 (no implicit access).
+- **Rationale:** Zero-trust default prevents unauthorized access. First admin must be bootstrapped via direct database insert.
+- **Parameters:** `loadEffectivePermissions(userId)` returns empty Set when user has no groups and no direct permissions. All permission-checked endpoints return 403 for such users.
+- **Parent Req:** REQ-PERM-003
+- **Derived Reqs:** None
+- **Verification:** Verified by: `backend/tests/__tests__/admin/permission-enforcement.test.js` lines 25–45 (users with no permissions get 403 on GET, POST, and admin endpoints).
+- **Validation:** Newly created user with no group assignment cannot access any protected endpoint.
+
+### REQ-PERM-005
+- **Description:** The system shall support direct user-level permission assignment (`UserPermissions` junction table), and effective permissions shall be the union of group permissions and direct permissions.
+- **Rationale:** Direct permissions enable individual exceptions without creating single-user groups.
+- **Parameters:** `UserPermissions`: userID (FK→Users, CASCADE), permissionID (FK→Permissions, CASCADE), UNIQUE(userID, permissionID). `loadEffectivePermissions` combines group and direct permissions into a single Set.
+- **Parent Req:** REQ-PERM-001
+- **Derived Reqs:** REQ-PERM-007
+- **Verification:** Verified by: `backend/tests/__tests__/admin/permission-enforcement.test.js` lines 108–145 (combines group and direct permissions, combines permissions from multiple groups). `backend/tests/__tests__/admin/user-permission.test.js` lines 73–124 (set direct permissions, replace existing permissions).
+- **Validation:** User with both group and direct permissions can access all endpoints covered by either source.
+
+### REQ-PERM-006
+- **Description:** The system shall provide Admin API endpoints for group management: list groups, get group with members/permissions, create group, update group (name, description, permissionIds), soft-delete group, add/remove members.
+- **Rationale:** Programmatic group management enables the Admin UI and supports automation.
+- **Parameters:** `GET /api/admin/group` (list active), `GET /api/admin/group/:id` (with members + permissions), `POST /api/admin/group` (create), `PUT /api/admin/group/:id` (update), `DELETE /api/admin/group/:id` (soft delete), `POST /api/admin/group/:id/member` (add, body: `{userID}`), `DELETE /api/admin/group/:id/member/:userId` (remove). All require `admin` resource permissions.
+- **Parent Req:** REQ-PERM-002
+- **Derived Reqs:** None
+- **Verification:** Verified by: `backend/tests/__tests__/admin/user-group.test.js` lines 14–218 (create, duplicate/missing rejection, list active, exclude inactive, get with members/permissions, update name/description/permissions, soft delete, add/remove member, duplicate membership rejection, 401/403/404 handling).
+- **Validation:** Admin can perform all group management operations through the API.
+
+### REQ-PERM-007
+- **Description:** The system shall provide Admin API endpoints for user permission management: list users, get user with groups/permissions, set direct permissions.
+- **Rationale:** Enables admin users to view and manage individual user permissions.
+- **Parameters:** `GET /api/admin/user` (list all users), `GET /api/admin/user/:id` (with groups + direct + effective permissions), `PUT /api/admin/user/:id/permissions` (set direct permissions, body: `{permissionIds: [...]}`). All require `admin` resource permissions.
+- **Parent Req:** REQ-PERM-005
+- **Derived Reqs:** None
+- **Verification:** Verified by: `backend/tests/__tests__/admin/user-permission.test.js` lines 39–124 (list users, get user with groups/permissions, set direct permissions, replace existing, 401/403/404 handling).
+- **Validation:** Admin can view all users, inspect their permissions, and assign/remove direct permissions.
+
+### REQ-PERM-008
+- **Description:** The auth endpoints (`checkToken`, `refreshToken`) shall include the user's effective permissions array in their responses.
+- **Rationale:** Frontend needs permissions to control UI visibility (nav items, buttons) without additional API calls.
+- **Parameters:** Response includes `permissions: ["inventory.read", "inventory.create", ...]` — array of `resource.action` strings from `loadEffectivePermissions(userId)`. Returned on both `checkToken` and `refreshToken` responses.
+- **Parent Req:** REQ-PERM-003
+- **Derived Reqs:** REQ-PERM-009, REQ-PERM-010
+- **Verification:** Verified by: `backend/tests/__tests__/admin/permission-enforcement.test.js` lines 147–155 (auth endpoints work without permissions — exempt from enforcement).
+- **Validation:** After login, frontend receives and stores the user's permission set.
+
+### REQ-PERM-009
+- **Description:** The frontend shall provide admin pages for managing user groups (list, create, edit with members and permissions) and user permissions (list users, edit direct permissions), accessible only to users with `admin.read` permission.
+- **Rationale:** Admin UI enables group and permission management without direct database access.
+- **Parameters:** Routes: `/admin/groups` (list), `/admin/groups/new` (create), `/admin/groups/:id` (edit), `/admin/users` (list), `/admin/users/:id` (permissions). Protected by `adminGuard` checking `hasPermission('admin', 'read')`. Group edit page includes: name/description form, members table (add/remove), permissions checkbox grid (resources × CRUD actions). User permissions page includes: user info, group chips, direct permissions grid.
+- **Parent Req:** REQ-PERM-008
+- **Derived Reqs:** None
+- **Verification:** Frontend components created: `groups-list`, `group-edit`, `users-list`, `user-permissions`. Admin guard verifies permission. Routes configured with `[authGuard, adminGuard]`.
+- **Validation:** Admin user can navigate to admin pages, manage groups and members, assign permissions via checkbox grid.
+
+### REQ-PERM-010
+- **Description:** The frontend navigation shall conditionally show the "Admin" sidebar group only to users with `admin.read` permission, with links to "User Groups" and "User Permissions".
+- **Rationale:** Users without admin access should not see admin navigation items.
+- **Parameters:** Admin rail item with `admin_panel_settings` icon. Flyout panel with "User Groups" (`/admin/groups`) and "User Permissions" (`/admin/users`) links. Rendered conditionally via `hasAdminAccess` computed signal checking `authService.hasPermission('admin', 'read')`. 403 errors from API propagated without token clearing (user is authenticated but lacks permission).
+- **Parent Req:** REQ-PERM-008
+- **Derived Reqs:** None
+- **Verification:** Verified by: `frontend/src/app/interceptors/auth.interceptor.spec.ts` lines 152–168 (403 propagated without clearing token or redirecting). Nav component includes conditional rendering via `hasAdminAccess()`.
+- **Validation:** Non-admin user does not see Admin in sidebar. Admin user sees Admin nav group with correct links.
+
 ---
 
 ## Appendix A: Development Requirements
@@ -1578,6 +1671,37 @@ Status key:
 | REQ-NOTIF-002 | Push subscription management per user | Met | On `pwa` branch, pending merge to master |
 | REQ-NOTIF-003 | Due date reminders and scheduled task notifications | Met | On `pwa` branch, pending merge to master |
 
+### 14. Design Requirements
+
+| Req ID | Description | Status | Notes |
+|--------|-------------|--------|-------|
+| REQ-DES-001 | Design requirement CRUD | Met | |
+| REQ-DES-002 | Hierarchical parent-child relationships | Met | |
+| REQ-DES-003 | Approval workflow | Met | |
+| REQ-DES-004 | Tree table with expandable hierarchy | Met | |
+| REQ-DES-005 | Create/edit pages with form validation | Met | |
+| REQ-DES-006 | Project association for requirements | Met | |
+| REQ-DES-007 | Requirement categories lookup table | Met | |
+| REQ-DES-008 | Immutable audit trail (RequirementHistory) | Met | |
+| REQ-DES-009 | Auto-record history on all mutations | Met | |
+| REQ-DES-010 | History GET endpoint with user association | Met | |
+| REQ-DES-011 | Frontend history timeline on edit page | Met | |
+
+### 15. Permissions & User Groups
+
+| Req ID | Description | Status | Notes |
+|--------|-------------|--------|-------|
+| REQ-PERM-001 | 28 permissions across 7 resources × 4 CRUD actions | Met | Seeded via migration |
+| REQ-PERM-002 | User groups with many-to-many membership and permissions | Met | Admin group seeded with all permissions |
+| REQ-PERM-003 | checkPermission middleware on all API endpoints | Met | Applied to all 25 route files |
+| REQ-PERM-004 | No implicit access — zero permissions by default | Met | Users must be explicitly granted access |
+| REQ-PERM-005 | Direct user permissions and union with group permissions | Met | |
+| REQ-PERM-006 | Admin API for group CRUD and membership | Met | |
+| REQ-PERM-007 | Admin API for user permission management | Met | |
+| REQ-PERM-008 | Auth endpoints include permissions in response | Met | checkToken and refreshToken both return permissions |
+| REQ-PERM-009 | Frontend admin pages for groups and permissions | Met | 4 components: groups-list, group-edit, users-list, user-permissions |
+| REQ-PERM-010 | Conditional admin nav visibility | Met | Admin rail item shown only with admin.read permission |
+
 ### Appendix A: Development Requirements
 
 | Req ID | Description | Status | Notes |
@@ -1592,10 +1716,10 @@ Status key:
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| Met | 114 | 93% |
+| Met | 135 | 96% |
 | Partial | 5 | 4% |
 | Not Met | 0 | 0% |
-| **Total** | **119** | |
+| **Total** | **140** | |
 
 ### Open Items (Partial Requirements)
 
@@ -1751,7 +1875,22 @@ This appendix maps system requirements to their frontend unit test spec files. T
 | REQ-UX-002 | `components/common/nav/nav.component.spec.ts` | 46–150 | Create, toggleSidenav, navigateToTasks, login redirect, logout, openSettings, mobile route detection |
 | REQ-AUTH-001 | `components/common/home/home.component.spec.ts` | all | Login redirect to home page |
 
-### D.12 Test Coverage Summary
+### D.12 Permissions & User Groups (Backend)
+
+| Req ID | Test File | Lines | What is Verified |
+|--------|-----------|-------|------------------|
+| REQ-PERM-001 | `backend/tests/__tests__/admin/user-permission.test.js` | 14–37 | Lists all 28 permissions, each has resource and action |
+| REQ-PERM-002 | `backend/tests/__tests__/admin/user-group.test.js` | 14–218 | Group CRUD, member add/remove, permission assignment, soft delete, duplicate rejection |
+| REQ-PERM-003 | `backend/tests/__tests__/admin/permission-enforcement.test.js` | 47–228 | Direct permissions allow/deny, group permissions allow/deny, action-level enforcement, resource mapping |
+| REQ-PERM-004 | `backend/tests/__tests__/admin/permission-enforcement.test.js` | 25–45 | No-permission users get 403 on GET, POST, and admin endpoints |
+| REQ-PERM-005 | `backend/tests/__tests__/admin/permission-enforcement.test.js` | 108–145 | Union of group + direct permissions, multi-group permission union |
+| REQ-PERM-005 | `backend/tests/__tests__/admin/user-permission.test.js` | 73–124 | Set/replace direct permissions for user |
+| REQ-PERM-006 | `backend/tests/__tests__/admin/user-group.test.js` | 14–218 | All group API endpoints (CRUD, membership, 401/403/404 handling) |
+| REQ-PERM-007 | `backend/tests/__tests__/admin/user-permission.test.js` | 39–124 | User list, user detail with groups/permissions, set direct permissions, 401/403/404 |
+| REQ-PERM-008 | `backend/tests/__tests__/admin/permission-enforcement.test.js` | 147–155 | Auth endpoints exempt from permission checks |
+| REQ-PERM-010 | `frontend/src/app/interceptors/auth.interceptor.spec.ts` | 152–168 | 403 propagated without token clearing or redirect |
+
+### D.13 Test Coverage Summary
 
 | Domain | Spec Files | Test Cases | Key Requirements Covered |
 |--------|-----------|------------|--------------------------|
@@ -1762,4 +1901,5 @@ This appendix maps system requirements to their frontend unit test spec files. T
 | Orders/Projects | 14 | ~200 | REQ-ORD-001–007, REQ-PLN-005–006, REQ-PLN-010 |
 | Notifications | 2 | ~30 | REQ-NOTIF-001–003 |
 | Mobile | 1 | ~30 | REQ-MOB-001–006 |
-| **Total** | **~51** | **~1264** | **All functional requirements with UI components** |
+| Permissions | 3 | ~45 | REQ-PERM-001–010 |
+| **Total** | **~54** | **~1309** | **All functional requirements with UI components** |

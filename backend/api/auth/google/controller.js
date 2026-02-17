@@ -2,6 +2,7 @@ const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const { Op } = require('sequelize');
 const db = require('../../../models');
 const dotenv = require('dotenv');
 const path = require('path');
@@ -47,7 +48,7 @@ exports.handleCallback = (req, res, next) => {
 
     try {
       // Find or create user in database
-      const [user, created] = await db.User.findOrCreate({
+      let [user, created] = await db.User.findOrCreate({
         where: { googleID: profile.id },
         defaults: {
           displayName: profile.displayName,
@@ -56,6 +57,33 @@ exports.handleCallback = (req, res, next) => {
           photoURL: profile.photos[0].value
         }
       });
+
+      // If a new record was created, check if an admin pre-created a user with same email
+      if (created) {
+        const existingByEmail = await db.User.findOne({
+          where: { email: profile.emails[0].value, id: { [Op.ne]: user.id } }
+        });
+        if (existingByEmail) {
+          // Admin pre-created this user — link Google account
+          await user.destroy({ force: true });
+          await existingByEmail.update({
+            googleID: profile.id,
+            displayName: profile.displayName,
+            photoURL: profile.photos[0].value,
+            activeFlag: true,
+          });
+          user = existingByEmail;
+          created = false;
+        }
+      }
+
+      // If truly new user, add to Default group
+      if (created) {
+        const defaultGroup = await db.UserGroup.findOne({ where: { name: 'Default', activeFlag: true } });
+        if (defaultGroup) {
+          await db.UserGroupMember.findOrCreate({ where: { userID: user.id, groupID: defaultGroup.id } });
+        }
+      }
 
       if (user.activeFlag) {
         // Generate short-lived access token (15 minutes)
@@ -172,6 +200,38 @@ exports.testLogin = async (req, res) => {
     if (!created && !user.activeFlag) {
       await user.update({ activeFlag: true });
     }
+
+    // If truly new user, add to Default group
+    if (created) {
+      const defaultGroup = await db.UserGroup.findOne({ where: { name: 'Default', activeFlag: true } });
+      if (defaultGroup) {
+        await db.UserGroupMember.findOrCreate({ where: { userID: user.id, groupID: defaultGroup.id } });
+      }
+    }
+
+    // Dev/test: seed permissions if empty, then grant all to test user
+    try {
+      if (db.Permission && db.UserPermission) {
+        let allPerms = await db.Permission.findAll({ attributes: ['id'] });
+        if (allPerms.length === 0) {
+          // Seed permissions (sequelize.sync() creates empty tables)
+          const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin'];
+          const actions = ['read', 'write', 'delete'];
+          const rows = [];
+          for (const resource of resources) {
+            for (const action of actions) {
+              rows.push({ resource, action });
+            }
+          }
+          rows.push({ resource: 'requirements', action: 'approve' });
+          rows.push({ resource: 'admin', action: 'impersonate' });
+          await db.Permission.bulkCreate(rows, { ignoreDuplicates: true });
+          allPerms = await db.Permission.findAll({ attributes: ['id'] });
+        }
+        const permRows = allPerms.map(p => ({ userID: user.id, permissionID: p.id }));
+        await db.UserPermission.bulkCreate(permRows, { ignoreDuplicates: true });
+      }
+    } catch { /* permission tables may not exist yet */ }
 
     const accessToken = jwt.sign(
       { id: user.id, email: user.email, displayName: user.displayName, photoURL: user.photoURL },

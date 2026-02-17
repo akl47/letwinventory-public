@@ -9,6 +9,30 @@
   display: flex;
   flex: 1;
   overflow: hidden;
+  position: relative;
+}
+
+.view-only-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #ffb74d;
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
+
+  mat-icon {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+  }
 }
 
 app-harness-canvas {

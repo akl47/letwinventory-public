@@ -1,0 +1,30 @@
+<h2 mat-dialog-title>Add User</h2>
+
+<mat-dialog-content>
+    <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Display Name</mat-label>
+        <input matInput [(ngModel)]="displayName" placeholder="John Doe">
+    </mat-form-field>
+
+    <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Email</mat-label>
+        <input matInput [(ngModel)]="email" type="email" placeholder="user@example.com">
+    </mat-form-field>
+
+    @if (error()) {
+    <div class="error-msg">{{ error() }}</div>
+    }
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+    <button mat-button (click)="cancel()">Cancel</button>
+    <button mat-flat-button color="primary"
+        (click)="create()"
+        [disabled]="creating() || !email.trim() || !displayName.trim()">
+        @if (creating()) {
+            Creating...
+        } @else {
+            Create
+        }
+    </button>
+</mat-dialog-actions>

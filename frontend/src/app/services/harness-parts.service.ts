@@ -36,7 +36,7 @@ export class HarnessPartsService {
       const reader = new FileReader();
       reader.onload = () => {
         const base64 = (reader.result as string).split(',')[1]; // Remove data URI prefix
-        this.http.post<UploadedFileResponse>(`${this.baseUrl}/files`, {
+        this.http.post<UploadedFileResponse>(`${this.baseUrl}/inventory/part/upload`, {
           filename: file.name,
           mimeType: file.type,
           data: base64
@@ -52,7 +52,7 @@ export class HarnessPartsService {
   }
 
   deleteFile(fileId: number): Observable<{ message: string }> {
-    return this.http.delete<{ message: string }>(`${this.baseUrl}/files/${fileId}`);
+    return this.http.delete<{ message: string }>(`${this.baseUrl}/inventory/part/upload/${fileId}`);
   }
 
   // Helper to extract image data from file reference

@@ -1,0 +1,71 @@
+<div class="groups-container">
+    <div class="page-header">
+        <h2>
+            <mat-icon>group</mat-icon>
+            User Groups
+        </h2>
+        <button mat-flat-button color="primary" (click)="navigateToNew()">
+            <mat-icon>add</mat-icon>
+            New Group
+        </button>
+    </div>
+
+    @if (groups() === null) {
+    <div class="loading-container">
+        <mat-spinner diameter="48"></mat-spinner>
+    </div>
+    } @else if (groups()!.length === 0) {
+    <div class="no-data">
+        <mat-icon>group_off</mat-icon>
+        <p>No groups found</p>
+        <button mat-flat-button color="primary" (click)="navigateToNew()">
+            <mat-icon>add</mat-icon>
+            Create Group
+        </button>
+    </div>
+    } @else {
+    <div class="table-wrapper">
+        <table mat-table [dataSource]="groups()!">
+            <!-- Name Column -->
+            <ng-container matColumnDef="name">
+                <th mat-header-cell *matHeaderCellDef>Name</th>
+                <td mat-cell *matCellDef="let group">
+                    <strong>{{ group.name }}</strong>
+                </td>
+            </ng-container>
+
+            <!-- Description Column -->
+            <ng-container matColumnDef="description">
+                <th mat-header-cell *matHeaderCellDef>Description</th>
+                <td mat-cell *matCellDef="let group">{{ group.description || '-' }}</td>
+            </ng-container>
+
+            <!-- Member Count Column -->
+            <ng-container matColumnDef="memberCount">
+                <th mat-header-cell *matHeaderCellDef>Members</th>
+                <td mat-cell *matCellDef="let group">{{ group.memberCount ?? 0 }}</td>
+            </ng-container>
+
+            <!-- Actions Column -->
+            <ng-container matColumnDef="actions">
+                <th mat-header-cell *matHeaderCellDef>Actions</th>
+                <td mat-cell *matCellDef="let group">
+                    <div class="actions-cell">
+                        <button mat-icon-button (click)="navigateToEdit(group.id)">
+                            <mat-icon>edit</mat-icon>
+                        </button>
+                        @if (group.name !== 'Admin' && group.name !== 'Default') {
+                        <button mat-icon-button color="warn" (click)="deleteGroup(group.id)">
+                            <mat-icon>delete</mat-icon>
+                        </button>
+                        }
+                    </div>
+                </td>
+            </ng-container>
+
+            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+            <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+        </table>
+    </div>
+    }
+</div>

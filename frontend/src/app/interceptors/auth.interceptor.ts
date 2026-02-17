@@ -26,14 +26,20 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
     catchError((error: HttpErrorResponse) => {
       // Only attempt refresh for 401 errors on non-refresh requests
       if (error.status === 401 && !isRefreshRequest) {
+        // If impersonating, stop impersonation instead of refreshing
+        if (localStorage.getItem('original_auth_token')) {
+          console.log('[AUTH] 401 during impersonation, stopping impersonation | URL:', req.url);
+          authService.stopImpersonating();
+          return throwError(() => error);
+        }
         console.log('[AUTH] 401 received, attempting refresh | URL:', req.url);
         return handleTokenRefresh(authService, router, req, next);
       }
 
       if (error.status === 403) {
-        console.log('[AUTH] 403 received, clearing token | URL:', req.url);
-        authService.clearToken();
-        router.navigate(['/home']);
+        // 403 = authenticated but lacks permission. Don't clear token or redirect.
+        // Let the component handle the error.
+        console.log('[AUTH] 403 received (insufficient permissions) | URL:', req.url);
       }
 
       return throwError(() => error);

@@ -13,6 +13,9 @@ async function createTestRequirement(auth, projectID, overrides = {}) {
   const res = await auth.post('/api/design/requirement')
     .send({
       description: 'Test requirement',
+      rationale: 'Test rationale',
+      verification: 'Test verification',
+      validation: 'Test validation',
       projectID,
       ...overrides,
     });
@@ -57,7 +60,7 @@ describe('Requirement History (REQ-DES-008 — REQ-DES-010)', () => {
       const updateEntry = res.body[0]; // most recent first
       expect(updateEntry.changeType).toBe('updated');
       expect(updateEntry.changes.description).toEqual({ from: 'Original', to: 'Updated' });
-      expect(updateEntry.changes.rationale).toEqual({ from: null, to: 'New rationale' });
+      expect(updateEntry.changes.rationale).toEqual({ from: 'Test rationale', to: 'New rationale' });
     });
 
     it('does not record history when nothing changed', async () => {
