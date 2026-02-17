@@ -1,0 +1,48 @@
+<div class="permissions-grid">
+    @if (showCount()) {
+    <div class="perm-header">
+        <span class="perm-count">{{ selectedIds().size }} of {{ permissions().length }} permissions</span>
+    </div>
+    }
+    <table class="perm-table">
+        <thead>
+            <tr>
+                <th class="resource-header">Resource</th>
+                @if (showAllColumn()) {
+                <th class="action-header">All</th>
+                }
+                @for (action of actions(); track action) {
+                <th class="action-header">{{ action | titlecase }}</th>
+                }
+            </tr>
+        </thead>
+        <tbody>
+            @for (group of permissionsByResource(); track group.resource) {
+            <tr>
+                <td class="resource-cell">{{ group.resource | titlecase }}</td>
+                @if (showAllColumn()) {
+                <td class="action-cell">
+                    <mat-checkbox [checked]="isAllSelectedForResource(group.resource)"
+                                  [indeterminate]="isSomeSelectedForResource(group.resource)"
+                                  [disabled]="disabled()"
+                                  (change)="toggleAllForResource(group.resource)">
+                    </mat-checkbox>
+                </td>
+                }
+                @for (action of actions(); track action) {
+                <td class="action-cell">
+                    @if (getPermissionForCell(group.resource, action); as perm) {
+                    <span [matTooltip]="getTooltip(group.resource, action)">
+                        <mat-checkbox [checked]="isPermissionSelected(perm.id)"
+                                      [disabled]="disabled()"
+                                      (change)="togglePermission(perm.id)">
+                        </mat-checkbox>
+                    </span>
+                    }
+                </td>
+                }
+            </tr>
+            }
+        </tbody>
+    </table>
+</div>

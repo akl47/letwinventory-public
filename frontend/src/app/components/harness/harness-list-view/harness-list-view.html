@@ -14,10 +14,12 @@
             <mat-slide-toggle [checked]="showInactive()" (change)="onToggleInactive($event.checked)" color="primary">
                 Show Inactive
             </mat-slide-toggle>
-            <button mat-flat-button color="primary" (click)="createNew()">
-                <mat-icon>add</mat-icon>
-                New Harness
-            </button>
+            <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+                <button mat-flat-button color="primary" (click)="createNew()" [disabled]="!canWrite()">
+                    <mat-icon>add</mat-icon>
+                    New Harness
+                </button>
+            </span>
         </div>
     </div>
 
@@ -80,9 +82,11 @@
                 <ng-container matColumnDef="actions">
                     <th mat-header-cell *matHeaderCellDef>Actions</th>
                     <td mat-cell *matCellDef="let harness">
-                        <button mat-icon-button (click)="openHarness(harness)" matTooltip="Edit harness">
-                            <mat-icon>edit</mat-icon>
-                        </button>
+                        <span [matTooltip]="canWrite() ? 'Edit harness' : 'You do not have permission'">
+                            <button mat-icon-button (click)="openHarness(harness)" [disabled]="!canWrite()">
+                                <mat-icon>edit</mat-icon>
+                            </button>
+                        </span>
                     </td>
                 </ng-container>
 
@@ -100,10 +104,12 @@
                                 <mat-icon>electrical_services</mat-icon>
                                 <h3>No Wire Harnesses</h3>
                                 <p>Create your first wire harness to get started</p>
-                                <button mat-raised-button color="primary" (click)="createNew()">
-                                    <mat-icon>add</mat-icon>
-                                    Create Harness
-                                </button>
+                                <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+                                    <button mat-raised-button color="primary" (click)="createNew()" [disabled]="!canWrite()">
+                                        <mat-icon>add</mat-icon>
+                                        Create Harness
+                                    </button>
+                                </span>
                             }
                         </div>
                     </td>

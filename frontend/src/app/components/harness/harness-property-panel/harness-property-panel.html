@@ -53,24 +53,32 @@
 
     <div class="release-actions">
       @if (isReleased()) {
-        <button mat-flat-button color="primary" (click)="newRevision.emit()">
-          <mat-icon>add_circle</mat-icon>
-          New Revision
-        </button>
+        <span [matTooltip]="isViewOnly() ? 'You do not have permission' : ''">
+          <button mat-flat-button color="primary" (click)="newRevision.emit()" [disabled]="isViewOnly()">
+            <mat-icon>add_circle</mat-icon>
+            New Revision
+          </button>
+        </span>
       } @else if (isInReview()) {
-        <button mat-flat-button color="primary" (click)="releaseHarness.emit()">
-          <mat-icon>publish</mat-icon>
-          Release
-        </button>
-        <button mat-stroked-button (click)="returnToDraft.emit()">
-          <mat-icon>undo</mat-icon>
-          Return to Draft
-        </button>
+        <span [matTooltip]="isViewOnly() ? 'You do not have permission' : ''">
+          <button mat-flat-button color="primary" (click)="releaseHarness.emit()" [disabled]="isViewOnly()">
+            <mat-icon>publish</mat-icon>
+            Release
+          </button>
+        </span>
+        <span [matTooltip]="isViewOnly() ? 'You do not have permission' : ''">
+          <button mat-stroked-button (click)="returnToDraft.emit()" [disabled]="isViewOnly()">
+            <mat-icon>undo</mat-icon>
+            Return to Draft
+          </button>
+        </span>
       } @else {
-        <button mat-flat-button color="primary" (click)="releaseHarness.emit()">
-          <mat-icon>send</mat-icon>
-          To Review
-        </button>
+        <span [matTooltip]="isViewOnly() ? 'You do not have permission' : ''">
+          <button mat-flat-button color="primary" (click)="releaseHarness.emit()" [disabled]="isViewOnly()">
+            <mat-icon>send</mat-icon>
+            To Review
+          </button>
+        </span>
       }
     </div>
   </mat-expansion-panel>

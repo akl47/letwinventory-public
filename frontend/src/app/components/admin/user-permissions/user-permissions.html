@@ -1,0 +1,128 @@
+@if (loading()) {
+<div class="loading-state">
+    <mat-spinner diameter="48"></mat-spinner>
+    <p>Loading user...</p>
+</div>
+} @else if (user()) {
+<div class="page-container">
+    <!-- Header -->
+    <div class="header">
+        <button mat-icon-button (click)="goBack()">
+            <mat-icon>arrow_back</mat-icon>
+        </button>
+        <div class="header-info">
+            <h2>{{ user()!.displayName }}@if (user()!.activeFlag === false) { <span class="disabled-label">(Disabled)</span>}</h2>
+            <span class="header-email">{{ user()!.email }}</span>
+        </div>
+        <span class="spacer"></span>
+        @if (isFormEditMode()) {
+            <button mat-button (click)="cancelEdit()">Cancel</button>
+            <button mat-button (click)="toggleActive()"
+                [matTooltip]="user()!.activeFlag === false ? 'Activate this user' : 'Deactivate this user'">
+                <mat-icon>{{ user()!.activeFlag === false ? 'person_add' : 'person_off' }}</mat-icon>
+                {{ user()!.activeFlag === false ? 'Activate' : 'Deactivate' }}
+            </button>
+            <button mat-flat-button color="primary" (click)="save()" [disabled]="user()!.activeFlag === false">
+                <mat-icon>save</mat-icon>
+                Save
+            </button>
+        } @else {
+            @if (canImpersonate() && user()!.activeFlag !== false) {
+            <button mat-button (click)="impersonate()">
+                <mat-icon>supervisor_account</mat-icon>
+                Impersonate
+            </button>
+            }
+            <button mat-flat-button color="primary" (click)="enableEdit()">
+                <mat-icon>edit</mat-icon>
+                Edit
+            </button>
+        }
+    </div>
+
+    <div class="content-wrapper">
+        <!-- User Info Card -->
+        <mat-card class="user-info-card">
+            <mat-card-header>
+                <mat-card-title>User Details</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                <div class="user-view-info">
+                    <div class="info-row">
+                        <div class="info-item">
+                            <div class="info-label">Name</div>
+                            <div class="info-value">{{ user()!.displayName }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Email</div>
+                            <div class="info-value">{{ user()!.email }}</div>
+                        </div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Status</div>
+                        <div class="info-value">
+                            @if (user()!.activeFlag === false) {
+                            <span class="status-badge status-disabled">Disabled</span>
+                            } @else {
+                            <span class="status-badge status-active">Active</span>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </mat-card-content>
+        </mat-card>
+
+        <!-- Groups Card -->
+        <mat-card class="groups-card">
+            <mat-card-header>
+                <mat-card-title>Groups</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                @if (user()!.groups && user()!.groups!.length > 0) {
+                <mat-chip-set>
+                    @for (group of user()!.groups; track group.id) {
+                    <mat-chip>
+                        <mat-icon matChipAvatar>group</mat-icon>
+                        {{ group.name }}
+                        @if (isFormEditMode()) {
+                        <button matChipRemove (click)="removeFromGroup(group.id)">
+                            <mat-icon>cancel</mat-icon>
+                        </button>
+                        }
+                    </mat-chip>
+                    }
+                </mat-chip-set>
+                } @else {
+                <div class="empty-state">No groups assigned.</div>
+                }
+                @if (isFormEditMode()) {
+                <div class="add-group-row">
+                    <mat-form-field appearance="outline" class="add-group-select">
+                        <mat-label>Add to Group</mat-label>
+                        <mat-select [ngModel]="selectedGroupId()" (ngModelChange)="selectedGroupId.set($event)">
+                            @for (group of availableGroups(); track group.id) {
+                            <mat-option [value]="group.id">{{ group.name }}</mat-option>
+                            }
+                        </mat-select>
+                    </mat-form-field>
+                    <button mat-flat-button color="primary" (click)="addToGroup(selectedGroupId())" [disabled]="!selectedGroupId()">
+                        <mat-icon>group_add</mat-icon>
+                        Add
+                    </button>
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+
+        <!-- Direct Permissions Card -->
+        <mat-card class="permissions-card">
+            <mat-card-header>
+                <mat-card-title>Direct Permissions</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                <app-permission-grid [permissions]="allPermissions()" [(selectedIds)]="selectedPermissionIds" [disabled]="!isFormEditMode() || user()!.activeFlag === false" />
+            </mat-card-content>
+        </mat-card>
+    </div>
+</div>
+}

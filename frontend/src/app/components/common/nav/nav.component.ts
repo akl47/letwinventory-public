@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject, signal, OnInit, OnDestroy, ElementRef, HostListener } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, signal, computed, OnInit, OnDestroy, ElementRef, HostListener } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet, NavigationEnd } from '@angular/router';
 import { MatSidenavModule } from '@angular/material/sidenav';
 import { MatListModule } from '@angular/material/list';
@@ -14,7 +14,7 @@ import { TaskViewPreferencesService } from '../../../services/task-view-preferen
 import { environment } from '../../../../environments/environment';
 import { APP_VERSION } from '../../../../environments/version';
 
-type NavGroup = 'inventory' | 'design';
+type NavGroup = 'inventory' | 'design' | 'admin';
 
 @Component({
     selector: 'app-nav',
@@ -50,6 +50,19 @@ export class NavComponent implements OnInit, OnDestroy {
 
     private readonly inventoryPrefixes = ['/inventory', '/parts', '/equipment', '/orders'];
     private readonly designPrefixes = ['/requirements', '/harness'];
+    private readonly adminPrefixes = ['/admin'];
+    protected readonly hasTasksAccess = computed(() => this.authService.hasAnyPermission('tasks'));
+    protected readonly hasProjectsAccess = computed(() => this.authService.hasAnyPermission('projects'));
+    protected readonly hasPartsAccess = computed(() => this.authService.hasAnyPermission('parts'));
+    protected readonly hasInventoryAccess = computed(() => this.authService.hasAnyPermission('inventory'));
+    protected readonly hasEquipmentAccess = computed(() => this.authService.hasAnyPermission('equipment'));
+    protected readonly hasOrdersAccess = computed(() => this.authService.hasAnyPermission('orders'));
+    protected readonly hasDesignAccess = computed(() => this.authService.hasAnyPermission('requirements'));
+    protected readonly hasHarnessAccess = computed(() => this.authService.hasAnyPermission('harness'));
+    protected readonly hasAdminAccess = computed(() => this.authService.hasAnyPermission('admin'));
+    protected readonly hasInventoryGroupAccess = computed(() => this.hasPartsAccess() || this.hasInventoryAccess() || this.hasEquipmentAccess() || this.hasOrdersAccess());
+    protected readonly hasDesignGroupAccess = computed(() => this.hasDesignAccess() || this.hasHarnessAccess());
+    protected readonly isImpersonating = this.authService.isImpersonating;
 
     ngOnInit() {
         if (window.innerWidth <= 768) {
@@ -92,8 +105,8 @@ export class NavComponent implements OnInit, OnDestroy {
 
     isGroupActive(group: NavGroup): boolean {
         const url = this.router.url;
-        const prefixes = group === 'inventory' ? this.inventoryPrefixes : this.designPrefixes;
-        return prefixes.some(p => url.startsWith(p));
+        const prefixMap = { inventory: this.inventoryPrefixes, design: this.designPrefixes, admin: this.adminPrefixes };
+        return prefixMap[group].some(p => url.startsWith(p));
     }
 
     navigateToTasks(event: Event) {
@@ -112,6 +125,10 @@ export class NavComponent implements OnInit, OnDestroy {
 
     logout() {
         this.authService.logout();
+    }
+
+    stopImpersonating() {
+        this.authService.stopImpersonating();
     }
 
     openSettings() {

@@ -17,6 +17,7 @@
                 </a>
                 }
                 @if (isAuthenticated()) {
+                @if (hasTasksAccess()) {
                 <!-- Tasks - direct link -->
                 <a class="rail-item" routerLink="/tasks" routerLinkActive="active" (click)="navigateToTasks($event)">
                     <div class="rail-icon-container">
@@ -24,7 +25,9 @@
                     </div>
                     <span class="rail-label">Tasks</span>
                 </a>
+                }
 
+                @if (hasInventoryGroupAccess()) {
                 <!-- Inventory - group toggle -->
                 <div class="rail-item" [class.active]="isGroupActive('inventory')" (click)="toggleGroup('inventory')">
                     <div class="rail-icon-container">
@@ -32,7 +35,9 @@
                     </div>
                     <span class="rail-label">Inventory</span>
                 </div>
+                }
 
+                @if (hasDesignGroupAccess()) {
                 <!-- Design - group toggle -->
                 <div class="rail-item" [class.active]="isGroupActive('design')" (click)="toggleGroup('design')">
                     <div class="rail-icon-container">
@@ -40,7 +45,19 @@
                     </div>
                     <span class="rail-label">Design</span>
                 </div>
+                }
 
+                @if (hasAdminAccess()) {
+                <!-- Admin - group toggle -->
+                <div class="rail-item" [class.active]="isGroupActive('admin')" (click)="toggleGroup('admin')">
+                    <div class="rail-icon-container">
+                        <mat-icon>admin_panel_settings</mat-icon>
+                    </div>
+                    <span class="rail-label">Admin</span>
+                </div>
+                }
+
+                @if (hasInventoryAccess()) {
                 <!-- Scanner - direct link, mobile only -->
                 <a class="rail-item mobile-scanner-btn" routerLink="/mobile" routerLinkActive="active">
                     <div class="rail-icon-container">
@@ -48,6 +65,7 @@
                     </div>
                     <span class="rail-label">Scanner</span>
                 </a>
+                }
                 }
 
                 <!-- Version Footer -->
@@ -59,34 +77,57 @@
             <!-- Flyout Panel -->
             @if (openGroup()) {
             <div class="flyout-panel">
-                <div class="flyout-header">{{ openGroup() === 'inventory' ? 'Inventory' : 'Design' }}</div>
+                <div class="flyout-header">{{ openGroup() === 'inventory' ? 'Inventory' : openGroup() === 'design' ?
+                    'Design' : 'Admin' }}</div>
                 <mat-nav-list>
                     @if (openGroup() === 'inventory') {
+                    @if (hasInventoryAccess()) {
                     <a mat-list-item routerLink="/inventory" routerLinkActive="active-link" (click)="closePanel()">
                         <mat-icon matListItemIcon>account_tree</mat-icon>
                         <span matListItemTitle>Hierarchy</span>
                     </a>
+                    }
+                    @if (hasPartsAccess()) {
                     <a mat-list-item routerLink="/parts" routerLinkActive="active-link" (click)="closePanel()">
                         <mat-icon matListItemIcon>widgets</mat-icon>
                         <span matListItemTitle>Parts</span>
                     </a>
+                    }
+                    @if (hasEquipmentAccess()) {
                     <a mat-list-item routerLink="/equipment" routerLinkActive="active-link" (click)="closePanel()">
                         <mat-icon matListItemIcon>build</mat-icon>
                         <span matListItemTitle>Equipment</span>
                     </a>
+                    }
+                    @if (hasOrdersAccess()) {
                     <a mat-list-item routerLink="/orders" routerLinkActive="active-link" (click)="closePanel()">
                         <mat-icon matListItemIcon>shopping_cart</mat-icon>
                         <span matListItemTitle>Orders</span>
                     </a>
                     }
+                    }
                     @if (openGroup() === 'design') {
+                    @if (hasDesignAccess()) {
                     <a mat-list-item routerLink="/requirements" routerLinkActive="active-link" (click)="closePanel()">
                         <mat-icon matListItemIcon>checklist</mat-icon>
                         <span matListItemTitle>Requirements</span>
                     </a>
+                    }
+                    @if (hasHarnessAccess()) {
                     <a mat-list-item routerLink="/harness" routerLinkActive="active-link" (click)="closePanel()">
                         <mat-icon matListItemIcon>cable</mat-icon>
                         <span matListItemTitle>Harness Design</span>
+                    </a>
+                    }
+                    }
+                    @if (openGroup() === 'admin') {
+                    <a mat-list-item routerLink="/admin/groups" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>group</mat-icon>
+                        <span matListItemTitle>User Groups</span>
+                    </a>
+                    <a mat-list-item routerLink="/admin/users" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>manage_accounts</mat-icon>
+                        <span matListItemTitle>Users</span>
                     </a>
                     }
                 </mat-nav-list>
@@ -96,19 +137,24 @@
     </mat-sidenav>
 
     <mat-sidenav-content class="sidenav-content">
-        <mat-toolbar class="nav-header" [class.dev]="isDev" [class.hidden]="isMobileRoute()">
+        <mat-toolbar class="nav-header" [class.dev]="isDev" [class.impersonating]="isImpersonating()" [class.hidden]="isMobileRoute()">
             <button mat-icon-button (click)="toggleSidenav()" aria-label="Toggle sidenav">
                 <mat-icon>menu</mat-icon>
             </button>
             <img height="36em" src="assets/logo.svg" alt="Logo">
             <span class="title-text">{{ isDev ? 'Letwinventory-dev' : 'Letwinventory' }}</span>
             <span class="spacer"></span>
-            @if (isAuthenticated()) {
-            <button mat-icon-button (click)="openSettings()" matTooltip="Settings"
-                aria-label="Settings">
-                <mat-icon>settings</mat-icon>
+            @if (isImpersonating()) {
+            <span class="impersonation-label">Impersonating {{ currentUser()?.displayName }}</span>
+            <button mat-button (click)="stopImpersonating()" class="stop-impersonating-btn">
+                <mat-icon>close</mat-icon>
+                Stop
             </button>
-            <span class="user-name">{{ currentUser()?.displayName }}</span>
+            }
+            @if (isAuthenticated()) {
+            <button mat-button (click)="openSettings()" matTooltip="Settings" aria-label="Settings">
+                {{ currentUser()?.displayName }}
+            </button>
             <button mat-button (click)="logout()" aria-label="Logout">
                 <mat-icon>logout</mat-icon>
                 Logout

@@ -12,6 +12,7 @@
     </h2>
     <span class="spacer"></span>
     @if (isEditMode() && !isFormEditMode() && !isReceiveMode()) {
+    @if (canWrite()) {
     @if (canReceive()) {
     <button mat-flat-button color="accent" (click)="enterReceiveMode()">
       <mat-icon>inventory_2</mat-icon>
@@ -23,10 +24,13 @@
       Mark as {{ nextStatusName() }}
     </button>
     }
-    <button mat-button (click)="enableEdit()">
-      <mat-icon>edit</mat-icon>
-      Edit
-    </button>
+    }
+    <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+      <button mat-button (click)="enableEdit()" [disabled]="!canWrite()">
+        <mat-icon>edit</mat-icon>
+        Edit
+      </button>
+    </span>
     }
     @if (isReceiveMode()) {
     <button mat-button (click)="cancelReceiveMode()">

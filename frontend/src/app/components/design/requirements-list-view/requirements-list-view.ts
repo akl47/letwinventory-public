@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
@@ -12,6 +12,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { DesignRequirementService } from '../../../services/design-requirement.service';
+import { AuthService } from '../../../services/auth.service';
 import { ProjectService } from '../../../services/project.service';
 import { DesignRequirement } from '../../../models/design-requirement.model';
 import { Project } from '../../../models/project.model';
@@ -47,7 +48,9 @@ export class RequirementsListView implements OnInit {
     private router = inject(Router);
     private route = inject(ActivatedRoute);
     private requirementService = inject(DesignRequirementService);
+    private authService = inject(AuthService);
     private projectService = inject(ProjectService);
+    canWrite = computed(() => this.authService.hasPermission('requirements', 'write'));
 
     allRequirements = signal<DesignRequirement[]>([]);
     treeRows = signal<TreeRow[]>([]);

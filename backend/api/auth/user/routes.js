@@ -8,6 +8,7 @@ router.get("/checkToken", controller.checkToken);
 router.post("/refresh", controller.refreshToken);
 
 router.get("/", checkToken, controller.getUser);
+router.get("/my-permissions", checkToken, controller.getMyPermissions);
 
 router.put("/", checkToken, controller.updateUser);
 

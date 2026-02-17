@@ -15,6 +15,7 @@ import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatDividerModule } from '@angular/material/divider';
 import { FormsModule } from '@angular/forms';
 import { InventoryService } from '../../../services/inventory.service';
+import { AuthService } from '../../../services/auth.service';
 import { Part, PartCategory } from '../../../models';
 
 @Component({
@@ -41,8 +42,10 @@ import { Part, PartCategory } from '../../../models';
 })
 export class PartsTableView implements OnInit {
   private inventoryService = inject(InventoryService);
+  private authService = inject(AuthService);
   private router = inject(Router);
   private route = inject(ActivatedRoute);
+  canWrite = computed(() => this.authService.hasPermission('parts', 'write'));
 
   allParts = signal<Part[]>([]);
   displayedParts = signal<Part[]>([]);

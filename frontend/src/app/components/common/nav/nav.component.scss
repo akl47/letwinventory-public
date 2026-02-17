@@ -243,6 +243,21 @@
   background-color: #d32f2f !important;
 }
 
+/* Impersonation indicator */
+.impersonating {
+  background-color: #e65100 !important;
+}
+
+.impersonation-label {
+  font-size: 13px;
+  font-weight: 500;
+  margin-right: 4px;
+}
+
+.stop-impersonating-btn {
+  color: white !important;
+}
+
 /* Version footer at bottom of rail */
 .version-footer {
   margin-top: auto;

@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const db = require("../../../models");
 const { OAuth2Client } = require("google-auth-library");
 const passport = require("../../../auth/passport");
+const { loadEffectivePermissions } = require('../../../middleware/checkPermission');
 // /**
 //  * @param {string} req.body.username
 //  * @param {string} req.body.password
@@ -68,13 +69,17 @@ exports.checkToken = async (req, res, next) => {
       return res.status(401).json({ error: 'User not found' });
     }
 
+    const permissions = await loadEffectivePermissions(user.id);
+
     res.json({
       valid: true,
       user: {
         id: user.id,
         displayName: user.displayName,
         email: user.email
-      }
+      },
+      permissions: [...permissions],
+      impersonatedBy: decoded.impersonatedBy || null
     });
   } catch (error) {
     res.status(401).json({
@@ -164,6 +169,54 @@ const doGoogleLogin = async (credentials) => {
   }
 };
 
+exports.getMyPermissions = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Get user's group memberships with group names and their permissions
+    const memberships = await db.UserGroupMember.findAll({
+      where: { userID: userId },
+      include: [{
+        model: db.UserGroup, as: 'group',
+        where: { activeFlag: true },
+        attributes: ['id', 'name'],
+        required: true,
+        include: [{
+          model: db.Permission,
+          as: 'permissions',
+          attributes: ['id', 'resource', 'action'],
+          through: { attributes: [] }
+        }]
+      }]
+    });
+
+    // Get direct user permissions
+    const directPerms = await db.UserPermission.findAll({
+      where: { userID: userId },
+      include: [{ model: db.Permission, as: 'permission', attributes: ['id', 'resource', 'action'] }]
+    });
+
+    // Build map: "resource.action" -> source names[]
+    const sourceMap = {};
+    for (const m of memberships) {
+      for (const p of m.group.permissions) {
+        const key = `${p.resource}.${p.action}`;
+        if (!sourceMap[key]) sourceMap[key] = [];
+        sourceMap[key].push(m.group.name);
+      }
+    }
+    for (const dp of directPerms) {
+      const key = `${dp.permission.resource}.${dp.permission.action}`;
+      if (!sourceMap[key]) sourceMap[key] = [];
+      sourceMap[key].push('Direct');
+    }
+
+    res.json(sourceMap);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 exports.loginWithGoogle = async (req, res, next) => {
   try {
     const user = await doGoogleLogin(req.body);
@@ -246,6 +299,8 @@ exports.refreshToken = async (req, res) => {
       activeFlag: true
     });
 
+    const permissions = await loadEffectivePermissions(user.id);
+
     // Set new cookies
     res.cookie('auth_token', accessToken, {
       httpOnly: false,
@@ -263,7 +318,8 @@ exports.refreshToken = async (req, res) => {
         id: user.id,
         email: user.email,
         displayName: user.displayName
-      }
+      },
+      permissions: [...permissions]
     });
     console.log('[REFRESH] OK: New tokens issued for user', user.id, user.email);
   } catch (error) {

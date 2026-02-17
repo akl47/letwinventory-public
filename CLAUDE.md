@@ -14,13 +14,17 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 The webapp runs in a Docker container that automatically builds on file changes. The user will report any build errors or issues.
 
+**Always ask before running tests.** Do not run backend tests (`jest`), frontend specs (`karma`), E2E tests (`playwright`), or the test runner script (`scripts/run-tests.sh`) without asking the user first. The user often wants to make additional changes before tests are run.
+
+**NEVER skip generating requirements.** If `req.js` fails or the API is unreachable, STOP and tell the user. Do not proceed to tests or implementation without requirements in the database.
+
 **New feature workflow (strictly follow this order):**
 
-1. **Requirements first.** Before writing any implementation code, generate requirements in `docs/requirements.md` following the existing format (REQ-XXX-NNN). Present each requirement to the user for approval. If anything is ambiguous or uncertain, ask — do not guess.
+1. **Requirements first.** Use `node scripts/req.js` to create requirements in the database. List existing categories with `node scripts/req.js categories`. Create each requirement with `node scripts/req.js create '<json>'`, presenting each to the user for approval before moving on. All requirements must include `description`, `rationale`, `verification`, and `validation`. If anything is ambiguous or uncertain, ask — do not guess.
 2. **Tests second.** Write tests for the approved requirements: backend (Jest), frontend (Karma spec), and E2E (Playwright) where applicable. Tests should fail at this point (they validate unimplemented behavior).
-3. **Link tests to requirements.** Update the requirements in `docs/requirements.md` to reference the test file(s) that verify each requirement (e.g., "Verified by: `backend/tests/__tests__/planning/task.test.js`, `frontend/e2e/tasks.spec.ts`").
+3. **Link tests to requirements.** Update requirements via `node scripts/req.js update <id> '<json>'` to add test file references to the `verification` field.
 4. **Implement the feature.** Write the code to make the tests pass.
-5. **Verify requirements are met.** After implementation, review each requirement against the code and test results. Confirm all are satisfied before declaring the feature complete. If any requirement is partially met or missed, flag it.
+5. **Verify requirements are met.** Use `node scripts/req.js list --project <id>` to review all requirements and confirm coverage. If any requirement is partially met or missed, flag it.
 
 ## 1. Think Before Coding
 
@@ -269,3 +273,245 @@ Each session should:
 - Update diffs only tracked for content fields (not approved/activeFlag which have dedicated change types)
 - No history record created when update has no actual field changes
 - `changeNotes` supported on update for optional user-provided change reasons
+
+## Session: 2026-02-15 (Requirements CLI Script)
+
+### Files Created
+- `scripts/req.js` — CLI script for managing design requirements via API
+
+### Files Modified
+- `CLAUDE.md` — updated "New feature workflow" step 1 to use `scripts/req.js` instead of `docs/requirements.md`, updated steps 3 and 5 accordingly
+
+### Changes Made
+1. **Requirements CLI script** — Node.js CLI (`scripts/req.js`) that authenticates via test-login endpoint, caches JWT in `/tmp`, and provides subcommands for all requirement CRUD operations, approval workflow, history, and categories
+2. **CLAUDE.md workflow update** — new requirements now go into the database via the CLI script instead of `docs/requirements.md`
+
+### Decisions
+- CLI script over MCP server (simpler, no background process, no extra deps)
+- CLI script over raw curl (handles auth caching, JSON formatting, error handling)
+- Auth via test-login with `claude@letwin.co` identity, token cached for 55min in `/tmp`
+- `docs/requirements.md` kept as static archive; new requirements go to database only
+
+## Session: 2026-02-15 (Permissions & User Groups Feature)
+
+### Files Created
+- `backend/migrations/20260216000000-create-user-groups.js` — UserGroups table
+- `backend/migrations/20260216000001-create-user-group-members.js` — UserGroupMembers junction table
+- `backend/migrations/20260216000002-create-permissions.js` — Permissions table
+- `backend/migrations/20260216000003-create-group-permissions.js` — GroupPermissions junction table
+- `backend/migrations/20260216000004-create-user-permissions.js` — UserPermissions junction table
+- `backend/migrations/20260216000005-seed-permissions-and-admin-group.js` — 28 permissions + Admin group seed
+- `backend/models/admin/userGroup.js` — UserGroup model with belongsToMany User, Permission
+- `backend/models/admin/userGroupMember.js` — Junction model (User ↔ UserGroup)
+- `backend/models/admin/permission.js` — Permission model (resource + action)
+- `backend/models/admin/groupPermission.js` — Junction model (UserGroup ↔ Permission)
+- `backend/models/admin/userPermission.js` — Junction model (User ↔ Permission)
+- `backend/middleware/checkPermission.js` — Permission enforcement middleware + loadEffectivePermissions helper
+- `backend/api/admin/group/controller.js` — Group CRUD + membership controller
+- `backend/api/admin/group/routes.js` — Group API routes with checkPermission
+- `backend/api/admin/user/controller.js` — User list + permission management controller
+- `backend/api/admin/user/routes.js` — User API routes with checkPermission
+- `backend/api/admin/permission/controller.js` — Permission list controller
+- `backend/api/admin/permission/routes.js` — Permission API routes
+- `backend/tests/__tests__/admin/permission-enforcement.test.js` — 20 tests for permission enforcement
+- `backend/tests/__tests__/admin/user-group.test.js` — 15 tests for group API
+- `backend/tests/__tests__/admin/user-permission.test.js` — 10 tests for user permission API
+- `frontend/src/app/models/permission.model.ts` — Permission, UserGroup, AdminUser interfaces
+- `frontend/src/app/services/admin.service.ts` — Admin API service
+- `frontend/src/app/guards/admin.guard.ts` — Admin route guard
+- `frontend/src/app/components/admin/groups-list/` — Group list page (ts, html, css)
+- `frontend/src/app/components/admin/group-edit/` — Group edit page with members + permissions grid (ts, html, css)
+- `frontend/src/app/components/admin/users-list/` — User list page (ts, html, css)
+- `frontend/src/app/components/admin/user-permissions/` — User permission edit page (ts, html, css)
+
+### Files Modified
+- `backend/models/common/user.js` — added belongsToMany associations for groups and directPermissions
+- `backend/api/auth/user/controller.js` — checkToken and refreshToken now return permissions array
+- `backend/tests/setup.js` — added 5 new tables to tablesToClean, seed permissions in seedReferenceData
+- `backend/tests/helpers.js` — added createTestGroup, addUserToGroup, assignGroupPermission, assignUserPermission, assignAllPermissions helpers; authenticatedRequest auto-grants all permissions by default
+- All 25 existing route files — added `checkPermission(resource, action)` middleware after checkToken
+- `frontend/src/app/services/auth.service.ts` — added _permissions signal, hasPermission(), hasAnyPermission(), permissions computed; updated checkAuthStatus/refreshAccessToken/clearToken
+- `frontend/src/app/interceptors/auth.interceptor.ts` — 403 no longer clears token or redirects (user is authenticated but lacks permission)
+- `frontend/src/app/interceptors/auth.interceptor.spec.ts` — updated 403 test to expect no token clearing
+- `frontend/src/app/app.routes.ts` — added 5 admin routes with authGuard + adminGuard
+- `frontend/src/app/components/common/nav/nav.component.ts` — added admin NavGroup type, hasAdminAccess computed, adminPrefixes
+- `frontend/src/app/components/common/nav/nav.component.html` — added conditional admin rail item + flyout
+- `docs/requirements.md` — added Section 15 (REQ-PERM-001–010), Appendix C §15, Appendix D.12, updated revision history/summary
+
+### Changes Made
+1. **Permissions model** — 5 new tables (UserGroups, UserGroupMembers, Permissions, GroupPermissions, UserPermissions) with 28 seed permissions across 7 resources
+2. **Permission enforcement** — checkPermission middleware applied to all 25 existing route files; zero-trust default (no implicit access)
+3. **Admin API** — group CRUD + membership, user permission management, permission reference list
+4. **Auth integration** — checkToken/refreshToken return effective permissions array; frontend stores in signal
+5. **Frontend admin UI** — 4 admin components (groups-list, group-edit, users-list, user-permissions) with adminGuard
+6. **Conditional nav** — Admin sidebar group shown only to users with admin.read permission
+7. **Tests** — 45 new backend tests (33 suites / 334 tests total, all passing); authenticatedRequest auto-grants permissions for backward compatibility
+
+### Decisions
+- Resource mapping: inventory/* → `inventory`, order/orderitem → `orders`, parts/* → `harness`, planning/* → `planning`, design/* → `design`, files → `files`, admin/* → `admin`
+- Exempt endpoints: auth/google/*, auth/user/*, config/* (no permission check needed)
+- authenticatedRequest in test helpers auto-grants all permissions by default; opt out with `{ grantPermissions: false }` for enforcement tests
+- Permission caching per request via `req._effectivePermissions` avoids redundant DB queries
+- 403 handler in frontend interceptor does NOT clear token — user is authenticated but lacks permission
+- Admin group seeded with all 28 permissions; first admin bootstrapped via manual DB insert
+
+## Session: 2026-02-16 (API Key Scoped Permissions)
+
+### Files Created
+- `backend/migrations/20260216300000-create-api-key-permissions.js` — ApiKeyPermissions junction table (apiKeyID FK→ApiKeys, permissionID FK→Permissions, unique index, CASCADE delete)
+- `backend/models/auth/apiKeyPermission.js` — ApiKeyPermission model (immutable, no updatedAt)
+
+### Files Modified
+- `backend/models/auth/apiKey.js` — added belongsToMany Permission through ApiKeyPermission
+- `backend/api/auth/api-key/controller.js` — scoped create (optional permissionIds), intersection-based exchangeToken, getPermissions, setPermissions endpoints
+- `backend/api/auth/api-key/routes.js` — added GET /:id/permissions, PUT /:id/permissions
+- `backend/tests/__tests__/auth/api-key.test.js` — added 9 permission tests (27 total in suite)
+- `backend/tests/setup.js` — added ApiKeyPermission to tablesToClean (before ApiKey for FK order)
+- `frontend/src/app/services/auth.service.ts` — updated ApiKey interface with permissions, added getApiKeyPermissions/setApiKeyPermissions methods, updated createApiKey to accept optional permissionIds
+- `frontend/src/app/components/settings/settings-page/settings-page.ts` — added permission grid state (allPermissions, editingKeyId, selectedPermissionIds, permissionsByResource computed), permission editing methods
+- `frontend/src/app/components/settings/settings-page/settings-page.html` — added permission count per key, tune icon button, inline permission grid editor with save/cancel
+- `frontend/src/app/components/settings/settings-page/settings-page.css` — added perm-table, key-perm-editor, permissions-grid styles (reused from admin group-edit pattern)
+
+### Changes Made
+1. **ApiKeyPermissions table** — junction table following UserPermission pattern; immutable (no updatedAt), CASCADE on both FKs
+2. **Scoped create** — create accepts optional `permissionIds`; if provided, validates against user's effective permissions (400 if exceeded); if omitted, grants all user permissions (backward compatible)
+3. **Intersection exchange** — token exchange loads key permissions AND user's current effective permissions, returns intersection; if user lost a permission since key creation, the key can't use it
+4. **Permission management endpoints** — GET/PUT /:id/permissions for viewing and replacing key permissions; only own active keys (404 otherwise); PUT validates against user's effective set
+5. **Frontend permission grid** — settings page shows permission count per key; "tune" icon opens inline permission grid (same checkbox table pattern as admin group-edit); save/cancel controls
+6. **Tests** — 9 new tests covering: scoped create, backward-compat create, over-scope rejection, scoped exchange, intersection behavior, set/get permissions, validation, cross-user isolation (34 suites / 374 total, all passing)
+
+### Decisions
+- Key permissions stored in dedicated junction table (not embedded in ApiKey row) — matches existing permission patterns
+- Token exchange returns `resource.action` strings (same format as existing permission flow) after intersection
+- List endpoint includes permissions association for frontend to display counts without extra requests
+- No checkPermission middleware on api-key routes (they use checkToken only, same as auth/* pattern — keys are user-scoped, not admin-managed)
+
+## Session: 2026-02-16 (Settings Page Redesign + Immutable Key Permissions)
+
+### Files Modified
+- `CLAUDE.md` — added "Always ask before running tests" rule to Project-Specific Rules
+- `frontend/src/app/components/settings/settings-page/settings-page.ts` — full-width layout; permission grid moved to create flow (collapsible, all pre-selected); removed edit-after-creation methods (editKeyPermissions, saveKeyPermissions, cancelEditPermissions, editingKeyId); added showCreatePerms signal
+- `frontend/src/app/components/settings/settings-page/settings-page.html` — orders-page header style (icon + title); permission grid in create area with expand/collapse; removed tune button and inline editor from key list
+- `frontend/src/app/components/settings/settings-page/settings-page.css` — `:host` absolute positioning matching orders page; full-width container; create-perm-section collapsible panel styles; removed key-perm-editor and key-actions styles
+- `frontend/src/app/services/auth.service.ts` — removed setApiKeyPermissions method
+- `backend/api/auth/api-key/controller.js` — removed setPermissions export
+- `backend/api/auth/api-key/routes.js` — removed PUT /:id/permissions route
+- `backend/tests/__tests__/auth/api-key.test.js` — removed 2 setPermissions tests, updated cross-user test to GET-only (25 tests in suite)
+
+### Changes Made
+1. **Settings page full-width** — matches orders page layout (`:host` absolute, full-width container, 28px header with icon)
+2. **Permissions at creation time** — collapsible permission grid in create form, all pre-selected by default, user unchecks before generating
+3. **Immutable after creation** — removed PUT endpoint, frontend edit UI, and setApiKeyPermissions service method; keys show permission count but can't be modified
+4. **CLAUDE.md rule** — added instruction to always ask user before running tests
+
+## Session: 2026-02-16 (Settings Accordion + API Key Dialog + Expiration)
+
+### Files Created
+- `backend/migrations/20260216400000-add-api-key-expiration.js` — adds nullable `expiresAt` DATE column to ApiKeys
+- `frontend/src/app/components/settings/api-key-create-dialog/api-key-create-dialog.ts` — dialog with name, expiration (never/date), permission grid
+- `frontend/src/app/components/settings/api-key-create-dialog/api-key-create-dialog.html` — two-state dialog (form → key display)
+- `frontend/src/app/components/settings/api-key-create-dialog/api-key-create-dialog.css` — dialog styles
+
+### Files Modified
+- `backend/models/auth/apiKey.js` — added `expiresAt` field (DATE, nullable)
+- `backend/api/auth/api-key/controller.js` — create accepts `expiresAt`, list returns it, exchangeToken rejects expired keys
+- `backend/tests/__tests__/auth/api-key.test.js` — added 5 expiration tests (30 total in suite)
+- `frontend/src/app/services/auth.service.ts` — added `expiresAt` to ApiKey interface, changed `createApiKey` to accept data object with optional expiresAt
+- `frontend/src/app/components/settings/settings-page/settings-page.ts` — replaced inline create form with dialog, replaced sections with MatExpansionModule accordion, removed permission grid state (moved to dialog)
+- `frontend/src/app/components/settings/settings-page/settings-page.html` — accordion panels for Notifications/Devices/API Keys, "Generate New Key" opens dialog, shows expiration info per key
+- `frontend/src/app/components/settings/settings-page/settings-page.css` — accordion styles, removed inline create/permission grid styles, added expired key visual states
+
+### Changes Made
+1. **Accordion cards** — each settings section (Notifications, Devices, API Keys) in a `mat-expansion-panel`; Notifications and API Keys expanded by default
+2. **Notification button width** — constrained with `align-self: flex-start` via `.action-btn` class
+3. **API key create dialog** — name field, expiration radio (never/date) with datepicker, collapsible permission grid; two-state UI (form → copy key); closes and refreshes key list
+4. **Key expiration backend** — `expiresAt` column, exchangeToken rejects expired keys (401), list includes expiresAt
+5. **Expired key UI** — keys show "Expires MMM d, y" or "Never expires" or red "Expired" badge with strikethrough name
+
+## Session: 2026-02-17 (Permission System Restructure)
+
+### Files Created
+- `backend/migrations/20260216600000-restructure-permissions.js` — maps old permissions to new ones, deletes old rows (CASCADE cleans junction tables)
+
+### Files Modified
+- `backend/migrations/20260216000005-seed-permissions-and-admin-group.js` — updated Resources/Actions to new model (9 resources × 3 actions + approve)
+- `backend/seeders/20260216000000-seed-permissions-and-admin-group.js` — same update
+- `backend/tests/setup.js` — updated permission seeding to new model
+- `backend/tests/__tests__/admin/permission-enforcement.test.js` — updated resource/action names, added resource mapping tests for parts, equipment, projects
+- `backend/api/files/routes.js` — stripped to read-only (GET /:id, GET /:id/data with checkToken only)
+- `backend/api/inventory/part/routes.js` — resource inventory→parts, create/update→write, added upload/delete routes
+- `backend/api/inventory/barcode/routes.js` — update→write
+- `backend/api/inventory/box/routes.js` — create/update→write
+- `backend/api/inventory/location/routes.js` — create/update→write
+- `backend/api/inventory/trace/routes.js` — create/update→write
+- `backend/api/inventory/equipment/routes.js` — resource inventory→equipment, create/update→write
+- `backend/api/inventory/unitofmeasure/routes.js` — resource inventory→admin
+- `backend/api/inventory/order/routes.js` — create/update→write
+- `backend/api/inventory/orderitem/routes.js` — create/update→write
+- `backend/api/parts/connector/routes.js` — resource harness→parts, create/update→write
+- `backend/api/parts/cable/routes.js` — resource harness→parts, create/update→write
+- `backend/api/parts/component/routes.js` — resource harness→parts, create/update→write
+- `backend/api/parts/wire/routes.js` — resource harness→parts, create/update→write
+- `backend/api/parts/wire-end/routes.js` — resource harness→admin, create/update→write
+- `backend/api/parts/harness/routes.js` — create/update→write
+- `backend/api/design/requirement/routes.js` — create/update→write
+- `backend/api/design/requirement-category/routes.js` — create/update→write
+- `backend/api/admin/group/routes.js` — create/update→write
+- `backend/api/admin/user/routes.js` — create/update→write
+- `frontend/src/app/app.routes.ts` — updated route guard resources (planning→tasks/projects, inventory→parts/equipment)
+- `frontend/src/app/components/common/nav/nav.component.ts` — replaced hasPlanningAccess with hasTasksAccess/hasProjectsAccess/hasPartsAccess/hasEquipmentAccess; updated hasInventoryGroupAccess
+- `frontend/src/app/components/common/nav/nav.component.html` — split inventory flyout per-item permission checks; Tasks uses hasTasksAccess
+- `frontend/src/app/components/admin/permission-grid/permission-grid.ts` — base actions: create/read/update/delete → read/write/delete
+- `frontend/src/app/services/harness-parts.service.ts` — upload URL /files → /inventory/part/upload
+
+### Changes Made
+1. **Merged create+update→write** — all route files use `write` instead of separate `create`/`update` actions
+2. **Split broad resources** — `inventory` split into `parts`+`inventory`+`equipment`; `planning` split into `tasks`+`projects`; `harness` parts routes moved to `parts` resource
+3. **Moved wire-ends and UoM under admin** — wire-end routes use `admin` resource; unit-of-measure uses `admin` resource
+4. **File upload moved to part routes** — upload/delete routes added to `/api/inventory/part/upload`; `/api/files` stripped to read-only
+5. **Migration preserves existing assignments** — maps old junction table rows to new permissions before deleting old ones
+6. **Frontend updated** — route guards, nav visibility, permission grid, file upload URLs all reflect new model
+
+### Decisions
+- Resource mapping: inventory/part → `parts`, inventory/barcode+trace+location+box → `inventory`, inventory/equipment → `equipment`, planning/task+tasklist+taskhistory+scheduled-task+time-tracking → `tasks`, planning/project → `projects`, parts/connector+cable+component+wire → `parts`, parts/wire-end → `admin`, parts/harness → `harness`
+- File routes kept as read-only (GET /:id, GET /:id/data) with checkToken only — file IDs are opaque references used by parts
+- Total permissions: 9×3 + 1 (requirements.approve) = 28
+
+## Session: 2026-02-17 (Admin User Impersonation)
+
+### Files Created
+- `backend/migrations/20260217000000-add-impersonate-permission.js` — adds `admin.impersonate` permission and assigns to Admin group
+- `backend/tests/__tests__/admin/impersonation.test.js` — 8 tests for impersonation endpoint
+
+### Files Modified
+- `backend/seeders/20260216000000-seed-permissions-and-admin-group.js` — added `admin.impersonate` to extraPermissions
+- `backend/tests/setup.js` — added `admin.impersonate` to permission seed data
+- `backend/api/admin/user/controller.js` — added `impersonate` export (JWT with impersonatedBy claim, target permissions)
+- `backend/api/admin/user/routes.js` — added `POST /:id/impersonate` route with `checkPermission('admin', 'impersonate')`
+- `backend/middleware/checkToken.js` — propagates `impersonatedBy` from JWT to `req.impersonatedBy`
+- `backend/api/auth/user/controller.js` — checkToken endpoint returns `impersonatedBy` field from decoded JWT
+- `frontend/src/app/services/auth.service.ts` — added `_isImpersonating` signal, `isImpersonating` computed, `startImpersonation()`, `stopImpersonating()`; `checkAuthStatus` detects impersonation; `clearToken` cleans up original token
+- `frontend/src/app/services/admin.service.ts` — added `impersonateUser()` method
+- `frontend/src/app/interceptors/auth.interceptor.ts` — 401 during impersonation stops impersonation instead of refreshing
+- `frontend/src/app/components/admin/user-permissions/user-permissions.ts` — added `canImpersonate` computed, `impersonate()` method
+- `frontend/src/app/components/admin/user-permissions/user-permissions.html` — added Impersonate button in view-mode header
+- `frontend/src/app/components/common/nav/nav.component.ts` — added `isImpersonating` computed, `stopImpersonating()` method
+- `frontend/src/app/components/common/nav/nav.component.html` — added `[class.impersonating]` on toolbar, impersonation label + stop button
+- `frontend/src/app/components/common/nav/nav.component.scss` — added `.impersonating`, `.impersonation-label`, `.stop-impersonating-btn` styles
+
+### Changes Made
+1. **New permission** — `admin.impersonate` added via migration and seed data; assigned to Admin group
+2. **Impersonate endpoint** — `POST /api/admin/user/:id/impersonate` issues 1-hour JWT with target's identity + `impersonatedBy` admin ID; returns target's effective permissions
+3. **Middleware propagation** — checkToken middleware sets `req.impersonatedBy` for audit trail; auth/user checkToken returns it in response
+4. **Frontend impersonation flow** — admin's original token saved to localStorage; impersonation token swapped in; user/permission signals updated; navigates to /tasks
+5. **Stop impersonation** — restores original token, reloads admin identity via checkAuthStatus, navigates to /admin/users
+6. **Interceptor handling** — 401 during impersonation auto-stops instead of attempting refresh (impersonation tokens have no refresh token)
+7. **Visual indicator** — toolbar turns orange (#e65100) during impersonation with "Impersonating [Name]" label and Stop button
+8. **Tests** — 8 new backend tests covering permission enforcement, happy path, JWT claims, edge cases, and token acceptance
+
+### Decisions
+- Token strategy: 1-hour JWT with `impersonatedBy` claim (no refresh token for impersonation sessions)
+- Original admin token preserved in `original_auth_token` localStorage key
+- Impersonation auto-stops on 401 (expired token) instead of attempting refresh
+- Cannot impersonate self (400) or inactive users (400)
+- Total permissions: 9×3 + 2 (requirements.approve + admin.impersonate) = 29

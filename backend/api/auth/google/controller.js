@@ -2,6 +2,7 @@ const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const { Op } = require('sequelize');
 const db = require('../../../models');
 const dotenv = require('dotenv');
 const path = require('path');
@@ -47,7 +48,7 @@ exports.handleCallback = (req, res, next) => {
 
     try {
       // Find or create user in database
-      const [user, created] = await db.User.findOrCreate({
+      let [user, created] = await db.User.findOrCreate({
         where: { googleID: profile.id },
         defaults: {
           displayName: profile.displayName,
@@ -56,6 +57,33 @@ exports.handleCallback = (req, res, next) => {
           photoURL: profile.photos[0].value
         }
       });
+
+      // If a new record was created, check if an admin pre-created a user with same email
+      if (created) {
+        const existingByEmail = await db.User.findOne({
+          where: { email: profile.emails[0].value, id: { [Op.ne]: user.id } }
+        });
+        if (existingByEmail) {
+          // Admin pre-created this user — link Google account
+          await user.destroy({ force: true });
+          await existingByEmail.update({
+            googleID: profile.id,
+            displayName: profile.displayName,
+            photoURL: profile.photos[0].value,
+            activeFlag: true,
+          });
+          user = existingByEmail;
+          created = false;
+        }
+      }
+
+      // If truly new user, add to Default group
+      if (created) {
+        const defaultGroup = await db.UserGroup.findOne({ where: { name: 'Default', activeFlag: true } });
+        if (defaultGroup) {
+          await db.UserGroupMember.findOrCreate({ where: { userID: user.id, groupID: defaultGroup.id } });
+        }
+      }
 
       if (user.activeFlag) {
         // Generate short-lived access token (15 minutes)
@@ -171,6 +199,14 @@ exports.testLogin = async (req, res) => {
     // Ensure existing user is active
     if (!created && !user.activeFlag) {
       await user.update({ activeFlag: true });
+    }
+
+    // If truly new user, add to Default group
+    if (created) {
+      const defaultGroup = await db.UserGroup.findOne({ where: { name: 'Default', activeFlag: true } });
+      if (defaultGroup) {
+        await db.UserGroupMember.findOrCreate({ where: { userID: user.id, groupID: defaultGroup.id } });
+      }
     }
 
     const accessToken = jwt.sign(

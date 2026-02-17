@@ -17,6 +17,9 @@ module.exports = (req, res, next) => {
             next(new RestError('Error finding user in database', 500))
           } else {
             req.user = dbUser.dataValues;
+            if (jwtUser.impersonatedBy) {
+              req.impersonatedBy = jwtUser.impersonatedBy;
+            }
             next();
           }
         }).catch(error => {

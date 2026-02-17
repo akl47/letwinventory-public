@@ -1,0 +1,16 @@
+.full-width {
+    width: 100%;
+}
+
+mat-dialog-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 360px;
+}
+
+.error-msg {
+    color: var(--mat-sys-error);
+    font-size: 13px;
+    margin-top: -4px;
+}

@@ -14,10 +14,12 @@
             <mat-slide-toggle [checked]="showInactive()" (change)="onToggleInactive($event.checked)" color="primary">
                 Show Inactive
             </mat-slide-toggle>
-            <button mat-flat-button color="primary" (click)="openNewEquipmentDialog()">
-                <mat-icon>add</mat-icon>
-                New Equipment
-            </button>
+            <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+                <button mat-flat-button color="primary" (click)="openNewEquipmentDialog()" [disabled]="!canWrite()">
+                    <mat-icon>add</mat-icon>
+                    New Equipment
+                </button>
+            </span>
         </div>
     </div>
 
@@ -63,9 +65,11 @@
             <ng-container matColumnDef="actions">
                 <th mat-header-cell *matHeaderCellDef>Actions</th>
                 <td mat-cell *matCellDef="let equipment">
-                    <button mat-icon-button (click)="editEquipment(equipment)" matTooltip="Edit equipment">
-                        <mat-icon>edit</mat-icon>
-                    </button>
+                    <span [matTooltip]="canWrite() ? 'Edit equipment' : 'You do not have permission'">
+                        <button mat-icon-button (click)="editEquipment(equipment)" [disabled]="!canWrite()">
+                            <mat-icon>edit</mat-icon>
+                        </button>
+                    </span>
                 </td>
             </ng-container>
 

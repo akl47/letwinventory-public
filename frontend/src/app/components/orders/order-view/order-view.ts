@@ -16,6 +16,7 @@ import { MatTableModule } from '@angular/material/table';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog } from '@angular/material/dialog';
 import { InventoryService } from '../../../services/inventory.service';
+import { AuthService } from '../../../services/auth.service';
 import { Order, OrderItem, Part } from '../../../models';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { OrderItemDialog } from '../order-item-dialog/order-item-dialog';
@@ -53,8 +54,10 @@ export class OrderView implements OnInit, OnDestroy {
   private router = inject(Router);
   private fb = inject(FormBuilder);
   private inventoryService = inject(InventoryService);
+  private authService = inject(AuthService);
   private errorNotification = inject(ErrorNotificationService);
   private dialog = inject(MatDialog);
+  canWrite = computed(() => this.authService.hasPermission('orders', 'write'));
   private paramSubscription?: Subscription;
 
   orderId = signal<number | null>(null);

@@ -17,6 +17,7 @@ import { MatDividerModule } from '@angular/material/divider';
 import { MatDialog } from '@angular/material/dialog';
 import { FormsModule } from '@angular/forms';
 import { InventoryService } from '../../../services/inventory.service';
+import { AuthService } from '../../../services/auth.service';
 import { Order, OrderStatus } from '../../../models';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { OrderEditDialog } from '../order-edit-dialog/order-edit-dialog';
@@ -46,10 +47,12 @@ import { OrderEditDialog } from '../order-edit-dialog/order-edit-dialog';
 })
 export class OrdersListView implements OnInit {
   private inventoryService = inject(InventoryService);
+  private authService = inject(AuthService);
   private errorNotification = inject(ErrorNotificationService);
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private dialog = inject(MatDialog);
+  canWrite = computed(() => this.authService.hasPermission('orders', 'write'));
 
   allOrders = signal<Order[]>([]);
   displayedOrders = signal<Order[]>([]);

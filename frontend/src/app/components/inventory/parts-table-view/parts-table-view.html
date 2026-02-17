@@ -63,10 +63,12 @@
             <mat-slide-toggle [checked]="showInactive()" (change)="onToggleInactive($event.checked)" color="primary">
                 Show Inactive
             </mat-slide-toggle>
-            <button mat-flat-button color="primary" (click)="openNewPartDialog()">
-                <mat-icon>add</mat-icon>
-                New Part
-            </button>
+            <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+                <button mat-flat-button color="primary" (click)="openNewPartDialog()" [disabled]="!canWrite()">
+                    <mat-icon>add</mat-icon>
+                    New Part
+                </button>
+            </span>
         </div>
     </div>
 
