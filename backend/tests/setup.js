@@ -180,11 +180,13 @@ function generateToken(user) {
   );
 }
 
+let _testUserSeq = 0;
 async function createTestUser(overrides = {}) {
+  const seq = ++_testUserSeq;
   const user = await db.User.create({
-    googleID: overrides.googleID || 'google-test-' + Date.now(),
+    googleID: overrides.googleID || `google-test-${Date.now()}-${seq}`,
     displayName: overrides.displayName || 'Test User',
-    email: overrides.email || `test-${Date.now()}@example.com`,
+    email: overrides.email || `test-${Date.now()}-${seq}@example.com`,
     activeFlag: true,
     ...overrides,
   });
