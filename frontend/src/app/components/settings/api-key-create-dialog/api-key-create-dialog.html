@@ -5,7 +5,7 @@
     <!-- Name -->
     <mat-form-field appearance="outline" class="full-width">
         <mat-label>Key name</mat-label>
-        <input matInput [(ngModel)]="name" placeholder="e.g. CI Script">
+        <input matInput [ngModel]="name()" (ngModelChange)="name.set($event)" placeholder="e.g. CI Script">
     </mat-form-field>
 
     <!-- Expiration -->

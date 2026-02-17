@@ -5,6 +5,7 @@ import { MatTableModule } from '@angular/material/table';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatSnackBar } from '@angular/material/snack-bar';
 import { AdminService } from '../../../services/admin.service';
 import { UserGroup } from '../../../models/permission.model';
 
@@ -24,6 +25,7 @@ import { UserGroup } from '../../../models/permission.model';
 export class GroupsList implements OnInit {
   private adminService = inject(AdminService);
   private router = inject(Router);
+  private snackBar = inject(MatSnackBar);
 
   groups = signal<UserGroup[] | null>(null);
 
@@ -38,8 +40,8 @@ export class GroupsList implements OnInit {
       next: (groups) => {
         this.groups.set(groups);
       },
-      error: (err) => {
-        console.error('Error loading groups:', err);
+      error: () => {
+        this.snackBar.open('Failed to load groups', 'Close', { duration: 3000 });
         this.groups.set([]);
       }
     });
@@ -50,8 +52,8 @@ export class GroupsList implements OnInit {
       next: () => {
         this.loadGroups();
       },
-      error: (err) => {
-        console.error('Error deleting group:', err);
+      error: () => {
+        this.snackBar.open('Failed to delete group', 'Close', { duration: 3000 });
       }
     });
   }

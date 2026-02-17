@@ -10,6 +10,7 @@ import { HarnessPage } from './harness-page';
 import { HarnessService } from '../../../services/harness.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { HarnessHistoryService } from '../../../services/harness-history.service';
+import { AuthService } from '../../../services/auth.service';
 import { HarnessData, HarnessConnector, createEmptyHarnessData } from '../../../models/harness.model';
 import { CanvasSelection } from '../harness-canvas/harness-canvas';
 
@@ -75,6 +76,8 @@ describe('HarnessPage', () => {
 
     harnessService = TestBed.inject(HarnessService);
     historyService = TestBed.inject(HarnessHistoryService);
+    const authService = TestBed.inject(AuthService);
+    vi.spyOn(authService, 'hasPermission').mockReturnValue(true);
 
     fixture = TestBed.createComponent(HarnessPage);
     component = fixture.componentInstance;

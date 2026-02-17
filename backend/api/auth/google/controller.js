@@ -209,6 +209,16 @@ exports.testLogin = async (req, res) => {
       }
     }
 
+    // Dev/test: grant all permissions so test users have full access
+    try {
+      if (db.Permission && db.UserPermission) {
+        const allPerms = await db.Permission.findAll({ attributes: ['id'] });
+        for (const perm of allPerms) {
+          await db.UserPermission.findOrCreate({ where: { userID: user.id, permissionID: perm.id } });
+        }
+      }
+    } catch { /* permission tables may not exist yet */ }
+
     const accessToken = jwt.sign(
       { id: user.id, email: user.email, displayName: user.displayName, photoURL: user.photoURL },
       process.env.JWT_SECRET,

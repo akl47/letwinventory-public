@@ -515,3 +515,49 @@ Each session should:
 - Impersonation auto-stops on 401 (expired token) instead of attempting refresh
 - Cannot impersonate self (400) or inactive users (400)
 - Total permissions: 9×3 + 2 (requirements.approve + admin.impersonate) = 29
+
+## Session: 2026-02-17 (Permission-Gated UI + Harness View-Only + Review & Cleanup)
+
+### Files Created
+- `frontend/src/app/components/admin/groups-list/groups-list.spec.ts` — 6 tests for group list component
+- `frontend/src/app/components/admin/group-edit/group-edit.spec.ts` — 13 tests for group edit component
+- `frontend/src/app/components/admin/permission-grid/permission-grid.spec.ts` — 20 tests for permission grid component
+- `frontend/src/app/components/admin/users-list/users-list.spec.ts` — 10 tests for users list component
+- `frontend/src/app/components/admin/user-permissions/user-permissions.spec.ts` — 6 tests for user permissions component
+- `frontend/src/app/components/admin/user-create-dialog/user-create-dialog.spec.ts` — 8 tests for user create dialog
+- `frontend/src/app/components/settings/api-key-create-dialog/api-key-create-dialog.spec.ts` — 10 tests for API key create dialog
+- `frontend/src/app/guards/permission.guard.spec.ts` — 3 tests for permission guard
+- `frontend/src/app/components/design/requirements-list-view/requirements-list-view.spec.ts` — spec for requirements list
+- `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.spec.ts` — spec for requirement edit page
+- `frontend/src/app/components/design/category-manage-dialog/category-manage-dialog.spec.ts` — spec for category dialog
+- `frontend/src/app/services/admin.service.spec.ts` — spec for admin service
+- `frontend/src/app/services/design-requirement.service.spec.ts` — spec for design requirement service
+- `frontend/src/app/services/requirement-category.service.spec.ts` — spec for requirement category service
+- `backend/migrations/20260216000000-create-permission-tables.js` — consolidated from 10 old migrations
+- `backend/migrations/20260216000001-create-api-keys.js` — consolidated from 3 old migrations
+
+### Files Modified
+- `frontend/src/app/components/harness/harness-page/harness-page.ts` — added `isViewOnly` computed, `MatIconModule`; extended `isLocked` with `!canWrite()`; guarded keyboard shortcuts with `isLocked()` checks
+- `frontend/src/app/components/harness/harness-page/harness-page.html` — added View Only badge overlay, passed `[isViewOnly]` to property panel
+- `frontend/src/app/components/harness/harness-page/harness-page.scss` — added `.view-only-badge` styles (amber text, semi-transparent dark background)
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.ts` — added `isViewOnly` input, `MatTooltipModule`
+- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.html` — wrapped release buttons in tooltip span, disabled when `isViewOnly()`
+- `frontend/src/app/components/admin/groups-list/groups-list.ts` — replaced `console.error` with `MatSnackBar` notifications
+- `backend/seeders/20260216000000-seed-permissions-and-admin-group.js` — added Default group creation (idempotent)
+
+### Files Deleted
+- 12 old migration files consolidated into 2 (20260216000000–20260216000005, 20260216100000, 20260216300000, 20260216400000, 20260216500000, 20260216600000, 20260217000000)
+
+### Changes Made
+1. **Permission-gated UI** — "New" and "Edit" buttons disabled with tooltip when user lacks write permission (across all list/edit pages)
+2. **Harness view-only mode** — `isViewOnly` computed based on `!hasPermission('harness', 'write')`; `isLocked` extended to include view-only; keyboard shortcuts, auto-save, and release buttons all gated; View Only badge shown in top-left corner
+3. **Migration consolidation** — 13 new migrations (none deployed to production) consolidated into 3 clean migrations; restructure migration folded into initial seed (seeds final permission state directly)
+4. **Code quality** — replaced `console.error` with MatSnackBar in admin components
+5. **Requirements coverage** — created 6 new requirements (298–303) for impersonation, permission-gated UI, harness view-only, API key expiration; updated 2 existing requirements (279, 296)
+6. **Frontend spec coverage** — created 14 new spec files covering all admin components, permission guard, API key dialog, design components, and 3 services
+
+### Decisions
+- View Only badge uses amber (#ffb74d) text on semi-transparent black background, positioned top-left with `pointer-events: none`
+- Release buttons (To Review, Release, Return to Draft, New Revision) all disabled with "You do not have permission" tooltip in view-only mode
+- Migration consolidation safe because none had been deployed to production
+- `admin.impersonate` permission included in initial seed (no separate migration needed)

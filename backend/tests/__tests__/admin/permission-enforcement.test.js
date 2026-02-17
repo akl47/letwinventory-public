@@ -112,17 +112,17 @@ describe('Permission Enforcement', () => {
       // Direct: parts.read
       await grantDirect(auth.user.id, 'parts', 'read');
 
-      // Group: tasks.read
-      const group = await createTestGroup({ name: 'TaskReaders' });
+      // Group: projects.read
+      const group = await createTestGroup({ name: 'ProjectReaders' });
       await addUserToGroup(auth.user.id, group.id);
-      await grantGroup(group.id, 'tasks', 'read');
+      await grantGroup(group.id, 'projects', 'read');
 
       // Both should work
       const partsRes = await auth.get('/api/inventory/part');
       expect(partsRes.status).toBe(200);
 
-      const taskRes = await auth.get('/api/planning/project');
-      expect(taskRes.status).toBe(200);
+      const projectRes = await auth.get('/api/planning/project');
+      expect(projectRes.status).toBe(200);
     });
 
     it('combines permissions from multiple groups', async () => {

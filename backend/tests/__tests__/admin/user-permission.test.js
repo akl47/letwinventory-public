@@ -17,7 +17,7 @@ describe('User Permissions API', () => {
       const res = await auth.get('/api/admin/permission');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.length).toBe(28);
+      expect(res.body.length).toBe(29);
     });
 
     it('each permission has resource and action', async () => {

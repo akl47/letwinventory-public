@@ -12,10 +12,11 @@ describe('Admin User Impersonation', () => {
   });
 
   it('should return 403 without admin.impersonate permission', async () => {
-    const noPermReq = await authenticatedRequest(admin, { grantPermissions: false });
+    const noAdmin = await createTestUser({ displayName: 'No Imp User', email: 'noimp@test.com' });
+    const noPermReq = await authenticatedRequest(noAdmin, { grantPermissions: false });
     // Grant admin.read but NOT admin.impersonate
     const readPerm = await db.Permission.findOne({ where: { resource: 'admin', action: 'read' } });
-    await db.UserPermission.create({ userID: admin.id, permissionID: readPerm.id });
+    await db.UserPermission.create({ userID: noAdmin.id, permissionID: readPerm.id });
 
     const res = await noPermReq.post(`/api/admin/user/${target.id}/impersonate`).send();
     expect(res.status).toBe(403);

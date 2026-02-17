@@ -79,6 +79,20 @@ module.exports = {
       adminGroupId = existingGroups[0].id;
     }
 
+    // Create Default group if not exists
+    const [existingDefault] = await queryInterface.sequelize.query(
+      `SELECT id FROM "UserGroups" WHERE name = 'Default'`
+    );
+    if (existingDefault.length === 0) {
+      await queryInterface.bulkInsert('UserGroups', [{
+        name: 'Default',
+        description: 'Default group for all new users',
+        activeFlag: true,
+        createdAt: now,
+        updatedAt: now
+      }]);
+    }
+
     // Assign all permissions to Admin group (skip duplicates)
     const [allPerms] = await queryInterface.sequelize.query('SELECT id FROM "Permissions"');
     for (const perm of allPerms) {

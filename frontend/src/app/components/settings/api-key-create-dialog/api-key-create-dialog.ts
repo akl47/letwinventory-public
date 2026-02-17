@@ -38,7 +38,7 @@ export class ApiKeyCreateDialog implements OnInit {
     private adminService = inject(AdminService);
     private authService = inject(AuthService);
 
-    name = '';
+    name = signal('');
     expirationMode: 'never' | 'date' = 'never';
     expiresAt: Date | null = null;
     minDate = new Date();
@@ -49,7 +49,7 @@ export class ApiKeyCreateDialog implements OnInit {
     creating = signal(false);
 
     canCreate = computed(() => {
-        return this.name.trim().length > 0
+        return this.name().trim().length > 0
             && this.selectedPermissionIds().size > 0
             && !this.creating();
     });
@@ -64,11 +64,11 @@ export class ApiKeyCreateDialog implements OnInit {
     }
 
     create() {
-        if (!this.name.trim()) return;
+        if (!this.name().trim()) return;
         this.creating.set(true);
 
         const data: any = {
-            name: this.name.trim(),
+            name: this.name().trim(),
             permissionIds: Array.from(this.selectedPermissionIds()),
         };
         if (this.expirationMode === 'date' && this.expiresAt) {
