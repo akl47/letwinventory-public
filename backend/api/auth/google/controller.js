@@ -209,13 +209,27 @@ exports.testLogin = async (req, res) => {
       }
     }
 
-    // Dev/test: grant all permissions so test users have full access
+    // Dev/test: seed permissions if empty, then grant all to test user
     try {
       if (db.Permission && db.UserPermission) {
-        const allPerms = await db.Permission.findAll({ attributes: ['id'] });
-        for (const perm of allPerms) {
-          await db.UserPermission.findOrCreate({ where: { userID: user.id, permissionID: perm.id } });
+        let allPerms = await db.Permission.findAll({ attributes: ['id'] });
+        if (allPerms.length === 0) {
+          // Seed permissions (sequelize.sync() creates empty tables)
+          const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin'];
+          const actions = ['read', 'write', 'delete'];
+          const rows = [];
+          for (const resource of resources) {
+            for (const action of actions) {
+              rows.push({ resource, action });
+            }
+          }
+          rows.push({ resource: 'requirements', action: 'approve' });
+          rows.push({ resource: 'admin', action: 'impersonate' });
+          await db.Permission.bulkCreate(rows, { ignoreDuplicates: true });
+          allPerms = await db.Permission.findAll({ attributes: ['id'] });
         }
+        const permRows = allPerms.map(p => ({ userID: user.id, permissionID: p.id }));
+        await db.UserPermission.bulkCreate(permRows, { ignoreDuplicates: true });
       }
     } catch { /* permission tables may not exist yet */ }
 
