@@ -561,3 +561,47 @@ Each session should:
 - Release buttons (To Review, Release, Return to Draft, New Revision) all disabled with "You do not have permission" tooltip in view-only mode
 - Migration consolidation safe because none had been deployed to production
 - `admin.impersonate` permission included in initial seed (no separate migration needed)
+
+## Session: 2026-02-18 (Requirements Refactor)
+
+### Files Modified
+- `scripts/req.js` — added `create-category`, `update-category`, `delete-category` CLI commands
+
+### Changes Made (database only — no code changes beyond req.js)
+1. **Fixed stale requirements** — req 296: removed stale PUT reference from validation; req 297: rewritten to reflect create-time permission selection (not post-creation editing)
+2. **Created 3 new categories** — Authorization (id=60), API Keys (id=61), Quality & Compliance (id=62)
+3. **Deleted 6 emptied sparse QMS categories** — Counterfeit Parts Prevention (42), Product Safety (41), Nonconforming Product (45), Configuration Management (40), Production Process Verification (44), Labeling Controls (37)
+4. **Created 26 category parent requirements** (one per category) — each gives a brief abstract overview of why that system exists; all other requirements in the category are children (directly or via sub-hierarchy)
+5. **Fixed all cross-category parent links** — old hierarchy had 137 (System) and 234 (QMS) parenting children across many categories; all broken and re-linked to correct category parents
+6. **Moved cross-category orphans** — 162 (UX, was under Barcode), 165 (Configuration, was under Barcode), 202 (UX, was under Harness), 257 (External Providers, was under Purchasing), 263 (Quality & Compliance, was under Production), 268 (Development, was under Records) — all re-parented to their own category root
+7. **Linked all parentless requirements** — 298 (Authorization), 282/283/299/300/301 (UX), 302 (Wire Harness) — all linked to their category parent
+
+### Category Parent Requirements (ID → Category)
+| ID | Category | ID | Category |
+|----|----------|----|----------|
+| 304 | API Keys | 318 | Notifications |
+| 305 | Authorization | 319 | Development |
+| 306 | Wire Harness | 320 | QMS |
+| 307 | Mobile | 321 | Design Controls |
+| 308 | Barcode | 322 | Design Requirements |
+| 309 | Orders | 323 | Purchasing Controls |
+| 310 | Planning | 324 | External Providers |
+| 311 | System | 325 | Identification & Traceability |
+| 312 | Authentication | 326 | Production & Process Controls |
+| 313 | Inventory | 327 | Quality & Compliance |
+| 314 | Parts | 328 | Records & Data Integrity |
+| 315 | Configuration | 329 | Operational Risk Management |
+| 316 | File Management | | |
+| 317 | UX | | |
+
+### Hierarchy Rules (enforced)
+- Every category has exactly 1 root requirement (parentRequirementID=null)
+- Every non-root requirement traces up to its category root with zero cross-category links
+- Within-category sub-hierarchies preserved (e.g. 139→140, 147→151→152, 243→250→251)
+- Total requirements: 192 (166 original + 26 category parents)
+
+### Decisions
+- Authentication category (46) kept for OAuth/JWT requirements (139-146) — no longer overloaded
+- UX category (56) collects cross-cutting UI requirements: admin nav (282), admin pages (283), impersonation UI (299), permission-gated buttons (300-301), barcode dialog (162), harness shortcuts (202), list view patterns (223-224), sidebar (225), notifications (226)
+- Sparse QMS categories deleted after requirements moved (rather than left empty)
+- Category parent descriptions are abstract ("why this system exists"); children are concrete ("what it does")

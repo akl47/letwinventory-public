@@ -61,6 +61,7 @@ export class RequirementsListView implements OnInit {
     selectedProjectID = signal<number | null>(null);
     approvedOnly = signal(false);
     hideChildren = signal(false);
+    private expandedFromQuery = new Set<number>();
     private initializedFromQuery = false;
 
     ngOnInit() {
@@ -77,6 +78,12 @@ export class RequirementsListView implements OnInit {
         if (params['projectID']) this.selectedProjectID.set(parseInt(params['projectID'], 10) || null);
         if (params['approvedOnly'] === 'true') this.approvedOnly.set(true);
         if (params['hideChildren'] === 'true') this.hideChildren.set(true);
+        if (params['expanded']) {
+            for (const id of params['expanded'].split(',')) {
+                const num = parseInt(id, 10);
+                if (!isNaN(num)) this.expandedFromQuery.add(num);
+            }
+        }
         this.initializedFromQuery = true;
     }
 
@@ -87,6 +94,10 @@ export class RequirementsListView implements OnInit {
         if (this.selectedProjectID()) params['projectID'] = String(this.selectedProjectID());
         if (this.approvedOnly()) params['approvedOnly'] = 'true';
         if (this.hideChildren()) params['hideChildren'] = 'true';
+        const expandedIds = this.treeRows()
+            .filter(r => r.expanded && r.hasChildren)
+            .map(r => r.requirement.id);
+        if (expandedIds.length > 0) params['expanded'] = expandedIds.join(',');
         this.router.navigate([], { relativeTo: this.route, queryParams: params, replaceUrl: true });
     }
 
@@ -142,9 +153,16 @@ export class RequirementsListView implements OnInit {
 
                 if (!matchesSearch && !hasChildren) continue;
 
-                // Default expanded based on hideChildren toggle; preserve user's manual toggle if set
+                // Preserve user's manual toggle; fall back to query param state; then default
                 const defaultExpanded = !hideChildren;
-                const expanded = prevStateMap.has(req.id) ? prevStateMap.get(req.id)! : defaultExpanded;
+                let expanded: boolean;
+                if (prevStateMap.has(req.id)) {
+                    expanded = prevStateMap.get(req.id)!;
+                } else if (this.expandedFromQuery.size > 0) {
+                    expanded = this.expandedFromQuery.has(req.id);
+                } else {
+                    expanded = defaultExpanded;
+                }
                 rows.push({
                     requirement: req,
                     level,
@@ -167,6 +185,7 @@ export class RequirementsListView implements OnInit {
     toggleExpand(row: TreeRow) {
         row.expanded = !row.expanded;
         this.buildTree();
+        this.updateQueryParams();
     }
 
     onSearchChange(value: string) {
@@ -190,17 +209,22 @@ export class RequirementsListView implements OnInit {
 
     toggleHideChildren() {
         this.hideChildren.set(!this.hideChildren());
+        this.expandedFromQuery.clear();
         this.treeRows.set([]); // Clear expand state so new default applies
         this.buildTree();
         this.updateQueryParams();
     }
 
     createNew() {
-        this.router.navigate(['/requirements/new']);
+        this.router.navigate(['/requirements/new'], {
+            queryParams: this.route.snapshot.queryParams,
+        });
     }
 
     openRequirement(req: DesignRequirement) {
-        this.router.navigate(['/requirements', req.id, 'edit']);
+        this.router.navigate(['/requirements', req.id, 'edit'], {
+            queryParams: this.route.snapshot.queryParams,
+        });
     }
 
     getIndentPx(level: number): string {

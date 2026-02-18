@@ -13,11 +13,25 @@ const http = require('http');
 const TOKEN_CACHE = '/tmp/letwinventory-claude-token.json';
 const DEFAULT_BASE_URL = 'http://localhost:3000/api';
 
-// Parse --url flag from argv
+// Load env vars from .env.claude (simple key=value parsing, no dotenv dependency)
+const envPath = path.join(__dirname, '..', '.env.claude');
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const val = trimmed.slice(eq + 1).trim();
+    if (!process.env[key]) process.env[key] = val;
+  }
+}
+
+// Parse --url flag from argv, fall back to env, then default
 function getBaseUrl() {
   const idx = process.argv.indexOf('--url');
   if (idx !== -1 && process.argv[idx + 1]) return process.argv[idx + 1];
-  return DEFAULT_BASE_URL;
+  return process.env.DEV_API_URL || DEFAULT_BASE_URL;
 }
 
 function request(method, urlStr, body) {
@@ -92,10 +106,13 @@ async function getToken(baseUrl) {
     } catch { /* re-auth */ }
   }
 
-  const res = await request('POST', `${baseUrl}/auth/google/test-login`, {
-    email: 'claude@letwin.co',
-    displayName: 'Claude Code',
-  });
+  const apiKey = process.env.DEV_API_KEY;
+  if (!apiKey) {
+    console.error('No DEV_API_KEY found. Set it in .env.claude or as an environment variable.');
+    process.exit(1);
+  }
+
+  const res = await request('POST', `${baseUrl}/auth/api-key/token`, { key: apiKey });
 
   if (res.status !== 200 || !res.data.accessToken) {
     console.error('Auth failed:', res.data);
@@ -103,7 +120,7 @@ async function getToken(baseUrl) {
   }
 
   const token = res.data.accessToken;
-  // test-login tokens expire in 1h
+  // exchanged tokens expire in 1h
   fs.writeFileSync(TOKEN_CACHE, JSON.stringify({
     token,
     expiresAt: Date.now() + 55 * 60 * 1000, // 55min to be safe
@@ -139,6 +156,9 @@ async function main() {
 
 Commands:
   categories                  List categories
+  create-category <json>      Create category (name, description)
+  update-category <id> <json> Update category fields
+  delete-category <id>        Delete category
   list [--project <id>]       List all requirements
   get <id>                    Get requirement with associations
   create <json>               Create requirement (returns id)
@@ -202,6 +222,36 @@ Options:
       const res = await api('PUT', `/design/requirement/${id}`, body);
       if (res.status !== 200) { console.error('Error:', res.data); process.exit(1); }
       console.log(`Updated requirement id=${id}`);
+      break;
+    }
+
+    case 'create-category': {
+      const json = cleanArgs[1];
+      if (!json) { console.error('Usage: create-category <json>'); process.exit(1); }
+      const body = JSON.parse(json);
+      const res = await api('POST', '/design/requirement-category', body);
+      if (res.status !== 201) { console.error('Error:', res.data); process.exit(1); }
+      console.log(`Created category id=${res.data.id} name="${res.data.name}"`);
+      break;
+    }
+
+    case 'update-category': {
+      const id = cleanArgs[1];
+      const json = cleanArgs[2];
+      if (!id || !json) { console.error('Usage: update-category <id> <json>'); process.exit(1); }
+      const body = JSON.parse(json);
+      const res = await api('PUT', `/design/requirement-category/${id}`, body);
+      if (res.status !== 200) { console.error('Error:', res.data); process.exit(1); }
+      console.log(`Updated category id=${id}`);
+      break;
+    }
+
+    case 'delete-category': {
+      const id = cleanArgs[1];
+      if (!id) { console.error('Usage: delete-category <id>'); process.exit(1); }
+      const res = await api('DELETE', `/design/requirement-category/${id}`);
+      if (res.status !== 200 && res.status !== 204) { console.error('Error:', res.data); process.exit(1); }
+      console.log(`Deleted category id=${id}`);
       break;
     }
 
