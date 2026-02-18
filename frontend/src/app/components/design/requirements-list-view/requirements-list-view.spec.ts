@@ -143,14 +143,14 @@ describe('RequirementsListView', () => {
         expect(requirementService.getAll).toHaveBeenCalledTimes(2);
     });
 
-    it('should navigate to new requirement page', () => {
+    it('should navigate to new requirement page with query params', () => {
         component.createNew();
-        expect(router.navigate).toHaveBeenCalledWith(['/requirements/new']);
+        expect(router.navigate).toHaveBeenCalledWith(['/requirements/new'], expect.objectContaining({ queryParams: {} }));
     });
 
-    it('should navigate to edit requirement page', () => {
+    it('should navigate to edit requirement page with query params', () => {
         component.openRequirement(mockRequirements[0]);
-        expect(router.navigate).toHaveBeenCalledWith(['/requirements', 1, 'edit']);
+        expect(router.navigate).toHaveBeenCalledWith(['/requirements', 1, 'edit'], expect.objectContaining({ queryParams: {} }));
     });
 
     it('should return correct indent pixels', () => {

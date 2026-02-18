@@ -1,6 +1,23 @@
-import { Routes } from '@angular/router';
+import { Routes, Router, CanActivateFn } from '@angular/router';
+import { inject } from '@angular/core';
+import { map } from 'rxjs';
 import { authGuard } from './guards/auth.guard';
 import { permissionGuard } from './guards/permission.guard';
+import { AuthService } from './services/auth.service';
+
+/** Redirects authenticated users to /tasks */
+const guestGuard: CanActivateFn = () => {
+    const authService = inject(AuthService);
+    const router = inject(Router);
+
+    if (authService.isAuthenticated()) {
+        return router.createUrlTree(['/tasks']);
+    }
+
+    return authService.checkAuthStatus().pipe(
+        map(isAuthenticated => isAuthenticated ? router.createUrlTree(['/tasks']) : true)
+    );
+};
 
 export const routes: Routes = [
     { path: '', redirectTo: 'home', pathMatch: 'full' },
@@ -9,6 +26,7 @@ export const routes: Routes = [
         title: 'Home',
         loadComponent: () =>
             import('./components/pages/home/home.component').then((m) => m.HomeComponent),
+        canActivate: [guestGuard],
     },
     {
         path: 'tasks',

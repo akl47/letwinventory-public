@@ -3,7 +3,6 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
 import { provideRouter, ActivatedRoute, Router } from '@angular/router';
-import { Location } from '@angular/common';
 import { MatDialog } from '@angular/material/dialog';
 import { of } from 'rxjs';
 import { vi } from 'vitest';
@@ -24,7 +23,6 @@ describe('RequirementEditPage', () => {
     let projectService: ProjectService;
     let authService: AuthService;
     let router: Router;
-    let location: Location;
 
     const mockProjects: Project[] = [
         { id: 1, ownerUserID: 1, tagColorHex: 'ff0000', name: 'Alpha', shortName: 'A', activeFlag: true, createdAt: new Date(), updatedAt: new Date() },
@@ -62,7 +60,7 @@ describe('RequirementEditPage', () => {
                 provideHttpClientTesting(),
                 provideAnimationsAsync(),
                 provideRouter([]),
-                { provide: ActivatedRoute, useValue: { params: of(routeParams), snapshot: { params: routeParams } } },
+                { provide: ActivatedRoute, useValue: { params: of(routeParams), snapshot: { params: routeParams, queryParams: {} } } },
             ],
         }).compileComponents();
     }
@@ -76,7 +74,6 @@ describe('RequirementEditPage', () => {
             projectService = TestBed.inject(ProjectService);
             authService = TestBed.inject(AuthService);
             router = TestBed.inject(Router);
-            location = TestBed.inject(Location);
 
             vi.spyOn(projectService, 'getProjects').mockReturnValue(of(mockProjects));
             vi.spyOn(categoryService, 'getAll').mockReturnValue(of(mockCategories));
@@ -124,13 +121,12 @@ describe('RequirementEditPage', () => {
             component.save();
 
             expect(requirementService.create).toHaveBeenCalled();
-            expect(router.navigate).toHaveBeenCalledWith(['/requirements', 10, 'edit']);
+            expect(router.navigate).toHaveBeenCalledWith(['/requirements', 10, 'edit'], expect.objectContaining({ queryParams: {} }));
         });
 
-        it('cancelEdit in create mode should go back', () => {
-            vi.spyOn(location, 'back');
+        it('cancelEdit in create mode should navigate to list', () => {
             component.cancelEdit();
-            expect(location.back).toHaveBeenCalled();
+            expect(router.navigate).toHaveBeenCalledWith(['/requirements'], expect.objectContaining({ queryParams: {} }));
         });
 
         it('getParentOptions should return all requirements when no current', () => {
@@ -221,7 +217,7 @@ describe('RequirementEditPage', () => {
             vi.spyOn(requirementService, 'delete').mockReturnValue(of({}));
             component.deleteRequirement();
             expect(requirementService.delete).toHaveBeenCalledWith(2);
-            expect(router.navigate).toHaveBeenCalledWith(['/requirements']);
+            expect(router.navigate).toHaveBeenCalledWith(['/requirements'], expect.objectContaining({ queryParams: {} }));
         });
 
         it('isOwner should return true when current user is owner', () => {

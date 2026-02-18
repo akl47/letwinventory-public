@@ -1,5 +1,5 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
-import { CommonModule, Location } from '@angular/common';
+import { CommonModule } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
@@ -45,7 +45,6 @@ export class RequirementEditPage implements OnInit {
     private fb = inject(FormBuilder);
     private route = inject(ActivatedRoute);
     private router = inject(Router);
-    private location = inject(Location);
     private dialog = inject(MatDialog);
     private requirementService = inject(DesignRequirementService);
     private categoryService = inject(RequirementCategoryService);
@@ -221,7 +220,9 @@ export class RequirementEditPage implements OnInit {
         } else {
             this.requirementService.create(data).subscribe({
                 next: (created) => {
-                    this.router.navigate(['/requirements', created.id, 'edit']);
+                    this.router.navigate(['/requirements', created.id, 'edit'], {
+                        queryParams: this.route.snapshot.queryParams,
+                    });
                 }
             });
         }
@@ -231,7 +232,9 @@ export class RequirementEditPage implements OnInit {
         if (!this.currentRequirement) return;
         this.requirementService.delete(this.currentRequirement.id).subscribe({
             next: () => {
-                this.router.navigate(['/requirements']);
+                this.router.navigate(['/requirements'], {
+                    queryParams: this.route.snapshot.queryParams,
+                });
             }
         });
     }
@@ -344,6 +347,8 @@ export class RequirementEditPage implements OnInit {
     }
 
     goBack() {
-        this.location.back();
+        this.router.navigate(['/requirements'], {
+            queryParams: this.route.snapshot.queryParams,
+        });
     }
 }
