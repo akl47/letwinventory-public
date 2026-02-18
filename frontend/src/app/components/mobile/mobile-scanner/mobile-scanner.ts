@@ -6,6 +6,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { forkJoin } from 'rxjs';
 import { InventoryService, InventoryTag, Barcode } from '../../../services/inventory.service';
 import { inject } from '@angular/core';
@@ -36,6 +37,7 @@ type SecondScanAction = 'move' | 'merge';
         MatProgressSpinnerModule,
         MatFormFieldModule,
         MatInputModule,
+        MatTooltipModule,
     ],
     templateUrl: './mobile-scanner.html',
     styleUrl: './mobile-scanner.css',
@@ -68,12 +70,16 @@ export class MobileScanner implements OnInit, OnDestroy {
     trashAll = signal(false);
     confirmAction = signal<'split' | 'trash' | null>(null);
 
+    // Scan mode
+    continuousScan = signal(true);
+
     // Camera / detector
     private stream: MediaStream | null = null;
     private detector: any = null;
     private animFrameId = 0;
     private scanDebounceMs = 1500;
     private lastScanTime = 0;
+    private scanPaused = false;
 
     isTrace = computed(() => this.scannedTag()?.type === 'Trace');
 
@@ -142,7 +148,13 @@ export class MobileScanner implements OnInit, OnDestroy {
                 return;
             }
 
-            if (video.readyState < 2) {
+            if (video.readyState < 2 || this.scanPaused) {
+                this.animFrameId = requestAnimationFrame(detect);
+                return;
+            }
+
+            // In manual mode, only scan when triggered
+            if (!this.continuousScan() && currentState === 'scanning') {
                 this.animFrameId = requestAnimationFrame(detect);
                 return;
             }
@@ -167,6 +179,22 @@ export class MobileScanner implements OnInit, OnDestroy {
         };
 
         this.animFrameId = requestAnimationFrame(detect);
+    }
+
+    toggleScanMode() {
+        this.continuousScan.set(!this.continuousScan());
+    }
+
+    manualScan() {
+        const video = this.videoEl()?.nativeElement;
+        if (!video || !this.detector || video.readyState < 2) return;
+
+        this.detector.detect(video).then((barcodes: any[]) => {
+            if (barcodes.length > 0) {
+                this.lastScanTime = Date.now();
+                this.onBarcodeDetected(barcodes[0].rawValue);
+            }
+        }).catch(() => {});
     }
 
     private onBarcodeDetected(rawValue: string) {

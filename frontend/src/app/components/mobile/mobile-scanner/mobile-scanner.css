@@ -83,6 +83,38 @@ video.visible {
     color: #fff;
 }
 
+.manual-scan-btn {
+    position: absolute;
+    bottom: 40px;
+    width: 72px;
+    height: 72px;
+    background: rgba(255, 255, 255, 0.2) !important;
+    color: #fff !important;
+    border: 2px solid rgba(255, 255, 255, 0.6);
+}
+
+.manual-scan-btn mat-icon {
+    font-size: 32px;
+    width: 32px;
+    height: 32px;
+}
+
+.scan-mode-toggle {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0, 0, 0, 0.5);
+    color: #b0b0b0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
 /* Center content (loading, result, error, confirm, unsupported) */
 .center-content {
     flex: 1;
@@ -206,19 +238,39 @@ video.visible {
     line-height: 1.4;
 }
 
-.item-quantity {
+.part-info {
     display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 14px;
-    color: #b0b0b0;
+    flex-wrap: wrap;
+    gap: 8px 16px;
     margin-bottom: 12px;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
 }
 
-.item-quantity mat-icon {
-    font-size: 18px;
-    width: 18px;
-    height: 18px;
+.part-detail {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.part-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #757575;
+}
+
+.part-value {
+    font-size: 14px;
+    color: #b0b0b0;
+}
+
+.qty-value {
+    font-weight: 600;
+    color: #4caf50;
+    font-size: 16px;
 }
 
 .location-chain {

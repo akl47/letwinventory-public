@@ -344,8 +344,13 @@ async function findBarcodeWithCategory(barcodeID) {
 async function buildTag(barcode) {
   const typeName = barcode.BarcodeCategory.name;
 
+  const includeOpts = typeName === 'Trace'
+    ? [{ model: db.Part }]
+    : [];
+
   const tagData = await db[typeName].findOne({
-    where: { barcodeID: barcode.id, activeFlag: true }
+    where: { barcodeID: barcode.id, activeFlag: true },
+    include: includeOpts,
   });
 
   if (!tagData) {
@@ -354,7 +359,7 @@ async function buildTag(barcode) {
 
   const tagDataJson = tagData.toJSON();
 
-  return {
+  const tag = {
     id: tagDataJson.id,
     barcodeID: barcode.id,
     barcode: barcode.barcode,
@@ -362,8 +367,19 @@ async function buildTag(barcode) {
     barcodeCategoryID: barcode.BarcodeCategory.id,
     parentBarcodeID: barcode.parentBarcodeID,
     name: tagDataJson.name,
-    description: tagDataJson.description
+    description: tagDataJson.description,
   };
+
+  if (typeName === 'Trace') {
+    tag.name = tagDataJson.Part?.name;
+    tag.description = tagDataJson.Part?.description;
+    tag.quantity = tagDataJson.quantity;
+    tag.partID = tagDataJson.partID;
+    tag.manufacturer = tagDataJson.Part?.manufacturer;
+    tag.manufacturerPN = tagDataJson.Part?.manufacturerPN;
+  }
+
+  return tag;
 }
 
 async function buildTagChain(startingBarcodeID) {
