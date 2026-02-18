@@ -13,17 +13,26 @@
         <div class="scan-frame"></div>
         <div class="scan-instruction">
             @if (state() === 'scanning') {
-            <span>Point camera at barcode</span>
+            <span>{{ continuousScan() ? 'Point camera at barcode' : 'Tap Scan when ready' }}</span>
             } @else {
             <span>{{ secondScanInstruction() }}</span>
             }
         </div>
+        @if (!continuousScan() && state() === 'scanning') {
+        <button mat-fab class="manual-scan-btn" (click)="manualScan()">
+            <mat-icon>qr_code_scanner</mat-icon>
+        </button>
+        }
         @if (state() === 'scanning_second') {
         <button mat-flat-button class="cancel-scan-btn" (click)="cancelSecondScan()">
             <mat-icon>close</mat-icon>
             Cancel
         </button>
         }
+        <button class="scan-mode-toggle" (click)="toggleScanMode()"
+            [matTooltip]="continuousScan() ? 'Continuous scanning' : 'Manual scanning'">
+            <mat-icon>{{ continuousScan() ? 'autorenew' : 'touch_app' }}</mat-icon>
+        </button>
     </div>
     }
 
@@ -56,10 +65,26 @@
             <p class="item-description">{{ scannedTag()?.description }}</p>
             }
 
-            @if (isTrace() && scannedTag()?.quantity != null) {
-            <div class="item-quantity">
-                <mat-icon>inventory_2</mat-icon>
-                <span>Qty: {{ scannedTag()?.quantity }}</span>
+            @if (isTrace()) {
+            <div class="part-info">
+                @if (scannedTag()?.manufacturer) {
+                <div class="part-detail">
+                    <span class="part-label">Mfr</span>
+                    <span class="part-value">{{ scannedTag()?.manufacturer }}</span>
+                </div>
+                }
+                @if (scannedTag()?.manufacturerPN) {
+                <div class="part-detail">
+                    <span class="part-label">MPN</span>
+                    <span class="part-value">{{ scannedTag()?.manufacturerPN }}</span>
+                </div>
+                }
+                @if (scannedTag()?.quantity != null) {
+                <div class="part-detail">
+                    <span class="part-label">Qty</span>
+                    <span class="part-value qty-value">{{ scannedTag()?.quantity }}</span>
+                </div>
+                }
             </div>
             }
 
