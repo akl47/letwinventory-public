@@ -169,7 +169,7 @@ export class MobileScanner implements OnInit, OnDestroy {
                 const barcodes = await this.detector.detect(video);
                 if (barcodes.length > 0) {
                     this.lastScanTime = now;
-                    this.onBarcodeDetected(barcodes[0].rawValue);
+                    this.onBarcodeDetected(this.closestToCenter(barcodes, video).rawValue);
                 }
             } catch {
                 // Detection error, continue loop
@@ -179,6 +179,25 @@ export class MobileScanner implements OnInit, OnDestroy {
         };
 
         this.animFrameId = requestAnimationFrame(detect);
+    }
+
+    private closestToCenter(barcodes: any[], video: HTMLVideoElement): any {
+        if (barcodes.length === 1) return barcodes[0];
+        const cx = video.videoWidth / 2;
+        const cy = video.videoHeight / 2;
+        let best = barcodes[0];
+        let bestDist = Infinity;
+        for (const b of barcodes) {
+            const box = b.boundingBox;
+            const dx = box.x + box.width / 2 - cx;
+            const dy = box.y + box.height / 2 - cy;
+            const dist = dx * dx + dy * dy;
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = b;
+            }
+        }
+        return best;
     }
 
     toggleScanMode() {
@@ -192,7 +211,7 @@ export class MobileScanner implements OnInit, OnDestroy {
         this.detector.detect(video).then((barcodes: any[]) => {
             if (barcodes.length > 0) {
                 this.lastScanTime = Date.now();
-                this.onBarcodeDetected(barcodes[0].rawValue);
+                this.onBarcodeDetected(this.closestToCenter(barcodes, video).rawValue);
             }
         }).catch(() => {});
     }
