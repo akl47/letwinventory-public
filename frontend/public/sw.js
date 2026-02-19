@@ -17,7 +17,7 @@ self.addEventListener('push', (event) => {
     const title = data.title || 'Letwinventory';
     const options = {
         body: data.body || '',
-        icon: '/assets/logo-256.png',
+        icon: '/assets/logo-192.png',
         data: { url: data.url || '/' }
     };
     event.waitUntil(self.registration.showNotification(title, options));

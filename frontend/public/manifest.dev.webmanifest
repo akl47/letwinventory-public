@@ -1,37 +1,37 @@
 {
-    "name": "Letwinventory",
+    "name": "Letwinventory (Dev)",
     "short_name": "Letwinventory",
     "start_url": "/",
     "display": "standalone",
-    "background_color": "#131316",
-    "theme_color": "#131316",
+    "background_color": "#cc0000",
+    "theme_color": "#cc0000",
     "icons": [
         {
-            "src": "assets/logo-48.png",
+            "src": "assets/logo-dev-48.png",
             "sizes": "48x48",
             "type": "image/png",
             "purpose": "any"
         },
         {
-            "src": "assets/logo-192.png",
+            "src": "assets/logo-dev-192.png",
             "sizes": "192x192",
             "type": "image/png",
             "purpose": "any"
         },
         {
-            "src": "assets/logo-512.png",
+            "src": "assets/logo-dev-512.png",
             "sizes": "512x512",
             "type": "image/png",
             "purpose": "any"
         },
         {
-            "src": "assets/logo-maskable-192.png",
+            "src": "assets/logo-dev-maskable-192.png",
             "sizes": "192x192",
             "type": "image/png",
             "purpose": "maskable"
         },
         {
-            "src": "assets/logo-maskable-512.png",
+            "src": "assets/logo-dev-maskable-512.png",
             "sizes": "512x512",
             "type": "image/png",
             "purpose": "maskable"
