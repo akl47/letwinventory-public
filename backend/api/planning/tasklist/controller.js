@@ -1,5 +1,6 @@
 const { Task, TaskList } = require('../../../models');
 const { Op } = require('sequelize');
+const taskSyncService = require('../../../services/taskSyncService');
 
 exports.createTaskList = async (req, res) => {
     try {
@@ -12,6 +13,7 @@ exports.createTaskList = async (req, res) => {
             order: newOrder
         });
         res.status(201).json(taskList);
+        taskSyncService.broadcast(req.headers['x-tab-id'] || null);
     } catch (error) {
         res.status(400).json({ error: error.message });
     }
@@ -64,6 +66,7 @@ exports.updateTaskList = async (req, res) => {
         }
         await taskList.update(req.body);
         res.json(taskList);
+        taskSyncService.broadcast(req.headers['x-tab-id'] || null);
     } catch (error) {
         res.status(400).json({ error: error.message });
     }
@@ -77,6 +80,7 @@ exports.deleteTaskList = async (req, res) => {
         }
         await taskList.update({ activeFlag: false });
         res.json({ message: 'Task list deleted successfully' });
+        taskSyncService.broadcast(req.headers['x-tab-id'] || null);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -96,6 +100,7 @@ exports.reorderTaskLists = async (req, res) => {
 
         await Promise.all(updates);
         res.json({ message: 'Task lists reordered successfully' });
+        taskSyncService.broadcast(req.headers['x-tab-id'] || null);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

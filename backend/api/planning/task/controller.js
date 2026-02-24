@@ -1,5 +1,6 @@
 const { Task, User, TaskHistory, TaskList, TaskHistoryActionType, TaskType } = require('../../../models');
 const { Op } = require('sequelize');
+const taskSyncService = require('../../../services/taskSyncService');
 
 // Helper function to get action type ID by code
 async function getActionTypeId(code) {
@@ -35,6 +36,7 @@ exports.createTask = async (req, res) => {
         }
 
         res.status(201).json(task);
+        taskSyncService.broadcast(req.headers['x-tab-id'] || null);
     } catch (error) {
         res.status(400).json({ error: error.message });
     }
@@ -192,6 +194,7 @@ exports.updateTask = async (req, res) => {
         }
 
         res.json(task);
+        taskSyncService.broadcast(req.headers['x-tab-id'] || null);
     } catch (error) {
         res.status(400).json({ error: error.message });
     }
@@ -206,6 +209,7 @@ exports.deleteTask = async (req, res) => {
 
         await task.update({ activeFlag: false });
         res.json({ message: 'Task deleted successfully' });
+        taskSyncService.broadcast(req.headers['x-tab-id'] || null);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -264,6 +268,7 @@ exports.moveTask = async (req, res) => {
         }
 
         res.json(task);
+        taskSyncService.broadcast(req.headers['x-tab-id'] || null);
     } catch (error) {
         res.status(400).json({ error: error.message });
     }

@@ -1,10 +1,11 @@
-import { Injectable, signal, computed, inject } from '@angular/core';
+import { Injectable, signal, computed, inject, Injector } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { DOCUMENT } from '@angular/common';
 import { Observable, catchError, map, of, Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { TaskViewPreferencesService } from './task-view-preferences.service';
+import { TaskSyncService } from './task-sync.service';
 import { Permission } from '../models/permission.model';
 
 export interface User {
@@ -43,6 +44,7 @@ export class AuthService {
     private readonly http = inject(HttpClient);
     private readonly router = inject(Router);
     private readonly document = inject(DOCUMENT);
+    private readonly injector = inject(Injector);
     private readonly taskViewPreferences = inject(TaskViewPreferencesService);
     private readonly user = signal<User | null>(null);
     private readonly _permissions = signal<Set<string>>(new Set());
@@ -50,6 +52,15 @@ export class AuthService {
     private readonly TOKEN_KEY = 'auth_token';
     private readonly ORIGINAL_TOKEN_KEY = 'original_auth_token';
     private readonly SESSION_ID_KEY = 'session_id';
+
+    // Lazy-loaded via injector to avoid circular DI at construction time
+    private _taskSyncService: TaskSyncService | null = null;
+    private getTaskSyncService(): TaskSyncService {
+        if (!this._taskSyncService) {
+            this._taskSyncService = this.injector.get(TaskSyncService);
+        }
+        return this._taskSyncService;
+    }
 
     // Refresh token state
     private isRefreshing = false;
@@ -129,6 +140,7 @@ export class AuthService {
     }
 
     clearToken(): void {
+        this.getTaskSyncService().disconnect();
         localStorage.removeItem(this.TOKEN_KEY);
         localStorage.removeItem(this.ORIGINAL_TOKEN_KEY);
         localStorage.removeItem(this.SESSION_ID_KEY);
@@ -154,6 +166,7 @@ export class AuthService {
                     this.user.set(response.user);
                     this._permissions.set(new Set(response.permissions || []));
                     this._isImpersonating.set(!!response.impersonatedBy || !!localStorage.getItem(this.ORIGINAL_TOKEN_KEY));
+                    this.getTaskSyncService().connect();
                     return true;
                 } else {
                     this.clearToken();
@@ -210,6 +223,7 @@ export class AuthService {
                     this.user.set(response.user);
                     this._permissions.set(new Set(response.permissions || []));
                     this.refreshSubject.next(response.accessToken);
+                    this.getTaskSyncService().connect();
                     return response.accessToken;
                 }
                 console.log('[AUTH] Refresh response missing accessToken');
@@ -237,6 +251,7 @@ export class AuthService {
         this.user.set(user);
         this._permissions.set(new Set(permissions));
         this._isImpersonating.set(true);
+        this.getTaskSyncService().connect();
         this.router.navigate(['/tasks']);
     }
 
