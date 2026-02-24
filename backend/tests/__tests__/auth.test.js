@@ -119,7 +119,7 @@ describe('Auth - User Endpoints', () => {
       expect(res.body.user.id).toBe(user.id);
     });
 
-    it('rotates refresh token on use', async () => {
+    it('reuses refresh token (no rotation)', async () => {
       const user = await createTestUser();
       const rawToken = crypto.randomBytes(32).toString('hex');
       const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
@@ -134,15 +134,15 @@ describe('Auth - User Endpoints', () => {
         .post('/api/auth/user/refresh')
         .set('Cookie', `refresh_token=${rawToken}`);
 
-      // Old token should be deactivated
+      // Token should still be active (no rotation)
       const oldToken = await db.RefreshToken.findOne({ where: { token: hashedToken } });
-      expect(oldToken.activeFlag).toBe(false);
+      expect(oldToken.activeFlag).toBe(true);
 
-      // Using old token again should fail
+      // Using same token again should succeed
       const res = await request(getApp())
         .post('/api/auth/user/refresh')
         .set('Cookie', `refresh_token=${rawToken}`);
-      expect(res.status).toBe(401);
+      expect(res.status).toBe(200);
     });
   });
 });

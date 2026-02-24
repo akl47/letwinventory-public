@@ -22,7 +22,9 @@ interface TreeRow {
     level: number;
     expanded: boolean;
     hasChildren: boolean;
+    childCount: number;
     visible: boolean;
+    childrenAllApproved: boolean;
 }
 
 @Component({
@@ -132,6 +134,11 @@ export class RequirementsListView implements OnInit {
             childrenMap.get(parentId)!.push(req);
         }
 
+        const allDescendantsApproved = (id: number): boolean => {
+            const children = childrenMap.get(id) || [];
+            return children.every(c => c.approved && allDescendantsApproved(c.id));
+        };
+
         // Build flat tree rows
         const rows: TreeRow[] = [];
         const prevStateMap = new Map<number, boolean>();
@@ -144,7 +151,9 @@ export class RequirementsListView implements OnInit {
             for (const req of children) {
                 if (approvedOnly && !req.approved) continue;
 
-                const hasChildren = (childrenMap.get(req.id) || []).length > 0;
+                const children = childrenMap.get(req.id) || [];
+                const childCount = children.length;
+                const hasChildren = childCount > 0;
                 const matchesSearch = !search ||
                     req.description.toLowerCase().includes(search) ||
                     req.rationale?.toLowerCase().includes(search) ||
@@ -168,7 +177,9 @@ export class RequirementsListView implements OnInit {
                     level,
                     expanded,
                     hasChildren,
+                    childCount,
                     visible: true,
+                    childrenAllApproved: allDescendantsApproved(req.id),
                 });
 
                 if (expanded || search) {
@@ -225,6 +236,10 @@ export class RequirementsListView implements OnInit {
         this.router.navigate(['/requirements', req.id, 'edit'], {
             queryParams: this.route.snapshot.queryParams,
         });
+    }
+
+    childLabel(count: number): string {
+        return count === 1 ? '1 child' : `${count} children`;
     }
 
     getIndentPx(level: number): string {

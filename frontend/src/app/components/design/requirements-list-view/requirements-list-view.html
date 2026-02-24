@@ -68,7 +68,12 @@
                             <span class="card-description">{{ row.requirement.description }}</span>
                         </mat-panel-title>
                         <mat-panel-description>
-
+                            @if (row.childCount > 0) {
+                            <span class="children-badge" [class.children-badge-expanded]="row.expanded"
+                                (click)="toggleExpand(row); $event.stopPropagation()">
+                                {{ childLabel(row.childCount) }}
+                            </span>
+                            }
                             @if (row.requirement.category) {
                             <span class="category-badge">{{ row.requirement.category.name }}</span>
                             }
@@ -78,15 +83,22 @@
                                 {{ row.requirement.project.shortName }}
                             </span>
                             }
+
                             @if (row.requirement.approved) {
+                            @if (row.childrenAllApproved) {
                             <mat-icon class="status-icon-approved"
                                 [matTooltip]="'Approved by ' + (row.requirement.approvedBy?.displayName || 'Unknown')">check_circle</mat-icon>
+                            } @else {
+                            <mat-icon class="status-icon-partial"
+                                matTooltip="Approved, but some children are not">check_circle</mat-icon>
+                            }
                             } @else {
                             <mat-icon class="status-icon-draft" matTooltip="Draft">pending</mat-icon>
                             }
                             <span [matTooltip]="canWrite() ? 'Edit' : 'You do not have permission'">
                                 <button mat-icon-button class="edit-btn"
-                                    (click)="openRequirement(row.requirement); $event.stopPropagation()" [disabled]="!canWrite()">
+                                    (click)="openRequirement(row.requirement); $event.stopPropagation()"
+                                    [disabled]="!canWrite()">
                                     <mat-icon>edit</mat-icon>
                                 </button>
                             </span>
@@ -120,12 +132,6 @@
                     </div>
 
                     <div class="card-footer">
-                        @if (row.hasChildren) {
-                        <button mat-button class="tree-toggle" (click)="toggleExpand(row)">
-                            <mat-icon>{{ row.expanded ? 'expand_less' : 'expand_more' }}</mat-icon>
-                            {{ row.expanded ? 'Hide' : 'Show' }} Children
-                        </button>
-                        }
                         @if (row.requirement.owner) {
                         <span class="footer-item">
                             <span class="footer-label">Owner:</span>

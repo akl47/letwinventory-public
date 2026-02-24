@@ -12,14 +12,14 @@
         </button>
         <h2>
             @if (isEditMode) {
-            Requirement #{{ currentRequirement?.id }}
+            Requirement #{{ currentRequirement()?.id }}
             } @else {
             New Requirement
             }
         </h2>
         <span class="spacer"></span>
-        @if (isEditMode && currentRequirement && canWrite()) {
-        @if (currentRequirement.approved) {
+        @if (isEditMode && currentRequirement() && canWrite()) {
+        @if (currentRequirement()?.approved) {
         <button mat-stroked-button (click)="unapprove()">
             <mat-icon>undo</mat-icon>
             Unapprove
@@ -44,7 +44,7 @@
         </button>
         <button mat-flat-button color="primary" (click)="save()" [disabled]="form.invalid">
             <mat-icon>save</mat-icon>
-            {{ isEditMode ? (currentRequirement?.approved && hasFormChanges() ? 'Save and Reset Approval' : 'Save') :
+            {{ isEditMode ? (currentRequirement()?.approved && hasFormChanges() ? 'Save and Reset Approval' : 'Save') :
             'Create' }}
         </button>
         } @else {
@@ -59,11 +59,11 @@
 
     <div class="content-wrapper">
         <!-- Approval Status -->
-        @if (isEditMode && currentRequirement) {
-        <div class="approval-banner" [class.approved]="currentRequirement.approved">
-            @if (currentRequirement.approved) {
+        @if (isEditMode && currentRequirement()) {
+        <div class="approval-banner" [class.approved]="currentRequirement()?.approved">
+            @if (currentRequirement()?.approved) {
             <mat-icon>check_circle</mat-icon>
-            <span>Approved by {{ currentRequirement.approvedBy?.displayName || 'Unknown' }} on {{ currentRequirement.approvedAt | date:'medium' }}</span>
+            <span>Approved by {{ currentRequirement()?.approvedBy?.displayName || 'Unknown' }} on {{ currentRequirement()?.approvedAt | date:'medium' }}</span>
             } @else {
             <mat-icon>pending</mat-icon>
             <span>Draft — Not yet approved</span>
@@ -172,13 +172,13 @@
                     <div class="info-row three-col">
                         <div class="info-item">
                             <div class="info-label">Project</div>
-                            <div class="info-value">{{ currentRequirement?.project?.name || '-' }}</div>
+                            <div class="info-value">{{ currentRequirement()?.project?.name || '-' }}</div>
                         </div>
                         <div class="info-item">
                             <div class="info-label">Parent Requirement</div>
                             <div class="info-value">
-                                @if (currentRequirement?.parentRequirement) {
-                                #{{ currentRequirement?.parentRequirement?.id }} — {{ currentRequirement?.parentRequirement?.description | slice:0:80 }}
+                                @if (currentRequirement()?.parentRequirement) {
+                                #{{ currentRequirement()?.parentRequirement?.id }} — {{ currentRequirement()?.parentRequirement?.description | slice:0:80 }}
                                 } @else {
                                 None (Top-level)
                                 }
@@ -186,33 +186,33 @@
                         </div>
                         <div class="info-item">
                             <div class="info-label">Category</div>
-                            <div class="info-value">{{ currentRequirement?.category?.name || '-' }}</div>
+                            <div class="info-value">{{ currentRequirement()?.category?.name || '-' }}</div>
                         </div>
                     </div>
 
                     <div class="info-item">
                         <div class="info-label">Description</div>
-                        <div class="info-value description-text">{{ currentRequirement?.description || '-' }}</div>
+                        <div class="info-value description-text">{{ currentRequirement()?.description || '-' }}</div>
                     </div>
 
                     <div class="info-item">
                         <div class="info-label">Rationale</div>
-                        <div class="info-value description-text">{{ currentRequirement?.rationale || '-' }}</div>
+                        <div class="info-value description-text">{{ currentRequirement()?.rationale || '-' }}</div>
                     </div>
 
                     <div class="info-item">
                         <div class="info-label">Parameter</div>
-                        <div class="info-value description-text">{{ currentRequirement?.parameter || '-' }}</div>
+                        <div class="info-value description-text">{{ currentRequirement()?.parameter || '-' }}</div>
                     </div>
 
                     <div class="info-row">
                         <div class="info-item">
                             <div class="info-label">Verification</div>
-                            <div class="info-value description-text">{{ currentRequirement?.verification || '-' }}</div>
+                            <div class="info-value description-text">{{ currentRequirement()?.verification || '-' }}</div>
                         </div>
                         <div class="info-item">
                             <div class="info-label">Validation</div>
-                            <div class="info-value description-text">{{ currentRequirement?.validation || '-' }}</div>
+                            <div class="info-value description-text">{{ currentRequirement()?.validation || '-' }}</div>
                         </div>
                     </div>
                 </div>
@@ -221,7 +221,7 @@
         </mat-card>
 
         <!-- Metadata Card -->
-        @if (isEditMode && currentRequirement) {
+        @if (isEditMode && currentRequirement()) {
         <mat-card class="info-card">
             <mat-card-header>
                 <mat-card-title>Details</mat-card-title>
@@ -231,7 +231,7 @@
                     <div class="info-item">
                         <div class="info-label">Owner</div>
                         <div class="info-value owner-value">
-                            {{ currentRequirement.owner?.displayName || 'Unknown' }}
+                            {{ currentRequirement()?.owner?.displayName || 'Unknown' }}
                             @if (isFormEditMode() && !isOwner()) {
                             <button mat-stroked-button class="take-ownership-btn" (click)="takeOwnership()">
                                 <mat-icon>person_add</mat-icon>
@@ -242,11 +242,11 @@
                     </div>
                     <div class="info-item">
                         <div class="info-label">Created</div>
-                        <div class="info-value">{{ currentRequirement.createdAt | date:'medium' }}</div>
+                        <div class="info-value">{{ currentRequirement()?.createdAt | date:'medium' }}</div>
                     </div>
                     <div class="info-item">
                         <div class="info-label">Updated</div>
-                        <div class="info-value">{{ currentRequirement.updatedAt | date:'medium' }}</div>
+                        <div class="info-value">{{ currentRequirement()?.updatedAt | date:'medium' }}</div>
                     </div>
                 </div>
             </mat-card-content>
