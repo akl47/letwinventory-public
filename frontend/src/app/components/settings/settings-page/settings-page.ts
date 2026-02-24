@@ -3,11 +3,11 @@ import { CommonModule, Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
-import { MatListModule } from '@angular/material/list';
 import { MatExpansionModule } from '@angular/material/expansion';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { NotificationService } from '../../../services/notification.service';
-import { AuthService, ApiKey } from '../../../services/auth.service';
+import { AuthService, ApiKey, Session } from '../../../services/auth.service';
 import { AdminService } from '../../../services/admin.service';
 import { PushSubscriptionRecord } from '../../../models/notification.model';
 import { Permission } from '../../../models/permission.model';
@@ -22,8 +22,8 @@ import { PermissionGridComponent } from '../../admin/permission-grid/permission-
         FormsModule,
         MatButtonModule,
         MatIconModule,
-        MatListModule,
         MatExpansionModule,
+        MatTooltipModule,
         MatDialogModule,
         PermissionGridComponent,
     ],
@@ -44,6 +44,9 @@ export class SettingsPage implements OnInit {
     testSending = signal(false);
     testResult = signal<string>('');
 
+    sessions = signal<Session[]>([]);
+    currentSessionId = signal<number | null>(null);
+
     apiKeys = signal<ApiKey[]>([]);
     allPermissions = signal<Permission[]>([]);
     totalPermissions = signal(0);
@@ -55,6 +58,7 @@ export class SettingsPage implements OnInit {
     ngOnInit() {
         this.permissionState.set(this.notificationService.getPermissionState());
         this.loadSubscriptions();
+        this.loadSessions();
         this.loadApiKeys();
         this.adminService.getPermissions().subscribe({
             next: (perms) => {
@@ -151,6 +155,23 @@ export class SettingsPage implements OnInit {
         if (userAgent.includes('Mac')) return 'macOS';
         if (userAgent.includes('Linux')) return 'Linux';
         return 'Browser';
+    }
+
+    private loadSessions() {
+        this.currentSessionId.set(this.authService.getCurrentSessionId());
+        this.authService.getSessions().subscribe({
+            next: (sessions) => this.sessions.set(sessions)
+        });
+    }
+
+    revokeSession(id: number) {
+        this.authService.revokeSession(id).subscribe({
+            next: () => this.sessions.update(s => s.filter(sess => sess.id !== id))
+        });
+    }
+
+    isCurrentSession(session: Session): boolean {
+        return session.id === this.currentSessionId();
     }
 
     private loadApiKeys() {

@@ -13,6 +13,13 @@ export interface User {
     email: string;
 }
 
+export interface Session {
+    id: number;
+    userAgent: string | null;
+    createdAt: string;
+    expiresAt: string;
+}
+
 export interface ApiKey {
     id: number;
     name: string;
@@ -24,6 +31,7 @@ export interface ApiKey {
 
 interface RefreshResponse {
     accessToken: string;
+    sessionId?: number;
     user: User;
     permissions?: string[];
 }
@@ -41,6 +49,7 @@ export class AuthService {
     private readonly _isImpersonating = signal(false);
     private readonly TOKEN_KEY = 'auth_token';
     private readonly ORIGINAL_TOKEN_KEY = 'original_auth_token';
+    private readonly SESSION_ID_KEY = 'session_id';
 
     // Refresh token state
     private isRefreshing = false;
@@ -83,6 +92,12 @@ export class AuthService {
             localStorage.setItem(this.TOKEN_KEY, cookieToken);
             // Clear the cookie (we'll use localStorage going forward)
             this.deleteCookie(this.TOKEN_KEY);
+            // Read and store session_id cookie
+            const sessionId = this.getCookie(this.SESSION_ID_KEY);
+            if (sessionId) {
+                localStorage.setItem(this.SESSION_ID_KEY, sessionId);
+                this.deleteCookie(this.SESSION_ID_KEY);
+            }
             // Redirect to tasks page with default view if available
             const defaultParams = this.taskViewPreferences.getDefaultViewQueryParams();
             if (defaultParams) {
@@ -116,7 +131,9 @@ export class AuthService {
     clearToken(): void {
         localStorage.removeItem(this.TOKEN_KEY);
         localStorage.removeItem(this.ORIGINAL_TOKEN_KEY);
+        localStorage.removeItem(this.SESSION_ID_KEY);
         this.deleteCookie(this.TOKEN_KEY);
+        this.deleteCookie(this.SESSION_ID_KEY);
         this.user.set(null);
         this._permissions.set(new Set());
         this._isImpersonating.set(false);
@@ -187,6 +204,9 @@ export class AuthService {
                 if (response.accessToken) {
                     console.log('[AUTH] Refresh OK, new token received');
                     localStorage.setItem(this.TOKEN_KEY, response.accessToken);
+                    if (response.sessionId) {
+                        localStorage.setItem(this.SESSION_ID_KEY, String(response.sessionId));
+                    }
                     this.user.set(response.user);
                     this._permissions.set(new Set(response.permissions || []));
                     this.refreshSubject.next(response.accessToken);
@@ -251,5 +271,18 @@ export class AuthService {
 
     getApiKeyPermissions(id: number): Observable<Permission[]> {
         return this.http.get<Permission[]>(`${environment.apiUrl}/auth/api-key/${id}/permissions`);
+    }
+
+    getCurrentSessionId(): number | null {
+        const id = localStorage.getItem(this.SESSION_ID_KEY);
+        return id ? parseInt(id, 10) : null;
+    }
+
+    getSessions(): Observable<Session[]> {
+        return this.http.get<Session[]>(`${environment.apiUrl}/auth/user/sessions`);
+    }
+
+    revokeSession(id: number): Observable<void> {
+        return this.http.delete<void>(`${environment.apiUrl}/auth/user/sessions/${id}`);
     }
 }

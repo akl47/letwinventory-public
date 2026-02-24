@@ -72,19 +72,64 @@
                     @if (subscriptions().length > 0) {
                     <div class="panel-section">
                         <div class="section-label">Registered Devices</div>
-                        <mat-list>
-                            @for (sub of subscriptions(); track sub.id) {
-                            <mat-list-item>
-                                <mat-icon matListItemIcon>devices</mat-icon>
-                                <span matListItemTitle>{{ getDeviceLabel(sub.userAgent) }}</span>
-                                <span matListItemLine class="device-date">{{ sub.createdAt | date:'MMM d, y' }}</span>
-                                <button mat-icon-button matListItemMeta (click)="removeDevice(sub)">
-                                    <mat-icon>delete</mat-icon>
-                                </button>
-                            </mat-list-item>
-                            }
-                        </mat-list>
+                        @for (sub of subscriptions(); track sub.id) {
+                        <div class="list-row">
+                            <mat-icon class="list-row-icon">devices</mat-icon>
+                            <div class="list-row-text">
+                                <span class="list-row-title">{{ getDeviceLabel(sub.userAgent) }}</span>
+                                <span class="list-row-sub">{{ sub.createdAt | date:'MMM d, y' }}</span>
+                            </div>
+                            <button mat-icon-button (click)="removeDevice(sub)" matTooltip="Remove device">
+                                <mat-icon>delete</mat-icon>
+                            </button>
+                        </div>
+                        }
                     </div>
+                    }
+                </mat-expansion-panel>
+            </mat-accordion>
+        </div>
+
+        <!-- Active Sessions -->
+        <div class="card-row">
+            <mat-accordion>
+                <mat-expansion-panel expanded>
+                    <mat-expansion-panel-header>
+                        <mat-panel-title>
+                            <span class="card-title">Active Sessions</span>
+                        </mat-panel-title>
+                        <mat-panel-description>
+                            {{ sessions().length }} session{{ sessions().length === 1 ? '' : 's' }}
+                        </mat-panel-description>
+                    </mat-expansion-panel-header>
+
+                    @if (sessions().length > 0) {
+                    <div class="panel-section">
+                        @for (session of sessions(); track session.id) {
+                        <div class="list-row">
+                            <mat-icon class="list-row-icon">devices</mat-icon>
+                            <div class="list-row-text">
+                                <span class="list-row-title">
+                                    {{ getDeviceLabel(session.userAgent ?? undefined) }}
+                                    @if (isCurrentSession(session)) {
+                                        <span class="current-session-badge">This device</span>
+                                    }
+                                </span>
+                                <span class="list-row-sub">
+                                    Signed in {{ session.createdAt | date:'MMM d, y' }}
+                                    · Expires {{ session.expiresAt | date:'MMM d, y' }}
+                                </span>
+                            </div>
+                            @if (!isCurrentSession(session)) {
+                            <button mat-icon-button (click)="revokeSession(session.id)" matTooltip="Revoke session">
+                                <mat-icon>delete</mat-icon>
+                            </button>
+                            }
+                        </div>
+                        }
+                    </div>
+                    } @else {
+                    <div class="empty-state">No active sessions.</div>
                     }
                 </mat-expansion-panel>
             </mat-accordion>
@@ -132,12 +177,12 @@
 
                     @if (apiKeys().length > 0) {
                     <div class="panel-section">
-                        <mat-list>
-                            @for (key of apiKeys(); track key.id) {
-                            <mat-list-item>
-                                <mat-icon matListItemIcon [class.expired-icon]="isExpired(key)">vpn_key</mat-icon>
-                                <span matListItemTitle [class.expired-text]="isExpired(key)">{{ key.name }}</span>
-                                <span matListItemLine class="key-meta">
+                        @for (key of apiKeys(); track key.id) {
+                        <div class="list-row">
+                            <mat-icon class="list-row-icon" [class.expired-icon]="isExpired(key)">vpn_key</mat-icon>
+                            <div class="list-row-text">
+                                <span class="list-row-title" [class.expired-text]="isExpired(key)">{{ key.name }}</span>
+                                <span class="list-row-sub">
                                     Created {{ key.createdAt | date:'MMM d, y' }}
                                     @if (key.lastUsedAt) {
                                         · Last used {{ key.lastUsedAt | date:'MMM d, y' }}
@@ -155,12 +200,12 @@
                                         · Never expires
                                     }
                                 </span>
-                                <button mat-icon-button matListItemMeta (click)="revokeApiKey(key.id)">
-                                    <mat-icon>delete</mat-icon>
-                                </button>
-                            </mat-list-item>
-                            }
-                        </mat-list>
+                            </div>
+                            <button mat-icon-button (click)="revokeApiKey(key.id)" matTooltip="Revoke API key">
+                                <mat-icon>delete</mat-icon>
+                            </button>
+                        </div>
+                        }
                     </div>
                     } @else {
                     <div class="empty-state">No API keys yet.</div>

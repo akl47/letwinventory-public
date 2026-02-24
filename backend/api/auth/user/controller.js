@@ -232,6 +232,42 @@ exports.loginWithGoogle = async (req, res, next) => {
 };
 
 /**
+ * List active sessions for the current user
+ */
+exports.getSessions = async (req, res) => {
+  try {
+    const sessions = await db.RefreshToken.findAll({
+      where: { userId: req.user.id, activeFlag: true },
+      attributes: ['id', 'userAgent', 'createdAt', 'expiresAt'],
+      order: [['createdAt', 'DESC']]
+    });
+    res.json(sessions);
+  } catch (error) {
+    console.error('[AUTH] Error fetching sessions:', error);
+    res.status(500).json({ error: 'Error fetching sessions' });
+  }
+};
+
+/**
+ * Revoke a specific session for the current user
+ */
+exports.revokeSession = async (req, res) => {
+  try {
+    const session = await db.RefreshToken.findOne({
+      where: { id: req.params.id, userId: req.user.id, activeFlag: true }
+    });
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    await session.update({ activeFlag: false });
+    res.json({ message: 'Session revoked' });
+  } catch (error) {
+    console.error('[AUTH] Error revoking session:', error);
+    res.status(500).json({ error: 'Error revoking session' });
+  }
+};
+
+/**
  * Refresh access token using refresh token from httpOnly cookie
  */
 exports.refreshToken = async (req, res) => {
@@ -306,6 +342,7 @@ exports.refreshToken = async (req, res) => {
       maxAge: 15 * 60 * 1000 // 15 minutes
     }).json({
       accessToken,
+      sessionId: storedToken.id,
       user: {
         id: user.id,
         email: user.email,

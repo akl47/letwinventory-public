@@ -103,17 +103,24 @@ exports.handleCallback = (req, res, next) => {
         const refreshTokenHash = crypto.createHash('sha256').update(refreshTokenRaw).digest('hex');
         const refreshTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-        // Deactivate any existing refresh tokens for this user
-        await db.RefreshToken.update(
-          { activeFlag: false },
-          { where: { userId: user.id, activeFlag: true } }
-        );
+        // Enforce max 10 active sessions — deactivate oldest if at limit
+        const activeCount = await db.RefreshToken.count({
+          where: { userId: user.id, activeFlag: true }
+        });
+        if (activeCount >= 10) {
+          const oldest = await db.RefreshToken.findOne({
+            where: { userId: user.id, activeFlag: true },
+            order: [['createdAt', 'ASC']]
+          });
+          if (oldest) await oldest.update({ activeFlag: false });
+        }
 
         // Store hashed refresh token in database
-        await db.RefreshToken.create({
+        const newSession = await db.RefreshToken.create({
           token: refreshTokenHash,
           userId: user.id,
-          expiresAt: refreshTokenExpiry
+          expiresAt: refreshTokenExpiry,
+          userAgent: req.headers['user-agent'] || null
         });
 
         // Set tokens in cookies and redirect to frontend
@@ -130,6 +137,11 @@ exports.handleCallback = (req, res, next) => {
           maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
         }).cookie('name', encodeURI(user.displayName), {
           httpOnly: false, // Allow frontend to read the name
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+        }).cookie('session_id', String(newSession.id), {
+          httpOnly: false, // Frontend needs to read this
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
           maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
@@ -161,6 +173,7 @@ exports.logout = async (req, res) => {
       .clearCookie('auth_token')
       .clearCookie('refresh_token')
       .clearCookie('name')
+      .clearCookie('session_id')
       .json({ message: 'Logged out successfully' });
   } catch (error) {
     console.error('Error during logout:', error);
@@ -169,6 +182,7 @@ exports.logout = async (req, res) => {
       .clearCookie('auth_token')
       .clearCookie('refresh_token')
       .clearCookie('name')
+      .clearCookie('session_id')
       .json({ message: 'Logged out successfully' });
   }
 };
