@@ -109,6 +109,13 @@ fi
 # ── Frontend Unit Tests ────────────────────────────────────────
 if $run_frontend; then
   print_header "Frontend Unit Tests (Karma)"
+  # Clear Angular cache if it has stale root-owned files (from Docker builds)
+  if [[ -d "$FRONTEND_DIR/.angular/cache" ]] && ! touch "$FRONTEND_DIR/.angular/cache/.test_write" 2>/dev/null; then
+    echo "Clearing stale Angular cache (permission mismatch)..."
+    sudo rm -rf "$FRONTEND_DIR/.angular/cache"
+  else
+    rm -f "$FRONTEND_DIR/.angular/cache/.test_write" 2>/dev/null
+  fi
   frontend_out=$(mktemp)
   pushd "$FRONTEND_DIR" > /dev/null
   set +e

@@ -167,8 +167,8 @@ describe('RequirementEditPage', () => {
 
         it('should load the requirement by id', () => {
             expect(requirementService.getById).toHaveBeenCalledWith(2);
-            expect(component.currentRequirement).toBeTruthy();
-            expect(component.currentRequirement!.id).toBe(2);
+            expect(component.currentRequirement()).toBeTruthy();
+            expect(component.currentRequirement()!.id).toBe(2);
         });
 
         it('should populate form with requirement data', () => {
