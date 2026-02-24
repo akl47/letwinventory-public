@@ -3,6 +3,7 @@ import { inject } from '@angular/core';
 import { Router } from '@angular/router';
 import { catchError, switchMap, throwError, filter, take } from 'rxjs';
 import { AuthService } from '../services/auth.service';
+import { TAB_ID } from '../utils/tab-id';
 
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const authService = inject(AuthService);
@@ -17,7 +18,8 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   if (token && !isRefreshRequest) {
     clonedRequest = req.clone({
       setHeaders: {
-        Authorization: `Bearer ${token}`
+        Authorization: `Bearer ${token}`,
+        'X-Tab-Id': TAB_ID
       }
     });
   }

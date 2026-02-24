@@ -28,7 +28,7 @@ app.use(cors({
     origin: process.env.FRONTEND_URL || 'http://localhost:4200',
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization']
+    allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'X-Tab-Id']
 }));
 
 if (process.env.NODE_ENV !== 'test') {
