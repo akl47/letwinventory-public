@@ -62,6 +62,7 @@ CURRENT_HASH=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" 
 
 if [ -f "$HASH_FILE" ] && [ "$(cat "$HASH_FILE")" = "$CURRENT_HASH" ]; then
   log "[$(date)] No changes detected, skipping backup"
+  send_email "[SKIP] DB Backup - No changes detected"
   exit 0
 fi
 

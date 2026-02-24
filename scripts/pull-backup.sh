@@ -44,7 +44,7 @@ fi
 
 # # --- Find all backups on VPS ---
 log "[$(date)] Finding backups on ${VPS_HOST}..."
-ALL_FILES=$(ssh -p "$VPS_PORT" "${VPS_USER}@${VPS_HOST}" "ls -t ${VPS_BACKUP_DIR}/*.dump 2>/dev/null")
+ALL_FILES=$(ssh -p "$VPS_PORT" "${VPS_USER}@${VPS_HOST}" "ls -t ${VPS_BACKUP_DIR}/*.dump 2>/dev/null" || true)
 
 if [ -z "$ALL_FILES" ]; then
   log "[$(date)] No backups found on VPS"

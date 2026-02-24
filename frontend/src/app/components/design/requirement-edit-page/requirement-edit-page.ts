@@ -55,7 +55,7 @@ export class RequirementEditPage implements OnInit {
     isEditMode = false;
     isFormEditMode = signal(false);
     isDataLoaded = signal(false);
-    currentRequirement: DesignRequirement | null = null;
+    currentRequirement = signal<DesignRequirement | null>(null);
 
     projects = signal<Project[]>([]);
     categories = signal<RequirementCategory[]>([]);
@@ -118,7 +118,7 @@ export class RequirementEditPage implements OnInit {
     private loadRequirement(id: number) {
         this.requirementService.getById(id).subscribe({
             next: (req) => {
-                this.currentRequirement = req;
+                this.currentRequirement.set(req);
                 this.form.patchValue({
                     projectID: req.projectID,
                     categoryID: req.categoryID ?? null,
@@ -140,7 +140,7 @@ export class RequirementEditPage implements OnInit {
     /** Filter out the current requirement from parent options */
     getParentOptions(): DesignRequirement[] {
         return this.allRequirements().filter(r =>
-            !this.currentRequirement || r.id !== this.currentRequirement.id
+            !this.currentRequirement() || r.id !== this.currentRequirement()!.id
         );
     }
 
@@ -165,9 +165,9 @@ export class RequirementEditPage implements OnInit {
     }
 
     hasFormChanges(): boolean {
-        if (!this.currentRequirement) return false;
+        if (!this.currentRequirement()) return false;
         const raw = this.form.getRawValue();
-        const req = this.currentRequirement;
+        const req = this.currentRequirement()!;
         return raw.description !== req.description
             || raw.rationale !== (req.rationale ?? '')
             || raw.parameter !== (req.parameter ?? '')
@@ -184,10 +184,10 @@ export class RequirementEditPage implements OnInit {
     }
 
     cancelEdit() {
-        if (this.isEditMode && this.currentRequirement) {
+        if (this.isEditMode && this.currentRequirement()) {
             this.isFormEditMode.set(false);
             this.form.disable();
-            this.loadRequirement(this.currentRequirement.id);
+            this.loadRequirement(this.currentRequirement()!.id);
         } else {
             this.goBack();
         }
@@ -208,12 +208,12 @@ export class RequirementEditPage implements OnInit {
             validation: raw.validation ?? undefined,
         };
 
-        if (this.isEditMode && this.currentRequirement) {
-            this.requirementService.update(this.currentRequirement.id, data).subscribe({
+        if (this.isEditMode && this.currentRequirement()) {
+            this.requirementService.update(this.currentRequirement()!.id, data).subscribe({
                 next: () => {
                     this.isFormEditMode.set(false);
                     this.form.disable();
-                    this.loadRequirement(this.currentRequirement!.id);
+                    this.loadRequirement(this.currentRequirement()!.id);
                     if (this.showHistory()) this.loadHistory();
                 }
             });
@@ -229,8 +229,8 @@ export class RequirementEditPage implements OnInit {
     }
 
     deleteRequirement() {
-        if (!this.currentRequirement) return;
-        this.requirementService.delete(this.currentRequirement.id).subscribe({
+        if (!this.currentRequirement()) return;
+        this.requirementService.delete(this.currentRequirement()!.id).subscribe({
             next: () => {
                 this.router.navigate(['/requirements'], {
                     queryParams: this.route.snapshot.queryParams,
@@ -240,20 +240,20 @@ export class RequirementEditPage implements OnInit {
     }
 
     approve() {
-        if (!this.currentRequirement) return;
-        this.requirementService.approve(this.currentRequirement.id).subscribe({
+        if (!this.currentRequirement()) return;
+        this.requirementService.approve(this.currentRequirement()!.id).subscribe({
             next: () => {
-                this.loadRequirement(this.currentRequirement!.id);
+                this.loadRequirement(this.currentRequirement()!.id);
                 if (this.showHistory()) this.loadHistory();
             }
         });
     }
 
     unapprove() {
-        if (!this.currentRequirement) return;
-        this.requirementService.unapprove(this.currentRequirement.id).subscribe({
+        if (!this.currentRequirement()) return;
+        this.requirementService.unapprove(this.currentRequirement()!.id).subscribe({
             next: () => {
-                this.loadRequirement(this.currentRequirement!.id);
+                this.loadRequirement(this.currentRequirement()!.id);
                 if (this.showHistory()) this.loadHistory();
             }
         });
@@ -261,15 +261,15 @@ export class RequirementEditPage implements OnInit {
 
     isOwner(): boolean {
         const user = this.authService.currentUser();
-        return !!user && !!this.currentRequirement && user.id === this.currentRequirement.ownerUserID;
+        return !!user && !!this.currentRequirement() && user.id === this.currentRequirement()!.ownerUserID;
     }
 
     takeOwnership() {
-        if (!this.currentRequirement) return;
+        if (!this.currentRequirement()) return;
         if (!confirm('Are you sure? You are taking responsibility for this requirement.')) return;
-        this.requirementService.takeOwnership(this.currentRequirement.id).subscribe({
+        this.requirementService.takeOwnership(this.currentRequirement()!.id).subscribe({
             next: () => {
-                this.loadRequirement(this.currentRequirement!.id);
+                this.loadRequirement(this.currentRequirement()!.id);
                 if (this.showHistory()) this.loadHistory();
             }
         });
@@ -290,14 +290,14 @@ export class RequirementEditPage implements OnInit {
 
     toggleHistory() {
         this.showHistory.set(!this.showHistory());
-        if (this.showHistory() && this.history().length === 0 && this.currentRequirement) {
+        if (this.showHistory() && this.history().length === 0 && this.currentRequirement()) {
             this.loadHistory();
         }
     }
 
     loadHistory() {
-        if (!this.currentRequirement) return;
-        this.requirementService.getHistory(this.currentRequirement.id).subscribe({
+        if (!this.currentRequirement()) return;
+        this.requirementService.getHistory(this.currentRequirement()!.id).subscribe({
             next: (entries) => this.history.set(entries)
         });
     }

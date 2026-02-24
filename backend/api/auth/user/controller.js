@@ -69,7 +69,12 @@ exports.checkToken = async (req, res, next) => {
       return res.status(401).json({ error: 'User not found' });
     }
 
-    const permissions = await loadEffectivePermissions(user.id);
+    let permissions = [];
+    try {
+      permissions = [...await loadEffectivePermissions(user.id)];
+    } catch (permErr) {
+      console.error('[AUTH] Failed to load permissions:', permErr.message);
+    }
 
     res.json({
       valid: true,
@@ -78,7 +83,7 @@ exports.checkToken = async (req, res, next) => {
         displayName: user.displayName,
         email: user.email
       },
-      permissions: [...permissions],
+      permissions,
       impersonatedBy: decoded.impersonatedBy || null
     });
   } catch (error) {
@@ -285,33 +290,20 @@ exports.refreshToken = async (req, res) => {
       { expiresIn: '15m' }
     );
 
-    // Rotate refresh token for better security
-    const newRefreshTokenRaw = crypto.randomBytes(32).toString('hex');
-    const newRefreshTokenHash = crypto.createHash('sha256').update(newRefreshTokenRaw).digest('hex');
-    const newRefreshTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    let permissions = [];
+    try {
+      permissions = [...await loadEffectivePermissions(user.id)];
+    } catch (permErr) {
+      console.error('[AUTH] Failed to load permissions on refresh:', permErr.message);
+    }
 
-    // Deactivate old token and create new one
-    await storedToken.update({ activeFlag: false });
-    await db.RefreshToken.create({
-      token: newRefreshTokenHash,
-      userId: user.id,
-      expiresAt: newRefreshTokenExpiry,
-      activeFlag: true
-    });
-
-    const permissions = await loadEffectivePermissions(user.id);
-
-    // Set new cookies
+    // Reuse existing refresh token (no rotation) — avoids stale-cookie issues
+    // when Set-Cookie doesn't land (Cloudflare edge, race conditions, etc.)
     res.cookie('auth_token', accessToken, {
       httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       maxAge: 15 * 60 * 1000 // 15 minutes
-    }).cookie('refresh_token', newRefreshTokenRaw, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     }).json({
       accessToken,
       user: {
@@ -319,7 +311,7 @@ exports.refreshToken = async (req, res) => {
         email: user.email,
         displayName: user.displayName
       },
-      permissions: [...permissions]
+      permissions
     });
     console.log('[REFRESH] OK: New tokens issued for user', user.id, user.email);
   } catch (error) {
