@@ -605,3 +605,40 @@ Each session should:
 - UX category (56) collects cross-cutting UI requirements: admin nav (282), admin pages (283), impersonation UI (299), permission-gated buttons (300-301), barcode dialog (162), harness shortcuts (202), list view patterns (223-224), sidebar (225), notifications (226)
 - Sparse QMS categories deleted after requirements moved (rather than left empty)
 - Category parent descriptions are abstract ("why this system exists"); children are concrete ("what it does")
+
+## Session: 2026-02-24 (Multi-Session Support + Session Management UI)
+
+### Files Created
+- `backend/migrations/20260224000000-add-user-agent-to-refresh-tokens.js` — adds nullable `userAgent` STRING(255) column to RefreshTokens
+
+### Files Modified
+- `backend/models/auth/refreshToken.js` — added `userAgent` field (STRING(255), nullable)
+- `backend/api/auth/google/controller.js` — removed "deactivate all" block; added max 10 sessions enforcement (deactivate oldest); captures `req.headers['user-agent']` on RefreshToken.create; sets `session_id` cookie; clears `session_id` on logout
+- `backend/api/auth/user/controller.js` — added `getSessions` (list active sessions DESC), `revokeSession` (deactivate by id with ownership check); refresh response now includes `sessionId`
+- `backend/api/auth/user/routes.js` — added `GET /sessions`, `DELETE /sessions/:id` with checkToken
+- `frontend/src/app/services/auth.service.ts` — added `Session` interface; added `SESSION_ID_KEY` constant; `checkForOAuthCallback` reads/stores session_id cookie; `refreshAccessToken` stores sessionId from response; `clearToken` removes session_id; added `getCurrentSessionId()`, `getSessions()`, `revokeSession()` methods
+- `frontend/src/app/components/settings/settings-page/settings-page.ts` — added `sessions` and `currentSessionId` signals; `loadSessions()`, `revokeSession()`, `isCurrentSession()` methods; imports Session type
+- `frontend/src/app/components/settings/settings-page/settings-page.html` — added Active Sessions panel between Notifications and Permissions with device labels, sign-in/expiry dates, current session badge, revoke buttons
+- `frontend/src/app/components/settings/settings-page/settings-page.css` — added `.current-session-badge` green pill style
+
+### Changes Made
+1. **Concurrent sessions** — removed the "deactivate all existing tokens" block from Google OAuth callback; new logins no longer kill existing sessions
+2. **Session limit** — max 10 active sessions per user; oldest deactivated when limit exceeded
+3. **Device tracking** — `userAgent` captured and stored on each RefreshToken for device identification
+4. **Session API** — `GET /sessions` lists active sessions; `DELETE /sessions/:id` revokes with ownership validation (404 for other users)
+5. **Session ID tracking** — backend sets `session_id` cookie on OAuth callback and returns `sessionId` on refresh; frontend stores in localStorage
+6. **Settings UI** — Active Sessions panel shows all sessions with device labels (reuses existing `getDeviceLabel`), sign-in dates, expiry dates; current session highlighted with green "This device" badge; other sessions have logout revoke button
+
+### Requirements Created (IDs 330-334)
+- 330: Multi-session support (parent, under 312/Authentication)
+- 331: Session limit enforcement (child of 330)
+- 332: Session device tracking (child of 330)
+- 333: Session management API (child of 330)
+- 334: Session management UI (child of 330)
+
+### Decisions
+- Session limit set at 10 (generous for multi-device, prevents abuse)
+- `session_id` cookie is non-httpOnly so frontend can read it (same pattern as `auth_token` and `name`)
+- Session panel placed between Notifications and Permissions (expanded by default)
+- Reuses existing `getDeviceLabel()` method from push subscription device list
+- Logout only deactivates current session's refresh token (not all sessions)

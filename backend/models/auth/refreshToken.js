@@ -35,6 +35,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.DATE,
       allowNull: false
     },
+    userAgent: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
     activeFlag: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
