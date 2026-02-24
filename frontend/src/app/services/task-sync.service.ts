@@ -14,6 +14,8 @@ export class TaskSyncService {
     connect(): void {
         this.disconnect();
 
+        if (typeof EventSource === 'undefined') return;
+
         const token = localStorage.getItem('auth_token');
         if (!token) {
             console.log('[TaskSync] connect() — no token, skipping');
