@@ -9,9 +9,10 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const https = require('https');
 
 const TOKEN_CACHE = '/tmp/letwinventory-claude-token.json';
-const DEFAULT_BASE_URL = 'http://localhost:3000/api';
+const DEFAULT_BASE_URL = 'https://letwinventory.letwin.co/api';
 
 // Load env vars from .env.claude (simple key=value parsing, no dotenv dependency)
 const envPath = path.join(__dirname, '..', '.env.claude');
@@ -31,22 +32,23 @@ if (fs.existsSync(envPath)) {
 function getBaseUrl() {
   const idx = process.argv.indexOf('--url');
   if (idx !== -1 && process.argv[idx + 1]) return process.argv[idx + 1];
-  return process.env.DEV_API_URL || DEFAULT_BASE_URL;
+  return process.env.PROD_API_URL || DEFAULT_BASE_URL;
 }
 
 function request(method, urlStr, body) {
   return new Promise((resolve, reject) => {
     const url = new URL(urlStr);
+    const transport = url.protocol === 'https:' ? https : http;
     const options = {
       hostname: url.hostname,
-      port: url.port,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: url.pathname + url.search,
       method,
       headers: { 'Content-Type': 'application/json' },
     };
     if (body) options.headers['Content-Length'] = Buffer.byteLength(JSON.stringify(body));
 
-    const req = http.request(options, (res) => {
+    const req = transport.request(options, (res) => {
       let data = '';
       res.on('data', (chunk) => (data += chunk));
       res.on('end', () => {
@@ -66,9 +68,10 @@ function request(method, urlStr, body) {
 function authRequest(method, urlStr, token, body) {
   return new Promise((resolve, reject) => {
     const url = new URL(urlStr);
+    const transport = url.protocol === 'https:' ? https : http;
     const options = {
       hostname: url.hostname,
-      port: url.port,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: url.pathname + url.search,
       method,
       headers: {
@@ -78,7 +81,7 @@ function authRequest(method, urlStr, token, body) {
     };
     if (body) options.headers['Content-Length'] = Buffer.byteLength(JSON.stringify(body));
 
-    const req = http.request(options, (res) => {
+    const req = transport.request(options, (res) => {
       let data = '';
       res.on('data', (chunk) => (data += chunk));
       res.on('end', () => {
@@ -106,9 +109,9 @@ async function getToken(baseUrl) {
     } catch { /* re-auth */ }
   }
 
-  const apiKey = process.env.DEV_API_KEY;
+  const apiKey = process.env.PROD_API_KEY;
   if (!apiKey) {
-    console.error('No DEV_API_KEY found. Set it in .env.claude or as an environment variable.');
+    console.error('No PROD_API_KEY found. Set it in .env.claude or as an environment variable.');
     process.exit(1);
   }
 
@@ -165,6 +168,7 @@ Commands:
   create <json>               Create requirement (returns id)
   update <id> <json>          Update requirement fields
   delete <id>                 Soft-delete requirement (sets activeFlag=false)
+  check                       Exit 1 if any requirements are unapproved
 
 Options:
   --url <base_url>            API base URL (default: ${DEFAULT_BASE_URL})`);
@@ -324,6 +328,22 @@ Options:
       for (const c of res.data) {
         console.log(padEnd(c.id, 6) + padEnd(truncate(c.name, 33), 35) + truncate(c.description || '', 50));
       }
+      break;
+    }
+
+    case 'check': {
+      const res = await api('GET', '/design/requirement');
+      if (res.status !== 200) { console.error('Error:', res.data); process.exit(1); }
+      const unapproved = res.data.filter(r => !r.approved);
+      console.log(`Total: ${res.data.length}, Approved: ${res.data.length - unapproved.length}, Unapproved: ${unapproved.length}`);
+      if (unapproved.length > 0) {
+        console.log('\nUnapproved requirements:');
+        for (const r of unapproved) {
+          console.log(`  ID ${r.id}: ${truncate(r.description, 80)}`);
+        }
+        process.exit(1);
+      }
+      console.log('All requirements are approved.');
       break;
     }
 

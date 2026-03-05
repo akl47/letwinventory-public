@@ -1,0 +1,22 @@
+name: Requirements Approval Check
+
+on:
+  pull_request:
+    branches: [master]
+
+jobs:
+  check-requirements:
+    name: All Requirements Approved
+    runs-on: ubuntu-latest
+    env:
+      PROD_API_URL: ${{ secrets.PROD_API_URL }}
+      PROD_API_KEY: ${{ secrets.PROD_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Check all requirements are approved
+        run: node scripts/req.js check
