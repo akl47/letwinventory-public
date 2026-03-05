@@ -24,4 +24,5 @@ export interface Task {
     reminderMinutes?: number;
     checklist?: ChecklistItem[];
     subtasks?: Task[];
+    parent?: { id: number; name: string };
 }

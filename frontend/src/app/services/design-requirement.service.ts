@@ -60,6 +60,24 @@ export class DesignRequirementService {
         );
     }
 
+    implement(id: number): Observable<DesignRequirement> {
+        return this.http.put<DesignRequirement>(`${this.apiUrl}/${id}/implement`, {}).pipe(
+            tap(() => this.clearCache())
+        );
+    }
+
+    validate(id: number): Observable<DesignRequirement> {
+        return this.http.put<DesignRequirement>(`${this.apiUrl}/${id}/validate`, {}).pipe(
+            tap(() => this.clearCache())
+        );
+    }
+
+    unimplement(id: number): Observable<DesignRequirement> {
+        return this.http.put<DesignRequirement>(`${this.apiUrl}/${id}/unimplement`, {}).pipe(
+            tap(() => this.clearCache())
+        );
+    }
+
     takeOwnership(id: number): Observable<DesignRequirement> {
         return this.http.put<DesignRequirement>(`${this.apiUrl}/${id}/take-ownership`, {}).pipe(
             tap(() => this.clearCache())

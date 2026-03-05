@@ -13,6 +13,7 @@ import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatDividerModule } from '@angular/material/divider';
+import { filterBySearch } from '../../../utils/search';
 import { FormsModule } from '@angular/forms';
 import { InventoryService } from '../../../services/inventory.service';
 import { AuthService } from '../../../services/auth.service';
@@ -236,16 +237,7 @@ export class PartsTableView implements OnInit {
     }
 
     // Apply search filter
-    const search = this.searchText().toLowerCase();
-    if (search) {
-      filtered = filtered.filter(part =>
-        part.name.toLowerCase().includes(search) ||
-        part.description?.toLowerCase().includes(search) ||
-        part.vendor?.toLowerCase().includes(search) ||
-        part.sku?.toLowerCase().includes(search) ||
-        part.PartCategory?.name?.toLowerCase().includes(search)
-      );
-    }
+    filtered = filterBySearch(filtered, this.searchText(), ['name', 'description', 'vendor', 'sku', 'PartCategory.name']);
 
     // Apply sorting
     const sortCol = this.sortColumn();
@@ -390,16 +382,7 @@ export class PartsTableView implements OnInit {
     }
 
     // Apply search filter
-    const search = this.searchText().toLowerCase();
-    if (search) {
-      filtered = filtered.filter(part =>
-        part.name.toLowerCase().includes(search) ||
-        part.description?.toLowerCase().includes(search) ||
-        part.vendor?.toLowerCase().includes(search) ||
-        part.sku?.toLowerCase().includes(search) ||
-        part.PartCategory?.name?.toLowerCase().includes(search)
-      );
-    }
+    filtered = filterBySearch(filtered, this.searchText(), ['name', 'description', 'vendor', 'sku', 'PartCategory.name']);
 
     return filtered.length;
   }

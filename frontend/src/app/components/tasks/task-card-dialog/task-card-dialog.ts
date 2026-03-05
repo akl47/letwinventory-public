@@ -1,5 +1,5 @@
 import { Component, inject, OnInit, OnDestroy, signal, computed } from '@angular/core';
-import { MAT_DIALOG_DATA, MatDialogModule } from '@angular/material/dialog';
+import { MAT_DIALOG_DATA, MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
@@ -33,6 +33,7 @@ export interface LabelOption {
 })
 export class TaskCardDialog implements OnInit, OnDestroy {
   data = inject<TaskCardDialogData>(MAT_DIALOG_DATA);
+  private dialog = inject(MatDialog);
   private taskService = inject(TaskService);
   private projectService = inject(ProjectService);
   private pendingRefresh: any;
@@ -546,6 +547,21 @@ export class TaskCardDialog implements OnInit, OnDestroy {
         this.taskService.triggerRefresh();
       },
       error: (err) => console.error('Failed to update estimate', err)
+    });
+  }
+
+  openParentTask(): void {
+    const parent = this.task().parent;
+    if (!parent) return;
+    this.taskService.getTask(parent.id).subscribe({
+      next: (parentTask) => {
+        this.dialog.open(TaskCardDialog, {
+          data: { task: parentTask },
+          width: '768px',
+          maxWidth: '95vw',
+          panelClass: 'trello-dialog-container',
+        });
+      }
     });
   }
 

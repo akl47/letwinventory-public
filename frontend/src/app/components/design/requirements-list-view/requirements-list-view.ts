@@ -13,6 +13,7 @@ import { MatExpansionModule } from '@angular/material/expansion';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { DesignRequirementService } from '../../../services/design-requirement.service';
 import { AuthService } from '../../../services/auth.service';
+import { matchesSearch } from '../../../utils/search';
 import { ProjectService } from '../../../services/project.service';
 import { DesignRequirement } from '../../../models/design-requirement.model';
 import { Project } from '../../../models/project.model';
@@ -65,6 +66,7 @@ export class RequirementsListView implements OnInit {
     hideChildren = signal(false);
     private expandedFromQuery = new Set<number>();
     private initializedFromQuery = false;
+    private lastSearch = '';
 
     ngOnInit() {
         this.applyQueryParams();
@@ -120,7 +122,7 @@ export class RequirementsListView implements OnInit {
 
     buildTree() {
         const all = this.allRequirements();
-        const search = this.searchText().toLowerCase();
+        const search = this.searchText();
         const approvedOnly = this.approvedOnly();
         const hideChildren = this.hideChildren();
 
@@ -141,36 +143,56 @@ export class RequirementsListView implements OnInit {
 
         // Build flat tree rows
         const rows: TreeRow[] = [];
+        const searchChanged = search !== this.lastSearch;
+        this.lastSearch = search;
         const prevStateMap = new Map<number, boolean>();
-        for (const row of this.treeRows()) {
-            prevStateMap.set(row.requirement.id, row.expanded);
+        if (!searchChanged) {
+            for (const row of this.treeRows()) {
+                prevStateMap.set(row.requirement.id, row.expanded);
+            }
         }
 
-        const addChildren = (parentId: number | null, level: number) => {
+        // When searching, pre-compute which nodes have a matching descendant (or match themselves)
+        const hasMatchingDescendant = new Set<number>();
+        if (search) {
+            const markAncestors = (id: number | null) => {
+                if (id == null || hasMatchingDescendant.has(id)) return;
+                hasMatchingDescendant.add(id);
+                const req = all.find(r => r.id === id);
+                if (req?.parentRequirementID != null) markAncestors(req.parentRequirementID);
+            };
+            for (const req of all) {
+                if (matchesSearch(req, search, ['description', 'category.name', 'owner.displayName'])) {
+                    markAncestors(req.id);
+                }
+            }
+        }
+
+        const addChildren = (parentId: number | null, level: number, showAll: boolean) => {
             const children = childrenMap.get(parentId) || [];
             for (const req of children) {
                 if (approvedOnly && !req.approved) continue;
 
-                const children = childrenMap.get(req.id) || [];
-                const childCount = children.length;
+                const inMatchPath = !!search && hasMatchingDescendant.has(req.id);
+                // Skip nodes not relevant to the search (unless parent was manually expanded)
+                if (search && !showAll && !inMatchPath) continue;
+
+                const nodeChildren = childrenMap.get(req.id) || [];
+                const childCount = nodeChildren.length;
                 const hasChildren = childCount > 0;
-                const matchesSearch = !search ||
-                    req.description.toLowerCase().includes(search) ||
-                    req.rationale?.toLowerCase().includes(search) ||
-                    req.category?.name.toLowerCase().includes(search) ||
-                    req.owner?.displayName.toLowerCase().includes(search);
 
-                if (!matchesSearch && !hasChildren) continue;
+                const isDirectMatch = !!search && matchesSearch(req, search, ['description', 'category.name', 'owner.displayName']);
 
-                // Preserve user's manual toggle; fall back to query param state; then default
-                const defaultExpanded = !hideChildren;
                 let expanded: boolean;
                 if (prevStateMap.has(req.id)) {
                     expanded = prevStateMap.get(req.id)!;
-                } else if (this.expandedFromQuery.size > 0) {
+                } else if (!search && this.expandedFromQuery.size > 0) {
                     expanded = this.expandedFromQuery.has(req.id);
+                } else if (search) {
+                    // Ancestors auto-expand to reveal matches; direct matches default collapsed
+                    expanded = inMatchPath && !isDirectMatch && hasChildren;
                 } else {
-                    expanded = defaultExpanded;
+                    expanded = !hideChildren;
                 }
                 rows.push({
                     requirement: req,
@@ -182,13 +204,14 @@ export class RequirementsListView implements OnInit {
                     childrenAllApproved: allDescendantsApproved(req.id),
                 });
 
-                if (expanded || search) {
-                    addChildren(req.id, level + 1);
+                if (expanded) {
+                    // When user manually expands a node during search, show all children
+                    const userExpanded = !!search && prevStateMap.has(req.id) && prevStateMap.get(req.id)!;
+                    addChildren(req.id, level + 1, showAll || userExpanded);
                 }
             }
         };
-
-        addChildren(null, 0);
+        addChildren(null, 0, false);
         this.treeRows.set(rows);
         this.displayedRows.set(rows.filter(r => r.visible));
     }

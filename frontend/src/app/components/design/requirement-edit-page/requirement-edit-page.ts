@@ -259,6 +259,36 @@ export class RequirementEditPage implements OnInit {
         });
     }
 
+    implementRequirement() {
+        if (!this.currentRequirement()) return;
+        this.requirementService.implement(this.currentRequirement()!.id).subscribe({
+            next: () => {
+                this.loadRequirement(this.currentRequirement()!.id);
+                if (this.showHistory()) this.loadHistory();
+            }
+        });
+    }
+
+    validateRequirement() {
+        if (!this.currentRequirement()) return;
+        this.requirementService.validate(this.currentRequirement()!.id).subscribe({
+            next: () => {
+                this.loadRequirement(this.currentRequirement()!.id);
+                if (this.showHistory()) this.loadHistory();
+            }
+        });
+    }
+
+    unimplement() {
+        if (!this.currentRequirement()) return;
+        this.requirementService.unimplement(this.currentRequirement()!.id).subscribe({
+            next: () => {
+                this.loadRequirement(this.currentRequirement()!.id);
+                if (this.showHistory()) this.loadHistory();
+            }
+        });
+    }
+
     isOwner(): boolean {
         const user = this.authService.currentUser();
         return !!user && !!this.currentRequirement() && user.id === this.currentRequirement()!.ownerUserID;
@@ -309,6 +339,9 @@ export class RequirementEditPage implements OnInit {
             approved: 'check_circle',
             unapproved: 'undo',
             deleted: 'delete',
+            implemented: 'build',
+            validated: 'verified',
+            unimplemented: 'undo',
         };
         return icons[type] || 'info';
     }
@@ -320,6 +353,9 @@ export class RequirementEditPage implements OnInit {
             approved: 'Approved',
             unapproved: 'Unapproved',
             deleted: 'Deleted',
+            implemented: 'Implemented',
+            validated: 'Validated',
+            unimplemented: 'Unimplemented',
         };
         return labels[type] || type;
     }
@@ -337,6 +373,8 @@ export class RequirementEditPage implements OnInit {
             approved: 'Approved',
             ownerUserID: 'Owner',
             approvedByUserID: 'Approved By',
+            implementationStatus: 'Implementation Status',
+            implementedByUserID: 'Implemented By',
             activeFlag: 'Active',
         };
         return labels[field] || field;

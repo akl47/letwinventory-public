@@ -13,6 +13,7 @@ import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatChipsModule } from '@angular/material/chips';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatCheckboxModule } from '@angular/material/checkbox';
+import { filterBySearch } from '../../../utils/search';
 import { MatDividerModule } from '@angular/material/divider';
 import { MatDialog } from '@angular/material/dialog';
 import { FormsModule } from '@angular/forms';
@@ -185,15 +186,7 @@ export class OrdersListView implements OnInit {
     }
 
     // Apply search filter
-    const search = this.searchText().toLowerCase();
-    if (search) {
-      filtered = filtered.filter(order =>
-        order.id?.toString().includes(search) ||
-        order.vendor?.toLowerCase().includes(search) ||
-        order.description?.toLowerCase().includes(search) ||
-        order.OrderStatus?.name.toLowerCase().includes(search)
-      );
-    }
+    filtered = filterBySearch(filtered, this.searchText(), ['id', 'vendor', 'description', 'OrderStatus.name']);
 
     // Apply sorting
     const sortCol = this.sortColumn();

@@ -90,6 +90,25 @@
     color: rgba(255, 255, 255, 0.7);
 }
 
+.parent-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+    vertical-align: middle;
+    margin-right: 2px;
+}
+
+.parent-name {
+    text-decoration: underline;
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.7);
+    transition: color 0.2s ease;
+}
+
+.parent-name:hover {
+    color: rgba(255, 255, 255, 0.9);
+}
+
 .close-btn {
     position: absolute;
     top: 8px;

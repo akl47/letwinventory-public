@@ -20,6 +20,10 @@ module.exports = (sequelize, DataTypes) => {
         as: 'approvedBy',
         foreignKey: 'approvedByUserID'
       });
+      DesignRequirement.belongsTo(models.User, {
+        as: 'implementedBy',
+        foreignKey: 'implementedByUserID'
+      });
       DesignRequirement.belongsTo(models.Project, {
         as: 'project',
         foreignKey: 'projectID'
@@ -83,6 +87,19 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
     approvedAt: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    implementationStatus: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'not_implemented'
+    },
+    implementedByUserID: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    implementedAt: {
       type: DataTypes.DATE,
       allowNull: true
     },

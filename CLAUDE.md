@@ -642,3 +642,92 @@ Each session should:
 - Session panel placed between Notifications and Permissions (expanded by default)
 - Reuses existing `getDeviceLabel()` method from push subscription device list
 - Logout only deactivates current session's refresh token (not all sessions)
+
+## Session: 2026-03-03 (Requirements Hierarchy Refactoring)
+
+### Files Modified
+- None (database-only changes via `scripts/req.js`)
+
+### Changes Made (database only)
+1. **Created Authorization category** (id=30) for RBAC, user groups, and permission enforcement
+2. **Created 5 group requirements** under req 1 as intermediate hierarchy layer:
+   - 143: Security & Access Control (G1)
+   - 144: Inventory & Supply Chain (G2)
+   - 145: Engineering & Design (G3)
+   - 146: Operations & Planning (G4)
+   - 147: System Infrastructure (G5)
+3. **Created 7 category root requirements** under group parents:
+   - 148: Authentication root (under G1, cat 16)
+   - 149: Barcode root (under G2, cat 18)
+   - 150: Planning root (under G4, cat 22)
+   - 151: Configuration root (under G5, cat 25)
+   - 152: UX root (under G5, cat 26)
+   - 153: Records & Data Integrity root (under 98, cat 8)
+   - 154: Authorization root (under G1, cat 30)
+4. **Re-parented ~33 existing requirements** to fix cross-category links and establish proper hierarchy:
+   - Moved 11, 38, 139 → G2; 45, 102, 107 → G3; 91, 81, 80 → G4; 94 → G5
+   - Fixed auth reqs: 2→1, 3/5/7/8→R1(148), 21→R2(149), 67/72/77/78/142→R3(150)
+   - Fixed UX reqs: 26/66/87/89/90→R5(152), 29→R4(151)
+   - Fixed dev reqs: 95/96/132→94
+   - Fixed QMS records: 129/130/131→R6(153)
+   - Changed req 142 category from System(1) to Planning(22)
+5. **Created 15 new feature requirements** covering previously missing subsystems:
+   - Authentication: 155 (multi-session), 156 (device tracking), 157 (session management), 158 (API keys), 159 (scoped permissions), 160 (expiration), 161 (token exchange)
+   - Authorization: 162 (permission model), 163 (user groups), 164 (direct permissions), 165 (enforcement), 166 (permission-gated UI), 167 (admin users), 168 (impersonation)
+   - Wire Harness: 169 (view-only mode)
+6. **Updated req 139** placeholder with proper description and rationale for parts management
+
+### Hierarchy Summary (after refactoring)
+| Metric | Before | After |
+|--------|--------|-------|
+| Categories | 29 | 30 (+1 Authorization) |
+| Requirements | 140 | 167 (+27 new) |
+| Root requirement | req 1 | req 1 (unchanged) |
+| Direct children of req 1 | 15 | 7 (2, 98, 143-147) |
+| Depth levels | 2-3 | 6 (root → group → cat root → feature → detail → sub-detail) |
+| Cross-category parent links | ~30 | 0 |
+| Feature coverage gaps | ~8 | 0 |
+| Orphans | 0 | 0 |
+| Reachable from req 1 | 140/140 | 167/167 |
+
+### Decisions
+- Group requirements (G1-G5) are abstract "why" descriptions in System category (cat 1)
+- Category root requirements (R1-R7) are concrete "what" descriptions in their own category
+- QMS subtree (req 98) kept as direct child of req 1 — not under a group (it IS the group)
+- Req 2 (soft deletion) kept as direct child of req 1 — cross-cutting concern
+- Req 142 (task sync/SSE) moved from System to Planning category (matches its function)
+- Authorization category separate from Authentication — auth answers "who are you?", authz answers "what can you do?"
+
+## Session: 2026-03-03 (QMS Alignment Restructuring)
+
+### Files Modified
+- `scripts/req.js` — added `delete` command (switch case + help text)
+
+### Changes Made (database only — 18 operations)
+1. **Re-parented 14 requirements** to align regulated processes under QMS clause nodes:
+   - **101 (Personnel/Auth — 820.20(b)(1), ISO §6.2):** 148 (Authentication), 154 (Authorization)
+   - **98 (QMS):** 102 (Design Controls) moved from G3 to direct QMS child
+   - **102 (Design Controls — 820.30, ISO §7.3):** 107 (Design Requirements), 45 (Wire Harness)
+   - **118 (Purchasing — 820.50, ISO §7.4):** 38 (Orders), 139 (Parts)
+   - **122 (ID & Traceability — 820.60/65, ISO §7.5.3):** 11 (Inventory), 149 (Barcodes)
+   - **125 (Production & Process — 820.70, ISO §7.5.1):** 150 (Planning), 81 (Mobile), 91 (Notifications)
+   - **99 (Document Control — 820.40, ISO §4.2.4):** 80 (File management)
+   - **153 (Records — 820.180-186):** 2 (Soft deletion)
+2. **Soft-deleted 4 empty group nodes** — G1 (143), G2 (144), G3 (145), G4 (146)
+3. **Added `delete` command to req.js** — `node scripts/req.js delete <id>` soft-deletes a requirement
+
+### Hierarchy Summary (after restructuring)
+| Metric | Before | After |
+|--------|--------|-------|
+| Req 1 direct children | 7 (2, 98, 143-147) | 2 (98, 147) |
+| QMS (98) direct children | 13 | 14 |
+| Reqs under QMS | ~25 | ~149 |
+| Reqs outside QMS (G5 + root) | ~142 | ~14 |
+| Active requirements | 167 | 163 |
+| 820.30 (Design Controls) coverage | 0% | 100% |
+
+### Decisions
+- All quality-affecting processes now trace through QMS (req 98), organized by regulatory clause
+- G5 (147, System Infrastructure) stays outside QMS — development, UX, and config are not quality-affecting
+- Req 2 (soft deletion) moved under Records (153) — it's a data integrity concern, not cross-cutting
+- Design Controls (102) is now a direct child of QMS, closing the 820.30 / ISO 13485 §7.3 gap

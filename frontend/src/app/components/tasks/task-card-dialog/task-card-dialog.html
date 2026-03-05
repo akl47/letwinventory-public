@@ -15,6 +15,9 @@
             }
             <p class="task-list-info">in list <span class="list-name clickable-text" [matMenuTriggerFor]="listMenu">{{
                     currentListName() }}</span></p>
+            @if (task().parent) {
+            <p class="task-list-info"><mat-icon class="parent-icon">subdirectory_arrow_right</mat-icon> subtask of <span class="parent-name clickable-text" (click)="openParentTask()">{{ task().parent!.name }}</span></p>
+            }
 
             <mat-menu #listMenu="matMenu" class="list-selection-menu">
                 <div class="menu-header">Move to list</div>

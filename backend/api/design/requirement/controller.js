@@ -14,6 +14,11 @@ const requirementIncludes = [
     attributes: ['id', 'displayName', 'email', 'photoURL']
   },
   {
+    model: db.User,
+    as: 'implementedBy',
+    attributes: ['id', 'displayName', 'email', 'photoURL']
+  },
+  {
     model: db.Project,
     as: 'project',
     attributes: ['id', 'name', 'shortName', 'tagColorHex']
@@ -101,10 +106,13 @@ exports.update = async (req, res) => {
       return res.status(404).json({ error: 'Requirement not found' });
     }
 
-    // Strip approval fields — must use dedicated approve/unapprove endpoints
+    // Strip approval and implementation fields — must use dedicated endpoints
     delete req.body.approved;
     delete req.body.approvedByUserID;
     delete req.body.approvedAt;
+    delete req.body.implementationStatus;
+    delete req.body.implementedByUserID;
+    delete req.body.implementedAt;
 
     const changes = {};
     for (const field of TRACKED_FIELDS) {
@@ -130,6 +138,17 @@ exports.update = async (req, res) => {
         await recordHistory(requirement.id, req.user.id, 'unapproved', {
           approved: { from: true, to: false },
           approvedByUserID: { from: previousApprover, to: null }
+        });
+      }
+
+      // Auto-reset implementation status on edit
+      if (requirement.implementationStatus !== 'not_implemented') {
+        const prevStatus = requirement.implementationStatus;
+        const prevUser = requirement.implementedByUserID;
+        await requirement.update({ implementationStatus: 'not_implemented', implementedByUserID: null, implementedAt: null });
+        await recordHistory(requirement.id, req.user.id, 'unimplemented', {
+          implementationStatus: { from: prevStatus, to: 'not_implemented' },
+          implementedByUserID: { from: prevUser, to: null }
         });
       }
     }
@@ -199,6 +218,75 @@ exports.unapprove = async (req, res) => {
   }
 };
 
+exports.implement = async (req, res) => {
+  try {
+    const requirement = await db.DesignRequirement.findByPk(req.params.id);
+    if (!requirement) {
+      return res.status(404).json({ error: 'Requirement not found' });
+    }
+    if (!requirement.approved) {
+      return res.status(400).json({ error: 'Requirement must be approved before marking as implemented' });
+    }
+    await requirement.update({
+      implementationStatus: 'implemented',
+      implementedByUserID: req.user.id,
+      implementedAt: new Date()
+    });
+    await recordHistory(requirement.id, req.user.id, 'implemented', {
+      implementationStatus: { from: 'not_implemented', to: 'implemented' },
+      implementedByUserID: { from: null, to: req.user.id }
+    });
+    const updated = await db.DesignRequirement.findByPk(req.params.id, { include: requirementIncludes });
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.validate = async (req, res) => {
+  try {
+    const requirement = await db.DesignRequirement.findByPk(req.params.id);
+    if (!requirement) {
+      return res.status(404).json({ error: 'Requirement not found' });
+    }
+    if (requirement.implementationStatus !== 'implemented') {
+      return res.status(400).json({ error: 'Requirement must be implemented before validation' });
+    }
+    await requirement.update({ implementationStatus: 'validated' });
+    await recordHistory(requirement.id, req.user.id, 'validated', {
+      implementationStatus: { from: 'implemented', to: 'validated' }
+    });
+    const updated = await db.DesignRequirement.findByPk(req.params.id, { include: requirementIncludes });
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.unimplement = async (req, res) => {
+  try {
+    const requirement = await db.DesignRequirement.findByPk(req.params.id);
+    if (!requirement) {
+      return res.status(404).json({ error: 'Requirement not found' });
+    }
+    const prevStatus = requirement.implementationStatus;
+    const prevUser = requirement.implementedByUserID;
+    await requirement.update({
+      implementationStatus: 'not_implemented',
+      implementedByUserID: null,
+      implementedAt: null
+    });
+    await recordHistory(requirement.id, req.user.id, 'unimplemented', {
+      implementationStatus: { from: prevStatus, to: 'not_implemented' },
+      implementedByUserID: { from: prevUser, to: null }
+    });
+    const updated = await db.DesignRequirement.findByPk(req.params.id, { include: requirementIncludes });
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 exports.takeOwnership = async (req, res) => {
   try {
     const requirement = await db.DesignRequirement.findByPk(req.params.id);
@@ -219,7 +307,7 @@ exports.takeOwnership = async (req, res) => {
   }
 };
 
-const USER_ID_FIELDS = ['ownerUserID', 'approvedByUserID', 'changedByUserID'];
+const USER_ID_FIELDS = ['ownerUserID', 'approvedByUserID', 'changedByUserID', 'implementedByUserID'];
 
 exports.getHistory = async (req, res) => {
   try {

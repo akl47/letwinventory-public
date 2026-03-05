@@ -33,6 +33,11 @@ exports.getAllTaskLists = async (req, res) => {
                     as: 'subtasks',
                     attributes: ['id'],
                     required: false
+                }, {
+                    model: Task,
+                    as: 'parent',
+                    attributes: ['id', 'name'],
+                    required: false
                 }]
             }],
             order: [

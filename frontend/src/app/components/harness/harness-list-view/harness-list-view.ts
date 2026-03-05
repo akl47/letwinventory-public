@@ -13,6 +13,7 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatDialog } from '@angular/material/dialog';
+import { filterBySearch } from '../../../utils/search';
 import { HarnessService } from '../../../services/harness.service';
 import { AuthService } from '../../../services/auth.service';
 import { WireHarnessSummary, createEmptyHarnessData } from '../../../models/harness.model';
@@ -122,14 +123,7 @@ export class HarnessListView implements OnInit {
     }
 
     // Apply search filter
-    const search = this.searchText().toLowerCase();
-    if (search) {
-      filtered = filtered.filter(h =>
-        h.name.toLowerCase().includes(search) ||
-        h.partNumber?.toLowerCase().includes(search) ||
-        h.description?.toLowerCase().includes(search)
-      );
-    }
+    filtered = filterBySearch(filtered, this.searchText(), ['name', 'partNumber', 'description']);
 
     // Apply sorting
     const sortCol = this.sortColumn();
