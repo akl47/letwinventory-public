@@ -168,6 +168,7 @@ Commands:
   create <json>               Create requirement (returns id)
   update <id> <json>          Update requirement fields
   delete <id>                 Soft-delete requirement (sets activeFlag=false)
+  check                       Exit 1 if any requirements are unapproved
 
 Options:
   --url <base_url>            API base URL (default: ${DEFAULT_BASE_URL})`);
@@ -327,6 +328,22 @@ Options:
       for (const c of res.data) {
         console.log(padEnd(c.id, 6) + padEnd(truncate(c.name, 33), 35) + truncate(c.description || '', 50));
       }
+      break;
+    }
+
+    case 'check': {
+      const res = await api('GET', '/design/requirement');
+      if (res.status !== 200) { console.error('Error:', res.data); process.exit(1); }
+      const unapproved = res.data.filter(r => !r.approved);
+      console.log(`Total: ${res.data.length}, Approved: ${res.data.length - unapproved.length}, Unapproved: ${unapproved.length}`);
+      if (unapproved.length > 0) {
+        console.log('\nUnapproved requirements:');
+        for (const r of unapproved) {
+          console.log(`  ID ${r.id}: ${truncate(r.description, 80)}`);
+        }
+        process.exit(1);
+      }
+      console.log('All requirements are approved.');
       break;
     }
 
