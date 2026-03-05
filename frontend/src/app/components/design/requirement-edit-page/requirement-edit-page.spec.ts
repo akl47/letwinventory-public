@@ -34,15 +34,15 @@ describe('RequirementEditPage', () => {
     ];
 
     const mockAllRequirements: DesignRequirement[] = [
-        { id: 1, description: 'Parent req', projectID: 1, ownerUserID: 1, approved: false, activeFlag: true, createdAt: new Date(), updatedAt: new Date() },
-        { id: 2, description: 'Child req', parentRequirementID: 1, projectID: 1, ownerUserID: 1, approved: false, activeFlag: true, createdAt: new Date(), updatedAt: new Date() },
+        { id: 1, description: 'Parent req', projectID: 1, ownerUserID: 1, approved: false, activeFlag: true, implementationStatus: 'not_implemented', createdAt: new Date(), updatedAt: new Date() },
+        { id: 2, description: 'Child req', parentRequirementID: 1, projectID: 1, ownerUserID: 1, approved: false, activeFlag: true, implementationStatus: 'not_implemented', createdAt: new Date(), updatedAt: new Date() },
     ];
 
     const mockRequirement: DesignRequirement = {
         id: 2, description: 'Child req', rationale: 'Because', parameter: 'P1',
         parentRequirementID: 1, projectID: 1, categoryID: 1,
         verification: 'Test it', validation: 'Review it',
-        ownerUserID: 1, approved: false, activeFlag: true,
+        ownerUserID: 1, approved: false, activeFlag: true, implementationStatus: 'not_implemented',
         createdAt: new Date(), updatedAt: new Date(),
         owner: { id: 1, displayName: 'Alice', email: 'alice@test.com' },
         category: { id: 1, name: 'Functional', activeFlag: true },

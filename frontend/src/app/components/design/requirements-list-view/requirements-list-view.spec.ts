@@ -29,7 +29,7 @@ describe('RequirementsListView', () => {
     const mockRequirements: DesignRequirement[] = [
         {
             id: 1, description: 'System shall support login', rationale: 'Security', parameter: '',
-            projectID: 1, ownerUserID: 1, approved: true, activeFlag: true,
+            projectID: 1, ownerUserID: 1, approved: true, activeFlag: true, implementationStatus: 'not_implemented',
             createdAt: new Date(), updatedAt: new Date(),
             category: { id: 1, name: 'Functional', activeFlag: true },
             owner: { id: 1, displayName: 'Alice', email: 'alice@test.com' },
@@ -37,14 +37,14 @@ describe('RequirementsListView', () => {
         },
         {
             id: 2, description: 'Login shall use OAuth', rationale: 'Standards', parameter: '',
-            parentRequirementID: 1, projectID: 1, ownerUserID: 1, approved: false, activeFlag: true,
+            parentRequirementID: 1, projectID: 1, ownerUserID: 1, approved: false, activeFlag: true, implementationStatus: 'not_implemented',
             createdAt: new Date(), updatedAt: new Date(),
             category: { id: 1, name: 'Functional', activeFlag: true },
             owner: { id: 1, displayName: 'Alice', email: 'alice@test.com' },
         },
         {
             id: 3, description: 'System shall handle errors', rationale: 'Reliability', parameter: '',
-            projectID: 2, ownerUserID: 2, approved: false, activeFlag: true,
+            projectID: 2, ownerUserID: 2, approved: false, activeFlag: true, implementationStatus: 'not_implemented',
             createdAt: new Date(), updatedAt: new Date(),
         },
     ];
