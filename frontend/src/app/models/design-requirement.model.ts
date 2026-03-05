@@ -9,7 +9,7 @@ export interface RequirementHistoryEntry {
     id: number;
     requirementID: number;
     changedByUserID: number;
-    changeType: 'created' | 'updated' | 'approved' | 'unapproved' | 'deleted';
+    changeType: 'created' | 'updated' | 'approved' | 'unapproved' | 'deleted' | 'implemented' | 'validated' | 'unimplemented';
     changes: Record<string, { from: any; to: any; fromName?: string; toName?: string }>;
     changeNotes?: string;
     createdAt: string;
@@ -30,6 +30,10 @@ export interface DesignRequirement {
     approved: boolean;
     approvedByUserID?: number;
     approvedAt?: Date;
+    implementationStatus: 'not_implemented' | 'implemented' | 'validated';
+    implementedByUserID?: number;
+    implementedAt?: Date;
+    implementedBy?: { id: number; displayName: string; email: string; photoURL?: string };
     activeFlag: boolean;
     createdAt: Date;
     updatedAt: Date;

@@ -13,6 +13,7 @@ import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { FormsModule } from '@angular/forms';
 import { MatDialog } from '@angular/material/dialog';
 import { InventoryService } from '../../../services/inventory.service';
+import { filterBySearch } from '../../../utils/search';
 import { AuthService } from '../../../services/auth.service';
 import { Equipment } from '../../../models/equipment.model';
 import { EquipmentEditDialog } from '../equipment-edit-dialog/equipment-edit-dialog';
@@ -118,15 +119,7 @@ export class EquipmentTableView implements OnInit {
     }
 
     // Apply search filter
-    const search = this.searchText().toLowerCase();
-    if (search) {
-      filtered = filtered.filter(equipment =>
-        equipment.name.toLowerCase().includes(search) ||
-        equipment.description?.toLowerCase().includes(search) ||
-        equipment.serialNumber?.toLowerCase().includes(search) ||
-        equipment.Barcode?.barcode?.toLowerCase().includes(search)
-      );
-    }
+    filtered = filterBySearch(filtered, this.searchText(), ['name', 'description', 'serialNumber', 'Barcode.barcode']);
 
     // Apply sorting
     const sortCol = this.sortColumn();
@@ -181,15 +174,7 @@ export class EquipmentTableView implements OnInit {
     }
 
     // Apply search filter
-    const search = this.searchText().toLowerCase();
-    if (search) {
-      filtered = filtered.filter(equipment =>
-        equipment.name.toLowerCase().includes(search) ||
-        equipment.description?.toLowerCase().includes(search) ||
-        equipment.serialNumber?.toLowerCase().includes(search) ||
-        equipment.Barcode?.barcode?.toLowerCase().includes(search)
-      );
-    }
+    filtered = filterBySearch(filtered, this.searchText(), ['name', 'description', 'serialNumber', 'Barcode.barcode']);
 
     return filtered.length;
   }

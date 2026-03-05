@@ -72,6 +72,16 @@
     color: #a5d6a7;
 }
 
+.approval-banner.implemented {
+    background-color: #1565c0;
+    color: #90caf9;
+}
+
+.approval-banner.validated {
+    background-color: #00695c;
+    color: #80cbc4;
+}
+
 .approval-banner mat-icon {
     font-size: 20px;
     width: 20px;
@@ -249,6 +259,9 @@ mat-form-field {
 .history-type-icon.type-approved { color: #66bb6a; }
 .history-type-icon.type-unapproved { color: #ff9800; }
 .history-type-icon.type-deleted { color: #f44336; }
+.history-type-icon.type-implemented { color: #1e88e5; }
+.history-type-icon.type-validated { color: #00897b; }
+.history-type-icon.type-unimplemented { color: #ff9800; }
 
 .history-type-label {
     font-weight: 500;

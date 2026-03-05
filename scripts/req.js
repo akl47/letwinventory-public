@@ -160,9 +160,11 @@ Commands:
   update-category <id> <json> Update category fields
   delete-category <id>        Delete category
   list [--project <id>]       List all requirements
+  tree [file]                 Export hierarchical JSON tree (default: requirements-tree.json)
   get <id>                    Get requirement with associations
   create <json>               Create requirement (returns id)
   update <id> <json>          Update requirement fields
+  delete <id>                 Soft-delete requirement (sets activeFlag=false)
 
 Options:
   --url <base_url>            API base URL (default: ${DEFAULT_BASE_URL})`);
@@ -194,6 +196,55 @@ Options:
       break;
     }
 
+    case 'tree': {
+      const [reqRes, catRes] = await Promise.all([
+        api('GET', '/design/requirement'),
+        api('GET', '/design/requirement-category'),
+      ]);
+      if (reqRes.status !== 200) { console.error('Error:', reqRes.data); process.exit(1); }
+      if (catRes.status !== 200) { console.error('Error:', catRes.data); process.exit(1); }
+
+      const catMap = {};
+      for (const c of catRes.data) catMap[c.id] = c.name;
+
+      const byId = {};
+      for (const r of reqRes.data) {
+        byId[r.id] = {
+          id: r.id,
+          description: r.description || '',
+          category: catMap[r.categoryID] || null,
+          approved: r.approved || false,
+          rationale: r.rationale || null,
+          verification: r.verification || null,
+          validation: r.validation || null,
+          children: [],
+        };
+      }
+
+      const roots = [];
+      for (const r of reqRes.data) {
+        if (r.parentRequirementID && byId[r.parentRequirementID]) {
+          byId[r.parentRequirementID].children.push(byId[r.id]);
+        } else if (!r.parentRequirementID) {
+          roots.push(byId[r.id]);
+        }
+      }
+
+      // Remove empty children arrays for cleaner output
+      function prune(node) {
+        if (node.children.length === 0) delete node.children;
+        else node.children.forEach(prune);
+        return node;
+      }
+      const tree = roots.length === 1 ? prune(roots[0]) : roots.map(prune);
+
+      const outFile = cleanArgs[1] || 'requirements-tree.json';
+      const outPath = path.resolve(outFile);
+      fs.writeFileSync(outPath, JSON.stringify(tree, null, 2) + '\n');
+      console.log(`Wrote ${reqRes.data.length} requirements as tree to ${outPath}`);
+      break;
+    }
+
     case 'get': {
       const id = cleanArgs[1];
       if (!id) { console.error('Usage: get <id>'); process.exit(1); }
@@ -222,6 +273,15 @@ Options:
       const res = await api('PUT', `/design/requirement/${id}`, body);
       if (res.status !== 200) { console.error('Error:', res.data); process.exit(1); }
       console.log(`Updated requirement id=${id}`);
+      break;
+    }
+
+    case 'delete': {
+      const id = cleanArgs[1];
+      if (!id) { console.error('Usage: delete <id>'); process.exit(1); }
+      const res = await api('DELETE', `/design/requirement/${id}`);
+      if (res.status !== 200 && res.status !== 204) { console.error('Error:', res.data); process.exit(1); }
+      console.log(`Deleted requirement id=${id}`);
       break;
     }
 

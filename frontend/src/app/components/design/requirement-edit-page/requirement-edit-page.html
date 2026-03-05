@@ -30,6 +30,24 @@
             Approve
         </button>
         }
+        @if (currentRequirement()?.approved && currentRequirement()?.implementationStatus === 'not_implemented') {
+        <button mat-flat-button (click)="implementRequirement()">
+            <mat-icon>build</mat-icon>
+            Implement
+        </button>
+        }
+        @if (currentRequirement()?.implementationStatus === 'implemented') {
+        <button mat-flat-button color="accent" (click)="validateRequirement()">
+            <mat-icon>verified</mat-icon>
+            Validate
+        </button>
+        }
+        @if (currentRequirement()?.implementationStatus !== 'not_implemented') {
+        <button mat-stroked-button (click)="unimplement()">
+            <mat-icon>undo</mat-icon>
+            Unimplement
+        </button>
+        }
         }
         @if (isFormEditMode()) {
         @if (isEditMode) {
@@ -44,7 +62,7 @@
         </button>
         <button mat-flat-button color="primary" (click)="save()" [disabled]="form.invalid">
             <mat-icon>save</mat-icon>
-            {{ isEditMode ? (currentRequirement()?.approved && hasFormChanges() ? 'Save and Reset Approval' : 'Save') :
+            {{ isEditMode ? ((currentRequirement()?.approved || currentRequirement()?.implementationStatus !== 'not_implemented') && hasFormChanges() ? 'Save and Reset Status' : 'Save') :
             'Create' }}
         </button>
         } @else {
@@ -60,8 +78,17 @@
     <div class="content-wrapper">
         <!-- Approval Status -->
         @if (isEditMode && currentRequirement()) {
-        <div class="approval-banner" [class.approved]="currentRequirement()?.approved">
-            @if (currentRequirement()?.approved) {
+        <div class="approval-banner"
+            [class.approved]="currentRequirement()?.approved && currentRequirement()?.implementationStatus === 'not_implemented'"
+            [class.implemented]="currentRequirement()?.implementationStatus === 'implemented'"
+            [class.validated]="currentRequirement()?.implementationStatus === 'validated'">
+            @if (currentRequirement()?.implementationStatus === 'validated') {
+            <mat-icon>verified</mat-icon>
+            <span>Validated — Implementation verified and accepted</span>
+            } @else if (currentRequirement()?.implementationStatus === 'implemented') {
+            <mat-icon>build</mat-icon>
+            <span>Implemented by {{ currentRequirement()?.implementedBy?.displayName || 'Unknown' }} on {{ currentRequirement()?.implementedAt | date:'medium' }}</span>
+            } @else if (currentRequirement()?.approved) {
             <mat-icon>check_circle</mat-icon>
             <span>Approved by {{ currentRequirement()?.approvedBy?.displayName || 'Unknown' }} on {{ currentRequirement()?.approvedAt | date:'medium' }}</span>
             } @else {
