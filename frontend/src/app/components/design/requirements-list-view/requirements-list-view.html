@@ -20,9 +20,34 @@
                     }
                 </mat-select>
             </mat-form-field>
-            <mat-slide-toggle [checked]="approvedOnly()" (change)="toggleApprovedOnly()" color="primary">
-                Approved Only
-            </mat-slide-toggle>
+            <button mat-button class="filter-btn" [matMenuTriggerFor]="statusMenu"
+                [class.has-filter]="activeStatusFilterCount() > 0">
+                <mat-icon>filter_list</mat-icon>
+                <span>Status</span>
+                @if (activeStatusFilterCount() > 0) {
+                <span class="filter-badge">{{ activeStatusFilterCount() }}</span>
+                }
+            </button>
+            <mat-menu #statusMenu="matMenu">
+                <div class="menu-header" (click)="$event.stopPropagation()">
+                    <mat-checkbox [checked]="allStatusesSelected()" [indeterminate]="someStatusesSelected()"
+                        (change)="toggleAllStatuses()">
+                        All Statuses
+                    </mat-checkbox>
+                </div>
+                <mat-divider></mat-divider>
+                @for (opt of statusOptions; track opt.value) {
+                @if (opt.value === 'not_implemented') {
+                <mat-divider></mat-divider>
+                }
+                <div class="menu-item" (click)="$event.stopPropagation()">
+                    <mat-checkbox [checked]="isStatusSelected(opt.value)" (change)="toggleStatus(opt.value)">
+                        <mat-icon [class]="opt.cssClass" class="menu-status-icon">{{ opt.icon }}</mat-icon>
+                        {{ opt.label }}
+                    </mat-checkbox>
+                </div>
+                }
+            </mat-menu>
             <mat-slide-toggle [checked]="hideChildren()" (change)="toggleHideChildren()" color="primary">
                 Hide Children
             </mat-slide-toggle>
