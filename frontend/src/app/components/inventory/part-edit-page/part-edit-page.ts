@@ -10,7 +10,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { CommonModule, Location, TitleCasePipe } from '@angular/common';
 import { forkJoin, of, combineLatest } from 'rxjs';
 import { catchError, take } from 'rxjs/operators';
-import { InventoryService } from '../../../services/inventory.service';
+import { InventoryService, PartLocationsResult } from '../../../services/inventory.service';
 import { AuthService } from '../../../services/auth.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { HarnessService } from '../../../services/harness.service';
@@ -19,6 +19,8 @@ import { DbHarnessConnector, DbHarnessWire, DbHarnessCable, DbElectricalComponen
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatTableModule } from '@angular/material/table';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { WIRE_COLORS } from '../../../utils/harness/wire-color-map';
 
 @Component({
@@ -34,7 +36,9 @@ import { WIRE_COLORS } from '../../../utils/harness/wire-color-map';
     MatCheckboxModule,
     MatSelectModule,
     MatIconModule,
-    MatTooltipModule
+    MatTooltipModule,
+    MatTableModule,
+    MatProgressSpinnerModule
   ],
   templateUrl: './part-edit-page.html',
   styleUrl: './part-edit-page.css',
@@ -96,6 +100,11 @@ export class PartEditPage implements OnInit {
   // Cable wire colors
   cableWireColors = signal<{ id: string; color: string; colorCode: string }[]>([]);
   wireColorOptions = WIRE_COLORS;
+
+  // Stock locations
+  locationData = signal<PartLocationsResult | null>(null);
+  loadingLocations = signal(false);
+  locationColumns = ['barcode', 'locationPath', 'quantity', 'serialNumber', 'lotNumber', 'unitOfMeasure'];
 
   // Computed property to get the selected category name
   selectedCategoryName = computed(() => {
@@ -337,6 +346,8 @@ export class PartEditPage implements OnInit {
         this.partImageFileID.set(part.imageFileID || null);
         // Load harness-specific data
         this.loadHarnessData(part.id, part.PartCategory?.name);
+        // Load stock locations
+        this.loadLocations(part.id);
       },
       error: (err) => {
         console.error('Failed to load part:', err);
@@ -415,6 +426,19 @@ export class PartEditPage implements OnInit {
         }
       });
     }
+  }
+
+  private loadLocations(partId: number) {
+    this.loadingLocations.set(true);
+    this.inventoryService.getPartLocations(partId).subscribe({
+      next: (data) => {
+        this.locationData.set(data);
+        this.loadingLocations.set(false);
+      },
+      error: () => {
+        this.loadingLocations.set(false);
+      }
+    });
   }
 
   getCategoryName(categoryId: number | null | undefined): string {

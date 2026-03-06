@@ -25,14 +25,14 @@ const mockCategories: PartCategory[] = [
 const mockParts: Part[] = [
   {
     id: 1, name: '000001', description: 'Existing Part', internalPart: false,
-    vendor: 'Digi-Key', sku: 'DK-001', link: null, minimumOrderQuantity: 1,
+    vendor: 'Digi-Key', sku: 'DK-001', link: null, minimumOrderQuantity: 1, minimumStockQuantity: null,
     partCategoryID: 1, activeFlag: true, serialNumberRequired: false,
     lotNumberRequired: false, defaultUnitOfMeasureID: 1, manufacturer: 'TE',
     manufacturerPN: 'TE-001', createdAt: '2026-01-01', updatedAt: '2026-01-01',
   },
   {
     id: 2, name: '000002', description: 'Another Part', internalPart: true,
-    vendor: '', sku: null, link: null, minimumOrderQuantity: 1,
+    vendor: '', sku: null, link: null, minimumOrderQuantity: 1, minimumStockQuantity: null,
     partCategoryID: 2, activeFlag: true, serialNumberRequired: false,
     lotNumberRequired: false, defaultUnitOfMeasureID: 1, manufacturer: null,
     manufacturerPN: null, createdAt: '2026-01-02', updatedAt: '2026-01-02',

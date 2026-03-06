@@ -50,6 +50,7 @@ export class PartsTableView implements OnInit {
 
   allParts = signal<Part[]>([]);
   displayedParts = signal<Part[]>([]);
+  stockLevels = signal<Record<number, number>>({});
   searchText = signal<string>('');
   showInactive = signal<boolean>(false);
   imageTooltipStyle: Record<string, string> = {};
@@ -62,7 +63,7 @@ export class PartsTableView implements OnInit {
   showInternal = signal<boolean>(true);
   showVendor = signal<boolean>(true);
 
-  displayedColumns: string[] = ['image', 'name', 'description', 'category', 'vendor', 'sku', 'minimumOrderQuantity', 'internalPart', 'createdAt'];
+  displayedColumns: string[] = ['image', 'name', 'description', 'category', 'vendor', 'sku', 'minimumOrderQuantity', 'inStock', 'minimumStockQuantity', 'internalPart', 'createdAt'];
 
   // Pagination
   pageSize = signal<number>(10);
@@ -201,6 +202,23 @@ export class PartsTableView implements OnInit {
         console.error('Error loading parts:', err);
       }
     });
+    this.inventoryService.getStockLevels().subscribe({
+      next: (levels) => {
+        this.stockLevels.set(levels);
+      },
+      error: (err) => {
+        console.error('Error loading stock levels:', err);
+      }
+    });
+  }
+
+  getStockQuantity(part: Part): number {
+    return this.stockLevels()[part.id] ?? 0;
+  }
+
+  isLowStock(part: Part): boolean {
+    if (part.minimumStockQuantity == null) return false;
+    return this.getStockQuantity(part) < part.minimumStockQuantity;
   }
 
   applyFiltersAndSort() {
@@ -440,6 +458,10 @@ export class PartsTableView implements OnInit {
     switch (column) {
       case 'category':
         return part.PartCategory?.name?.toLowerCase() ?? null;
+      case 'inStock':
+        return this.getStockQuantity(part);
+      case 'minimumStockQuantity':
+        return part.minimumStockQuantity ?? null;
       case 'createdAt':
         return part.createdAt ? new Date(part.createdAt).getTime() : null;
       default:

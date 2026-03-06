@@ -311,6 +311,22 @@
     font-size: 16px;
 }
 
+/* Low stock warning */
+.low-stock {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #ffb74d;
+    font-weight: 500;
+}
+
+.low-stock-icon {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+    color: #ffb74d;
+}
+
 mat-paginator {
     border-top: 1px solid rgba(255, 255, 255, 0.12);
 }

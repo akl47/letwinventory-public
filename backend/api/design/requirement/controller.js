@@ -64,7 +64,14 @@ exports.create = async (req, res) => {
 
     res.status(201).json(requirement);
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    const details = error.errors?.map(e => e.message) || [];
+    res.status(400).json({
+      error: error.message,
+      details,
+      fields: error.fields,
+      parent: error.parent?.detail,
+      name: error.name
+    });
   }
 };
 
@@ -155,7 +162,14 @@ exports.update = async (req, res) => {
 
     res.json(requirement);
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    const details = error.errors?.map(e => e.message) || [];
+    res.status(400).json({
+      error: error.message,
+      details,
+      fields: error.fields,
+      parent: error.parent?.detail,
+      name: error.name
+    });
   }
 };
 

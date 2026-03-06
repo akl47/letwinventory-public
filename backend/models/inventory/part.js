@@ -107,6 +107,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.INTEGER,
       allowNull: true
     },
+    minimumStockQuantity: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: null
+    },
     createdAt: {
       allowNull: false,
       type: DataTypes.DATE

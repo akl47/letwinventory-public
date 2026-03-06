@@ -14,14 +14,14 @@ import { InventoryTag, Part } from '../../../models';
 const mockParts: Part[] = [
   {
     id: 1, name: '000001', description: 'Resistor 100R', internalPart: false,
-    vendor: 'Digi-Key', sku: 'DK-R100', link: null, minimumOrderQuantity: 10,
+    vendor: 'Digi-Key', sku: 'DK-R100', link: null, minimumOrderQuantity: 10, minimumStockQuantity: null,
     partCategoryID: 1, activeFlag: true, serialNumberRequired: false,
     lotNumberRequired: false, defaultUnitOfMeasureID: 1, manufacturer: null,
     manufacturerPN: null, createdAt: '2026-01-01', updatedAt: '2026-01-01',
   },
   {
     id: 2, name: '000002', description: 'Capacitor 10uF', internalPart: false,
-    vendor: 'Mouser', sku: 'MO-C10', link: null, minimumOrderQuantity: 5,
+    vendor: 'Mouser', sku: 'MO-C10', link: null, minimumOrderQuantity: 5, minimumStockQuantity: null,
     partCategoryID: 1, activeFlag: true, serialNumberRequired: true,
     lotNumberRequired: true, defaultUnitOfMeasureID: 2, manufacturer: null,
     manufacturerPN: null, createdAt: '2026-01-02', updatedAt: '2026-01-02',

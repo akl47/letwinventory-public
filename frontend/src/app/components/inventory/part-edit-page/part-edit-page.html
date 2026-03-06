@@ -759,6 +759,68 @@
             </mat-card-content>
         </mat-card>
         }
+
+        <!-- Stock Locations (view mode only, existing parts) -->
+        @if (isEditMode) {
+        <mat-card class="category-card">
+            <mat-card-header>
+                <mat-card-title>Stock Locations</mat-card-title>
+                @if (locationData()) {
+                <span class="stock-total">Total: {{ locationData()!.totalQuantity }}</span>
+                }
+            </mat-card-header>
+            <mat-card-content>
+                @if (loadingLocations()) {
+                <div class="locations-loading">
+                    <mat-spinner diameter="32"></mat-spinner>
+                </div>
+                } @else if (locationData()?.traces?.length) {
+                <div class="locations-table-wrapper">
+                    <table mat-table [dataSource]="locationData()!.traces" class="locations-table">
+                        <ng-container matColumnDef="barcode">
+                            <th mat-header-cell *matHeaderCellDef>Barcode</th>
+                            <td mat-cell *matCellDef="let trace">
+                                <span class="barcode-tag">{{ trace.barcode || '-' }}</span>
+                            </td>
+                        </ng-container>
+
+                        <ng-container matColumnDef="locationPath">
+                            <th mat-header-cell *matHeaderCellDef>Location</th>
+                            <td mat-cell *matCellDef="let trace">{{ trace.locationPath || 'No location' }}</td>
+                        </ng-container>
+
+                        <ng-container matColumnDef="quantity">
+                            <th mat-header-cell *matHeaderCellDef>Quantity</th>
+                            <td mat-cell *matCellDef="let trace">{{ trace.quantity }}</td>
+                        </ng-container>
+
+                        <ng-container matColumnDef="serialNumber">
+                            <th mat-header-cell *matHeaderCellDef>Serial #</th>
+                            <td mat-cell *matCellDef="let trace">{{ trace.serialNumber || '-' }}</td>
+                        </ng-container>
+
+                        <ng-container matColumnDef="lotNumber">
+                            <th mat-header-cell *matHeaderCellDef>Lot #</th>
+                            <td mat-cell *matCellDef="let trace">{{ trace.lotNumber || '-' }}</td>
+                        </ng-container>
+
+                        <ng-container matColumnDef="unitOfMeasure">
+                            <th mat-header-cell *matHeaderCellDef>Unit</th>
+                            <td mat-cell *matCellDef="let trace">{{ trace.unitOfMeasure || '-' }}</td>
+                        </ng-container>
+
+                        <tr mat-header-row *matHeaderRowDef="locationColumns"></tr>
+                        <tr mat-row *matRowDef="let row; columns: locationColumns;"></tr>
+                    </table>
+                </div>
+                } @else {
+                <div class="view-info">
+                    <div class="info-value">No inventory found for this part</div>
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+        }
     </div>
     }
 </div>
