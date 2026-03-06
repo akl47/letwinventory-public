@@ -19,6 +19,22 @@ import {
 import { Equipment } from '../models/equipment.model';
 import { environment } from '../../environments/environment';
 
+export interface PartLocationTrace {
+    id: number;
+    quantity: number;
+    serialNumber: string | null;
+    lotNumber: string | null;
+    unitOfMeasure: string | null;
+    barcodeID: number;
+    barcode: string | null;
+    locationPath: string;
+}
+
+export interface PartLocationsResult {
+    traces: PartLocationTrace[];
+    totalQuantity: number;
+}
+
 export interface BulkImportPartInfo {
     id: number | null;
     name: string;
@@ -270,6 +286,14 @@ export class InventoryService {
             items,
             orderData
         });
+    }
+
+    getStockLevels(): Observable<Record<number, number>> {
+        return this.http.get<Record<number, number>>(`${this.apiUrl}/part/stock-levels`);
+    }
+
+    getPartLocations(partId: number): Observable<PartLocationsResult> {
+        return this.http.get<PartLocationsResult>(`${this.apiUrl}/part/${partId}/locations`);
     }
 
     getPrinters(): Observable<any[]> {

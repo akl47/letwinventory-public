@@ -138,6 +138,28 @@
                 </td>
             </ng-container>
 
+
+
+            <!-- In Stock Column -->
+            <ng-container matColumnDef="inStock">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>In Stock</th>
+                <td mat-cell *matCellDef="let part">
+                    <span [class.low-stock]="isLowStock(part)">
+                        {{ getStockQuantity(part) }}
+                        @if (isLowStock(part)) {
+                        <mat-icon class="low-stock-icon"
+                            matTooltip="Below minimum stock ({{ part.minimumStockQuantity }})">warning</mat-icon>
+                        }
+                    </span>
+                </td>
+            </ng-container>
+
+            <!-- Min Stock Quantity Column -->
+            <ng-container matColumnDef="minimumStockQuantity">
+                <th mat-header-cell *matHeaderCellDef mat-sort-header>Min Stock Qty</th>
+                <td mat-cell *matCellDef="let part">{{ part.minimumStockQuantity ?? '-' }}</td>
+            </ng-container>
+
             <!-- Min Order Quantity Column -->
             <ng-container matColumnDef="minimumOrderQuantity">
                 <th mat-header-cell *matHeaderCellDef mat-sort-header>Min Order Qty</th>
@@ -161,7 +183,8 @@
             </ng-container>
 
             <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-            <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="editPart(row)" (mousedown)="onRowMouseDown($event)" (auxclick)="onRowAuxClick($event, row)" class="clickable-row">
+            <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="editPart(row)"
+                (mousedown)="onRowMouseDown($event)" (auxclick)="onRowAuxClick($event, row)" class="clickable-row">
             </tr>
 
             <!-- No data row -->

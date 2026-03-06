@@ -1,6 +1,7 @@
 const db = require('../../../models');
 const createError = require('http-errors');
 const { Op } = require('sequelize');
+const { buildTagChain } = require('../barcode/controller');
 
 exports.getAllPartCategories = (req, res, next) => {
   db.PartCategory.findAll({
@@ -250,6 +251,82 @@ exports.deletePartByID = (req, res, next) => {
     next(createError(500, 'Error Getting Part:' + error))
   })
 }
+
+exports.getStockLevels = async (req, res, next) => {
+  try {
+    const stockLevels = await db.Trace.findAll({
+      where: { activeFlag: true },
+      attributes: [
+        'partID',
+        [db.sequelize.fn('SUM', db.sequelize.col('quantity')), 'totalQuantity']
+      ],
+      group: ['partID']
+    });
+    const result = {};
+    stockLevels.forEach(row => {
+      const json = row.toJSON();
+      result[json.partID] = parseInt(json.totalQuantity, 10);
+    });
+    res.json(result);
+  } catch (error) {
+    next(createError(500, 'Error getting stock levels: ' + error.message));
+  }
+};
+
+exports.getPartLocations = async (req, res, next) => {
+  try {
+    const partID = req.params.id;
+
+    const traces = await db.Trace.findAll({
+      where: { partID, activeFlag: true },
+      include: [
+        {
+          model: db.UnitOfMeasure,
+          as: 'unitOfMeasure',
+          attributes: ['id', 'name']
+        },
+        {
+          model: db.Barcode,
+          attributes: ['id', 'barcode']
+        }
+      ]
+    });
+
+    let totalQuantity = 0;
+    const traceResults = [];
+
+    for (const trace of traces) {
+      const json = trace.toJSON();
+      totalQuantity += json.quantity;
+
+      let locationPath = '';
+      try {
+        const chain = await buildTagChain(json.barcodeID);
+        // Chain goes from trace -> parent -> grandparent...
+        // Skip the first entry (the trace itself), reverse for top-down path
+        const locationParts = chain.slice(1).reverse();
+        locationPath = locationParts.map(t => t.name).join(' > ');
+      } catch (e) {
+        locationPath = 'Unknown';
+      }
+
+      traceResults.push({
+        id: json.id,
+        quantity: json.quantity,
+        serialNumber: json.serialNumber,
+        lotNumber: json.lotNumber,
+        unitOfMeasure: json.unitOfMeasure?.name || null,
+        barcodeID: json.barcodeID,
+        barcode: json.Barcode?.barcode || null,
+        locationPath
+      });
+    }
+
+    res.json({ traces: traceResults, totalQuantity });
+  } catch (error) {
+    next(createError(500, 'Error getting part locations: ' + error.message));
+  }
+};
 
 // exports.testError = (req, res, next) => {
 //   next(new RestError('TEST ERROR PLEASE IGNORE', 500))

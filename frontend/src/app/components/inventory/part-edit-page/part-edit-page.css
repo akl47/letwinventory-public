@@ -550,6 +550,53 @@ mat-checkbox {
     font-style: italic;
 }
 
+/* Stock locations */
+.stock-total {
+    font-size: 14px;
+    padding: 4px 12px;
+    background: var(--mat-sys-surface-container-low);
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.locations-loading {
+    display: flex;
+    justify-content: center;
+    padding: 24px;
+}
+
+.locations-table-wrapper {
+    border: 1px solid var(--mat-sys-outline-variant);
+    border-radius: 4px;
+    overflow: auto;
+    max-height: 400px;
+}
+
+.locations-table {
+    width: 100%;
+}
+
+.locations-table th {
+    background-color: var(--mat-sys-surface-container);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.locations-table td {
+    font-size: 14px;
+}
+
+.barcode-tag {
+    font-family: monospace;
+    font-size: 13px;
+    padding: 2px 8px;
+    background-color: rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+}
+
 /* Delete button */
 .mat-custom-error {
     --mdc-filled-button-container-color: #f44336 !important;

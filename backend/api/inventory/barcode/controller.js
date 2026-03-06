@@ -402,6 +402,11 @@ async function buildTagChain(startingBarcodeID) {
   return tagChain;
 }
 
+// Exported helpers for use by other controllers
+exports.buildTagChain = buildTagChain;
+exports.buildTag = buildTag;
+exports.findBarcodeWithCategory = findBarcodeWithCategory;
+
 // ============================================
 // Helper Functions - Printer
 // ============================================
