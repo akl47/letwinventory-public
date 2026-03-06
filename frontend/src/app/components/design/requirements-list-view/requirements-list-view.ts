@@ -10,6 +10,9 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatSelectModule } from '@angular/material/select';
 import { MatExpansionModule } from '@angular/material/expansion';
+import { MatCheckboxModule } from '@angular/material/checkbox';
+import { MatMenuModule } from '@angular/material/menu';
+import { MatDividerModule } from '@angular/material/divider';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { DesignRequirementService } from '../../../services/design-requirement.service';
 import { AuthService } from '../../../services/auth.service';
@@ -42,6 +45,9 @@ interface TreeRow {
         MatTooltipModule,
         MatSelectModule,
         MatExpansionModule,
+        MatCheckboxModule,
+        MatMenuModule,
+        MatDividerModule,
         MatSlideToggleModule,
     ],
     templateUrl: './requirements-list-view.html',
@@ -62,8 +68,20 @@ export class RequirementsListView implements OnInit {
     isLoading = signal(true);
     searchText = signal('');
     selectedProjectID = signal<number | null>(null);
-    approvedOnly = signal(false);
+    selectedStatuses = signal<Set<string>>(new Set(['unapproved', 'approved', 'not_implemented', 'implemented', 'validated']));
     hideChildren = signal(false);
+
+    statusOptions = [
+        { value: 'unapproved', label: 'Unapproved', icon: 'pending', cssClass: 'status-icon-draft' },
+        { value: 'approved', label: 'Approved', icon: 'check_circle', cssClass: 'status-icon-approved' },
+        { value: 'not_implemented', label: 'Not Implemented', icon: 'code_off', cssClass: 'status-icon-not-implemented' },
+        { value: 'implemented', label: 'Implemented', icon: 'build', cssClass: 'status-icon-implemented' },
+        { value: 'validated', label: 'Validated', icon: 'verified', cssClass: 'status-icon-validated' },
+    ];
+
+    activeStatusFilterCount = computed(() => {
+        return this.statusOptions.length - this.selectedStatuses().size;
+    });
     private expandedFromQuery = new Set<number>();
     private initializedFromQuery = false;
     private lastSearch = '';
@@ -80,7 +98,9 @@ export class RequirementsListView implements OnInit {
         const params = this.route.snapshot.queryParams;
         if (params['search']) this.searchText.set(params['search']);
         if (params['projectID']) this.selectedProjectID.set(parseInt(params['projectID'], 10) || null);
-        if (params['approvedOnly'] === 'true') this.approvedOnly.set(true);
+        if (params['statuses']) {
+            this.selectedStatuses.set(new Set(params['statuses'].split(',')));
+        }
         if (params['hideChildren'] === 'true') this.hideChildren.set(true);
         if (params['expanded']) {
             for (const id of params['expanded'].split(',')) {
@@ -96,7 +116,9 @@ export class RequirementsListView implements OnInit {
         const params: Record<string, string> = {};
         if (this.searchText()) params['search'] = this.searchText();
         if (this.selectedProjectID()) params['projectID'] = String(this.selectedProjectID());
-        if (this.approvedOnly()) params['approvedOnly'] = 'true';
+        if (this.selectedStatuses().size < this.statusOptions.length) {
+            params['statuses'] = Array.from(this.selectedStatuses()).join(',');
+        }
         if (this.hideChildren()) params['hideChildren'] = 'true';
         const expandedIds = this.treeRows()
             .filter(r => r.expanded && r.hasChildren)
@@ -123,7 +145,7 @@ export class RequirementsListView implements OnInit {
     buildTree() {
         const all = this.allRequirements();
         const search = this.searchText();
-        const approvedOnly = this.approvedOnly();
+        const statuses = this.selectedStatuses();
         const hideChildren = this.hideChildren();
 
         // Build a map of children
@@ -168,10 +190,29 @@ export class RequirementsListView implements OnInit {
             }
         }
 
+        const matchesStatus = (req: DesignRequirement): boolean => {
+            const approvalStatus = req.approved ? 'approved' : 'unapproved';
+            return statuses.has(approvalStatus) && statuses.has(req.implementationStatus);
+        };
+
+        // Pre-compute which nodes have a status-matching descendant
+        const hasMatchingStatusDescendant = new Map<number, boolean>();
+        const checkStatusDescendants = (id: number): boolean => {
+            if (hasMatchingStatusDescendant.has(id)) return hasMatchingStatusDescendant.get(id)!;
+            const children = childrenMap.get(id) || [];
+            const result = children.some(c => matchesStatus(c) || checkStatusDescendants(c.id));
+            hasMatchingStatusDescendant.set(id, result);
+            return result;
+        };
+        for (const req of all) checkStatusDescendants(req.id);
+
         const addChildren = (parentId: number | null, level: number, showAll: boolean) => {
             const children = childrenMap.get(parentId) || [];
             for (const req of children) {
-                if (approvedOnly && !req.approved) continue;
+                const matches = matchesStatus(req);
+                const hasDescendantMatch = hasMatchingStatusDescendant.get(req.id) || false;
+                // Skip if neither this node nor any descendant matches the status filter
+                if (!matches && !hasDescendantMatch) continue;
 
                 const inMatchPath = !!search && hasMatchingDescendant.has(req.id);
                 // Skip nodes not relevant to the search (unless parent was manually expanded)
@@ -194,20 +235,24 @@ export class RequirementsListView implements OnInit {
                 } else {
                     expanded = !hideChildren;
                 }
-                rows.push({
-                    requirement: req,
-                    level,
-                    expanded,
-                    hasChildren,
-                    childCount,
-                    visible: true,
-                    childrenAllApproved: allDescendantsApproved(req.id),
-                });
 
-                if (expanded) {
+                // Only add the row if it matches the status filter itself
+                if (matches) {
+                    rows.push({
+                        requirement: req,
+                        level,
+                        expanded,
+                        hasChildren,
+                        childCount,
+                        visible: true,
+                        childrenAllApproved: allDescendantsApproved(req.id),
+                    });
+                }
+
+                if (expanded || !matches) {
                     // When user manually expands a node during search, show all children
                     const userExpanded = !!search && prevStateMap.has(req.id) && prevStateMap.get(req.id)!;
-                    addChildren(req.id, level + 1, showAll || userExpanded);
+                    addChildren(req.id, level + (matches ? 1 : 0), showAll || userExpanded);
                 }
             }
         };
@@ -235,8 +280,38 @@ export class RequirementsListView implements OnInit {
         this.updateQueryParams();
     }
 
-    toggleApprovedOnly() {
-        this.approvedOnly.set(!this.approvedOnly());
+    isStatusSelected(value: string): boolean {
+        return this.selectedStatuses().has(value);
+    }
+
+    toggleStatus(value: string): void {
+        const current = this.selectedStatuses();
+        const newSet = new Set(current);
+        if (newSet.has(value)) {
+            newSet.delete(value);
+        } else {
+            newSet.add(value);
+        }
+        this.selectedStatuses.set(newSet);
+        this.buildTree();
+        this.updateQueryParams();
+    }
+
+    allStatusesSelected(): boolean {
+        return this.selectedStatuses().size === this.statusOptions.length;
+    }
+
+    someStatusesSelected(): boolean {
+        const size = this.selectedStatuses().size;
+        return size > 0 && size < this.statusOptions.length;
+    }
+
+    toggleAllStatuses(): void {
+        if (this.allStatusesSelected()) {
+            this.selectedStatuses.set(new Set());
+        } else {
+            this.selectedStatuses.set(new Set(this.statusOptions.map(s => s.value)));
+        }
         this.buildTree();
         this.updateQueryParams();
     }

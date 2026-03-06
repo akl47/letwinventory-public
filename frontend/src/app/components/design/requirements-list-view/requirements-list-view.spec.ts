@@ -111,8 +111,9 @@ describe('RequirementsListView', () => {
         expect(ids).toContain(2);
     });
 
-    it('should filter approved only', () => {
-        component.toggleApprovedOnly();
+    it('should filter by status using AND logic', () => {
+        // Deselect 'unapproved' — only approved items should remain
+        component.toggleStatus('unapproved');
         const rows = component.displayedRows();
         expect(rows.every(r => r.requirement.approved)).toBe(true);
     });
@@ -176,7 +177,7 @@ describe('RequirementsListView', () => {
                 provideHttpClientTesting(),
                 provideAnimationsAsync(),
                 provideRouter([]),
-                { provide: ActivatedRoute, useValue: { snapshot: { queryParams: { search: 'test', approvedOnly: 'true' } } } },
+                { provide: ActivatedRoute, useValue: { snapshot: { queryParams: { search: 'test', statuses: 'approved,implemented' } } } },
             ],
         }).compileComponents();
 
@@ -191,6 +192,8 @@ describe('RequirementsListView', () => {
         await fix.whenStable();
 
         expect(comp.searchText()).toBe('test');
-        expect(comp.approvedOnly()).toBe(true);
+        expect(comp.selectedStatuses().has('approved')).toBe(true);
+        expect(comp.selectedStatuses().has('implemented')).toBe(true);
+        expect(comp.selectedStatuses().size).toBe(2);
     });
 });
