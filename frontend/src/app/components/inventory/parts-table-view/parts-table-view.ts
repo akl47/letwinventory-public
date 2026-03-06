@@ -53,6 +53,7 @@ export class PartsTableView implements OnInit {
   stockLevels = signal<Record<number, number>>({});
   searchText = signal<string>('');
   showInactive = signal<boolean>(false);
+  lowStockOnly = signal<boolean>(false);
   imageTooltipStyle: Record<string, string> = {};
 
   // Category filter
@@ -154,6 +155,7 @@ export class PartsTableView implements OnInit {
     const params = this.route.snapshot.queryParams;
     if (params['search']) this.searchText.set(params['search']);
     if (params['inactive'] === 'true') this.showInactive.set(true);
+    if (params['lowStock'] === 'true') this.lowStockOnly.set(true);
     if (params['internal'] !== undefined) this.showInternal.set(params['internal'] !== 'false');
     if (params['vendor'] !== undefined) this.showVendor.set(params['vendor'] !== 'false');
     if (params['sort']) this.sortColumn.set(params['sort']);
@@ -173,6 +175,7 @@ export class PartsTableView implements OnInit {
     const search = this.searchText();
     if (search) params['search'] = search;
     if (this.showInactive()) params['inactive'] = 'true';
+    if (this.lowStockOnly()) params['lowStock'] = 'true';
     if (!this.showInternal()) params['internal'] = 'false';
     if (!this.showVendor()) params['vendor'] = 'false';
     const sortCol = this.sortColumn();
@@ -257,6 +260,11 @@ export class PartsTableView implements OnInit {
     // Apply search filter
     filtered = filterBySearch(filtered, this.searchText(), ['name', 'description', 'vendor', 'sku', 'PartCategory.name']);
 
+    // Filter low stock only
+    if (this.lowStockOnly()) {
+      filtered = filtered.filter(part => this.isLowStock(part));
+    }
+
     // Apply sorting
     const sortCol = this.sortColumn();
     const sortDir = this.sortDirection();
@@ -302,6 +310,13 @@ export class PartsTableView implements OnInit {
 
   onToggleInactive(checked: boolean) {
     this.showInactive.set(checked);
+    this.pageIndex.set(0);
+    this.applyFiltersAndSort();
+    this.updateQueryParams();
+  }
+
+  onToggleLowStock(checked: boolean) {
+    this.lowStockOnly.set(checked);
     this.pageIndex.set(0);
     this.applyFiltersAndSort();
     this.updateQueryParams();
@@ -401,6 +416,11 @@ export class PartsTableView implements OnInit {
 
     // Apply search filter
     filtered = filterBySearch(filtered, this.searchText(), ['name', 'description', 'vendor', 'sku', 'PartCategory.name']);
+
+    // Filter low stock only
+    if (this.lowStockOnly()) {
+      filtered = filtered.filter(part => this.isLowStock(part));
+    }
 
     return filtered.length;
   }

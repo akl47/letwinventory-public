@@ -60,6 +60,9 @@
                     placeholder="Search by name, description, category, vendor, or SKU">
                 <mat-icon matPrefix>search</mat-icon>
             </mat-form-field>
+            <mat-slide-toggle [checked]="lowStockOnly()" (change)="onToggleLowStock($event.checked)" color="warn">
+                Low Stock Only
+            </mat-slide-toggle>
             <mat-slide-toggle [checked]="showInactive()" (change)="onToggleInactive($event.checked)" color="primary">
                 Show Inactive
             </mat-slide-toggle>
