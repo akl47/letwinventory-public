@@ -131,6 +131,15 @@
                             </mat-form-field>
 
                             <mat-form-field appearance="outline">
+                                <mat-label>Minimum Stock Quantity</mat-label>
+                                <input matInput formControlName="minimumStockQuantity" type="number" min="0">
+                                @if (form.get('minimumStockQuantity')?.hasError('min')) {
+                                <mat-error>Cannot be negative</mat-error>
+                                }
+                            </mat-form-field>
+                        </div>
+                        <div class="form-row">
+                            <mat-form-field appearance="outline">
                                 <mat-label>Default Unit of Measure</mat-label>
                                 <mat-select formControlName="defaultUnitOfMeasureID">
                                     @for (uom of unitsOfMeasure(); track uom.id) {
@@ -156,6 +165,12 @@
                                 <div class="info-label">Min Order Qty</div>
                                 <div class="info-value">{{ currentPart?.minimumOrderQuantity || 1 }}</div>
                             </div>
+                            <div class="info-item">
+                                <div class="info-label">Min Stock Qty</div>
+                                <div class="info-value">{{ currentPart?.minimumStockQuantity ?? '-' }}</div>
+                            </div>
+                        </div>
+                        <div class="info-row">
                             <div class="info-item">
                                 <div class="info-label">Unit of Measure</div>
                                 <div class="info-value">{{ getUomName(currentPart?.defaultUnitOfMeasureID) }}</div>
