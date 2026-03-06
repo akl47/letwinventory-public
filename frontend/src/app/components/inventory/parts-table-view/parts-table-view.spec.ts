@@ -20,7 +20,7 @@ const mockCategories: PartCategory[] = [
 const mockParts: Part[] = [
   {
     id: 1, name: '000001', description: 'Test Connector', internalPart: false,
-    vendor: 'Digi-Key', sku: 'DK-001', link: null, minimumOrderQuantity: 1,
+    vendor: 'Digi-Key', sku: 'DK-001', link: null, minimumOrderQuantity: 1, minimumStockQuantity: null,
     partCategoryID: 1, activeFlag: true, serialNumberRequired: false,
     lotNumberRequired: false, defaultUnitOfMeasureID: 1, manufacturer: 'TE',
     manufacturerPN: 'TE-001', createdAt: '2026-01-01T00:00:00Z',
@@ -29,7 +29,7 @@ const mockParts: Part[] = [
   },
   {
     id: 2, name: '000002', description: 'Test Wire', internalPart: true,
-    vendor: '', sku: null, link: null, minimumOrderQuantity: 1,
+    vendor: '', sku: null, link: null, minimumOrderQuantity: 1, minimumStockQuantity: null,
     partCategoryID: 2, activeFlag: true, serialNumberRequired: false,
     lotNumberRequired: false, defaultUnitOfMeasureID: 1, manufacturer: null,
     manufacturerPN: null, createdAt: '2026-01-02T00:00:00Z',
@@ -38,7 +38,7 @@ const mockParts: Part[] = [
   },
   {
     id: 3, name: '000003', description: 'Inactive Cable', internalPart: false,
-    vendor: 'Mouser', sku: 'MO-001', link: null, minimumOrderQuantity: 5,
+    vendor: 'Mouser', sku: 'MO-001', link: null, minimumOrderQuantity: 5, minimumStockQuantity: null,
     partCategoryID: 3, activeFlag: false, serialNumberRequired: false,
     lotNumberRequired: false, defaultUnitOfMeasureID: 1, manufacturer: 'Belden',
     manufacturerPN: 'BL-001', createdAt: '2026-01-03T00:00:00Z',
