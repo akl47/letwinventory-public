@@ -159,6 +159,14 @@ export class PartEditDialog implements OnInit {
         internalPart: true,
       });
     }
+
+    // Disable reactive form controls programmatically (avoids Angular warning)
+    if (this.lockedCategoryName) {
+      this.form.get('partCategoryID')?.disable();
+      if (this.lockedCategoryName === 'Harness') {
+        this.form.get('internalPart')?.disable();
+      }
+    }
   }
 
   private loadHarnessData(partId: number, categoryName?: string) {
@@ -789,7 +797,7 @@ export class PartEditDialog implements OnInit {
     }
 
     if (this.form.valid) {
-      const formValue = this.form.value;
+      const formValue = this.form.getRawValue();
       const partData = {
         name: formValue.name!,
         description: formValue.description || '',

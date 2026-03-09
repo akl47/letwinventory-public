@@ -573,6 +573,7 @@ function generateZPLHeader(qrCodeData, labelSize = '3x1') {
  * @returns {string} ZPL details section
  */
 function generateZPLDetailsSection(name, description, labelSize = '3x1', qty = null, uom = null) {
+  description = description || '';
   if (labelSize === '1.5x1') {
     // 1.5"x1" label layout
     font_size = Math.floor(-1.25 * name.length + 42)

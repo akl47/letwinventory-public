@@ -28,7 +28,7 @@
 
         <mat-form-field appearance="outline">
             <mat-label>Category</mat-label>
-            <mat-select formControlName="partCategoryID" required [disabled]="lockedCategoryName !== null">
+            <mat-select formControlName="partCategoryID" required>
                 @for (category of categories(); track category.id) {
                 <mat-option [value]="category.id">{{ category.name }}</mat-option>
                 }
@@ -340,7 +340,7 @@
         </div>
         }
 
-        <mat-checkbox formControlName="internalPart" [disabled]="lockedCategoryName === 'Harness'">
+        <mat-checkbox formControlName="internalPart">
             Internal Part (manufactured in-house)
         </mat-checkbox>
 
