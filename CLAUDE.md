@@ -87,7 +87,7 @@ For multi-step tasks, state a brief plan:
 ### Stack
 - **Backend:** Node.js/Express 5, Sequelize ORM, PostgreSQL (SQLite in tests)
 - **Frontend:** Angular 19 (standalone components, signals), Angular Material
-- **Tests:** Jest (backend, 27 suites/255 tests), Karma (frontend specs), Playwright (E2E, 41 tests)
+- **Tests:** Jest (backend, ~34 suites/374 tests), Karma (frontend, ~74 spec files), Playwright (E2E, 41 tests)
 - **Infra:** Docker, GitHub Actions CI/CD, DockerHub deploy on `v*` tag
 
 ### Environment Configuration
@@ -102,21 +102,36 @@ For multi-step tasks, state a brief plan:
 - `/inventory`, `/parts`, `/parts/new`, `/parts/:id/edit`, `/equipment` — inventory
 - `/orders`, `/orders/bulk-upload`, `/orders/:id` — orders
 - `/harness`, `/harness/editor`, `/harness/editor/:id` — wire harness
+- `/requirements`, `/requirements/new`, `/requirements/:id/edit` — design requirements
+- `/admin/groups`, `/admin/groups/:id`, `/admin/users`, `/admin/users/:id/permissions`, `/admin/users/new` — admin
 - `/inventory/barcode-history/:id`, `/settings`, `/mobile` — other
-- All routes (except `/home`) use `authGuard`
+- All routes (except `/home`) use `authGuard`; admin routes also use `adminGuard`
 
 ### API Structure (backend)
 APIs auto-discovered via `backend/api/index.js` directory scanner:
 - `/api/auth/google/*` — OAuth login, test-login, token refresh
-- `/api/auth/user/*` — checkToken, getUser, updateUser
+- `/api/auth/user/*` — checkToken, getUser, updateUser, getSessions, revokeSession
+- `/api/auth/api-key/*` — API key CRUD, token exchange, scoped permissions
 - `/api/inventory/part/*`, `/api/inventory/barcode/*`, `/api/inventory/trace/*`
 - `/api/inventory/location/*`, `/api/inventory/box/*`, `/api/inventory/equipment/*`
 - `/api/inventory/order/*`, `/api/inventory/order-item/*`
 - `/api/parts/connector/*`, `/api/parts/cable/*`, `/api/parts/component/*`, `/api/parts/wire/*`, `/api/parts/wire-end/*`
 - `/api/parts/harness/*` — includes revision control endpoints (`submit-review`, `reject`, `release`, `history`, `revisions`, `revert`)
 - `/api/planning/task/*`, `/api/planning/tasklist/*`, `/api/planning/project/*`, `/api/planning/scheduled-task/*`
+- `/api/design/requirement/*`, `/api/design/requirement-category/*` — requirements CRUD + approval + history
+- `/api/admin/group/*`, `/api/admin/user/*`, `/api/admin/permission/*` — RBAC management + impersonation
 - `/api/config/push-subscription/*`, `/api/config/notification-preference/*`, `/api/config/vapid-public-key`
-- `/api/files/*` — file uploads
+- `/api/files/*` — read-only file access (upload moved to `/api/inventory/part/upload`)
+
+### Permission System
+- **Tables:** Permissions, UserGroups, UserGroupMembers, GroupPermissions, UserPermissions, ApiKeyPermissions
+- **Resources (9):** parts, inventory, equipment, tasks, projects, harness, requirements, admin, orders
+- **Actions (3+2):** read, write, delete (base); requirements.approve, admin.impersonate (special)
+- **Total permissions:** 29 (9×3 + 2 special)
+- **Enforcement:** `checkPermission(resource, action)` middleware on all routes; exempt: auth/*, config/*
+- **Frontend:** `authService.hasPermission()` signal; permission-gated UI buttons with tooltips
+- **Test helpers:** `authenticatedRequest` auto-grants all permissions by default; opt out with `{ grantPermissions: false }`
+- **API keys:** scoped permissions at creation (immutable after); token exchange returns intersection of key + user permissions
 
 ### Key Database Tables & Migrations
 Migrations in `backend/migrations/` — run via `npx sequelize-cli db:migrate`:
@@ -129,6 +144,11 @@ Migrations in `backend/migrations/` — run via `npx sequelize-cli db:migrate`:
 - `Tasks.dueDateNotifiedAt` — prevents duplicate notification sends
 - `PushSubscriptions` — web push endpoints per user
 - `NotificationPreferences` — per-user notification settings
+- `DesignRequirements` — hierarchical requirements with category FK, project FK, approval workflow
+- `RequirementCategories` — lookup table for requirement categories
+- `RequirementHistory` — immutable audit trail with `changedByUserID` FK, field-level diffs
+- `RefreshTokens.userAgent` — device tracking for session management
+- `ApiKeys.expiresAt` — nullable DATE for key expiration
 
 ### Harness Editor Architecture
 - **Canvas:** `harness-canvas.ts` — HTML5 Canvas rendering, mouse/touch interaction, hit testing
@@ -140,8 +160,17 @@ Migrations in `backend/migrations/` — run via `npx sequelize-cli db:migrate`:
 - **Endpoint resolution:** `endpoint-resolver.ts` resolves connection endpoints by type
 - **Undo/redo:** `HarnessHistoryService` with past/future stacks (max 50), transaction pattern for drags
 - **Release workflow:** Draft → Review → Released; released harnesses are read-only; editing creates new revision (A→B→C...)
+- **View-only mode:** `isViewOnly` computed from `!hasPermission('harness', 'write')`; extends `isLocked`; View Only badge shown
 - **Image handling:** Images stripped from JSON before save/export via `stripImageData()`; re-fetched from parts DB on load via `syncPartsFromDatabase()`
 - **Parts sync on load:** Compares harness elements against DB for structural changes (pinCount, type, etc.); opens sync dialog if differences found; images always silently refreshed
+
+### Authentication & Sessions
+- **OAuth:** Google login → JWT access token + refresh token
+- **Multi-session:** Up to 10 concurrent sessions per user; oldest deactivated when exceeded
+- **Session tracking:** `userAgent` stored on RefreshToken; `session_id` cookie set on login
+- **Session management:** `GET /sessions` lists active; `DELETE /sessions/:id` revokes
+- **Impersonation:** `POST /api/admin/user/:id/impersonate` → 1-hour JWT with `impersonatedBy` claim; no refresh; toolbar turns orange; auto-stops on 401
+- **API keys:** scoped permissions at creation (immutable); optional `expiresAt`; exchangeToken rejects expired keys
 
 ### Services & Background Processes
 - **Scheduled task service:** Runs hourly, creates tasks from cron expressions; uses AND logic for DOM+DOW (custom `computeNextRun()`, not cron-parser's OR behavior)
@@ -150,8 +179,8 @@ Migrations in `backend/migrations/` — run via `npx sequelize-cli db:migrate`:
 - **DigiKey lookup:** `backend/scripts/digikey-lookup.js` — API-based (not direct DB), requires `--token <jwt>`
 
 ### Testing
-- **Backend tests:** Jest with SQLite, `--runInBand --silent`, 242 pass / 13 skipped (PostgreSQL-specific)
-- **Frontend specs:** Karma, 60 spec files covering all components/services/guards/interceptors
+- **Backend tests:** Jest with SQLite, `--runInBand --silent`
+- **Frontend specs:** Karma, ~74 spec files covering all components/services/guards/interceptors
 - **E2E:** Playwright on port 4201, chromium only, auth via test-login endpoint → storageState
 - **Test runner:** `scripts/run-tests.sh` runs all suites
 - **Skipped tests:** PostgreSQL sequences, `Op.iLike`, raw SQL unions, network-dependent (printer)
@@ -178,6 +207,19 @@ Migrations in `backend/migrations/` — run via `npx sequelize-cli db:migrate`:
 - Vertical wire labels always read top-to-bottom
 - `by-part` endpoints (connector, cable, component) include nested `Part.imageFile`
 - Frontend transform functions fall back to `part.imageFile.data` when specific image file is null
+- API key permissions are immutable after creation (set at create time only)
+- 403 in frontend interceptor does NOT clear token (user is authenticated but lacks permission)
+- Impersonation token: 1-hour JWT, no refresh, original admin token saved to `original_auth_token` localStorage key
+- `minimumStockQuantity` is nullable (null = no minimum set)
+
+### Requirements System
+- **CLI:** `scripts/req.js` — create, update, delete, list, approve, history, categories, create-category, update-category, delete-category
+- **Auth:** test-login with `claude@letwin.co`, JWT cached 55min in `/tmp`
+- **Hierarchy:** req 1 is root → QMS (98) contains ~149 quality-affecting reqs organized by regulatory clause (820.x / ISO 13485); G5 (147, System Infrastructure) stays outside QMS
+- **Categories:** ~30 categories; each has exactly 1 root requirement; zero cross-category parent links
+- **History:** immutable RequirementHistory table with changedByUserID FK, auto-recorded on all mutations
+- **Status filter:** 5-status AND-based filter (approved/unapproved × not_implemented/implemented/validated)
+- **Custom command:** `.claude/commands/feature.md` — `/feature` slash command for guided workflow
 
 ## Instructions for Future Sessions
 
@@ -189,545 +231,41 @@ Each session should:
 
 ---
 
-## Session: 2026-02-15
-
-### Files Modified
-- `backend/middleware/bodyValidator.js` — removed 12 debug console.log statements (6 `req.body` + 6 `UNCAUGHT TYPE`)
-- `backend/api/inventory/trace/controller.js` — removed 4 debug console.log statements
-- `backend/api/auth/user/controller.js` — removed 4 debug console.log statements (including credential leak)
-- `backend/api/inventory/barcode/controller.js` — removed 3 debug console.log statements
-- `backend/middleware/checkToken.js` — removed 1 redundant error dump
-- `backend/package.json` — added `--silent` to jest command
-- `frontend/e2e/harness.spec.ts` — fixed editor route (`/#/harness/editor/:id` not `/#/harness/:id`), fixed export button selector (`download` icon not `more_vert`)
-
-### Changes Made
-1. **Cleaned up debug logging in backend** — removed ~24 debug `console.log` statements from production code; kept intentional prefixed logs (`[AUTH]`, `[REFRESH]`, `[ScheduledTasks]`) and `console.error` in catch blocks; added `--silent` to Jest to suppress remaining console output during tests
-2. **Fixed harness E2E tests** — corrected route path to `/#/harness/editor/${id}` (matching `app.routes.ts`), rewrote export test to use correct `download` icon selector and proper `waitForEvent` ordering
-
-## Session: 2026-02-15 (Design Requirements Feature)
-
-### Files Created
-- `backend/migrations/20260215120000-create-requirement-categories.js` — RequirementCategories table migration
-- `backend/migrations/20260215120001-create-design-requirements.js` — DesignRequirements table migration with FK indexes
-- `backend/models/design/requirementCategory.js` — RequirementCategory model with hasMany association
-- `backend/models/design/designRequirement.js` — DesignRequirement model with self-referencing hierarchy, User, Project, Category associations
-- `backend/api/design/requirement-category/controller.js` — CRUD controller for categories
-- `backend/api/design/requirement-category/routes.js` — Routes with checkToken
-- `backend/api/design/requirement/controller.js` — CRUD + approve/unapprove controller
-- `backend/api/design/requirement/routes.js` — Routes with checkToken
-- `backend/tests/__tests__/design/requirement-category.test.js` — 12 tests for category CRUD
-- `backend/tests/__tests__/design/design-requirement.test.js` — 19 tests for requirement CRUD + hierarchy + approval
-- `frontend/src/app/models/design-requirement.model.ts` — DesignRequirement and RequirementCategory interfaces
-- `frontend/src/app/services/design-requirement.service.ts` — CRUD + approve/unapprove service with cache
-- `frontend/src/app/services/requirement-category.service.ts` — CRUD service with cache
-- `frontend/src/app/components/design/requirements-list-view/` — Tree table list view (ts, html, css)
-- `frontend/src/app/components/design/requirement-edit-page/` — Create/edit page (ts, html, css)
-- `frontend/src/app/components/design/category-manage-dialog/` — Category management dialog (ts, html, css)
-
-### Files Modified
-- `frontend/src/app/app.routes.ts` — added 3 routes: `/requirements`, `/requirements/new`, `/requirements/:id/edit`
-- `frontend/src/app/components/common/nav/nav.component.html` — added "Requirements" nav link with checklist icon
-- `backend/tests/setup.js` — added DesignRequirement and RequirementCategory to tablesToClean
-- `docs/requirements.md` — added section 14 (REQ-DES-001 through REQ-DES-007) with test file references
-
-### Changes Made
-1. **Design Requirements feature** — full-stack implementation following CLAUDE.md workflow (requirements → tests → implementation)
-2. **Backend** — new `design/` API category auto-discovered by existing route scanner; RequirementCategories lookup table + DesignRequirements table with hierarchical parent-child, project FK, category FK, approval workflow
-3. **Frontend** — tree table list view with expand/collapse, project filter, search; separate create/edit pages with view-first pattern; category management dialog
-4. **Tests** — 31 new backend tests (29 suites / 273 tests total, all passing)
-
-### Decisions
-- API lives under `/api/design/requirement` and `/api/design/requirement-category` (new `design/` group)
-- Sidebar link placed between "Wire Harness" and "Scanner" using `checklist` material icon
-- Tree table uses flat data source with indentation rather than nested mat-tree (matches existing mat-table patterns)
-- Categories managed via dialog opened from edit page (not a separate route)
-
-## Session: 2026-02-15 (Requirement History / QMS Audit Trail)
-
-### Files Created
-- `backend/migrations/20260215120002-create-requirement-history.js` — RequirementHistory table migration with FK indexes
-- `backend/models/design/requirementHistory.js` — RequirementHistory model (immutable, no updatedAt, User FK)
-- `backend/tests/__tests__/design/requirement-history.test.js` — 15 tests for history on create/update/approve/unapprove/delete + GET endpoint + lifecycle
-
-### Files Modified
-- `backend/api/design/requirement/controller.js` — added `recordHistory` helper, history recording on all 5 mutation types, `getHistory` endpoint
-- `backend/api/design/requirement/routes.js` — added `GET /:id/history` route
-- `backend/tests/setup.js` — added `RequirementHistory` to tablesToClean
-- `frontend/src/app/models/design-requirement.model.ts` — added `RequirementHistoryEntry` interface
-- `frontend/src/app/services/design-requirement.service.ts` — added `getHistory()` method
-- `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.ts` — added history signal, toggle, load, helper methods
-- `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.html` — added collapsible history timeline section
-- `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.css` — added history timeline styles
-- `docs/requirements.md` — added REQ-DES-008 through REQ-DES-011, updated REQ-DES-001 derived reqs
-
-### Changes Made
-1. **Requirement History audit trail** — immutable `RequirementHistory` table following HarnessRevisionHistory pattern with User FK improvement
-2. **Auto-recording** — all 5 mutation types (create/update/approve/unapprove/delete) automatically log history with field-level diffs
-3. **History API** — `GET /api/design/requirement/:id/history` returns entries DESC with changedBy user association
-4. **Frontend timeline** — collapsible history section on edit page with change type icons, user, timestamp, notes, and field diffs
-5. **Tests** — 15 new tests (30 suites / 285 tests total, all passing)
-
-### Decisions
-- Follows HarnessRevisionHistory pattern: `timestamps: false`, `freezeTableName: true`, hardcoded enum validation
-- Improvement over HarnessRevisionHistory: uses `changedByUserID` FK to Users instead of string `changedBy`
-- Update diffs only tracked for content fields (not approved/activeFlag which have dedicated change types)
-- No history record created when update has no actual field changes
-- `changeNotes` supported on update for optional user-provided change reasons
-
-## Session: 2026-02-15 (Requirements CLI Script)
-
-### Files Created
-- `scripts/req.js` — CLI script for managing design requirements via API
-
-### Files Modified
-- `CLAUDE.md` — updated "New feature workflow" step 1 to use `scripts/req.js` instead of `docs/requirements.md`, updated steps 3 and 5 accordingly
-
-### Changes Made
-1. **Requirements CLI script** — Node.js CLI (`scripts/req.js`) that authenticates via test-login endpoint, caches JWT in `/tmp`, and provides subcommands for all requirement CRUD operations, approval workflow, history, and categories
-2. **CLAUDE.md workflow update** — new requirements now go into the database via the CLI script instead of `docs/requirements.md`
-
-### Decisions
-- CLI script over MCP server (simpler, no background process, no extra deps)
-- CLI script over raw curl (handles auth caching, JSON formatting, error handling)
-- Auth via test-login with `claude@letwin.co` identity, token cached for 55min in `/tmp`
-- `docs/requirements.md` kept as static archive; new requirements go to database only
-
-## Session: 2026-02-15 (Permissions & User Groups Feature)
-
-### Files Created
-- `backend/migrations/20260216000000-create-user-groups.js` — UserGroups table
-- `backend/migrations/20260216000001-create-user-group-members.js` — UserGroupMembers junction table
-- `backend/migrations/20260216000002-create-permissions.js` — Permissions table
-- `backend/migrations/20260216000003-create-group-permissions.js` — GroupPermissions junction table
-- `backend/migrations/20260216000004-create-user-permissions.js` — UserPermissions junction table
-- `backend/migrations/20260216000005-seed-permissions-and-admin-group.js` — 28 permissions + Admin group seed
-- `backend/models/admin/userGroup.js` — UserGroup model with belongsToMany User, Permission
-- `backend/models/admin/userGroupMember.js` — Junction model (User ↔ UserGroup)
-- `backend/models/admin/permission.js` — Permission model (resource + action)
-- `backend/models/admin/groupPermission.js` — Junction model (UserGroup ↔ Permission)
-- `backend/models/admin/userPermission.js` — Junction model (User ↔ Permission)
-- `backend/middleware/checkPermission.js` — Permission enforcement middleware + loadEffectivePermissions helper
-- `backend/api/admin/group/controller.js` — Group CRUD + membership controller
-- `backend/api/admin/group/routes.js` — Group API routes with checkPermission
-- `backend/api/admin/user/controller.js` — User list + permission management controller
-- `backend/api/admin/user/routes.js` — User API routes with checkPermission
-- `backend/api/admin/permission/controller.js` — Permission list controller
-- `backend/api/admin/permission/routes.js` — Permission API routes
-- `backend/tests/__tests__/admin/permission-enforcement.test.js` — 20 tests for permission enforcement
-- `backend/tests/__tests__/admin/user-group.test.js` — 15 tests for group API
-- `backend/tests/__tests__/admin/user-permission.test.js` — 10 tests for user permission API
-- `frontend/src/app/models/permission.model.ts` — Permission, UserGroup, AdminUser interfaces
-- `frontend/src/app/services/admin.service.ts` — Admin API service
-- `frontend/src/app/guards/admin.guard.ts` — Admin route guard
-- `frontend/src/app/components/admin/groups-list/` — Group list page (ts, html, css)
-- `frontend/src/app/components/admin/group-edit/` — Group edit page with members + permissions grid (ts, html, css)
-- `frontend/src/app/components/admin/users-list/` — User list page (ts, html, css)
-- `frontend/src/app/components/admin/user-permissions/` — User permission edit page (ts, html, css)
-
-### Files Modified
-- `backend/models/common/user.js` — added belongsToMany associations for groups and directPermissions
-- `backend/api/auth/user/controller.js` — checkToken and refreshToken now return permissions array
-- `backend/tests/setup.js` — added 5 new tables to tablesToClean, seed permissions in seedReferenceData
-- `backend/tests/helpers.js` — added createTestGroup, addUserToGroup, assignGroupPermission, assignUserPermission, assignAllPermissions helpers; authenticatedRequest auto-grants all permissions by default
-- All 25 existing route files — added `checkPermission(resource, action)` middleware after checkToken
-- `frontend/src/app/services/auth.service.ts` — added _permissions signal, hasPermission(), hasAnyPermission(), permissions computed; updated checkAuthStatus/refreshAccessToken/clearToken
-- `frontend/src/app/interceptors/auth.interceptor.ts` — 403 no longer clears token or redirects (user is authenticated but lacks permission)
-- `frontend/src/app/interceptors/auth.interceptor.spec.ts` — updated 403 test to expect no token clearing
-- `frontend/src/app/app.routes.ts` — added 5 admin routes with authGuard + adminGuard
-- `frontend/src/app/components/common/nav/nav.component.ts` — added admin NavGroup type, hasAdminAccess computed, adminPrefixes
-- `frontend/src/app/components/common/nav/nav.component.html` — added conditional admin rail item + flyout
-- `docs/requirements.md` — added Section 15 (REQ-PERM-001–010), Appendix C §15, Appendix D.12, updated revision history/summary
-
-### Changes Made
-1. **Permissions model** — 5 new tables (UserGroups, UserGroupMembers, Permissions, GroupPermissions, UserPermissions) with 28 seed permissions across 7 resources
-2. **Permission enforcement** — checkPermission middleware applied to all 25 existing route files; zero-trust default (no implicit access)
-3. **Admin API** — group CRUD + membership, user permission management, permission reference list
-4. **Auth integration** — checkToken/refreshToken return effective permissions array; frontend stores in signal
-5. **Frontend admin UI** — 4 admin components (groups-list, group-edit, users-list, user-permissions) with adminGuard
-6. **Conditional nav** — Admin sidebar group shown only to users with admin.read permission
-7. **Tests** — 45 new backend tests (33 suites / 334 tests total, all passing); authenticatedRequest auto-grants permissions for backward compatibility
-
-### Decisions
-- Resource mapping: inventory/* → `inventory`, order/orderitem → `orders`, parts/* → `harness`, planning/* → `planning`, design/* → `design`, files → `files`, admin/* → `admin`
-- Exempt endpoints: auth/google/*, auth/user/*, config/* (no permission check needed)
-- authenticatedRequest in test helpers auto-grants all permissions by default; opt out with `{ grantPermissions: false }` for enforcement tests
-- Permission caching per request via `req._effectivePermissions` avoids redundant DB queries
-- 403 handler in frontend interceptor does NOT clear token — user is authenticated but lacks permission
-- Admin group seeded with all 28 permissions; first admin bootstrapped via manual DB insert
-
-## Session: 2026-02-16 (API Key Scoped Permissions)
-
-### Files Created
-- `backend/migrations/20260216300000-create-api-key-permissions.js` — ApiKeyPermissions junction table (apiKeyID FK→ApiKeys, permissionID FK→Permissions, unique index, CASCADE delete)
-- `backend/models/auth/apiKeyPermission.js` — ApiKeyPermission model (immutable, no updatedAt)
-
-### Files Modified
-- `backend/models/auth/apiKey.js` — added belongsToMany Permission through ApiKeyPermission
-- `backend/api/auth/api-key/controller.js` — scoped create (optional permissionIds), intersection-based exchangeToken, getPermissions, setPermissions endpoints
-- `backend/api/auth/api-key/routes.js` — added GET /:id/permissions, PUT /:id/permissions
-- `backend/tests/__tests__/auth/api-key.test.js` — added 9 permission tests (27 total in suite)
-- `backend/tests/setup.js` — added ApiKeyPermission to tablesToClean (before ApiKey for FK order)
-- `frontend/src/app/services/auth.service.ts` — updated ApiKey interface with permissions, added getApiKeyPermissions/setApiKeyPermissions methods, updated createApiKey to accept optional permissionIds
-- `frontend/src/app/components/settings/settings-page/settings-page.ts` — added permission grid state (allPermissions, editingKeyId, selectedPermissionIds, permissionsByResource computed), permission editing methods
-- `frontend/src/app/components/settings/settings-page/settings-page.html` — added permission count per key, tune icon button, inline permission grid editor with save/cancel
-- `frontend/src/app/components/settings/settings-page/settings-page.css` — added perm-table, key-perm-editor, permissions-grid styles (reused from admin group-edit pattern)
-
-### Changes Made
-1. **ApiKeyPermissions table** — junction table following UserPermission pattern; immutable (no updatedAt), CASCADE on both FKs
-2. **Scoped create** — create accepts optional `permissionIds`; if provided, validates against user's effective permissions (400 if exceeded); if omitted, grants all user permissions (backward compatible)
-3. **Intersection exchange** — token exchange loads key permissions AND user's current effective permissions, returns intersection; if user lost a permission since key creation, the key can't use it
-4. **Permission management endpoints** — GET/PUT /:id/permissions for viewing and replacing key permissions; only own active keys (404 otherwise); PUT validates against user's effective set
-5. **Frontend permission grid** — settings page shows permission count per key; "tune" icon opens inline permission grid (same checkbox table pattern as admin group-edit); save/cancel controls
-6. **Tests** — 9 new tests covering: scoped create, backward-compat create, over-scope rejection, scoped exchange, intersection behavior, set/get permissions, validation, cross-user isolation (34 suites / 374 total, all passing)
-
-### Decisions
-- Key permissions stored in dedicated junction table (not embedded in ApiKey row) — matches existing permission patterns
-- Token exchange returns `resource.action` strings (same format as existing permission flow) after intersection
-- List endpoint includes permissions association for frontend to display counts without extra requests
-- No checkPermission middleware on api-key routes (they use checkToken only, same as auth/* pattern — keys are user-scoped, not admin-managed)
-
-## Session: 2026-02-16 (Settings Page Redesign + Immutable Key Permissions)
-
-### Files Modified
-- `CLAUDE.md` — added "Always ask before running tests" rule to Project-Specific Rules
-- `frontend/src/app/components/settings/settings-page/settings-page.ts` — full-width layout; permission grid moved to create flow (collapsible, all pre-selected); removed edit-after-creation methods (editKeyPermissions, saveKeyPermissions, cancelEditPermissions, editingKeyId); added showCreatePerms signal
-- `frontend/src/app/components/settings/settings-page/settings-page.html` — orders-page header style (icon + title); permission grid in create area with expand/collapse; removed tune button and inline editor from key list
-- `frontend/src/app/components/settings/settings-page/settings-page.css` — `:host` absolute positioning matching orders page; full-width container; create-perm-section collapsible panel styles; removed key-perm-editor and key-actions styles
-- `frontend/src/app/services/auth.service.ts` — removed setApiKeyPermissions method
-- `backend/api/auth/api-key/controller.js` — removed setPermissions export
-- `backend/api/auth/api-key/routes.js` — removed PUT /:id/permissions route
-- `backend/tests/__tests__/auth/api-key.test.js` — removed 2 setPermissions tests, updated cross-user test to GET-only (25 tests in suite)
-
-### Changes Made
-1. **Settings page full-width** — matches orders page layout (`:host` absolute, full-width container, 28px header with icon)
-2. **Permissions at creation time** — collapsible permission grid in create form, all pre-selected by default, user unchecks before generating
-3. **Immutable after creation** — removed PUT endpoint, frontend edit UI, and setApiKeyPermissions service method; keys show permission count but can't be modified
-4. **CLAUDE.md rule** — added instruction to always ask user before running tests
-
-## Session: 2026-02-16 (Settings Accordion + API Key Dialog + Expiration)
-
-### Files Created
-- `backend/migrations/20260216400000-add-api-key-expiration.js` — adds nullable `expiresAt` DATE column to ApiKeys
-- `frontend/src/app/components/settings/api-key-create-dialog/api-key-create-dialog.ts` — dialog with name, expiration (never/date), permission grid
-- `frontend/src/app/components/settings/api-key-create-dialog/api-key-create-dialog.html` — two-state dialog (form → key display)
-- `frontend/src/app/components/settings/api-key-create-dialog/api-key-create-dialog.css` — dialog styles
-
-### Files Modified
-- `backend/models/auth/apiKey.js` — added `expiresAt` field (DATE, nullable)
-- `backend/api/auth/api-key/controller.js` — create accepts `expiresAt`, list returns it, exchangeToken rejects expired keys
-- `backend/tests/__tests__/auth/api-key.test.js` — added 5 expiration tests (30 total in suite)
-- `frontend/src/app/services/auth.service.ts` — added `expiresAt` to ApiKey interface, changed `createApiKey` to accept data object with optional expiresAt
-- `frontend/src/app/components/settings/settings-page/settings-page.ts` — replaced inline create form with dialog, replaced sections with MatExpansionModule accordion, removed permission grid state (moved to dialog)
-- `frontend/src/app/components/settings/settings-page/settings-page.html` — accordion panels for Notifications/Devices/API Keys, "Generate New Key" opens dialog, shows expiration info per key
-- `frontend/src/app/components/settings/settings-page/settings-page.css` — accordion styles, removed inline create/permission grid styles, added expired key visual states
-
-### Changes Made
-1. **Accordion cards** — each settings section (Notifications, Devices, API Keys) in a `mat-expansion-panel`; Notifications and API Keys expanded by default
-2. **Notification button width** — constrained with `align-self: flex-start` via `.action-btn` class
-3. **API key create dialog** — name field, expiration radio (never/date) with datepicker, collapsible permission grid; two-state UI (form → copy key); closes and refreshes key list
-4. **Key expiration backend** — `expiresAt` column, exchangeToken rejects expired keys (401), list includes expiresAt
-5. **Expired key UI** — keys show "Expires MMM d, y" or "Never expires" or red "Expired" badge with strikethrough name
-
-## Session: 2026-02-17 (Permission System Restructure)
-
-### Files Created
-- `backend/migrations/20260216600000-restructure-permissions.js` — maps old permissions to new ones, deletes old rows (CASCADE cleans junction tables)
-
-### Files Modified
-- `backend/migrations/20260216000005-seed-permissions-and-admin-group.js` — updated Resources/Actions to new model (9 resources × 3 actions + approve)
-- `backend/seeders/20260216000000-seed-permissions-and-admin-group.js` — same update
-- `backend/tests/setup.js` — updated permission seeding to new model
-- `backend/tests/__tests__/admin/permission-enforcement.test.js` — updated resource/action names, added resource mapping tests for parts, equipment, projects
-- `backend/api/files/routes.js` — stripped to read-only (GET /:id, GET /:id/data with checkToken only)
-- `backend/api/inventory/part/routes.js` — resource inventory→parts, create/update→write, added upload/delete routes
-- `backend/api/inventory/barcode/routes.js` — update→write
-- `backend/api/inventory/box/routes.js` — create/update→write
-- `backend/api/inventory/location/routes.js` — create/update→write
-- `backend/api/inventory/trace/routes.js` — create/update→write
-- `backend/api/inventory/equipment/routes.js` — resource inventory→equipment, create/update→write
-- `backend/api/inventory/unitofmeasure/routes.js` — resource inventory→admin
-- `backend/api/inventory/order/routes.js` — create/update→write
-- `backend/api/inventory/orderitem/routes.js` — create/update→write
-- `backend/api/parts/connector/routes.js` — resource harness→parts, create/update→write
-- `backend/api/parts/cable/routes.js` — resource harness→parts, create/update→write
-- `backend/api/parts/component/routes.js` — resource harness→parts, create/update→write
-- `backend/api/parts/wire/routes.js` — resource harness→parts, create/update→write
-- `backend/api/parts/wire-end/routes.js` — resource harness→admin, create/update→write
-- `backend/api/parts/harness/routes.js` — create/update→write
-- `backend/api/design/requirement/routes.js` — create/update→write
-- `backend/api/design/requirement-category/routes.js` — create/update→write
-- `backend/api/admin/group/routes.js` — create/update→write
-- `backend/api/admin/user/routes.js` — create/update→write
-- `frontend/src/app/app.routes.ts` — updated route guard resources (planning→tasks/projects, inventory→parts/equipment)
-- `frontend/src/app/components/common/nav/nav.component.ts` — replaced hasPlanningAccess with hasTasksAccess/hasProjectsAccess/hasPartsAccess/hasEquipmentAccess; updated hasInventoryGroupAccess
-- `frontend/src/app/components/common/nav/nav.component.html` — split inventory flyout per-item permission checks; Tasks uses hasTasksAccess
-- `frontend/src/app/components/admin/permission-grid/permission-grid.ts` — base actions: create/read/update/delete → read/write/delete
-- `frontend/src/app/services/harness-parts.service.ts` — upload URL /files → /inventory/part/upload
-
-### Changes Made
-1. **Merged create+update→write** — all route files use `write` instead of separate `create`/`update` actions
-2. **Split broad resources** — `inventory` split into `parts`+`inventory`+`equipment`; `planning` split into `tasks`+`projects`; `harness` parts routes moved to `parts` resource
-3. **Moved wire-ends and UoM under admin** — wire-end routes use `admin` resource; unit-of-measure uses `admin` resource
-4. **File upload moved to part routes** — upload/delete routes added to `/api/inventory/part/upload`; `/api/files` stripped to read-only
-5. **Migration preserves existing assignments** — maps old junction table rows to new permissions before deleting old ones
-6. **Frontend updated** — route guards, nav visibility, permission grid, file upload URLs all reflect new model
-
-### Decisions
-- Resource mapping: inventory/part → `parts`, inventory/barcode+trace+location+box → `inventory`, inventory/equipment → `equipment`, planning/task+tasklist+taskhistory+scheduled-task+time-tracking → `tasks`, planning/project → `projects`, parts/connector+cable+component+wire → `parts`, parts/wire-end → `admin`, parts/harness → `harness`
-- File routes kept as read-only (GET /:id, GET /:id/data) with checkToken only — file IDs are opaque references used by parts
-- Total permissions: 9×3 + 1 (requirements.approve) = 28
-
-## Session: 2026-02-17 (Admin User Impersonation)
-
-### Files Created
-- `backend/migrations/20260217000000-add-impersonate-permission.js` — adds `admin.impersonate` permission and assigns to Admin group
-- `backend/tests/__tests__/admin/impersonation.test.js` — 8 tests for impersonation endpoint
-
-### Files Modified
-- `backend/seeders/20260216000000-seed-permissions-and-admin-group.js` — added `admin.impersonate` to extraPermissions
-- `backend/tests/setup.js` — added `admin.impersonate` to permission seed data
-- `backend/api/admin/user/controller.js` — added `impersonate` export (JWT with impersonatedBy claim, target permissions)
-- `backend/api/admin/user/routes.js` — added `POST /:id/impersonate` route with `checkPermission('admin', 'impersonate')`
-- `backend/middleware/checkToken.js` — propagates `impersonatedBy` from JWT to `req.impersonatedBy`
-- `backend/api/auth/user/controller.js` — checkToken endpoint returns `impersonatedBy` field from decoded JWT
-- `frontend/src/app/services/auth.service.ts` — added `_isImpersonating` signal, `isImpersonating` computed, `startImpersonation()`, `stopImpersonating()`; `checkAuthStatus` detects impersonation; `clearToken` cleans up original token
-- `frontend/src/app/services/admin.service.ts` — added `impersonateUser()` method
-- `frontend/src/app/interceptors/auth.interceptor.ts` — 401 during impersonation stops impersonation instead of refreshing
-- `frontend/src/app/components/admin/user-permissions/user-permissions.ts` — added `canImpersonate` computed, `impersonate()` method
-- `frontend/src/app/components/admin/user-permissions/user-permissions.html` — added Impersonate button in view-mode header
-- `frontend/src/app/components/common/nav/nav.component.ts` — added `isImpersonating` computed, `stopImpersonating()` method
-- `frontend/src/app/components/common/nav/nav.component.html` — added `[class.impersonating]` on toolbar, impersonation label + stop button
-- `frontend/src/app/components/common/nav/nav.component.scss` — added `.impersonating`, `.impersonation-label`, `.stop-impersonating-btn` styles
-
-### Changes Made
-1. **New permission** — `admin.impersonate` added via migration and seed data; assigned to Admin group
-2. **Impersonate endpoint** — `POST /api/admin/user/:id/impersonate` issues 1-hour JWT with target's identity + `impersonatedBy` admin ID; returns target's effective permissions
-3. **Middleware propagation** — checkToken middleware sets `req.impersonatedBy` for audit trail; auth/user checkToken returns it in response
-4. **Frontend impersonation flow** — admin's original token saved to localStorage; impersonation token swapped in; user/permission signals updated; navigates to /tasks
-5. **Stop impersonation** — restores original token, reloads admin identity via checkAuthStatus, navigates to /admin/users
-6. **Interceptor handling** — 401 during impersonation auto-stops instead of attempting refresh (impersonation tokens have no refresh token)
-7. **Visual indicator** — toolbar turns orange (#e65100) during impersonation with "Impersonating [Name]" label and Stop button
-8. **Tests** — 8 new backend tests covering permission enforcement, happy path, JWT claims, edge cases, and token acceptance
-
-### Decisions
-- Token strategy: 1-hour JWT with `impersonatedBy` claim (no refresh token for impersonation sessions)
-- Original admin token preserved in `original_auth_token` localStorage key
-- Impersonation auto-stops on 401 (expired token) instead of attempting refresh
-- Cannot impersonate self (400) or inactive users (400)
-- Total permissions: 9×3 + 2 (requirements.approve + admin.impersonate) = 29
-
-## Session: 2026-02-17 (Permission-Gated UI + Harness View-Only + Review & Cleanup)
-
-### Files Created
-- `frontend/src/app/components/admin/groups-list/groups-list.spec.ts` — 6 tests for group list component
-- `frontend/src/app/components/admin/group-edit/group-edit.spec.ts` — 13 tests for group edit component
-- `frontend/src/app/components/admin/permission-grid/permission-grid.spec.ts` — 20 tests for permission grid component
-- `frontend/src/app/components/admin/users-list/users-list.spec.ts` — 10 tests for users list component
-- `frontend/src/app/components/admin/user-permissions/user-permissions.spec.ts` — 6 tests for user permissions component
-- `frontend/src/app/components/admin/user-create-dialog/user-create-dialog.spec.ts` — 8 tests for user create dialog
-- `frontend/src/app/components/settings/api-key-create-dialog/api-key-create-dialog.spec.ts` — 10 tests for API key create dialog
-- `frontend/src/app/guards/permission.guard.spec.ts` — 3 tests for permission guard
-- `frontend/src/app/components/design/requirements-list-view/requirements-list-view.spec.ts` — spec for requirements list
-- `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.spec.ts` — spec for requirement edit page
-- `frontend/src/app/components/design/category-manage-dialog/category-manage-dialog.spec.ts` — spec for category dialog
-- `frontend/src/app/services/admin.service.spec.ts` — spec for admin service
-- `frontend/src/app/services/design-requirement.service.spec.ts` — spec for design requirement service
-- `frontend/src/app/services/requirement-category.service.spec.ts` — spec for requirement category service
-- `backend/migrations/20260216000000-create-permission-tables.js` — consolidated from 10 old migrations
-- `backend/migrations/20260216000001-create-api-keys.js` — consolidated from 3 old migrations
-
-### Files Modified
-- `frontend/src/app/components/harness/harness-page/harness-page.ts` — added `isViewOnly` computed, `MatIconModule`; extended `isLocked` with `!canWrite()`; guarded keyboard shortcuts with `isLocked()` checks
-- `frontend/src/app/components/harness/harness-page/harness-page.html` — added View Only badge overlay, passed `[isViewOnly]` to property panel
-- `frontend/src/app/components/harness/harness-page/harness-page.scss` — added `.view-only-badge` styles (amber text, semi-transparent dark background)
-- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.ts` — added `isViewOnly` input, `MatTooltipModule`
-- `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.html` — wrapped release buttons in tooltip span, disabled when `isViewOnly()`
-- `frontend/src/app/components/admin/groups-list/groups-list.ts` — replaced `console.error` with `MatSnackBar` notifications
-- `backend/seeders/20260216000000-seed-permissions-and-admin-group.js` — added Default group creation (idempotent)
-
-### Files Deleted
-- 12 old migration files consolidated into 2 (20260216000000–20260216000005, 20260216100000, 20260216300000, 20260216400000, 20260216500000, 20260216600000, 20260217000000)
-
-### Changes Made
-1. **Permission-gated UI** — "New" and "Edit" buttons disabled with tooltip when user lacks write permission (across all list/edit pages)
-2. **Harness view-only mode** — `isViewOnly` computed based on `!hasPermission('harness', 'write')`; `isLocked` extended to include view-only; keyboard shortcuts, auto-save, and release buttons all gated; View Only badge shown in top-left corner
-3. **Migration consolidation** — 13 new migrations (none deployed to production) consolidated into 3 clean migrations; restructure migration folded into initial seed (seeds final permission state directly)
-4. **Code quality** — replaced `console.error` with MatSnackBar in admin components
-5. **Requirements coverage** — created 6 new requirements (298–303) for impersonation, permission-gated UI, harness view-only, API key expiration; updated 2 existing requirements (279, 296)
-6. **Frontend spec coverage** — created 14 new spec files covering all admin components, permission guard, API key dialog, design components, and 3 services
-
-### Decisions
-- View Only badge uses amber (#ffb74d) text on semi-transparent black background, positioned top-left with `pointer-events: none`
-- Release buttons (To Review, Release, Return to Draft, New Revision) all disabled with "You do not have permission" tooltip in view-only mode
-- Migration consolidation safe because none had been deployed to production
-- `admin.impersonate` permission included in initial seed (no separate migration needed)
-
-## Session: 2026-02-18 (Requirements Refactor)
-
-### Files Modified
-- `scripts/req.js` — added `create-category`, `update-category`, `delete-category` CLI commands
-
-### Changes Made (database only — no code changes beyond req.js)
-1. **Fixed stale requirements** — req 296: removed stale PUT reference from validation; req 297: rewritten to reflect create-time permission selection (not post-creation editing)
-2. **Created 3 new categories** — Authorization (id=60), API Keys (id=61), Quality & Compliance (id=62)
-3. **Deleted 6 emptied sparse QMS categories** — Counterfeit Parts Prevention (42), Product Safety (41), Nonconforming Product (45), Configuration Management (40), Production Process Verification (44), Labeling Controls (37)
-4. **Created 26 category parent requirements** (one per category) — each gives a brief abstract overview of why that system exists; all other requirements in the category are children (directly or via sub-hierarchy)
-5. **Fixed all cross-category parent links** — old hierarchy had 137 (System) and 234 (QMS) parenting children across many categories; all broken and re-linked to correct category parents
-6. **Moved cross-category orphans** — 162 (UX, was under Barcode), 165 (Configuration, was under Barcode), 202 (UX, was under Harness), 257 (External Providers, was under Purchasing), 263 (Quality & Compliance, was under Production), 268 (Development, was under Records) — all re-parented to their own category root
-7. **Linked all parentless requirements** — 298 (Authorization), 282/283/299/300/301 (UX), 302 (Wire Harness) — all linked to their category parent
-
-### Category Parent Requirements (ID → Category)
-| ID | Category | ID | Category |
-|----|----------|----|----------|
-| 304 | API Keys | 318 | Notifications |
-| 305 | Authorization | 319 | Development |
-| 306 | Wire Harness | 320 | QMS |
-| 307 | Mobile | 321 | Design Controls |
-| 308 | Barcode | 322 | Design Requirements |
-| 309 | Orders | 323 | Purchasing Controls |
-| 310 | Planning | 324 | External Providers |
-| 311 | System | 325 | Identification & Traceability |
-| 312 | Authentication | 326 | Production & Process Controls |
-| 313 | Inventory | 327 | Quality & Compliance |
-| 314 | Parts | 328 | Records & Data Integrity |
-| 315 | Configuration | 329 | Operational Risk Management |
-| 316 | File Management | | |
-| 317 | UX | | |
-
-### Hierarchy Rules (enforced)
-- Every category has exactly 1 root requirement (parentRequirementID=null)
-- Every non-root requirement traces up to its category root with zero cross-category links
-- Within-category sub-hierarchies preserved (e.g. 139→140, 147→151→152, 243→250→251)
-- Total requirements: 192 (166 original + 26 category parents)
-
-### Decisions
-- Authentication category (46) kept for OAuth/JWT requirements (139-146) — no longer overloaded
-- UX category (56) collects cross-cutting UI requirements: admin nav (282), admin pages (283), impersonation UI (299), permission-gated buttons (300-301), barcode dialog (162), harness shortcuts (202), list view patterns (223-224), sidebar (225), notifications (226)
-- Sparse QMS categories deleted after requirements moved (rather than left empty)
-- Category parent descriptions are abstract ("why this system exists"); children are concrete ("what it does")
-
-## Session: 2026-02-24 (Multi-Session Support + Session Management UI)
-
-### Files Created
-- `backend/migrations/20260224000000-add-user-agent-to-refresh-tokens.js` — adds nullable `userAgent` STRING(255) column to RefreshTokens
-
-### Files Modified
-- `backend/models/auth/refreshToken.js` — added `userAgent` field (STRING(255), nullable)
-- `backend/api/auth/google/controller.js` — removed "deactivate all" block; added max 10 sessions enforcement (deactivate oldest); captures `req.headers['user-agent']` on RefreshToken.create; sets `session_id` cookie; clears `session_id` on logout
-- `backend/api/auth/user/controller.js` — added `getSessions` (list active sessions DESC), `revokeSession` (deactivate by id with ownership check); refresh response now includes `sessionId`
-- `backend/api/auth/user/routes.js` — added `GET /sessions`, `DELETE /sessions/:id` with checkToken
-- `frontend/src/app/services/auth.service.ts` — added `Session` interface; added `SESSION_ID_KEY` constant; `checkForOAuthCallback` reads/stores session_id cookie; `refreshAccessToken` stores sessionId from response; `clearToken` removes session_id; added `getCurrentSessionId()`, `getSessions()`, `revokeSession()` methods
-- `frontend/src/app/components/settings/settings-page/settings-page.ts` — added `sessions` and `currentSessionId` signals; `loadSessions()`, `revokeSession()`, `isCurrentSession()` methods; imports Session type
-- `frontend/src/app/components/settings/settings-page/settings-page.html` — added Active Sessions panel between Notifications and Permissions with device labels, sign-in/expiry dates, current session badge, revoke buttons
-- `frontend/src/app/components/settings/settings-page/settings-page.css` — added `.current-session-badge` green pill style
-
-### Changes Made
-1. **Concurrent sessions** — removed the "deactivate all existing tokens" block from Google OAuth callback; new logins no longer kill existing sessions
-2. **Session limit** — max 10 active sessions per user; oldest deactivated when limit exceeded
-3. **Device tracking** — `userAgent` captured and stored on each RefreshToken for device identification
-4. **Session API** — `GET /sessions` lists active sessions; `DELETE /sessions/:id` revokes with ownership validation (404 for other users)
-5. **Session ID tracking** — backend sets `session_id` cookie on OAuth callback and returns `sessionId` on refresh; frontend stores in localStorage
-6. **Settings UI** — Active Sessions panel shows all sessions with device labels (reuses existing `getDeviceLabel`), sign-in dates, expiry dates; current session highlighted with green "This device" badge; other sessions have logout revoke button
-
-### Requirements Created (IDs 330-334)
-- 330: Multi-session support (parent, under 312/Authentication)
-- 331: Session limit enforcement (child of 330)
-- 332: Session device tracking (child of 330)
-- 333: Session management API (child of 330)
-- 334: Session management UI (child of 330)
-
-### Decisions
-- Session limit set at 10 (generous for multi-device, prevents abuse)
-- `session_id` cookie is non-httpOnly so frontend can read it (same pattern as `auth_token` and `name`)
-- Session panel placed between Notifications and Permissions (expanded by default)
-- Reuses existing `getDeviceLabel()` method from push subscription device list
-- Logout only deactivates current session's refresh token (not all sessions)
-
-## Session: 2026-03-03 (Requirements Hierarchy Refactoring)
-
-### Files Modified
-- None (database-only changes via `scripts/req.js`)
-
-### Changes Made (database only)
-1. **Created Authorization category** (id=30) for RBAC, user groups, and permission enforcement
-2. **Created 5 group requirements** under req 1 as intermediate hierarchy layer:
-   - 143: Security & Access Control (G1)
-   - 144: Inventory & Supply Chain (G2)
-   - 145: Engineering & Design (G3)
-   - 146: Operations & Planning (G4)
-   - 147: System Infrastructure (G5)
-3. **Created 7 category root requirements** under group parents:
-   - 148: Authentication root (under G1, cat 16)
-   - 149: Barcode root (under G2, cat 18)
-   - 150: Planning root (under G4, cat 22)
-   - 151: Configuration root (under G5, cat 25)
-   - 152: UX root (under G5, cat 26)
-   - 153: Records & Data Integrity root (under 98, cat 8)
-   - 154: Authorization root (under G1, cat 30)
-4. **Re-parented ~33 existing requirements** to fix cross-category links and establish proper hierarchy:
-   - Moved 11, 38, 139 → G2; 45, 102, 107 → G3; 91, 81, 80 → G4; 94 → G5
-   - Fixed auth reqs: 2→1, 3/5/7/8→R1(148), 21→R2(149), 67/72/77/78/142→R3(150)
-   - Fixed UX reqs: 26/66/87/89/90→R5(152), 29→R4(151)
-   - Fixed dev reqs: 95/96/132→94
-   - Fixed QMS records: 129/130/131→R6(153)
-   - Changed req 142 category from System(1) to Planning(22)
-5. **Created 15 new feature requirements** covering previously missing subsystems:
-   - Authentication: 155 (multi-session), 156 (device tracking), 157 (session management), 158 (API keys), 159 (scoped permissions), 160 (expiration), 161 (token exchange)
-   - Authorization: 162 (permission model), 163 (user groups), 164 (direct permissions), 165 (enforcement), 166 (permission-gated UI), 167 (admin users), 168 (impersonation)
-   - Wire Harness: 169 (view-only mode)
-6. **Updated req 139** placeholder with proper description and rationale for parts management
-
-### Hierarchy Summary (after refactoring)
-| Metric | Before | After |
-|--------|--------|-------|
-| Categories | 29 | 30 (+1 Authorization) |
-| Requirements | 140 | 167 (+27 new) |
-| Root requirement | req 1 | req 1 (unchanged) |
-| Direct children of req 1 | 15 | 7 (2, 98, 143-147) |
-| Depth levels | 2-3 | 6 (root → group → cat root → feature → detail → sub-detail) |
-| Cross-category parent links | ~30 | 0 |
-| Feature coverage gaps | ~8 | 0 |
-| Orphans | 0 | 0 |
-| Reachable from req 1 | 140/140 | 167/167 |
-
-### Decisions
-- Group requirements (G1-G5) are abstract "why" descriptions in System category (cat 1)
-- Category root requirements (R1-R7) are concrete "what" descriptions in their own category
-- QMS subtree (req 98) kept as direct child of req 1 — not under a group (it IS the group)
-- Req 2 (soft deletion) kept as direct child of req 1 — cross-cutting concern
-- Req 142 (task sync/SSE) moved from System to Planning category (matches its function)
-- Authorization category separate from Authentication — auth answers "who are you?", authz answers "what can you do?"
-
-## Session: 2026-03-03 (QMS Alignment Restructuring)
-
-### Files Modified
-- `scripts/req.js` — added `delete` command (switch case + help text)
-
-### Changes Made (database only — 18 operations)
-1. **Re-parented 14 requirements** to align regulated processes under QMS clause nodes:
-   - **101 (Personnel/Auth — 820.20(b)(1), ISO §6.2):** 148 (Authentication), 154 (Authorization)
-   - **98 (QMS):** 102 (Design Controls) moved from G3 to direct QMS child
-   - **102 (Design Controls — 820.30, ISO §7.3):** 107 (Design Requirements), 45 (Wire Harness)
-   - **118 (Purchasing — 820.50, ISO §7.4):** 38 (Orders), 139 (Parts)
-   - **122 (ID & Traceability — 820.60/65, ISO §7.5.3):** 11 (Inventory), 149 (Barcodes)
-   - **125 (Production & Process — 820.70, ISO §7.5.1):** 150 (Planning), 81 (Mobile), 91 (Notifications)
-   - **99 (Document Control — 820.40, ISO §4.2.4):** 80 (File management)
-   - **153 (Records — 820.180-186):** 2 (Soft deletion)
-2. **Soft-deleted 4 empty group nodes** — G1 (143), G2 (144), G3 (145), G4 (146)
-3. **Added `delete` command to req.js** — `node scripts/req.js delete <id>` soft-deletes a requirement
-
-### Hierarchy Summary (after restructuring)
-| Metric | Before | After |
-|--------|--------|-------|
-| Req 1 direct children | 7 (2, 98, 143-147) | 2 (98, 147) |
-| QMS (98) direct children | 13 | 14 |
-| Reqs under QMS | ~25 | ~149 |
-| Reqs outside QMS (G5 + root) | ~142 | ~14 |
-| Active requirements | 167 | 163 |
-| 820.30 (Design Controls) coverage | 0% | 100% |
-
-### Decisions
-- All quality-affecting processes now trace through QMS (req 98), organized by regulatory clause
-- G5 (147, System Infrastructure) stays outside QMS — development, UX, and config are not quality-affecting
-- Req 2 (soft deletion) moved under Records (153) — it's a data integrity concern, not cross-cutting
-- Design Controls (102) is now a direct child of QMS, closing the 820.30 / ISO 13485 §7.3 gap
+## Session History (condensed)
+
+### 2026-02-15
+- Removed ~24 debug `console.log` statements from backend; added `--silent` to Jest
+- Fixed harness E2E tests (route path + export selector)
+- **Design Requirements feature** — full-stack: RequirementCategories + DesignRequirements tables, hierarchical CRUD + approval, tree table list view, create/edit pages, category dialog; API under `/api/design/requirement*`
+- **Requirement History** — immutable audit trail table with `changedByUserID` FK; auto-records on all 5 mutation types; collapsible timeline on edit page
+- **Requirements CLI** — `scripts/req.js` for DB-based requirement management (replaced `docs/requirements.md`)
+- **Permissions & User Groups** — 5 tables (UserGroups, UserGroupMembers, Permissions, GroupPermissions, UserPermissions); `checkPermission` middleware on all 25 route files; admin API + UI; 45 backend tests
+
+### 2026-02-16
+- **API Key Scoped Permissions** — ApiKeyPermissions junction table; scoped create, intersection-based token exchange
+- **Settings page redesign** — full-width layout, accordion panels, API key create dialog with name/expiration/permission grid
+- **Immutable key permissions** — removed PUT endpoint; permissions set at creation only
+- **Key expiration** — `expiresAt` column; exchangeToken rejects expired keys; expired badge in UI
+
+### 2026-02-17
+- **Permission restructure** — merged create+update→write; split inventory→parts/inventory/equipment; split planning→tasks/projects; total 29 permissions (9×3 + 2 special)
+- **Admin impersonation** — `admin.impersonate` permission; 1-hour JWT with `impersonatedBy`; orange toolbar indicator
+- **Permission-gated UI** — buttons disabled with tooltip when lacking write permission; harness view-only mode
+- **Migration consolidation** — 13 pre-production migrations → 3 clean files
+- **Frontend specs** — 14 new spec files for admin, design, and settings components
+
+### 2026-02-18
+- **Requirements DB refactor** — fixed hierarchy, created category parents, eliminated cross-category links; added `create-category`/`update-category`/`delete-category` to req.js
+
+### 2026-02-24
+- **Multi-session support** — removed single-session enforcement; max 10 concurrent; `userAgent` tracking on RefreshTokens; session management API + settings UI with "This device" badge
+
+### 2026-03-03
+- **Requirements hierarchy refactoring** — created group requirements (G1-G5), category roots, 15 feature requirements; zero cross-category links; 167 total reqs
+- **QMS alignment** — re-parented regulated processes under QMS clause nodes (820.x/ISO); soft-deleted empty group nodes; ~149 reqs now trace through QMS
+
+### 2026-03-06
+- **Requirements status filter** — 5-status AND-based multi-select replacing boolean toggle; tree traversal preserves children of filtered-out parents
+- **Part minimum stock quantity** — added to part edit page (form + view mode); nullable field
+- **Low stock toggle** — "Low Stock Only" toggle in parts table; filters by `minimumStockQuantity` threshold
+- **Custom `/feature` slash command** — `.claude/commands/feature.md` for guided new feature workflow
