@@ -119,6 +119,12 @@ export class MobileScanner implements OnInit, OnDestroy {
         this.stopCamera();
     }
 
+    private ensureDetector() {
+        if (!this.detector && 'BarcodeDetector' in window) {
+            this.initDetector();
+        }
+    }
+
     private initDetector() {
         this.detector = new (window as any).BarcodeDetector({
             formats: ['code_128', 'code_39', 'qr_code', 'ean_13', 'ean_8'],
@@ -397,21 +403,13 @@ export class MobileScanner implements OnInit, OnDestroy {
 
     scanAgain() {
         this.resetState();
-        if (!('BarcodeDetector' in window)) {
-            this.state.set('unsupported');
-            return;
-        }
-        if (!this.detector) this.initDetector();
+        this.ensureDetector();
         this.startCamera();
     }
 
     tryAgain() {
         this.resetState();
-        if (!('BarcodeDetector' in window)) {
-            this.state.set('unsupported');
-            return;
-        }
-        if (!this.detector) this.initDetector();
+        this.ensureDetector();
         this.startCamera();
     }
 
