@@ -56,6 +56,10 @@ describe('ReceiveLineItemDialog', () => {
     fixture.detectChanges();
   }
 
+  beforeEach(() => {
+    localStorage.removeItem('receiveDialogSettings');
+  });
+
   afterEach(() => {
     TestBed.resetTestingModule();
   });

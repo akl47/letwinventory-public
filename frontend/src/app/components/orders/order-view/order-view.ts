@@ -84,8 +84,6 @@ export class OrderView implements OnInit, OnDestroy {
 
   orderLineTypes = signal<any[]>([]);
 
-  printers = signal<any[]>([]);
-
   hasNextStatus = computed(() => {
     const order = this.currentOrder();
     return order?.OrderStatus?.nextStatusID != null;
@@ -149,15 +147,6 @@ export class OrderView implements OnInit, OnDestroy {
       },
       error: (err) => {
         this.errorNotification.showHttpError(err, 'Failed to load order line types');
-      }
-    });
-
-    this.inventoryService.getPrinters().subscribe({
-      next: (printers) => {
-        this.printers.set(printers);
-      },
-      error: (err) => {
-        this.errorNotification.showHttpError(err, 'Failed to load printers');
       }
     });
 
@@ -470,12 +459,9 @@ export class OrderView implements OnInit, OnDestroy {
                   this.loadOrder(true);
 
                   if (result.printBarcode && equipment.barcodeID) {
-                    const defaultPrinter = this.printers().find(p => p.isDefault);
-                    const printerIP = defaultPrinter?.ipAddress || '10.50.20.91';
                     this.inventoryService.printBarcode(
                       equipment.barcodeID,
-                      result.barcodeSize,
-                      printerIP
+                      result.barcodeSize
                     ).subscribe({
                       next: () => {
                         this.errorNotification.showSuccess(`Received equipment "${equipment.name}" - Label printed`);
@@ -516,12 +502,9 @@ export class OrderView implements OnInit, OnDestroy {
                   this.loadOrder(true);
 
                   if (result.printBarcode && trace.barcodeID) {
-                    const defaultPrinter = this.printers().find(p => p.isDefault);
-                    const printerIP = defaultPrinter?.ipAddress || '10.50.20.91';
                     this.inventoryService.printBarcode(
                       trace.barcodeID,
-                      result.barcodeSize,
-                      printerIP
+                      result.barcodeSize
                     ).subscribe({
                       next: () => {
                         this.errorNotification.showSuccess(`Received ${result.receivedQuantity} of ${item.Part?.name || 'item'} - Label printed`);

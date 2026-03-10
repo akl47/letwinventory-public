@@ -27,14 +27,20 @@
                 <mat-spinner diameter="24"></mat-spinner>
             } @else {
                 <mat-form-field appearance="outline" class="full-width">
-                    <mat-label>Select Location</mat-label>
-                    <mat-select [ngModel]="selectedLocationId()" (ngModelChange)="selectedLocationId.set($event)" required>
-                        @for (loc of locations(); track loc.id) {
-                            <mat-option [value]="loc.id">
-                                {{ loc.barcode }}@if (loc.name || loc.description) { - {{ loc.name || loc.description }}}
+                    <mat-label>Search Location</mat-label>
+                    <input matInput
+                           [value]="locationSearch()"
+                           (input)="onLocationInput($any($event.target).value)"
+                           [matAutocomplete]="locationAuto"
+                           placeholder="Type to search...">
+                    <mat-autocomplete #locationAuto="matAutocomplete"
+                                      (optionSelected)="onLocationSelected($event.option.value)">
+                        @for (loc of filteredLocations(); track loc.id) {
+                            <mat-option [value]="loc">
+                                {{ getLocationLabel(loc) }}
                             </mat-option>
                         }
-                    </mat-select>
+                    </mat-autocomplete>
                     <mat-hint>Where will this item be stored?</mat-hint>
                 </mat-form-field>
             }
