@@ -120,6 +120,32 @@
                 <mat-icon>delete</mat-icon>
                 Trash
             </button>
+            <button mat-flat-button class="action-btn action-reprint" (click)="printLabel()" [disabled]="isPrinting()">
+                @if (isPrinting()) {
+                <mat-spinner diameter="24"></mat-spinner>
+                } @else {
+                <mat-icon>print</mat-icon>
+                }
+                Reprint
+            </button>
+        </div>
+
+        <!-- Barcode preview -->
+        <div class="barcode-preview">
+            @if (barcodeImageLoading()) {
+            <mat-spinner diameter="24"></mat-spinner>
+            }
+            @if (barcodeImageUrl()) {
+            <img [src]="barcodeImageUrl()" alt="Barcode label" class="barcode-preview-img"
+                [class.hidden]="barcodeImageLoading()"
+                (load)="onBarcodeImageLoad()" (error)="onBarcodeImageError()" />
+            }
+            <div class="label-size-toggle">
+                <span>1.5" x 1"</span>
+                <mat-slide-toggle [checked]="selectedLabelSize() === '3x1'" (change)="onLabelSizeToggle($event)">
+                </mat-slide-toggle>
+                <span>3" x 1"</span>
+            </div>
         </div>
 
         <button mat-button class="scan-again-btn" (click)="scanAgain()">
