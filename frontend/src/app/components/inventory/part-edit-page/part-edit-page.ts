@@ -1,6 +1,6 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatFormFieldModule } from '@angular/material/form-field';
@@ -22,6 +22,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatTableModule } from '@angular/material/table';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { WIRE_COLORS } from '../../../utils/harness/wire-color-map';
+import { BarcodeTag } from '../barcode-tag/barcode-tag';
 
 @Component({
   selector: 'app-part-edit-page',
@@ -38,7 +39,9 @@ import { WIRE_COLORS } from '../../../utils/harness/wire-color-map';
     MatIconModule,
     MatTooltipModule,
     MatTableModule,
-    MatProgressSpinnerModule
+    MatProgressSpinnerModule,
+    BarcodeTag,
+    RouterLink
   ],
   templateUrl: './part-edit-page.html',
   styleUrl: './part-edit-page.css',
@@ -105,6 +108,7 @@ export class PartEditPage implements OnInit {
   locationData = signal<PartLocationsResult | null>(null);
   loadingLocations = signal(false);
   locationColumns = ['barcode', 'locationPath', 'quantity', 'serialNumber', 'lotNumber', 'unitOfMeasure'];
+  orderColumns = ['vendor', 'status', 'quantityOrdered', 'quantityReceived', 'quantityPending'];
 
   // Computed property to get the selected category name
   selectedCategoryName = computed(() => {
@@ -430,7 +434,7 @@ export class PartEditPage implements OnInit {
     }
   }
 
-  private loadLocations(partId: number) {
+  loadLocations(partId: number) {
     this.loadingLocations.set(true);
     this.inventoryService.getPartLocations(partId).subscribe({
       next: (data) => {

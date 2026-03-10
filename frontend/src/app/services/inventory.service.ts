@@ -30,9 +30,20 @@ export interface PartLocationTrace {
     locationPath: string;
 }
 
+export interface PendingOrderItem {
+    orderItemId: number;
+    orderId: number;
+    vendor: string | null;
+    status: string;
+    quantityOrdered: number;
+    quantityReceived: number;
+    quantityPending: number;
+}
+
 export interface PartLocationsResult {
     traces: PartLocationTrace[];
     totalQuantity: number;
+    pendingOrders?: PendingOrderItem[];
 }
 
 export interface BulkImportPartInfo {

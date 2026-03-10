@@ -353,6 +353,11 @@ video.visible {
     color: #fff !important;
 }
 
+.action-part {
+    background: #0277bd !important;
+    color: #fff !important;
+}
+
 /* Barcode preview */
 .barcode-preview {
     display: flex;

@@ -12,7 +12,7 @@ import { forkJoin } from 'rxjs';
 import { InventoryService, InventoryTag, Barcode } from '../../../services/inventory.service';
 import { inject } from '@angular/core';
 import { Location } from '@angular/common';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 
 type ScannerState =
     | 'unsupported'
@@ -49,6 +49,7 @@ export class MobileScanner implements OnInit, OnDestroy {
     private inventoryService = inject(InventoryService);
     private location = inject(Location);
     private route = inject(ActivatedRoute);
+    private router = inject(Router);
 
     videoEl = viewChild<ElementRef<HTMLVideoElement>>('videoElement');
 
@@ -466,6 +467,13 @@ export class MobileScanner implements OnInit, OnDestroy {
     onLabelSizeToggle(event: MatSlideToggleChange) {
         this.selectedLabelSize.set(event.checked ? '3x1' : '1.5x1');
         this.loadBarcodePreview();
+    }
+
+    viewPart() {
+        const partId = this.scannedTag()?.partID;
+        if (partId) {
+            this.router.navigate(['/parts', partId, 'edit']);
+        }
     }
 
     printLabel() {

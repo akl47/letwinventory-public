@@ -795,7 +795,9 @@
                         <ng-container matColumnDef="barcode">
                             <th mat-header-cell *matHeaderCellDef>Barcode</th>
                             <td mat-cell *matCellDef="let trace">
-                                <span class="barcode-tag">{{ trace.barcode || '-' }}</span>
+                                @if (trace.barcode) {
+                                <app-barcode-tag [barcode]="trace.barcode" (dataChanged)="loadLocations(currentPart!.id)"></app-barcode-tag>
+                                } @else { - }
                             </td>
                         </ng-container>
 
@@ -828,9 +830,48 @@
                         <tr mat-row *matRowDef="let row; columns: locationColumns;"></tr>
                     </table>
                 </div>
-                } @else {
+                } @else if (!locationData()?.pendingOrders?.length) {
                 <div class="view-info">
                     <div class="info-value">No inventory found for this part</div>
+                </div>
+                }
+
+                @if (locationData()?.pendingOrders?.length) {
+                <div class="pending-orders-section">
+                    <label class="section-label">Pending Orders</label>
+                    <div class="locations-table-wrapper">
+                        <table mat-table [dataSource]="locationData()!.pendingOrders!" class="locations-table">
+                            <ng-container matColumnDef="vendor">
+                                <th mat-header-cell *matHeaderCellDef>Vendor</th>
+                                <td mat-cell *matCellDef="let item">
+                                    <a class="order-link" [routerLink]="['/orders', item.orderId]">{{ item.vendor || '-' }}</a>
+                                </td>
+                            </ng-container>
+
+                            <ng-container matColumnDef="status">
+                                <th mat-header-cell *matHeaderCellDef>Status</th>
+                                <td mat-cell *matCellDef="let item">{{ item.status }}</td>
+                            </ng-container>
+
+                            <ng-container matColumnDef="quantityOrdered">
+                                <th mat-header-cell *matHeaderCellDef>Ordered</th>
+                                <td mat-cell *matCellDef="let item">{{ item.quantityOrdered }}</td>
+                            </ng-container>
+
+                            <ng-container matColumnDef="quantityReceived">
+                                <th mat-header-cell *matHeaderCellDef>Received</th>
+                                <td mat-cell *matCellDef="let item">{{ item.quantityReceived }}</td>
+                            </ng-container>
+
+                            <ng-container matColumnDef="quantityPending">
+                                <th mat-header-cell *matHeaderCellDef>Pending</th>
+                                <td mat-cell *matCellDef="let item">{{ item.quantityPending }}</td>
+                            </ng-container>
+
+                            <tr mat-header-row *matHeaderRowDef="orderColumns"></tr>
+                            <tr mat-row *matRowDef="let row; columns: orderColumns;"></tr>
+                        </table>
+                    </div>
                 </div>
                 }
             </mat-card-content>

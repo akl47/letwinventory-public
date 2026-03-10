@@ -588,6 +588,30 @@ mat-checkbox {
     font-size: 14px;
 }
 
+.pending-orders-section {
+    margin-top: 20px;
+}
+
+.section-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--mat-sys-on-surface-variant);
+    margin-bottom: 8px;
+}
+
+.order-link {
+    color: var(--mat-sys-primary);
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.order-link:hover {
+    text-decoration: underline;
+}
+
 .barcode-tag {
     font-family: monospace;
     font-size: 13px;
