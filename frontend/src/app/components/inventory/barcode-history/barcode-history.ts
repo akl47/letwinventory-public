@@ -55,7 +55,6 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
   allHistory = signal<BarcodeHistory[]>([]);
   filteredHistory = signal<BarcodeHistory[]>([]);
   displayedHistory = signal<BarcodeHistory[]>([]);
-  barcodeMap: Map<number, string> = new Map();
   displayedColumns: string[] = ['action', 'from', 'to', 'user', 'date'];
 
   // Pagination
@@ -96,18 +95,13 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
   loadData() {
     this.isLoading = true;
 
-    // Load all barcodes (including inactive) for mapping IDs to barcode strings
-    this.inventoryService.getAllBarcodes(true).subscribe({
-      next: (barcodes) => {
-        barcodes.forEach((b: any) => {
-          this.barcodeMap.set(b.id, b.barcode);
-        });
-
-        // Find current barcode info
-        this.barcodeInfo = barcodes.find((b: any) => b.id === this.barcodeId);
+    // Load current barcode's tag info
+    this.inventoryService.getTagById(this.barcodeId!, true).subscribe({
+      next: (tag) => {
+        this.barcodeInfo = tag;
 
         // Set columns based on barcode type - show trace columns only for traces
-        const isTraceBarcode = this.barcodeInfo?.BarcodeCategory?.name === 'Trace';
+        const isTraceBarcode = tag.type === 'Trace';
         this.isTrace.set(isTraceBarcode);
         if (isTraceBarcode) {
           this.displayedColumns = ['action', 'qty', 'serialNumber', 'lotNumber', 'from', 'to', 'user', 'date'];
@@ -119,7 +113,7 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
         this.loadHistory();
       },
       error: (err) => {
-        this.error = 'Failed to load barcodes: ' + err.message;
+        this.error = 'Failed to load barcode info: ' + err.message;
         this.isLoading = false;
       }
     });
@@ -158,8 +152,8 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
         item.user?.displayName?.toLowerCase().includes(search) ||
         item.serialNumber?.toLowerCase().includes(search) ||
         item.lotNumber?.toLowerCase().includes(search) ||
-        this.getBarcodeString(item.fromID).toLowerCase().includes(search) ||
-        this.getBarcodeString(item.toID).toLowerCase().includes(search)
+        item.fromBarcode?.barcode?.toLowerCase().includes(search) ||
+        item.toBarcode?.barcode?.toLowerCase().includes(search)
       );
     }
 
@@ -245,6 +239,10 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
     this.openActionDialog('split');
   }
 
+  onAdjust() {
+    this.openActionDialog('adjust');
+  }
+
   onDelete() {
     this.openActionDialog('delete');
   }
@@ -258,6 +256,7 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
       case 'SPLIT': return 'Split';
       case 'MERGED': return 'Merged';
       case 'DELETED': return 'Deleted';
+      case 'ADJUSTED': return 'Adjusted';
       default: return item.actionType?.label || 'Unknown Action';
     }
   }
@@ -271,17 +270,14 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
       case 'SPLIT': return 'call_split';
       case 'MERGED': return 'call_merge';
       case 'DELETED': return 'delete';
+      case 'ADJUSTED': return 'tune';
       default: return 'history';
     }
   }
 
-  getBarcodeString(id: number | null): string {
-    if (id === null || id === undefined) return 'None';
-    return this.barcodeMap.get(id) || `ID: ${id}`;
-  }
-
   getLocationLabel(item: BarcodeHistory, type: 'from' | 'to'): string {
-    const id = type === 'from' ? item.fromID : item.toID;
-    return this.getBarcodeString(id);
+    const bc = type === 'from' ? item.fromBarcode : item.toBarcode;
+    if (!bc) return 'None';
+    return bc.barcode;
   }
 }

@@ -583,3 +583,26 @@ mat-card-content {
         padding: 12px;
     }
 }
+
+/* Inactive trace indicator */
+.inactive-trace {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    opacity: 0.6;
+}
+
+.inactive-trace app-barcode-tag {
+    text-decoration: line-through;
+}
+
+.inactive-badge {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #f44336;
+    background: rgba(244, 67, 54, 0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+}

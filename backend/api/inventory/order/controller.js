@@ -87,12 +87,11 @@ exports.getOrderById = (req, res, next) => {
           },
           {
             model: db.Trace,
-            where: { activeFlag: true },
             required: false,
             include: [
               {
                 model: db.Barcode,
-                attributes: ['id', 'barcode']
+                attributes: ['id', 'barcode', 'activeFlag']
               }
             ]
           },
