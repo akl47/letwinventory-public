@@ -12,7 +12,7 @@ import { forkJoin } from 'rxjs';
 import { InventoryService, InventoryTag, Barcode } from '../../../services/inventory.service';
 import { inject } from '@angular/core';
 import { Location } from '@angular/common';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 
 type ScannerState =
     | 'unsupported'
@@ -49,6 +49,7 @@ export class MobileScanner implements OnInit, OnDestroy {
     private inventoryService = inject(InventoryService);
     private location = inject(Location);
     private route = inject(ActivatedRoute);
+    private router = inject(Router);
 
     videoEl = viewChild<ElementRef<HTMLVideoElement>>('videoElement');
 
@@ -68,11 +69,12 @@ export class MobileScanner implements OnInit, OnDestroy {
     secondScannedBarcode = signal<Barcode | null>(null);
     secondScannedTag = signal<InventoryTag | null>(null);
 
-    // Split / trash quantity
+    // Split / trash / adjust quantity
     splitQuantity = signal<number>(1);
     trashQuantity = signal<number>(1);
     trashAll = signal(false);
-    confirmAction = signal<'split' | 'trash' | null>(null);
+    adjustQuantity = signal<number>(1);
+    confirmAction = signal<'split' | 'trash' | 'adjust' | null>(null);
 
     // Reprint
     barcodeImageUrl = signal<string | null>(null);
@@ -80,8 +82,12 @@ export class MobileScanner implements OnInit, OnDestroy {
     selectedLabelSize = signal<string>('3x1');
     isPrinting = signal(false);
 
+    // Manual input
+    manualInputVisible = signal(false);
+    manualInputValue = signal('');
+
     // Scan mode
-    continuousScan = signal(false);
+    continuousScan = signal(localStorage.getItem('scannerContinuousMode') === 'true');
 
     // Camera / detector
     private stream: MediaStream | null = null;
@@ -176,7 +182,7 @@ export class MobileScanner implements OnInit, OnDestroy {
             }
 
             // In manual mode, only scan when triggered
-            if (!this.continuousScan() && currentState === 'scanning') {
+            if (!this.continuousScan()) {
                 this.animFrameId = requestAnimationFrame(detect);
                 return;
             }
@@ -223,7 +229,27 @@ export class MobileScanner implements OnInit, OnDestroy {
     }
 
     toggleScanMode() {
-        this.continuousScan.set(!this.continuousScan());
+        const newValue = !this.continuousScan();
+        this.continuousScan.set(newValue);
+        localStorage.setItem('scannerContinuousMode', String(newValue));
+    }
+
+    showManualInput() {
+        this.manualInputVisible.set(true);
+        this.manualInputValue.set('');
+    }
+
+    hideManualInput() {
+        this.manualInputVisible.set(false);
+        this.manualInputValue.set('');
+    }
+
+    submitManualInput() {
+        const value = this.manualInputValue().trim();
+        if (!value) return;
+        this.manualInputVisible.set(false);
+        this.manualInputValue.set('');
+        this.onBarcodeDetected(value);
     }
 
     manualScan() {
@@ -322,6 +348,12 @@ export class MobileScanner implements OnInit, OnDestroy {
         this.state.set('confirming_action');
     }
 
+    startAdjust() {
+        this.adjustQuantity.set(this.scannedTag()?.quantity ?? 1);
+        this.confirmAction.set('adjust');
+        this.state.set('confirming_action');
+    }
+
     startTrash() {
         this.trashQuantity.set(1);
         this.trashAll.set(false);
@@ -345,6 +377,15 @@ export class MobileScanner implements OnInit, OnDestroy {
         this.inventoryService.splitTrace(barcodeId, this.splitQuantity()).subscribe({
             next: () => this.showResult(true, `Split ${this.splitQuantity()} from item.`),
             error: (err) => this.showResult(false, err?.error?.message || 'Split failed.'),
+        });
+    }
+
+    confirmAdjust() {
+        this.state.set('executing');
+        const barcodeId = this.scannedBarcode()!.id;
+        this.inventoryService.adjustTraceQuantity(barcodeId, this.adjustQuantity()).subscribe({
+            next: () => this.showResult(true, `Quantity adjusted to ${this.adjustQuantity()}.`),
+            error: (err) => this.showResult(false, err?.error?.message || 'Adjustment failed.'),
         });
     }
 
@@ -401,6 +442,27 @@ export class MobileScanner implements OnInit, OnDestroy {
         this.state.set('display');
     }
 
+    backToBarcode() {
+        const barcodeId = this.scannedBarcode()?.id;
+        if (!barcodeId) return;
+        this.state.set('loading');
+        forkJoin({
+            tag: this.inventoryService.getTagById(barcodeId),
+            chain: this.inventoryService.getTagChain(barcodeId),
+        }).subscribe({
+            next: ({ tag, chain }) => {
+                this.scannedTag.set(tag);
+                this.tagChain.set(chain);
+                this.state.set('display');
+                this.loadBarcodePreview();
+            },
+            error: () => {
+                this.state.set('error');
+                this.errorMessage.set('Failed to reload item details.');
+            },
+        });
+    }
+
     scanAgain() {
         this.resetState();
         this.ensureDetector();
@@ -444,9 +506,25 @@ export class MobileScanner implements OnInit, OnDestroy {
         const size = this.selectedLabelSize();
         this.inventoryService.getBarcodeZPL(barcodeId, size).subscribe({
             next: (zpl) => {
-                const encoded = encodeURIComponent(zpl);
                 const dpmm = size === '1.5x1' ? '8dpmm' : '12dpmm';
-                this.barcodeImageUrl.set(`https://api.labelary.com/v1/printers/${dpmm}/labels/${size}/0/${encoded}`);
+                const url = `https://api.labelary.com/v1/printers/${dpmm}/labels/${size}/0/`;
+                fetch(url, {
+                    method: 'POST',
+                    headers: { 'Accept': 'image/png', 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: zpl,
+                })
+                    .then(res => {
+                        if (!res.ok) throw new Error(`Labelary returned ${res.status}`);
+                        return res.blob();
+                    })
+                    .then(blob => {
+                        this.barcodeImageUrl.set(URL.createObjectURL(blob));
+                        this.barcodeImageLoading.set(false);
+                    })
+                    .catch(() => {
+                        this.barcodeImageLoading.set(false);
+                        this.barcodeImageUrl.set(null);
+                    });
             },
             error: () => {
                 this.barcodeImageLoading.set(false);
@@ -466,6 +544,13 @@ export class MobileScanner implements OnInit, OnDestroy {
     onLabelSizeToggle(event: MatSlideToggleChange) {
         this.selectedLabelSize.set(event.checked ? '3x1' : '1.5x1');
         this.loadBarcodePreview();
+    }
+
+    viewPart() {
+        const partId = this.scannedTag()?.partID;
+        if (partId) {
+            this.router.navigate(['/parts', partId, 'edit']);
+        }
     }
 
     printLabel() {

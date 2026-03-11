@@ -63,17 +63,11 @@ export class BarcodeDialog implements OnInit {
   }
 
   private fetchAndRenderBarcode() {
-    this.inventoryService.getAllBarcodes().subscribe({
-      next: (barcodes) => {
-        const barcode = barcodes.find((b: any) => b.barcode === this.data.barcode);
-        if (barcode) {
-          this.barcodeId.set(barcode.id);
-          this.barcodeObject.set(barcode);
-          this.fetchZPL(barcode.id);
-        } else {
-          this.error.set('Barcode not found');
-          this.isLoading.set(false);
-        }
+    this.inventoryService.lookupBarcode(this.data.barcode).subscribe({
+      next: (barcode) => {
+        this.barcodeId.set(barcode.id);
+        this.barcodeObject.set(barcode);
+        this.fetchZPL(barcode.id);
       },
       error: (err) => {
         this.error.set('Failed to fetch barcode: ' + err.message);
@@ -110,10 +104,13 @@ export class BarcodeDialog implements OnInit {
     });
   }
 
+  private lastZpl = '';
+
   private fetchZPL(barcodeId: number, labelSize?: string) {
     const size = labelSize || this.selectedPreviewSize();
     this.inventoryService.getBarcodeZPL(barcodeId, size).subscribe({
       next: (zpl) => {
+        this.lastZpl = zpl;
         this.renderBarcodeImage(zpl, size);
       },
       error: (err) => {
@@ -124,14 +121,28 @@ export class BarcodeDialog implements OnInit {
   }
 
   private renderBarcodeImage(zpl: string, labelSize: string) {
-    const encodedZPL = encodeURIComponent(zpl);
-    let labelaryUrl = '';
-    if (labelSize === '1.5x1') {
-      labelaryUrl = `https://api.labelary.com/v1/printers/8dpmm/labels/${labelSize}/0/${encodedZPL}`;
-    } else if (labelSize === '3x1') {
-      labelaryUrl = `https://api.labelary.com/v1/printers/12dpmm/labels/${labelSize}/0/${encodedZPL}`;
-    }
-    this.barcodeImageUrl.set(labelaryUrl);
+    const dpmm = labelSize === '1.5x1' ? '8dpmm' : '12dpmm';
+    const url = `https://api.labelary.com/v1/printers/${dpmm}/labels/${labelSize}/0/`;
+
+    // Use POST to avoid URL length limits with large ZPL (e.g. GFA graphics)
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Accept': 'image/png', 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: zpl,
+    })
+      .then(res => {
+        if (!res.ok) throw new Error(`Labelary returned ${res.status}`);
+        return res.blob();
+      })
+      .then(blob => {
+        this.barcodeImageUrl.set(URL.createObjectURL(blob));
+        this.isLoading.set(false);
+      })
+      .catch(() => {
+        console.log('ZPL that failed Labelary render:', zpl);
+        this.error.set('Failed to load barcode image from Labelary');
+        this.isLoading.set(false);
+      });
   }
 
   onPreviewSizeChange() {
@@ -148,7 +159,6 @@ export class BarcodeDialog implements OnInit {
   }
 
   onImageError() {
-    this.error.set('Failed to load barcode image from Labelary');
     this.isLoading.set(false);
   }
 

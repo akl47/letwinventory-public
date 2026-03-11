@@ -8,6 +8,9 @@
             Barcode History
             @if (barcodeInfo) {
                 <span class="barcode-label">{{ barcodeInfo.barcode }}</span>
+                @if (barcodeInfo.activeFlag === false) {
+                    <span class="inactive-badge">Inactive</span>
+                }
             }
         </h2>
         <div class="header-actions">
@@ -18,18 +21,21 @@
                 <mat-icon matPrefix>search</mat-icon>
             </mat-form-field>
             <div class="action-buttons">
-                <button mat-icon-button (click)="onMove()" matTooltip="Move">
+                <button mat-icon-button (click)="onMove()" matTooltip="Move" [disabled]="barcodeInfo?.activeFlag === false">
                     <mat-icon>swap_horiz</mat-icon>
                 </button>
                 @if (isTrace()) {
-                    <button mat-icon-button (click)="onMerge()" matTooltip="Merge">
+                    <button mat-icon-button (click)="onMerge()" matTooltip="Merge" [disabled]="barcodeInfo?.activeFlag === false">
                         <mat-icon>call_merge</mat-icon>
                     </button>
-                    <button mat-icon-button (click)="onSplit()" matTooltip="Split">
+                    <button mat-icon-button (click)="onSplit()" matTooltip="Split" [disabled]="barcodeInfo?.activeFlag === false">
                         <mat-icon>call_split</mat-icon>
                     </button>
+                    <button mat-icon-button (click)="onAdjust()" matTooltip="Adjust Quantity" [disabled]="barcodeInfo?.activeFlag === false">
+                        <mat-icon>tune</mat-icon>
+                    </button>
                 }
-                <button mat-icon-button (click)="onDelete()" matTooltip="Delete" class="delete-button">
+                <button mat-icon-button (click)="onDelete()" matTooltip="Delete" class="delete-button" [disabled]="barcodeInfo?.activeFlag === false">
                     <mat-icon>delete</mat-icon>
                 </button>
             </div>

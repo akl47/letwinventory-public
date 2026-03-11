@@ -11,11 +11,7 @@ import { BarcodeDialog } from './barcode-dialog';
 import { InventoryService } from '../../../services/inventory.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 
-const mockBarcodes = [
-  { id: 1, barcode: 'LOC-001', BarcodeCategory: { name: 'Location' } },
-  { id: 2, barcode: 'BOX-001', BarcodeCategory: { name: 'Box' } },
-  { id: 3, barcode: 'TRC-001', BarcodeCategory: { name: 'Trace' } },
-];
+const mockBarcode = { id: 1, barcode: 'LOC-001', BarcodeCategory: { name: 'Location' } };
 
 describe('BarcodeDialog', () => {
   let component: BarcodeDialog;
@@ -44,7 +40,7 @@ describe('BarcodeDialog', () => {
     errorNotification = TestBed.inject(ErrorNotificationService);
     router = TestBed.inject(Router);
 
-    vi.spyOn(inventoryService, 'getAllBarcodes').mockReturnValue(of(mockBarcodes as any));
+    vi.spyOn(inventoryService, 'lookupBarcode').mockReturnValue(of(mockBarcode as any));
     vi.spyOn(inventoryService, 'getBarcodeZPL').mockReturnValue(of('^XA^FO50,50^A0N,50,50^FDTest^FS^XZ'));
 
     fixture = TestBed.createComponent(BarcodeDialog);
@@ -61,8 +57,8 @@ describe('BarcodeDialog', () => {
       expect(component.data.barcode).toBe('LOC-001');
     });
 
-    it('should fetch barcodes on init', () => {
-      expect(inventoryService.getAllBarcodes).toHaveBeenCalled();
+    it('should lookup barcode on init', () => {
+      expect(inventoryService.lookupBarcode).toHaveBeenCalledWith('LOC-001');
     });
 
     it('should set barcodeId when barcode is found', () => {
@@ -77,26 +73,11 @@ describe('BarcodeDialog', () => {
     it('should fetch ZPL after finding barcode', () => {
       expect(inventoryService.getBarcodeZPL).toHaveBeenCalledWith(1, '3x1');
     });
-
-    it('should set barcodeImageUrl after rendering', () => {
-      expect(component.barcodeImageUrl()).toBeTruthy();
-      expect(component.barcodeImageUrl()).toContain('labelary.com');
-    });
-  });
-
-  describe('barcode not found', () => {
-    it('should set error when barcode not in list', async () => {
-      vi.mocked(inventoryService.getAllBarcodes).mockReturnValue(of([]));
-      component.ngOnInit();
-      await fixture.whenStable();
-      expect(component.error()).toBe('Barcode not found');
-      expect(component.isLoading()).toBe(false);
-    });
   });
 
   describe('fetch error', () => {
-    it('should set error on barcodes fetch failure', async () => {
-      vi.mocked(inventoryService.getAllBarcodes).mockReturnValue(
+    it('should set error on lookup failure', async () => {
+      vi.mocked(inventoryService.lookupBarcode).mockReturnValue(
         throwError(() => new Error('Network error'))
       );
       component.ngOnInit();
@@ -149,9 +130,9 @@ describe('BarcodeDialog', () => {
   });
 
   describe('onImageError', () => {
-    it('should set error and stop loading', () => {
+    it('should stop loading', () => {
+      component.isLoading.set(true);
       component.onImageError();
-      expect(component.error()).toBe('Failed to load barcode image from Labelary');
       expect(component.isLoading()).toBe(false);
     });
   });
@@ -192,7 +173,7 @@ describe('BarcodeDialog', () => {
       vi.spyOn(inventoryService, 'printBarcode').mockReturnValue(of({ message: 'Printed' }));
       vi.spyOn(errorNotification, 'showSuccess');
       component.printLabel();
-      expect(component.isPrinting()).toBe(false); // resolved
+      expect(component.isPrinting()).toBe(false);
       expect(inventoryService.printBarcode).toHaveBeenCalledWith(1, '3x1');
       expect(errorNotification.showSuccess).toHaveBeenCalled();
     });

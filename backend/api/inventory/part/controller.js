@@ -322,7 +322,45 @@ exports.getPartLocations = async (req, res, next) => {
       });
     }
 
-    res.json({ traces: traceResults, totalQuantity });
+    // Fetch pending order items for this part (not fully received)
+    const pendingOrderItems = await db.OrderItem.findAll({
+      where: {
+        partID,
+        activeFlag: true
+      },
+      include: [
+        {
+          model: db.Order,
+          where: { activeFlag: true },
+          attributes: ['id', 'vendor', 'orderStatusID'],
+          include: [{
+            model: db.OrderStatus,
+            attributes: ['id', 'name']
+          }]
+        }
+      ]
+    });
+
+    const pendingOrders = pendingOrderItems
+      .filter(item => {
+        const json = item.toJSON();
+        const remaining = json.quantity - (json.receivedQuantity || 0);
+        return remaining > 0 && json.Order.orderStatusID !== 4; // 4 = Received
+      })
+      .map(item => {
+        const json = item.toJSON();
+        return {
+          orderItemId: json.id,
+          orderId: json.Order.id,
+          vendor: json.Order.vendor,
+          status: json.Order.OrderStatus?.name || 'Unknown',
+          quantityOrdered: json.quantity,
+          quantityReceived: json.receivedQuantity || 0,
+          quantityPending: json.quantity - (json.receivedQuantity || 0)
+        };
+      });
+
+    res.json({ traces: traceResults, totalQuantity, pendingOrders });
   } catch (error) {
     next(createError(500, 'Error getting part locations: ' + error.message));
   }

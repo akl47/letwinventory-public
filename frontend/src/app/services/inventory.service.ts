@@ -30,9 +30,20 @@ export interface PartLocationTrace {
     locationPath: string;
 }
 
+export interface PendingOrderItem {
+    orderItemId: number;
+    orderId: number;
+    vendor: string | null;
+    status: string;
+    quantityOrdered: number;
+    quantityReceived: number;
+    quantityPending: number;
+}
+
 export interface PartLocationsResult {
     traces: PartLocationTrace[];
     totalQuantity: number;
+    pendingOrders?: PendingOrderItem[];
 }
 
 export interface BulkImportPartInfo {
@@ -207,8 +218,9 @@ export class InventoryService {
         });
     }
 
-    getTagById(barcodeId: number): Observable<InventoryTag> {
-        return this.http.get<InventoryTag>(`${this.apiUrl}/barcode/tag/${barcodeId}`);
+    getTagById(barcodeId: number, includeInactive = false): Observable<InventoryTag> {
+        const params = includeInactive ? '?includeInactive=true' : '';
+        return this.http.get<InventoryTag>(`${this.apiUrl}/barcode/tag/${barcodeId}${params}`);
     }
 
     getTagChain(barcodeId: number): Observable<InventoryTag[]> {
@@ -222,6 +234,10 @@ export class InventoryService {
 
     mergeTrace(targetBarcodeId: number, mergeBarcodeId: number): Observable<any> {
         return this.http.post(`${this.apiUrl}/trace/merge/${targetBarcodeId}`, { mergeBarcodeId });
+    }
+
+    adjustTraceQuantity(barcodeId: number, newQuantity: number, reason?: string): Observable<any> {
+        return this.http.put(`${this.apiUrl}/trace/adjust-quantity/${barcodeId}`, { newQuantity, reason });
     }
 
     deleteTrace(barcodeId: number, deleteQuantity?: number): Observable<any> {

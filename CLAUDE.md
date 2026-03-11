@@ -269,3 +269,39 @@ Each session should:
 - **Part minimum stock quantity** — added to part edit page (form + view mode); nullable field
 - **Low stock toggle** — "Low Stock Only" toggle in parts table; filters by `minimumStockQuantity` threshold
 - **Custom `/feature` slash command** — `.claude/commands/feature.md` for guided new feature workflow
+
+### 2026-03-11
+- **Mobile scanner UX improvements:**
+  - Fixed scan-again button text color (#b0b0b0 → #e0e0e0)
+  - Persisted scan mode preference (continuous/manual) to localStorage key `scannerContinuousMode`
+  - Added manual barcode input button (keyboard icon) with text input overlay in scanning states
+  - Added "Back to Barcode" button in result state — re-fetches tag data and returns to display state
+  - Added "Adjust" action button for traces — direct quantity adjustment with confirmation UI
+- **Quantity adjustment feature (full stack):**
+  - Migration `20260311000000-add-adjusted-action-type.js` — adds ADJUSTED (id: 7) to BarcodeHistoryActionTypes
+  - `PUT /api/inventory/trace/adjust-quantity/:barcodeId` — validates, updates quantity, records BarcodeHistory with ADJUSTED action
+  - Frontend: `adjustTraceQuantity()` in inventory.service.ts, adjust action in mobile-scanner + barcode-movement-dialog + barcode-history
+- **Inactive barcodes in order view:**
+  - Removed `activeFlag: true` filter from Trace include in `getOrderById()` — shows all traces (active and inactive)
+  - Added `activeFlag` to Barcode attributes in Trace include
+  - Frontend: inactive traces shown with strikethrough + red "inactive" badge in order-view barcode column
+- **ZPL watermarks:**
+  - DEV watermark (`NODE_ENV !== 'production'`): large "DEV" text on labels
+  - INACTIVE watermark (`barcode.activeFlag === false`): large "INACTIVE" text on labels
+  - Relaxed `activeFlag` filters in `findBarcodeForLabel()`, `getZPLDetails()`, `displayBarcode()`, `printBarcodeByID()` to allow generating/printing labels for inactive barcodes
+- **Files modified:**
+  - `frontend/src/app/components/mobile/mobile-scanner/mobile-scanner.ts` — manual input, scan mode persistence, adjust, back to barcode
+  - `frontend/src/app/components/mobile/mobile-scanner/mobile-scanner.html` — manual input overlay, adjust UI, back to barcode button
+  - `frontend/src/app/components/mobile/mobile-scanner/mobile-scanner.css` — button colors, manual input styles, adjust button
+  - `frontend/src/app/services/inventory.service.ts` — `adjustTraceQuantity()` method
+  - `frontend/src/app/components/orders/order-view/order-view.html` — inactive trace indicator
+  - `frontend/src/app/components/orders/order-view/order-view.css` — inactive trace styles
+  - `frontend/src/app/components/inventory/barcode-history/barcode-history.ts` — ADJUSTED action label/icon, onAdjust()
+  - `frontend/src/app/components/inventory/barcode-history/barcode-history.html` — adjust button
+  - `frontend/src/app/components/inventory/barcode-movement-dialog/barcode-movement-dialog.ts` — adjust action type + executeAdjust()
+  - `frontend/src/app/components/inventory/barcode-movement-dialog/barcode-movement-dialog.html` — adjust form
+  - `backend/api/inventory/trace/controller.js` — `adjustQuantity()` handler
+  - `backend/api/inventory/trace/routes.js` — adjust-quantity route
+  - `backend/api/inventory/order/controller.js` — removed activeFlag filter from Trace include
+  - `backend/api/inventory/barcode/controller.js` — `findBarcodeForLabel()`, `generateWatermark()`, relaxed activeFlag filters
+  - `backend/migrations/20260311000000-add-adjusted-action-type.js` — new migration

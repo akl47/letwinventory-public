@@ -10,6 +10,7 @@ router.post('/',checkToken,checkPermission('inventory','write'),controller.creat
 router.put('/:id',checkToken,checkPermission('inventory','write'),controller.updateTrace);
 router.post('/split/:barcodeId',checkToken,checkPermission('inventory','write'),controller.splitTrace);
 router.post('/merge/:barcodeId',checkToken,checkPermission('inventory','write'),controller.mergeTrace);
+router.put('/adjust-quantity/:barcodeId',checkToken,checkPermission('inventory','write'),controller.adjustQuantity);
 router.delete('/barcode/:barcodeId',checkToken,checkPermission('inventory','delete'),controller.deleteTrace);
 
 module.exports = router;

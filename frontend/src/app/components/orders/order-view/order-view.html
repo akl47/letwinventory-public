@@ -294,7 +294,12 @@
                 }
                 } @else if (item.Traces?.length) {
                 @for (trace of item.Traces; track trace.id) {
-                <app-barcode-tag [barcode]="trace.Barcode?.barcode || trace.barcode"></app-barcode-tag>
+                <span [class.inactive-trace]="!trace.activeFlag">
+                  <app-barcode-tag [barcode]="trace.Barcode?.barcode || trace.barcode"></app-barcode-tag>
+                  @if (!trace.activeFlag) {
+                  <span class="inactive-badge">inactive</span>
+                  }
+                </span>
                 }
                 } @else {
                 -
