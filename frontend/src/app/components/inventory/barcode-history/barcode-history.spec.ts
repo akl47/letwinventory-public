@@ -13,11 +13,8 @@ import { BarcodeHistoryComponent } from './barcode-history';
 import { BarcodeHistoryService, BarcodeHistory } from '../../../services/history.service';
 import { InventoryService } from '../../../services/inventory.service';
 
-const mockBarcodes = [
-  { id: 1, barcode: 'LOC-001', BarcodeCategory: { name: 'Location' } },
-  { id: 2, barcode: 'BOX-001', BarcodeCategory: { name: 'Box' } },
-  { id: 3, barcode: 'TRC-001', BarcodeCategory: { name: 'Trace' } },
-];
+const mockLocationTag = { id: 1, barcodeID: 1, barcode: 'LOC-001', type: 'Location', activeFlag: true };
+const mockTraceTag = { id: 3, barcodeID: 3, barcode: 'TRC-001', type: 'Trace', activeFlag: true };
 
 const mockHistory: BarcodeHistory[] = [
   {
@@ -26,6 +23,8 @@ const mockHistory: BarcodeHistory[] = [
     createdAt: '2026-01-01T10:00:00Z',
     user: { id: 1, displayName: 'Test User' },
     actionType: { id: 1, code: 'CREATED', label: 'Created' },
+    fromBarcode: null,
+    toBarcode: { id: 2, barcode: 'BOX-001' },
   },
   {
     id: 2, barcodeID: 1, userID: 1, actionID: 2, fromID: 2, toID: 1,
@@ -33,6 +32,8 @@ const mockHistory: BarcodeHistory[] = [
     createdAt: '2026-01-02T10:00:00Z',
     user: { id: 1, displayName: 'Test User' },
     actionType: { id: 2, code: 'MOVED', label: 'Moved' },
+    fromBarcode: { id: 2, barcode: 'BOX-001' },
+    toBarcode: { id: 1, barcode: 'LOC-001' },
   },
   {
     id: 3, barcodeID: 1, userID: 1, actionID: 3, fromID: 1, toID: null,
@@ -40,6 +41,8 @@ const mockHistory: BarcodeHistory[] = [
     createdAt: '2026-01-03T10:00:00Z',
     user: { id: 1, displayName: 'Admin' },
     actionType: { id: 3, code: 'DELETED', label: 'Deleted' },
+    fromBarcode: { id: 1, barcode: 'LOC-001' },
+    toBarcode: null,
   },
 ];
 
@@ -75,7 +78,7 @@ describe('BarcodeHistoryComponent', () => {
     barcodeHistoryService = TestBed.inject(BarcodeHistoryService);
     location = TestBed.inject(Location);
 
-    vi.spyOn(inventoryService, 'getAllBarcodes').mockReturnValue(of(mockBarcodes as any));
+    vi.spyOn(inventoryService, 'getTagById').mockReturnValue(of(mockLocationTag as any));
     vi.spyOn(barcodeHistoryService, 'getBarcodeHistory').mockReturnValue(of(mockHistory));
 
     fixture = TestBed.createComponent(BarcodeHistoryComponent);
@@ -95,7 +98,7 @@ describe('BarcodeHistoryComponent', () => {
 
     it('should load data when id is present', () => {
       paramMapSubject.next({ get: (key: string) => key === 'id' ? '1' : null });
-      expect(inventoryService.getAllBarcodes).toHaveBeenCalled();
+      expect(inventoryService.getTagById).toHaveBeenCalledWith(1, true);
       expect(barcodeHistoryService.getBarcodeHistory).toHaveBeenCalledWith(1);
     });
 
@@ -111,12 +114,7 @@ describe('BarcodeHistoryComponent', () => {
       paramMapSubject.next({ get: (key: string) => key === 'id' ? '1' : null });
     });
 
-    it('should build barcode map', () => {
-      expect(component.barcodeMap.get(1)).toBe('LOC-001');
-      expect(component.barcodeMap.get(2)).toBe('BOX-001');
-    });
-
-    it('should find barcodeInfo for current barcode', () => {
+    it('should set barcodeInfo from tag', () => {
       expect(component.barcodeInfo).toBeTruthy();
       expect(component.barcodeInfo.barcode).toBe('LOC-001');
     });
@@ -133,9 +131,7 @@ describe('BarcodeHistoryComponent', () => {
 
   describe('trace barcode columns', () => {
     it('should set trace columns for Trace barcode', () => {
-      vi.mocked(inventoryService.getAllBarcodes).mockReturnValue(of([
-        { id: 3, barcode: 'TRC-001', BarcodeCategory: { name: 'Trace' } },
-      ] as any));
+      vi.mocked(inventoryService.getTagById).mockReturnValue(of(mockTraceTag as any));
       component.barcodeId = 3;
       component.loadData();
       expect(component.isTrace()).toBe(true);
@@ -183,7 +179,7 @@ describe('BarcodeHistoryComponent', () => {
     it('should filter by barcode string', () => {
       component.onSearchChange('BOX-001');
       const displayed = component.displayedHistory();
-      // BOX-001 is id=2, which appears as fromID or toID
+      // BOX-001 appears as fromBarcode or toBarcode in history items
       expect(displayed.length).toBeGreaterThan(0);
     });
 
@@ -282,37 +278,20 @@ describe('BarcodeHistoryComponent', () => {
     });
   });
 
-  describe('getBarcodeString', () => {
-    beforeEach(() => {
-      paramMapSubject.next({ get: (key: string) => key === 'id' ? '1' : null });
-    });
-
-    it('should return None for null', () => {
-      expect(component.getBarcodeString(null)).toBe('None');
-    });
-
-    it('should return barcode from map', () => {
-      expect(component.getBarcodeString(1)).toBe('LOC-001');
-    });
-
-    it('should return ID fallback for unknown barcode', () => {
-      expect(component.getBarcodeString(999)).toBe('ID: 999');
-    });
-  });
-
   describe('getLocationLabel', () => {
-    beforeEach(() => {
-      paramMapSubject.next({ get: (key: string) => key === 'id' ? '1' : null });
-    });
-
     it('should return from barcode string', () => {
-      const item = { fromID: 1, toID: 2 } as any;
+      const item = { fromBarcode: { id: 1, barcode: 'LOC-001' }, toBarcode: { id: 2, barcode: 'BOX-001' } } as any;
       expect(component.getLocationLabel(item, 'from')).toBe('LOC-001');
     });
 
     it('should return to barcode string', () => {
-      const item = { fromID: 1, toID: 2 } as any;
+      const item = { fromBarcode: { id: 1, barcode: 'LOC-001' }, toBarcode: { id: 2, barcode: 'BOX-001' } } as any;
       expect(component.getLocationLabel(item, 'to')).toBe('BOX-001');
+    });
+
+    it('should return None for null barcode', () => {
+      const item = { fromBarcode: null, toBarcode: null } as any;
+      expect(component.getLocationLabel(item, 'from')).toBe('None');
     });
   });
 

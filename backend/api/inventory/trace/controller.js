@@ -309,6 +309,67 @@ exports.mergeTrace = async (req, res, next) => {
 }
 
 /**
+ * Adjust the quantity of a trace directly, with audit trail
+ */
+exports.adjustQuantity = async (req, res, next) => {
+  const barcodeID = parseInt(req.params.barcodeId);
+  const { newQuantity, reason } = req.body;
+
+  try {
+    if (!newQuantity || newQuantity <= 0) {
+      return next(createError(400, 'New quantity must be greater than 0'));
+    }
+
+    const trace = await db.Trace.findOne({
+      where: { barcodeID, activeFlag: true },
+      include: [{ model: db.Barcode }]
+    });
+
+    if (!trace) {
+      return next(createError(404, 'Trace not found'));
+    }
+
+    const traceData = trace.toJSON();
+    const oldQuantity = traceData.quantity;
+
+    if (newQuantity === oldQuantity) {
+      return next(createError(400, 'New quantity is the same as current quantity'));
+    }
+
+    await trace.update({ quantity: newQuantity });
+
+    // Record in history
+    const adjustedAction = await db.BarcodeHistoryActionType.findOne({
+      where: { code: 'ADJUSTED', activeFlag: true }
+    });
+
+    if (adjustedAction) {
+      await db.BarcodeHistory.create({
+        barcodeID: traceData.barcodeID,
+        userID: req.user ? req.user.id : null,
+        actionID: adjustedAction.id,
+        fromID: traceData.barcodeID,
+        toID: null,
+        qty: newQuantity,
+        serialNumber: traceData.serialNumber,
+        lotNumber: traceData.lotNumber,
+        unitOfMeasureID: traceData.unitOfMeasureID
+      });
+    }
+
+    res.json({
+      message: 'Quantity adjusted successfully',
+      barcodeID: barcodeID,
+      oldQuantity: oldQuantity,
+      newQuantity: newQuantity,
+      reason: reason || null
+    });
+  } catch (error) {
+    next(createError(500, 'Error adjusting quantity: ' + error.message));
+  }
+}
+
+/**
  * Delete a trace - either reduce quantity or deactivate entirely
  */
 exports.deleteTrace = async (req, res, next) => {

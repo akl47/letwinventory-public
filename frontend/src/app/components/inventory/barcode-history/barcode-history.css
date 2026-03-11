@@ -33,6 +33,17 @@
     font-weight: 500;
 }
 
+.inactive-badge {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: #c62828;
+    color: #fff;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
 .table-header h2 > mat-icon {
     font-size: 32px;
     width: 32px;
@@ -59,15 +70,15 @@
     align-items: center;
 }
 
-.action-buttons button {
+.action-buttons button:not(:disabled) {
     color: var(--mat-sys-on-surface);
 }
 
-.action-buttons button:hover {
+.action-buttons button:not(:disabled):hover {
     background-color: var(--mat-sys-surface-container-high);
 }
 
-.action-buttons .delete-button:hover {
+.action-buttons .delete-button:not(:disabled):hover {
     color: #f44336;
 }
 

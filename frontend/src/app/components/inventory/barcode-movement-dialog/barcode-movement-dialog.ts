@@ -11,7 +11,7 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatRadioModule } from '@angular/material/radio';
 import { InventoryService } from '../../../services/inventory.service';
 
-export type BarcodeActionType = 'move' | 'merge' | 'split' | 'delete';
+export type BarcodeActionType = 'move' | 'merge' | 'split' | 'delete' | 'adjust';
 
 export interface BarcodeMovementDialogData {
   action: BarcodeActionType;
@@ -62,6 +62,9 @@ export class BarcodeMovementDialog {
   // Merge fields
   mergeBarcode = '';
 
+  // Adjust fields
+  adjustQuantity: number | null = null;
+
   // Delete fields
   deleteConfirmation = '';
   deleteType: 'full' | 'partial' = 'full';
@@ -72,6 +75,7 @@ export class BarcodeMovementDialog {
       case 'move': return 'Move Barcode';
       case 'merge': return 'Merge Barcode';
       case 'split': return 'Split Barcode';
+      case 'adjust': return 'Adjust Quantity';
       case 'delete': return 'Delete Barcode';
     }
   }
@@ -81,6 +85,7 @@ export class BarcodeMovementDialog {
       case 'move': return 'swap_horiz';
       case 'merge': return 'call_merge';
       case 'split': return 'call_split';
+      case 'adjust': return 'tune';
       case 'delete': return 'delete';
     }
   }
@@ -93,6 +98,8 @@ export class BarcodeMovementDialog {
         return !!this.mergeBarcode.trim();
       case 'split':
         return this.splitQuantity !== null && this.splitQuantity > 0;
+      case 'adjust':
+        return this.adjustQuantity !== null && this.adjustQuantity > 0;
       case 'delete':
         if (this.deleteConfirmation !== this.data.barcode) return false;
         if (this.data.isTrace && this.deleteType === 'partial') {
@@ -121,6 +128,9 @@ export class BarcodeMovementDialog {
         break;
       case 'split':
         this.executeSplit();
+        break;
+      case 'adjust':
+        this.executeAdjust();
         break;
       case 'delete':
         this.executeDelete();
@@ -211,6 +221,24 @@ export class BarcodeMovementDialog {
       error: (err) => {
         this.isSubmitting.set(false);
         this.errorMessage.set(err.error?.message || 'Failed to split trace');
+      }
+    });
+  }
+
+  private executeAdjust() {
+    if (this.adjustQuantity === null) return;
+
+    this.inventoryService.adjustTraceQuantity(this.data.barcodeId, this.adjustQuantity!).subscribe({
+      next: (result) => {
+        this.dialogRef.close({
+          success: true,
+          action: 'adjust',
+          data: result
+        });
+      },
+      error: (err) => {
+        this.isSubmitting.set(false);
+        this.errorMessage.set(err.error?.message || 'Failed to adjust quantity');
       }
     });
   }

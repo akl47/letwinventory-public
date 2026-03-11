@@ -66,6 +66,8 @@ export interface BarcodeHistory {
     };
     actionType?: BarcodeHistoryActionType;
     unitOfMeasure?: BarcodeHistoryUnitOfMeasure;
+    fromBarcode?: { id: number; barcode: string } | null;
+    toBarcode?: { id: number; barcode: string } | null;
     orderInfo?: {
         orderID: number;
         lineNumber: number;

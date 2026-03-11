@@ -15,10 +15,10 @@
             @if (state() === 'scanning') {
             <span>{{ continuousScan() ? 'Point camera at barcode' : 'Tap Scan when ready' }}</span>
             } @else {
-            <span>{{ secondScanInstruction() }}</span>
+            <span>{{ continuousScan() ? secondScanInstruction() : 'Tap Scan when ready' }}</span>
             }
         </div>
-        @if (!continuousScan() && state() === 'scanning') {
+        @if (!continuousScan()) {
         <button mat-fab class="manual-scan-btn" (click)="manualScan()">
             <mat-icon>qr_code_scanner</mat-icon>
         </button>
@@ -33,6 +33,30 @@
             [matTooltip]="continuousScan() ? 'Continuous scanning' : 'Manual scanning'">
             <mat-icon>{{ continuousScan() ? 'autorenew' : 'touch_app' }}</mat-icon>
         </button>
+        <button class="keyboard-input-toggle" (click)="showManualInput()" matTooltip="Type barcode manually">
+            <mat-icon>keyboard</mat-icon>
+        </button>
+
+        @if (manualInputVisible()) {
+        <div class="manual-input-overlay">
+            <div class="manual-input-card">
+                <h3>Enter Barcode</h3>
+                <mat-form-field appearance="outline" class="manual-input-field">
+                    <mat-label>Barcode</mat-label>
+                    <input matInput [ngModel]="manualInputValue()" (ngModelChange)="manualInputValue.set($event)"
+                        (keydown.enter)="submitManualInput()" autofocus>
+                </mat-form-field>
+                <div class="manual-input-actions">
+                    <button mat-button (click)="hideManualInput()">Cancel</button>
+                    <button mat-flat-button color="primary" (click)="submitManualInput()"
+                        [disabled]="!manualInputValue().trim()">
+                        <mat-icon>search</mat-icon>
+                        Go
+                    </button>
+                </div>
+            </div>
+        </div>
+        }
     </div>
     }
 
@@ -115,6 +139,10 @@
                 <mat-icon>call_split</mat-icon>
                 Split
             </button>
+            <button mat-flat-button class="action-btn action-adjust" (click)="startAdjust()">
+                <mat-icon>tune</mat-icon>
+                Adjust
+            </button>
             }
             <button mat-flat-button class="action-btn action-trash" (click)="startTrash()">
                 <mat-icon>delete</mat-icon>
@@ -143,8 +171,7 @@
             }
             @if (barcodeImageUrl()) {
             <img [src]="barcodeImageUrl()" alt="Barcode label" class="barcode-preview-img"
-                [class.hidden]="barcodeImageLoading()"
-                (load)="onBarcodeImageLoad()" (error)="onBarcodeImageError()" />
+                [class.hidden]="barcodeImageLoading()" (load)="onBarcodeImageLoad()" (error)="onBarcodeImageError()" />
             }
             <div class="label-size-toggle">
                 <span>1.5" x 1"</span>
@@ -154,7 +181,7 @@
             </div>
         </div>
 
-        <button mat-button class="scan-again-btn" (click)="scanAgain()">
+        <button mat-button class="scan-again-btn" style="align-self: center; margin-top: 8px;" (click)="scanAgain()">
             <mat-icon>qr_code_scanner</mat-icon>
             Scan Another
         </button>
@@ -181,6 +208,23 @@
                 </button>
             </div>
         </div>
+        } @else if (confirmAction() === 'adjust') {
+        <div class="confirm-card">
+            <h3>Adjust Quantity</h3>
+            <p>Set new quantity for <strong>{{ scannedTag()?.name }}</strong></p>
+            <mat-form-field appearance="outline" class="qty-field">
+                <mat-label>New Quantity</mat-label>
+                <input matInput type="number" min="1" [ngModel]="adjustQuantity()"
+                    (ngModelChange)="adjustQuantity.set($event)">
+            </mat-form-field>
+            <div class="confirm-actions">
+                <button mat-button (click)="cancelAction()">Cancel</button>
+                <button mat-flat-button class="action-adjust" (click)="confirmAdjust()">
+                    <mat-icon>tune</mat-icon>
+                    Adjust
+                </button>
+            </div>
+        </div>
         } @else if (confirmAction() === 'trash') {
         <div class="confirm-card">
             <h3>Confirm Delete</h3>
@@ -189,10 +233,8 @@
             <div class="qty-row">
                 <mat-form-field appearance="outline" class="qty-field">
                     <mat-label>Quantity</mat-label>
-                    <input matInput type="number" min="1" [max]="scannedTag()?.quantity ?? null"
-                        [disabled]="trashAll()"
-                        [ngModel]="trashQuantity()"
-                        (ngModelChange)="trashQuantity.set($event)">
+                    <input matInput type="number" min="1" [max]="scannedTag()?.quantity ?? null" [disabled]="trashAll()"
+                        [ngModel]="trashQuantity()" (ngModelChange)="trashQuantity.set($event)">
                 </mat-form-field>
                 <button mat-stroked-button class="all-btn" [class.active]="trashAll()" (click)="toggleTrashAll()">
                     All
@@ -235,8 +277,7 @@
 
             <div class="confirm-actions">
                 <button mat-button (click)="cancelSecondAction()">Cancel</button>
-                <button mat-flat-button
-                    [class]="secondScanAction() === 'move' ? 'action-move' : 'action-merge'"
+                <button mat-flat-button [class]="secondScanAction() === 'move' ? 'action-move' : 'action-merge'"
                     (click)="confirmSecondAction()">
                     <mat-icon>{{ secondScanAction() === 'move' ? 'open_with' : 'merge_type' }}</mat-icon>
                     {{ secondScanAction() === 'move' ? 'Move' : 'Merge' }}
@@ -251,10 +292,18 @@
     <div class="center-content">
         <mat-icon class="result-icon success">check_circle</mat-icon>
         <p class="result-text">{{ resultMessage() }}</p>
-        <button mat-flat-button class="scan-again-btn" (click)="scanAgain()">
-            <mat-icon>qr_code_scanner</mat-icon>
-            Scan Again
-        </button>
+        <div class="result-actions">
+            @if (scannedBarcode()) {
+            <button mat-stroked-button (click)="backToBarcode()">
+                <mat-icon>arrow_back</mat-icon>
+                Back to Barcode
+            </button>
+            }
+            <button mat-flat-button (click)="scanAgain()">
+                <mat-icon>qr_code_scanner</mat-icon>
+                Scan Again
+            </button>
+        </div>
     </div>
     }
 

@@ -22,6 +22,14 @@ module.exports = (sequelize, DataTypes) => {
                 foreignKey: 'unitOfMeasureID',
                 as: 'unitOfMeasure'
             });
+            BarcodeHistory.belongsTo(models.Barcode, {
+                foreignKey: 'fromID',
+                as: 'fromBarcode'
+            });
+            BarcodeHistory.belongsTo(models.Barcode, {
+                foreignKey: 'toID',
+                as: 'toBarcode'
+            });
         }
     };
     BarcodeHistory.init({

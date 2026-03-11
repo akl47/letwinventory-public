@@ -60,6 +60,16 @@ exports.getBarcodeHistory = async (req, res) => {
                     model: UnitOfMeasure,
                     as: 'unitOfMeasure',
                     attributes: ['id', 'name', 'description']
+                },
+                {
+                    model: Barcode,
+                    as: 'fromBarcode',
+                    attributes: ['id', 'barcode']
+                },
+                {
+                    model: Barcode,
+                    as: 'toBarcode',
+                    attributes: ['id', 'barcode']
                 }
             ],
             attributes: ['id', 'barcodeID', 'userID', 'actionID', 'fromID', 'toID', 'qty', 'serialNumber', 'lotNumber', 'unitOfMeasureID', 'createdAt']
