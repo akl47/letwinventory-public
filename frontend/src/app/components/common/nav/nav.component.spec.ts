@@ -148,4 +148,33 @@ describe('NavComponent', () => {
       expect((component as any).appVersion).toBeDefined();
     });
   });
+
+  // ── REQ 174: Tools Navigation Group ─────────────────────────────────────
+  describe('Tools navigation group (REQ 174)', () => {
+    it('should have tools in toolsPrefixes', () => {
+      expect((component as any).toolsPrefixes).toBeDefined();
+      expect((component as any).toolsPrefixes).toContain('/tools');
+    });
+
+    it('should toggle tools group', () => {
+      (component as any).toggleGroup('tools');
+      expect((component as any).openGroup()).toBe('tools');
+    });
+
+    it('should close tools group when toggled again', () => {
+      (component as any).toggleGroup('tools');
+      (component as any).toggleGroup('tools');
+      expect((component as any).openGroup()).toBeNull();
+    });
+
+    it('should detect tools route as active', () => {
+      vi.spyOn(router, 'url', 'get').mockReturnValue('/tools/outline');
+      expect(component.isGroupActive('tools' as any)).toBe(true);
+    });
+
+    it('should not detect non-tools route as tools active', () => {
+      vi.spyOn(router, 'url', 'get').mockReturnValue('/inventory');
+      expect(component.isGroupActive('tools' as any)).toBe(false);
+    });
+  });
 });

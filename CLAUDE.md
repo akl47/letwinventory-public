@@ -104,6 +104,7 @@ For multi-step tasks, state a brief plan:
 - `/harness`, `/harness/editor`, `/harness/editor/:id` — wire harness
 - `/requirements`, `/requirements/new`, `/requirements/:id/edit` — design requirements
 - `/admin/groups`, `/admin/groups/:id`, `/admin/users`, `/admin/users/:id/permissions`, `/admin/users/new` — admin
+- `/tools/outline` — tools
 - `/inventory/barcode-history/:id`, `/settings`, `/mobile` — other
 - All routes (except `/home`) use `authGuard`; admin routes also use `adminGuard`
 
@@ -305,3 +306,28 @@ Each session should:
   - `backend/api/inventory/order/controller.js` — removed activeFlag filter from Trace include
   - `backend/api/inventory/barcode/controller.js` — `findBarcodeForLabel()`, `generateWatermark()`, relaxed activeFlag filters
   - `backend/migrations/20260311000000-add-adjusted-action-type.js` — new migration
+
+### 2026-03-14
+- **Tool Outline Generator feature** — frontend-only, ported standalone HTML/JS app into Angular component
+  - Created "Tools" top-level navigation group in sidebar (construction icon) with "Tool Outline" child page (straighten icon)
+  - Full image processing pipeline using OpenCV.js WASM loaded dynamically from CDN
+  - Controls: scale method (plate size/DPI/manual), smoothing, blur, threshold, morphology, fill holes, margin, radii, centerlines
+  - Interactive preview canvas with zoom/pan, overlay rendering of contours and centerlines
+  - Draggable centerline control points on preview canvas
+  - Per-part SVG/DXF output with download (individual + ZIP bulk download via JSZip)
+  - Pipeline debug steps (8-step collapsible panel)
+  - Info bar showing image/plate/SVG dimensions, contour count, scale
+  - SVG sanitize pipe for safe innerHTML rendering
+  - 10 requirements created (REQ 174-183) in new "Tools" category (id=31)
+- **Files created:**
+  - `frontend/src/app/components/tools/tool-outline/tool-outline.ts` — ~700 line standalone component with signals
+  - `frontend/src/app/components/tools/tool-outline/tool-outline.html` — Angular Material template
+  - `frontend/src/app/components/tools/tool-outline/tool-outline.css` — responsive styles
+  - `frontend/src/app/components/tools/tool-outline/svg-sanitize.pipe.ts` — DomSanitizer pipe
+  - `frontend/src/app/components/tools/tool-outline/tool-outline.spec.ts` — component tests
+  - `docs/features/tool-outline.md` — feature spec
+- **Files modified:**
+  - `frontend/src/app/components/common/nav/nav.component.ts` — added 'tools' NavGroup, toolsPrefixes
+  - `frontend/src/app/components/common/nav/nav.component.html` — added Tools rail item + flyout section
+  - `frontend/src/app/components/common/nav/nav.component.spec.ts` — added Tools navigation group tests
+  - `frontend/src/app/app.routes.ts` — added /tools/outline route with authGuard only

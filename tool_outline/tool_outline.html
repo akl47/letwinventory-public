@@ -1,0 +1,2391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tool Outline Generator</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f0f0f;
+    color: #e0e0e0;
+    min-height: 100vh;
+  }
+
+  .header {
+    padding: 24px 32px;
+    border-bottom: 1px solid #222;
+  }
+  .header h1 { font-size: 1.4rem; font-weight: 600; }
+  .header p { color: #888; font-size: 0.85rem; margin-top: 4px; }
+
+  .main {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 32px;
+  }
+
+  /* OpenCV loading banner */
+  .cv-status {
+    padding: 10px 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .cv-status.loading {
+    background: #1a1a2e;
+    border: 1px solid #2a2a4e;
+    color: #8888cc;
+  }
+  .cv-status.ready {
+    background: #0d1f0d;
+    border: 1px solid #1a3a1a;
+    color: #6a6;
+  }
+  .cv-status.error {
+    background: #2a0d0d;
+    border: 1px solid #3a1a1a;
+    color: #c66;
+  }
+  .cv-spinner {
+    width: 16px; height: 16px;
+    border: 2px solid #444; border-top-color: #88f;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  /* Upload area */
+  .upload-zone {
+    border: 2px dashed #333;
+    border-radius: 12px;
+    padding: 48px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    margin-bottom: 24px;
+  }
+  .upload-zone:hover, .upload-zone.dragover {
+    border-color: #4a9eff;
+    background: #0d1b2a;
+  }
+  .upload-zone input { display: none; }
+  .upload-zone .label { font-size: 1rem; color: #aaa; }
+  .upload-zone .label strong { color: #4a9eff; }
+
+  /* Controls */
+  .controls {
+    display: flex; gap: 16px; flex-wrap: wrap;
+    align-items: end;
+    margin-bottom: 24px;
+  }
+  .control-group {
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .control-group label {
+    font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .control-group select, .control-group input[type=number] {
+    background: #1a1a1a; border: 1px solid #333; color: #e0e0e0;
+    border-radius: 6px; padding: 8px 12px; font-size: 0.85rem;
+  }
+  .control-group input[type=number] { width: 120px; }
+
+  button {
+    background: #4a9eff; color: #fff; border: none;
+    border-radius: 6px; padding: 10px 20px;
+    font-size: 0.85rem; font-weight: 600; cursor: pointer;
+    transition: background 0.2s;
+  }
+  button:hover { background: #3a8eef; }
+  button:disabled { background: #333; color: #666; cursor: not-allowed; }
+
+  .btn-outline {
+    background: transparent; border: 1px solid #333; color: #ccc;
+  }
+  .btn-outline:hover { background: #1a1a1a; border-color: #555; }
+
+  /* Results */
+  .results {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  @media (max-width: 768px) {
+    .results { grid-template-columns: 1fr; }
+  }
+
+  .result-card {
+    background: #1a1a1a;
+    border: 1px solid #222;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .result-card .card-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid #222;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .result-card .card-header h3 { font-size: 0.85rem; font-weight: 500; }
+  .result-card .card-body {
+    padding: 16px;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 300px;
+    background: #111;
+    position: relative;
+  }
+  .result-card canvas {
+    max-width: 100%; max-height: 500px; object-fit: contain;
+  }
+  /* Preview card — full width */
+  #previewCard { grid-column: 1 / -1; }
+  #previewBody {
+    overflow: auto;
+    display: block;
+    max-height: 75vh;
+    cursor: default;
+    position: relative;
+  }
+  #previewBody canvas {
+    max-width: none; max-height: none; object-fit: unset;
+    display: block;
+    transform-origin: 0 0;
+  }
+  /* Preview toolbar */
+  .preview-toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px;
+    background: #111; border-bottom: 1px solid #222;
+    font-size: 0.75rem; color: #aaa;
+  }
+  .preview-toolbar button {
+    background: #222; border: 1px solid #333; color: #ccc;
+    border-radius: 4px; padding: 3px 10px; cursor: pointer;
+    font-size: 0.75rem; line-height: 1.4;
+  }
+  .preview-toolbar button:hover { background: #333; border-color: #555; }
+  .preview-toolbar .zoom-display {
+    min-width: 48px; text-align: center; color: #4a9eff; font-weight: 600;
+  }
+
+  .spinner {
+    width: 32px; height: 32px;
+    border: 3px solid #333; border-top-color: #4a9eff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Processing overlay */
+  .processing-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 900;
+    flex-direction: column;
+    justify-content: center; align-items: center;
+    gap: 16px;
+  }
+  .processing-overlay.active { display: flex; }
+  .processing-overlay .spinner {
+    width: 48px; height: 48px;
+    border-width: 4px;
+  }
+  .processing-overlay .proc-text {
+    color: #ccc; font-size: 0.9rem;
+  }
+
+  .status {
+    text-align: center; padding: 16px;
+    color: #888; font-size: 0.85rem;
+  }
+
+  .info-bar {
+    background: #1a1a1a; border: 1px solid #222; border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 24px;
+    font-size: 0.8rem; color: #aaa;
+    display: none;
+  }
+  .info-bar span { color: #e0e0e0; font-weight: 500; }
+
+  #svgBody {
+    display: block; padding: 8px;
+  }
+  #svgContainer {
+    max-height: 70vh; overflow: auto;
+  }
+
+  /* Sliders */
+  .slider-row {
+    display: flex; gap: 16px; flex-wrap: wrap;
+    align-items: end;
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    background: #1a1a1a;
+    border: 1px solid #222;
+    border-radius: 8px;
+    display: none;
+  }
+  .slider-group {
+    display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 160px;
+  }
+  .slider-group label {
+    font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em;
+    display: flex; justify-content: space-between;
+  }
+  .slider-group label .val { color: #4a9eff; font-weight: 600; }
+  .slider-group input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 4px;
+    background: #333; border-radius: 2px; outline: none;
+  }
+  .slider-group input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px;
+    background: #4a9eff; border-radius: 50%; cursor: pointer;
+  }
+  .slider-group input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px;
+    background: #4a9eff; border-radius: 50%; cursor: pointer; border: none;
+  }
+
+  /* Part cards */
+  .part-card {
+    background: #1a1a1a; border: 1px solid #222; border-radius: 8px;
+    overflow: hidden; margin-bottom: 12px;
+  }
+  .part-card .part-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-bottom: 1px solid #222;
+  }
+  .part-card .part-name {
+    background: #111; border: 1px solid #333; border-radius: 4px;
+    color: #e0e0e0; padding: 3px 8px; font-size: 0.8rem;
+    flex: 1; min-width: 80px;
+  }
+  .part-card .part-dims {
+    font-size: 0.75rem; color: #888;
+  }
+  .part-card .part-btns { display: flex; gap: 4px; }
+  .part-card .part-btns button {
+    background: #222; border: 1px solid #333; color: #ccc;
+    border-radius: 4px; padding: 3px 8px; cursor: pointer;
+    font-size: 0.7rem;
+  }
+  .part-card .part-btns button:hover { background: #333; border-color: #555; }
+  .part-card .part-body {
+    padding: 12px; display: flex; justify-content: center;
+    background: #fff; min-height: 60px;
+  }
+  .part-card .part-body svg { max-width: 100%; max-height: 300px; }
+
+  /* Debug pipeline steps */
+  .steps-toggle {
+    background: #1a1a1a; border: 1px solid #222; border-radius: 8px;
+    padding: 10px 16px; margin-bottom: 16px; cursor: pointer;
+    color: #888; font-size: 0.8rem; user-select: none;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .steps-toggle:hover { border-color: #444; color: #ccc; }
+  .steps-toggle .arrow { transition: transform 0.2s; }
+  .steps-toggle.open .arrow { transform: rotate(90deg); }
+  .steps-grid {
+    display: none; gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    margin-bottom: 16px;
+  }
+  .steps-grid.open { display: grid; }
+  .step-card {
+    background: #1a1a1a; border: 1px solid #222; border-radius: 8px;
+    overflow: hidden;
+  }
+  .step-card .step-label {
+    padding: 6px 10px; font-size: 0.72rem; color: #888;
+    border-bottom: 1px solid #222; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .step-card canvas {
+    width: 100%; display: block; background: #111;
+  }
+
+  /* Preview click hint */
+  .result-card canvas { cursor: pointer; }
+  .click-hint {
+    position: absolute; bottom: 8px; right: 8px;
+    background: rgba(0,0,0,0.6); color: #aaa;
+    font-size: 0.7rem; padding: 3px 8px; border-radius: 4px;
+    pointer-events: none;
+  }
+
+  /* Full-res lightbox */
+  .lightbox {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.92);
+    z-index: 1000;
+    overflow: auto;
+    cursor: zoom-out;
+  }
+  .lightbox.open { display: flex; }
+  .lightbox canvas {
+    margin: auto;
+    cursor: default;
+  }
+  .lightbox-close {
+    position: absolute; top: 16px; right: 24px;
+    background: none; border: none; color: #aaa;
+    font-size: 1.8rem; cursor: pointer; line-height: 1;
+  }
+  .lightbox-close:hover { color: #fff; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Tool Outline Generator</h1>
+  <p>Upload a photo of tools on an LED backlight plate to generate SVG outlines — runs entirely in your browser</p>
+</div>
+
+<div class="main">
+  <div class="cv-status loading" id="cvStatus">
+    <div class="cv-spinner"></div>
+    <span>Loading OpenCV.js (~8 MB)...</span>
+  </div>
+
+  <div class="upload-zone" id="dropZone">
+    <input type="file" id="fileInput" accept="image/*">
+    <div class="label">
+      <strong>Click to upload</strong> or drag and drop<br>
+      <span style="font-size:0.8rem; color:#666;">JPG, PNG, BMP, TIFF</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="control-group">
+      <label>Scale Method</label>
+      <select id="scaleMethod">
+        <option value="reference">Plate Size (mm)</option>
+        <option value="dpi">DPI</option>
+        <option value="manual">Manual (mm/px)</option>
+      </select>
+    </div>
+    <div class="control-group" id="scaleValueGroup">
+      <label id="scaleValueLabel">Plate Width (mm)</label>
+      <input type="number" id="scaleValue" value="222" step="any" min="0.001">
+    </div>
+    <div class="control-group" id="plateHeightGroup">
+      <label>Plate Height (mm)</label>
+      <input type="number" id="plateHeight" value="310" step="any" min="1">
+    </div>
+    <div class="control-group">
+      <label>Smoothing</label>
+      <input type="number" id="smooth" value="0.0008" step="0.0001" min="0.0001" max="0.01">
+    </div>
+    <button id="processBtn" disabled>Generate Outlines</button>
+  </div>
+
+  <div class="slider-row" id="sliderRow">
+    <div class="slider-group">
+      <label>Blur Radius <span class="val" id="blurVal">5</span></label>
+      <input type="range" id="blurSlider" min="1" max="31" step="2" value="5">
+    </div>
+    <div class="slider-group" style="min-width:auto;">
+      <label>Threshold Method</label>
+      <select id="threshMethod" style="background:#222;color:#ccc;border:1px solid #333;border-radius:4px;padding:2px 4px;font-size:0.78rem;margin-top:2px;">
+        <option value="adaptive">Adaptive</option>
+        <option value="otsu">Otsu</option>
+        <option value="combined">Otsu + Adaptive</option>
+      </select>
+    </div>
+    <div class="slider-group">
+      <label>Threshold <span class="val" id="threshVal">Auto</span></label>
+      <input type="range" id="threshSlider" min="0" max="255" value="0">
+    </div>
+    <div class="slider-group">
+      <label>Block Size <span class="val" id="blockSizeVal">53</span></label>
+      <input type="range" id="blockSizeSlider" min="11" max="201" step="2" value="53">
+    </div>
+    <div class="slider-group">
+      <label>Sensitivity (C) <span class="val" id="adaptiveCVal">8</span></label>
+      <input type="range" id="adaptiveCSlider" min="1" max="40" value="8">
+    </div>
+    <div class="slider-group">
+      <label>Morph Close <span class="val" id="closeVal">2</span></label>
+      <input type="range" id="closeSlider" min="0" max="10" value="2">
+    </div>
+    <div class="slider-group">
+      <label>Morph Open <span class="val" id="openVal">1</span></label>
+      <input type="range" id="openSlider" min="0" max="10" value="1">
+    </div>
+    <div class="slider-group">
+      <label>Min Area <span class="val" id="minAreaVal">0.1%</span></label>
+      <input type="range" id="minAreaSlider" min="0.0001" max="0.01" step="0.0001" value="0.001">
+    </div>
+    <div class="slider-group">
+      <label>Margin <span class="val" id="marginVal">0.0 mm</span></label>
+      <input type="range" id="marginSlider" min="0" max="10" step="0.1" value="0">
+    </div>
+    <div class="slider-group">
+      <label>Ext Radius <span class="val" id="minRadiusVal">0.0 mm</span></label>
+      <input type="range" id="minRadiusSlider" min="0" max="10" step="0.1" value="0">
+    </div>
+    <div class="slider-group">
+      <label>Int Radius <span class="val" id="intRadiusVal">0.0 mm</span></label>
+      <input type="range" id="intRadiusSlider" min="0" max="10" step="0.1" value="0">
+    </div>
+    <div class="slider-group" style="min-width:auto;">
+      <label>Fill Reflections</label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;margin-top:2px;">
+        <input type="checkbox" id="fillHolesCheck" checked style="width:16px;height:16px;accent-color:#4a9eff;">
+        <span style="color:#ccc;font-size:0.8rem;">On</span>
+      </label>
+    </div>
+    <div class="slider-group" style="min-width:auto;">
+      <label>Center Lines</label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;margin-top:2px;">
+        <input type="checkbox" id="centerLineCheck" checked style="width:16px;height:16px;accent-color:#4a9eff;">
+        <span style="color:#ccc;font-size:0.8rem;">On</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="info-bar" id="infoBar"></div>
+
+  <div id="stepsPanel" style="display:none;">
+    <div class="steps-toggle" id="stepsToggle">
+      Pipeline Steps <span class="arrow">&#9654;</span>
+    </div>
+    <div class="steps-grid" id="stepsGrid">
+      <div class="step-card"><div class="step-label">1. Grayscale</div><canvas id="stepGray"></canvas></div>
+      <div class="step-card"><div class="step-label">2. Blurred</div><canvas id="stepBlurred"></canvas></div>
+      <div class="step-card"><div class="step-label">3. Rough Otsu (full image)</div><canvas id="stepRoughOtsu"></canvas></div>
+      <div class="step-card"><div class="step-label">4. Rough + Morph Close (plate detect input)</div><canvas id="stepRoughClosed"></canvas></div>
+      <div class="step-card"><div class="step-label">5. Threshold Result</div><canvas id="stepThreshold"></canvas></div>
+      <div class="step-card"><div class="step-label">6. After Morph Close/Open</div><canvas id="stepMorph"></canvas></div>
+      <div class="step-card"><div class="step-label">7. After Fill Holes</div><canvas id="stepFillHoles"></canvas></div>
+      <div class="step-card"><div class="step-label">8. Plate Mask</div><canvas id="stepPlateMask"></canvas></div>
+    </div>
+  </div>
+
+  <div class="results" id="results" style="display:none;">
+    <div class="result-card" id="previewCard">
+      <div class="card-header">
+        <h3>Preview</h3>
+      </div>
+      <div class="preview-toolbar" id="previewToolbar" style="display:none;">
+        <button id="zoomFitBtn" title="Fit to window">Fit</button>
+        <button id="zoom100Btn" title="100% zoom">1:1</button>
+        <button id="zoomOutBtn" title="Zoom out">−</button>
+        <span class="zoom-display" id="zoomDisplay">50%</span>
+        <button id="zoomInBtn" title="Zoom in">+</button>
+        <span style="color:#555;">|</span>
+        <span style="color:#666;">Scroll to zoom · Middle-click to pan · Drag cyan points to edit centerlines</span>
+      </div>
+      <div class="card-body" id="previewBody">
+        <div class="spinner" id="previewSpinner" style="display:none;"></div>
+        <canvas id="previewCanvas" style="display:none;"></canvas>
+        <span class="click-hint" id="clickHint" style="display:none;"></span>
+      </div>
+    </div>
+    <div class="result-card" style="grid-column:1/-1;">
+      <div class="card-header">
+        <h3>Parts</h3>
+        <div style="display:flex;gap:6px;">
+          <button class="btn-outline" id="downloadBtn" style="display:none;">Download All SVG</button>
+          <button class="btn-outline" id="downloadDxfBtn" style="display:none;">Download All DXF</button>
+        </div>
+      </div>
+      <div class="card-body" id="svgBody">
+        <div id="svgContainer"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Processing overlay -->
+<div class="processing-overlay" id="processingOverlay">
+  <div class="spinner"></div>
+  <div class="proc-text" id="procText">Processing image...</div>
+</div>
+
+<!-- Full-resolution lightbox -->
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" id="lightboxClose">&times;</button>
+  <canvas id="lightboxCanvas"></canvas>
+</div>
+
+<!-- Hidden canvas for loading uploaded image -->
+<canvas id="hiddenCanvas" style="display:none;"></canvas>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+let cvReady = false;
+let selectedFile = null;
+let lastSvgString = null;
+let lastDxfParts = null; // array of {name, dxf} for per-part DXF export
+let lastLoadedImage = null; // keep the Image object for re-processing
+let lastCenterLines = []; // editable centerlines [{x1,y1,x2,y2}, ...]
+let lastBluePaths = null;  // for regenerating SVG/DXF after centerline edit
+let lastSvgParams = null;  // {wMm, hMm, mmPerPx, offsetX, offsetY}
+let cachedPreviewData = null; // ImageData snapshot before centerlines
+let draggingCL = null; // {index, endpoint: 1|2} during drag
+let previewZoom = 0.5; // CSS scale factor for preview canvas
+let isPanning = false; // true during middle-click or space+drag pan
+let panStart = { x: 0, y: 0, scrollLeft: 0, scrollTop: 0 };
+
+// ─── DOM refs ────────────────────────────────────────────────────────────────
+const cvStatus      = document.getElementById('cvStatus');
+const dropZone      = document.getElementById('dropZone');
+const fileInput     = document.getElementById('fileInput');
+const processBtn    = document.getElementById('processBtn');
+const scaleMethod   = document.getElementById('scaleMethod');
+const scaleValue    = document.getElementById('scaleValue');
+const scaleLabel    = document.getElementById('scaleValueLabel');
+const smoothInput   = document.getElementById('smooth');
+const infoBar       = document.getElementById('infoBar');
+const results       = document.getElementById('results');
+const previewCanvas = document.getElementById('previewCanvas');
+const previewSpinner= document.getElementById('previewSpinner');
+const svgContainer  = document.getElementById('svgContainer');
+const downloadBtn    = document.getElementById('downloadBtn');
+const downloadDxfBtn = document.getElementById('downloadDxfBtn');
+const hiddenCanvas  = document.getElementById('hiddenCanvas');
+const sliderRow     = document.getElementById('sliderRow');
+const clickHint     = document.getElementById('clickHint');
+const lightbox      = document.getElementById('lightbox');
+const lightboxCanvas= document.getElementById('lightboxCanvas');
+const stepsPanel    = document.getElementById('stepsPanel');
+const stepsToggle   = document.getElementById('stepsToggle');
+const stepsGrid     = document.getElementById('stepsGrid');
+
+stepsToggle.addEventListener('click', () => {
+  stepsToggle.classList.toggle('open');
+  stepsGrid.classList.toggle('open');
+});
+
+function showStep(canvasId, mat) {
+  const c = document.getElementById(canvasId);
+  if (!c) return;
+  cv.imshow(c, mat);
+}
+
+// ─── Slider refs & labels ───────────────────────────────────────────────────
+const blurSlider      = document.getElementById('blurSlider');
+const threshSlider    = document.getElementById('threshSlider');
+const threshMethod    = document.getElementById('threshMethod');
+const blockSizeSlider = document.getElementById('blockSizeSlider');
+const adaptiveCSlider = document.getElementById('adaptiveCSlider');
+const closeSlider     = document.getElementById('closeSlider');
+const openSlider      = document.getElementById('openSlider');
+const minAreaSlider   = document.getElementById('minAreaSlider');
+const marginSlider    = document.getElementById('marginSlider');
+const minRadiusSlider = document.getElementById('minRadiusSlider');
+const intRadiusSlider = document.getElementById('intRadiusSlider');
+const fillHolesCheck  = document.getElementById('fillHolesCheck');
+const centerLineCheck = document.getElementById('centerLineCheck');
+
+function updateSliderLabels() {
+  document.getElementById('blurVal').textContent = blurSlider.value;
+  const tv = parseInt(threshSlider.value);
+  document.getElementById('threshVal').textContent = tv === 0 ? 'Auto' : tv;
+  document.getElementById('blockSizeVal').textContent = blockSizeSlider.value;
+  document.getElementById('adaptiveCVal').textContent = adaptiveCSlider.value;
+  document.getElementById('closeVal').textContent = closeSlider.value;
+  document.getElementById('openVal').textContent = openSlider.value;
+  document.getElementById('minAreaVal').textContent = (parseFloat(minAreaSlider.value) * 100).toFixed(2) + '%';
+  document.getElementById('marginVal').textContent = parseFloat(marginSlider.value).toFixed(1) + ' mm';
+  document.getElementById('minRadiusVal').textContent = parseFloat(minRadiusSlider.value).toFixed(1) + ' mm';
+  document.getElementById('intRadiusVal').textContent = parseFloat(intRadiusSlider.value).toFixed(1) + ' mm';
+}
+[blurSlider, threshSlider, blockSizeSlider, adaptiveCSlider, closeSlider, openSlider, minAreaSlider, marginSlider, minRadiusSlider, intRadiusSlider].forEach(s => {
+  s.addEventListener('input', updateSliderLabels);
+});
+threshMethod.addEventListener('change', updateSliderLabels);
+updateSliderLabels();
+
+// ─── Upload handling ─────────────────────────────────────────────────────────
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) selectFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files.length) selectFile(fileInput.files[0]); });
+
+function selectFile(file) {
+  selectedFile = file;
+  dropZone.querySelector('.label').innerHTML =
+    '<strong>' + file.name + '</strong><br>' +
+    '<span style="font-size:0.8rem;color:#666;">' + (file.size / 1024 / 1024).toFixed(1) + ' MB</span>';
+  updateProcessBtn();
+}
+
+scaleMethod.addEventListener('change', () => {
+  const labels   = { dpi: 'DPI', reference: 'Plate Width (mm)', manual: 'mm per pixel' };
+  const defaults = { dpi: 96, reference: 222, manual: 0.15 };
+  scaleLabel.textContent = labels[scaleMethod.value];
+  scaleValue.value = defaults[scaleMethod.value];
+  document.getElementById('plateHeightGroup').style.display =
+    scaleMethod.value === 'reference' ? '' : 'none';
+});
+
+function updateProcessBtn() {
+  processBtn.disabled = !(cvReady && selectedFile);
+}
+
+downloadBtn.addEventListener('click', () => {
+  if (!lastSvgString) return;
+  const blob = new Blob([lastSvgString], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'tool_outlines.svg';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+downloadDxfBtn.addEventListener('click', async () => {
+  if (!lastDxfParts || lastDxfParts.length === 0) return;
+  if (lastDxfParts.length === 1) {
+    // Single part — download directly
+    const blob = new Blob([lastDxfParts[0].dxf], { type: 'application/dxf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = lastDxfParts[0].name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } else {
+    // Multiple parts — ZIP them
+    if (typeof JSZip === 'undefined') {
+      alert('JSZip is still loading. Please try again in a moment.');
+      return;
+    }
+    const zip = new JSZip();
+    for (let i = 0; i < lastDxfParts.length; i++) {
+      zip.file(lastDxfParts[i].name, lastDxfParts[i].dxf);
+    }
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'tool_outlines_dxf.zip';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+});
+
+// ─── Part card helpers ───────────────────────────────────────────────────────
+let partNames = []; // user-editable part names
+
+function buildPartCardHtml(index, partSvg, clLen, maxW) {
+  const name = (partNames[index] || 'Part ' + (index + 1));
+  const dims = clLen > 0 ? clLen.toFixed(1) + ' &times; ' + maxW.toFixed(1) + ' mm' : '';
+  // Strip XML declaration for inline display (browsers don't like it in innerHTML)
+  const displaySvg = partSvg.replace(/<\?xml[^?]*\?>\s*/g, '');
+  return '<div class="part-card" data-part-idx="' + index + '">' +
+    '<div class="part-header">' +
+    '<input class="part-name" value="' + name.replace(/"/g, '&quot;') + '" data-part-idx="' + index + '">' +
+    (dims ? '<span class="part-dims">' + dims + '</span>' : '') +
+    '<div class="part-btns">' +
+    '<button onclick="savePartSvg(' + index + ')">SVG</button>' +
+    '<button onclick="savePartDxf(' + index + ')">DXF</button>' +
+    '</div></div>' +
+    '<div class="part-body">' + displaySvg + '</div></div>';
+}
+
+function savePartSvg(index) {
+  if (!lastPartSvgs || !lastPartSvgs[index]) return;
+  const name = partNames[index] || 'part_' + (index + 1);
+  const blob = new Blob([lastPartSvgs[index]], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url;
+  a.download = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.svg';
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+function savePartDxf(index) {
+  if (!lastDxfParts || !lastDxfParts[index]) return;
+  const name = partNames[index] || 'part_' + (index + 1);
+  const blob = new Blob([lastDxfParts[index].dxf], { type: 'application/dxf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url;
+  a.download = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.dxf';
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+// Listen for part name changes
+document.addEventListener('input', (e) => {
+  if (e.target.classList.contains('part-name')) {
+    const idx = parseInt(e.target.dataset.partIdx);
+    partNames[idx] = e.target.value;
+  }
+});
+
+let lastPartSvgs = [];
+
+// ─── Center Line Overlay Drawing + Interactive Editing ──────────────────────
+
+// Extend a line defined by two control points to the boundary of a polygon.
+// Returns {x1, y1, x2, y2} — the two extreme intersection points.
+function extendLineToPart(cp1x, cp1y, cp2x, cp2y, pts) {
+  const n = pts.length;
+  if (n < 3) return { x1: cp1x, y1: cp1y, x2: cp2x, y2: cp2y };
+
+  const dx = cp2x - cp1x, dy = cp2y - cp1y;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 1e-6) return { x1: cp1x, y1: cp1y, x2: cp2x, y2: cp2y };
+
+  // Line direction unit vector
+  const ux = dx / len, uy = dy / len;
+
+  // Find all intersections of the infinite line with polygon edges
+  const hits = [];
+  for (let i = 0; i < n; i++) {
+    const ax = pts[i][0], ay = pts[i][1];
+    const bx = pts[(i + 1) % n][0], by = pts[(i + 1) % n][1];
+    const ex = bx - ax, ey = by - ay;
+    const denom = ux * ey - uy * ex;
+    if (Math.abs(denom) < 1e-10) continue;
+    const t = ((ax - cp1x) * ey - (ay - cp1y) * ex) / denom;
+    const s = ((ax - cp1x) * uy - (ay - cp1y) * ux) / denom;
+    if (s >= 0 && s <= 1) {
+      hits.push(t); // parameter along the centerline direction from cp1
+    }
+  }
+
+  if (hits.length < 2) return { x1: cp1x, y1: cp1y, x2: cp2x, y2: cp2y };
+
+  const minT = Math.min(...hits);
+  const maxT = Math.max(...hits);
+
+  return {
+    x1: cp1x + ux * minT, y1: cp1y + uy * minT,
+    x2: cp1x + ux * maxT, y2: cp1y + uy * maxT
+  };
+}
+
+// Find perpendicular line through a point, clipped to contour boundary
+function perpLineAtPoint(px, py, dirX, dirY, contourPts) {
+  // Perpendicular direction
+  const perpX = -dirY, perpY = dirX;
+  const ext = extendLineToPart(px, py, px + perpX, py + perpY, contourPts);
+  return ext;
+}
+
+// Compute max width of a contour perpendicular to a direction
+function computeMaxWidth(dirX, dirY, contourPts) {
+  const perpX = -dirY, perpY = dirX;
+  let minProj = Infinity, maxProj = -Infinity;
+  for (const p of contourPts) {
+    const proj = p[0] * perpX + p[1] * perpY;
+    if (proj < minProj) minProj = proj;
+    if (proj > maxProj) maxProj = proj;
+  }
+  return maxProj - minProj;
+}
+
+function drawCenterLinesOverlay() {
+  if (!cachedPreviewData) return;
+  const pctx = previewCanvas.getContext('2d');
+  const w = previewCanvas.width, h = previewCanvas.height;
+  const mmPerPx = lastSvgParams ? lastSvgParams.mmPerPx : 0;
+
+  pctx.putImageData(cachedPreviewData, 0, 0);
+
+  // Draw center lines extended to part boundary
+  if (lastCenterLines.length > 0 && lastBluePaths) {
+    for (let i = 0; i < lastCenterLines.length; i++) {
+      const cl = lastCenterLines[i];
+      const contour = (i < lastBluePaths.length) ? lastBluePaths[i] : null;
+
+      // Centerline direction
+      const dx = cl.cp2x - cl.cp1x, dy = cl.cp2y - cl.cp1y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      const dirX = len > 0 ? dx / len : 1, dirY = len > 0 ? dy / len : 0;
+
+      // Compute extended line from control points to contour boundary
+      let ex1, ey1, ex2, ey2;
+      if (contour) {
+        const ext = extendLineToPart(cl.cp1x, cl.cp1y, cl.cp2x, cl.cp2y, contour);
+        ex1 = ext.x1; ey1 = ext.y1; ex2 = ext.x2; ey2 = ext.y2;
+      } else {
+        ex1 = cl.cp1x; ey1 = cl.cp1y; ex2 = cl.cp2x; ey2 = cl.cp2y;
+      }
+      cl.x1 = ex1; cl.y1 = ey1; cl.x2 = ex2; cl.y2 = ey2;
+
+      // Centerline length and max width in mm
+      const clLenPx = Math.sqrt((ex2 - ex1) ** 2 + (ey2 - ey1) ** 2);
+      const clLenMm = clLenPx * mmPerPx;
+      const maxWidthPx = contour ? computeMaxWidth(dirX, dirY, contour) : 0;
+      const maxWidthMm = maxWidthPx * mmPerPx;
+      cl.lengthMm = clLenMm;
+      cl.maxWidthMm = maxWidthMm;
+
+      // Draw extended centerline
+      pctx.strokeStyle = '#00ffff';
+      pctx.lineWidth = 1.5;
+      pctx.setLineDash([8, 4]);
+      pctx.beginPath();
+      pctx.moveTo(ex1, ey1);
+      pctx.lineTo(ex2, ey2);
+      pctx.stroke();
+      pctx.setLineDash([]);
+
+      // Draw perpendicular lines at each control point (colored by side length)
+      if (contour) {
+        pctx.lineWidth = 1.5;
+        pctx.setLineDash([4, 3]);
+        for (const [cpx, cpy] of [[cl.cp1x, cl.cp1y], [cl.cp2x, cl.cp2y]]) {
+          const perp = perpLineAtPoint(cpx, cpy, dirX, dirY, contour);
+          const d1 = Math.sqrt((cpx - perp.x1) ** 2 + (cpy - perp.y1) ** 2);
+          const d2 = Math.sqrt((cpx - perp.x2) ** 2 + (cpy - perp.y2) ** 2);
+          const margin = Math.max(d1, d2) * 0.05; // 5% tolerance
+          let color1, color2;
+          if (Math.abs(d1 - d2) <= margin) {
+            color1 = 'rgba(0, 200, 80, 0.8)'; color2 = 'rgba(0, 200, 80, 0.8)';
+          } else if (d1 > d2) {
+            color1 = 'rgba(255, 80, 80, 0.8)'; color2 = 'rgba(180, 107, 255, 0.8)';
+          } else {
+            color1 = 'rgba(180, 107, 255, 0.8)'; color2 = 'rgba(255, 80, 80, 0.8)';
+          }
+          // Side 1: control point to perp.x1/y1
+          pctx.strokeStyle = color1;
+          pctx.beginPath();
+          pctx.moveTo(cpx, cpy); pctx.lineTo(perp.x1, perp.y1);
+          pctx.stroke();
+          // Side 2: control point to perp.x2/y2
+          pctx.strokeStyle = color2;
+          pctx.beginPath();
+          pctx.moveTo(cpx, cpy); pctx.lineTo(perp.x2, perp.y2);
+          pctx.stroke();
+        }
+        pctx.setLineDash([]);
+      }
+
+      // Draw control points
+      for (const [px, py] of [[cl.cp1x, cl.cp1y], [cl.cp2x, cl.cp2y]]) {
+        pctx.fillStyle = '#00ffff';
+        pctx.beginPath();
+        pctx.arc(px, py, 6, 0, Math.PI * 2);
+        pctx.fill();
+        pctx.strokeStyle = '#ffffff';
+        pctx.lineWidth = 1.5;
+        pctx.stroke();
+      }
+
+      // Draw dimension labels near centerline
+      if (mmPerPx > 0) {
+        const midX = (ex1 + ex2) / 2, midY = (ey1 + ey2) / 2;
+        pctx.font = '13px sans-serif';
+        pctx.fillStyle = '#00ffff';
+        pctx.textAlign = 'left';
+        pctx.textBaseline = 'bottom';
+        const perpOff = 12;
+        pctx.fillText('L=' + clLenMm.toFixed(1) + 'mm', midX + dirY * perpOff, midY - dirX * perpOff);
+        pctx.textBaseline = 'top';
+        pctx.fillText('W=' + maxWidthMm.toFixed(1) + 'mm', midX + dirY * perpOff, midY - dirX * perpOff + 2);
+      }
+    }
+  }
+
+  // Scale indicator
+  const minRadiusMm = parseFloat(minRadiusSlider.value);
+  const minRadiusPx = minRadiusMm > 0 && mmPerPx > 0 ? Math.max(1, Math.round(minRadiusMm / mmPerPx)) : 0;
+  const intRadiusMm = parseFloat(intRadiusSlider.value);
+  const intRadiusPx = intRadiusMm > 0 && mmPerPx > 0 ? Math.max(1, Math.round(intRadiusMm / mmPerPx)) : 0;
+
+  if (mmPerPx > 0) {
+    const scaleMm = 25;
+    const scalePx = Math.round(scaleMm / mmPerPx);
+    const pad = 20;
+    const originX = w - pad, originY = h - pad;
+    const tickLen = 6;
+
+    pctx.strokeStyle = '#ffffff'; pctx.fillStyle = '#ffffff';
+    pctx.lineWidth = 2; pctx.font = '14px sans-serif';
+    pctx.textBaseline = 'middle'; pctx.textAlign = 'center';
+
+    pctx.beginPath();
+    pctx.moveTo(originX, originY); pctx.lineTo(originX - scalePx, originY);
+    pctx.moveTo(originX - scalePx, originY - tickLen); pctx.lineTo(originX - scalePx, originY + tickLen);
+    pctx.stroke();
+    pctx.textBaseline = 'top';
+    pctx.fillText(scaleMm + 'mm', originX - scalePx / 2, originY + 6);
+
+    pctx.beginPath();
+    pctx.moveTo(originX, originY); pctx.lineTo(originX, originY - scalePx);
+    pctx.moveTo(originX - tickLen, originY - scalePx); pctx.lineTo(originX + tickLen, originY - scalePx);
+    pctx.stroke();
+    pctx.save();
+    pctx.translate(originX + 10, originY - scalePx / 2);
+    pctx.rotate(-Math.PI / 2);
+    pctx.textBaseline = 'bottom'; pctx.textAlign = 'center';
+    pctx.fillText(scaleMm + 'mm', 0, 0);
+    pctx.restore();
+
+    const circleX = originX - scalePx / 2, circleY = originY - scalePx / 2;
+    pctx.textAlign = 'center'; pctx.textBaseline = 'top'; pctx.lineWidth = 2;
+    if (minRadiusPx > 0) {
+      pctx.strokeStyle = '#ff6b6b'; pctx.beginPath();
+      pctx.arc(circleX, circleY, minRadiusPx, 0, Math.PI * 2); pctx.stroke();
+      pctx.fillStyle = '#ff6b6b';
+      pctx.fillText('ext=' + minRadiusMm.toFixed(1), circleX, circleY + Math.max(minRadiusPx, intRadiusPx || 0) + 4);
+    }
+    if (intRadiusPx > 0) {
+      pctx.strokeStyle = '#b46bff'; pctx.setLineDash([4, 4]); pctx.beginPath();
+      pctx.arc(circleX, circleY, intRadiusPx, 0, Math.PI * 2); pctx.stroke();
+      pctx.setLineDash([]); pctx.fillStyle = '#b46bff';
+      const yOff = Math.max(minRadiusPx || 0, intRadiusPx) + 4 + (minRadiusPx > 0 ? 16 : 0);
+      pctx.fillText('int=' + intRadiusMm.toFixed(1), circleX, circleY + yOff);
+    }
+  }
+}
+
+// Convert mouse event to canvas pixel coords (accounting for CSS zoom)
+function canvasCoords(e) {
+  const rect = previewCanvas.getBoundingClientRect();
+  const scaleX = previewCanvas.width / rect.width;
+  const scaleY = previewCanvas.height / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY
+  };
+}
+
+// Regenerate SVG/DXF after centerline edit
+function updateOutputsAfterCLEdit() {
+  if (!lastBluePaths || !lastSvgParams) return;
+  const p = lastSvgParams;
+
+  lastDxfParts = [];
+  let allPartSvgs = [];
+  let svgContainerHtml = '';
+
+  for (let i = 0; i < lastBluePaths.length; i++) {
+    let polyPts = contourToPolylineMm(lastBluePaths[i], p.mmPerPx, p.offsetX, p.offsetY);
+    const cl = (i < lastCenterLines.length) ? lastCenterLines[i] : null;
+    let clMm = null;
+    if (cl) {
+      clMm = {
+        x1: (cl.x1 - p.offsetX) * p.mmPerPx, y1: (cl.y1 - p.offsetY) * p.mmPerPx,
+        x2: (cl.x2 - p.offsetX) * p.mmPerPx, y2: (cl.y2 - p.offsetY) * p.mmPerPx
+      };
+      const clAngle = Math.PI / 2 - Math.atan2(clMm.y2 - clMm.y1, clMm.x2 - clMm.x1);
+      polyPts = rotatePoints(polyPts, clAngle);
+      clMm = rotateLine(clMm, clAngle);
+      let minX = Infinity, minY = Infinity;
+      for (const pt of polyPts) { if (pt[0] < minX) minX = pt[0]; if (pt[1] < minY) minY = pt[1]; }
+      minX = Math.min(minX, clMm.x1, clMm.x2);
+      minY = Math.min(minY, clMm.y1, clMm.y2);
+      polyPts = polyPts.map(pt => [pt[0] - minX, pt[1] - minY]);
+      clMm = { x1: clMm.x1 - minX, y1: clMm.y1 - minY, x2: clMm.x2 - minX, y2: clMm.y2 - minY };
+    }
+
+    let bMaxX = 0, bMaxY = 0;
+    for (const pt of polyPts) { if (pt[0] > bMaxX) bMaxX = pt[0]; if (pt[1] > bMaxY) bMaxY = pt[1]; }
+    const pad = 2;
+    const d = pointsToBezierPath(polyPts);
+    let partSvg = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<svg xmlns="http://www.w3.org/2000/svg"\n' +
+      '     width="' + (bMaxX + pad * 2).toFixed(2) + 'mm" height="' + (bMaxY + pad * 2).toFixed(2) + 'mm"\n' +
+      '     viewBox="' + (-pad).toFixed(2) + ' ' + (-pad).toFixed(2) + ' ' +
+      (bMaxX + pad * 2).toFixed(2) + ' ' + (bMaxY + pad * 2).toFixed(2) + '">\n' +
+      '  <g fill="none" stroke="black" stroke-width="0.3">\n' +
+      '    <path d="' + d + '"/>\n  </g>\n';
+    if (clMm) {
+      partSvg += '  <g fill="none" stroke="red" stroke-width="0.2" stroke-dasharray="2,1">\n' +
+        '    <line x1="' + clMm.x1.toFixed(2) + '" y1="' + clMm.y1.toFixed(2) +
+        '" x2="' + clMm.x2.toFixed(2) + '" y2="' + clMm.y2.toFixed(2) + '"/>\n  </g>\n';
+    }
+    partSvg += '</svg>';
+    allPartSvgs.push(partSvg);
+
+    const clLen = cl ? cl.lengthMm : 0;
+    const maxW = cl ? cl.maxWidthMm : 0;
+    svgContainerHtml += buildPartCardHtml(i, partSvg, clLen, maxW);
+
+    lastDxfParts.push({ name: 'part_' + (i + 1) + '.dxf', dxf: generateDxf(polyPts, clMm) });
+  }
+
+  lastSvgString = allPartSvgs.join('\n\n');
+  lastPartSvgs = allPartSvgs;
+  svgContainer.innerHTML = svgContainerHtml;
+}
+
+// ─── Zoom & Pan ──────────────────────────────────────────────────────────────
+const previewBody = document.getElementById('previewBody');
+const previewToolbar = document.getElementById('previewToolbar');
+const zoomDisplay = document.getElementById('zoomDisplay');
+
+function applyZoom() {
+  previewCanvas.style.transform = 'scale(' + previewZoom + ')';
+  zoomDisplay.textContent = Math.round(previewZoom * 100) + '%';
+}
+
+function zoomToFit() {
+  if (!previewCanvas.width) return;
+  const bodyW = previewBody.clientWidth - 32;
+  const bodyH = previewBody.clientHeight || 500;
+  previewZoom = Math.min(bodyW / previewCanvas.width, bodyH / previewCanvas.height, 1);
+  applyZoom();
+}
+
+document.getElementById('zoomFitBtn').addEventListener('click', zoomToFit);
+document.getElementById('zoom100Btn').addEventListener('click', () => { previewZoom = 1; applyZoom(); });
+document.getElementById('zoomInBtn').addEventListener('click', () => {
+  previewZoom = Math.min(5, previewZoom * 1.25); applyZoom();
+});
+document.getElementById('zoomOutBtn').addEventListener('click', () => {
+  previewZoom = Math.max(0.1, previewZoom / 1.25); applyZoom();
+});
+
+previewBody.addEventListener('wheel', (e) => {
+  if (!cachedPreviewData) return;
+  e.preventDefault();
+  const oldZoom = previewZoom;
+  const delta = e.deltaY > 0 ? 0.9 : 1.1;
+  previewZoom = Math.max(0.1, Math.min(5, previewZoom * delta));
+  applyZoom();
+
+  // Adjust scroll to keep mouse position stable
+  const rect = previewBody.getBoundingClientRect();
+  const mx = e.clientX - rect.left + previewBody.scrollLeft;
+  const my = e.clientY - rect.top + previewBody.scrollTop;
+  const ratio = previewZoom / oldZoom;
+  previewBody.scrollLeft = mx * ratio - (e.clientX - rect.left);
+  previewBody.scrollTop = my * ratio - (e.clientY - rect.top);
+}, { passive: false });
+
+// Middle-click pan
+previewBody.addEventListener('mousedown', (e) => {
+  if (e.button === 1) { // middle click
+    e.preventDefault();
+    isPanning = true;
+    panStart = { x: e.clientX, y: e.clientY, scrollLeft: previewBody.scrollLeft, scrollTop: previewBody.scrollTop };
+    previewBody.style.cursor = 'move';
+  }
+});
+window.addEventListener('mousemove', (e) => {
+  if (!isPanning) return;
+  e.preventDefault();
+  previewBody.scrollLeft = panStart.scrollLeft - (e.clientX - panStart.x);
+  previewBody.scrollTop = panStart.scrollTop - (e.clientY - panStart.y);
+});
+window.addEventListener('mouseup', (e) => {
+  if (isPanning) { isPanning = false; previewBody.style.cursor = ''; }
+});
+
+// ─── Control point dragging ─────────────────────────────────────────────────
+const CL_HIT_RADIUS = 15; // pixels (in canvas coords) to detect click on control point
+
+previewCanvas.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return; // left click only
+  if (lastCenterLines.length === 0 || !cachedPreviewData) return;
+  const { x, y } = canvasCoords(e);
+
+  let bestDist = CL_HIT_RADIUS;
+  let bestIdx = -1, bestEp = 0;
+  for (let i = 0; i < lastCenterLines.length; i++) {
+    const cl = lastCenterLines[i];
+    const d1 = Math.sqrt((x - cl.cp1x) ** 2 + (y - cl.cp1y) ** 2);
+    const d2 = Math.sqrt((x - cl.cp2x) ** 2 + (y - cl.cp2y) ** 2);
+    if (d1 < bestDist) { bestDist = d1; bestIdx = i; bestEp = 1; }
+    if (d2 < bestDist) { bestDist = d2; bestIdx = i; bestEp = 2; }
+  }
+
+  if (bestIdx >= 0) {
+    e.preventDefault();
+    e.stopPropagation();
+    draggingCL = { index: bestIdx, endpoint: bestEp };
+    previewCanvas.style.cursor = 'grabbing';
+  }
+});
+
+previewCanvas.addEventListener('mousemove', (e) => {
+  if (!draggingCL) {
+    if (lastCenterLines.length > 0 && cachedPreviewData) {
+      const { x, y } = canvasCoords(e);
+      let near = false;
+      for (let i = 0; i < lastCenterLines.length; i++) {
+        const cl = lastCenterLines[i];
+        if (Math.sqrt((x - cl.cp1x) ** 2 + (y - cl.cp1y) ** 2) < CL_HIT_RADIUS ||
+            Math.sqrt((x - cl.cp2x) ** 2 + (y - cl.cp2y) ** 2) < CL_HIT_RADIUS) {
+          near = true; break;
+        }
+      }
+      previewCanvas.style.cursor = near ? 'grab' : 'default';
+    }
+    return;
+  }
+
+  e.preventDefault();
+  const { x, y } = canvasCoords(e);
+  const cl = lastCenterLines[draggingCL.index];
+  if (draggingCL.endpoint === 1) { cl.cp1x = x; cl.cp1y = y; }
+  else { cl.cp2x = x; cl.cp2y = y; }
+
+  drawCenterLinesOverlay();
+});
+
+previewCanvas.addEventListener('mouseup', (e) => {
+  if (!draggingCL) return;
+  e.preventDefault();
+  e.stopPropagation();
+  previewCanvas.style.cursor = 'grab';
+  draggingCL = null;
+  updateOutputsAfterCLEdit();
+});
+
+previewCanvas.addEventListener('mouseleave', () => {
+  if (draggingCL) {
+    draggingCL = null;
+    previewCanvas.style.cursor = 'default';
+    updateOutputsAfterCLEdit();
+  }
+});
+lightbox.addEventListener('click', (e) => {
+  if (e.target === lightboxCanvas) return; // don't close when clicking the image
+  lightbox.classList.remove('open');
+});
+document.getElementById('lightboxClose').addEventListener('click', () => {
+  lightbox.classList.remove('open');
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') lightbox.classList.remove('open');
+});
+
+// ─── Image processing pipeline ──────────────────────────────────────────────
+processBtn.addEventListener('click', () => {
+  if (!selectedFile || !cvReady) return;
+  processImage(selectedFile);
+});
+
+const processingOverlay = document.getElementById('processingOverlay');
+const procText = document.getElementById('procText');
+
+function showProcessing(msg) {
+  procText.textContent = msg || 'Processing image...';
+  processingOverlay.classList.add('active');
+}
+function hideProcessing() {
+  processingOverlay.classList.remove('active');
+}
+
+function finishProcessing() {
+  hideProcessing();
+  processBtn.textContent = 'Generate Outlines';
+  updateProcessBtn();
+  sliderRow.style.display = 'flex';
+}
+
+function runPipelineDeferred(img) {
+  // Defer so the overlay renders before the blocking computation
+  setTimeout(() => {
+    try {
+      runPipeline(img);
+    } catch (err) {
+      showError(err.message || String(err));
+    } finally {
+      finishProcessing();
+    }
+  }, 50);
+}
+
+function processImage(file) {
+  results.style.display = 'grid';
+  stepsPanel.style.display = 'block';
+  previewToolbar.style.display = 'flex';
+  previewCanvas.style.display = 'none';
+  clickHint.style.display = 'none';
+  svgContainer.innerHTML = '';
+  downloadBtn.style.display = 'none';
+  downloadDxfBtn.style.display = 'none';
+  infoBar.style.display = 'none';
+  processBtn.disabled = true;
+  processBtn.textContent = 'Processing...';
+  showProcessing('Processing image...');
+
+  // If we already have the image loaded and file hasn't changed, reuse it
+  if (lastLoadedImage && lastLoadedImage._file === file) {
+    runPipelineDeferred(lastLoadedImage);
+    return;
+  }
+
+  showProcessing('Loading image...');
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const img = new Image();
+    img.onload = function() {
+      img._file = file;
+      lastLoadedImage = img;
+      showProcessing('Processing image...');
+      runPipelineDeferred(img);
+    };
+    img.onerror = () => { hideProcessing(); showError('Could not decode image'); };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function showError(msg) {
+  infoBar.innerHTML = '<span style="color:#ff6b6b;">Error:</span> ' + msg;
+  infoBar.style.display = 'block';
+  previewSpinner.style.display = 'none';
+  hideProcessing();
+}
+
+function runPipeline(img) {
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+
+  // Draw image to hidden canvas so OpenCV can read it
+  hiddenCanvas.width = w;
+  hiddenCanvas.height = h;
+  const ctx = hiddenCanvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+
+  // ── Step 1: Load into OpenCV ──
+  let src = cv.imread(hiddenCanvas);
+  let gray = new cv.Mat();
+  let blurred = new cv.Mat();
+  let binary = new cv.Mat();
+  let kernel = null;
+  let contours = null;
+  let hierarchy = null;
+  let plateMask = null;
+
+  try {
+    // ── Step 2: Grayscale + blur + threshold (inverted) ──
+    const blurSize = parseInt(blurSlider.value) | 1; // ensure odd
+    const threshVal = parseInt(threshSlider.value);
+    const closeIter = parseInt(closeSlider.value);
+    const openIter = parseInt(openSlider.value);
+
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    showStep('stepGray', gray);
+    let ksize = new cv.Size(blurSize, blurSize);
+    cv.GaussianBlur(gray, blurred, ksize, 0);
+    showStep('stepBlurred', blurred);
+
+    const method_thresh = threshMethod.value;
+    const blockSize = parseInt(blockSizeSlider.value) | 1; // ensure odd
+    const adaptiveC = parseInt(adaptiveCSlider.value);
+
+    // Rough full-image Otsu to find the plate (always needed for plate detection)
+    cv.threshold(blurred, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+    showStep('stepRoughOtsu', binary);
+    let roughBinary = binary.clone();
+    let roughKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
+    cv.morphologyEx(roughBinary, roughBinary, cv.MORPH_CLOSE, roughKernel, new cv.Point(-1, -1), 2);
+    showStep('stepRoughClosed', roughBinary);
+    const plateInfo = detectPlate(roughBinary, w, h);
+    roughKernel.delete();
+    roughBinary.delete();
+
+    // Apply selected threshold method
+    if (threshVal > 0) {
+      // Manual threshold overrides everything
+      cv.threshold(blurred, binary, threshVal, 255, cv.THRESH_BINARY_INV);
+    } else if (method_thresh === 'adaptive' || method_thresh === 'combined') {
+      // Adaptive threshold on the plate ROI (or full image)
+      let adaptiveBin = new cv.Mat();
+      cv.adaptiveThreshold(blurred, adaptiveBin, 255,
+        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV,
+        blockSize, adaptiveC);
+
+      if (method_thresh === 'combined') {
+        // OR adaptive with plate-local Otsu for best coverage
+        if (plateInfo) {
+          const pr = cv.boundingRect(plateInfo.contour);
+          let roiSrc = blurred.roi(new cv.Rect(pr.x, pr.y, pr.width, pr.height));
+          let roiDst = binary.roi(new cv.Rect(pr.x, pr.y, pr.width, pr.height));
+          cv.threshold(roiSrc, roiDst, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+          roiSrc.delete();
+          roiDst.delete();
+        }
+        cv.bitwise_or(binary, adaptiveBin, binary);
+      } else {
+        adaptiveBin.copyTo(binary);
+      }
+      adaptiveBin.delete();
+    } else {
+      // Otsu: re-run on plate bounding rect if plate found
+      if (plateInfo) {
+        const pr = cv.boundingRect(plateInfo.contour);
+        let roiSrc = blurred.roi(new cv.Rect(pr.x, pr.y, pr.width, pr.height));
+        let roiDst = binary.roi(new cv.Rect(pr.x, pr.y, pr.width, pr.height));
+        cv.threshold(roiSrc, roiDst, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+        roiSrc.delete();
+        roiDst.delete();
+      }
+      // (if no plate, the initial full-image Otsu result stays)
+    }
+    showStep('stepThreshold', binary);
+
+    // ── Step 3: Morphological close then open ──
+    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
+    if (closeIter > 0)
+      cv.morphologyEx(binary, binary, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), closeIter);
+    if (openIter > 0)
+      cv.morphologyEx(binary, binary, cv.MORPH_OPEN, kernel, new cv.Point(-1, -1), openIter);
+    showStep('stepMorph', binary);
+
+    // ── Step 3.5: Fill holes (reflections/shiny spots inside tools) ──
+    // Find black regions (gaps in tools) that are fully enclosed.
+    // Invert binary → find external contours of the background → the largest
+    // one is the real background; all other white blobs are holes → fill them.
+    if (fillHolesCheck.checked) {
+      let invBinary = new cv.Mat();
+      cv.bitwise_not(binary, invBinary);
+
+      let holeContours = new cv.MatVector();
+      let holeHier = new cv.Mat();
+      cv.findContours(invBinary, holeContours, holeHier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      if (holeContours.size() > 0) {
+        // Find the largest background region (the actual image background)
+        let maxArea = 0;
+        let maxIdx = 0;
+        for (let i = 0; i < holeContours.size(); i++) {
+          const a = cv.contourArea(holeContours.get(i));
+          if (a > maxArea) { maxArea = a; maxIdx = i; }
+        }
+
+        // Fill every other region (holes inside tools) into the binary as white
+        for (let i = 0; i < holeContours.size(); i++) {
+          if (i === maxIdx) continue; // skip the real background
+          let fillVec = new cv.MatVector();
+          fillVec.push_back(holeContours.get(i));
+          cv.drawContours(binary, fillVec, 0, new cv.Scalar(255, 255, 255, 255), -1);
+          fillVec.delete();
+        }
+      }
+
+      holeContours.delete();
+      holeHier.delete();
+      invBinary.delete();
+    }
+    showStep('stepFillHoles', binary);
+
+    // ── Step 3.6: Plate already detected in rough pass above ──
+
+    // ── Step 3.7: Apply margin (dilate tool regions outward) ──
+    const marginMm = parseFloat(marginSlider.value);
+    const method = scaleMethod.value;
+    const scValue = parseFloat(scaleValue.value);
+    const plateH = parseFloat(document.getElementById('plateHeight').value) || 310;
+    const mmPerPx = computeScale(plateInfo, method, scValue, plateH);
+
+    // ── Step 4: Find contours (before margin) ──
+    contours = new cv.MatVector();
+    hierarchy = new cv.Mat();
+    cv.findContours(binary, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_NONE);
+
+    const imageArea = w * h;
+    const minAreaRatio = parseFloat(minAreaSlider.value);
+    const minArea = imageArea * minAreaRatio;
+
+    // Build a filled mask from the plate contour for inside-plate testing
+    if (plateInfo) {
+      plateMask = cv.Mat.zeros(h, w, cv.CV_8UC1);
+      let plateVec = new cv.MatVector();
+      plateVec.push_back(plateInfo.contour);
+      cv.drawContours(plateMask, plateVec, 0, new cv.Scalar(255), -1); // filled
+      plateVec.delete();
+      showStep('stepPlateMask', plateMask);
+    }
+
+    // Filter contours: hierarchy + min area + must be inside plate
+    let kept = []; // Array of {contour: cv.Mat, isHole: bool}
+    const hData = hierarchy.data32S;
+    const numContours = contours.size();
+
+    for (let i = 0; i < numContours; i++) {
+      const c = contours.get(i);
+      const area = cv.contourArea(c);
+      const parent = hData[i * 4 + 3];
+
+      let validSize = false;
+      if (parent === -1 && area >= minArea) {
+        validSize = true;
+      } else if (parent >= 0 && area >= minArea * 0.1) {
+        validSize = true;
+      }
+
+      if (!validSize) continue;
+
+      // Check if contour centroid is inside the plate
+      if (plateMask) {
+        const moments = cv.moments(c);
+        if (moments.m00 > 0) {
+          const cx = Math.round(moments.m10 / moments.m00);
+          const cy = Math.round(moments.m01 / moments.m00);
+          if (cx >= 0 && cx < w && cy >= 0 && cy < h) {
+            const val = plateMask.ucharAt(cy, cx);
+            if (val === 0) continue; // outside plate — skip
+          }
+        }
+      }
+
+      kept.push({ contour: c, isHole: (parent >= 0) });
+    }
+
+    // Don't count the plate itself as a tool
+    if (plateInfo) {
+      const plateArea = cv.contourArea(plateInfo.contour);
+      kept = kept.filter(k => cv.contourArea(k.contour) < plateArea * 0.8);
+    }
+
+    if (kept.length === 0) {
+      showError('No tool outlines detected inside the plate. Make sure tools are dark on a bright backlit plate.');
+      return;
+    }
+
+    // ── Step 5: Scale already computed above (mmPerPx) ──
+    const wMm = w * mmPerPx;
+    const hMm = h * mmPerPx;
+    const smoothFactor = parseFloat(smoothInput.value) || 0.0008;
+
+    // ── Compute green bezier paths (detected edges, no margin) ──
+    const greenPaths = [];
+    for (let i = 0; i < kept.length; i++) {
+      const pts = contourToPoints(kept[i].contour);
+      greenPaths.push(douglasPeucker(pts, smoothFactor));
+    }
+
+    // ── Step 5.5: Apply margin → find expanded contours for SVG (blue) ──
+    let bluePaths = greenPaths; // default: same as green when margin=0
+    const marginPx = marginMm > 0 ? Math.round(marginMm / mmPerPx) : 0;
+    const minRadiusMm = parseFloat(minRadiusSlider.value);
+    const minRadiusPx = minRadiusMm > 0 ? Math.max(1, Math.round(minRadiusMm / mmPerPx)) : 0;
+    const intRadiusMm = parseFloat(intRadiusSlider.value);
+    const intRadiusPx = intRadiusMm > 0 ? Math.max(1, Math.round(intRadiusMm / mmPerPx)) : 0;
+
+    if (marginPx > 0) {
+      const kSize = marginPx * 2 + 1;
+      let marginKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(kSize, kSize));
+      let dilated = new cv.Mat();
+      cv.dilate(binary, dilated, marginKernel, new cv.Point(-1, -1), 1);
+
+      let mContours = new cv.MatVector();
+      let mHierarchy = new cv.Mat();
+      cv.findContours(dilated, mContours, mHierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_NONE);
+
+      const mhData = mHierarchy.data32S;
+      let mKept = [];
+      for (let i = 0; i < mContours.size(); i++) {
+        const c = mContours.get(i);
+        const area = cv.contourArea(c);
+        const parent = mhData[i * 4 + 3];
+        let valid = false;
+        if (parent === -1 && area >= minArea) valid = true;
+        else if (parent >= 0 && area >= minArea * 0.1) valid = true;
+        if (!valid) continue;
+        if (plateMask) {
+          const moments = cv.moments(c);
+          if (moments.m00 > 0) {
+            const cx = Math.round(moments.m10 / moments.m00);
+            const cy = Math.round(moments.m01 / moments.m00);
+            if (cx >= 0 && cx < w && cy >= 0 && cy < h) {
+              if (plateMask.ucharAt(cy, cx) === 0) continue;
+            }
+          }
+        }
+        mKept.push(c);
+      }
+      if (plateInfo) {
+        const plateArea = cv.contourArea(plateInfo.contour);
+        mKept = mKept.filter(c => cv.contourArea(c) < plateArea * 0.8);
+      }
+
+      bluePaths = [];
+      for (let i = 0; i < mKept.length; i++) {
+        const pts = contourToPoints(mKept[i]);
+        bluePaths.push(douglasPeucker(pts, smoothFactor));
+      }
+
+      marginKernel.delete();
+      dilated.delete();
+      mContours.delete();
+      mHierarchy.delete();
+    }
+
+    // ── Step 5.6: Apply minimum radius to corners (geometry-based) ──
+    // Run iteratively — each pass may change edge lengths/angles, allowing
+    // previously-skipped corners to fit on the next pass.
+    let allArcs = [];
+    if (minRadiusPx > 0 || intRadiusPx > 0) {
+      bluePaths = bluePaths.map(pts => {
+        const { pts: rounded, arcs } = applyMinRadius(pts, minRadiusPx, intRadiusPx);
+        allArcs = allArcs.concat(arcs);
+        return rounded;
+      });
+    }
+
+    // ── Step 5.7: Compute center lines ──
+    let centerLines = []; // array of {x1,y1,x2,y2} in pixel coords
+    if (centerLineCheck.checked) {
+      for (let i = 0; i < bluePaths.length; i++) {
+        const cl = computeCenterLine(bluePaths[i]);
+        if (cl) centerLines.push(cl);
+      }
+    }
+
+    // ── Step 6: Draw preview ──
+    previewCanvas.width = w;
+    previewCanvas.height = h;
+    cv.imshow(previewCanvas, src);
+    const pctx = previewCanvas.getContext('2d');
+
+    // Red plate outline
+    if (plateInfo) {
+      const platePts = contourToPoints(plateInfo.contour);
+      pctx.strokeStyle = '#ff0000';
+      pctx.lineWidth = 3;
+      pctx.beginPath();
+      if (platePts.length > 0) {
+        pctx.moveTo(platePts[0][0], platePts[0][1]);
+        for (let i = 1; i < platePts.length; i++) {
+          pctx.lineTo(platePts[i][0], platePts[i][1]);
+        }
+        pctx.closePath();
+      }
+      pctx.stroke();
+    }
+
+    // Green = detected tool edges
+    pctx.strokeStyle = '#00ff00';
+    pctx.lineWidth = 2;
+    for (let i = 0; i < greenPaths.length; i++) {
+      drawBezierOnCanvas(pctx, greenPaths[i]);
+    }
+
+    // Purple = SVG output (with margin and/or min radius applied)
+    if (marginPx > 0 || minRadiusPx > 0 || intRadiusPx > 0) {
+      pctx.strokeStyle = '#b46bff';
+      pctx.lineWidth = 2;
+      for (let i = 0; i < bluePaths.length; i++) {
+        drawBezierOnCanvas(pctx, bluePaths[i]);
+      }
+    }
+
+    // Draw vertex dots and bezier control point handles
+    const dotPaths = (marginPx > 0 || minRadiusPx > 0 || intRadiusPx > 0) ? bluePaths : greenPaths;
+    for (let pi = 0; pi < dotPaths.length; pi++) {
+      const pts = dotPaths[pi];
+      const n = pts.length;
+      if (n < 3) continue;
+
+      // Pre-compute sharp corners (same logic as bezier renderer)
+      const isSharp = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const prev = pts[((i - 1) % n + n) % n];
+        const curr = pts[i];
+        const next = pts[(i + 1) % n];
+        isSharp[i] = vertexAngle(prev, curr, next) < CORNER_ANGLE_THRESHOLD;
+      }
+
+      for (let i = 0; i < n; i++) {
+        const p1 = pts[i];
+        const p2 = pts[(i + 1) % n];
+
+        if (!isSharp[i] && !isSharp[(i + 1) % n]) {
+          const p0 = pts[((i - 1) % n + n) % n];
+          const p3 = pts[(i + 2) % n];
+          const [c1x, c1y] = clampCP(
+            p1[0] + (p2[0] - p0[0]) / 6.0,
+            p1[1] + (p2[1] - p0[1]) / 6.0, p1, p2);
+          const [c2x, c2y] = clampCP(
+            p2[0] - (p3[0] - p1[0]) / 6.0,
+            p2[1] - (p3[1] - p1[1]) / 6.0, p1, p2);
+
+          // Handle lines (vertex to control point)
+          pctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+          pctx.lineWidth = 1;
+          pctx.beginPath();
+          pctx.moveTo(p1[0], p1[1]); pctx.lineTo(c1x, c1y);
+          pctx.stroke();
+          pctx.beginPath();
+          pctx.moveTo(p2[0], p2[1]); pctx.lineTo(c2x, c2y);
+          pctx.stroke();
+
+          // Control point dots (cyan)
+          pctx.fillStyle = 'rgba(0, 220, 255, 0.7)';
+          pctx.beginPath();
+          pctx.arc(c1x, c1y, 2.5, 0, Math.PI * 2);
+          pctx.fill();
+          pctx.beginPath();
+          pctx.arc(c2x, c2y, 2.5, 0, Math.PI * 2);
+          pctx.fill();
+        }
+
+        // Vertex dot (yellow for smooth, red for sharp)
+        pctx.fillStyle = isSharp[i] ? 'rgba(255, 80, 80, 0.8)' : 'rgba(255, 255, 0, 0.7)';
+        pctx.beginPath();
+        pctx.arc(p1[0], p1[1], 3, 0, Math.PI * 2);
+        pctx.fill();
+      }
+    }
+
+    // ── Step 7: Compute SVG params ──
+    let svgWMm = wMm;
+    let svgHMm = hMm;
+    let svgOffsetX = 0;
+    let svgOffsetY = 0;
+
+    if (plateInfo) {
+      const pr = cv.boundingRect(plateInfo.contour);
+      svgOffsetX = pr.x;
+      svgOffsetY = pr.y;
+      svgWMm = pr.width * mmPerPx;
+      svgHMm = pr.height * mmPerPx;
+    }
+
+    // Cache preview before centerlines for interactive editing
+    cachedPreviewData = pctx.getImageData(0, 0, w, h);
+    lastCenterLines = centerLines;
+    lastBluePaths = bluePaths;
+    lastSvgParams = { wMm: svgWMm, hMm: svgHMm, mmPerPx, offsetX: svgOffsetX, offsetY: svgOffsetY };
+
+    // Draw centerlines + scale (redrawn on drag too)
+    drawCenterLinesOverlay();
+
+    previewCanvas.style.display = 'block';
+    // Fit to window on first render, then use current zoom
+    setTimeout(zoomToFit, 0);
+    clickHint.style.display = 'none';
+    previewSpinner.style.display = 'none';
+
+    // Generate per-part rotated SVG + DXF (centerline vertical)
+    lastDxfParts = [];
+    let allPartSvgs = [];
+    let svgContainerHtml = '';
+    for (let i = 0; i < bluePaths.length; i++) {
+      let polyPts = contourToPolylineMm(bluePaths[i], mmPerPx, svgOffsetX, svgOffsetY);
+      const cl = (i < centerLines.length) ? centerLines[i] : null;
+      let clMm = null;
+      if (cl) {
+        clMm = {
+          x1: (cl.x1 - svgOffsetX) * mmPerPx, y1: (cl.y1 - svgOffsetY) * mmPerPx,
+          x2: (cl.x2 - svgOffsetX) * mmPerPx, y2: (cl.y2 - svgOffsetY) * mmPerPx
+        };
+        const clAngle = Math.PI / 2 - Math.atan2(clMm.y2 - clMm.y1, clMm.x2 - clMm.x1);
+        polyPts = rotatePoints(polyPts, clAngle);
+        clMm = rotateLine(clMm, clAngle);
+        let minX = Infinity, minY = Infinity;
+        for (const p of polyPts) { if (p[0] < minX) minX = p[0]; if (p[1] < minY) minY = p[1]; }
+        minX = Math.min(minX, clMm.x1, clMm.x2);
+        minY = Math.min(minY, clMm.y1, clMm.y2);
+        polyPts = polyPts.map(p => [p[0] - minX, p[1] - minY]);
+        clMm = { x1: clMm.x1 - minX, y1: clMm.y1 - minY, x2: clMm.x2 - minX, y2: clMm.y2 - minY };
+      }
+
+      // Bounding box of rotated part
+      let bMaxX = 0, bMaxY = 0;
+      for (const p of polyPts) { if (p[0] > bMaxX) bMaxX = p[0]; if (p[1] > bMaxY) bMaxY = p[1]; }
+      const pad = 2;
+
+      // Build per-part SVG
+      const d = pointsToBezierPath(polyPts);
+      let partSvg = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+        '<svg xmlns="http://www.w3.org/2000/svg"\n' +
+        '     width="' + (bMaxX + pad * 2).toFixed(2) + 'mm" height="' + (bMaxY + pad * 2).toFixed(2) + 'mm"\n' +
+        '     viewBox="' + (-pad).toFixed(2) + ' ' + (-pad).toFixed(2) + ' ' +
+        (bMaxX + pad * 2).toFixed(2) + ' ' + (bMaxY + pad * 2).toFixed(2) + '">\n' +
+        '  <g fill="none" stroke="black" stroke-width="0.3">\n' +
+        '    <path d="' + d + '"/>\n' +
+        '  </g>\n';
+      if (clMm) {
+        partSvg += '  <g fill="none" stroke="red" stroke-width="0.2" stroke-dasharray="2,1">\n' +
+          '    <line x1="' + clMm.x1.toFixed(2) + '" y1="' + clMm.y1.toFixed(2) +
+          '" x2="' + clMm.x2.toFixed(2) + '" y2="' + clMm.y2.toFixed(2) + '"/>\n' +
+          '  </g>\n';
+      }
+      partSvg += '</svg>';
+      allPartSvgs.push(partSvg);
+
+      const clLen = cl ? cl.lengthMm : 0;
+      const maxW = cl ? cl.maxWidthMm : 0;
+      svgContainerHtml += buildPartCardHtml(i, partSvg, clLen, maxW);
+
+      const dxfStr = generateDxf(polyPts, clMm);
+      lastDxfParts.push({ name: 'part_' + (i + 1) + '.dxf', dxf: dxfStr });
+    }
+
+    lastSvgString = allPartSvgs.join('\n\n');
+    lastPartSvgs = allPartSvgs;
+    // Initialize part names if first run
+    if (partNames.length !== bluePaths.length) {
+      partNames = bluePaths.map((_, i) => 'Part ' + (i + 1));
+    }
+
+    svgContainer.innerHTML = svgContainerHtml;
+    downloadBtn.style.display = 'inline-block';
+    downloadDxfBtn.style.display = 'inline-block';
+
+    // ── Info bar ──
+    const plateStatus = plateInfo
+      ? 'Plate: <span>' + plateInfo.rect.size.width.toFixed(0) + ' x ' + plateInfo.rect.size.height.toFixed(0) + ' px</span> &nbsp;|&nbsp; '
+      : 'Plate: <span style="color:#ff6b6b;">not detected</span> &nbsp;|&nbsp; ';
+    infoBar.innerHTML =
+      'Image: <span>' + w + ' x ' + h + ' px</span> &nbsp;|&nbsp; ' +
+      plateStatus +
+      'SVG: <span>' + svgWMm.toFixed(1) + ' x ' + svgHMm.toFixed(1) + ' mm</span> &nbsp;|&nbsp; ' +
+      'Contours: <span>' + kept.length + '</span> &nbsp;|&nbsp; ' +
+      'Scale: <span>' + mmPerPx.toFixed(4) + ' mm/px</span>';
+    infoBar.style.display = 'block';
+
+  } finally {
+    // ── Cleanup WASM memory ──
+    src.delete();
+    gray.delete();
+    blurred.delete();
+    binary.delete();
+    if (kernel) kernel.delete();
+    if (contours) contours.delete();
+    if (hierarchy) hierarchy.delete();
+    if (plateMask) plateMask.delete();
+  }
+}
+
+// ─── Plate detection ────────────────────────────────────────────────────────
+// Detects the bright rectangular plate. Returns {contour, rect, dims} or null.
+// Tries both the normal inverted binary and checks horizontal/vertical orientation.
+function detectPlate(binary, imgW, imgH) {
+  let plate = new cv.Mat();
+  let kernel = null;
+  let contours = null;
+  let hier = null;
+
+  try {
+    // The plate is the bright background — invert binary so plate = white
+    cv.bitwise_not(binary, plate);
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(15, 15));
+    cv.morphologyEx(plate, plate, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), 3);
+
+    contours = new cv.MatVector();
+    hier = new cv.Mat();
+    cv.findContours(plate, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    if (contours.size() === 0) return null;
+
+    // Find the largest contour that looks like a rectangle
+    // Score candidates by area and rectangularity
+    let bestIdx = -1;
+    let bestScore = 0;
+    const imgArea = imgW * imgH;
+
+    for (let i = 0; i < contours.size(); i++) {
+      const c = contours.get(i);
+      const area = cv.contourArea(c);
+
+      // Must be at least 5% of image area to be the plate
+      if (area < imgArea * 0.05) continue;
+
+      // Rectangularity: area / bounding rect area
+      const rect = cv.minAreaRect(c);
+      const rectArea = rect.size.width * rect.size.height;
+      const rectangularity = rectArea > 0 ? area / rectArea : 0;
+
+      // Prefer large, rectangular contours
+      const score = area * rectangularity;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx === -1) return null;
+
+    const bestContour = contours.get(bestIdx);
+    const rect = cv.minAreaRect(bestContour);
+    const dims = { w: rect.size.width, h: rect.size.height };
+
+    return { contour: bestContour, rect: rect, dims: dims };
+  } finally {
+    plate.delete();
+    if (kernel) kernel.delete();
+    // Don't delete contours — we're returning a reference to one of them
+    if (hier) hier.delete();
+  }
+}
+
+// ─── Scale computation ──────────────────────────────────────────────────────
+function computeScale(plateInfo, method, value, plateHeightMm) {
+  if (method === 'manual') return value;
+  if (method === 'dpi') return 25.4 / value;
+  if (method === 'reference' && plateInfo) {
+    // value = plate width in mm, plateHeightMm = plate height in mm
+    // Match detected short/long sides to provided width/height
+    // Works regardless of plate orientation (horizontal or vertical)
+    const detShort = Math.min(plateInfo.dims.w, plateInfo.dims.h);
+    const detLong  = Math.max(plateInfo.dims.w, plateInfo.dims.h);
+    const refShort = Math.min(value, plateHeightMm);
+    const refLong  = Math.max(value, plateHeightMm);
+    // Average scale from both axes for accuracy
+    const scaleW = refShort / detShort;
+    const scaleH = refLong / detLong;
+    return (scaleW + scaleH) / 2;
+  }
+  // fallback
+  return 25.4 / 96;
+}
+
+// ─── Corner detection ────────────────────────────────────────────────────────
+// Returns the angle (in degrees) at vertex p1 formed by p0->p1->p2
+function vertexAngle(p0, p1, p2) {
+  const ax = p0[0] - p1[0], ay = p0[1] - p1[1];
+  const bx = p2[0] - p1[0], by = p2[1] - p1[1];
+  const dot = ax * bx + ay * by;
+  const magA = Math.sqrt(ax * ax + ay * ay);
+  const magB = Math.sqrt(bx * bx + by * by);
+  if (magA === 0 || magB === 0) return 180;
+  const cos = Math.max(-1, Math.min(1, dot / (magA * magB)));
+  return Math.acos(cos) * 180 / Math.PI;
+}
+
+const CORNER_ANGLE_THRESHOLD = 140; // degrees — below this is a sharp corner
+
+// ─── Minimum radius enforcement ─────────────────────────────────────────────
+
+// Remove vertices that create edges shorter than minLen, but only if
+// the vertex is nearly collinear with its neighbors (removing it won't
+// change the shape significantly). This prevents shortcuts that cut inside.
+function mergeShortEdges(pts, minLen) {
+  if (pts.length < 4 || minLen <= 0) return pts;
+  const result = [];
+  for (let i = 0; i < pts.length; i++) {
+    const prev = pts[((i - 1) % pts.length + pts.length) % pts.length];
+    const curr = pts[i];
+    const next = pts[(i + 1) % pts.length];
+    const dx1 = curr[0] - prev[0], dy1 = curr[1] - prev[1];
+    const dx2 = next[0] - curr[0], dy2 = next[1] - curr[1];
+    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+    const tooShort = len1 < minLen || len2 < minLen;
+    // Only remove if short AND nearly straight (angle > 160°)
+    if (tooShort && len1 > 1e-6 && len2 > 1e-6) {
+      const dot = dx1 * dx2 + dy1 * dy2;
+      const cosA = dot / (len1 * len2);
+      if (cosA > Math.cos(Math.PI * 160 / 180)) continue; // nearly straight, safe to remove
+    }
+    result.push(curr);
+  }
+  return result.length >= 3 ? result : pts;
+}
+
+// Checks if any corner in pts violates the given radii. Returns true if violations exist.
+function hasRadiusViolations(pts, extRadius, intRadius) {
+  const n = pts.length;
+  if (n < 3) return false;
+  let signedArea2 = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    signedArea2 += (pts[j][0] - pts[i][0]) * (pts[j][1] + pts[i][1]);
+  }
+  const cw = signedArea2 < 0;
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[((i - 1) % n + n) % n];
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    const v1x = p0[0] - p1[0], v1y = p0[1] - p1[1];
+    const v2x = p2[0] - p1[0], v2y = p2[1] - p1[1];
+    const len1 = Math.sqrt(v1x * v1x + v1y * v1y);
+    const len2 = Math.sqrt(v2x * v2x + v2y * v2y);
+    if (len1 < 1e-6 || len2 < 1e-6) continue;
+    const cross = v1x * v2y - v1y * v2x;
+    const isConcave = cw ? (cross > 0) : (cross < 0);
+    const cornerRadius = isConcave ? intRadius : extRadius;
+    if (cornerRadius <= 0) continue;
+    const dot = v1x * v2x + v1y * v2y;
+    const cosA = Math.max(-1, Math.min(1, dot / (len1 * len2)));
+    const angle = Math.acos(cosA);
+    if (angle > Math.PI * 0.945) continue;
+    // This corner needs rounding
+    return true;
+  }
+  return false;
+}
+
+// Single pass: replaces sharp corners with circular fillet arcs.
+// Reduces radius to fit when edges are too short.
+function applyMinRadiusPass(pts, extRadius, intRadius) {
+  const n = pts.length;
+  if (n < 3) return { pts: pts, arcs: [] };
+  if (extRadius <= 0 && intRadius <= 0) return { pts: pts, arcs: [] };
+
+  // Signed area to determine winding
+  let signedArea2 = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    signedArea2 += (pts[j][0] - pts[i][0]) * (pts[j][1] + pts[i][1]);
+  }
+  const cw = signedArea2 < 0;
+
+  const result = [];
+  const arcs = [];
+
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[((i - 1) % n + n) % n];
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+
+    const v1x = p0[0] - p1[0], v1y = p0[1] - p1[1];
+    const v2x = p2[0] - p1[0], v2y = p2[1] - p1[1];
+    const len1 = Math.sqrt(v1x * v1x + v1y * v1y);
+    const len2 = Math.sqrt(v2x * v2x + v2y * v2y);
+
+    if (len1 < 1e-6 || len2 < 1e-6) { result.push(p1); continue; }
+
+    // Determine concavity via cross product
+    const cross = v1x * v2y - v1y * v2x;
+    const isConcave = cw ? (cross > 0) : (cross < 0);
+
+    // Pick the appropriate radius for this corner type
+    const cornerRadius = isConcave ? intRadius : extRadius;
+    if (cornerRadius <= 0) { result.push(p1); continue; }
+
+    // Angle at vertex
+    const dot = v1x * v2x + v1y * v2y;
+    const cosA = Math.max(-1, Math.min(1, dot / (len1 * len2)));
+    const angle = Math.acos(cosA);
+    const halfAngle = angle / 2;
+
+    // Skip near-straight angles (>170°)
+    if (angle > Math.PI * 0.945 || halfAngle < 1e-6) {
+      result.push(p1); continue;
+    }
+
+    // Compute tangent distance for requested radius
+    let r = cornerRadius;
+    let d = r / Math.tan(halfAngle);
+
+    // Reduce radius to fit if edges are too short
+    const maxD = Math.min(len1, len2) * 0.48;
+    if (d > maxD) {
+      d = maxD;
+      r = d * Math.tan(halfAngle);
+    }
+
+    if (r < 0.5 || d < 0.5) { result.push(p1); continue; }
+
+    // Unit vectors along each edge (from p1 toward neighbors)
+    const u1x = v1x / len1, u1y = v1y / len1;
+    const u2x = v2x / len2, u2y = v2y / len2;
+
+    // Tangent points on each edge
+    const t1x = p1[0] + u1x * d, t1y = p1[1] + u1y * d;
+    const t2x = p1[0] + u2x * d, t2y = p1[1] + u2y * d;
+
+    // Arc center along the angle bisector
+    const bisX = u1x + u2x, bisY = u1y + u2y;
+    const bisLen = Math.sqrt(bisX * bisX + bisY * bisY);
+    if (bisLen < 1e-6) { result.push(p1); continue; }
+    const centerDist = r / Math.sin(halfAngle);
+    const cx = p1[0] + (bisX / bisLen) * centerDist;
+    const cy = p1[1] + (bisY / bisLen) * centerDist;
+
+    arcs.push({ cx: cx, cy: cy, r: r, type: isConcave ? 'int' : 'ext' });
+
+    // Generate arc from t1 to t2
+    const startA = Math.atan2(t1y - cy, t1x - cx);
+    const endA = Math.atan2(t2y - cy, t2x - cx);
+
+    let sweep = endA - startA;
+    while (sweep > Math.PI) sweep -= Math.PI * 2;
+    while (sweep < -Math.PI) sweep += Math.PI * 2;
+
+    const numArcPts = Math.max(8, Math.ceil(Math.abs(sweep) / (Math.PI / 64)));
+
+    result.push([t1x, t1y]);
+    for (let j = 1; j < numArcPts; j++) {
+      const t = j / numArcPts;
+      const a = startA + sweep * t;
+      result.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    }
+    result.push([t2x, t2y]);
+  }
+
+  return { pts: result, arcs: arcs };
+}
+
+// Main entry: runs iteratively, merging short edges between passes,
+// until no corners violate the minimum radii.
+function applyMinRadius(pts, extRadius, intRadius) {
+  if (pts.length < 3) return { pts: pts, arcs: [] };
+  if (extRadius <= 0 && intRadius <= 0) return { pts: pts, arcs: [] };
+
+  let current = pts;
+  let allArcs = [];
+  const maxPasses = 20;
+  const minEdge = Math.max(extRadius, intRadius) * 0.5;
+
+  for (let pass = 0; pass < maxPasses; pass++) {
+    if (!hasRadiusViolations(current, extRadius, intRadius)) break;
+
+    const { pts: rounded, arcs } = applyMinRadiusPass(current, extRadius, intRadius);
+    allArcs = allArcs.concat(arcs);
+    if (arcs.length === 0) break; // nothing changed
+    current = rounded;
+  }
+
+  return { pts: current, arcs: allArcs };
+}
+
+// Clamp a control point to the bounding box of segment endpoints p1→p2
+function clampCP(cpx, cpy, p1, p2) {
+  const minX = Math.min(p1[0], p2[0]), maxX = Math.max(p1[0], p2[0]);
+  const minY = Math.min(p1[1], p2[1]), maxY = Math.max(p1[1], p2[1]);
+  return [
+    Math.max(minX, Math.min(maxX, cpx)),
+    Math.max(minY, Math.min(maxY, cpy))
+  ];
+}
+
+// ─── Canvas bezier drawing (for preview) ────────────────────────────────────
+// Draws Catmull-Rom curves with sharp corners preserved as line segments
+function drawBezierOnCanvas(ctx, pts) {
+  const n = pts.length;
+  if (n < 2) return;
+  ctx.beginPath();
+  if (n < 3) {
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < n; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+    ctx.stroke();
+    return;
+  }
+
+  // Pre-compute which vertices are sharp corners
+  const isSharp = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const prev = pts[((i - 1) % n + n) % n];
+    const curr = pts[i];
+    const next = pts[(i + 1) % n];
+    isSharp[i] = vertexAngle(prev, curr, next) < CORNER_ANGLE_THRESHOLD;
+  }
+
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 0; i < n; i++) {
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+
+    // If either endpoint of this segment is a sharp corner, use a line
+    if (isSharp[i] || isSharp[(i + 1) % n]) {
+      ctx.lineTo(p2[0], p2[1]);
+    } else {
+      const p0 = pts[((i - 1) % n + n) % n];
+      const p3 = pts[(i + 2) % n];
+      let cp1x = p1[0] + (p2[0] - p0[0]) / 6.0;
+      let cp1y = p1[1] + (p2[1] - p0[1]) / 6.0;
+      let cp2x = p2[0] - (p3[0] - p1[0]) / 6.0;
+      let cp2y = p2[1] - (p3[1] - p1[1]) / 6.0;
+      const [c1x, c1y] = clampCP(cp1x, cp1y, p1, p2);
+      const [c2x, c2y] = clampCP(cp2x, cp2y, p1, p2);
+      ctx.bezierCurveTo(c1x, c1y, c2x, c2y, p2[0], p2[1]);
+    }
+  }
+  ctx.closePath();
+  ctx.stroke();
+}
+
+// ─── SVG Generation ─────────────────────────────────────────────────────────
+// Takes pre-computed bezier point arrays (in pixel coords), converts to mm
+function generateSvgFromBezier(bezierPaths, wMm, hMm, mmPerPx, offsetX, offsetY, centerLines) {
+  offsetX = offsetX || 0;
+  offsetY = offsetY || 0;
+  let paths = '';
+  for (let i = 0; i < bezierPaths.length; i++) {
+    // Convert pixel points to mm with plate offset
+    const mmPts = bezierPaths[i].map(p => [
+      (p[0] - offsetX) * mmPerPx,
+      (p[1] - offsetY) * mmPerPx
+    ]);
+    const d = pointsToBezierPath(mmPts);
+    paths += '    <path d="' + d + '"/>\n';
+  }
+
+  let clPaths = '';
+  if (centerLines && centerLines.length > 0) {
+    for (let i = 0; i < centerLines.length; i++) {
+      const cl = centerLines[i];
+      const x1 = ((cl.x1 - offsetX) * mmPerPx).toFixed(2);
+      const y1 = ((cl.y1 - offsetY) * mmPerPx).toFixed(2);
+      const x2 = ((cl.x2 - offsetX) * mmPerPx).toFixed(2);
+      const y2 = ((cl.y2 - offsetY) * mmPerPx).toFixed(2);
+      clPaths += '    <line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '"/>\n';
+    }
+  }
+
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<svg xmlns="http://www.w3.org/2000/svg"\n' +
+    '     width="' + wMm.toFixed(2) + 'mm" height="' + hMm.toFixed(2) + 'mm"\n' +
+    '     viewBox="0 0 ' + wMm.toFixed(2) + ' ' + hMm.toFixed(2) + '">\n' +
+    '  <g fill="none" stroke="black" stroke-width="0.3">\n' +
+    paths +
+    '  </g>\n' +
+    (clPaths ? '  <g fill="none" stroke="red" stroke-width="0.2" stroke-dasharray="2,1">\n' +
+    clPaths + '  </g>\n' : '') +
+    '</svg>';
+}
+
+function contourToPoints(contour) {
+  const rows = contour.rows;
+  const data = contour.data32S;
+  const pts = [];
+  for (let i = 0; i < rows; i++) {
+    pts.push([data[i * 2], data[i * 2 + 1]]);
+  }
+  return pts;
+}
+
+// Douglas-Peucker using epsilon as fraction of perimeter
+function douglasPeucker(pts, epsilonFactor) {
+  const n = pts.length;
+  if (n < 4) return pts;
+
+  // Compute perimeter
+  let perimeter = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const dx = pts[j][0] - pts[i][0];
+    const dy = pts[j][1] - pts[i][1];
+    perimeter += Math.sqrt(dx * dx + dy * dy);
+  }
+  const epsilon = epsilonFactor * perimeter;
+
+  // Use OpenCV's approxPolyDP on the scaled points
+  // Build a cv.Mat from our points for approxPolyDP
+  let mat = cv.matFromArray(n, 1, cv.CV_32FC2, pts.flat());
+  let approx = new cv.Mat();
+  try {
+    cv.approxPolyDP(mat, approx, epsilon, true);
+    const result = [];
+    const data = approx.data32F;
+    for (let i = 0; i < approx.rows; i++) {
+      result.push([data[i * 2], data[i * 2 + 1]]);
+    }
+    return result;
+  } finally {
+    mat.delete();
+    approx.delete();
+  }
+}
+
+// Catmull-Rom to cubic Bezier path with sharp corner preservation
+function pointsToBezierPath(pts) {
+  const n = pts.length;
+  if (n < 3) {
+    let d = 'M ' + pts[0][0].toFixed(2) + ',' + pts[0][1].toFixed(2);
+    for (let i = 1; i < n; i++) {
+      d += ' L ' + pts[i][0].toFixed(2) + ',' + pts[i][1].toFixed(2);
+    }
+    return d + ' Z';
+  }
+
+  // Pre-compute which vertices are sharp corners
+  const isSharp = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const prev = pts[((i - 1) % n + n) % n];
+    const curr = pts[i];
+    const next = pts[(i + 1) % n];
+    isSharp[i] = vertexAngle(prev, curr, next) < CORNER_ANGLE_THRESHOLD;
+  }
+
+  let d = 'M ' + pts[0][0].toFixed(2) + ',' + pts[0][1].toFixed(2);
+
+  for (let i = 0; i < n; i++) {
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+
+    if (isSharp[i] || isSharp[(i + 1) % n]) {
+      // Sharp corner — straight line
+      d += ' L ' + p2[0].toFixed(2) + ',' + p2[1].toFixed(2);
+    } else {
+      // Smooth segment — Catmull-Rom bezier with clamped control points
+      const p0 = pts[((i - 1) % n + n) % n];
+      const p3 = pts[(i + 2) % n];
+      let cp1x = p1[0] + (p2[0] - p0[0]) / 6.0;
+      let cp1y = p1[1] + (p2[1] - p0[1]) / 6.0;
+      let cp2x = p2[0] - (p3[0] - p1[0]) / 6.0;
+      let cp2y = p2[1] - (p3[1] - p1[1]) / 6.0;
+      const [c1x, c1y] = clampCP(cp1x, cp1y, p1, p2);
+      const [c2x, c2y] = clampCP(cp2x, cp2y, p1, p2);
+      d += ' C ' + c1x.toFixed(2) + ',' + c1y.toFixed(2) +
+           ' ' + c2x.toFixed(2) + ',' + c2y.toFixed(2) +
+           ' ' + p2[0].toFixed(2) + ',' + p2[1].toFixed(2);
+    }
+  }
+
+  return d + ' Z';
+}
+
+// ─── Center Line Computation ────────────────────────────────────────────────
+// Computes the principal axis line for a closed polygon using second-order moments.
+// Returns {cp1x, cp1y, cp2x, cp2y, x1, y1, x2, y2} where cp* are control points
+// placed at 1/3 and 2/3 along the axis, and x1/y1/x2/y2 are the extended endpoints.
+function computeCenterLine(pts) {
+  const n = pts.length;
+  if (n < 3) return null;
+
+  // Centroid
+  let cx = 0, cy = 0;
+  for (let i = 0; i < n; i++) { cx += pts[i][0]; cy += pts[i][1]; }
+  cx /= n; cy /= n;
+
+  // Second-order central moments
+  let mu20 = 0, mu02 = 0, mu11 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = pts[i][0] - cx, dy = pts[i][1] - cy;
+    mu20 += dx * dx;
+    mu02 += dy * dy;
+    mu11 += dx * dy;
+  }
+
+  // Principal axis angle
+  const theta = 0.5 * Math.atan2(2 * mu11, mu20 - mu02);
+  const cosT = Math.cos(theta), sinT = Math.sin(theta);
+
+  // Project all points onto the principal axis to find extent
+  let minProj = Infinity, maxProj = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const dx = pts[i][0] - cx, dy = pts[i][1] - cy;
+    const proj = dx * cosT + dy * sinT;
+    if (proj < minProj) minProj = proj;
+    if (proj > maxProj) maxProj = proj;
+  }
+
+  // Place control points at 1/3 and 2/3 along the axis
+  const t1 = minProj + (maxProj - minProj) / 3;
+  const t2 = minProj + (maxProj - minProj) * 2 / 3;
+
+  return {
+    cp1x: cx + cosT * t1, cp1y: cy + sinT * t1,
+    cp2x: cx + cosT * t2, cp2y: cy + sinT * t2,
+    x1: cx + cosT * minProj, y1: cy + sinT * minProj,
+    x2: cx + cosT * maxProj, y2: cy + sinT * maxProj
+  };
+}
+
+// ─── Rotation helpers for DXF export ────────────────────────────────────────
+function rotatePoints(pts, angle) {
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+  return pts.map(p => [p[0] * cos - p[1] * sin, p[0] * sin + p[1] * cos]);
+}
+function rotateLine(cl, angle) {
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+  return {
+    x1: cl.x1 * cos - cl.y1 * sin, y1: cl.x1 * sin + cl.y1 * cos,
+    x2: cl.x2 * cos - cl.y2 * sin, y2: cl.x2 * sin + cl.y2 * cos
+  };
+}
+
+// ─── DXF Generation ─────────────────────────────────────────────────────────
+
+// Sample a cubic bezier curve into line segments
+function sampleBezier(p1, cp1, cp2, p2, numSamples) {
+  const pts = [];
+  for (let i = 1; i <= numSamples; i++) {
+    const t = i / numSamples;
+    const u = 1 - t;
+    const x = u*u*u*p1[0] + 3*u*u*t*cp1[0] + 3*u*t*t*cp2[0] + t*t*t*p2[0];
+    const y = u*u*u*p1[1] + 3*u*u*t*cp1[1] + 3*u*t*t*cp2[1] + t*t*t*p2[1];
+    pts.push([x, y]);
+  }
+  return pts;
+}
+
+// Convert a single contour (point array in px) to dense mm polyline points
+function contourToPolylineMm(pts, mmPerPx, offsetX, offsetY) {
+  return pts.map(p => [(p[0] - offsetX) * mmPerPx, (p[1] - offsetY) * mmPerPx]);
+}
+
+// Generate a DXF string for a single closed polyline (points in mm)
+// with optional centerline {x1, y1, x2, y2} in mm
+function generateDxf(polylinePoints, centerLine) {
+  let dxf = '0\nSECTION\n2\nHEADER\n';
+  dxf += '9\n$INSUNITS\n70\n4\n'; // mm
+  dxf += '0\nENDSEC\n';
+  dxf += '0\nSECTION\n2\nENTITIES\n';
+
+  // Outline on layer 0
+  dxf += '0\nLWPOLYLINE\n';
+  dxf += '8\n0\n';               // layer 0
+  dxf += '90\n' + polylinePoints.length + '\n'; // vertex count
+  dxf += '70\n1\n';              // closed polyline
+
+  for (let i = 0; i < polylinePoints.length; i++) {
+    dxf += '10\n' + polylinePoints[i][0].toFixed(4) + '\n';
+    dxf += '20\n' + polylinePoints[i][1].toFixed(4) + '\n';
+  }
+
+  // Center line on layer CENTERLINE
+  if (centerLine) {
+    dxf += '0\nLINE\n';
+    dxf += '8\nCENTERLINE\n';
+    dxf += '10\n' + centerLine.x1.toFixed(4) + '\n';
+    dxf += '20\n' + centerLine.y1.toFixed(4) + '\n';
+    dxf += '11\n' + centerLine.x2.toFixed(4) + '\n';
+    dxf += '21\n' + centerLine.y2.toFixed(4) + '\n';
+  }
+
+  dxf += '0\nENDSEC\n';
+  dxf += '0\nEOF\n';
+  return dxf;
+}
+
+// ─── Load OpenCV.js ─────────────────────────────────────────────────────────
+function onOpenCvReady() {
+  // OpenCV.js calls this or we detect via cv.onRuntimeInitialized
+  cvReady = true;
+  cvStatus.className = 'cv-status ready';
+  cvStatus.innerHTML = '<span>OpenCV.js ready</span>';
+  updateProcessBtn();
+}
+
+// Set up the callback before loading the script
+var Module = {
+  onRuntimeInitialized: function() {
+    onOpenCvReady();
+  }
+};
+
+(function loadOpenCV() {
+  const script = document.createElement('script');
+  script.src = 'https://docs.opencv.org/4.x/opencv.js';
+  script.async = true;
+  script.onload = function() {
+    // If cv.onRuntimeInitialized doesn't fire (already ready), check manually
+    if (typeof cv !== 'undefined' && cv.Mat) {
+      onOpenCvReady();
+    }
+  };
+  script.onerror = function() {
+    cvStatus.className = 'cv-status error';
+    cvStatus.innerHTML = '<span>Failed to load OpenCV.js. Check your internet connection and reload.</span>';
+  };
+  document.head.appendChild(script);
+})();
+
+// Load JSZip for multi-file DXF export
+(function loadJSZip() {
+  const s = document.createElement('script');
+  s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+  s.async = true;
+  document.head.appendChild(s);
+})();
+</script>
+</body>
+</html>

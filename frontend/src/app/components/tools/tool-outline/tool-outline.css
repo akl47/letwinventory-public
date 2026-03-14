@@ -1,0 +1,415 @@
+:host {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.tool-outline-page {
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.page-title {
+    font-size: 1.4rem;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+
+.page-subtitle {
+    color: var(--mat-sys-on-surface-variant);
+    font-size: 0.85rem;
+    margin-bottom: 20px;
+}
+
+/* OpenCV status */
+.cv-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 0.85rem;
+}
+
+.cv-status.loading {
+    background: rgba(var(--mat-sys-primary-rgb, 103, 80, 164), 0.08);
+    color: var(--mat-sys-primary);
+}
+
+.cv-status.ready {
+    background: rgba(76, 175, 80, 0.08);
+    color: #4caf50;
+}
+
+.cv-status.error {
+    background: rgba(244, 67, 54, 0.08);
+    color: #f44336;
+}
+
+.status-icon.ready { color: #4caf50; }
+.status-icon.error { color: #f44336; }
+
+/* Upload card */
+.upload-card {
+    margin-bottom: 16px;
+    cursor: pointer;
+    border: 2px dashed var(--mat-sys-outline-variant);
+    transition: border-color 0.2s, background-color 0.2s;
+}
+
+.upload-card:hover {
+    border-color: var(--mat-sys-primary);
+    background-color: rgba(var(--mat-sys-primary-rgb, 103, 80, 164), 0.04);
+}
+
+.upload-card.has-file {
+    border-style: solid;
+}
+
+.upload-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px !important;
+    text-align: center;
+}
+
+.upload-icon {
+    font-size: 48px;
+    width: 48px;
+    height: 48px;
+    color: var(--mat-sys-outline);
+    margin-bottom: 8px;
+}
+
+.upload-icon.selected {
+    color: var(--mat-sys-primary);
+}
+
+.upload-hint {
+    font-size: 0.8rem;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+/* Settings panel */
+.header-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex: 1;
+}
+
+.header-actions button {
+    font-size: 0.8rem;
+}
+
+.settings-section {
+    margin-bottom: 16px;
+}
+
+.settings-section-label {
+    font-size: 0.72rem;
+    color: var(--mat-sys-on-surface-variant);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+}
+
+.controls-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.control-field {
+    min-width: 140px;
+    flex: 1;
+}
+
+.sliders-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px 16px;
+}
+
+.slider-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.slider-group label {
+    font-size: 0.75rem;
+    color: var(--mat-sys-on-surface-variant);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    display: flex;
+    justify-content: space-between;
+}
+
+.slider-val {
+    color: var(--mat-sys-primary);
+    font-weight: 600;
+}
+
+.slider-select {
+    width: 100%;
+}
+
+.toggle-group {
+    display: flex;
+    align-items: center;
+    padding-top: 8px;
+}
+
+/* Error card */
+.error-card {
+    margin-bottom: 16px;
+    background-color: rgba(244, 67, 54, 0.08);
+}
+
+.error-card mat-card-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #f44336;
+}
+
+
+/* Accordion panels — match mat-card appearance */
+mat-accordion {
+    margin-bottom: 16px;
+    display: block;
+    --mat-expansion-container-background-color: var(--mat-card-elevated-container-color, var(--mat-sys-surface-container-low));
+    --mat-expansion-container-elevation-shadow: var(--mat-card-elevated-container-elevation, var(--mat-sys-level1));
+    --mat-expansion-header-collapsed-state-height: 48px;
+}
+
+.hidden-panel {
+    display: none;
+}
+
+/* Pipeline steps */
+.steps-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+    padding: 8px 0;
+}
+
+.step-card {
+    border: 1px solid var(--mat-sys-outline-variant);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.step-label {
+    padding: 6px 10px;
+    font-size: 0.72rem;
+    color: var(--mat-sys-on-surface-variant);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+}
+
+.step-card canvas {
+    width: 100%;
+    display: block;
+}
+
+/* Preview & Parts toolbar */
+.preview-toolbar,
+.parts-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+    height: 48px;
+}
+
+.toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.toolbar-group button {
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.toolbar-group button:hover:not(:disabled) {
+    color: var(--mat-sys-on-surface);
+}
+
+.toolbar-group button:disabled {
+    color: var(--mat-sys-outline);
+}
+
+mat-divider[vertical] {
+    height: 32px !important;
+    border-color: var(--mat-sys-outline-variant) !important;
+}
+
+.zoom-level {
+    font-size: 12px;
+    color: var(--mat-sys-on-surface-variant);
+    min-width: 48px;
+    text-align: center;
+}
+
+.toolbar-label {
+    font-size: 12px;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.toolbar-hint {
+    color: var(--mat-sys-outline);
+    font-size: 0.7rem;
+    margin-left: auto;
+}
+
+/* Preview body */
+.preview-body {
+    overflow: auto;
+    max-height: 75vh;
+    padding: 16px;
+    position: relative;
+    cursor: grab;
+}
+
+.preview-body.panning {
+    cursor: grabbing;
+}
+
+.preview-body canvas {
+    display: block;
+    cursor: inherit;
+}
+
+/* Part cards */
+.part-card {
+    border: 1px solid var(--mat-sys-outline-variant);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 12px;
+}
+
+.part-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+}
+
+.part-name-input {
+    background: transparent;
+    border: 1px solid var(--mat-sys-outline-variant);
+    border-radius: 4px;
+    color: var(--mat-sys-on-surface);
+    padding: 4px 8px;
+    font-size: 0.8rem;
+    flex: 1;
+    min-width: 80px;
+}
+
+.part-dims {
+    font-size: 0.75rem;
+    color: var(--mat-sys-on-surface-variant);
+    white-space: nowrap;
+}
+
+.part-btns {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.part-btns button {
+    font-size: 0.7rem;
+    min-width: unset;
+    padding: 0 8px;
+    line-height: 28px;
+}
+
+.part-body {
+    padding: 12px;
+    display: flex;
+    justify-content: center;
+    background: var(--mat-sys-surface-container-lowest, #fff);
+    min-height: 60px;
+}
+
+.part-body svg {
+    max-width: 100%;
+    max-height: 300px;
+}
+
+::ng-deep .part-body svg g:first-child {
+    stroke: white !important;
+}
+
+.part-deleted {
+    opacity: 0.4;
+}
+
+.part-deleted .part-name-input {
+    text-decoration: line-through;
+}
+
+/* Processing overlay */
+.processing-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 16px;
+}
+
+.processing-overlay p {
+    color: #ccc;
+    font-size: 0.9rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .tool-outline-page {
+        padding: 16px;
+    }
+
+    .controls-row {
+        flex-direction: column;
+    }
+
+    .control-field {
+        width: 100%;
+    }
+
+    .sliders-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .info-row {
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .info-sep {
+        display: none;
+    }
+
+    .toolbar-hint {
+        display: none;
+    }
+}

@@ -213,6 +213,13 @@ export const routes: Routes = [
         data: { resource: 'admin' },
     },
     {
+        path: 'tools/outline',
+        title: 'Tool Outline',
+        loadComponent: () =>
+            import('./components/tools/tool-outline/tool-outline').then((m) => m.ToolOutlineComponent),
+        canActivate: [authGuard],
+    },
+    {
         path: 'settings',
         title: 'Settings',
         loadComponent: () =>
