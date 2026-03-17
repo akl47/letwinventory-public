@@ -109,14 +109,9 @@ describe('ToolOutlineComponent', () => {
             expect((component as any).blurRadius()).toBe(5);
         });
 
-        it('should have threshMethod signal defaulting to adaptive', () => {
+        it('should have threshMethod signal defaulting to combined', () => {
             expect((component as any).threshMethod).toBeDefined();
-            expect((component as any).threshMethod()).toBe('adaptive');
-        });
-
-        it('should have showSliders signal starting as false', () => {
-            expect((component as any).showSliders).toBeDefined();
-            expect((component as any).showSliders()).toBe(false);
+            expect((component as any).threshMethod()).toBe('combined');
         });
 
         it('should have fillHoles signal defaulting to true', () => {
@@ -129,19 +124,19 @@ describe('ToolOutlineComponent', () => {
             expect((component as any).centerLinesEnabled()).toBe(true);
         });
 
-        it('should have marginMm signal defaulting to 0', () => {
+        it('should have marginMm signal defaulting to 1', () => {
             expect((component as any).marginMm).toBeDefined();
-            expect((component as any).marginMm()).toBe(0);
+            expect((component as any).marginMm()).toBe(1);
         });
 
-        it('should have extRadiusMm signal defaulting to 0', () => {
+        it('should have extRadiusMm signal defaulting to 3.2', () => {
             expect((component as any).extRadiusMm).toBeDefined();
-            expect((component as any).extRadiusMm()).toBe(0);
+            expect((component as any).extRadiusMm()).toBe(3.2);
         });
 
-        it('should have intRadiusMm signal defaulting to 0', () => {
+        it('should have intRadiusMm signal defaulting to 3.2', () => {
             expect((component as any).intRadiusMm).toBeDefined();
-            expect((component as any).intRadiusMm()).toBe(0);
+            expect((component as any).intRadiusMm()).toBe(3.2);
         });
 
         it('should show plateHeight input only when scaleMethod is reference', () => {
@@ -174,16 +169,16 @@ describe('ToolOutlineComponent', () => {
             expect((component as any).previewZoom()).toBeLessThan(1.0);
         });
 
-        it('should clamp zoom to minimum 0.1', () => {
-            (component as any).previewZoom.set(0.1);
+        it('should clamp zoom to minimum 0.05', () => {
+            (component as any).previewZoom.set(0.05);
             (component as any).zoomOut();
-            expect((component as any).previewZoom()).toBeGreaterThanOrEqual(0.1);
+            expect((component as any).previewZoom()).toBeGreaterThanOrEqual(0.05);
         });
 
-        it('should clamp zoom to maximum 5', () => {
-            (component as any).previewZoom.set(5);
+        it('should clamp zoom to maximum 10', () => {
+            (component as any).previewZoom.set(10);
             (component as any).zoomIn();
-            expect((component as any).previewZoom()).toBeLessThanOrEqual(5);
+            expect((component as any).previewZoom()).toBeLessThanOrEqual(10);
         });
 
         it('should have zoom100 method that sets zoom to 1', () => {
