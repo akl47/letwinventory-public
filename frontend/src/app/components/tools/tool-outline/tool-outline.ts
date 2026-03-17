@@ -106,9 +106,9 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
     readonly morphClose = signal(2);
     readonly morphOpen = signal(1);
     readonly minAreaRatio = signal(0.001);
-    readonly marginMm = signal(0);
-    readonly extRadiusMm = signal(0);
-    readonly intRadiusMm = signal(0);
+    readonly marginMm = signal(1);
+    readonly extRadiusMm = signal(3.2);
+    readonly intRadiusMm = signal(3.2);
     readonly fillHoles = signal(true);
     readonly centerLinesEnabled = signal(true);
 
@@ -121,9 +121,14 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
 
     // ── Preview ─────────────────────────────────────────────────────────────
     readonly previewZoom = signal(0.5);
+    readonly previewPanX = signal(0);
+    readonly previewPanY = signal(0);
     readonly zoomDisplayText = computed(() => Math.round(this.previewZoom() * 100) + '%');
+    readonly previewTransform = computed(() =>
+        `translate(${this.previewPanX()}px, ${this.previewPanY()}px) scale(${this.previewZoom()})`
+    );
     private isPanning = false;
-    private panStart = { x: 0, y: 0, scrollLeft: 0, scrollTop: 0 };
+    private panStart = { x: 0, y: 0, panX: 0, panY: 0 };
 
     // ── Centerlines ─────────────────────────────────────────────────────────
     readonly centerLines = signal<CenterLine[]>([]);
@@ -144,6 +149,9 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
     readonly previewExpanded = signal(true);
     readonly partsExpanded = signal(true);
 
+    // ── Step image expand ────────────────────────────────────────────────────
+    readonly expandedStepId = signal<string | null>(null);
+
     // ── Delete state ────────────────────────────────────────────────────────
     readonly deletedParts = signal<Set<number>>(new Set());
 
@@ -154,13 +162,15 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
     private lastHasMargin = false;
     private lastSvgParams: SvgParams | null = null;
     private cachedBaseData: ImageData | null = null;
+    private lastPlateRect: { x: number; y: number; width: number; height: number } | null = null;
+    private lastPlateMm: { w: number; h: number } | null = null;
 
     @ViewChild('previewCanvas', { static: false }) private previewCanvasRef!: ElementRef<HTMLCanvasElement>;
     @ViewChild('hiddenCanvas', { static: false }) private hiddenCanvasRef!: ElementRef<HTMLCanvasElement>;
     @ViewChild('previewBody', { static: false }) private previewBodyRef!: ElementRef<HTMLDivElement>;
 
     // Step canvas refs
-    private stepCanvasIds = ['stepGray', 'stepBlurred', 'stepRoughOtsu', 'stepRoughClosed', 'stepThreshold', 'stepMorph', 'stepFillHoles', 'stepPlateMask'];
+    private stepCanvasIds = ['stepPlateDetect', 'stepPlateOutline', 'stepGray', 'stepBlurred', 'stepThreshold', 'stepMorph', 'stepFillHoles', 'stepContours'];
 
     ngOnInit() {
         this.loadOpenCV();
@@ -246,6 +256,12 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
         }
     }
 
+    // ── Step Image Expand ─────────────────────────────────────────────────
+
+    toggleStepExpand(canvasId: string) {
+        this.expandedStepId.set(this.expandedStepId() === canvasId ? null : canvasId);
+    }
+
     // ── Scale Method ────────────────────────────────────────────────────────
 
     onScaleMethodChange(value: string) {
@@ -257,24 +273,48 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
     // ── Zoom Controls ───────────────────────────────────────────────────────
 
     zoomIn() {
-        this.previewZoom.update(z => Math.min(5, z * 1.25));
+        this.zoomAroundCenter(1.25);
     }
 
     zoomOut() {
-        this.previewZoom.update(z => Math.max(0.1, z / 1.25));
+        this.zoomAroundCenter(1 / 1.25);
     }
 
     zoom100() {
-        this.previewZoom.set(1);
+        this.centerAtZoom(1);
     }
 
     zoomToFit() {
         const canvas = this.previewCanvasRef?.nativeElement;
         const body = this.previewBodyRef?.nativeElement;
         if (!canvas || !body || !canvas.width) return;
-        const bodyW = body.clientWidth - 32;
+        const bodyW = body.clientWidth;
         const bodyH = body.clientHeight || 500;
-        this.previewZoom.set(Math.min(bodyW / canvas.width, bodyH / canvas.height, 1));
+        const zoom = Math.min(bodyW / canvas.width, bodyH / canvas.height, 1);
+        this.centerAtZoom(zoom);
+    }
+
+    private centerAtZoom(zoom: number) {
+        const canvas = this.previewCanvasRef?.nativeElement;
+        const body = this.previewBodyRef?.nativeElement;
+        if (!canvas || !body || !canvas.width) {
+            this.previewZoom.set(zoom);
+            return;
+        }
+        this.previewZoom.set(zoom);
+        this.previewPanX.set((body.clientWidth - canvas.width * zoom) / 2);
+        this.previewPanY.set((body.clientHeight - canvas.height * zoom) / 2);
+    }
+
+    private zoomAroundCenter(factor: number) {
+        const body = this.previewBodyRef?.nativeElement;
+        if (!body) return;
+        const oldZoom = this.previewZoom();
+        const newZoom = Math.max(0.05, Math.min(10, oldZoom * factor));
+        // Zoom around the center of the viewport
+        const cx = body.clientWidth / 2;
+        const cy = body.clientHeight / 2;
+        this.applyZoomAt(newZoom, cx, cy);
     }
 
     onPreviewWheel(event: WheelEvent) {
@@ -282,48 +322,55 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
         event.preventDefault();
         const body = this.previewBodyRef?.nativeElement;
         if (!body) return;
-        const oldZoom = this.previewZoom();
-        const delta = event.deltaY > 0 ? 0.9 : 1.1;
-        this.previewZoom.set(Math.max(0.1, Math.min(5, oldZoom * delta)));
-
+        const factor = event.deltaY > 0 ? 0.9 : 1.1;
+        const newZoom = Math.max(0.05, Math.min(10, this.previewZoom() * factor));
         const rect = body.getBoundingClientRect();
-        const mx = event.clientX - rect.left + body.scrollLeft;
-        const my = event.clientY - rect.top + body.scrollTop;
-        const ratio = this.previewZoom() / oldZoom;
-        body.scrollLeft = mx * ratio - (event.clientX - rect.left);
-        body.scrollTop = my * ratio - (event.clientY - rect.top);
+        this.applyZoomAt(newZoom, event.clientX - rect.left, event.clientY - rect.top);
+    }
+
+    private applyZoomAt(newZoom: number, viewX: number, viewY: number) {
+        const oldZoom = this.previewZoom();
+        const panX = this.previewPanX();
+        const panY = this.previewPanY();
+        // Point in canvas-space under the cursor
+        const canvasX = (viewX - panX) / oldZoom;
+        const canvasY = (viewY - panY) / oldZoom;
+        // Adjust pan so that same canvas point stays under cursor
+        this.previewZoom.set(newZoom);
+        this.previewPanX.set(viewX - canvasX * newZoom);
+        this.previewPanY.set(viewY - canvasY * newZoom);
     }
 
     // ── Pan ─────────────────────────────────────────────────────────────────
 
     onPreviewMouseDown(event: MouseEvent) {
-        if (event.button === 1) {
+        // Left-click pan (only if not hitting a centerline control point)
+        if (event.button === 0 && !this.draggingCL()) {
+            const cls = this.centerLines();
+            if (cls.length > 0 && this.cachedBaseData) {
+                const { x, y } = this.canvasCoords(event);
+                for (const cl of cls) {
+                    if (Math.sqrt((x - cl.cp1x) ** 2 + (y - cl.cp1y) ** 2) < CL_HIT_RADIUS ||
+                        Math.sqrt((x - cl.cp2x) ** 2 + (y - cl.cp2y) ** 2) < CL_HIT_RADIUS) {
+                        return; // Let centerline drag handle this
+                    }
+                }
+            }
             event.preventDefault();
             this.isPanning = true;
-            const body = this.previewBodyRef?.nativeElement;
-            if (body) {
-                this.panStart = { x: event.clientX, y: event.clientY, scrollLeft: body.scrollLeft, scrollTop: body.scrollTop };
-                body.classList.add('panning');
-            }
+            this.panStart = { x: event.clientX, y: event.clientY, panX: this.previewPanX(), panY: this.previewPanY() };
         }
     }
 
     onWindowMouseMove(event: MouseEvent) {
         if (!this.isPanning) return;
         event.preventDefault();
-        const body = this.previewBodyRef?.nativeElement;
-        if (body) {
-            body.scrollLeft = this.panStart.scrollLeft - (event.clientX - this.panStart.x);
-            body.scrollTop = this.panStart.scrollTop - (event.clientY - this.panStart.y);
-        }
+        this.previewPanX.set(this.panStart.panX + (event.clientX - this.panStart.x));
+        this.previewPanY.set(this.panStart.panY + (event.clientY - this.panStart.y));
     }
 
     onWindowMouseUp() {
-        if (this.isPanning) {
-            this.isPanning = false;
-            const body = this.previewBodyRef?.nativeElement;
-            if (body) body.classList.remove('panning');
-        }
+        this.isPanning = false;
     }
 
     // ── Centerline Dragging ─────────────────────────────────────────────────
@@ -479,84 +526,129 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
         ctx.drawImage(img, 0, 0);
 
         let src = cv.imread(hiddenCanvas);
-        let gray = new cv.Mat();
-        let blurred = new cv.Mat();
-        let binary = new cv.Mat();
+        let fullGray = new cv.Mat();
+        let fullBlurred = new cv.Mat();
+        let fullBinary = new cv.Mat();
+        let rotatedSrc: any = null;
+        let croppedSrc: any = null;
+        let croppedGray: any = null;
+        let croppedBlurred: any = null;
+        let croppedBinary: any = null;
         let kernel: any = null;
         let contours: any = null;
         let hierarchy: any = null;
-        let plateMask: any = null;
 
         try {
+            // ── Phase A: Plate Detection on full image ──────────────────────
+
+            // Full-image grayscale + blur for plate detection
+            cv.cvtColor(src, fullGray, cv.COLOR_RGBA2GRAY);
+            const fullBlurSize = 5;
+            cv.GaussianBlur(fullGray, fullBlurred, new cv.Size(fullBlurSize, fullBlurSize), 0);
+
+            // Otsu threshold on full image to find plate
+            cv.threshold(fullBlurred, fullBinary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+            let roughKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
+            cv.morphologyEx(fullBinary, fullBinary, cv.MORPH_CLOSE, roughKernel, new cv.Point(-1, -1), 2);
+            this.showStep('stepPlateDetect', fullBinary);
+            roughKernel.delete();
+
+            const plateInfo = this.detectPlate(fullBinary, w, h);
+            if (!plateInfo) {
+                this.ngZone.run(() => {
+                    this.errorMessage.set('No plate detected. Ensure the backlight plate is visible in the image.');
+                });
+                return;
+            }
+
+            const rect = plateInfo.rect; // minAreaRect: center, size, angle
+            const cx = rect.center.x, cy = rect.center.y;
+
+            // Compute scale from plate dimensions
+            const mmPerPx = this.computeScale(plateInfo, this.scaleMethod(), this.scaleValue(), this.plateHeight());
+
+            // Rotate full image to straighten the plate
+            const M = cv.getRotationMatrix2D(rect.center, rect.angle, 1.0);
+            rotatedSrc = new cv.Mat();
+            cv.warpAffine(src, rotatedSrc, M, new cv.Size(w, h), cv.INTER_LINEAR, cv.BORDER_REPLICATE);
+            M.delete();
+
+            // After rotation the plate is axis-aligned at rect.center
+            const plateW = Math.round(rect.size.width);
+            const plateH = Math.round(rect.size.height);
+            const cropX = Math.max(0, Math.round(cx - plateW / 2));
+            const cropY = Math.max(0, Math.round(cy - plateH / 2));
+            const cw = Math.min(plateW, rotatedSrc.cols - cropX);
+            const ch = Math.min(plateH, rotatedSrc.rows - cropY);
+
+            // Show step 2: rotated image with crop rect (green)
+            let outlineMat = rotatedSrc.clone();
+            cv.rectangle(outlineMat, new cv.Point(cropX, cropY),
+                new cv.Point(cropX + cw, cropY + ch), new cv.Scalar(0, 255, 0, 255), 3);
+            this.showStep('stepPlateOutline', outlineMat);
+            outlineMat.delete();
+
+            // Crop the axis-aligned plate region
+            croppedSrc = rotatedSrc.roi(new cv.Rect(cropX, cropY, cw, ch)).clone();
+            rotatedSrc.delete(); rotatedSrc = null;
+
+            // Done with full-image mats
+            fullGray.delete(); fullBlurred.delete(); fullBinary.delete();
+            fullGray = new cv.Mat(); fullBlurred = new cv.Mat(); fullBinary = new cv.Mat();
+
+            // ── Phase B: Tool Detection on cropped image ────────────────────
+
             const blurSize = (this.blurRadius() | 1);
             const threshVal = this.threshValue();
             const closeIter = this.morphClose();
             const openIter = this.morphOpen();
-
-            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-            this.showStep('stepGray', gray);
-            const ksize = new cv.Size(blurSize, blurSize);
-            cv.GaussianBlur(gray, blurred, ksize, 0);
-            this.showStep('stepBlurred', blurred);
-
             const method_thresh = this.threshMethod();
             const blockSz = (this.blockSize() | 1);
             const aC = this.adaptiveC();
 
-            // Rough full-image Otsu for plate detection
-            cv.threshold(blurred, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-            this.showStep('stepRoughOtsu', binary);
-            let roughBinary = binary.clone();
-            let roughKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
-            cv.morphologyEx(roughBinary, roughBinary, cv.MORPH_CLOSE, roughKernel, new cv.Point(-1, -1), 2);
-            this.showStep('stepRoughClosed', roughBinary);
-            const plateInfo = this.detectPlate(roughBinary, w, h);
-            roughKernel.delete();
-            roughBinary.delete();
+            // Grayscale (cropped)
+            croppedGray = new cv.Mat();
+            cv.cvtColor(croppedSrc, croppedGray, cv.COLOR_RGBA2GRAY);
+            this.showStep('stepGray', croppedGray);
 
-            // Apply selected threshold method
+            // Blur (cropped)
+            croppedBlurred = new cv.Mat();
+            cv.GaussianBlur(croppedGray, croppedBlurred, new cv.Size(blurSize, blurSize), 0);
+            this.showStep('stepBlurred', croppedBlurred);
+
+            // Threshold (cropped) — no ROI tricks needed, entire image IS the plate
+            croppedBinary = new cv.Mat();
             if (threshVal > 0) {
-                cv.threshold(blurred, binary, threshVal, 255, cv.THRESH_BINARY_INV);
-            } else if (method_thresh === 'adaptive' || method_thresh === 'combined') {
-                let adaptiveBin = new cv.Mat();
-                cv.adaptiveThreshold(blurred, adaptiveBin, 255,
+                cv.threshold(croppedBlurred, croppedBinary, threshVal, 255, cv.THRESH_BINARY_INV);
+            } else if (method_thresh === 'adaptive') {
+                cv.adaptiveThreshold(croppedBlurred, croppedBinary, 255,
                     cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, blockSz, aC);
-                if (method_thresh === 'combined') {
-                    if (plateInfo) {
-                        const pr = cv.boundingRect(plateInfo.contour);
-                        let roiSrc = blurred.roi(new cv.Rect(pr.x, pr.y, pr.width, pr.height));
-                        let roiDst = binary.roi(new cv.Rect(pr.x, pr.y, pr.width, pr.height));
-                        cv.threshold(roiSrc, roiDst, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-                        roiSrc.delete(); roiDst.delete();
-                    }
-                    cv.bitwise_or(binary, adaptiveBin, binary);
-                } else {
-                    adaptiveBin.copyTo(binary);
-                }
-                adaptiveBin.delete();
+            } else if (method_thresh === 'combined') {
+                let adaptiveBin = new cv.Mat();
+                cv.adaptiveThreshold(croppedBlurred, adaptiveBin, 255,
+                    cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, blockSz, aC);
+                let otsiBin = new cv.Mat();
+                cv.threshold(croppedBlurred, otsiBin, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+                cv.bitwise_or(otsiBin, adaptiveBin, croppedBinary);
+                adaptiveBin.delete(); otsiBin.delete();
             } else {
-                if (plateInfo) {
-                    const pr = cv.boundingRect(plateInfo.contour);
-                    let roiSrc = blurred.roi(new cv.Rect(pr.x, pr.y, pr.width, pr.height));
-                    let roiDst = binary.roi(new cv.Rect(pr.x, pr.y, pr.width, pr.height));
-                    cv.threshold(roiSrc, roiDst, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-                    roiSrc.delete(); roiDst.delete();
-                }
+                // otsu only
+                cv.threshold(croppedBlurred, croppedBinary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
             }
-            this.showStep('stepThreshold', binary);
+            this.showStep('stepThreshold', croppedBinary);
 
-            // Morphological close/open
+            // Morphological close/open (cropped)
             kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
             if (closeIter > 0)
-                cv.morphologyEx(binary, binary, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), closeIter);
+                cv.morphologyEx(croppedBinary, croppedBinary, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), closeIter);
             if (openIter > 0)
-                cv.morphologyEx(binary, binary, cv.MORPH_OPEN, kernel, new cv.Point(-1, -1), openIter);
-            this.showStep('stepMorph', binary);
+                cv.morphologyEx(croppedBinary, croppedBinary, cv.MORPH_OPEN, kernel, new cv.Point(-1, -1), openIter);
+            this.showStep('stepMorph', croppedBinary);
 
-            // Fill holes
+            // Fill holes (cropped)
             if (this.fillHoles()) {
                 let invBinary = new cv.Mat();
-                cv.bitwise_not(binary, invBinary);
+                cv.bitwise_not(croppedBinary, invBinary);
                 let holeContours = new cv.MatVector();
                 let holeHier = new cv.Mat();
                 cv.findContours(invBinary, holeContours, holeHier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
@@ -570,36 +662,23 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
                         if (i === maxIdx) continue;
                         let fillVec = new cv.MatVector();
                         fillVec.push_back(holeContours.get(i));
-                        cv.drawContours(binary, fillVec, 0, new cv.Scalar(255, 255, 255, 255), -1);
+                        cv.drawContours(croppedBinary, fillVec, 0, new cv.Scalar(255, 255, 255, 255), -1);
                         fillVec.delete();
                     }
                 }
                 holeContours.delete(); holeHier.delete(); invBinary.delete();
             }
-            this.showStep('stepFillHoles', binary);
+            this.showStep('stepFillHoles', croppedBinary);
 
-            // Margin & scale
-            const mmPerPx = this.computeScale(plateInfo, this.scaleMethod(), this.scaleValue(), this.plateHeight());
-
-            // Find contours
+            // Find contours (cropped — all coordinates are plate-relative)
             contours = new cv.MatVector();
             hierarchy = new cv.Mat();
-            cv.findContours(binary, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_NONE);
+            cv.findContours(croppedBinary, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_NONE);
 
-            const imageArea = w * h;
-            const minArea = imageArea * this.minAreaRatio();
+            const croppedArea = cw * ch;
+            const minArea = croppedArea * this.minAreaRatio();
 
-            // Build plate mask
-            if (plateInfo) {
-                plateMask = cv.Mat.zeros(h, w, cv.CV_8UC1);
-                let plateVec = new cv.MatVector();
-                plateVec.push_back(plateInfo.contour);
-                cv.drawContours(plateMask, plateVec, 0, new cv.Scalar(255), -1);
-                plateVec.delete();
-                this.showStep('stepPlateMask', plateMask);
-            }
-
-            // Filter contours
+            // Filter contours by min area (no plate mask needed — already cropped)
             let kept: { contour: any; isHole: boolean }[] = [];
             const hData = hierarchy.data32S;
             for (let i = 0; i < contours.size(); i++) {
@@ -608,21 +687,19 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
                 const parent = hData[i * 4 + 3];
                 let validSize = (parent === -1 && area >= minArea) || (parent >= 0 && area >= minArea * 0.1);
                 if (!validSize) continue;
-                if (plateMask) {
-                    const moments = cv.moments(c);
-                    if (moments.m00 > 0) {
-                        const cx = Math.round(moments.m10 / moments.m00);
-                        const cy = Math.round(moments.m01 / moments.m00);
-                        if (cx >= 0 && cx < w && cy >= 0 && cy < h && plateMask.ucharAt(cy, cx) === 0) continue;
-                    }
-                }
                 kept.push({ contour: c, isHole: parent >= 0 });
             }
 
-            if (plateInfo) {
-                const plateArea = cv.contourArea(plateInfo.contour);
-                kept = kept.filter(k => cv.contourArea(k.contour) < plateArea * 0.8);
+            // Show step 8: contours drawn on cropped image
+            let contourVis = croppedSrc.clone();
+            for (let i = 0; i < kept.length; i++) {
+                let vec = new cv.MatVector();
+                vec.push_back(kept[i].contour);
+                cv.drawContours(contourVis, vec, 0, new cv.Scalar(0, 255, 0, 255), 2);
+                vec.delete();
             }
+            this.showStep('stepContours', contourVis);
+            contourVis.delete();
 
             if (kept.length === 0) {
                 this.ngZone.run(() => {
@@ -631,11 +708,9 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
                 return;
             }
 
-            const wMm = w * mmPerPx;
-            const hMm = h * mmPerPx;
             const smoothFactor = this.smoothing();
 
-            // Green paths (raw edges)
+            // Green paths (raw edges — plate-relative coordinates)
             const greenPaths: number[][][] = [];
             for (const k of kept) {
                 const pts = this.contourToPoints(k.contour);
@@ -652,7 +727,7 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
                 const kSize = marginPx * 2 + 1;
                 let marginKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(kSize, kSize));
                 let dilated = new cv.Mat();
-                cv.dilate(binary, dilated, marginKernel, new cv.Point(-1, -1), 1);
+                cv.dilate(croppedBinary, dilated, marginKernel, new cv.Point(-1, -1), 1);
                 let mContours = new cv.MatVector();
                 let mHierarchy = new cv.Mat();
                 cv.findContours(dilated, mContours, mHierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_NONE);
@@ -663,19 +738,7 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
                     const area = cv.contourArea(c);
                     const parent = mhData[i * 4 + 3];
                     if (!((parent === -1 && area >= minArea) || (parent >= 0 && area >= minArea * 0.1))) continue;
-                    if (plateMask) {
-                        const moments = cv.moments(c);
-                        if (moments.m00 > 0) {
-                            const cx = Math.round(moments.m10 / moments.m00);
-                            const cy = Math.round(moments.m01 / moments.m00);
-                            if (cx >= 0 && cx < w && cy >= 0 && cy < h && plateMask.ucharAt(cy, cx) === 0) continue;
-                        }
-                    }
                     mKept.push(c);
-                }
-                if (plateInfo) {
-                    const plateArea = cv.contourArea(plateInfo.contour);
-                    mKept = mKept.filter((c: any) => cv.contourArea(c) < plateArea * 0.8);
                 }
                 bluePaths = mKept.map((c: any) => this.douglasPeucker(this.contourToPoints(c), smoothFactor));
                 marginKernel.delete(); dilated.delete(); mContours.delete(); mHierarchy.delete();
@@ -695,41 +758,29 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
                 }
             }
 
-            // Draw base preview (image + plate outline only)
-            previewCanvas.width = w;
-            previewCanvas.height = h;
-            cv.imshow(previewCanvas, src);
+            // Draw base preview — show cropped image (plate only)
+            previewCanvas.width = cw;
+            previewCanvas.height = ch;
+            cv.imshow(previewCanvas, croppedSrc);
             const pctx = previewCanvas.getContext('2d')!;
 
-            // Red plate outline
-            if (plateInfo) {
-                const platePts = this.contourToPoints(plateInfo.contour);
-                pctx.strokeStyle = '#ff0000';
-                pctx.lineWidth = 3;
-                pctx.beginPath();
-                if (platePts.length > 0) {
-                    pctx.moveTo(platePts[0][0], platePts[0][1]);
-                    for (let i = 1; i < platePts.length; i++) pctx.lineTo(platePts[i][0], platePts[i][1]);
-                    pctx.closePath();
-                }
-                pctx.stroke();
-            }
-
             // Cache base image (before contours) for overlay redraws
-            this.cachedBaseData = pctx.getImageData(0, 0, w, h);
+            this.cachedBaseData = pctx.getImageData(0, 0, cw, ch);
             this.lastGreenPaths = greenPaths;
             this.lastHasMargin = (marginPx > 0 || minRadPx > 0 || intRadPx > 0);
 
-            // Compute SVG params
-            let svgWMm = wMm, svgHMm = hMm, svgOffsetX = 0, svgOffsetY = 0;
-            if (plateInfo) {
-                const pr = cv.boundingRect(plateInfo.contour);
-                svgOffsetX = pr.x; svgOffsetY = pr.y;
-                svgWMm = pr.width * mmPerPx; svgHMm = pr.height * mmPerPx;
-            }
+            // SVG params — offset is 0,0 since preview IS the cropped plate
+            const svgWMm = cw * mmPerPx;
+            const svgHMm = ch * mmPerPx;
+
+            // Store plate rect as 0,0-based (preview is the plate)
+            this.lastPlateRect = { x: 0, y: 0, width: cw, height: ch };
+            const detShort = Math.min(plateInfo.dims.w, plateInfo.dims.h);
+            const detLong = Math.max(plateInfo.dims.w, plateInfo.dims.h);
+            this.lastPlateMm = { w: detLong * mmPerPx, h: detShort * mmPerPx };
 
             this.lastBluePaths = bluePaths;
-            this.lastSvgParams = { wMm: svgWMm, hMm: svgHMm, mmPerPx, offsetX: svgOffsetX, offsetY: svgOffsetY };
+            this.lastSvgParams = { wMm: svgWMm, hMm: svgHMm, mmPerPx, offsetX: 0, offsetY: 0 };
 
             this.ngZone.run(() => {
                 this.deletedParts.set(new Set());
@@ -737,14 +788,14 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
                 this.drawPreviewOverlay();
                 setTimeout(() => this.zoomToFit(), 0);
 
-                // Generate per-part output
-                this.generatePartOutput(bluePaths, newCenterLines, mmPerPx, svgOffsetX, svgOffsetY);
+                // Generate per-part output (offset 0,0 — already cropped)
+                this.generatePartOutput(bluePaths, newCenterLines, mmPerPx, 0, 0);
 
                 // Info bar
                 this.infoBarData.set({
                     imageW: w, imageH: h,
-                    plateW: plateInfo ? plateInfo.rect.size.width : 0,
-                    plateH: plateInfo ? plateInfo.rect.size.height : 0,
+                    plateW: plateInfo.rect.size.width,
+                    plateH: plateInfo.rect.size.height,
                     svgW: svgWMm, svgH: svgHMm,
                     contourCount: kept.length,
                     scale: mmPerPx
@@ -752,11 +803,16 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
             });
 
         } finally {
-            src.delete(); gray.delete(); blurred.delete(); binary.delete();
+            src.delete();
+            fullGray.delete(); fullBlurred.delete(); fullBinary.delete();
+            if (rotatedSrc) rotatedSrc.delete();
+            if (croppedSrc) croppedSrc.delete();
+            if (croppedGray) croppedGray.delete();
+            if (croppedBlurred) croppedBlurred.delete();
+            if (croppedBinary) croppedBinary.delete();
             if (kernel) kernel.delete();
             if (contours) contours.delete();
             if (hierarchy) hierarchy.delete();
-            if (plateMask) plateMask.delete();
         }
     }
 
@@ -930,10 +986,11 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
                 const c = plateContours.get(i);
                 const area = cv.contourArea(c);
                 if (area < imgArea * 0.05) continue;
+                // Score by how well the contour fills its rotated bounding rect
                 const rect = cv.minAreaRect(c);
                 const rectArea = rect.size.width * rect.size.height;
-                const rectangularity = rectArea > 0 ? area / rectArea : 0;
-                const score = area * rectangularity;
+                const fillRatio = rectArea > 0 ? area / rectArea : 0;
+                const score = area * fillRatio;
                 if (score > bestScore) { bestScore = score; bestIdx = i; }
             }
             if (bestIdx === -1) return null;
@@ -1335,6 +1392,28 @@ export class ToolOutlineComponent implements OnInit, OnDestroy {
                     pctx.fillText('W=' + cl.maxWidthMm.toFixed(1) + 'mm', midX + dirY * 12, midY - dirX * 12 + 2);
                 }
             }
+        }
+
+        // Plate dimension labels
+        if (this.lastPlateRect && this.lastPlateMm && mmPerPx > 0) {
+            const pr = this.lastPlateRect;
+            const pm = this.lastPlateMm;
+            pctx.font = '16px sans-serif'; pctx.fillStyle = '#ff4444';
+            pctx.strokeStyle = 'rgba(0,0,0,0.6)'; pctx.lineWidth = 3;
+            // Width label (top edge)
+            pctx.textAlign = 'center'; pctx.textBaseline = 'bottom';
+            const wLabel = pm.w.toFixed(1) + ' mm';
+            pctx.strokeText(wLabel, pr.x + pr.width / 2, pr.y - 6);
+            pctx.fillText(wLabel, pr.x + pr.width / 2, pr.y - 6);
+            // Height label (left edge, rotated)
+            const hLabel = pm.h.toFixed(1) + ' mm';
+            pctx.save();
+            pctx.translate(pr.x - 6, pr.y + pr.height / 2);
+            pctx.rotate(-Math.PI / 2);
+            pctx.textAlign = 'center'; pctx.textBaseline = 'bottom';
+            pctx.strokeText(hLabel, 0, 0);
+            pctx.fillText(hLabel, 0, 0);
+            pctx.restore();
         }
 
         // Scale indicator

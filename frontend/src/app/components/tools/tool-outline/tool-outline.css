@@ -207,6 +207,8 @@ mat-accordion {
     border: 1px solid var(--mat-sys-outline-variant);
     border-radius: 8px;
     overflow: hidden;
+    cursor: pointer;
+    transition: all 0.2s;
 }
 
 .step-label {
@@ -218,9 +220,36 @@ mat-accordion {
     border-bottom: 1px solid var(--mat-sys-outline-variant);
 }
 
+.step-card:hover {
+    border-color: var(--mat-sys-primary);
+}
+
 .step-card canvas {
     width: 100%;
     display: block;
+}
+
+.step-expand-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+    float: right;
+    opacity: 0.5;
+}
+
+.step-card:hover .step-expand-icon {
+    opacity: 1;
+}
+
+.step-expanded {
+    grid-column: 1 / -1;
+}
+
+.step-expanded canvas {
+    max-height: 80vh;
+    width: auto;
+    max-width: 100%;
+    margin: 0 auto;
 }
 
 /* Preview & Parts toolbar */
@@ -277,20 +306,15 @@ mat-divider[vertical] {
 
 /* Preview body */
 .preview-body {
-    overflow: auto;
-    max-height: 75vh;
-    padding: 16px;
+    overflow: hidden;
+    height: 70vh;
     position: relative;
     cursor: grab;
+    background: var(--mat-sys-surface-container-lowest, #1a1a1a);
 }
 
-.preview-body.panning {
+.preview-body:active {
     cursor: grabbing;
-}
-
-.preview-body canvas {
-    display: block;
-    cursor: inherit;
 }
 
 /* Part cards */

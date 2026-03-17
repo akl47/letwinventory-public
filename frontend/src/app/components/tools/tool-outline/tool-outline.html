@@ -194,14 +194,24 @@
                     <mat-panel-title>Pipeline Steps</mat-panel-title>
                 </mat-expansion-panel-header>
                 <div class="steps-grid">
-                    <div class="step-card"><div class="step-label">1. Grayscale</div><canvas id="stepGray"></canvas></div>
-                    <div class="step-card"><div class="step-label">2. Blurred</div><canvas id="stepBlurred"></canvas></div>
-                    <div class="step-card"><div class="step-label">3. Rough Otsu</div><canvas id="stepRoughOtsu"></canvas></div>
-                    <div class="step-card"><div class="step-label">4. Rough Closed</div><canvas id="stepRoughClosed"></canvas></div>
-                    <div class="step-card"><div class="step-label">5. Threshold</div><canvas id="stepThreshold"></canvas></div>
-                    <div class="step-card"><div class="step-label">6. After Morph</div><canvas id="stepMorph"></canvas></div>
-                    <div class="step-card"><div class="step-label">7. After Fill Holes</div><canvas id="stepFillHoles"></canvas></div>
-                    <div class="step-card"><div class="step-label">8. Plate Mask</div><canvas id="stepPlateMask"></canvas></div>
+                    @for (step of [
+                        { id: 'stepPlateDetect', label: '1. Plate Detection' },
+                        { id: 'stepPlateOutline', label: '2. Straightened + Crop' },
+                        { id: 'stepGray', label: '3. Grayscale' },
+                        { id: 'stepBlurred', label: '4. Blurred' },
+                        { id: 'stepThreshold', label: '5. Threshold' },
+                        { id: 'stepMorph', label: '6. After Morph' },
+                        { id: 'stepFillHoles', label: '7. After Fill Holes' },
+                        { id: 'stepContours', label: '8. Final Contours' }
+                    ]; track step.id) {
+                        <div class="step-card" [class.step-expanded]="expandedStepId() === step.id"
+                             (click)="toggleStepExpand(step.id)">
+                            <div class="step-label">{{ step.label }}
+                                <mat-icon class="step-expand-icon">{{ expandedStepId() === step.id ? 'close_fullscreen' : 'open_in_full' }}</mat-icon>
+                            </div>
+                            <canvas [id]="step.id"></canvas>
+                        </div>
+                    }
                 </div>
             </mat-expansion-panel>
         </mat-accordion>
@@ -239,7 +249,7 @@
                         <mat-icon>refresh</mat-icon>
                     </button>
                 </div>
-                <span class="toolbar-hint">Scroll to zoom · Middle-click to pan · Drag cyan points to edit centerlines</span>
+                <span class="toolbar-hint">Scroll to zoom · Click + drag to pan · Drag cyan points to edit centerlines</span>
             </div>
             <div class="preview-body" #previewBody
                  (wheel)="onPreviewWheel($event)"
@@ -247,8 +257,8 @@
                  (mousemove)="onWindowMouseMove($event)"
                  (mouseup)="onWindowMouseUp()">
                 <canvas #previewCanvas
-                        [style.transform]="'scale(' + previewZoom() + ')'"
-                        style="transform-origin: 0 0; display: block;"
+                        [style.transform]="previewTransform()"
+                        style="transform-origin: 0 0; position: absolute; top: 0; left: 0;"
                         (mousedown)="onCanvasMouseDown($event)"
                         (mousemove)="onCanvasMouseMove($event)"
                         (mouseup)="onCanvasMouseUp($event)"

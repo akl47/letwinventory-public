@@ -217,7 +217,6 @@ export const routes: Routes = [
         title: 'Tool Outline',
         loadComponent: () =>
             import('./components/tools/tool-outline/tool-outline').then((m) => m.ToolOutlineComponent),
-        canActivate: [authGuard],
     },
     {
         path: 'settings',
