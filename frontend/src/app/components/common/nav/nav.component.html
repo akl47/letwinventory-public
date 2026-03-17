@@ -47,6 +47,14 @@
                 </div>
                 }
 
+                <!-- Tools - group toggle -->
+                <div class="rail-item" [class.active]="isGroupActive('tools')" (click)="toggleGroup('tools')">
+                    <div class="rail-icon-container">
+                        <mat-icon>construction</mat-icon>
+                    </div>
+                    <span class="rail-label">Tools</span>
+                </div>
+
                 @if (hasAdminAccess()) {
                 <!-- Admin - group toggle -->
                 <div class="rail-item" [class.active]="isGroupActive('admin')" (click)="toggleGroup('admin')">
@@ -78,7 +86,7 @@
             @if (openGroup()) {
             <div class="flyout-panel">
                 <div class="flyout-header">{{ openGroup() === 'inventory' ? 'Inventory' : openGroup() === 'design' ?
-                    'Design' : 'Admin' }}</div>
+                    'Design' : openGroup() === 'tools' ? 'Tools' : 'Admin' }}</div>
                 <mat-nav-list>
                     @if (openGroup() === 'inventory') {
                     @if (hasInventoryAccess()) {
@@ -119,6 +127,12 @@
                         <span matListItemTitle>Harness Design</span>
                     </a>
                     }
+                    }
+                    @if (openGroup() === 'tools') {
+                    <a mat-list-item routerLink="/tools/outline" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>straighten</mat-icon>
+                        <span matListItemTitle>Tool Outline</span>
+                    </a>
                     }
                     @if (openGroup() === 'admin') {
                     <a mat-list-item routerLink="/admin/groups" routerLinkActive="active-link" (click)="closePanel()">

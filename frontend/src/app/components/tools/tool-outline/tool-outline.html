@@ -1,0 +1,332 @@
+<div class="tool-outline-page">
+    <h2 class="page-title">Tool Outline Generator</h2>
+    <p class="page-subtitle">Upload a photo of tools on an LED backlight plate to generate SVG/DXF outlines</p>
+
+    <!-- OpenCV Status -->
+    <div class="cv-status" [class.loading]="cvStatus() === 'loading'" [class.ready]="cvStatus() === 'ready'" [class.error]="cvStatus() === 'error'">
+        @if (cvStatus() === 'loading') {
+            <mat-spinner diameter="16"></mat-spinner>
+            <span>Loading OpenCV.js (~8 MB)...</span>
+        }
+        @if (cvStatus() === 'ready') {
+            <mat-icon class="status-icon ready">check_circle</mat-icon>
+            <span>OpenCV.js ready</span>
+        }
+        @if (cvStatus() === 'error') {
+            <mat-icon class="status-icon error">error</mat-icon>
+            <span>Failed to load OpenCV.js. Check your internet connection and reload.</span>
+        }
+    </div>
+
+    <!-- Upload Zone -->
+    <mat-card class="upload-card" (click)="fileInputRef.click()"
+              (dragover)="onDragOver($event)" (drop)="onDrop($event)"
+              [class.has-file]="selectedFile()">
+        <mat-card-content class="upload-content">
+            <input #fileInputRef type="file" accept="image/*" hidden (change)="onFileSelected($event)">
+            @if (!selectedFile()) {
+                <mat-icon class="upload-icon">cloud_upload</mat-icon>
+                <p><strong>Click to upload</strong> or drag and drop</p>
+                <p class="upload-hint">JPG, PNG, BMP, TIFF</p>
+            } @else {
+                <mat-icon class="upload-icon selected">image</mat-icon>
+                <p><strong>{{ fileName() }}</strong></p>
+                <p class="upload-hint">{{ fileSizeMB() }} MB</p>
+            }
+        </mat-card-content>
+    </mat-card>
+
+    <!-- Settings -->
+    <mat-accordion>
+        <mat-expansion-panel [expanded]="settingsExpanded()" (opened)="settingsExpanded.set(true)" (closed)="settingsExpanded.set(false)">
+            <mat-expansion-panel-header>
+                <mat-panel-title>Settings</mat-panel-title>
+                <mat-panel-description class="header-actions">
+                    <button mat-flat-button [disabled]="processDisabled()" (click)="processImage(); $event.stopPropagation()" (keydown.space)="$event.stopPropagation()">
+                        <mat-icon>play_arrow</mat-icon>
+                        Generate Outlines
+                    </button>
+                </mat-panel-description>
+            </mat-expansion-panel-header>
+
+            <div class="settings-section">
+                <div class="settings-section-label">Scale & Output</div>
+                <div class="controls-row">
+                    <mat-form-field appearance="outline" class="control-field">
+                        <mat-label>Scale Method</mat-label>
+                        <mat-select [value]="scaleMethod()" (selectionChange)="onScaleMethodChange($event.value)">
+                            <mat-option value="reference">Plate Size (mm)</mat-option>
+                            <mat-option value="dpi">DPI</mat-option>
+                            <mat-option value="manual">Manual (mm/px)</mat-option>
+                        </mat-select>
+                    </mat-form-field>
+
+                    <mat-form-field appearance="outline" class="control-field">
+                        <mat-label>{{ scaleValueLabel() }}</mat-label>
+                        <input matInput type="number" [ngModel]="scaleValue()" (ngModelChange)="scaleValue.set($event)" step="any" min="0.001">
+                    </mat-form-field>
+
+                    @if (showPlateHeight()) {
+                        <mat-form-field appearance="outline" class="control-field">
+                            <mat-label>Plate Height (mm)</mat-label>
+                            <input matInput type="number" [ngModel]="plateHeight()" (ngModelChange)="plateHeight.set($event)" step="any" min="1">
+                        </mat-form-field>
+                    }
+
+                    <mat-form-field appearance="outline" class="control-field">
+                        <mat-label>Smoothing</mat-label>
+                        <input matInput type="number" [ngModel]="smoothing()" (ngModelChange)="smoothing.set($event)" step="0.0001" min="0.0001" max="0.01">
+                    </mat-form-field>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <div class="settings-section-label">Image Processing</div>
+                <div class="sliders-grid">
+                    <div class="slider-group">
+                        <label>Blur Radius <span class="slider-val">{{ blurRadius() }}</span></label>
+                        <mat-slider min="1" max="31" step="2" discrete>
+                            <input matSliderThumb [ngModel]="blurRadius()" (ngModelChange)="blurRadius.set($event)">
+                        </mat-slider>
+                    </div>
+
+                    <div class="slider-group">
+                        <mat-form-field appearance="outline" class="slider-select">
+                            <mat-label>Threshold Method</mat-label>
+                            <mat-select [value]="threshMethod()" (selectionChange)="threshMethod.set($event.value)">
+                                <mat-option value="adaptive">Adaptive</mat-option>
+                                <mat-option value="otsu">Otsu</mat-option>
+                                <mat-option value="combined">Otsu + Adaptive</mat-option>
+                            </mat-select>
+                        </mat-form-field>
+                    </div>
+
+                    <div class="slider-group">
+                        <label>Threshold <span class="slider-val">{{ threshValue() === 0 ? 'Auto' : threshValue() }}</span></label>
+                        <mat-slider min="0" max="255" step="1" discrete>
+                            <input matSliderThumb [ngModel]="threshValue()" (ngModelChange)="threshValue.set($event)">
+                        </mat-slider>
+                    </div>
+
+                    <div class="slider-group">
+                        <label>Block Size <span class="slider-val">{{ blockSize() }}</span></label>
+                        <mat-slider min="11" max="201" step="2" discrete>
+                            <input matSliderThumb [ngModel]="blockSize()" (ngModelChange)="blockSize.set($event)">
+                        </mat-slider>
+                    </div>
+
+                    <div class="slider-group">
+                        <label>Sensitivity (C) <span class="slider-val">{{ adaptiveC() }}</span></label>
+                        <mat-slider min="1" max="40" step="1" discrete>
+                            <input matSliderThumb [ngModel]="adaptiveC()" (ngModelChange)="adaptiveC.set($event)">
+                        </mat-slider>
+                    </div>
+
+                    <div class="slider-group">
+                        <label>Morph Close <span class="slider-val">{{ morphClose() }}</span></label>
+                        <mat-slider min="0" max="10" step="1" discrete>
+                            <input matSliderThumb [ngModel]="morphClose()" (ngModelChange)="morphClose.set($event)">
+                        </mat-slider>
+                    </div>
+
+                    <div class="slider-group">
+                        <label>Morph Open <span class="slider-val">{{ morphOpen() }}</span></label>
+                        <mat-slider min="0" max="10" step="1" discrete>
+                            <input matSliderThumb [ngModel]="morphOpen()" (ngModelChange)="morphOpen.set($event)">
+                        </mat-slider>
+                    </div>
+
+                    <div class="slider-group">
+                        <label>Min Area <span class="slider-val">{{ (minAreaRatio() * 100).toFixed(2) }}%</span></label>
+                        <mat-slider min="0.0001" max="0.01" step="0.0001">
+                            <input matSliderThumb [ngModel]="minAreaRatio()" (ngModelChange)="minAreaRatio.set($event)">
+                        </mat-slider>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <div class="settings-section-label">Contour Adjustment</div>
+                <div class="controls-row">
+                    <mat-form-field appearance="outline" class="control-field">
+                        <mat-label>Margin (mm)</mat-label>
+                        <input matInput type="number" [ngModel]="marginMm()" (ngModelChange)="marginMm.set($event)" step="0.1" min="0">
+                    </mat-form-field>
+
+                    <mat-form-field appearance="outline" class="control-field">
+                        <mat-label>Ext Radius (mm)</mat-label>
+                        <input matInput type="number" [ngModel]="extRadiusMm()" (ngModelChange)="extRadiusMm.set($event)" step="0.1" min="0">
+                    </mat-form-field>
+
+                    <mat-form-field appearance="outline" class="control-field">
+                        <mat-label>Int Radius (mm)</mat-label>
+                        <input matInput type="number" [ngModel]="intRadiusMm()" (ngModelChange)="intRadiusMm.set($event)" step="0.1" min="0">
+                    </mat-form-field>
+
+                    <mat-slide-toggle [checked]="fillHoles()" (change)="fillHoles.set($event.checked)">
+                        Fill Reflections
+                    </mat-slide-toggle>
+
+                    <mat-slide-toggle [checked]="centerLinesEnabled()" (change)="centerLinesEnabled.set($event.checked)">
+                        Center Lines
+                    </mat-slide-toggle>
+                </div>
+            </div>
+
+        </mat-expansion-panel>
+    </mat-accordion>
+
+    <!-- Error Message -->
+    @if (errorMessage()) {
+        <mat-card class="error-card">
+            <mat-card-content>
+                <mat-icon>error</mat-icon>
+                <span>{{ errorMessage() }}</span>
+            </mat-card-content>
+        </mat-card>
+    }
+
+    <!-- Pipeline Steps -->
+    @if (showResults()) {
+        <mat-accordion>
+            <mat-expansion-panel [expanded]="stepsExpanded()" (opened)="stepsExpanded.set(true)" (closed)="stepsExpanded.set(false)">
+                <mat-expansion-panel-header>
+                    <mat-panel-title>Pipeline Steps</mat-panel-title>
+                </mat-expansion-panel-header>
+                <div class="steps-grid">
+                    @for (step of [
+                        { id: 'stepPlateDetect', label: '1. Plate Detection' },
+                        { id: 'stepPlateOutline', label: '2. Straightened + Crop' },
+                        { id: 'stepGray', label: '3. Grayscale' },
+                        { id: 'stepBlurred', label: '4. Blurred' },
+                        { id: 'stepThreshold', label: '5. Threshold' },
+                        { id: 'stepMorph', label: '6. After Morph' },
+                        { id: 'stepFillHoles', label: '7. After Fill Holes' },
+                        { id: 'stepContours', label: '8. Final Contours' }
+                    ]; track step.id) {
+                        <div class="step-card" [class.step-expanded]="expandedStepId() === step.id"
+                             (click)="toggleStepExpand(step.id)">
+                            <div class="step-label">{{ step.label }}
+                                <mat-icon class="step-expand-icon">{{ expandedStepId() === step.id ? 'close_fullscreen' : 'open_in_full' }}</mat-icon>
+                            </div>
+                            <canvas [id]="step.id"></canvas>
+                        </div>
+                    }
+                </div>
+            </mat-expansion-panel>
+        </mat-accordion>
+    }
+
+    <!-- Preview -->
+    <mat-accordion>
+        <mat-expansion-panel [expanded]="previewExpanded()" (opened)="previewExpanded.set(true)" (closed)="previewExpanded.set(false)"
+                             [class.hidden-panel]="!showResults()">
+            <mat-expansion-panel-header>
+                <mat-panel-title>Preview</mat-panel-title>
+            </mat-expansion-panel-header>
+            <div class="preview-toolbar">
+                <div class="toolbar-group">
+                    <button mat-icon-button matTooltip="Fit to window" (click)="zoomToFit()">
+                        <mat-icon>fit_screen</mat-icon>
+                    </button>
+                    <button mat-icon-button matTooltip="100% zoom" (click)="zoom100()">
+                        <mat-icon>crop_free</mat-icon>
+                    </button>
+                </div>
+                <mat-divider [vertical]="true"></mat-divider>
+                <div class="toolbar-group">
+                    <button mat-icon-button matTooltip="Zoom out" (click)="zoomOut()">
+                        <mat-icon>zoom_out</mat-icon>
+                    </button>
+                    <span class="zoom-level">{{ zoomDisplayText() }}</span>
+                    <button mat-icon-button matTooltip="Zoom in" (click)="zoomIn()">
+                        <mat-icon>zoom_in</mat-icon>
+                    </button>
+                </div>
+                <mat-divider [vertical]="true"></mat-divider>
+                <div class="toolbar-group">
+                    <button mat-icon-button matTooltip="Re-process with current settings" (click)="processImage()" [disabled]="processDisabled()">
+                        <mat-icon>refresh</mat-icon>
+                    </button>
+                </div>
+                <span class="toolbar-hint">Scroll to zoom · Click + drag to pan · Drag cyan points to edit centerlines</span>
+            </div>
+            <div class="preview-body" #previewBody
+                 (wheel)="onPreviewWheel($event)"
+                 (mousedown)="onPreviewMouseDown($event)"
+                 (mousemove)="onWindowMouseMove($event)"
+                 (mouseup)="onWindowMouseUp()">
+                <canvas #previewCanvas
+                        [style.transform]="previewTransform()"
+                        style="transform-origin: 0 0; position: absolute; top: 0; left: 0;"
+                        (mousedown)="onCanvasMouseDown($event)"
+                        (mousemove)="onCanvasMouseMove($event)"
+                        (mouseup)="onCanvasMouseUp($event)"
+                        (mouseleave)="onCanvasMouseLeave()"></canvas>
+            </div>
+        </mat-expansion-panel>
+    </mat-accordion>
+
+    <!-- Parts Output -->
+    @if (showResults()) {
+        <mat-accordion>
+            <mat-expansion-panel [expanded]="partsExpanded()" (opened)="partsExpanded.set(true)" (closed)="partsExpanded.set(false)">
+                <mat-expansion-panel-header>
+                    <mat-panel-title>Parts ({{ partSvgs().length - deletedParts().size }})</mat-panel-title>
+                </mat-expansion-panel-header>
+                <div class="parts-toolbar">
+                    <button mat-icon-button matTooltip="Download all SVG" (click)="downloadAllSvg()" [disabled]="!partSvgs().length">
+                        <mat-icon>download</mat-icon>
+                    </button>
+                    <span class="toolbar-label">All SVG</span>
+                    <mat-divider [vertical]="true"></mat-divider>
+                    <button mat-icon-button matTooltip="Download all DXF" (click)="downloadAllDxf()" [disabled]="!dxfParts().length">
+                        <mat-icon>download</mat-icon>
+                    </button>
+                    <span class="toolbar-label">All DXF</span>
+                </div>
+                <mat-card-content>
+                    @for (svg of partSvgs(); track $index) {
+                        <div class="part-card" [class.part-deleted]="deletedParts().has($index)">
+                            <div class="part-header">
+                                <input class="part-name-input" [value]="partNames()[$index]"
+                                       (input)="updatePartName($index, $any($event.target).value)"
+                                       [disabled]="deletedParts().has($index)">
+                                @if (partDimensions()[$index]; as dim) {
+                                    @if (dim.length > 0) {
+                                        <span class="part-dims">{{ dim.length | number:'1.1-1' }} × {{ dim.width | number:'1.1-1' }} mm</span>
+                                    }
+                                }
+                                <div class="part-btns">
+                                    @if (deletedParts().has($index)) {
+                                        <button mat-stroked-button (click)="restorePart($index)">Restore</button>
+                                    } @else {
+                                        <button mat-stroked-button (click)="downloadPartSvg($index)">SVG</button>
+                                        <button mat-stroked-button (click)="downloadPartDxf($index)">DXF</button>
+                                        <button mat-icon-button matTooltip="Delete part" (click)="deletePart($index)">
+                                            <mat-icon>delete</mat-icon>
+                                        </button>
+                                    }
+                                </div>
+                            </div>
+                            @if (!deletedParts().has($index)) {
+                                <div class="part-body" [innerHTML]="svg | svgSanitize"></div>
+                            }
+                        </div>
+                    }
+                </mat-card-content>
+            </mat-expansion-panel>
+        </mat-accordion>
+    }
+
+    <!-- Hidden canvas for image loading -->
+    <canvas #hiddenCanvas style="display:none;"></canvas>
+</div>
+
+<!-- Processing Overlay -->
+@if (isProcessing()) {
+    <div class="processing-overlay">
+        <mat-spinner diameter="48"></mat-spinner>
+        <p>{{ processingText() }}</p>
+    </div>
+}
