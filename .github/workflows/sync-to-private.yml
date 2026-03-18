@@ -25,6 +25,32 @@ jobs:
           # Checkout the private master and merge public master into it
           git checkout private/master
           git checkout -b private-master
-          git merge origin/master --no-edit -m "chore: sync public repo changes"
+
+          # Merge public into private, auto-resolving conflicts:
+          # - For version files, take the public side (private-version-bump will re-set them)
+          # - For workflows that only exist in public, accept the deletion from private
+          git merge origin/master --no-edit -m "chore: sync public repo changes" || {
+            echo "Merge conflicts detected, resolving automatically..."
+
+            # Version files: always take public (incoming) version
+            git checkout --theirs frontend/package.json 2>/dev/null && git add frontend/package.json || true
+            git checkout --theirs frontend/src/environments/version.ts 2>/dev/null && git add frontend/src/environments/version.ts || true
+
+            # Public-only workflows: if deleted in private, keep them deleted
+            for f in .github/workflows/sync-to-private.yml .github/workflows/require-version-label.yml .github/workflows/version-bump.yml; do
+              if git diff --name-only --diff-filter=U | grep -q "$f"; then
+                git rm -f "$f" 2>/dev/null || true
+              fi
+            done
+
+            # If any conflicts remain, fail so we can investigate
+            if git diff --name-only --diff-filter=U | grep -q .; then
+              echo "::error::Unresolved merge conflicts remain:"
+              git diff --name-only --diff-filter=U
+              exit 1
+            fi
+
+            git commit --no-edit
+          }
 
           git push private private-master:master
