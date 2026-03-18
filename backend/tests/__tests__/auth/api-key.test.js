@@ -375,4 +375,55 @@ describe('API Key Management', () => {
       expect(res.body.accessToken).toBeDefined();
     });
   });
+
+  describe('API key permission enforcement', () => {
+    it('should deny access to endpoints not in API key scope', async () => {
+      // Create user with all permissions
+      const user = await createTestUser({ googleID: 'g-enforce', email: 'enforce@test.com', displayName: 'Enforce' });
+      await assignAllPermissions(user.id);
+
+      // Create API key with only tasks.read permission
+      const token = generateToken(user);
+      const app = getApp();
+      const tasksReadPerm = await db.Permission.findOne({ where: { resource: 'tasks', action: 'read' } });
+
+      const createRes = await request(app)
+        .post(BASE_URL)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Read Only Key', permissionIds: [tasksReadPerm.id] });
+
+      // Exchange for API key token
+      const exchangeRes = await request(app).post(`${BASE_URL}/token`).send({ key: createRes.body.key });
+      const apiKeyToken = exchangeRes.body.accessToken;
+
+      // Should succeed: tasks.read
+      const readRes = await request(app)
+        .get('/api/planning/task/types')
+        .set('Authorization', `Bearer ${apiKeyToken}`);
+      expect(readRes.status).toBe(200);
+
+      // Should fail: tasks.write (not in API key scope)
+      const writeRes = await request(app)
+        .post('/api/planning/task')
+        .set('Authorization', `Bearer ${apiKeyToken}`)
+        .send({ name: 'Should fail', taskListID: 1 });
+      expect(writeRes.status).toBe(403);
+    });
+
+    it('should include apiKeyId in exchanged token', async () => {
+      const user = await createTestUser({ googleID: 'g-claim', email: 'claim@test.com', displayName: 'Claim' });
+      await assignAllPermissions(user.id);
+      const token = generateToken(user);
+      const app = getApp();
+
+      const createRes = await request(app)
+        .post(BASE_URL)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Claim Key' });
+
+      const exchangeRes = await request(app).post(`${BASE_URL}/token`).send({ key: createRes.body.key });
+      const decoded = require('jsonwebtoken').verify(exchangeRes.body.accessToken, process.env.JWT_SECRET);
+      expect(decoded.apiKeyId).toBe(createRes.body.id);
+    });
+  });
 });

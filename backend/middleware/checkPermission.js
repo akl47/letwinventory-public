@@ -33,11 +33,27 @@ async function loadEffectivePermissions(userId) {
   return permSet;
 }
 
+async function loadApiKeyPermissions(apiKeyId) {
+  const keyPerms = await db.ApiKeyPermission.findAll({
+    where: { apiKeyID: apiKeyId },
+    include: [{ model: db.Permission, as: 'permission', attributes: ['resource', 'action'] }]
+  });
+  return new Set(keyPerms.map(kp => `${kp.permission.resource}.${kp.permission.action}`));
+}
+
 function checkPermission(resource, action) {
   return async (req, res, next) => {
     try {
       if (!req._effectivePermissions) {
-        req._effectivePermissions = await loadEffectivePermissions(req.user.id);
+        let userPerms = await loadEffectivePermissions(req.user.id);
+
+        // If this token was issued via API key, intersect with key's scoped permissions
+        if (req.user.apiKeyId) {
+          const keyPerms = await loadApiKeyPermissions(req.user.apiKeyId);
+          userPerms = new Set([...userPerms].filter(p => keyPerms.has(p)));
+        }
+
+        req._effectivePermissions = userPerms;
       }
 
       if (req._effectivePermissions.has(`${resource}.${action}`)) {

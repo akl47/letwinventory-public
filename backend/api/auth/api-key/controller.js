@@ -157,7 +157,8 @@ exports.exchangeToken = async (req, res, next) => {
         id: user.id,
         email: user.email,
         displayName: user.displayName,
-        photoURL: user.photoURL
+        photoURL: user.photoURL,
+        apiKeyId: apiKey.id
       },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
