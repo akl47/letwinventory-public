@@ -14,5 +14,7 @@ jobs:
 
       - name: Push to private repo
         run: |
+          # Remove the credential helper that actions/checkout configures (uses GITHUB_TOKEN)
+          git config --unset-all http.https://github.com/.extraheader || true
           git remote add private https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/akl47/letwinventory-private.git
           git push private master --force
