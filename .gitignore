@@ -5,6 +5,8 @@
 /.env.production
 /.env.claude
 
+/.claude/plan
+
 # compiled output
 frontend/dist
 /tmp
