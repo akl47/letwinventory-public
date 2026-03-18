@@ -24,11 +24,17 @@ jobs:
     # Run if: manually triggered OR PR was merged (not just closed)
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     steps:
+      - name: Check PAT is configured
+        run: |
+          if [ -z "${{ secrets.PRIVATE_REPO_PAT }}" ]; then
+            echo "::error::PRIVATE_REPO_PAT secret is not set. Push will not trigger sync-to-private workflow."
+            echo "Create a fine-grained PAT with Contents: Read & Write and add it as a repo secret."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
-          # Use PAT to bypass branch protection. Create a PAT with 'repo' scope
-          # and add it as a repository secret named 'PAT_VERSION_BUMP'
-          token: ${{ secrets.PAT_VERSION_BUMP || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
