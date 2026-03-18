@@ -12,9 +12,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Push to private repo
+      - name: Merge public into private
         run: |
           # Remove the credential helper that actions/checkout configures (uses GITHUB_TOKEN)
           git config --unset-all http.https://github.com/.extraheader || true
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git remote add private https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/akl47/letwinventory-private.git
-          git push private master --force
+          git fetch private master
+
+          # Checkout the private master and merge public master into it
+          git checkout private/master
+          git checkout -b private-master
+          git merge origin/master --no-edit -m "chore: sync public repo changes"
+
+          git push private private-master:master
