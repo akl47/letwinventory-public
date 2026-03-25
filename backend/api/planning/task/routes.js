@@ -14,7 +14,6 @@ const sseAuth = (req, res, next) => {
     next();
 };
 router.get('/events', sseAuth, checkToken, checkPermission('tasks', 'read'), (req, res) => {
-    console.log(`[SSE] /events hit: userId=${req.user.id}, tabId=${req.query.tabId}, hasToken=${!!req.query.token}`);
     res.set({
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',

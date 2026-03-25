@@ -108,6 +108,11 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
       defaultValue: null
     },
+    linkURL: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      defaultValue: null
+    },
     activeFlag: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

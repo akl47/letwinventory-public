@@ -91,13 +91,13 @@
 }
 
 .harness-name-link {
-    color: var(--mat-sys-primary);
+    /* color: var(--mat-sys-primary); */
     cursor: pointer;
-    transition: color 0.2s;
+    /* transition: color 0.2s; */
 }
 
 .harness-name-link:hover {
-    text-decoration: underline;
+    text-decoration: none;
 }
 
 .part-number {
@@ -140,7 +140,7 @@
     color: rgba(255, 255, 255, 0.54);
 }
 
-.no-data > mat-icon {
+.no-data>mat-icon {
     font-size: 72px;
     width: 72px;
     height: 72px;

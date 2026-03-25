@@ -151,7 +151,7 @@
 
                     <!-- Reminder Label -->
                     @if (task().dueDate) {
-                    <span class="label clickable-label" [matMenuTriggerFor]="reminderMenu"
+                    <span class="label reminder-label clickable-label" [matMenuTriggerFor]="reminderMenu"
                         #reminderTrigger="matMenuTrigger">
                         <mat-icon class="left-icon">notifications</mat-icon>
                         {{ task().reminderMinutes ? formatReminder(task().reminderMinutes) : 'Reminder' }}
@@ -229,7 +229,34 @@
                         &nbsp;
                         <mat-icon class="dropdown-icon">arrow_drop_down</mat-icon>
                     </span>
+
+                    <!-- Link URL Label -->
+                    @if (!isEditingLink()) {
+                    <span class="label link-label clickable-label" (click)="toggleEditLink()">
+                        <mat-icon class="left-icon">link</mat-icon>
+                        @if (task().linkURL) {
+                        Link
+                        <mat-icon class="left-icon" style="margin-left: 2px;">open_in_new</mat-icon>
+                        } @else {
+                        Add Link
+                        }
+                    </span>
+                    }
                 </div>
+
+                <!-- Link URL Edit (inline, outside labels-container) -->
+                @if (isEditingLink()) {
+                <div class="link-edit-row">
+                    <mat-icon class="link-edit-icon">link</mat-icon>
+                    <input type="url" class="link-input" [(ngModel)]="linkDraft"
+                        placeholder="https://..." (keyup.enter)="saveLink()" />
+                    <button mat-raised-button color="primary" class="link-save-btn" (click)="saveLink()">Save</button>
+                    <button mat-button class="link-cancel-btn" (click)="cancelEditLink()">Cancel</button>
+                    @if (task().linkURL) {
+                    <button mat-button class="remove-btn" (click)="removeLink()">Remove</button>
+                    }
+                </div>
+                }
             </div>
 
             <!-- Subtasks Section -->

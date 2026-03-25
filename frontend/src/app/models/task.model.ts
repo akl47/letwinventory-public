@@ -23,6 +23,7 @@ export interface Task {
     updatedAt: Date;
     reminderMinutes?: number;
     checklist?: ChecklistItem[];
+    linkURL?: string;
     subtasks?: Task[];
     parent?: { id: number; name: string };
 }
