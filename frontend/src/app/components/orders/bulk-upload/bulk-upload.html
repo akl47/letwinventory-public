@@ -37,6 +37,34 @@
         </mat-card-content>
     </mat-card>
 
+    <mat-card class="upload-card">
+        <mat-card-header>
+            <mat-card-title>Bambu Lab Order Confirmation</mat-card-title>
+        </mat-card-header>
+        <mat-card-content>
+            <div class="file-input-row">
+                <input
+                    type="file"
+                    accept=".pdf"
+                    (change)="onPdfSelected($event)"
+                    #pdfInput
+                    style="display: none"
+                />
+                <button mat-stroked-button (click)="pdfInput.click()">
+                    <mat-icon>picture_as_pdf</mat-icon>
+                    Select PDF
+                </button>
+                @if (selectedPdfFile()) {
+                    <span class="file-name">{{ selectedPdfFile()!.name }}</span>
+                }
+                @if (isLoading() && importMode() === 'pdf') {
+                    <mat-spinner diameter="24"></mat-spinner>
+                }
+                <span class="file-hint">Upload a Bambu Lab order confirmation email saved as PDF</span>
+            </div>
+        </mat-card-content>
+    </mat-card>
+
     @if (error()) {
         <mat-card class="error-card">
             <mat-card-content>
@@ -132,7 +160,15 @@
                 }
 
                 <div class="items-section">
-                    <h3>Order Items</h3>
+                    <div class="items-header">
+                        <h3>Order Items</h3>
+                        @if (importMode() === 'pdf') {
+                            <button mat-stroked-button (click)="checkParts()" [disabled]="isLoading()">
+                                <mat-icon>search</mat-icon>
+                                Check Parts
+                            </button>
+                        }
+                    </div>
                     <div class="table-wrapper">
                         <table mat-table [dataSource]="editableItems()" class="items-table">
                             <ng-container matColumnDef="partName">
@@ -204,9 +240,11 @@
                             </ng-container>
 
                             <ng-container matColumnDef="status">
-                                <th mat-header-cell *matHeaderCellDef>Part Status</th>
+                                <th mat-header-cell *matHeaderCellDef>Status</th>
                                 <td mat-cell *matCellDef="let item">
-                                    <mat-chip [class.new-part]="item.isNew" [class.existing-part]="!item.isNew">
+                                    <mat-chip [class.new-part]="item.isNew && isPartItem(item)"
+                                              [class.existing-part]="!item.isNew && isPartItem(item)"
+                                              [class.non-part]="!isPartItem(item)">
                                         {{ getStatusLabel(item) }}
                                     </mat-chip>
                                 </td>

@@ -304,6 +304,13 @@ export class InventoryService {
         });
     }
 
+    bulkImportOrderPreview(items: BulkImportOrderItem[], orderData: BulkImportOrderData): Observable<BulkImportResult> {
+        return this.http.post<BulkImportResult>(`${this.apiUrl}/order/bulk-import?dryRun=true`, {
+            items,
+            orderData
+        });
+    }
+
     getStockLevels(): Observable<Record<number, number>> {
         return this.http.get<Record<number, number>>(`${this.apiUrl}/part/stock-levels`);
     }
