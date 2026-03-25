@@ -17,9 +17,12 @@ import { MatNativeDateModule } from '@angular/material/core';
 import { MatSelectModule } from '@angular/material/select';
 import { InventoryService, BulkImportResult, BulkImportOrderItem, BulkImportOrderData } from '../../../services/inventory.service';
 import { PartCategory } from '../../../models';
+import { detectAndParse } from '../../../utils/pdf-parsers/parser-registry';
+import { ParsedOrder } from '../../../utils/pdf-parsers/parser.interface';
 
 interface EditableOrderItem extends BulkImportOrderItem {
     index: number;
+    orderLineTypeID?: number;
 }
 
 @Component({
@@ -54,6 +57,10 @@ export class BulkUploadComponent {
     isLoading = signal(false);
     previewResult = signal<BulkImportResult | null>(null);
     error = signal<string | null>(null);
+
+    // PDF state
+    selectedPdfFile = signal<File | null>(null);
+    importMode = signal<'csv' | 'pdf' | null>(null);
 
     // Editable items list
     editableItems = signal<EditableOrderItem[]>([]);
@@ -91,13 +98,14 @@ export class BulkUploadComponent {
     });
 
     newPartsCount = computed(() => {
-        return this.editableItems().filter(item => item.isNew).length;
+        return this.editableItems().filter(item => item.isNew && this.isPartItem(item)).length;
     });
 
     existingPartsCount = computed(() => {
-        return this.editableItems().filter(item => !item.isNew).length;
+        return this.editableItems().filter(item => !item.isNew && this.isPartItem(item)).length;
     });
 
+    // CSV flow
     onFileSelected(event: Event): void {
         const input = event.target as HTMLInputElement;
         if (input.files && input.files.length > 0) {
@@ -106,6 +114,7 @@ export class BulkUploadComponent {
             this.error.set(null);
             this.previewResult.set(null);
             this.editableItems.set([]);
+            this.importMode.set('csv');
 
             const reader = new FileReader();
             reader.onload = () => {
@@ -159,9 +168,211 @@ export class BulkUploadComponent {
         });
     }
 
+    // PDF flow
+    async onPdfSelected(event: Event): Promise<void> {
+        const input = event.target as HTMLInputElement;
+        if (!input.files || input.files.length === 0) return;
+
+        const file = input.files[0];
+        this.selectedPdfFile.set(file);
+        this.error.set(null);
+        this.previewResult.set(null);
+        this.editableItems.set([]);
+        this.importMode.set('pdf');
+        this.isLoading.set(true);
+
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const text = await this.extractTextFromPdf(arrayBuffer);
+
+            const result = detectAndParse(text);
+            if (!result) {
+                this.error.set('Could not detect vendor from this PDF. Supported vendors: Bambu Lab');
+                this.isLoading.set(false);
+                return;
+            }
+
+            this.populateFromParsedOrder(result.order);
+            this.isLoading.set(false);
+        } catch (err: any) {
+            this.error.set('Failed to parse PDF: ' + (err.message || err));
+            this.isLoading.set(false);
+        }
+    }
+
+    private async extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<string> {
+        const pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'assets/pdf.worker.min.mjs';
+
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const lines: string[] = [];
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+
+            const lineMap = new Map<number, Array<{ x: number; text: string }>>();
+            const yThreshold = 3;
+
+            for (const item of content.items) {
+                if (!('str' in item) || !item.str.trim()) continue;
+                const textItem = item as any;
+                const y = Math.round(textItem.transform[5] / yThreshold) * yThreshold;
+                const x = textItem.transform[4];
+                if (!lineMap.has(y)) lineMap.set(y, []);
+                lineMap.get(y)!.push({ x, text: item.str.trim() });
+            }
+
+            const sortedYs = [...lineMap.keys()].sort((a, b) => b - a);
+            for (const y of sortedYs) {
+                const lineItems = lineMap.get(y)!.sort((a, b) => a.x - b.x);
+                let lineText = '';
+                for (let j = 0; j < lineItems.length; j++) {
+                    if (j > 0) {
+                        const gap = lineItems[j].x - lineItems[j - 1].x;
+                        lineText += gap > 50 ? '    ' : ' ';
+                    }
+                    lineText += lineItems[j].text;
+                }
+                lines.push(lineText);
+            }
+        }
+
+        return lines.join('\n');
+    }
+
+    checkParts(): void {
+        const partItems = this.editableItems().filter(i => !i.orderLineTypeID || i.orderLineTypeID === 1);
+        if (partItems.length === 0) return;
+
+        this.isLoading.set(true);
+        this.error.set(null);
+
+        const orderData: BulkImportOrderData = {
+            description: this.orderDescription() || undefined,
+            vendor: this.vendor() || undefined,
+        };
+
+        const importItems = partItems.map(item => ({
+            partName: item.partName,
+            name: item.partName,
+            description: item.description,
+            quantity: item.quantity,
+            qty: item.quantity,
+            price: item.price,
+            isNew: true,
+            partId: null,
+            vendor: item.vendor || this.vendor(),
+            sku: item.sku,
+            manufacturer: item.manufacturer,
+            manufacturerPN: item.manufacturerPN,
+            partCategoryID: item.partCategoryID || 1,
+            internalPart: false
+        }));
+
+        this.inventoryService.bulkImportOrderPreview(importItems as any, orderData).subscribe({
+            next: (result) => {
+                const currentItems = [...this.editableItems()];
+                for (const resultItem of result.orderItems) {
+                    const idx = currentItems.findIndex(
+                        i => i.partName === resultItem.partName && (!i.orderLineTypeID || i.orderLineTypeID === 1)
+                    );
+                    if (idx !== -1) {
+                        currentItems[idx] = {
+                            ...currentItems[idx],
+                            partId: resultItem.partId,
+                            isNew: resultItem.isNew,
+                            // Copy existing part's description if found
+                            ...(!resultItem.isNew && resultItem.description ? { description: resultItem.description } : {})
+                        };
+                    }
+                }
+                this.editableItems.set(currentItems);
+                this.isLoading.set(false);
+            },
+            error: (err) => {
+                this.error.set(err.error?.message || 'Failed to check parts');
+                this.isLoading.set(false);
+            }
+        });
+    }
+
+    private populateFromParsedOrder(order: ParsedOrder): void {
+        this.vendor.set(order.vendor);
+        this.orderDescription.set(`Order ${order.orderNumber}`);
+        if (order.placedDate) {
+            this.placedDate.set(new Date(order.placedDate + 'T00:00:00'));
+        }
+
+        const items: EditableOrderItem[] = [];
+        let index = 0;
+
+        for (const item of order.items) {
+            const discountNote = item.discount > 0
+                ? ` (discount: -$${item.discount.toFixed(2)})`
+                : '';
+            items.push({
+                index: index++,
+                partId: null,
+                partName: item.name,
+                description: item.description + discountNote,
+                quantity: item.quantity,
+                price: item.unitPrice,
+                lineTotal: item.lineTotal,
+                isNew: true,
+                partCategoryID: 1,
+                vendor: order.vendor,
+                sku: undefined,
+                manufacturer: order.vendor,
+                manufacturerPN: undefined,
+                orderLineTypeID: item.orderLineTypeID
+            });
+        }
+
+        if (order.shipping >= 0) {
+            items.push({
+                index: index++,
+                partId: null,
+                partName: 'Shipping',
+                description: '',
+                quantity: 1,
+                price: order.shipping,
+                lineTotal: order.shipping,
+                isNew: false,
+                partCategoryID: 1,
+                vendor: order.vendor,
+                sku: undefined,
+                manufacturer: undefined,
+                manufacturerPN: undefined,
+                orderLineTypeID: 2
+            });
+        }
+
+        if (order.tax > 0) {
+            items.push({
+                index: index++,
+                partId: null,
+                partName: 'Taxes',
+                description: order.taxDescription,
+                quantity: 1,
+                price: order.tax,
+                lineTotal: order.tax,
+                isNew: false,
+                partCategoryID: 1,
+                vendor: order.vendor,
+                sku: undefined,
+                manufacturer: undefined,
+                manufacturerPN: undefined,
+                orderLineTypeID: 3
+            });
+        }
+
+        this.editableItems.set(items);
+    }
+
     executeImport(): void {
-        const items = this.editableItems();
-        if (items.length === 0) {
+        const allItems = this.editableItems();
+        if (allItems.length === 0) {
             this.error.set('No items to import');
             return;
         }
@@ -175,11 +386,14 @@ export class BulkUploadComponent {
             trackingNumber: this.trackingNumber() || undefined,
             link: this.orderLink() || undefined,
             notes: this.notes() || undefined,
-            placedDate: this.placedDate()?.toISOString() || undefined
+            placedDate: this.placedDate()?.toISOString() || undefined,
+            ...(this.importMode() === 'pdf' ? { orderStatusID: 2 } : {})
         };
 
-        // Map items to the format expected by the API
-        const importItems = items.map(item => ({
+        const partItems = allItems.filter(i => !i.orderLineTypeID || i.orderLineTypeID === 1);
+        const nonPartItems = allItems.filter(i => i.orderLineTypeID && i.orderLineTypeID !== 1);
+
+        const importItems = partItems.map(item => ({
             partName: item.partName,
             name: item.partName,
             description: item.description,
@@ -198,9 +412,38 @@ export class BulkUploadComponent {
 
         this.inventoryService.bulkImportOrderWithEdits(importItems as any, orderData).subscribe({
             next: (result) => {
-                this.isLoading.set(false);
-                if (result.order?.id) {
+                if (result.order?.id && nonPartItems.length > 0) {
+                    let completed = 0;
+                    for (const item of nonPartItems) {
+                        this.inventoryService.createOrderItem({
+                            orderID: result.order.id,
+                            orderLineTypeID: item.orderLineTypeID,
+                            name: item.partName,
+                            quantity: 1,
+                            price: item.price,
+                            lineNumber: partItems.length + completed + 1
+                        } as any).subscribe({
+                            next: () => {
+                                completed++;
+                                if (completed === nonPartItems.length) {
+                                    this.isLoading.set(false);
+                                    this.router.navigate(['/orders', result.order!.id]);
+                                }
+                            },
+                            error: () => {
+                                completed++;
+                                if (completed === nonPartItems.length) {
+                                    this.isLoading.set(false);
+                                    this.router.navigate(['/orders', result.order!.id]);
+                                }
+                            }
+                        });
+                    }
+                } else if (result.order?.id) {
+                    this.isLoading.set(false);
                     this.router.navigate(['/orders', result.order.id]);
+                } else {
+                    this.isLoading.set(false);
                 }
             },
             error: (err) => {
@@ -212,6 +455,7 @@ export class BulkUploadComponent {
 
     reset(): void {
         this.selectedFile.set(null);
+        this.selectedPdfFile.set(null);
         this.csvContent.set('');
         this.previewResult.set(null);
         this.editableItems.set([]);
@@ -223,6 +467,7 @@ export class BulkUploadComponent {
         this.orderLink.set('');
         this.notes.set('');
         this.editingIndex.set(null);
+        this.importMode.set(null);
     }
 
     goBack(): void {
@@ -281,7 +526,13 @@ export class BulkUploadComponent {
     }
 
     getStatusLabel(item: EditableOrderItem): string {
+        if (item.orderLineTypeID === 2) return 'Shipping';
+        if (item.orderLineTypeID === 3) return 'Taxes';
         return item.isNew ? 'New Part' : 'Existing';
+    }
+
+    isPartItem(item: EditableOrderItem): boolean {
+        return !item.orderLineTypeID || item.orderLineTypeID === 1;
     }
 
     formatPrice(price: number): string {
