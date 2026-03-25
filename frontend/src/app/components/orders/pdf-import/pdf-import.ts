@@ -19,7 +19,6 @@ import { InventoryService, BulkImportOrderItem, BulkImportOrderData } from '../.
 import { PartCategory } from '../../../models';
 import { detectAndParse } from '../../../utils/pdf-parsers/parser-registry';
 import { ParsedOrder } from '../../../utils/pdf-parsers/parser.interface';
-import * as pdfjsLib from 'pdfjs-dist';
 
 interface EditableOrderItem extends BulkImportOrderItem {
     index: number;
@@ -141,6 +140,7 @@ export class PdfImportComponent {
     }
 
     private async extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<string> {
+        const pdfjsLib = await import('pdfjs-dist');
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'assets/pdf.worker.min.mjs';
 
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -156,7 +156,7 @@ export class PdfImportComponent {
 
             for (const item of content.items) {
                 if (!('str' in item) || !item.str.trim()) continue;
-                const textItem = item as pdfjsLib.TextItem;
+                const textItem = item as any;
                 const y = Math.round(textItem.transform[5] / yThreshold) * yThreshold;
                 const x = textItem.transform[4];
                 if (!lineMap.has(y)) lineMap.set(y, []);

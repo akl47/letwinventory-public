@@ -17,7 +17,6 @@ import { MatNativeDateModule } from '@angular/material/core';
 import { MatSelectModule } from '@angular/material/select';
 import { InventoryService, BulkImportResult, BulkImportOrderItem, BulkImportOrderData } from '../../../services/inventory.service';
 import { PartCategory } from '../../../models';
-import * as pdfjsLib from 'pdfjs-dist';
 import { detectAndParse } from '../../../utils/pdf-parsers/parser-registry';
 import { ParsedOrder } from '../../../utils/pdf-parsers/parser.interface';
 
@@ -202,6 +201,7 @@ export class BulkUploadComponent {
     }
 
     private async extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<string> {
+        const pdfjsLib = await import('pdfjs-dist');
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'assets/pdf.worker.min.mjs';
 
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -216,7 +216,7 @@ export class BulkUploadComponent {
 
             for (const item of content.items) {
                 if (!('str' in item) || !item.str.trim()) continue;
-                const textItem = item as pdfjsLib.TextItem;
+                const textItem = item as any;
                 const y = Math.round(textItem.transform[5] / yThreshold) * yThreshold;
                 const x = textItem.transform[4];
                 if (!lineMap.has(y)) lineMap.set(y, []);
