@@ -82,6 +82,8 @@
             <ng-container matColumnDef="image">
                 <th mat-header-cell *matHeaderCellDef></th>
                 <td mat-cell *matCellDef="let part">
+                    <a class="row-overlay" [href]="'/#/parts/' + part.id + '/edit'"
+                        (click)="$event.preventDefault()"></a>
                     @if (part.imageFile?.data) {
                     <div class="image-preview-trigger" #imgWrapper
                         (mouseenter)="imageTooltipStyle = {'top': imgWrapper.getBoundingClientRect().top - 8 + 'px', 'left': imgWrapper.getBoundingClientRect().left + 'px'}">
@@ -98,7 +100,7 @@
             <ng-container matColumnDef="name">
                 <th mat-header-cell *matHeaderCellDef mat-sort-header>Part Number</th>
                 <td mat-cell *matCellDef="let part">
-                    <strong>{{ part.name }}</strong>
+                    <span><strong>{{ part.name }}</strong></span>
                 </td>
             </ng-container>
 

@@ -8,7 +8,7 @@
         <div class="task-title" [class.completed]="displayDone()">{{ task().name }}</div>
     </div>
     @if (task().dueDate || task().timeEstimate || task().checklist?.length || task().subtasks?.length || task().parentTaskID || task().taskTypeEnum
-    === 'tracking' || task().taskTypeEnum === 'scheduled') {
+    === 'tracking' || task().taskTypeEnum === 'scheduled' || task().linkURL) {
     <div class="meta-info">
         @if (task().dueDate) {
         <span class="due-date-tag" [class.overdue]="isOverdue()" [class.due-today]="isDueToday()">
@@ -40,6 +40,12 @@
         }
         @if (task().taskTypeEnum === 'scheduled') {
         <mat-icon class="tracking-icon" matTooltip="Scheduled" style="color: #4bce97;">schedule</mat-icon>
+        }
+        @if (task().linkURL) {
+        <a class="link-btn" [href]="task().linkURL" target="_blank" rel="noopener"
+            (click)="$event.stopPropagation()" matTooltip="Open link">
+            <mat-icon class="icon-xs">link</mat-icon>
+        </a>
         }
     </div>
     }

@@ -54,6 +54,8 @@ export class TaskCardDialog implements OnInit, OnDestroy {
   titleDraft = signal('');
   showChecklist = signal(false);
   checklistDraft = signal('');
+  isEditingLink = signal(false);
+  linkDraft = signal('');
 
   checklist = computed(() => this.task().checklist || []);
   checklistProgress = computed(() => {
@@ -562,6 +564,36 @@ export class TaskCardDialog implements OnInit, OnDestroy {
           panelClass: 'trello-dialog-container',
         });
       }
+    });
+  }
+
+  toggleEditLink(): void {
+    this.linkDraft.set(this.task().linkURL || '');
+    this.isEditingLink.set(true);
+  }
+
+  saveLink(): void {
+    const url = this.linkDraft().trim() || null;
+    const task = this.task();
+    this.task.set({ ...task, linkURL: url as any });
+    this.isEditingLink.set(false);
+    this.taskService.updateTask(task.id, { linkURL: url } as any).subscribe({
+      next: () => this.taskService.triggerRefresh(),
+      error: (err) => console.error('Failed to update link', err)
+    });
+  }
+
+  cancelEditLink(): void {
+    this.isEditingLink.set(false);
+  }
+
+  removeLink(): void {
+    const task = this.task();
+    this.task.set({ ...task, linkURL: undefined });
+    this.isEditingLink.set(false);
+    this.taskService.updateTask(task.id, { linkURL: null } as any).subscribe({
+      next: () => this.taskService.triggerRefresh(),
+      error: (err) => console.error('Failed to remove link', err)
     });
   }
 

@@ -10,9 +10,6 @@ function addClient(userId, res, tabId) {
     const client = { res, tabId };
     clients.get(userId).add(client);
 
-    const totalClients = Array.from(clients.values()).reduce((sum, s) => sum + s.size, 0);
-    console.log(`[SSE] Client connected: userId=${userId}, tabId=${tabId}, totalClients=${totalClients}`);
-
     res.on('close', () => {
         const userClients = clients.get(userId);
         if (userClients) {
@@ -21,8 +18,6 @@ function addClient(userId, res, tabId) {
                 clients.delete(userId);
             }
         }
-        const remaining = Array.from(clients.values()).reduce((sum, s) => sum + s.size, 0);
-        console.log(`[SSE] Client disconnected: userId=${userId}, tabId=${tabId}, remainingClients=${remaining}`);
     });
 }
 
@@ -39,7 +34,6 @@ function broadcast(sourceTabId) {
             }
         }
     }
-    console.log(`[SSE] Broadcast: sourceTabId=${sourceTabId}, sent=${sent}, skipped=${skipped}`);
 }
 
 module.exports = { addClient, broadcast };

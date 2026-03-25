@@ -604,7 +604,9 @@
 .project-label,
 .date-label,
 .estimate-label,
-.subtask-add-label {
+.subtask-add-label,
+.reminder-label,
+.link-label {
     background-color: rgba(255, 255, 255, 0.05);
     color: #fff;
 }
@@ -1021,4 +1023,37 @@
 
 .flex-spacer {
     flex: 1;
+}
+
+/* Link URL Edit */
+.link-edit-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+}
+
+.link-edit-icon {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}
+
+.link-input {
+    flex: 1;
+    background-color: #22272b;
+    border: 2px solid #579dff;
+    border-radius: 4px;
+    color: #b6c2cf;
+    padding: 6px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+}
+
+.link-save-btn,
+.link-cancel-btn {
+    flex-shrink: 0;
 }

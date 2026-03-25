@@ -93,6 +93,34 @@ body {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
+/* Table row links — enables right-click "Open in new tab" on entire row */
+tr.clickable-row {
+    position: relative;
+}
+
+.row-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+}
+
+.row-link {
+    color: inherit;
+    text-decoration: none;
+    position: relative;
+    z-index: 2;
+}
+
+.row-link:hover {
+    text-decoration: underline;
+}
+
+/* Keep action buttons above the overlay */
+tr.clickable-row button {
+    position: relative;
+    z-index: 2;
+}
+
 /* Horizontal drop list placeholder for lists */
 .cdk-drop-list-dragging[cdkDropListOrientation="horizontal"] .cdk-drag-placeholder {
     min-width: 18rem;
