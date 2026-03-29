@@ -1,23 +1,53 @@
 import { Injectable, signal } from '@angular/core';
 import { HarnessData } from '../models/harness.model';
 
+interface HistoryStack {
+  past: HarnessData[];
+  future: HarnessData[];
+  transactionSnapshot: HarnessData | null;
+}
+
 @Injectable({ providedIn: 'root' })
 export class HarnessHistoryService {
-  private past: HarnessData[] = [];
-  private future: HarnessData[] = [];
+  private stacks = new Map<string, HistoryStack>();
+  private activeKey = 'new';
   private maxSize = 50;
-  private transactionSnapshot: HarnessData | null = null;
 
   canUndo = signal(false);
   canRedo = signal(false);
 
   /**
+   * Switch to a harness's history stack (creates if needed)
+   * Pass null for a new unsaved harness
+   */
+  setActiveHarness(id: number | null): void {
+    this.activeKey = id === null ? 'new' : String(id);
+    if (!this.stacks.has(this.activeKey)) {
+      this.stacks.set(this.activeKey, { past: [], future: [], transactionSnapshot: null });
+    }
+    this.updateSignals();
+  }
+
+  /**
+   * Move the 'new' stack to a numeric ID after first save
+   */
+  promoteNewToId(id: number): void {
+    const newStack = this.stacks.get('new');
+    if (newStack) {
+      this.stacks.delete('new');
+      this.stacks.set(String(id), newStack);
+      this.activeKey = String(id);
+    }
+  }
+
+  /**
    * Push state before a change (for instant operations like delete, rotate, etc.)
    */
   push(state: HarnessData): void {
-    this.past.push(structuredClone(state));
-    if (this.past.length > this.maxSize) this.past.shift();
-    this.future = []; // Clear redo stack on new change
+    const stack = this.getActiveStack();
+    stack.past.push(structuredClone(state));
+    if (stack.past.length > this.maxSize) stack.past.shift();
+    stack.future = []; // Clear redo stack on new change
     this.updateSignals();
   }
 
@@ -25,37 +55,39 @@ export class HarnessHistoryService {
    * For drag operations - snapshot at start of drag
    */
   beginTransaction(state: HarnessData): void {
-    this.transactionSnapshot = structuredClone(state);
+    this.getActiveStack().transactionSnapshot = structuredClone(state);
   }
 
   /**
    * Commit transaction if state actually changed
    */
   commitTransaction(newState: HarnessData): void {
-    if (this.transactionSnapshot &&
-        JSON.stringify(this.transactionSnapshot) !== JSON.stringify(newState)) {
-      this.past.push(this.transactionSnapshot);
-      if (this.past.length > this.maxSize) this.past.shift();
-      this.future = [];
+    const stack = this.getActiveStack();
+    if (stack.transactionSnapshot &&
+        JSON.stringify(stack.transactionSnapshot) !== JSON.stringify(newState)) {
+      stack.past.push(stack.transactionSnapshot);
+      if (stack.past.length > this.maxSize) stack.past.shift();
+      stack.future = [];
       this.updateSignals();
     }
-    this.transactionSnapshot = null;
+    stack.transactionSnapshot = null;
   }
 
   /**
    * Cancel transaction without committing
    */
   cancelTransaction(): void {
-    this.transactionSnapshot = null;
+    this.getActiveStack().transactionSnapshot = null;
   }
 
   /**
    * Undo: pop from past, push current to future, return previous state
    */
   undo(currentState: HarnessData): HarnessData | null {
-    if (this.past.length === 0) return null;
-    this.future.push(structuredClone(currentState));
-    const previous = this.past.pop()!;
+    const stack = this.getActiveStack();
+    if (stack.past.length === 0) return null;
+    stack.future.push(structuredClone(currentState));
+    const previous = stack.past.pop()!;
     this.updateSignals();
     return previous;
   }
@@ -64,25 +96,37 @@ export class HarnessHistoryService {
    * Redo: pop from future, push current to past, return next state
    */
   redo(currentState: HarnessData): HarnessData | null {
-    if (this.future.length === 0) return null;
-    this.past.push(structuredClone(currentState));
-    const next = this.future.pop()!;
+    const stack = this.getActiveStack();
+    if (stack.future.length === 0) return null;
+    stack.past.push(structuredClone(currentState));
+    const next = stack.future.pop()!;
     this.updateSignals();
     return next;
   }
 
   /**
-   * Clear all history (e.g., when loading a different harness)
+   * Clear the active harness's history
    */
   clear(): void {
-    this.past = [];
-    this.future = [];
-    this.transactionSnapshot = null;
+    const stack = this.getActiveStack();
+    stack.past = [];
+    stack.future = [];
+    stack.transactionSnapshot = null;
     this.updateSignals();
   }
 
+  private getActiveStack(): HistoryStack {
+    let stack = this.stacks.get(this.activeKey);
+    if (!stack) {
+      stack = { past: [], future: [], transactionSnapshot: null };
+      this.stacks.set(this.activeKey, stack);
+    }
+    return stack;
+  }
+
   private updateSignals(): void {
-    this.canUndo.set(this.past.length > 0);
-    this.canRedo.set(this.future.length > 0);
+    const stack = this.getActiveStack();
+    this.canUndo.set(stack.past.length > 0);
+    this.canRedo.set(stack.future.length > 0);
   }
 }

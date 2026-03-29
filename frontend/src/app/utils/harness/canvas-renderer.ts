@@ -92,7 +92,9 @@ export {
   hitTestWireLabelHandle,
   getPositionFromPoint,
   findWaypointInsertIndex,
-  getNearestPointOnWire
+  getNearestPointOnWire,
+  computeWirePath,
+  offsetOverlappingSegments
 } from './wire';
 export type { WireObstacle, WireRoutingContext } from './wire';
 

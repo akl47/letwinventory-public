@@ -122,23 +122,33 @@ export function drawBlock(
 
   ctx.save();
 
-  // Origin at first pin center (consistent across all non-cable block types)
-  ctx.translate(x, y - ROW_HEIGHT / 2);
+  // Origin at pin 0's wire connection point
+  ctx.translate(x, y);
   ctx.rotate((rotation * Math.PI) / 180);
 
+  // Determine body position based on pin side
+  const pinRadius = block.blockType === 'component' ? COMPONENT_PIN_RADIUS : PIN_CIRCLE_RADIUS;
+  const bodyLeft = block.pinSide === 'right'
+    ? -width  // Component: body to the left of pin 0
+    : 0;      // Connector: body starts at pin 0
+  const bodyRight = bodyLeft + width;
+
   if (flipped) {
-    const centerX = width / 2;
+    const centerX = (bodyLeft + bodyRight) / 2;
     const totalPinHeight = block.blockType === 'component'
       ? dims.groupHeights.reduce((a, b) => a + b, 0)
       : block.pins.length * ROW_HEIGHT;
-    const centerY = totalPinHeight / 2 - HEADER_HEIGHT - primaryImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
+    const pinCount = Math.max(totalPinHeight / ROW_HEIGHT, 1);
+    const bodyTop = -ROW_HEIGHT / 2 - HEADER_HEIGHT - primaryImageHeight - partNameRowHeight;
+    const bodyBottom = (pinCount - 1) * ROW_HEIGHT;
+    const centerY = (bodyTop + bodyBottom) / 2;
     ctx.translate(centerX, centerY);
     ctx.scale(-1, 1);
     ctx.translate(-centerX, -centerY);
   }
 
-  const left = 0;
-  const top = -HEADER_HEIGHT - primaryImageHeight - partNameRowHeight;
+  const left = bodyLeft;
+  const top = -ROW_HEIGHT / 2 - HEADER_HEIGHT - primaryImageHeight - partNameRowHeight;
 
   // Pinout diagram (left side)
   if (block.showPinoutDiagram && block.pinoutDiagramImage) {
@@ -203,8 +213,9 @@ function drawConnectorPinRows(
 
   const visiblePins = block.pins.filter(p => !p.hidden);
   visiblePins.forEach((pin, index) => {
-    const rowTop = top + HEADER_HEIGHT + primaryImageHeight + partNameRowHeight + (index * ROW_HEIGHT);
-    const rowCenter = rowTop + ROW_HEIGHT / 2;
+    // Pin i center at local y = index * ROW_HEIGHT (relative to pin 0 at origin)
+    const rowCenter = index * ROW_HEIGHT;
+    const rowTop = rowCenter - ROW_HEIGHT / 2;
 
     drawPinRow(
       ctx, left, rowTop, width,
@@ -218,13 +229,10 @@ function drawConnectorPinRows(
     const isPinHighlighted = highlightedPinIds?.has(pin.id) || false;
     const isMatingHighlighted = highlightedMatingPinIds?.has(pin.id) || false;
 
-    // Wire connection circle
-    const circleX = block.pinSide === 'right'
-      ? left + width + PIN_CIRCLE_RADIUS
-      : left - PIN_CIRCLE_RADIUS;
-    drawPinCircle(ctx, circleX, rowCenter, PIN_CIRCLE_RADIUS, block.headerColor, isPinHighlighted);
+    // Wire connection circle extends from body edge
+    drawPinCircle(ctx, -PIN_CIRCLE_RADIUS, rowCenter, PIN_CIRCLE_RADIUS, block.headerColor, isPinHighlighted);
 
-    // Mating point (opposite side)
+    // Mating point (on the far side of the body from pin 0)
     if (block.hasMatingPoints) {
       const matingX = block.pinSide === 'right'
         ? left - MATING_POINT_SIZE
@@ -248,8 +256,8 @@ function drawComponentPinRows(
   const groups = block.pinGroups || [];
   const pinMap = new Map(block.pins.map(p => [p.id, p]));
 
-  let currentY = top + HEADER_HEIGHT + primaryImageHeight + partNameRowHeight;
   let pinIndex = 0;
+  let currentPinOffset = 0;
   let visibleGroupIndex = 0;
 
   for (let gi = 0; gi < groups.length; gi++) {
@@ -257,12 +265,13 @@ function drawComponentPinRows(
     if (group.hidden) continue;
 
     // Group divider (not before first visible group)
-    if (visibleGroupIndex > 0) {
+    if (visibleGroupIndex > 0 && currentPinOffset > 0) {
+      const dividerY = currentPinOffset * ROW_HEIGHT - ROW_HEIGHT / 2;
       ctx.strokeStyle = '#CCCCCC';
       ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.moveTo(left, currentY);
-      ctx.lineTo(left + width, currentY);
+      ctx.moveTo(left, dividerY);
+      ctx.lineTo(left + width, dividerY);
       ctx.stroke();
       ctx.lineWidth = 1;
     }
@@ -273,8 +282,9 @@ function drawComponentPinRows(
       const pin = pinMap.get(pid);
       if (!pin) continue;
 
-      const rowTop = currentY + (rowIdx * ROW_HEIGHT);
-      const rowCenter = rowTop + ROW_HEIGHT / 2;
+      const globalPinIndex = currentPinOffset + rowIdx;
+      const rowCenter = globalPinIndex * ROW_HEIGHT; // Pin center at origin axis
+      const rowTop = rowCenter - ROW_HEIGHT / 2;
 
       drawPinRow(
         ctx, left, rowTop, width,
@@ -287,18 +297,17 @@ function drawComponentPinRows(
 
       const isPinHighlighted = highlightedPinIds?.has(pin.id) || false;
       if (group.matingConnector) {
-        // Mating square on right side (same side as connector pins)
+        // Mating square on far side of body
         const matingX = left + width;
         drawMatingPoint(ctx, matingX, rowCenter - MATING_POINT_SIZE / 2, MATING_POINT_SIZE, block.headerColor, isPinHighlighted);
       } else {
-        // Wire connection circle on right side
-        const circleX = left + width + COMPONENT_PIN_RADIUS;
-        drawPinCircle(ctx, circleX, rowCenter, COMPONENT_PIN_RADIUS, block.headerColor, isPinHighlighted);
+        // Wire connection circle extends from body edge
+        drawPinCircle(ctx, COMPONENT_PIN_RADIUS, rowCenter, COMPONENT_PIN_RADIUS, block.headerColor, isPinHighlighted);
       }
       rowIdx++;
     }
 
-    currentY += visiblePinIds.length * ROW_HEIGHT;
+    currentPinOffset += visiblePinIds.length;
     pinIndex += visiblePinIds.length;
     visibleGroupIndex++;
   }
@@ -324,18 +333,21 @@ function drawCableBlock(
 
   ctx.save();
 
-  // Cable origin: first wire position (same as connector/component origin with ROW_HEIGHT/2 offset applied in migration)
-  ctx.translate(x, y - ROW_HEIGHT / 2);
+  // Cable origin: wire 0's left endpoint
+  ctx.translate(x, y);
   ctx.rotate((rotation * Math.PI) / 180);
 
   if (flipped) {
-    const centerX = width / 2;
+    const bodyLeft = 0;
+    const bodyRight = width;
+    const centerX = (bodyLeft + bodyRight) / 2;
     const centerY = (wireCount - 1) * CABLE_WIRE_SPACING / 2;
     ctx.translate(centerX, centerY);
     ctx.scale(-1, 1);
     ctx.translate(-centerX, -centerY);
   }
 
+  // Body edge at wire 0 left endpoint
   const left = 0;
   const top = -HEADER_HEIGHT - partNameRowHeight - infoRowHeight - CABLE_WIRE_SPACING / 2;
 
@@ -400,17 +412,17 @@ function drawCableBlock(
     const pairedId = pin.pairedPinId;
     const isRightHighlighted = pairedId ? (highlightedPinIds?.has(pairedId) || false) : false;
 
-    // Wire line
+    // Wire line (inside body)
     ctx.beginPath();
     ctx.strokeStyle = wireColor;
     ctx.lineWidth = 3;
-    ctx.moveTo(left + CABLE_ENDPOINT_RADIUS, wireY);
-    ctx.lineTo(left + width - CABLE_ENDPOINT_RADIUS, wireY);
+    ctx.moveTo(left, wireY);
+    ctx.lineTo(left + width, wireY);
     ctx.stroke();
 
-    // Left endpoint
+    // Left endpoint at x=0 (origin axis)
     ctx.beginPath();
-    ctx.arc(left - CABLE_ENDPOINT_RADIUS, wireY, CABLE_ENDPOINT_RADIUS, 0, Math.PI * 2);
+    ctx.arc(-CABLE_ENDPOINT_RADIUS, wireY, CABLE_ENDPOINT_RADIUS, 0, Math.PI * 2);
     ctx.fillStyle = isLeftHighlighted ? '#ffeb3b' : wireColor;
     ctx.fill();
     ctx.strokeStyle = isLeftHighlighted ? '#ff9800' : '#ffffff';
@@ -418,8 +430,9 @@ function drawCableBlock(
     ctx.stroke();
 
     // Right endpoint
+    const rightEndpointX = width + CABLE_ENDPOINT_RADIUS;
     ctx.beginPath();
-    ctx.arc(left + width + CABLE_ENDPOINT_RADIUS, wireY, CABLE_ENDPOINT_RADIUS, 0, Math.PI * 2);
+    ctx.arc(rightEndpointX, wireY, CABLE_ENDPOINT_RADIUS, 0, Math.PI * 2);
     ctx.fillStyle = isRightHighlighted ? '#ffeb3b' : wireColor;
     ctx.fill();
     ctx.strokeStyle = isRightHighlighted ? '#ff9800' : '#ffffff';
@@ -567,25 +580,33 @@ export function getBlockPinPositions(block: HarnessBlock): BlockPinPosition[] {
   const positions: BlockPinPosition[] = [];
   const pinRadius = block.blockType === 'component' ? COMPONENT_PIN_RADIUS : PIN_CIRCLE_RADIUS;
 
+  // Body position depends on pin side
+  const bodyLeft = block.pinSide === 'right'
+    ? -width  // Component: body to the left of pin 0
+    : 0;      // Connector: body starts at pin 0
+  const bodyRight = bodyLeft + width;
+
   if (block.blockType === 'component' && block.pinGroups?.length) {
     // Component: iterate through visible pin groups, skip hidden pins
     const pinMap = new Map(block.pins.map(p => [p.id, p]));
-    let currentLocalY = primaryImageHeight + partNameRowHeight + HEADER_HEIGHT;
+    let currentPinOffset = 0;
     for (const group of block.pinGroups) {
       if (group.hidden) continue;
       const visiblePinIds = group.pinIds.filter(pid => !pinMap.get(pid)?.hidden);
       const isMatingGroup = !!group.matingConnector;
       for (let pi = 0; pi < visiblePinIds.length; pi++) {
         const pinId = visiblePinIds[pi];
-        const localPinY = currentLocalY + (pi * ROW_HEIGHT) + ROW_HEIGHT / 2;
+        const globalPinIndex = currentPinOffset + pi;
 
+        // Pin at local (0, globalPinIndex * ROW_HEIGHT) — origin axis
         let localX = isMatingGroup
-          ? width + MATING_POINT_SIZE / 2  // Right side for mating
-          : width + pinRadius;              // Right side for wire
-        let localY = localPinY - HEADER_HEIGHT - primaryImageHeight - partNameRowHeight;
+          ? bodyLeft - MATING_POINT_SIZE / 2  // Mating on far body side
+          : 0;                                 // Wire at origin
+        let localY = globalPinIndex * ROW_HEIGHT;
 
         if (flipped) {
-          localX = width - localX;
+          const centerX = (bodyLeft + bodyRight) / 2;
+          localX = 2 * centerX - localX;
         }
 
         const rad = (rotation * Math.PI) / 180;
@@ -597,27 +618,26 @@ export function getBlockPinPositions(block: HarnessBlock): BlockPinPosition[] {
         positions.push({
           pinId,
           x: ox + rotX,
-          y: (oy - ROW_HEIGHT / 2) + rotY,
+          y: oy + rotY,
           side: isMatingGroup ? 'mating' : 'right',
           groupId: group.id
         });
       }
-      currentLocalY += visiblePinIds.length * ROW_HEIGHT;
+      currentPinOffset += visiblePinIds.length;
     }
   } else {
     // Connector: wire and mating positions
     const visiblePins = block.pins.filter(p => !p.hidden);
     visiblePins.forEach((pin, index) => {
-      const rowCenter = index * ROW_HEIGHT + ROW_HEIGHT / 2;
+      // Pin i at local (0, index * ROW_HEIGHT)
+      const pinLocalY = index * ROW_HEIGHT;
 
-      // Wire connection point
-      let wireX = block.pinSide === 'right'
-        ? width + pinRadius
-        : -pinRadius;
-      let wireY = rowCenter;
+      // Wire connection point at x=0 (origin axis)
+      let wireX = 0;
+      let wireY = pinLocalY;
 
       if (flipped) {
-        const centerX = width / 2;
+        const centerX = (bodyLeft + bodyRight) / 2;
         wireX = 2 * centerX - wireX;
       }
 
@@ -630,19 +650,19 @@ export function getBlockPinPositions(block: HarnessBlock): BlockPinPosition[] {
       positions.push({
         pinId: pin.id,
         x: ox + rotWireX,
-        y: (oy - ROW_HEIGHT / 2) + rotWireY,
+        y: oy + rotWireY,
         side: block.pinSide === 'left' ? 'left' : 'right'
       });
 
-      // Mating point (opposite side)
+      // Mating point (on far side of body)
       if (block.hasMatingPoints) {
         let matingX = block.pinSide === 'right'
-          ? -MATING_POINT_SIZE / 2
-          : width + MATING_POINT_SIZE / 2;
-        let matingY = rowCenter;
+          ? bodyLeft - MATING_POINT_SIZE / 2
+          : bodyRight + MATING_POINT_SIZE / 2;
+        let matingY = pinLocalY;
 
         if (flipped) {
-          const centerX = width / 2;
+          const centerX = (bodyLeft + bodyRight) / 2;
           matingX = 2 * centerX - matingX;
         }
 
@@ -652,7 +672,7 @@ export function getBlockPinPositions(block: HarnessBlock): BlockPinPosition[] {
         positions.push({
           pinId: pin.id,
           x: ox + rotMatingX,
-          y: (oy - ROW_HEIGHT / 2) + rotMatingY,
+          y: oy + rotMatingY,
           side: 'mating'
         });
       }
@@ -675,13 +695,16 @@ function getCableBlockPinPositions(block: HarnessBlock): BlockPinPosition[] {
   block.pins.forEach((pin, index) => {
     const localWireY = index * CABLE_WIRE_SPACING;
 
-    let leftX = -CABLE_ENDPOINT_RADIUS;
+    // Left endpoint at x=0 (origin axis), right at 2*radius+width
+    let leftX = 0;
     let leftY = localWireY;
-    let rightX = width + CABLE_ENDPOINT_RADIUS;
+    let rightX = width;
     let rightY = localWireY;
 
     if (flipped) {
-      const centerX = width / 2;
+      const bodyLeft = CABLE_ENDPOINT_RADIUS;
+      const bodyRight = CABLE_ENDPOINT_RADIUS + width;
+      const centerX = (bodyLeft + bodyRight) / 2;
       leftX = 2 * centerX - leftX;
       rightX = 2 * centerX - rightX;
       [leftX, rightX] = [rightX, leftX];
@@ -700,7 +723,7 @@ function getCableBlockPinPositions(block: HarnessBlock): BlockPinPosition[] {
     positions.push({
       pinId: pin.id,
       x: ox + rotLeftX,
-      y: (oy - ROW_HEIGHT / 2) + rotLeftY,
+      y: oy + rotLeftY,
       side: 'left'
     });
 
@@ -709,7 +732,7 @@ function getCableBlockPinPositions(block: HarnessBlock): BlockPinPosition[] {
     positions.push({
       pinId: rightPinId,
       x: ox + rotRightX,
-      y: (oy - ROW_HEIGHT / 2) + rotRightY,
+      y: oy + rotRightY,
       side: 'right'
     });
   });
@@ -721,26 +744,31 @@ function getCableBlockPinPositions(block: HarnessBlock): BlockPinPosition[] {
 
 export function getBlockCentroidOffset(block: HarnessBlock): CentroidOffset {
   const dims = getBlockDimensions(block);
+  const pinRadius = block.blockType === 'component' ? COMPONENT_PIN_RADIUS : PIN_CIRCLE_RADIUS;
 
   if (block.blockType === 'cable') {
     const { width, height, hasPartName, hasInfoRow } = dims;
     const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
     const infoRowHeight = hasInfoRow ? ROW_HEIGHT : 0;
-    const wireCount = block.pins.length || 1;
 
-    const top = -HEADER_HEIGHT - partNameRowHeight - infoRowHeight - CABLE_WIRE_SPACING / 2;
-    const bottom = top + height;
+    const bodyTop = -HEADER_HEIGHT - partNameRowHeight - infoRowHeight - CABLE_WIRE_SPACING / 2;
+    const bodyBottom = bodyTop + height;
 
-    return { cx: width / 2, cy: (top + bottom) / 2 };
+    return { cx: width / 2, cy: (bodyTop + bodyBottom) / 2 };
   }
 
   const { width, height, hasPartName, primaryImageHeight } = dims;
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
-  const drawingTop = -HEADER_HEIGHT - primaryImageHeight - partNameRowHeight;
-  const drawingBottom = drawingTop + height;
-  const localCy = (drawingTop + drawingBottom) / 2;
+  const pinCount = getPinRowCount(block);
+  const bodyTop = -ROW_HEIGHT / 2 - HEADER_HEIGHT - primaryImageHeight - partNameRowHeight;
+  const bodyBottom = (pinCount - 1) * ROW_HEIGHT;
 
-  return { cx: width / 2, cy: localCy - ROW_HEIGHT / 2 };
+  if (block.pinSide === 'right') {
+    // Component: body to the left of pin 0
+    return { cx: -(pinRadius + width / 2), cy: (bodyTop + bodyBottom) / 2 };
+  }
+  // Connector: body to the right of pin 0
+  return { cx: pinRadius + width / 2, cy: (bodyTop + bodyBottom) / 2 };
 }
 
 // --- Hit Testing ---
@@ -764,17 +792,35 @@ export function hitTestBlock(
   const pinRadius = block.blockType === 'component' ? COMPONENT_PIN_RADIUS : PIN_CIRCLE_RADIUS;
   const pinCount = getPinRowCount(block);
 
-  const local = worldToLocal(testX, testY, {
-    ox, oy, rotation, flipped, width
-  });
+  // Transform to local space (origin at pin 0)
+  const rad = (-rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = testX - ox;
+  const dy = testY - oy;
 
-  const left = -pinRadius;
-  const right = width + pinRadius;
+  let localX = dx * cos - dy * sin;
+  let localY = dx * sin + dy * cos;
+
+  if (flipped) {
+    const bodyLeft = block.pinSide === 'right' ? -width : 0;
+    const bodyRight = bodyLeft + width;
+    const centerX = (bodyLeft + bodyRight) / 2;
+    localX = 2 * centerX - localX;
+  }
+
+  // Hit area covers pin circle to far side of body
+  const left = block.pinSide === 'right'
+    ? -(width + pinRadius)
+    : -pinRadius;
+  const right = block.pinSide === 'right'
+    ? pinRadius
+    : width + pinRadius;
   const top = -HEADER_HEIGHT - primaryImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
   const bottom = (pinCount - 1) * ROW_HEIGHT + ROW_HEIGHT / 2;
 
-  return local.x >= left && local.x <= right &&
-    local.y >= top && local.y <= bottom;
+  return localX >= left && localX <= right &&
+    localY >= top && localY <= bottom;
 }
 
 function hitTestCableBlock(
@@ -793,18 +839,20 @@ function hitTestCableBlock(
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
   const infoRowHeight = hasInfoRow ? ROW_HEIGHT : 0;
 
-  // Cable uses same origin convention now (y - ROW_HEIGHT/2 in draw)
+  // Origin at wire 0 left endpoint (ox, oy)
   const rad = (-rotation * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
   const dx = testX - ox;
-  const dy = testY - (oy - ROW_HEIGHT / 2);
+  const dy = testY - oy;
 
   let localX = dx * cos - dy * sin;
   let localY = dx * sin + dy * cos;
 
   if (flipped) {
-    const centerX = width / 2;
+    const bodyLeft = 0;
+    const bodyRight = width;
+    const centerX = (bodyLeft + bodyRight) / 2;
     localX = 2 * centerX - localX;
   }
 
@@ -854,20 +902,35 @@ export function hitTestBlockButton(
   const flipped = block.flipped || false;
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
 
-  const local = worldToLocal(testX, testY, {
-    ox, oy, rotation, flipped, width
-  });
+  const pinRadius = block.blockType === 'component' ? COMPONENT_PIN_RADIUS : PIN_CIRCLE_RADIUS;
 
-  const left = 0;
-  const top = -HEADER_HEIGHT - primaryImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
+  // Transform to local space (origin at pin 0)
+  const rad = (-rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = testX - ox;
+  const dy = testY - oy;
+
+  let localX = dx * cos - dy * sin;
+  let localY = dx * sin + dy * cos;
+
+  if (flipped) {
+    const bodyLeft = block.pinSide === 'right' ? -width : 0;
+    const bodyRight = bodyLeft + width;
+    const centerX = (bodyLeft + bodyRight) / 2;
+    localX = 2 * centerX - localX;
+  }
+
+  const left = block.pinSide === 'right' ? -width : 0;
+  const top = -ROW_HEIGHT / 2 - HEADER_HEIGHT - primaryImageHeight - partNameRowHeight;
 
   // Primary image button (top-right of header)
   if (block.primaryImage) {
     const btnX = left + width - EXPAND_BUTTON_SIZE - 2;
     const btnY = top + (HEADER_HEIGHT - EXPAND_BUTTON_SIZE) / 2;
 
-    if (local.x >= btnX && local.x <= btnX + EXPAND_BUTTON_SIZE &&
-      local.y >= btnY && local.y <= btnY + EXPAND_BUTTON_SIZE) {
+    if (localX >= btnX && localX <= btnX + EXPAND_BUTTON_SIZE &&
+      localY >= btnY && localY <= btnY + EXPAND_BUTTON_SIZE) {
       return 'primaryImage';
     }
   }
@@ -884,8 +947,8 @@ export function hitTestBlockButton(
       btnY = top + (HEADER_HEIGHT - EXPAND_BUTTON_SIZE) / 2;
     }
 
-    if (local.x >= btnX && local.x <= btnX + EXPAND_BUTTON_SIZE &&
-      local.y >= btnY && local.y <= btnY + EXPAND_BUTTON_SIZE) {
+    if (localX >= btnX && localX <= btnX + EXPAND_BUTTON_SIZE &&
+      localY >= btnY && localY <= btnY + EXPAND_BUTTON_SIZE) {
       return 'pinoutDiagram';
     }
   }
@@ -908,17 +971,20 @@ function hitTestCableBlockButton(
   const flipped = block.flipped || false;
   const wireCount = block.pins.length || 1;
 
+  // Origin at wire 0 left endpoint (ox, oy)
   const rad = (-rotation * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
   const dx = testX - ox;
-  const dy = testY - (oy - ROW_HEIGHT / 2);
+  const dy = testY - oy;
 
   let localX = dx * cos - dy * sin;
   let localY = dx * sin + dy * cos;
 
   if (flipped) {
-    const centerX = width / 2;
+    const bodyLeft = 0;
+    const bodyRight = width;
+    const centerX = (bodyLeft + bodyRight) / 2;
     localX = 2 * centerX - localX;
   }
 

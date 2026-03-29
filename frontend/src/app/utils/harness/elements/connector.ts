@@ -100,6 +100,8 @@ export function getConnectorDimensions(connector: HarnessConnector): ConnectorDi
 
 /**
  * Draw a connector element on canvas
+ * Origin = pin 0's wire connection point (the circle where wires attach)
+ * Body draws to the right of pin 0, header/images above
  */
 export function drawConnector(
   ctx: CanvasRenderingContext2D,
@@ -120,22 +122,27 @@ export function drawConnector(
 
   ctx.save();
 
-  // Origin is at the first pin center (so pins land on grid lines)
-  ctx.translate(x, y - ROW_HEIGHT / 2);
+  // Origin is at pin 0's wire connection point
+  ctx.translate(x, y);
   ctx.rotate((rotation * Math.PI) / 180);
 
-  // Flip around the center of the connector
+  // Flip around the center of the connector body
   if (flipped) {
-    const centerX = width / 2;
-    const centerY = height / 2 - HEADER_HEIGHT - connectorImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
+    const bodyLeft = 0;
+    const bodyRight = width;
+    const centerX = (bodyLeft + bodyRight) / 2;
+    const pinCount = connector.pins?.length || connector.pinCount || 1;
+    const bodyTop = -ROW_HEIGHT / 2 - HEADER_HEIGHT - connectorImageHeight - partNameRowHeight;
+    const bodyBottom = (pinCount - 1) * ROW_HEIGHT + ROW_HEIGHT / 2;
+    const centerY = (bodyTop + bodyBottom) / 2;
     ctx.translate(centerX, centerY);
     ctx.scale(-1, 1);
     ctx.translate(-centerX, -centerY);
   }
 
-  // Position relative to origin (top-left of first pin row)
+  // Body starts at origin (pin 0 is at body edge). Circle extends left.
   const left = 0;
-  const top = -HEADER_HEIGHT - connectorImageHeight - partNameRowHeight;
+  const top = -ROW_HEIGHT / 2 - HEADER_HEIGHT - connectorImageHeight - partNameRowHeight;
 
   // Draw pinout diagram to the left if shown
   if (connector.showPinoutDiagram && connector.pinoutDiagramImage) {
@@ -173,10 +180,11 @@ export function drawConnector(
   const pins = connector.pins?.length > 0 ? connector.pins : generateDefaultPins(pinCount);
 
   pins.forEach((pin, index) => {
-    const rowTop = top + HEADER_HEIGHT + connectorImageHeight + partNameRowHeight + (index * ROW_HEIGHT);
-    const rowCenter = rowTop + ROW_HEIGHT / 2;
+    // Pin rows start at y=0 (pin 0) relative to origin
+    const rowTop = index * ROW_HEIGHT - ROW_HEIGHT / 2;
+    const rowCenter = index * ROW_HEIGHT; // Pin i center = i * ROW_HEIGHT
 
-    // Draw pin row
+    // Draw pin row (inside the body)
     drawPinRow(
       ctx, left, rowTop, width,
       pin.number || String(index + 1),
@@ -190,11 +198,10 @@ export function drawConnector(
     const isPinHighlighted = highlightedPinIds?.has(pin.id) || false;
     const isMatingPinHighlighted = highlightedMatingPinIds?.has(pin.id) || false;
 
-    // Wire connection point (circle on left side) - for wire connections
-    const wireCircleX = left - PIN_CIRCLE_RADIUS;
-    drawPinCircle(ctx, wireCircleX, rowCenter, PIN_CIRCLE_RADIUS, headerColor, isPinHighlighted);
+    // Wire connection point (circle extends left from body edge)
+    drawPinCircle(ctx, -PIN_CIRCLE_RADIUS, rowCenter, PIN_CIRCLE_RADIUS, headerColor, isPinHighlighted);
 
-    // Mating connection point (square on right side) - for connector-to-connector mating
+    // Mating connection point (square on right side of body)
     const matingX = left + width;
     drawMatingPoint(ctx, matingX, rowCenter - MATING_POINT_SIZE / 2, MATING_POINT_SIZE, headerColor, isMatingPinHighlighted);
   });
@@ -208,7 +215,7 @@ export function drawConnector(
 
   if (connector.pinoutDiagramImage) {
     const pinoutBtnX = left - EXPAND_BUTTON_SIZE - 4;
-    const pinoutBtnY = top + (HEADER_HEIGHT - EXPAND_BUTTON_SIZE) / 2;  // Centered on header
+    const pinoutBtnY = top + (HEADER_HEIGHT - EXPAND_BUTTON_SIZE) / 2;
     drawExpandButton(ctx, pinoutBtnX, pinoutBtnY, !!connector.showPinoutDiagram, flipped);
   }
 
@@ -222,8 +229,8 @@ export interface ConnectorPinPosition extends PinPosition {
 
 /**
  * Get pin positions for a connector
- * @param connector The connector
- * @param side Which side to get positions for: 'wire' (default), 'mating', or 'both'
+ * Pin 0 is at local (0, 0), pin i at local (0, i * ROW_HEIGHT)
+ * Origin = (ox, oy) = pin 0's wire connection point
  */
 export function getConnectorPinPositions(
   connector: HarnessConnector,
@@ -240,17 +247,19 @@ export function getConnectorPinPositions(
 
   const positions: PinPosition[] = [];
 
-  // Local coordinates are relative to the drawing origin at (ox, oy - ROW_HEIGHT/2)
   pins.forEach((pin, index) => {
-    const rowCenter = index * ROW_HEIGHT + ROW_HEIGHT / 2;
+    // Pin i center in local space: (0, i * ROW_HEIGHT)
+    const pinLocalY = index * ROW_HEIGHT;
 
-    // Wire connection point (always left side)
+    // Wire connection point (at origin axis, x=0)
     if (side === 'wire' || side === 'both') {
-      let wireX = -PIN_CIRCLE_RADIUS;
-      let wireY = rowCenter;
+      let wireX = 0;
+      let wireY = pinLocalY;
 
       if (flipped) {
-        const centerX = width / 2;
+        const bodyLeft = 0;
+        const bodyRight = width;
+        const centerX = (bodyLeft + bodyRight) / 2;
         wireX = 2 * centerX - wireX;
       }
 
@@ -263,17 +272,19 @@ export function getConnectorPinPositions(
       positions.push({
         pinId: pin.id,
         x: ox + rotatedWireX,
-        y: (oy - ROW_HEIGHT / 2) + rotatedWireY
+        y: oy + rotatedWireY
       });
     }
 
-    // Mating connection point (always right side)
+    // Mating connection point (right side of body)
     if (side === 'mating' || side === 'both') {
       let matingX = width + MATING_POINT_SIZE / 2;
-      let matingY = rowCenter;
+      let matingY = pinLocalY;
 
       if (flipped) {
-        const centerX = width / 2;
+        const bodyLeft = 0;
+        const bodyRight = width;
+        const centerX = (bodyLeft + bodyRight) / 2;
         matingX = 2 * centerX - matingX;
       }
 
@@ -286,7 +297,7 @@ export function getConnectorPinPositions(
       positions.push({
         pinId: side === 'both' ? `${pin.id}:mating` : pin.id,
         x: ox + rotatedMatingX,
-        y: (oy - ROW_HEIGHT / 2) + rotatedMatingY
+        y: oy + rotatedMatingY
       });
     }
   });
@@ -309,19 +320,20 @@ export function getConnectorPinPositionsWithSide(connector: HarnessConnector): C
 
   const positions: ConnectorPinPosition[] = [];
 
-  // Local coordinates are relative to the drawing origin at (ox, oy - ROW_HEIGHT/2)
   pins.forEach((pin, index) => {
-    const rowCenter = index * ROW_HEIGHT + ROW_HEIGHT / 2;
+    const pinLocalY = index * ROW_HEIGHT;
     const rad = (rotation * Math.PI) / 180;
     const cos = Math.cos(rad);
     const sin = Math.sin(rad);
 
-    // Wire connection point
-    // Wire connection point (always left side)
-    let wireX = -PIN_CIRCLE_RADIUS;
-    let wireY = rowCenter;
+    // Wire connection point (x=0 in local space)
+    let wireX = 0;
+    let wireY = pinLocalY;
     if (flipped) {
-      wireX = width - wireX;
+      const bodyLeft = 0;
+      const bodyRight = width;
+      const centerX = (bodyLeft + bodyRight) / 2;
+      wireX = 2 * centerX - wireX;
     }
     const rotatedWireX = wireX * cos - wireY * sin;
     const rotatedWireY = wireX * sin + wireY * cos;
@@ -329,15 +341,18 @@ export function getConnectorPinPositionsWithSide(connector: HarnessConnector): C
     positions.push({
       pinId: pin.id,
       x: ox + rotatedWireX,
-      y: (oy - ROW_HEIGHT / 2) + rotatedWireY,
+      y: oy + rotatedWireY,
       side: 'wire'
     });
 
-    // Mating connection point (always right side)
+    // Mating connection point (right side of body)
     let matingX = width + MATING_POINT_SIZE / 2;
-    let matingY = rowCenter;
+    let matingY = pinLocalY;
     if (flipped) {
-      matingX = width - matingX;
+      const bodyLeft = 0;
+      const bodyRight = width;
+      const centerX = (bodyLeft + bodyRight) / 2;
+      matingX = 2 * centerX - matingX;
     }
     const rotatedMatingX = matingX * cos - matingY * sin;
     const rotatedMatingY = matingX * sin + matingY * cos;
@@ -345,7 +360,7 @@ export function getConnectorPinPositionsWithSide(connector: HarnessConnector): C
     positions.push({
       pinId: pin.id,
       x: ox + rotatedMatingX,
-      y: (oy - ROW_HEIGHT / 2) + rotatedMatingY,
+      y: oy + rotatedMatingY,
       side: 'mating'
     });
   });
@@ -354,24 +369,28 @@ export function getConnectorPinPositionsWithSide(connector: HarnessConnector): C
 }
 
 /**
- * Get the centroid offset from the connector's stored position
+ * Get the centroid offset from the connector's stored position (pin 0)
  */
 export function getConnectorCentroidOffset(connector: HarnessConnector): CentroidOffset {
   const { width, height, hasPartName, connectorImageHeight } = getConnectorDimensions(connector);
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
+  const pinCount = connector.pins?.length || connector.pinCount || 1;
 
-  const drawingTop = -HEADER_HEIGHT - connectorImageHeight - partNameRowHeight;
-  const drawingBottom = drawingTop + height;
+  // Body goes from (PIN_CIRCLE_RADIUS, top) to (PIN_CIRCLE_RADIUS + width, bottom)
+  // top = -HEADER_HEIGHT - connectorImageHeight - partNameRowHeight
+  // bottom = (pinCount - 1) * ROW_HEIGHT
+  const bodyTop = -HEADER_HEIGHT - connectorImageHeight - partNameRowHeight;
+  const bodyBottom = (pinCount - 1) * ROW_HEIGHT;
 
-  const localCy = (drawingTop + drawingBottom) / 2;
   const cx = width / 2;
-  const cy = localCy - ROW_HEIGHT / 2;
+  const cy = (bodyTop + bodyBottom) / 2;
 
   return { cx, cy };
 }
 
 /**
  * Hit test for connector body
+ * Origin = pin 0's wire connection point (ox, oy)
  */
 export function hitTestConnector(
   connector: HarnessConnector,
@@ -387,19 +406,31 @@ export function hitTestConnector(
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
   const pinCount = connector.pins?.length || connector.pinCount || 1;
 
-  // Transform to local space
-  const local = worldToLocal(testX, testY, {
-    ox, oy, rotation, flipped, width
-  });
+  // Transform to local space (origin at pin 0)
+  const rad = (-rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = testX - ox;
+  const dy = testY - oy;
 
-  // Hit area bounds relative to origin (first pin center)
+  let localX = dx * cos - dy * sin;
+  let localY = dx * sin + dy * cos;
+
+  if (flipped) {
+    const bodyLeft = 0;
+    const bodyRight = width;
+    const centerX = (bodyLeft + bodyRight) / 2;
+    localX = 2 * centerX - localX;
+  }
+
+  // Hit area: from pin circle to mating point, header to last pin
   const left = -PIN_CIRCLE_RADIUS;
-  const right = width + PIN_CIRCLE_RADIUS;
+  const right = PIN_CIRCLE_RADIUS + width + PIN_CIRCLE_RADIUS;
   const top = -HEADER_HEIGHT - connectorImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
   const bottom = (pinCount - 1) * ROW_HEIGHT + ROW_HEIGHT / 2;
 
-  return local.x >= left && local.x <= right &&
-    local.y >= top && local.y <= bottom;
+  return localX >= left && localX <= right &&
+    localY >= top && localY <= bottom;
 }
 
 // Hit test result with side information
@@ -458,23 +489,34 @@ export function hitTestConnectorButton(
   const flipped = connector.flipped || false;
 
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
-  const pinCount = connector.pins?.length || connector.pinCount || 1;
 
-  // Transform to local space
-  const local = worldToLocal(testX, testY, {
-    ox, oy, rotation, flipped, width
-  });
+  // Transform to local space (origin at pin 0)
+  const rad = (-rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = testX - ox;
+  const dy = testY - oy;
 
-  const left = 0;
-  const top = -HEADER_HEIGHT - connectorImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
+  let localX = dx * cos - dy * sin;
+  let localY = dx * sin + dy * cos;
+
+  if (flipped) {
+    const bodyLeft = 0;
+    const bodyRight = width;
+    const centerX = (bodyLeft + bodyRight) / 2;
+    localX = 2 * centerX - localX;
+  }
+
+  const left = PIN_CIRCLE_RADIUS;
+  const top = -HEADER_HEIGHT - connectorImageHeight - partNameRowHeight;
 
   // Check connector image button
   if (connector.connectorImage) {
     const connImgBtnX = left + width - EXPAND_BUTTON_SIZE - 2;
     const connImgBtnY = top + (HEADER_HEIGHT - EXPAND_BUTTON_SIZE) / 2;
 
-    if (local.x >= connImgBtnX && local.x <= connImgBtnX + EXPAND_BUTTON_SIZE &&
-      local.y >= connImgBtnY && local.y <= connImgBtnY + EXPAND_BUTTON_SIZE) {
+    if (localX >= connImgBtnX && localX <= connImgBtnX + EXPAND_BUTTON_SIZE &&
+      localY >= connImgBtnY && localY <= connImgBtnY + EXPAND_BUTTON_SIZE) {
       return 'connectorImage';
     }
   }
@@ -482,10 +524,10 @@ export function hitTestConnectorButton(
   // Check pinout diagram button
   if (connector.pinoutDiagramImage) {
     const pinoutBtnX = left - EXPAND_BUTTON_SIZE - 4;
-    const pinoutBtnY = top + (HEADER_HEIGHT - EXPAND_BUTTON_SIZE) / 2;  // Centered on header (matches drawing)
+    const pinoutBtnY = top + (HEADER_HEIGHT - EXPAND_BUTTON_SIZE) / 2;
 
-    if (local.x >= pinoutBtnX && local.x <= pinoutBtnX + EXPAND_BUTTON_SIZE &&
-      local.y >= pinoutBtnY && local.y <= pinoutBtnY + EXPAND_BUTTON_SIZE) {
+    if (localX >= pinoutBtnX && localX <= pinoutBtnX + EXPAND_BUTTON_SIZE &&
+      localY >= pinoutBtnY && localY <= pinoutBtnY + EXPAND_BUTTON_SIZE) {
       return 'pinout';
     }
   }

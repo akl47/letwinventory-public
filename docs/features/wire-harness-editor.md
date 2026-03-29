@@ -39,8 +39,36 @@ The wire harness editor is a canvas-based schematic design tool for cable assemb
 ### Canvas Architecture (Req #45)
 - HTML5 Canvas 2D rendering in `harness-canvas.ts`
 - Data model: `HarnessData` with connectors, cables, components, connections, subHarnesses
+- `schemaVersion` field tracks data format version (absent = v1, current = v2)
 - Mouse/touch interaction with hit testing
 - Tools: select, pan, wire, node edit, connector add, cable add, component add
+
+### Element Positioning & Rotation
+- Each element's `position` represents **pin 0's wire connection point** (the circle/endpoint where wires attach)
+  - Connector: pin 0 wire circle (left side)
+  - Component: pin 0 circle of first visible pin group (right side)
+  - Cable: wire 0 left endpoint circle
+- Rotation (0/90/180/270) always rotates around pin 0's connection point — pin 0 stays fixed on the grid
+- Other pins are spaced by `ROW_HEIGHT` (20px), so all pins remain grid-aligned at any rotation
+- Element body is drawn relative to pin 0: connectors draw body to the right/up, components to the left/up, cables to the right
+- Data migration (`migration.ts`) converts v1 positions (old abstract origin) to v2 (pin 0 anchor) on load
+
+### Wire Routing
+- Orthogonal routing via `calculateOrthogonalPathV2()` in `wire.ts`
+- Lead-out direction determined by pin position relative to element bounding box
+- Lead-out distance: 1 grid unit past the element edge (snapped to grid), consistent regardless of element size
+  - `computeLeadPoint()` checks source element bounds and all obstacles, ensuring the lead point is always outside and grid-aligned
+- **Wire-on-wire avoidance:** parallel wire segments sharing the same path are automatically offset by 1 grid unit (20px)
+  - Two-pass rendering: all wire paths computed first, then `offsetOverlappingSegments()` detects and spreads overlapping parallel segments
+  - Only applies to auto-routed paths; connections with manual waypoints are not adjusted
+  - Horizontal segments grouped by Y coordinate, vertical segments by X; overlapping ranges are spread across adjacent grid lines
+
+### Undo/Redo History
+- `HarnessHistoryService` maintains per-harness undo/redo stacks via `Map<string, HistoryStack>`
+- Each harness has independent past/future stacks (max 50 entries each)
+- History persists when switching between harnesses — switching calls `setActiveHarness(id)` instead of clearing
+- New unsaved harnesses use temporary `'new'` key; `promoteNewToId(id)` preserves history after first save
+- Transaction pattern for drag operations: `beginTransaction()` at drag start, `commitTransaction()` at end
 
 ### Release Workflow (Req #57, Req #58, Req #59)
 - States: `draft` → `review` → `released`
@@ -153,7 +181,7 @@ The wire harness editor is a canvas-based schematic design tool for cable assemb
 | partID | INTEGER | FK → Parts, nullable |
 | revision | STRING(10) | NOT NULL, default 'A' |
 | description | TEXT | nullable |
-| harnessData | JSONB | NOT NULL, default {} |
+| harnessData | JSONB | NOT NULL, default {} (includes `schemaVersion` field) |
 | thumbnailBase64 | TEXT | nullable |
 | releaseState | STRING(20) | NOT NULL, default 'draft' |
 | releasedAt | DATE | nullable |
@@ -248,13 +276,17 @@ Seeded: f-pin, m-pin, f-spade, m-spade, ring, fork, ferrule, soldered, bare
 ## Implementation Notes
 
 ### Key Files
-- `frontend/src/app/components/harness/harness-canvas/harness-canvas.ts` — Canvas rendering, mouse/touch interaction
+- `frontend/src/app/components/harness/harness-canvas/harness-canvas.ts` — Canvas rendering, mouse/touch interaction, two-pass wire rendering
 - `frontend/src/app/components/harness/harness-page/harness-page.ts` — Editor page orchestration
 - `frontend/src/app/components/harness/harness-property-panel/harness-property-panel.ts` — Property editing
 - `frontend/src/app/components/harness/harness-toolbar/harness-toolbar.ts` — Tool selection
-- `frontend/src/app/models/harness.model.ts` — HarnessData type definitions
+- `frontend/src/app/models/harness.model.ts` — HarnessData type definitions (includes `schemaVersion`)
+- `frontend/src/app/utils/harness/migration.ts` — v1→v2 data migration (position to pin 0 anchor)
+- `frontend/src/app/utils/harness/wire.ts` — Wire routing, `computeLeadPoint()`, `offsetOverlappingSegments()`
+- `frontend/src/app/utils/harness/transform-utils.ts` — Coordinate transforms (localToWorld, worldToLocal)
+- `frontend/src/app/utils/harness/endpoint-resolver.ts` — Resolves connection endpoints to canvas positions
 - `frontend/src/app/services/harness.service.ts` — API calls
-- `frontend/src/app/services/harness-history.service.ts` — Undo/redo (max 50)
+- `frontend/src/app/services/harness-history.service.ts` — Per-harness undo/redo stacks (max 50 per harness)
 - `backend/api/parts/harness/controller.js` — Harness CRUD + release workflow
 - `backend/models/parts/WireHarness.js` — WireHarness model
 - `backend/models/parts/HarnessRevisionHistory.js` — History model
@@ -263,13 +295,16 @@ Seeded: f-pin, m-pin, f-spade, m-spade, ring, fork, ferrule, soldered, bare
 - Revision letters: A→B→...→Z→AA→AB
 - `stripImageData()` removes base64 before save/export
 - `syncPartsFromDatabase()` re-fetches images on load
+- `migrateHarnessData()` upgrades v1 position data to v2 (pin 0 anchor) on load
 - `by-part` endpoints include nested `Part.imageFile` for fallback
-- Wire routing: `calculateOrthogonalPathV2()` with lead-out direction and obstacle avoidance
-- `WireDrawingManager` class (Phase 1 — created but not fully integrated)
+- Wire routing: `calculateOrthogonalPathV2()` with lead-out direction, obstacle avoidance, and parallel wire offsetting
+- Two-pass wire rendering: compute all paths, offset overlaps, then draw
+- `WireDrawingManager` class manages wire drawing interaction state
 - Endpoint resolution via `endpoint-resolver.ts`
 - `isViewOnly` computed from `!hasPermission('harness', 'write')`, extends `isLocked`
 - Sub-harness image toggle state is cache-only (not persisted)
 - Connector pin sides: always wire=left (circle), mating=right (square)
+- Element position = pin 0 connection point; body drawn relative to that anchor
 - Vertical wire labels always read top-to-bottom
 
 ### Edge Cases
@@ -279,3 +314,6 @@ Seeded: f-pin, m-pin, f-spade, m-spade, ring, fork, ferrule, soldered, bare
 - Released harness edits auto-create new revision with previousRevisionID link
 - Sub-harness cascade on submit-review
 - Images stripped from JSON means harnessData JSONB column stays lean
+- Data migration: v1 harnesses (no `schemaVersion`) have positions converted to pin 0 anchor on load, accounting for rotation/flip
+- Parallel wire offset: only auto-routed segments are offset; manual waypoint wires are left as-is
+- Per-harness history: `'new'` key supports one unsaved harness; promoted to numeric ID on first save

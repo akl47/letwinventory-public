@@ -104,7 +104,7 @@ describe('HarnessHistoryService', () => {
   });
 
   describe('clear', () => {
-    it('should reset all stacks and signals', () => {
+    it('should reset active stack and signals', () => {
       service.push(mockState(1));
       service.push(mockState(2));
       service.undo(mockState(3));
@@ -165,6 +165,115 @@ describe('HarnessHistoryService', () => {
       (state as any).connectors[0].id = 999;
       const result = service.undo(mockState(2));
       expect((result as any).connectors[0].id).toBe(1);
+    });
+  });
+
+  describe('per-harness stacks', () => {
+    it('should maintain independent history per harness', () => {
+      service.setActiveHarness(1);
+      service.push(mockState(10));
+      service.push(mockState(11));
+
+      service.setActiveHarness(2);
+      service.push(mockState(20));
+
+      // Harness 2 has 1 undo entry
+      expect(service.canUndo()).toBe(true);
+      const result2 = service.undo(mockState(21));
+      expect(result2).toEqual(mockState(20));
+      expect(service.canUndo()).toBe(false);
+
+      // Switch back to harness 1 — its history is intact
+      service.setActiveHarness(1);
+      expect(service.canUndo()).toBe(true);
+      const result1 = service.undo(mockState(12));
+      expect(result1).toEqual(mockState(11));
+    });
+
+    it('should preserve history when switching harnesses', () => {
+      service.setActiveHarness(1);
+      service.push(mockState(1));
+      service.push(mockState(2));
+
+      // Switch away and back
+      service.setActiveHarness(2);
+      service.setActiveHarness(1);
+
+      // History still present
+      expect(service.canUndo()).toBe(true);
+      const result = service.undo(mockState(3));
+      expect(result).toEqual(mockState(2));
+    });
+
+    it('should create empty stack for new harness', () => {
+      service.setActiveHarness(42);
+      expect(service.canUndo()).toBe(false);
+      expect(service.canRedo()).toBe(false);
+    });
+
+    it('should use "new" key when id is null', () => {
+      service.setActiveHarness(null);
+      service.push(mockState(1));
+      expect(service.canUndo()).toBe(true);
+
+      // Switch to a real harness — new harness history is separate
+      service.setActiveHarness(5);
+      expect(service.canUndo()).toBe(false);
+
+      // Switch back to new
+      service.setActiveHarness(null);
+      expect(service.canUndo()).toBe(true);
+    });
+
+    it('should clear only the active stack', () => {
+      service.setActiveHarness(1);
+      service.push(mockState(10));
+
+      service.setActiveHarness(2);
+      service.push(mockState(20));
+
+      service.clear(); // Clears harness 2 only
+
+      expect(service.canUndo()).toBe(false);
+
+      service.setActiveHarness(1);
+      expect(service.canUndo()).toBe(true);
+    });
+  });
+
+  describe('promoteNewToId', () => {
+    it('should move new stack to numeric ID', () => {
+      service.setActiveHarness(null);
+      service.push(mockState(1));
+      service.push(mockState(2));
+
+      service.promoteNewToId(42);
+
+      // Active key should now be '42'
+      expect(service.canUndo()).toBe(true);
+      const result = service.undo(mockState(3));
+      expect(result).toEqual(mockState(2));
+    });
+
+    it('should make old "new" key empty after promotion', () => {
+      service.setActiveHarness(null);
+      service.push(mockState(1));
+
+      service.promoteNewToId(42);
+
+      // Switch to 'new' — should be fresh
+      service.setActiveHarness(null);
+      expect(service.canUndo()).toBe(false);
+    });
+
+    it('should be no-op if no "new" stack exists', () => {
+      service.setActiveHarness(1);
+      service.push(mockState(10));
+
+      service.promoteNewToId(2); // No 'new' stack to promote
+      // Should not affect harness 1
+      service.setActiveHarness(1);
+      expect(service.canUndo()).toBe(true);
     });
   });
 });

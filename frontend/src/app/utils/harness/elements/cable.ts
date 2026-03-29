@@ -41,6 +41,8 @@ export function getCableDimensions(cable: HarnessCable): CableDimensions {
 
 /**
  * Draw a cable element on canvas
+ * Origin = wire 0's left endpoint circle center
+ * Body draws to the right of wire 0 left endpoint
  */
 export function drawCable(
   ctx: CanvasRenderingContext2D,
@@ -62,20 +64,22 @@ export function drawCable(
 
   ctx.save();
 
-  // Origin is at first wire position
+  // Origin is at wire 0's left endpoint
   ctx.translate(x, y);
   ctx.rotate((rotation * Math.PI) / 180);
 
-  // Flip around center if flipped
+  // Flip around center of body
   if (flipped) {
-    const centerX = width / 2;
+    const bodyLeft = 0;
+    const bodyRight = width;
+    const centerX = (bodyLeft + bodyRight) / 2;
     const centerY = (wireCount - 1) * CABLE_WIRE_SPACING / 2;
     ctx.translate(centerX, centerY);
     ctx.scale(-1, 1);
     ctx.translate(-centerX, -centerY);
   }
 
-  // Local coordinates (relative to origin at first wire)
+  // Body edge at wire 0 left endpoint (x=0). Left circle extends left.
   const left = 0;
   const top = -HEADER_HEIGHT - partNameRowHeight - infoRowHeight - CABLE_WIRE_SPACING / 2;
 
@@ -140,23 +144,24 @@ export function drawCable(
   // Draw wires
   const wires = cable.wires || [];
   wires.forEach((wire, index) => {
+    // Wire i center at local y = index * CABLE_WIRE_SPACING
     const wireY = index * CABLE_WIRE_SPACING;
     const wireColor = getWireColorHex(wire.colorCode || wire.color || 'BK');
     const isWireHighlighted = highlightedWireIds?.has(wire.id) || false;
     const highlightLeft = isWireHighlighted && (highlightedSide === 'left' || highlightedSide === 'both');
     const highlightRight = isWireHighlighted && (highlightedSide === 'right' || highlightedSide === 'both');
 
-    // Draw wire line
+    // Draw wire line (inside body)
     ctx.beginPath();
     ctx.strokeStyle = wireColor;
     ctx.lineWidth = 3;
-    ctx.moveTo(left + CABLE_ENDPOINT_RADIUS, wireY);
-    ctx.lineTo(left + width - CABLE_ENDPOINT_RADIUS, wireY);
+    ctx.moveTo(left, wireY);
+    ctx.lineTo(left + width, wireY);
     ctx.stroke();
 
-    // Draw left endpoint circle
+    // Draw left endpoint circle (at origin axis x=0)
     ctx.beginPath();
-    ctx.arc(left - CABLE_ENDPOINT_RADIUS, wireY, CABLE_ENDPOINT_RADIUS, 0, Math.PI * 2);
+    ctx.arc(-CABLE_ENDPOINT_RADIUS, wireY, CABLE_ENDPOINT_RADIUS, 0, Math.PI * 2);
     ctx.fillStyle = highlightLeft ? '#ffeb3b' : wireColor;
     ctx.fill();
     ctx.strokeStyle = highlightLeft ? '#ff9800' : '#ffffff';
@@ -164,8 +169,9 @@ export function drawCable(
     ctx.stroke();
 
     // Draw right endpoint circle
+    const rightEndpointX = width + CABLE_ENDPOINT_RADIUS;
     ctx.beginPath();
-    ctx.arc(left + width + CABLE_ENDPOINT_RADIUS, wireY, CABLE_ENDPOINT_RADIUS, 0, Math.PI * 2);
+    ctx.arc(rightEndpointX, wireY, CABLE_ENDPOINT_RADIUS, 0, Math.PI * 2);
     ctx.fillStyle = highlightRight ? '#ffeb3b' : wireColor;
     ctx.fill();
     ctx.strokeStyle = highlightRight ? '#ff9800' : '#ffffff';
@@ -205,7 +211,7 @@ export function drawCable(
       ctx.fillStyle = COLORS.text;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const labelX = flipped ? -(width / 2) : (width / 2);
+      const labelX = flipped ? -(left + width / 2) : (left + width / 2);
       ctx.fillText(truncatedLabel, labelX, wireY);
       ctx.restore();
     }
@@ -260,6 +266,9 @@ export function drawCable(
 
 /**
  * Get wire endpoint positions for a cable
+ * Wire 0 left endpoint at local (0, 0), wire i at local (0, i * CABLE_WIRE_SPACING)
+ * Right endpoints at local (2*CABLE_ENDPOINT_RADIUS + width, i * CABLE_WIRE_SPACING)
+ * Origin = (ox, oy) = wire 0's left endpoint
  */
 export function getCableWirePositions(cable: HarnessCable): CableWirePosition[] {
   const { width } = getCableDimensions(cable);
@@ -275,14 +284,17 @@ export function getCableWirePositions(cable: HarnessCable): CableWirePosition[] 
   wires.forEach((wire, index) => {
     const localWireY = index * CABLE_WIRE_SPACING;
 
-    let leftX = -CABLE_ENDPOINT_RADIUS;
+    // Left endpoint at x=0, right at x = 2*radius + width
+    let leftX = 0;
     let leftY = localWireY;
-    let rightX = width + CABLE_ENDPOINT_RADIUS;
+    let rightX = width;
     let rightY = localWireY;
 
-    // Apply flip around center
+    // Apply flip around body center
     if (flipped) {
-      const centerX = width / 2;
+      const bodyLeft = CABLE_ENDPOINT_RADIUS;
+      const bodyRight = CABLE_ENDPOINT_RADIUS + width;
+      const centerX = (bodyLeft + bodyRight) / 2;
       leftX = 2 * centerX - leftX;
       rightX = 2 * centerX - rightX;
       [leftX, rightX] = [rightX, leftX];
@@ -319,24 +331,27 @@ export function getCableWirePositions(cable: HarnessCable): CableWirePosition[] 
 }
 
 /**
- * Get the centroid offset from the cable's position origin
+ * Get the centroid offset from the cable's position (wire 0 left endpoint)
  */
 export function getCableCentroidOffset(cable: HarnessCable): CentroidOffset {
   const { width, height, hasPartName, hasInfoRow } = getCableDimensions(cable);
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
   const infoRowHeight = hasInfoRow ? ROW_HEIGHT : 0;
+  const wireCount = cable.wires?.length || cable.wireCount || 1;
 
-  const top = -HEADER_HEIGHT - partNameRowHeight - infoRowHeight - CABLE_WIRE_SPACING / 2;
-  const bottom = top + height;
+  // Body: left = CABLE_ENDPOINT_RADIUS, top = -HEADER - extras - spacing/2
+  const bodyTop = -HEADER_HEIGHT - partNameRowHeight - infoRowHeight - CABLE_WIRE_SPACING / 2;
+  const bodyBottom = bodyTop + height;
 
   const cx = width / 2;
-  const cy = (top + bottom) / 2;
+  const cy = (bodyTop + bodyBottom) / 2;
 
   return { cx, cy };
 }
 
 /**
  * Hit test for cable body
+ * Origin = wire 0's left endpoint (ox, oy)
  */
 export function hitTestCable(
   cable: HarnessCable,
@@ -353,7 +368,7 @@ export function hitTestCable(
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
   const infoRowHeight = hasInfoRow ? ROW_HEIGHT : 0;
 
-  // Transform to local space
+  // Transform to local space (origin at wire 0 left endpoint)
   const rad = (-rotation * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
@@ -364,7 +379,9 @@ export function hitTestCable(
   let localY = dx * sin + dy * cos;
 
   if (flipped) {
-    const centerX = width / 2;
+    const bodyLeft = 0;
+    const bodyRight = width;
+    const centerX = (bodyLeft + bodyRight) / 2;
     localX = 2 * centerX - localX;
   }
 
@@ -395,7 +412,7 @@ export function hitTestCableButton(
   const flipped = cable.flipped || false;
   const wireCount = cable.wires?.length || cable.wireCount || 1;
 
-  // Transform to local space
+  // Transform to local space (origin at wire 0 left endpoint)
   const rad = (-rotation * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
@@ -406,11 +423,13 @@ export function hitTestCableButton(
   let localY = dx * sin + dy * cos;
 
   if (flipped) {
-    const centerX = width / 2;
+    const bodyLeft = 0;
+    const bodyRight = width;
+    const centerX = (bodyLeft + bodyRight) / 2;
     localX = 2 * centerX - localX;
   }
 
-  // Button position (bottom center)
+  // Button position (bottom center of body)
   const btnY = (wireCount - 1) * CABLE_WIRE_SPACING + CABLE_WIRE_SPACING / 2 + 4;
   const btnX = width / 2 - EXPAND_BUTTON_SIZE / 2;
 

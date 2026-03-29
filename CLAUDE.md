@@ -331,3 +331,39 @@ Each session should:
   - `frontend/src/app/components/common/nav/nav.component.html` — added Tools rail item + flyout section
   - `frontend/src/app/components/common/nav/nav.component.spec.ts` — added Tools navigation group tests
   - `frontend/src/app/app.routes.ts` — added /tools/outline route with authGuard only
+
+### 2026-03-29
+- **Wire Harness Canvas Refactor** — three core changes to fix canvas behavior
+- **Per-harness undo/redo history:**
+  - `HarnessHistoryService` refactored from single global stack to `Map<string, HistoryStack>` keyed by harness ID
+  - `setActiveHarness(id)` switches stacks (preserves history across navigation), `promoteNewToId(id)` transfers 'new' stack after first save
+  - `harness-page.ts` uses `setActiveHarness()` instead of `clear()` when switching harnesses
+- **Pin 0 rotation anchor (position = pin 0's wire connection point):**
+  - Connectors: position = pin 0 wire circle (left side), body draws to the right
+  - Components: position = pin 0 circle (right side), body draws to the left
+  - Cables: position = wire 0 left endpoint, body draws to the right
+  - All pins at local `(0, i * ROW_HEIGHT)` — grid-aligned at any rotation
+  - `schemaVersion` field added to `HarnessData`; `migration.ts` converts v1 positions to v2 on load
+  - Updated: connector.ts, component.ts, cable.ts, block-renderer.ts, endpoint-resolver.ts, harness-canvas.ts (getWireObstacles)
+- **Wire routing fixes:**
+  - `computeLeadPoint()` replaces `getLeadPoint()` + `adjustWaypointForObstacles()` — snaps to element edge + 1 grid unit, consistent results
+  - `computeWirePath()` exported for two-pass rendering
+  - `offsetOverlappingSegments()` detects parallel wire segments on same grid line with overlapping ranges, spreads them by gridSize
+  - Canvas uses two-pass rendering: compute all paths → offset overlaps → draw with adjusted paths
+  - Manual waypoint paths excluded from overlap detection
+- **Files created:**
+  - `frontend/src/app/utils/harness/migration.ts` — v1→v2 position data migration
+- **Files modified:**
+  - `frontend/src/app/services/harness-history.service.ts` — Map-based per-harness stacks
+  - `frontend/src/app/services/harness-history.service.spec.ts` — per-harness + promoteNewToId tests
+  - `frontend/src/app/components/harness/harness-page/harness-page.ts` — setActiveHarness, promoteNewToId, migration on load
+  - `frontend/src/app/utils/harness/elements/connector.ts` — pin 0 anchor origin
+  - `frontend/src/app/utils/harness/elements/component.ts` — pin 0 anchor origin (right side)
+  - `frontend/src/app/utils/harness/elements/cable.ts` — wire 0 left endpoint anchor
+  - `frontend/src/app/utils/harness/elements/block-renderer.ts` — unified block renderer updated for new origins
+  - `frontend/src/app/utils/harness/endpoint-resolver.ts` — updated bounds calculations
+  - `frontend/src/app/utils/harness/wire.ts` — computeLeadPoint, computeWirePath, offsetOverlappingSegments, precomputedPath param
+  - `frontend/src/app/utils/harness/canvas-renderer.ts` — re-exports for new functions
+  - `frontend/src/app/components/harness/harness-canvas/harness-canvas.ts` — two-pass wire rendering, updated obstacle bounds
+  - `frontend/src/app/models/harness.model.ts` — schemaVersion field
+  - `docs/features/wire-harness-editor.md` — updated spec with new behavior
