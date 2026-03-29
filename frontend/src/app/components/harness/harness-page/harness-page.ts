@@ -39,6 +39,7 @@ import {
   getBlockCentroidOffset,
   rotateAroundCentroid
 } from '../../../utils/harness/canvas-renderer';
+import { migrateHarnessData } from '../../../utils/harness/migration';
 
 @Component({
   selector: 'app-harness-page',
@@ -126,6 +127,10 @@ export class HarnessPage implements OnInit, OnDestroy {
       next: (result) => {
         this.isSaving.set(false);
         if (result) {
+          // Promote history stack from 'new' to the real ID on first save
+          if (!this.route.snapshot.params['id']) {
+            this.historyService.promoteNewToId(result.id);
+          }
           this.currentHarnessId.set(result.id);
           // Update local data with generated part number if it was created
           if (result.partNumber) {
@@ -173,7 +178,11 @@ export class HarnessPage implements OnInit, OnDestroy {
   }
 
   private handleKeydown(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+    // Don't intercept keyboard shortcuts when a dialog is open or form control is focused
+    const target = e.target as HTMLElement;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement || target.isContentEditable ||
+        target.closest('mat-dialog-container, [role="dialog"]')) {
       return;
     }
 
@@ -269,47 +278,43 @@ export class HarnessPage implements OnInit, OnDestroy {
     // Push to history before making changes
     this.historyService.push(data);
 
-    // Use block for unified rotation if available
+    // Pin-0-anchor rotation: position stays fixed (it IS pin 0), only rotation changes
     if (selection?.block) {
       const block = selection.block;
       const currentRotation = block.rotation || 0;
       let newRotation = (currentRotation + delta) % 360;
       if (newRotation < 0) newRotation += 360;
 
-      const centroidOffset = getBlockCentroidOffset(block);
-      const currentPos = block.position;
-      const newPos = rotateAroundCentroid(currentPos, centroidOffset, currentRotation, newRotation);
+      // Position doesn't change — pin 0 stays where it is
+      const pos = block.position;
 
       if (block.blockType === 'connector') {
         const updatedConnector = {
           ...data.connectors.find(c => c.id === block.id)!,
-          rotation: newRotation as 0 | 90 | 180 | 270,
-          position: newPos
+          rotation: newRotation as 0 | 90 | 180 | 270
         };
         this.updateHarnessConnectors(
           data.connectors.map(c => c.id === block.id ? updatedConnector : c)
         );
-        this.currentSelection.set({ type: 'connector', connector: updatedConnector, block: { ...block, rotation: newRotation, position: newPos } });
+        this.currentSelection.set({ type: 'connector', connector: updatedConnector, block: { ...block, rotation: newRotation } });
       } else if (block.blockType === 'cable') {
         const updatedCable = {
           ...data.cables.find(c => c.id === block.id)!,
-          rotation: newRotation as 0 | 90 | 180 | 270,
-          position: newPos
+          rotation: newRotation as 0 | 90 | 180 | 270
         };
         this.updateHarnessCables(
           data.cables.map(c => c.id === block.id ? updatedCable : c)
         );
-        this.currentSelection.set({ type: 'cable', cable: updatedCable, block: { ...block, rotation: newRotation, position: newPos } });
+        this.currentSelection.set({ type: 'cable', cable: updatedCable, block: { ...block, rotation: newRotation } });
       } else if (block.blockType === 'component') {
         const updatedComponent = {
           ...((data.components || []).find(c => c.id === block.id))!,
-          rotation: newRotation as 0 | 90 | 180 | 270,
-          position: newPos
+          rotation: newRotation as 0 | 90 | 180 | 270
         };
         this.updateHarnessComponents(
           (data.components || []).map(c => c.id === block.id ? updatedComponent : c)
         );
-        this.currentSelection.set({ type: 'component', component: updatedComponent, block: { ...block, rotation: newRotation, position: newPos } });
+        this.currentSelection.set({ type: 'component', component: updatedComponent, block: { ...block, rotation: newRotation } });
       }
     }
     // Legacy fallback for selections without block (e.g. sub-harness edit mode)
@@ -319,9 +324,7 @@ export class HarnessPage implements OnInit, OnDestroy {
       const currentRotation = connector.rotation || 0;
       let newRotation = (currentRotation + delta) % 360;
       if (newRotation < 0) newRotation += 360;
-      const centroidOffset = getConnectorCentroidOffset(connector);
-      const newPos = rotateAroundCentroid(connector.position || { x: 100, y: 100 }, centroidOffset, currentRotation, newRotation);
-      const updatedConnector = { ...connector, rotation: newRotation as 0 | 90 | 180 | 270, position: newPos };
+      const updatedConnector = { ...connector, rotation: newRotation as 0 | 90 | 180 | 270 };
       this.updateHarnessConnectors(data.connectors.map(c => c.id === updatedConnector.id ? updatedConnector : c));
       this.currentSelection.set({ type: 'connector', connector: updatedConnector });
     } else if (selection?.cable) {
@@ -330,9 +333,7 @@ export class HarnessPage implements OnInit, OnDestroy {
       const currentRotation = cable.rotation || 0;
       let newRotation = (currentRotation + delta) % 360;
       if (newRotation < 0) newRotation += 360;
-      const centroidOffset = getCableCentroidOffset(cable);
-      const newPos = rotateAroundCentroid(cable.position || { x: 100, y: 100 }, centroidOffset, currentRotation, newRotation);
-      const updatedCable = { ...cable, rotation: newRotation as 0 | 90 | 180 | 270, position: newPos };
+      const updatedCable = { ...cable, rotation: newRotation as 0 | 90 | 180 | 270 };
       this.updateHarnessCables(data.cables.map(c => c.id === updatedCable.id ? updatedCable : c));
       this.currentSelection.set({ type: 'cable', cable: updatedCable });
     } else if (selection?.component) {
@@ -341,9 +342,7 @@ export class HarnessPage implements OnInit, OnDestroy {
       const currentRotation = component.rotation || 0;
       let newRotation = (currentRotation + delta) % 360;
       if (newRotation < 0) newRotation += 360;
-      const centroidOffset = getComponentCentroidOffset(component);
-      const newPos = rotateAroundCentroid(component.position || { x: 100, y: 100 }, centroidOffset, currentRotation, newRotation);
-      const updatedComponent = { ...component, rotation: newRotation as 0 | 90 | 180 | 270, position: newPos };
+      const updatedComponent = { ...component, rotation: newRotation as 0 | 90 | 180 | 270 };
       this.updateHarnessComponents((data.components || []).map(c => c.id === updatedComponent.id ? updatedComponent : c));
       this.currentSelection.set({ type: 'component', component: updatedComponent });
     }
@@ -475,8 +474,8 @@ export class HarnessPage implements OnInit, OnDestroy {
   }
 
   createNewHarness(part?: Part) {
-    // Clear undo/redo history when creating a new harness
-    this.historyService.clear();
+    // Switch to a fresh history stack for the new harness
+    this.historyService.setActiveHarness(null);
 
     const name = part?.name || 'New Harness';
     const data = createEmptyHarnessData(name);
@@ -491,15 +490,15 @@ export class HarnessPage implements OnInit, OnDestroy {
   }
 
   loadHarness(id: number) {
-    // Clear undo/redo history when loading a different harness
-    this.historyService.clear();
+    // Switch to this harness's history stack (preserves history across navigation)
+    this.historyService.setActiveHarness(id);
 
     this.harnessService.getHarnessById(id).subscribe({
       next: (harness) => {
         this.currentHarnessId.set(harness.id);
         this.linkedPartId.set(harness.partID);
         // Merge top-level WireHarness fields into harnessData
-        const data: HarnessData = {
+        const rawData: HarnessData = {
           ...harness.harnessData,
           name: harness.name,
           partNumber: harness.partNumber || '',
@@ -507,6 +506,9 @@ export class HarnessPage implements OnInit, OnDestroy {
           description: harness.description || '',
           releaseState: harness.releaseState || 'draft'
         };
+
+        // Migrate from v1 position format to v2 (pin 0 anchor) if needed
+        const data = migrateHarnessData(rawData);
 
         // Sync all linked parts (connectors, cables, components) from database
         this.syncPartsFromDatabase(data);
@@ -960,6 +962,10 @@ export class HarnessPage implements OnInit, OnDestroy {
       next: (result) => {
         this.isSaving.set(false);
         if (result) {
+          // Promote history stack from 'new' to the real ID on first save
+          if (!this.route.snapshot.params['id']) {
+            this.historyService.promoteNewToId(result.id);
+          }
           this.currentHarnessId.set(result.id);
           // Update local data with generated part number if it was created
           if (result.partNumber) {

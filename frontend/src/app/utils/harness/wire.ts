@@ -221,19 +221,44 @@ export function adjustWaypointForObstacles(
 }
 
 /**
- * Get the lead-out offset point for a given direction
+ * Compute lead point: one grid unit past the element edge in the lead-out direction.
+ * Ensures the point is outside the source element bounds and all obstacles, snapped to grid.
  */
-function getLeadPoint(
-  position: { x: number; y: number },
+function computeLeadPoint(
+  pin: { x: number; y: number },
   direction: 'left' | 'right' | 'up' | 'down',
+  elementBounds: WireObstacle | null | undefined,
+  obstacles: WireObstacle[],
   gridSize: number
 ): { x: number; y: number } {
+  const snap = (v: number) => Math.round(v / gridSize) * gridSize;
+
+  // Start one grid unit from pin in lead direction
+  let candidate = { x: pin.x, y: pin.y };
   switch (direction) {
-    case 'right': return { x: position.x + gridSize, y: position.y };
-    case 'left':  return { x: position.x - gridSize, y: position.y };
-    case 'down':  return { x: position.x, y: position.y + gridSize };
-    case 'up':    return { x: position.x, y: position.y - gridSize };
+    case 'right': candidate.x += gridSize; break;
+    case 'left':  candidate.x -= gridSize; break;
+    case 'down':  candidate.y += gridSize; break;
+    case 'up':    candidate.y -= gridSize; break;
   }
+
+  // If inside own element bounds, snap to edge + gridSize
+  const allBounds = elementBounds ? [elementBounds, ...obstacles] : obstacles;
+  for (const obs of allBounds) {
+    if (candidate.x > obs.minX && candidate.x < obs.maxX &&
+        candidate.y > obs.minY && candidate.y < obs.maxY) {
+      switch (direction) {
+        case 'right': candidate.x = snap(obs.maxX) + gridSize; break;
+        case 'left':  candidate.x = snap(obs.minX) - gridSize; break;
+        case 'down':  candidate.y = snap(obs.maxY) + gridSize; break;
+        case 'up':    candidate.y = snap(obs.minY) - gridSize; break;
+      }
+    }
+  }
+
+  candidate.x = snap(candidate.x);
+  candidate.y = snap(candidate.y);
+  return candidate;
 }
 
 /**
@@ -241,6 +266,145 @@ function getLeadPoint(
  */
 function isHorizontalDir(dir: 'left' | 'right' | 'up' | 'down'): boolean {
   return dir === 'left' || dir === 'right';
+}
+
+/**
+ * Check if a horizontal segment (from (x1,y) to (x2,y)) passes through any obstacle
+ */
+function doesHorizontalSegmentHitObstacle(
+  y: number, x1: number, x2: number, obstacles: WireObstacle[]
+): WireObstacle | null {
+  const minX = Math.min(x1, x2);
+  const maxX = Math.max(x1, x2);
+  for (const obs of obstacles) {
+    if (y > obs.minY && y < obs.maxY && maxX > obs.minX && minX < obs.maxX) {
+      return obs;
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if a vertical segment (from (x,y1) to (x,y2)) passes through any obstacle
+ */
+function doesVerticalSegmentHitObstacle(
+  x: number, y1: number, y2: number, obstacles: WireObstacle[]
+): WireObstacle | null {
+  const minY = Math.min(y1, y2);
+  const maxY = Math.max(y1, y2);
+  for (const obs of obstacles) {
+    if (x > obs.minX && x < obs.maxX && maxY > obs.minY && minY < obs.maxY) {
+      return obs;
+    }
+  }
+  return null;
+}
+
+/**
+ * Route orthogonally from start to end, avoiding obstacles.
+ * Adds intermediate waypoints to the path array.
+ */
+function routeAroundObstacles(
+  path: { x: number; y: number }[],
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  fromHoriz: boolean,
+  toHoriz: boolean,
+  obstacles: WireObstacle[],
+  gridSize: number
+): void {
+  const snap = (v: number) => Math.round(v / gridSize) * gridSize;
+  const dx = Math.abs(end.x - start.x);
+  const dy = Math.abs(end.y - start.y);
+
+  if (dx < 1 && dy < 1) return;
+
+  // Try the simple L-shaped route first (one corner)
+  // Option A: go horizontal first, then vertical
+  const cornerA = { x: end.x, y: start.y };
+  // Option B: go vertical first, then horizontal
+  const cornerB = { x: start.x, y: end.y };
+
+  // For mixed lead directions, prefer the natural corner
+  if (fromHoriz && !toHoriz) {
+    // Natural: horizontal then vertical (corner A)
+    if (!doesHorizontalSegmentHitObstacle(start.y, start.x, end.x, obstacles) &&
+        !doesVerticalSegmentHitObstacle(end.x, start.y, end.y, obstacles)) {
+      path.push(cornerA);
+      return;
+    }
+    // Try the other L
+    if (!doesVerticalSegmentHitObstacle(start.x, start.y, end.y, obstacles) &&
+        !doesHorizontalSegmentHitObstacle(end.y, start.x, end.x, obstacles)) {
+      path.push(cornerB);
+      return;
+    }
+  } else if (!fromHoriz && toHoriz) {
+    // Natural: vertical then horizontal (corner B)
+    if (!doesVerticalSegmentHitObstacle(start.x, start.y, end.y, obstacles) &&
+        !doesHorizontalSegmentHitObstacle(end.y, start.x, end.x, obstacles)) {
+      path.push(cornerB);
+      return;
+    }
+    // Try the other L
+    if (!doesHorizontalSegmentHitObstacle(start.y, start.x, end.x, obstacles) &&
+        !doesVerticalSegmentHitObstacle(end.x, start.y, end.y, obstacles)) {
+      path.push(cornerA);
+      return;
+    }
+  } else {
+    // Both same direction — need a U-shape (3 segments)
+    // Try both L options first
+    if (!doesHorizontalSegmentHitObstacle(start.y, start.x, end.x, obstacles) &&
+        !doesVerticalSegmentHitObstacle(end.x, start.y, end.y, obstacles)) {
+      if (Math.abs(end.x - start.x) > 1) path.push(cornerA);
+      return;
+    }
+    if (!doesVerticalSegmentHitObstacle(start.x, start.y, end.y, obstacles) &&
+        !doesHorizontalSegmentHitObstacle(end.y, start.x, end.x, obstacles)) {
+      if (Math.abs(end.y - start.y) > 1) path.push(cornerB);
+      return;
+    }
+  }
+
+  // Simple L routes blocked — find a clear detour around the blocking obstacle
+  // Strategy: route around the obstacle that blocks the direct path
+  // Try routing above or below (for horizontal blocks) or left/right (for vertical blocks)
+
+  // Find which obstacle blocks us
+  const hBlock = doesHorizontalSegmentHitObstacle(start.y, start.x, end.x, obstacles);
+  const vBlock = doesVerticalSegmentHitObstacle(start.x, start.y, end.y, obstacles);
+  const blocker = hBlock || vBlock;
+
+  if (blocker) {
+    // Try going around the blocker: above, below, left, or right
+    const aboveY = snap(blocker.minY) - gridSize;
+    const belowY = snap(blocker.maxY) + gridSize;
+    const leftX = snap(blocker.minX) - gridSize;
+    const rightX = snap(blocker.maxX) + gridSize;
+
+    // Pick the detour closest to our path
+    if (fromHoriz || (!fromHoriz && !toHoriz && dy > dx)) {
+      // Prefer vertical detour (go above or below)
+      const detourY = Math.abs(aboveY - start.y) < Math.abs(belowY - start.y) ? aboveY : belowY;
+      // Route: start → (start.x, detourY) → (end.x, detourY) → end
+      if (Math.abs(detourY - start.y) > 1) path.push({ x: start.x, y: detourY });
+      if (Math.abs(end.x - start.x) > 1) path.push({ x: end.x, y: detourY });
+    } else {
+      // Prefer horizontal detour (go left or right)
+      const detourX = Math.abs(leftX - start.x) < Math.abs(rightX - start.x) ? leftX : rightX;
+      // Route: start → (detourX, start.y) → (detourX, end.y) → end
+      if (Math.abs(detourX - start.x) > 1) path.push({ x: detourX, y: start.y });
+      if (Math.abs(end.y - start.y) > 1) path.push({ x: detourX, y: end.y });
+    }
+  } else {
+    // No single obstacle found blocking — just use L route as fallback
+    if (fromHoriz) {
+      path.push(cornerA);
+    } else {
+      path.push(cornerB);
+    }
+  }
 }
 
 /**
@@ -262,61 +426,15 @@ export function calculateOrthogonalPathV2(context: WireRoutingContext): { x: num
   const fromHoriz = isHorizontalDir(fromLeadDir);
   const toHoriz = isHorizontalDir(toLeadDir);
 
-  let leadOutPoint = getLeadPoint(fromPosition, fromLeadDir, gridSize);
-  leadOutPoint = adjustWaypointForObstacles(leadOutPoint, obstacles, gridSize);
-
-  let leadInPoint = getLeadPoint(toPosition, toLeadDir, gridSize);
-  leadInPoint = adjustWaypointForObstacles(leadInPoint, obstacles, gridSize);
+  const leadOutPoint = computeLeadPoint(fromPosition, fromLeadDir, fromElementBounds, obstacles, gridSize);
+  const leadInPoint = computeLeadPoint(toPosition, toLeadDir, toElementBounds, obstacles, gridSize);
 
   const path: { x: number; y: number }[] = [];
   path.push({ x: fromPosition.x, y: fromPosition.y });
   path.push(leadOutPoint);
 
-  // Route from leadOutPoint to leadInPoint with orthogonal segments
-  const dx = Math.abs(leadInPoint.x - leadOutPoint.x);
-  const dy = Math.abs(leadInPoint.y - leadOutPoint.y);
-
-  if (dx > 1 || dy > 1) {
-    if (fromHoriz && toHoriz) {
-      // Both horizontal: route via vertical segment in between
-      if (dy > 1) {
-        let midX = leadOutPoint.x;
-        const testY = (leadOutPoint.y + leadInPoint.y) / 2;
-        if (isPointInObstacle(midX, testY, obstacles)) {
-          const altX = leadInPoint.x;
-          if (!isPointInObstacle(altX, testY, obstacles)) {
-            midX = altX;
-          }
-        }
-        if (Math.abs(midX - leadOutPoint.x) > 1) {
-          path.push({ x: midX, y: leadOutPoint.y });
-        }
-        path.push({ x: midX, y: leadInPoint.y });
-      }
-    } else if (!fromHoriz && !toHoriz) {
-      // Both vertical: route via horizontal segment in between
-      if (dx > 1) {
-        let midY = leadOutPoint.y;
-        const testX = (leadOutPoint.x + leadInPoint.x) / 2;
-        if (isPointInObstacle(testX, midY, obstacles)) {
-          const altY = leadInPoint.y;
-          if (!isPointInObstacle(testX, altY, obstacles)) {
-            midY = altY;
-          }
-        }
-        if (Math.abs(midY - leadOutPoint.y) > 1) {
-          path.push({ x: leadOutPoint.x, y: midY });
-        }
-        path.push({ x: leadInPoint.x, y: midY });
-      }
-    } else if (fromHoriz && !toHoriz) {
-      // From horizontal, to vertical: one corner connects them
-      path.push({ x: leadInPoint.x, y: leadOutPoint.y });
-    } else {
-      // From vertical, to horizontal: one corner connects them
-      path.push({ x: leadOutPoint.x, y: leadInPoint.y });
-    }
-  }
+  // Route from leadOutPoint to leadInPoint with obstacle-aware orthogonal segments
+  routeAroundObstacles(path, leadOutPoint, leadInPoint, fromHoriz, toHoriz, obstacles, gridSize);
 
   // Add lead-in point if not redundant
   const lastPoint = path[path.length - 1];
@@ -428,18 +546,20 @@ export function drawWire(
   fromElementCenter?: { x: number; y: number } | null,
   toElementCenter?: { x: number; y: number } | null,
   fromElementBounds?: WireObstacle | null,
-  toElementBounds?: WireObstacle | null
+  toElementBounds?: WireObstacle | null,
+  precomputedPath?: { x: number; y: number }[]
 ): void {
   const hexColor = getWireColorHex(wireColor);
 
   ctx.save();
 
-  // Build orthogonal path
+  // Use precomputed path if provided, otherwise compute
   let points: { x: number; y: number }[];
-  if (connection.waypoints?.length) {
+  if (precomputedPath) {
+    points = precomputedPath;
+  } else if (connection.waypoints?.length) {
     points = [fromPos, ...connection.waypoints, toPos];
   } else if (fromElementCenter || toElementCenter) {
-    // Use improved routing with element centers
     points = calculateOrthogonalPathV2({
       fromPosition: fromPos,
       toPosition: toPos,
@@ -772,10 +892,13 @@ export function hitTestWire(
   toElementCenter?: { x: number; y: number } | null,
   obstacles: WireObstacle[] = [],
   fromElementBounds?: WireObstacle | null,
-  toElementBounds?: WireObstacle | null
+  toElementBounds?: WireObstacle | null,
+  precomputedPath?: { x: number; y: number }[]
 ): boolean {
   let points: { x: number; y: number }[];
-  if (connection.waypoints?.length) {
+  if (precomputedPath) {
+    points = precomputedPath;
+  } else if (connection.waypoints?.length) {
     points = [fromPos, ...connection.waypoints, toPos];
   } else if (fromElementCenter || toElementCenter) {
     points = calculateOrthogonalPathV2({
@@ -1118,4 +1241,224 @@ export function getNearestPointOnWire(
   }
 
   return result.point;
+}
+
+/**
+ * Compute the wire path for a connection (used in two-pass rendering).
+ * Returns the array of points that would be used for drawing.
+ */
+export function computeWirePath(
+  connection: HarnessConnection,
+  fromPos: { x: number; y: number },
+  toPos: { x: number; y: number },
+  gridSize: number,
+  obstacles: WireObstacle[],
+  fromElementCenter?: { x: number; y: number } | null,
+  toElementCenter?: { x: number; y: number } | null,
+  fromElementBounds?: WireObstacle | null,
+  toElementBounds?: WireObstacle | null
+): { x: number; y: number }[] {
+  if (connection.waypoints?.length) {
+    return [fromPos, ...connection.waypoints, toPos];
+  } else if (fromElementCenter || toElementCenter) {
+    return calculateOrthogonalPathV2({
+      fromPosition: fromPos,
+      toPosition: toPos,
+      fromElementCenter: fromElementCenter || null,
+      toElementCenter: toElementCenter || null,
+      fromElementBounds: fromElementBounds || null,
+      toElementBounds: toElementBounds || null,
+      obstacles,
+      gridSize
+    });
+  } else {
+    return calculateOrthogonalPath(fromPos, toPos, gridSize, obstacles);
+  }
+}
+
+interface Segment {
+  connectionId: string;
+  segmentIndex: number;
+  pathLength: number; // total segments in this connection's path
+  p1: { x: number; y: number };
+  p2: { x: number; y: number };
+}
+
+/**
+ * Offset overlapping parallel wire segments so they don't stack.
+ * Skips first/last segments (pin connections) and manual waypoint paths.
+ * When a middle segment is offset, corner points are inserted to maintain
+ * orthogonal connectivity from the fixed adjacent points.
+ * Returns new paths with actual moved points.
+ */
+export function offsetOverlappingSegments(
+  allPaths: Map<string, { points: { x: number; y: number }[]; hasWaypoints: boolean }>,
+  gridSize: number
+): Map<string, { x: number; y: number }[]> {
+  // Collect middle segments only (skip first and last)
+  const hSegments: Segment[] = [];
+  const vSegments: Segment[] = [];
+
+  for (const [connectionId, { points, hasWaypoints }] of allPaths) {
+    if (hasWaypoints) continue;
+    const lastIdx = points.length - 2;
+    for (let i = 0; i <= lastIdx; i++) {
+      // Skip first segment (i=0) and last segment (i=lastIdx) — they connect to pins
+      if (i === 0 || i === lastIdx) continue;
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      if (Math.abs(p1.y - p2.y) < 1) {
+        hSegments.push({ connectionId, segmentIndex: i, pathLength: points.length, p1, p2 });
+      } else if (Math.abs(p1.x - p2.x) < 1) {
+        vSegments.push({ connectionId, segmentIndex: i, pathLength: points.length, p1, p2 });
+      }
+    }
+  }
+
+  // Track which segments need offsetting: connectionId -> segmentIndex -> offset value
+  const offsets = new Map<string, Map<number, { dx: number; dy: number }>>();
+
+  // Process horizontal segments grouped by Y
+  const hByY = new Map<number, Segment[]>();
+  for (const seg of hSegments) {
+    const y = Math.round(seg.p1.y);
+    if (!hByY.has(y)) hByY.set(y, []);
+    hByY.get(y)!.push(seg);
+  }
+  for (const [, segs] of hByY) {
+    if (segs.length < 2) continue;
+    const groups = findOverlappingGroups(segs, 'horizontal');
+    for (const group of groups) {
+      if (group.length < 2) continue;
+      const centerOffset = ((group.length - 1) * gridSize) / 2;
+      group.forEach((seg, i) => {
+        const dy = i * gridSize - centerOffset;
+        if (Math.abs(dy) < 1) return;
+        if (!offsets.has(seg.connectionId)) offsets.set(seg.connectionId, new Map());
+        offsets.get(seg.connectionId)!.set(seg.segmentIndex, { dx: 0, dy });
+      });
+    }
+  }
+
+  // Process vertical segments grouped by X
+  const vByX = new Map<number, Segment[]>();
+  for (const seg of vSegments) {
+    const x = Math.round(seg.p1.x);
+    if (!vByX.has(x)) vByX.set(x, []);
+    vByX.get(x)!.push(seg);
+  }
+  for (const [, segs] of vByX) {
+    if (segs.length < 2) continue;
+    const groups = findOverlappingGroups(segs, 'vertical');
+    for (const group of groups) {
+      if (group.length < 2) continue;
+      const centerOffset = ((group.length - 1) * gridSize) / 2;
+      group.forEach((seg, i) => {
+        const dx = i * gridSize - centerOffset;
+        if (Math.abs(dx) < 1) return;
+        if (!offsets.has(seg.connectionId)) offsets.set(seg.connectionId, new Map());
+        offsets.get(seg.connectionId)!.set(seg.segmentIndex, { dx, dy: 0 });
+      });
+    }
+  }
+
+  // Build adjusted paths with corner insertions
+  const result = new Map<string, { x: number; y: number }[]>();
+  for (const [connectionId, { points }] of allPaths) {
+    const connOffsets = offsets.get(connectionId);
+    if (!connOffsets || connOffsets.size === 0) {
+      result.set(connectionId, points);
+      continue;
+    }
+
+    // Rebuild path, inserting corners where segments are offset
+    const newPath: { x: number; y: number }[] = [];
+
+    for (let i = 0; i < points.length; i++) {
+      const prevOffset = connOffsets.get(i - 1); // offset of segment ending at this point
+      const nextOffset = connOffsets.get(i);      // offset of segment starting at this point
+
+      if (!prevOffset && !nextOffset) {
+        // No offsets touch this point — keep as-is
+        newPath.push({ ...points[i] });
+      } else if (prevOffset && nextOffset) {
+        // Both adjacent segments offset — shift the point by the average
+        // (In practice they should be the same offset for a shared middle point)
+        newPath.push({
+          x: points[i].x + nextOffset.dx,
+          y: points[i].y + nextOffset.dy
+        });
+      } else if (nextOffset && !prevOffset) {
+        // Entering an offset segment — add corner: keep original point, then shifted point
+        newPath.push({ ...points[i] });
+        newPath.push({
+          x: points[i].x + nextOffset.dx,
+          y: points[i].y + nextOffset.dy
+        });
+      } else if (prevOffset && !nextOffset) {
+        // Leaving an offset segment — add shifted point, then original
+        newPath.push({
+          x: points[i].x + prevOffset.dx,
+          y: points[i].y + prevOffset.dy
+        });
+        newPath.push({ ...points[i] });
+      }
+    }
+
+    result.set(connectionId, cleanPath(newPath));
+  }
+
+  // Add paths that weren't processed
+  for (const [connectionId, { points }] of allPaths) {
+    if (!result.has(connectionId)) {
+      result.set(connectionId, points);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Find groups of segments that overlap in their shared axis range
+ */
+function findOverlappingGroups(segments: Segment[], orientation: 'horizontal' | 'vertical'): Segment[][] {
+  const groups: Segment[][] = [];
+  const used = new Set<number>();
+
+  for (let i = 0; i < segments.length; i++) {
+    if (used.has(i)) continue;
+    const group = [segments[i]];
+    used.add(i);
+
+    for (let j = i + 1; j < segments.length; j++) {
+      if (used.has(j)) continue;
+      if (segmentsOverlap(segments[i], segments[j], orientation)) {
+        group.push(segments[j]);
+        used.add(j);
+      }
+    }
+
+    groups.push(group);
+  }
+
+  return groups;
+}
+
+/**
+ * Check if two segments on the same line have overlapping ranges
+ */
+function segmentsOverlap(a: Segment, b: Segment, orientation: 'horizontal' | 'vertical'): boolean {
+  if (orientation === 'horizontal') {
+    const aMin = Math.min(a.p1.x, a.p2.x);
+    const aMax = Math.max(a.p1.x, a.p2.x);
+    const bMin = Math.min(b.p1.x, b.p2.x);
+    const bMax = Math.max(b.p1.x, b.p2.x);
+    return aMin < bMax && bMin < aMax;
+  } else {
+    const aMin = Math.min(a.p1.y, a.p2.y);
+    const aMax = Math.max(a.p1.y, a.p2.y);
+    const bMin = Math.min(b.p1.y, b.p2.y);
+    const bMax = Math.max(b.p1.y, b.p2.y);
+    return aMin < bMax && bMin < aMax;
+  }
 }

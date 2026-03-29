@@ -224,10 +224,10 @@ describe('HarnessPage', () => {
       expect(component.linkedPartId()).toBe(5);
     });
 
-    it('should clear history on new harness', () => {
-      vi.spyOn(historyService, 'clear');
+    it('should switch to new history stack on new harness', () => {
+      vi.spyOn(historyService, 'setActiveHarness');
       component.createNewHarness();
-      expect(historyService.clear).toHaveBeenCalled();
+      expect(historyService.setActiveHarness).toHaveBeenCalledWith(null);
     });
 
     it('should reset currentHarnessId', () => {
@@ -614,14 +614,14 @@ describe('HarnessPage', () => {
           canvasSettings: { zoom: 1, gridEnabled: true, snapToGrid: true }
         }
       } as any));
-      vi.spyOn(historyService, 'clear');
+      vi.spyOn(historyService, 'setActiveHarness');
 
       component.loadHarness(1);
 
       expect(harnessService.getHarnessById).toHaveBeenCalledWith(1);
       expect(component.currentHarnessId()).toBe(1);
       expect(component.linkedPartId()).toBe(10);
-      expect(historyService.clear).toHaveBeenCalled();
+      expect(historyService.setActiveHarness).toHaveBeenCalledWith(1);
     });
   });
 

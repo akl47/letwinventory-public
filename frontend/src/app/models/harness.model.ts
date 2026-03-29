@@ -189,6 +189,8 @@ export interface HarnessData {
   partNumber?: string;
   revision?: string;
   description?: string;
+  /** Data format version (absent = v1, current = 2) */
+  schemaVersion?: number;
   /** Current release state: draft, review, or released */
   releaseState?: ReleaseState;
   connectors: HarnessConnector[];
@@ -467,6 +469,7 @@ export function createEmptyHarnessData(name: string = 'New Harness'): HarnessDat
     partNumber: '',
     revision: '01',
     description: '',
+    schemaVersion: 2,
     connectors: [],
     cables: [],
     components: [],

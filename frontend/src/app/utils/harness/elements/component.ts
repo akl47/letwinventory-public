@@ -59,6 +59,8 @@ export function getComponentDimensions(component: HarnessComponent): ComponentDi
 
 /**
  * Draw a component element on canvas
+ * Origin = pin 0's connection point (right side circle center)
+ * Body draws to the LEFT of pin 0
  */
 export function drawComponent(
   ctx: CanvasRenderingContext2D,
@@ -77,22 +79,28 @@ export function drawComponent(
 
   ctx.save();
 
-  // Origin is at the first pin center
-  ctx.translate(x, y - ROW_HEIGHT / 2);
+  // Origin is at pin 0's connection point (right side)
+  ctx.translate(x, y);
   ctx.rotate((rotation * Math.PI) / 180);
 
-  // Flip around center if flipped
+  // Flip around center of body
   if (flipped) {
-    const centerX = width / 2;
+    const bodyLeft = -width;
+    const bodyRight = 0;
+    const centerX = (bodyLeft + bodyRight) / 2;
     const totalGroupHeight = groupHeights.reduce((a, b) => a + b, 0);
-    const centerY = totalGroupHeight / 2 - HEADER_HEIGHT - componentImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
+    const totalPins = Math.max(totalGroupHeight / ROW_HEIGHT, 1);
+    const bodyTop = -ROW_HEIGHT / 2 - HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
+    const bodyBottom = (totalPins - 1) * ROW_HEIGHT + ROW_HEIGHT / 2;
+    const centerY = (bodyTop + bodyBottom) / 2;
     ctx.translate(centerX, centerY);
     ctx.scale(-1, 1);
     ctx.translate(-centerX, -centerY);
   }
 
-  const left = 0;
-  const top = -HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
+  // Body edge at pin 0 (x=0). Body extends left. Circle extends right.
+  const left = -width;
+  const top = -ROW_HEIGHT / 2 - HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
 
   // Draw pinout diagram if shown
   if (component.showPinoutDiagram && component.pinoutDiagramImage) {
@@ -126,19 +134,20 @@ export function drawComponent(
   }
 
   // Draw pin groups
-  let currentY = top + HEADER_HEIGHT + componentImageHeight + partNameRowHeight;
   let pinIndex = 0;
+  let currentPinOffset = 0;
 
   for (let gi = 0; gi < component.pinGroups.length; gi++) {
     const group = component.pinGroups[gi];
 
     // Draw thicker divider line between pin groups (not before first group)
-    if (gi > 0) {
+    if (gi > 0 && currentPinOffset > 0) {
+      const dividerY = currentPinOffset * ROW_HEIGHT - ROW_HEIGHT / 2;
       ctx.strokeStyle = '#CCCCCC';
       ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.moveTo(left, currentY);
-      ctx.lineTo(left + width, currentY);
+      ctx.moveTo(left, dividerY);
+      ctx.lineTo(left + width, dividerY);
       ctx.stroke();
       ctx.lineWidth = 1;
     }
@@ -146,10 +155,11 @@ export function drawComponent(
     // Draw pins in this group
     for (let i = 0; i < group.pins.length; i++) {
       const pin = group.pins[i];
-      const rowTop = currentY + (i * ROW_HEIGHT);
-      const rowCenter = rowTop + ROW_HEIGHT / 2;
+      const globalPinIndex = currentPinOffset + i;
+      const rowCenter = globalPinIndex * ROW_HEIGHT; // Pin center in local space
+      const rowTop = rowCenter - ROW_HEIGHT / 2;
 
-      // Draw pin row
+      // Draw pin row (inside the body)
       drawPinRow(
         ctx, left, rowTop, width,
         pin.number || String(i + 1),
@@ -162,12 +172,12 @@ export function drawComponent(
       // Check if this pin should be highlighted
       const isPinHighlighted = highlightedPinIds?.has(pin.id) || false;
 
-      // Wire connection point on the right side
-      const circleX = left + width + COMPONENT_PIN_RADIUS;
-      drawPinCircle(ctx, circleX, rowCenter, COMPONENT_PIN_RADIUS, COMPONENT_HEADER_COLOR, isPinHighlighted);
+      // Wire connection point at pin center (x=0 = the origin axis)
+      // Pin circle extends right from body edge
+      drawPinCircle(ctx, COMPONENT_PIN_RADIUS, rowCenter, COMPONENT_PIN_RADIUS, COMPONENT_HEADER_COLOR, isPinHighlighted);
     }
 
-    currentY += group.pins.length * ROW_HEIGHT;
+    currentPinOffset += group.pins.length;
     pinIndex += group.pins.length;
   }
 
@@ -190,6 +200,8 @@ export function drawComponent(
 
 /**
  * Get pin positions for a component
+ * Pin 0 is at local (0, 0), pin i at local (0, i * ROW_HEIGHT)
+ * Origin = (ox, oy) = pin 0's connection point
  */
 export function getComponentPinPositions(component: HarnessComponent): ComponentPinPosition[] {
   const { width, hasPartName, componentImageHeight } = getComponentDimensions(component);
@@ -198,26 +210,25 @@ export function getComponentPinPositions(component: HarnessComponent): Component
   const rotation = component.rotation || 0;
   const flipped = component.flipped || false;
 
-  const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
   const positions: ComponentPinPosition[] = [];
-
-  // Local coordinates are relative to the drawing origin at (ox, oy - ROW_HEIGHT/2)
-  let currentLocalY = componentImageHeight + partNameRowHeight + HEADER_HEIGHT;
+  let currentPinOffset = 0;
 
   for (const group of component.pinGroups) {
     if (group.hidden) continue;
     const visiblePins = group.pins.filter(p => !p.hidden);
     for (let pi = 0; pi < visiblePins.length; pi++) {
       const pin = visiblePins[pi];
-      const localPinY = currentLocalY + (pi * ROW_HEIGHT) + ROW_HEIGHT / 2;
+      const globalPinIndex = currentPinOffset + pi;
 
-      // Pin connection is on the right side
-      let localX = width + COMPONENT_PIN_RADIUS;
-      let localY = localPinY - HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
+      // Pin connection at local (0, globalPinIndex * ROW_HEIGHT)
+      let localX = 0;
+      let localY = globalPinIndex * ROW_HEIGHT;
 
-      // Apply flip
+      // Apply flip around body center
       if (flipped) {
-        const centerX = width / 2;
+        const bodyLeft = -width;
+        const bodyRight = 0;
+        const centerX = (bodyLeft + bodyRight) / 2;
         localX = 2 * centerX - localX;
       }
 
@@ -232,35 +243,44 @@ export function getComponentPinPositions(component: HarnessComponent): Component
         pinId: pin.id,
         groupId: group.id,
         x: ox + rotatedX,
-        y: (oy - ROW_HEIGHT / 2) + rotatedY
+        y: oy + rotatedY
       });
     }
 
-    currentLocalY += visiblePins.length * ROW_HEIGHT;
+    currentPinOffset += visiblePins.length;
   }
 
   return positions;
 }
 
 /**
- * Get the centroid offset for component
+ * Get the centroid offset for component (relative to pin 0 at origin)
  */
 export function getComponentCentroidOffset(component: HarnessComponent): CentroidOffset {
   const { width, height, hasPartName, componentImageHeight } = getComponentDimensions(component);
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
 
-  const drawingTop = -HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
-  const drawingBottom = drawingTop + height;
+  let totalPins = 0;
+  for (const group of component.pinGroups) {
+    if (group.hidden) continue;
+    totalPins += group.pins.filter(p => !p.hidden).length;
+  }
+  totalPins = Math.max(totalPins, 1);
 
-  const localCy = (drawingTop + drawingBottom) / 2;
-  const cx = width / 2;
-  const cy = localCy - ROW_HEIGHT / 2;
+  // Body: left = -(COMPONENT_PIN_RADIUS + width), top = -HEADER_HEIGHT - extras
+  // Body: right = -COMPONENT_PIN_RADIUS, bottom = (totalPins - 1) * ROW_HEIGHT
+  const bodyTop = -HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
+  const bodyBottom = (totalPins - 1) * ROW_HEIGHT;
+
+  const cx = -(width / 2);
+  const cy = (bodyTop + bodyBottom) / 2;
 
   return { cx, cy };
 }
 
 /**
  * Hit test for component body
+ * Origin = pin 0's connection point (ox, oy)
  */
 export function hitTestComponent(
   component: HarnessComponent,
@@ -275,25 +295,34 @@ export function hitTestComponent(
 
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
 
-  // Transform to local space (account for drawing origin at y - ROW_HEIGHT/2)
+  let totalPins = 0;
+  for (const group of component.pinGroups || []) {
+    if (group.hidden) continue;
+    totalPins += group.pins?.filter(p => !p.hidden).length || 0;
+  }
+  totalPins = Math.max(totalPins, 1);
+
+  // Transform to local space (origin at pin 0)
   const rad = (-rotation * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
   const dx = testX - ox;
-  const dy = testY - oy + ROW_HEIGHT / 2;
+  const dy = testY - oy;
 
   let localX = dx * cos - dy * sin;
   let localY = dx * sin + dy * cos;
 
   if (flipped) {
-    const centerX = width / 2;
+    const bodyLeft = -width;
+    const bodyRight = 0;
+    const centerX = (bodyLeft + bodyRight) / 2;
     localX = 2 * centerX - localX;
   }
 
-  const left = -COMPONENT_PIN_RADIUS;
-  const right = width + COMPONENT_PIN_RADIUS;
-  const top = -HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
-  const bottom = height - HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
+  const left = -(width + COMPONENT_PIN_RADIUS);
+  const right = COMPONENT_PIN_RADIUS;
+  const top = -HEADER_HEIGHT - componentImageHeight - partNameRowHeight - ROW_HEIGHT / 2;
+  const bottom = (totalPins - 1) * ROW_HEIGHT + ROW_HEIGHT / 2;
 
   return localX >= left && localX <= right &&
     localY >= top && localY <= bottom;
@@ -334,22 +363,24 @@ export function hitTestComponentButton(
 
   const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
 
-  // Transform to local space (account for drawing origin at y - ROW_HEIGHT/2)
+  // Transform to local space (origin at pin 0)
   const rad = (-rotation * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
   const dx = testX - ox;
-  const dy = testY - oy + ROW_HEIGHT / 2;
+  const dy = testY - oy;
 
   let localX = dx * cos - dy * sin;
   let localY = dx * sin + dy * cos;
 
   if (flipped) {
-    const centerX = width / 2;
+    const bodyLeft = -width;
+    const bodyRight = 0;
+    const centerX = (bodyLeft + bodyRight) / 2;
     localX = 2 * centerX - localX;
   }
 
-  const left = 0;
+  const left = -width;
   const top = -HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
 
   // Check component image button

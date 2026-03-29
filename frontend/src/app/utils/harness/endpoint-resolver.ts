@@ -39,7 +39,9 @@ import {
   CABLE_WIRE_SPACING,
   PIN_CIRCLE_RADIUS,
   CABLE_ENDPOINT_RADIUS,
-  COMPONENT_PIN_RADIUS
+  COMPONENT_PIN_RADIUS,
+  CONNECTOR_IMAGE_MAX_HEIGHT,
+  COMPONENT_IMAGE_MAX_HEIGHT
 } from './constants';
 
 /**
@@ -94,6 +96,7 @@ function getRotatedBounds(
 
 /**
  * Calculate connector center and bounds
+ * Origin = pin 0's wire connection point (x, y)
  */
 function getConnectorCenterAndBounds(connector: HarnessConnector): { center: Point; bounds: WireObstacle } {
   const dims = getConnectorDimensions(connector);
@@ -102,19 +105,22 @@ function getConnectorCenterAndBounds(connector: HarnessConnector): { center: Poi
   const rotation = connector.rotation || 0;
 
   const pinCount = connector.pins?.length || connector.pinCount || 1;
-  const headerAndExtras = dims.height - (pinCount * ROW_HEIGHT);
+  const hasPartName = !!connector.partName;
+  const hasConnectorImage = !!connector.showConnectorImage && !!connector.connectorImage;
+  const connectorImageHeight = hasConnectorImage ? CONNECTOR_IMAGE_MAX_HEIGHT : 0;
+  const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
 
-  // Origin is at (x, y - ROW_HEIGHT/2)
+  // Origin is at pin 0 (x, y)
   const originX = x;
-  const originY = y - ROW_HEIGHT / 2;
+  const originY = y;
+  // Body edge at pin 0 (x=0)
   const localMinX = 0;
-  const localMinY = -headerAndExtras;
+  const localMinY = -ROW_HEIGHT / 2 - HEADER_HEIGHT - connectorImageHeight - partNameRowHeight;
   const localMaxX = dims.width;
-  const localMaxY = pinCount * ROW_HEIGHT;
+  const localMaxY = (pinCount - 1) * ROW_HEIGHT + ROW_HEIGHT / 2;
 
   const bounds = getRotatedBounds(localMinX, localMinY, localMaxX, localMaxY, originX, originY, rotation);
 
-  // Center is the center of the bounding box
   const center: Point = {
     x: (bounds.minX + bounds.maxX) / 2,
     y: (bounds.minY + bounds.maxY) / 2
@@ -125,6 +131,7 @@ function getConnectorCenterAndBounds(connector: HarnessConnector): { center: Poi
 
 /**
  * Calculate cable center and bounds
+ * Origin = wire 0's left endpoint (x, y)
  */
 function getCableCenterAndBounds(cable: HarnessCable): { center: Point; bounds: WireObstacle } {
   const dims = getCableDimensions(cable);
@@ -133,13 +140,17 @@ function getCableCenterAndBounds(cable: HarnessCable): { center: Point; bounds: 
   const rotation = cable.rotation || 0;
 
   const wireCount = cable.wires?.length || cable.wireCount || 1;
-  const headerAndExtras = dims.height - (wireCount * CABLE_WIRE_SPACING);
+  const hasPartName = !!cable.partName;
+  const hasInfoRow = !!(cable.gaugeAWG || cable.lengthMm);
+  const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
+  const infoRowHeight = hasInfoRow ? ROW_HEIGHT : 0;
 
-  // Origin is at (x, y)
+  // Origin is at wire 0 left endpoint (x, y)
   const originX = x;
   const originY = y;
+  // Body edge at wire 0 left endpoint (x=0)
   const localMinX = 0;
-  const localMinY = -headerAndExtras - CABLE_WIRE_SPACING / 2;
+  const localMinY = -HEADER_HEIGHT - partNameRowHeight - infoRowHeight - CABLE_WIRE_SPACING / 2;
   const localMaxX = dims.width;
   const localMaxY = (wireCount - 0.5) * CABLE_WIRE_SPACING;
 
@@ -155,6 +166,7 @@ function getCableCenterAndBounds(cable: HarnessCable): { center: Point; bounds: 
 
 /**
  * Calculate component center and bounds
+ * Origin = pin 0's connection point (right side, x, y)
  */
 function getComponentCenterAndBounds(component: HarnessComponent): { center: Point; bounds: WireObstacle } {
   const dims = getComponentDimensions(component);
@@ -169,15 +181,20 @@ function getComponentCenterAndBounds(component: HarnessComponent): { center: Poi
   }
   totalPins = Math.max(totalPins, 1);
 
-  const headerAndExtras = dims.height - (totalPins * ROW_HEIGHT);
+  const hasPartName = !!component.partName;
+  const hasComponentImage = !!component.showComponentImage && !!component.componentImage;
+  const componentImageHeight = hasComponentImage ? COMPONENT_IMAGE_MAX_HEIGHT : 0;
+  const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
 
-  // Origin is at (x, y - ROW_HEIGHT/2)
+  // Origin is at pin 0 (x, y)
   const originX = x;
-  const originY = y - ROW_HEIGHT / 2;
-  const localMinX = 0;
-  const localMinY = -headerAndExtras;
-  const localMaxX = dims.width;
-  const localMaxY = totalPins * ROW_HEIGHT;
+  const originY = y;
+  // Body draws to the left of pin 0
+  // Body edge at pin 0 (x=0), body extends left
+  const localMinX = -dims.width;
+  const localMinY = -ROW_HEIGHT / 2 - HEADER_HEIGHT - componentImageHeight - partNameRowHeight;
+  const localMaxX = 0;
+  const localMaxY = (totalPins - 1) * ROW_HEIGHT + ROW_HEIGHT / 2;
 
   const bounds = getRotatedBounds(localMinX, localMinY, localMaxX, localMaxY, originX, originY, rotation);
 

@@ -80,6 +80,8 @@ import {
   WireEndpoint,
   WireRoutingContext,
   WIRE_STROKE_WIDTH,
+  computeWirePath,
+  offsetOverlappingSegments,
 } from '../../../utils/harness/canvas-renderer';
 import {
   drawSubHarnessCollapsed,
@@ -163,6 +165,14 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
 
   // Debug flag - set to true to show bounding boxes
   debugShowBounds = false;
+
+  // Cached wire paths from two-pass rendering (used for drawing AND hit testing)
+  private computedWirePaths = new Map<string, { x: number; y: number }[]>();
+
+  /** Get the cached computed path for a connection, if available */
+  getCachedWirePath(connectionId: string): { x: number; y: number }[] | undefined {
+    return this.computedWirePaths.get(connectionId);
+  }
 
   // Sub-harness edit mode state
   editingSubHarnessId = signal<string | null>(null);  // ID of sub-harness being edited
@@ -655,13 +665,27 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       // Check if in sub-harness edit mode for wire drawing
       const inEditModeForWires = this.editingSubHarnessId() !== null;
 
-      // Draw wires first (behind connectors and cables)
+      // Two-pass wire rendering: compute all paths, offset overlaps, then draw
       // In edit mode, gray out parent harness wires
       if (inEditModeForWires) {
         ctx.globalAlpha = 0.3;
       }
+
+      // Pass 1: compute all wire paths
+      const wirePaths = new Map<string, { points: { x: number; y: number }[]; hasWaypoints: boolean }>();
+      const wireRenderData = new Map<string, {
+        connection: HarnessConnection;
+        fromPos: { x: number; y: number };
+        toPos: { x: number; y: number };
+        wireColor: string;
+        isSelected: boolean;
+        showControlPoints: boolean;
+        isMating: boolean;
+        fromEndpoint: WireEndpoint;
+        toEndpoint: WireEndpoint;
+      }>();
+
       data.connections.forEach(connection => {
-        // Use endpoint resolver to get full endpoint info including element centers
         const fromEndpoint = resolveFromEndpoint(data, connection, this.subHarnessDataCache);
         const toEndpoint = resolveToEndpoint(data, connection, this.subHarnessDataCache);
 
@@ -669,10 +693,6 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
 
         const fromPos = fromEndpoint.position;
         const toPos = toEndpoint.position;
-        const fromElementCenter = fromEndpoint.elementCenter;
-        const toElementCenter = toEndpoint.elementCenter;
-        const fromElementBounds = fromEndpoint.elementBounds;
-        const toElementBounds = toEndpoint.elementBounds;
 
         // Get wire color from cable endpoint if available
         let wireColor = 'BK';
@@ -693,21 +713,39 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         const selectedGroupId = this.getSelectedGroupId();
         const isInSelectedGroup = !!(selectedGroupId && connection.groupId === selectedGroupId);
         const isSelected = this.selectedConnectionId === connection.id || this.selectedIds.has(`connection:${connection.id}`) || isInSelectedGroup;
-        // Only show control points in nodeEdit mode when wire is selected
         const showControlPoints = this.activeTool() === 'nodeEdit' && isSelected;
+        const isMating = connection.connectionType === 'mating';
 
-        const isMatingConnection = connection.connectionType === 'mating';
-        if (isMatingConnection) {
-          // Draw mating connection as gray dashed orthogonal line
-          drawMatingConnection(ctx, connection, fromPos, toPos, isSelected, this.gridSize(), wireObstacles, showControlPoints, fromElementCenter, toElementCenter, fromElementBounds, toElementBounds);
-        } else {
-          // Draw regular wire
-          if (connection.color) {
-            wireColor = connection.color;
-          }
-          drawWire(ctx, connection, fromPos, toPos, wireColor, isSelected, this.gridSize(), undefined, wireObstacles, showControlPoints, fromElementCenter, toElementCenter, fromElementBounds, toElementBounds);
-        }
+        if (connection.color) wireColor = connection.color;
+
+        // Compute path
+        const path = computeWirePath(
+          connection, fromPos, toPos, this.gridSize(), wireObstacles,
+          fromEndpoint.elementCenter, toEndpoint.elementCenter,
+          fromEndpoint.elementBounds, toEndpoint.elementBounds
+        );
+
+        wirePaths.set(connection.id, { points: path, hasWaypoints: !!(connection.waypoints?.length) });
+        wireRenderData.set(connection.id, {
+          connection, fromPos, toPos, wireColor, isSelected, showControlPoints, isMating, fromEndpoint, toEndpoint
+        });
       });
+
+      // Pass 2: offset overlapping parallel segments and cache for hit testing
+      const adjustedPaths = offsetOverlappingSegments(wirePaths, this.gridSize());
+      this.computedWirePaths = adjustedPaths;
+
+      // Pass 3: draw all wires with adjusted paths
+      for (const [connId, renderData] of wireRenderData) {
+        const adjustedPath = adjustedPaths.get(connId);
+        const { connection, fromPos, toPos, wireColor, isSelected, showControlPoints, isMating, fromEndpoint, toEndpoint } = renderData;
+
+        if (isMating) {
+          drawMatingConnection(ctx, connection, fromPos, toPos, isSelected, this.gridSize(), wireObstacles, showControlPoints, fromEndpoint.elementCenter, toEndpoint.elementCenter, fromEndpoint.elementBounds, toEndpoint.elementBounds);
+        } else {
+          drawWire(ctx, connection, fromPos, toPos, wireColor, isSelected, this.gridSize(), undefined, wireObstacles, showControlPoints, fromEndpoint.elementCenter, toEndpoint.elementCenter, fromEndpoint.elementBounds, toEndpoint.elementBounds, adjustedPath);
+        }
+      }
 
       // Reset alpha after drawing wires
       if (inEditModeForWires) {
@@ -1023,45 +1061,49 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         };
       };
 
-      // Connector bounds (red)
+      // Connector bounds (red) — origin = pin 0 wire connection point (x, y)
       ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
       for (const connector of data.connectors) {
         if (!connector.position) continue;
         const dims = getConnectorDimensions(connector);
         const pinCount = connector.pins?.length || connector.pinCount || 1;
-        const headerAndExtras = dims.height - (pinCount * ROW_HEIGHT);
+        const hasPartName = !!connector.partName;
+        const hasConnImg = !!connector.showConnectorImage && !!connector.connectorImage;
+        const connImgH = hasConnImg ? 80 : 0;
+        const partNameH = hasPartName ? ROW_HEIGHT : 0;
         const rotation = connector.rotation || 0;
-        // Origin is at (x, y - ROW_HEIGHT/2), local coords relative to that
         const originX = connector.position.x;
-        const originY = connector.position.y - ROW_HEIGHT / 2;
-        const localMinX = 0;
-        const localMinY = -headerAndExtras;
+        const originY = connector.position.y;
+        const localMinX = 0;  // Body edge at pin 0
+        const localMinY = -ROW_HEIGHT / 2 - 20 - connImgH - partNameH;  // -ROW_HEIGHT/2 - HEADER_HEIGHT - extras
         const localMaxX = dims.width;
-        const localMaxY = pinCount * ROW_HEIGHT;
+        const localMaxY = (pinCount - 1) * ROW_HEIGHT + ROW_HEIGHT / 2;
         const bounds = getRotatedBounds(localMinX, localMinY, localMaxX, localMaxY, originX, originY, rotation);
         ctx.strokeRect(bounds.minX, bounds.minY, bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
       }
 
-      // Cable bounds (green)
+      // Cable bounds (green) — origin = wire 0 left endpoint (x, y)
       ctx.strokeStyle = 'rgba(0, 255, 0, 0.8)';
       for (const cable of data.cables) {
         if (!cable.position) continue;
         const dims = getCableDimensions(cable);
         const wireCount = cable.wires?.length || cable.wireCount || 1;
-        const headerAndExtras = dims.height - (wireCount * CABLE_WIRE_SPACING);
+        const hasPartName = !!cable.partName;
+        const hasInfoRow = !!(cable.gaugeAWG || cable.lengthMm);
+        const partNameH = hasPartName ? ROW_HEIGHT : 0;
+        const infoH = hasInfoRow ? ROW_HEIGHT : 0;
         const rotation = cable.rotation || 0;
-        // Origin is at (x, y), local coords relative to that
         const originX = cable.position.x;
         const originY = cable.position.y;
-        const localMinX = 0;
-        const localMinY = -headerAndExtras - CABLE_WIRE_SPACING / 2;
+        const localMinX = 5;  // CABLE_ENDPOINT_RADIUS
+        const localMinY = -20 - partNameH - infoH - CABLE_WIRE_SPACING / 2;
         const localMaxX = dims.width;
         const localMaxY = (wireCount - 0.5) * CABLE_WIRE_SPACING;
         const bounds = getRotatedBounds(localMinX, localMinY, localMaxX, localMaxY, originX, originY, rotation);
         ctx.strokeRect(bounds.minX, bounds.minY, bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
       }
 
-      // Component bounds (blue)
+      // Component bounds (blue) — origin = pin 0 connection point on right side (x, y)
       ctx.strokeStyle = 'rgba(0, 0, 255, 0.8)';
       for (const component of (data.components || [])) {
         if (!component.position) continue;
@@ -1072,15 +1114,18 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
           totalPins += group.pins?.filter(p => !p.hidden).length || 0;
         }
         totalPins = Math.max(totalPins, 1);
-        const headerAndExtras = dims.height - (totalPins * ROW_HEIGHT);
+        const hasPartName = !!component.partName;
+        const hasCompImg = !!component.showComponentImage && !!component.componentImage;
+        const compImgH = hasCompImg ? 80 : 0;
+        const partNameH = hasPartName ? ROW_HEIGHT : 0;
         const rotation = component.rotation || 0;
-        // Origin is at (x, y - ROW_HEIGHT/2), local coords relative to that
         const originX = component.position.x;
-        const originY = component.position.y - ROW_HEIGHT / 2;
-        const localMinX = 0;
-        const localMinY = -headerAndExtras;
-        const localMaxX = dims.width;
-        const localMaxY = totalPins * ROW_HEIGHT;
+        const originY = component.position.y;
+        // Body is to the LEFT of pin 0
+        const localMinX = -dims.width;  // -(COMPONENT_PIN_RADIUS + width)
+        const localMinY = -ROW_HEIGHT / 2 - 20 - compImgH - partNameH;  // -ROW_HEIGHT/2 - HEADER_HEIGHT - extras
+        const localMaxX = 0;  // -COMPONENT_PIN_RADIUS
+        const localMaxY = (totalPins - 1) * ROW_HEIGHT + ROW_HEIGHT / 2;
         const bounds = getRotatedBounds(localMinX, localMinY, localMaxX, localMaxY, originX, originY, rotation);
         ctx.strokeRect(bounds.minX, bounds.minY, bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
       }
@@ -1390,7 +1435,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         if (!fromEp || !toEp) continue;
 
         if (hitTestWire(connection, fromEp.position, toEp.position, x, y, this.gridSize(), 8,
-          fromEp.elementCenter, toEp.elementCenter, nodeEditObstacles, fromEp.elementBounds, toEp.elementBounds)) {
+          fromEp.elementCenter, toEp.elementCenter, nodeEditObstacles, fromEp.elementBounds, toEp.elementBounds, this.getCachedWirePath(connection.id))) {
           this.selectedIds.clear();
           this.selectedConnectionId = connection.id;
           this.selectedConnectorId = null;
@@ -1681,7 +1726,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       const toEp = resolveToEndpoint(data, connection, this.subHarnessDataCache);
 
       if (fromEp && toEp && hitTestWire(connection, fromEp.position, toEp.position, x, y, this.gridSize(), 8,
-        fromEp.elementCenter, toEp.elementCenter, selectWireObstacles, fromEp.elementBounds, toEp.elementBounds)) {
+        fromEp.elementCenter, toEp.elementCenter, selectWireObstacles, fromEp.elementBounds, toEp.elementBounds, this.getCachedWirePath(connection.id))) {
         // Handle shift-click for multi-selection
         const alreadySelected = this.selectedIds.has(`connection:${connection.id}`);
         if (event.shiftKey) {
@@ -1784,10 +1829,11 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       return;
     }
 
-    // Wire drawing
+    // Wire drawing — snap endpoint to nearest grid point
     if (this.isDrawingWire) {
-      this.wireEndX = x;
-      this.wireEndY = y;
+      const gs = this.gridSize();
+      this.wireEndX = Math.round(x / gs) * gs;
+      this.wireEndY = Math.round(y / gs) * gs;
 
       // Track hovered pin for green indicator
       this.hoveredPinConnectorId = null;
@@ -2153,7 +2199,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
                   const fromPin = fromPins.find(p => p.pinId === connection.fromPin);
                   const toPin = toPins.find(p => p.pinId === connection.toPin);
 
-                  if (fromPin && toPin && hitTestWire(connection, fromPin, toPin, x, y, this.gridSize())) {
+                  if (fromPin && toPin && hitTestWire(connection, fromPin, toPin, x, y, this.gridSize(), 8, undefined, undefined, [], undefined, undefined, this.getCachedWirePath(connection.id))) {
                     cursor = 'pointer';
                     break;
                   }
@@ -2517,7 +2563,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
         if (!fromEp || !toEp) continue;
 
         if (hitTestWire(connection, fromEp.position, toEp.position, x, y, this.gridSize(), 8,
-          fromEp.elementCenter, toEp.elementCenter, dblClickObstacles, fromEp.elementBounds, toEp.elementBounds)) {
+          fromEp.elementCenter, toEp.elementCenter, dblClickObstacles, fromEp.elementBounds, toEp.elementBounds, this.getCachedWirePath(connection.id))) {
           // Add a new control point at this position
           this.addWireControlPoint(connection.id, fromEp.position, toEp.position, x, y);
           return;
@@ -2543,7 +2589,7 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
       if (!fromEp || !toEp) continue;
 
       if (hitTestWire(connection, fromEp.position, toEp.position, x, y, this.gridSize(), 8,
-        fromEp.elementCenter, toEp.elementCenter, dblClickWireObstacles, fromEp.elementBounds, toEp.elementBounds)) {
+        fromEp.elementCenter, toEp.elementCenter, dblClickWireObstacles, fromEp.elementBounds, toEp.elementBounds, this.getCachedWirePath(connection.id))) {
         console.log('Double-clicked on wire, entering nodeEdit mode', connection.id);
         // Select the wire and switch to nodeEdit mode
         this.selectedConnectionId = connection.id;
@@ -2887,49 +2933,57 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
 
     // Include connectors
     // Drawing: ctx.translate(x, y - ROW_HEIGHT/2), top = -HEADER_HEIGHT - imageHeight - partNameHeight
-    // So world top = y - ROW_HEIGHT/2 - HEADER_HEIGHT - imageHeight - partNameHeight
-    // World bottom = y - ROW_HEIGHT/2 + pinCount * ROW_HEIGHT
+    // Connectors — origin = pin 0's wire connection point
+    // Body extends to the right (PIN_CIRCLE_RADIUS offset), header above
     for (const connector of data.connectors) {
       if (!connector.position) continue;
       const dims = getConnectorDimensions(connector);
       const pinCount = connector.pins?.length || connector.pinCount || 1;
-      const headerAndExtras = dims.height - (pinCount * ROW_HEIGHT);
+      const hasPartName = !!connector.partName;
+      const hasConnectorImage = !!connector.showConnectorImage && !!connector.connectorImage;
+      const connectorImageHeight = hasConnectorImage ? 80 : 0;
+      const partNameRowHeight = hasPartName ? 20 : 0;
       minX = Math.min(minX, connector.position.x);
-      minY = Math.min(minY, connector.position.y - ROW_HEIGHT / 2 - headerAndExtras);
+      minY = Math.min(minY, connector.position.y - 20 - connectorImageHeight - partNameRowHeight);
       maxX = Math.max(maxX, connector.position.x + dims.width);
-      maxY = Math.max(maxY, connector.position.y - ROW_HEIGHT / 2 + pinCount * ROW_HEIGHT);
+      maxY = Math.max(maxY, connector.position.y + (pinCount - 1) * ROW_HEIGHT + ROW_HEIGHT / 2);
     }
 
-    // Include cables
-    // Drawing: ctx.translate(x, y), top = -HEADER_HEIGHT - partNameHeight - infoHeight - WIRE_SPACING/2
-    // World top = y - HEADER_HEIGHT - partNameHeight - infoHeight - WIRE_SPACING/2
-    // World bottom = y + (wireCount - 0.5) * WIRE_SPACING
+    // Cables — origin = wire 0's left endpoint
+    // Body extends to the right (CABLE_ENDPOINT_RADIUS offset)
     for (const cable of data.cables) {
       if (!cable.position) continue;
       const dims = getCableDimensions(cable);
       const wireCount = cable.wires?.length || cable.wireCount || 1;
-      const headerAndExtras = dims.height - (wireCount * CABLE_WIRE_SPACING);
+      const hasPartName = !!cable.partName;
+      const hasInfoRow = !!(cable.gaugeAWG || cable.lengthMm);
+      const partNameRowHeight = hasPartName ? 20 : 0;
+      const infoRowHeight = hasInfoRow ? 20 : 0;
       minX = Math.min(minX, cable.position.x);
-      minY = Math.min(minY, cable.position.y - headerAndExtras - CABLE_WIRE_SPACING / 2);
+      minY = Math.min(minY, cable.position.y - 20 - partNameRowHeight - infoRowHeight - CABLE_WIRE_SPACING / 2);
       maxX = Math.max(maxX, cable.position.x + dims.width);
       maxY = Math.max(maxY, cable.position.y + (wireCount - 0.5) * CABLE_WIRE_SPACING);
     }
 
-    // Include components (similar to connectors)
+    // Include components — origin = pin 0's connection point (right side)
     for (const component of (data.components || [])) {
       if (!component.position) continue;
       const dims = getComponentDimensions(component);
-      // Components have pin groups, calculate total pins
       let totalPins = 0;
       for (const group of component.pinGroups || []) {
-        totalPins += group.pins?.length || 0;
+        if (group.hidden) continue;
+        totalPins += group.pins?.filter(p => !p.hidden).length || 0;
       }
       totalPins = Math.max(totalPins, 1);
-      const headerAndExtras = dims.height - (totalPins * ROW_HEIGHT);
-      minX = Math.min(minX, component.position.x);
-      minY = Math.min(minY, component.position.y - ROW_HEIGHT / 2 - headerAndExtras);
-      maxX = Math.max(maxX, component.position.x + dims.width);
-      maxY = Math.max(maxY, component.position.y - ROW_HEIGHT / 2 + totalPins * ROW_HEIGHT);
+      const hasPartName = !!component.partName;
+      const hasComponentImage = !!component.showComponentImage && !!component.componentImage;
+      const componentImageHeight = hasComponentImage ? 80 : 0;
+      const partNameRowHeight = hasPartName ? 20 : 0;
+      // Body is to the left of pin 0
+      minX = Math.min(minX, component.position.x - dims.width);
+      minY = Math.min(minY, component.position.y - 20 - componentImageHeight - partNameRowHeight);
+      maxX = Math.max(maxX, component.position.x);
+      maxY = Math.max(maxY, component.position.y + (totalPins - 1) * ROW_HEIGHT + ROW_HEIGHT / 2);
     }
 
     // Include sub-harnesses (uses bounds relative to position)
@@ -3981,57 +4035,68 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
     };
 
     // Add connectors as obstacles (using full visual bounds with rotation)
+    // Origin = pin 0's wire connection point (x, y)
     for (const connector of data.connectors) {
       if (!connector.position) continue;
       const dims = getConnectorDimensions(connector);
       const pinCount = connector.pins?.length || connector.pinCount || 1;
-      const headerAndExtras = dims.height - (pinCount * ROW_HEIGHT);
+      const hasPartName = !!connector.partName;
+      const hasConnectorImage = !!connector.showConnectorImage && !!connector.connectorImage;
+      const connectorImageHeight = hasConnectorImage ? 80 : 0; // CONNECTOR_IMAGE_MAX_HEIGHT
+      const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
       const rotation = connector.rotation || 0;
-      // Origin is at (x, y - ROW_HEIGHT/2), local coords relative to that
       const originX = connector.position.x;
-      const originY = connector.position.y - ROW_HEIGHT / 2;
-      const localMinX = 0;
-      const localMinY = -headerAndExtras;
-      const localMaxX = dims.width;
-      const localMaxY = pinCount * ROW_HEIGHT;
+      const originY = connector.position.y;
+      const localMinX = 5; // PIN_CIRCLE_RADIUS
+      const localMinY = -ROW_HEIGHT / 2 - 20 - connectorImageHeight - partNameRowHeight; // -ROW_HEIGHT/2 - HEADER_HEIGHT - extras
+      const localMaxX = dims.width; // PIN_CIRCLE_RADIUS + width
+      const localMaxY = (pinCount - 1) * ROW_HEIGHT + ROW_HEIGHT / 2;
       obstacles.push(getRotatedBounds(localMinX, localMinY, localMaxX, localMaxY, originX, originY, rotation));
     }
 
     // Add cables as obstacles (using full visual bounds with rotation)
+    // Origin = wire 0's left endpoint (x, y)
     for (const cable of data.cables) {
       if (!cable.position) continue;
       const dims = getCableDimensions(cable);
       const wireCount = cable.wires?.length || cable.wireCount || 1;
-      const headerAndExtras = dims.height - (wireCount * CABLE_WIRE_SPACING);
+      const hasPartName = !!cable.partName;
+      const hasInfoRow = !!(cable.gaugeAWG || cable.lengthMm);
+      const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
+      const infoRowHeight = hasInfoRow ? ROW_HEIGHT : 0;
       const rotation = cable.rotation || 0;
-      // Origin is at (x, y), local coords relative to that
       const originX = cable.position.x;
       const originY = cable.position.y;
-      const localMinX = 0;
-      const localMinY = -headerAndExtras - CABLE_WIRE_SPACING / 2;
-      const localMaxX = dims.width;
+      const localMinX = 0; // Body edge at wire 0
+      const localMinY = -20 - partNameRowHeight - infoRowHeight - CABLE_WIRE_SPACING / 2; // -HEADER_HEIGHT - extras
+      const localMaxX = dims.width; // CABLE_ENDPOINT_RADIUS + width
       const localMaxY = (wireCount - 0.5) * CABLE_WIRE_SPACING;
       obstacles.push(getRotatedBounds(localMinX, localMinY, localMaxX, localMaxY, originX, originY, rotation));
     }
 
     // Add components as obstacles (using full visual bounds with rotation)
+    // Origin = pin 0's connection point on right side (x, y)
     for (const component of (data.components || [])) {
       if (!component.position) continue;
       const dims = getComponentDimensions(component);
       let totalPins = 0;
       for (const group of component.pinGroups || []) {
-        totalPins += group.pins?.length || 0;
+        if (group.hidden) continue;
+        totalPins += group.pins?.filter(p => !p.hidden).length || 0;
       }
       totalPins = Math.max(totalPins, 1);
-      const headerAndExtras = dims.height - (totalPins * ROW_HEIGHT);
+      const hasPartName = !!component.partName;
+      const hasComponentImage = !!component.showComponentImage && !!component.componentImage;
+      const componentImageHeight = hasComponentImage ? 80 : 0; // COMPONENT_IMAGE_MAX_HEIGHT
+      const partNameRowHeight = hasPartName ? ROW_HEIGHT : 0;
       const rotation = component.rotation || 0;
-      // Origin is at (x, y - ROW_HEIGHT/2), local coords relative to that
       const originX = component.position.x;
-      const originY = component.position.y - ROW_HEIGHT / 2;
-      const localMinX = 0;
-      const localMinY = -headerAndExtras;
-      const localMaxX = dims.width;
-      const localMaxY = totalPins * ROW_HEIGHT;
+      const originY = component.position.y;
+      // Body is to the LEFT of pin 0
+      const localMinX = -dims.width; // -(COMPONENT_PIN_RADIUS + width)
+      const localMinY = -ROW_HEIGHT / 2 - 20 - componentImageHeight - partNameRowHeight; // -ROW_HEIGHT/2 - HEADER_HEIGHT - extras
+      const localMaxX = 0; // -COMPONENT_PIN_RADIUS
+      const localMaxY = (totalPins - 1) * ROW_HEIGHT + ROW_HEIGHT / 2; // Last pin center + half row
       obstacles.push(getRotatedBounds(localMinX, localMinY, localMaxX, localMaxY, originX, originY, rotation));
     }
 
@@ -4756,6 +4821,14 @@ export class HarnessCanvas implements AfterViewInit, OnDestroy {
    */
   @HostListener('document:keydown', ['$event'])
   onKeyDown(event: KeyboardEvent): void {
+    // Don't intercept keyboard shortcuts when a dialog is open or form control is focused
+    const target = event.target as HTMLElement;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement || target.isContentEditable ||
+        target.closest('mat-dialog-container, [role="dialog"]')) {
+      return;
+    }
+
     // Cancel wire pen mode on Escape
     if (event.key === 'Escape' && this.isWirePenMode) {
       this.isDrawingWire = false;
