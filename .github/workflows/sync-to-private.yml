@@ -35,27 +35,51 @@ jobs:
             echo "Clean merge — pushing directly to private master"
             git push private private-master:master
           else
-            echo "Conflicts detected — creating PR for manual resolution"
-            git merge --abort
+            echo "Conflicts detected — attempting auto-resolve for version files"
 
-            # Push the public ref as a branch on the private repo
-            BRANCH="sync/public-$TAG"
-            git checkout origin/master
-            git checkout -b "$BRANCH"
-            git push private "$BRANCH"
+            # Auto-resolve version file conflicts by accepting public repo's version
+            VERSION_FILES="frontend/src/environments/version.ts frontend/package.json"
+            ALL_RESOLVED=true
 
-            # Collect conflicted file list for the PR body
-            git checkout private-master
-            CONFLICT_FILES=$(git merge origin/master --no-commit 2>&1 | grep "CONFLICT" | sed 's/CONFLICT.*: /  - /' || true)
-            git merge --abort
+            for f in $VERSION_FILES; do
+              if git diff --name-only --diff-filter=U | grep -q "^${f}$"; then
+                echo "Auto-resolving conflict in $f (accepting public version)"
+                git checkout --theirs "$f"
 
-            # Create PR on the private repo
-            gh pr create \
-              --repo akl47/letwinventory-private \
-              --base master \
-              --head "$BRANCH" \
-              --title "chore: sync public repo $TAG" \
-              --body "$(cat <<EOF
+                # For package.json, only take the version line from public, keep rest from private
+                if [ "$f" = "frontend/package.json" ]; then
+                  PUBLIC_VERSION=$(git show origin/master:frontend/package.json | grep '"version"' | head -1)
+                  git checkout --ours "$f"
+                  sed -i "s|.*\"version\".*|${PUBLIC_VERSION}|" "$f"
+                fi
+
+                git add "$f"
+              fi
+            done
+
+            # Check if any conflicts remain
+            if git diff --name-only --diff-filter=U | grep -q .; then
+              echo "Unresolved conflicts remain — creating PR for manual resolution"
+              git merge --abort
+
+              # Push the public ref as a branch on the private repo
+              BRANCH="sync/public-$TAG"
+              git checkout origin/master
+              git checkout -b "$BRANCH"
+              git push private "$BRANCH"
+
+              # Collect conflicted file list for the PR body
+              git checkout private-master
+              CONFLICT_FILES=$(git merge origin/master --no-commit 2>&1 | grep "CONFLICT" | sed 's/CONFLICT.*: /  - /' || true)
+              git merge --abort
+
+              # Create PR on the private repo
+              gh pr create \
+                --repo akl47/letwinventory-private \
+                --base master \
+                --head "$BRANCH" \
+                --title "chore: sync public repo $TAG" \
+                --body "$(cat <<EOF
           ## Sync from public repo
 
           Auto-sync of public repo tag \`$TAG\`. This PR has conflicts that need manual resolution.
@@ -72,5 +96,11 @@ jobs:
           EOF
           )"
 
-            echo "PR created on private repo for manual conflict resolution"
+              echo "PR created on private repo for manual conflict resolution"
+            else
+              # All conflicts auto-resolved — commit and push
+              git commit --no-edit
+              echo "Version conflicts auto-resolved — pushing to private master"
+              git push private private-master:master
+            fi
           fi
