@@ -14,7 +14,7 @@ import { TaskViewPreferencesService } from '../../../services/task-view-preferen
 import { environment } from '../../../../environments/environment';
 import { APP_VERSION } from '../../../../environments/version';
 
-type NavGroup = 'inventory' | 'design' | 'tools' | 'admin';
+type NavGroup = 'inventory' | 'design' | 'tools' | 'build' | 'admin';
 
 @Component({
     selector: 'app-nav',
@@ -51,6 +51,7 @@ export class NavComponent implements OnInit, OnDestroy {
     private readonly inventoryPrefixes = ['/inventory', '/parts', '/equipment', '/orders'];
     private readonly designPrefixes = ['/requirements', '/harness'];
     private readonly toolsPrefixes = ['/tools'];
+    private readonly buildPrefixes = ['/build'];
     private readonly adminPrefixes = ['/admin'];
     protected readonly hasTasksAccess = computed(() => this.authService.hasAnyPermission('tasks'));
     protected readonly hasProjectsAccess = computed(() => this.authService.hasAnyPermission('projects'));
@@ -106,7 +107,7 @@ export class NavComponent implements OnInit, OnDestroy {
 
     isGroupActive(group: NavGroup): boolean {
         const url = this.router.url;
-        const prefixMap: Record<NavGroup, string[]> = { inventory: this.inventoryPrefixes, design: this.designPrefixes, tools: this.toolsPrefixes, admin: this.adminPrefixes };
+        const prefixMap: Record<NavGroup, string[]> = { inventory: this.inventoryPrefixes, design: this.designPrefixes, tools: this.toolsPrefixes, build: this.buildPrefixes, admin: this.adminPrefixes };
         return prefixMap[group].some(p => url.startsWith(p));
     }
 

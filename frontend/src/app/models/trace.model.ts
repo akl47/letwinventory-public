@@ -5,6 +5,7 @@ export interface UnitOfMeasure {
     id: number;
     name: string;
     description: string | null;
+    allowDecimal?: boolean;
 }
 
 export interface Trace {

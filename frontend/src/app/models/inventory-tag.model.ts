@@ -8,8 +8,12 @@ export interface InventoryTag {
     description?: string;
     quantity?: number; // For Trace items
     partID?: number; // For Trace items
+    revision?: string; // For Trace items — from Part
     manufacturer?: string; // For Trace items
     manufacturerPN?: string; // For Trace items
+    unitOfMeasureID?: number; // For Trace items
+    allowDecimal?: boolean; // For Trace items — from UoM
+    createdAt?: string;
     // properties from backend query
     type: 'Location' | 'Box' | 'Trace' | 'Equipment';
     item_id: number;

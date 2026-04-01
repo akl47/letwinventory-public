@@ -3,7 +3,7 @@ const createError = require('http-errors');
 
 exports.getAllUnitsOfMeasure = (req, res, next) => {
   db.UnitOfMeasure.findAll({
-    attributes: ['id', 'name', 'description'],
+    attributes: ['id', 'name', 'description', 'allowDecimal'],
     order: [['id', 'ASC']]
   }).then(unitsOfMeasure => {
     res.json(unitsOfMeasure);

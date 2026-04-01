@@ -15,6 +15,7 @@ import { Part } from '../../../models';
 import { InventoryService } from '../../../services/inventory.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { CONNECTOR_COLORS } from '../../../utils/harness/wire-color-map';
+import { PartNumberPipe, formatPartNumber } from '../../../pipes/part-number.pipe';
 import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
 
 interface DialogData {
@@ -38,7 +39,8 @@ interface DialogData {
     MatIconModule,
     MatAutocompleteModule,
     MatProgressSpinnerModule,
-    MatTooltipModule
+    MatTooltipModule,
+    PartNumberPipe
   ],
   templateUrl: './harness-connector-dialog.html',
   styleUrls: ['./harness-connector-dialog.scss']
@@ -121,7 +123,7 @@ export class HarnessConnectorDialog implements OnInit {
   }
 
   displayPart(part: Part): string {
-    return part ? part.name : '';
+    return part ? formatPartNumber(part.name, part.revision) : '';
   }
 
   onPartSelected(part: Part) {

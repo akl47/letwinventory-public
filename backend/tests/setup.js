@@ -77,12 +77,14 @@ async function seedReferenceData() {
   await db.PartCategory.bulkCreate([
     { id: 1, name: 'General', tagColorHex: '#808080', activeFlag: true },
     { id: 2, name: 'Electronic', tagColorHex: '#2196F3', activeFlag: true },
+    { id: 3, name: 'Kit', tagColorHex: '#4CAF50', activeFlag: true },
+    { id: 4, name: 'Assembly', tagColorHex: '#2196F3', activeFlag: true },
   ]);
 
   // UnitOfMeasure
   await db.UnitOfMeasure.bulkCreate([
-    { id: 1, name: 'Each' },
-    { id: 2, name: 'Feet' },
+    { id: 1, name: 'Each', allowDecimal: false },
+    { id: 2, name: 'Feet', allowDecimal: true },
   ]);
 
   // TaskTypes
@@ -109,6 +111,8 @@ async function seedReferenceData() {
     { id: 3, code: 'RECEIVED', label: 'Received', activeFlag: true },
     { id: 4, code: 'SPLIT', label: 'Split', activeFlag: true },
     { id: 5, code: 'MERGED', label: 'Merged', activeFlag: true },
+    { id: 8, code: 'KITTED', label: 'Kitted to Assembly', activeFlag: true },
+    { id: 9, code: 'UNKITTED', label: 'Unkitted from Assembly', activeFlag: true },
   ]);
 
   // ElectricalPinTypes
@@ -155,9 +159,10 @@ afterEach(async () => {
     'ElectricalComponent', 'Cable', 'Wire', 'ElectricalConnector',
     'TaskTimeTracking', 'TaskHistory', 'Task', 'ScheduledTask',
     'TaskList', 'Project',
+    'BillOfMaterialItem',
     'BarcodeHistory', 'Trace', 'Equipment', 'OrderItem', 'Order',
     'Box', 'Location', 'Barcode',
-    'Part', 'UploadedFile', 'PushSubscription', 'Printer', 'ApiKeyPermission', 'ApiKey', 'RefreshToken', 'User',
+    'PartRevisionHistory', 'Part', 'UploadedFile', 'PushSubscription', 'Printer', 'ApiKeyPermission', 'ApiKey', 'RefreshToken', 'User',
   ];
 
   for (const table of tablesToClean) {

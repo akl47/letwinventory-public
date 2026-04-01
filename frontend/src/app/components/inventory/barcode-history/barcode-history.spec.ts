@@ -257,6 +257,11 @@ describe('BarcodeHistoryComponent', () => {
       expect(component.getActionLabel({ actionType: { code: 'DELETED' } } as any)).toBe('Deleted');
     });
 
+    it('should return correct labels for KITTED and UNKITTED', () => {
+      expect(component.getActionLabel({ actionType: { code: 'KITTED' } } as any)).toBe('Kitted');
+      expect(component.getActionLabel({ actionType: { code: 'UNKITTED' } } as any)).toBe('Unkitted');
+    });
+
     it('should return actionType label for unknown code', () => {
       expect(component.getActionLabel({ actionType: { code: 'CUSTOM', label: 'Custom Action' } } as any)).toBe('Custom Action');
     });
@@ -271,6 +276,11 @@ describe('BarcodeHistoryComponent', () => {
       expect(component.getActionIcon({ actionType: { code: 'CREATED' } } as any)).toBe('add_circle');
       expect(component.getActionIcon({ actionType: { code: 'MOVED' } } as any)).toBe('swap_horiz');
       expect(component.getActionIcon({ actionType: { code: 'DELETED' } } as any)).toBe('delete');
+    });
+
+    it('should return correct icons for KITTED and UNKITTED', () => {
+      expect(component.getActionIcon({ actionType: { code: 'KITTED' } } as any)).toBe('inventory_2');
+      expect(component.getActionIcon({ actionType: { code: 'UNKITTED' } } as any)).toBe('output');
     });
 
     it('should return history for unknown code', () => {
@@ -326,6 +336,12 @@ describe('BarcodeHistoryComponent', () => {
       vi.spyOn(component, 'openActionDialog');
       component.onDelete();
       expect(component.openActionDialog).toHaveBeenCalledWith('delete');
+    });
+
+    it('onKit should call openActionDialog with kit', () => {
+      vi.spyOn(component, 'openActionDialog');
+      component.onKit();
+      expect(component.openActionDialog).toHaveBeenCalledWith('kit');
     });
 
     it('openActionDialog should do nothing if no barcodeId', () => {

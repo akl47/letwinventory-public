@@ -307,6 +307,66 @@ describe('BarcodeMovementDialog', () => {
     });
   });
 
+  describe('kit action', () => {
+    beforeEach(() => {
+      createComponent({ action: 'kit', barcodeId: 1, barcode: 'TRC-001', isTrace: true });
+    });
+
+    it('should have correct title and icon', () => {
+      expect(component.actionTitle).toBe('Kit to Assembly');
+      expect(component.actionIcon).toBe('inventory_2');
+    });
+
+    it('canSubmit should require target barcode and quantity', () => {
+      component.kitTargetBarcode = '';
+      component.kitQuantity = null;
+      expect(component.canSubmit).toBe(false);
+
+      component.kitTargetBarcode = 'KIT-001';
+      component.kitQuantity = null;
+      expect(component.canSubmit).toBe(false);
+
+      component.kitTargetBarcode = '';
+      component.kitQuantity = 5;
+      expect(component.canSubmit).toBe(false);
+
+      component.kitTargetBarcode = 'KIT-001';
+      component.kitQuantity = 5;
+      expect(component.canSubmit).toBe(true);
+    });
+
+    it('should call kitTrace on submit', () => {
+      component.kitTargetBarcode = 'KIT-001';
+      component.kitQuantity = 5;
+      vi.spyOn(inventoryService, 'lookupBarcode').mockReturnValue(of({ id: 10 } as any));
+      vi.spyOn(inventoryService, 'kitTrace').mockReturnValue(of({ success: true }));
+      component.onSubmit();
+      expect(inventoryService.lookupBarcode).toHaveBeenCalledWith('KIT-001');
+      expect(inventoryService.kitTrace).toHaveBeenCalledWith(1, 10, 5);
+    });
+
+    it('should close dialog on success', () => {
+      component.kitTargetBarcode = 'KIT-001';
+      component.kitQuantity = 3;
+      vi.spyOn(inventoryService, 'lookupBarcode').mockReturnValue(of({ id: 10 } as any));
+      vi.spyOn(inventoryService, 'kitTrace').mockReturnValue(of({ success: true }));
+      component.onSubmit();
+      expect(dialogRef.close).toHaveBeenCalledWith({
+        success: true, action: 'kit', data: { success: true }
+      });
+    });
+
+    it('should show error on lookup failure', () => {
+      component.kitTargetBarcode = 'INVALID';
+      component.kitQuantity = 5;
+      vi.spyOn(inventoryService, 'lookupBarcode').mockReturnValue(
+        throwError(() => ({ status: 404 }))
+      );
+      component.onSubmit();
+      expect(component.errorMessage()).toContain('not found');
+    });
+  });
+
   describe('signal defaults', () => {
     beforeEach(() => {
       createComponent({ action: 'move', barcodeId: 1, barcode: 'LOC-001', isTrace: false });

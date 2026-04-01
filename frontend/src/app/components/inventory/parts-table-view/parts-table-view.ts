@@ -64,7 +64,7 @@ export class PartsTableView implements OnInit {
   showInternal = signal<boolean>(true);
   showVendor = signal<boolean>(true);
 
-  displayedColumns: string[] = ['image', 'name', 'description', 'category', 'vendor', 'sku', 'minimumOrderQuantity', 'inStock', 'minimumStockQuantity', 'internalPart', 'createdAt'];
+  displayedColumns: string[] = ['image', 'name', 'revision', 'description', 'category', 'vendor', 'sku', 'minimumOrderQuantity', 'inStock', 'minimumStockQuantity', 'internalPart', 'createdAt'];
 
   // Pagination
   pageSize = signal<number>(10);

@@ -26,7 +26,7 @@ const mockParts: Part[] = [
     vendor: 'Digi-Key', sku: 'DK-001', link: null, minimumOrderQuantity: 1, minimumStockQuantity: null,
     partCategoryID: 1, activeFlag: true, serialNumberRequired: false,
     lotNumberRequired: false, defaultUnitOfMeasureID: 1, manufacturer: 'TE',
-    manufacturerPN: 'TE-001', createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    manufacturerPN: 'TE-001', revision: '00', revisionLocked: false, createdAt: '2026-01-01', updatedAt: '2026-01-01',
   },
 ];
 
@@ -103,7 +103,7 @@ describe('PartEditDialog', () => {
       minimumOrderQuantity: 5, minimumStockQuantity: null, partCategoryID: 1, activeFlag: true,
       serialNumberRequired: false, lotNumberRequired: false,
       defaultUnitOfMeasureID: 1, manufacturer: 'TE', manufacturerPN: 'TE-001',
-      createdAt: '2026-01-01', updatedAt: '2026-01-01',
+      revision: '00', revisionLocked: false, createdAt: '2026-01-01', updatedAt: '2026-01-01',
       PartCategory: { id: 1, name: 'Connector', tagColorHex: '#FF0000', activeFlag: true, createdAt: '', updatedAt: '' },
     };
 

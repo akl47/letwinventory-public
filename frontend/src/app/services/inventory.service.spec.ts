@@ -407,4 +407,54 @@ describe('InventoryService', () => {
     expect(req.request.method).toBe('GET');
     req.flush([]);
   });
+
+  // --- BOM ---
+
+  it('getBom sends GET to /bom/:partId', () => {
+    service.getBom(42).subscribe();
+    const req = httpMock.expectOne(`${API}/bom/42`);
+    expect(req.request.method).toBe('GET');
+    req.flush({ bomItems: [] });
+  });
+
+  it('updateBom sends PUT to /bom/:partId', () => {
+    const bomItems = [{ partID: 1, quantity: 3 }];
+    service.updateBom(42, bomItems).subscribe();
+    const req = httpMock.expectOne(`${API}/bom/42`);
+    expect(req.request.method).toBe('PUT');
+    expect(req.request.body).toEqual({ bomItems });
+    req.flush({ bomItems: [] });
+  });
+
+  // --- Kitting ---
+
+  it('kitTrace sends POST to /trace/kit/:barcodeId', () => {
+    service.kitTrace(1, 2, 5).subscribe();
+    const req = httpMock.expectOne(`${API}/trace/kit/1`);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ targetBarcodeId: 2, quantity: 5 });
+    req.flush({});
+  });
+
+  it('unkitTrace sends POST to /trace/unkit/:barcodeId', () => {
+    service.unkitTrace(2, 1, 5).subscribe();
+    const req = httpMock.expectOne(`${API}/trace/unkit/2`);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ targetBarcodeId: 1, quantity: 5 });
+    req.flush({});
+  });
+
+  it('getKitStatus sends GET to /trace/kit-status/:barcodeId', () => {
+    service.getKitStatus(1).subscribe();
+    const req = httpMock.expectOne(`${API}/trace/kit-status/1`);
+    expect(req.request.method).toBe('GET');
+    req.flush({ status: 'partial', bomLines: [] });
+  });
+
+  it('getInProgressBuilds sends GET to /trace/in-progress-builds', () => {
+    service.getInProgressBuilds().subscribe();
+    const req = httpMock.expectOne(`${API}/trace/in-progress-builds`);
+    expect(req.request.method).toBe('GET');
+    req.flush([]);
+  });
 });

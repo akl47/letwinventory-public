@@ -192,6 +192,30 @@ export class InventoryService {
         return this.http.get<Part>(`${this.apiUrl}/part/${partId}`);
     }
 
+    getPartRevisions(name: string): Observable<Part[]> {
+        return this.http.get<Part[]>(`${this.apiUrl}/part/revisions/${encodeURIComponent(name)}`);
+    }
+
+    createNewRevision(partId: number): Observable<Part> {
+        return this.http.post<Part>(`${this.apiUrl}/part/${partId}/new-revision`, {});
+    }
+
+    releaseToProduction(partId: number): Observable<Part> {
+        return this.http.post<Part>(`${this.apiUrl}/part/${partId}/release`, {});
+    }
+
+    lockRevision(partId: number): Observable<any> {
+        return this.http.put(`${this.apiUrl}/part/${partId}/lock`, {});
+    }
+
+    unlockRevision(partId: number): Observable<any> {
+        return this.http.put(`${this.apiUrl}/part/${partId}/unlock`, {});
+    }
+
+    getPartRevisionHistory(partId: number): Observable<any[]> {
+        return this.http.get<any[]>(`${this.apiUrl}/part/${partId}/revision-history`);
+    }
+
     getPartCategories(): Observable<PartCategory[]> {
         return this.http.get<PartCategory[]>(`${this.apiUrl}/part/categories`);
     }
@@ -244,6 +268,35 @@ export class InventoryService {
         return this.http.delete(`${this.apiUrl}/trace/barcode/${barcodeId}`, {
             body: deleteQuantity !== undefined ? { deleteQuantity } : {}
         });
+    }
+
+    // Kit/Assembly BOM methods
+    getBom(partId: number): Observable<{ bomItems: any[] }> {
+        return this.http.get<{ bomItems: any[] }>(`${this.apiUrl}/bom/${partId}`);
+    }
+
+    updateBom(partId: number, bomItems: { partID: number; quantity: number }[]): Observable<{ bomItems: any[] }> {
+        return this.http.put<{ bomItems: any[] }>(`${this.apiUrl}/bom/${partId}`, { bomItems });
+    }
+
+    // Kitting methods
+    kitTrace(sourceBarcodeId: number, targetBarcodeId: number, quantity: number): Observable<any> {
+        return this.http.post(`${this.apiUrl}/trace/kit/${sourceBarcodeId}`, { targetBarcodeId, quantity });
+    }
+
+    unkitTrace(kitBarcodeId: number, targetBarcodeId: number, quantity: number): Observable<any> {
+        return this.http.post(`${this.apiUrl}/trace/unkit/${kitBarcodeId}`, { targetBarcodeId, quantity });
+    }
+
+    getKitStatus(barcodeId: number): Observable<{ status: string; bomLines: any[] }> {
+        return this.http.get<{ status: string; bomLines: any[] }>(`${this.apiUrl}/trace/kit-status/${barcodeId}`);
+    }
+
+    getInProgressBuilds(includeCompleted = false): Observable<any[]> {
+        const url = includeCompleted
+            ? `${this.apiUrl}/trace/in-progress-builds?includeCompleted=true`
+            : `${this.apiUrl}/trace/in-progress-builds`;
+        return this.http.get<any[]>(url);
     }
 
     // Order methods

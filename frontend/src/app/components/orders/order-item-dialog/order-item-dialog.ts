@@ -13,6 +13,7 @@ import { map, startWith } from 'rxjs/operators';
 import { InventoryService } from '../../../services/inventory.service';
 import { Part, OrderItem, OrderLineType } from '../../../models';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
+import { PartNumberPipe, formatPartNumber } from '../../../pipes/part-number.pipe';
 
 export interface OrderItemDialogData {
   orderID: number;
@@ -31,7 +32,8 @@ export interface OrderItemDialogData {
     MatInputModule,
     MatSelectModule,
     MatAutocompleteModule,
-    MatIconModule
+    MatIconModule,
+    PartNumberPipe
   ],
   templateUrl: './order-item-dialog.html',
   styleUrl: './order-item-dialog.css'
@@ -273,7 +275,7 @@ export class OrderItemDialog implements OnInit {
     if (!part || typeof part === 'string') {
       return part as string || '';
     }
-    return `${part.sku || ''} - ${part.name || ''}`.trim();
+    return `${part.sku || ''} - ${formatPartNumber(part.name, part.revision)}`.trim();
   }
 
   onPartSelected(part: Part) {

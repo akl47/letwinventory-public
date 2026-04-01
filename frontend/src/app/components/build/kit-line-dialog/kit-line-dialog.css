@@ -1,0 +1,63 @@
+.dialog-container {
+    min-width: 400px;
+}
+
+h2[mat-dialog-title] {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.needs-label {
+    color: var(--mat-sys-on-surface-variant);
+    margin-bottom: 16px;
+}
+
+.scan-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.scan-field {
+    flex: 1;
+}
+
+.scan-result {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.scan-result-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px;
+    background: var(--mat-sys-surface-container-low);
+    border-radius: 8px;
+}
+
+.kit-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.qty-field {
+    width: 150px;
+}
+
+.message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 8px;
+    margin-top: 12px;
+}
+
+.error-message {
+    background: var(--mat-sys-error-container);
+    color: var(--mat-sys-on-error-container);
+}

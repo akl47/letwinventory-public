@@ -236,7 +236,7 @@ exports.trace = (req,res,next) => {
 
 exports.part = (req,res,next) => {
     const model = db.Part.tableAttributes
-    let ignore = [...ignore_all]
+    let ignore = [...ignore_all, 'revision', 'revisionLocked', 'previousRevisionID']
     return_body = {}
     let error_message = ''
     Object.keys(model).forEach(attribute=>{

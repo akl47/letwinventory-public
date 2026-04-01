@@ -7,7 +7,7 @@
             <mat-icon>history</mat-icon>
             Barcode History
             @if (barcodeInfo) {
-                <span class="barcode-label">{{ barcodeInfo.barcode }}</span>
+                <app-barcode-tag [barcode]="barcodeInfo.barcode" (dataChanged)="loadHistory()"></app-barcode-tag>
                 @if (barcodeInfo.activeFlag === false) {
                     <span class="inactive-badge">Inactive</span>
                 }
@@ -33,6 +33,9 @@
                     </button>
                     <button mat-icon-button (click)="onAdjust()" matTooltip="Adjust Quantity" [disabled]="barcodeInfo?.activeFlag === false">
                         <mat-icon>tune</mat-icon>
+                    </button>
+                    <button mat-icon-button (click)="onKit()" matTooltip="Kit to Assembly" [disabled]="barcodeInfo?.activeFlag === false">
+                        <mat-icon>inventory_2</mat-icon>
                     </button>
                 }
                 <button mat-icon-button (click)="onDelete()" matTooltip="Delete" class="delete-button" [disabled]="barcodeInfo?.activeFlag === false">

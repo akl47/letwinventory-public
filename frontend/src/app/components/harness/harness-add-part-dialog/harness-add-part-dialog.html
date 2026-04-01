@@ -46,7 +46,7 @@
                           }
                         </span>
                         @if (conn.part) {
-                          <span class="part-link">{{ conn.part.name }}</span>
+                          <span class="part-link">{{ conn.part | partNumber }}</span>
                         }
                       </div>
                     </mat-radio-button>
@@ -147,7 +147,7 @@
                           <span class="color-dot" [style.backgroundColor]="getWireHex(wire.colorCode || '')"></span>
                         </span>
                         @if (wire.part) {
-                          <span class="part-link">{{ wire.part.name }}</span>
+                          <span class="part-link">{{ wire.part | partNumber }}</span>
                         }
                       </div>
                     </mat-radio-button>
@@ -248,7 +248,7 @@
                           }
                         </div>
                         @if (cable.part) {
-                          <span class="part-link">{{ cable.part.name }}</span>
+                          <span class="part-link">{{ cable.part | partNumber }}</span>
                         }
                       </div>
                     </mat-radio-button>

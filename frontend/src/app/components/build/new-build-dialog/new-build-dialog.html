@@ -1,0 +1,85 @@
+<div class="dialog-container">
+    <h2 mat-dialog-title>
+        <mat-icon>build_circle</mat-icon>
+        New Build
+    </h2>
+
+    <mat-dialog-content>
+        <p class="action-description">Select a kit or assembly to build.</p>
+
+        <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Kit / Assembly</mat-label>
+            <input matInput
+                   [ngModel]="searchText()"
+                   (ngModelChange)="searchText.set(typeof $event === 'string' ? $event : $event?.name || '')"
+                   [matAutocomplete]="partAuto"
+                   placeholder="Search by name, description, vendor, or SKU">
+            <mat-icon matPrefix>search</mat-icon>
+            <mat-autocomplete #partAuto="matAutocomplete" [displayWith]="displayPartName" (optionSelected)="onPartSelected($event.option.value)">
+                @for (part of filteredParts(); track part.id) {
+                <mat-option [value]="part">
+                    <div class="part-option">
+                        <strong>{{ part | partNumber }}</strong> - {{ part.description }}
+                        <br>
+                        <small>{{ part.vendor }}{{ part.sku ? ' | SKU: ' + part.sku : '' }}
+                            | {{ part.PartCategory?.name }}</small>
+                    </div>
+                </mat-option>
+                }
+            </mat-autocomplete>
+        </mat-form-field>
+
+        @if (selectedPart()) {
+        <div class="selected-part-info">
+            <mat-icon>check_circle</mat-icon>
+            <span>{{ selectedPart() | partNumber }} — {{ selectedPart()!.PartCategory?.name }}</span>
+        </div>
+        }
+
+        <div class="location-section">
+            <label class="section-label">Location</label>
+            @if (loadingLocations()) {
+                <mat-spinner diameter="24"></mat-spinner>
+            } @else {
+                <mat-form-field appearance="outline" class="full-width">
+                    <mat-label>Search Location</mat-label>
+                    <input matInput
+                           [value]="locationSearch()"
+                           (input)="onLocationInput($any($event.target).value)"
+                           [matAutocomplete]="locationAuto"
+                           placeholder="Type to search...">
+                    <mat-icon matPrefix>place</mat-icon>
+                    <mat-autocomplete #locationAuto="matAutocomplete"
+                                      (optionSelected)="onLocationSelected($event.option.value)">
+                        @for (loc of filteredLocations(); track loc.id) {
+                            <mat-option [value]="loc">
+                                {{ getLocationLabel(loc) }}
+                            </mat-option>
+                        }
+                    </mat-autocomplete>
+                    <mat-hint>Where will this build be stored?</mat-hint>
+                </mat-form-field>
+            }
+        </div>
+
+        @if (errorMessage()) {
+        <div class="error-message">
+            <mat-icon>error</mat-icon>
+            <span>{{ errorMessage() }}</span>
+        </div>
+        }
+    </mat-dialog-content>
+
+    <mat-dialog-actions align="end">
+        <button mat-button (click)="onCancel()" [disabled]="isSubmitting()">Cancel</button>
+        <button mat-flat-button color="primary"
+                (click)="onSubmit()"
+                [disabled]="!selectedPart() || !selectedLocationId() || isSubmitting()">
+            @if (isSubmitting()) {
+                <mat-spinner diameter="20"></mat-spinner>
+            } @else {
+                <ng-container><mat-icon>build</mat-icon> Start Build</ng-container>
+            }
+        </button>
+    </mat-dialog-actions>
+</div>
