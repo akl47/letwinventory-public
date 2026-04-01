@@ -11,6 +11,7 @@ import { InventoryService } from '../../../services/inventory.service';
 import { InventoryTag, Part, UnitOfMeasure } from '../../../models';
 import { CommonModule } from '@angular/common';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
+import { PartNumberPipe } from '../../../pipes/part-number.pipe';
 
 @Component({
   selector: 'app-inventory-item-dialog',
@@ -24,7 +25,8 @@ import { ErrorNotificationService } from '../../../services/error-notification.s
     MatInputModule,
     MatSelectModule,
     MatAutocompleteModule,
-    MatIconModule
+    MatIconModule,
+    PartNumberPipe
   ],
   templateUrl: './inventory-item-dialog.html',
   styleUrl: './inventory-item-dialog.css',
@@ -55,6 +57,8 @@ export class InventoryItemDialog implements OnInit {
     if (!part || !part.defaultUnitOfMeasureID) return null;
     return this.unitsOfMeasure().find(u => u.id === part.defaultUnitOfMeasureID) || null;
   });
+
+  allowDecimal = computed(() => this.selectedPartUOM()?.allowDecimal ?? false);
 
   form = this.fb.group({
     name: ['', Validators.required],

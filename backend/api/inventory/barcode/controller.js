@@ -367,7 +367,7 @@ async function buildTag(barcode, opts = {}) {
   const typeName = barcode.BarcodeCategory.name;
 
   const includeOpts = typeName === 'Trace'
-    ? [{ model: db.Part }]
+    ? [{ model: db.Part }, { model: db.UnitOfMeasure, as: 'unitOfMeasure', attributes: ['id', 'name', 'allowDecimal'] }]
     : [];
 
   const where = { barcodeID: barcode.id };
@@ -394,15 +394,19 @@ async function buildTag(barcode, opts = {}) {
     activeFlag: barcode.activeFlag,
     name: tagDataJson.name,
     description: tagDataJson.description,
+    createdAt: barcode.createdAt,
   };
 
   if (typeName === 'Trace') {
     tag.name = tagDataJson.Part?.name;
     tag.description = tagDataJson.Part?.description;
+    tag.revision = tagDataJson.Part?.revision;
     tag.quantity = tagDataJson.quantity;
     tag.partID = tagDataJson.partID;
     tag.manufacturer = tagDataJson.Part?.manufacturer;
     tag.manufacturerPN = tagDataJson.Part?.manufacturerPN;
+    tag.unitOfMeasureID = tagDataJson.unitOfMeasureID;
+    tag.allowDecimal = tagDataJson.unitOfMeasure?.allowDecimal ?? false;
   }
 
   return tag;

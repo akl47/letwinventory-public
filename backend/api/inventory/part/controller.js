@@ -193,39 +193,78 @@ exports.getPartByID = (req, res, next) => {
 }
 
 
-exports.createNewPart = (req, res, next) => {
-  // Validate manufacturer fields for vendor parts
-  if (!req.body.internalPart) {
-    if (!req.body.manufacturer || !req.body.manufacturerPN) {
-      return next(createError(400, 'Manufacturer and Manufacturer Part Number are required for vendor parts'));
+exports.createNewPart = async (req, res, next) => {
+  try {
+    // Validate manufacturer fields for vendor parts
+    if (!req.body.internalPart) {
+      if (!req.body.manufacturer || !req.body.manufacturerPN) {
+        return next(createError(400, 'Manufacturer and Manufacturer Part Number are required for vendor parts'));
+      }
     }
-  }
 
-  db.Part.create(req.body).then(part => {
-    res.json(part)
-  }).catch(error => {
-    next(createError(500, 'Error Creating New Part:' + error))
-  })
+    // Set default revision if not provided
+    if (!req.body.revision) {
+      req.body.revision = req.body.internalPart ? '01' : '00';
+    }
+
+    const part = await db.Part.create(req.body);
+
+    await db.PartRevisionHistory.create({
+      partID: part.id,
+      changedByUserID: req.user?.id || null,
+      changeType: 'created',
+      changes: null,
+      createdAt: new Date()
+    });
+
+    res.json(part);
+  } catch (error) {
+    next(createError(500, 'Error Creating New Part:' + error));
+  }
 }
 
-exports.updatePartByID = (req, res, next) => {
-  // Validate manufacturer fields for vendor parts
-  if (!req.body.internalPart) {
-    if (!req.body.manufacturer || !req.body.manufacturerPN) {
-      return next(createError(400, 'Manufacturer and Manufacturer Part Number are required for vendor parts'));
-    }
-  }
+exports.updatePartByID = async (req, res, next) => {
+  try {
+    const part = await db.Part.findByPk(req.params.id);
+    if (!part) return next(createError(404, 'Part not found'));
+    if (part.revisionLocked) return next(createError(403, 'This revision is locked and cannot be edited'));
 
-  db.Part.update(req.body, {
-    where: {
-      id: req.params.id
-    },
-    returning: true
-  }).then(updated => {
-    res.json(updated[1])
-  }).catch(error => {
-    next(createError(500, 'Error Updating Part:' + error))
-  })
+    // Validate manufacturer fields for vendor parts
+    if (!req.body.internalPart) {
+      if (!req.body.manufacturer || !req.body.manufacturerPN) {
+        return next(createError(400, 'Manufacturer and Manufacturer Part Number are required for vendor parts'));
+      }
+    }
+
+    const updated = await db.Part.update(req.body, {
+      where: { id: req.params.id },
+      returning: true
+    });
+
+    // Compute field-level diffs and record history
+    const changes = {};
+    const fields = ['name', 'description', 'vendor', 'sku', 'link', 'minimumOrderQuantity', 'partCategoryID',
+      'serialNumberRequired', 'lotNumberRequired', 'defaultUnitOfMeasureID', 'manufacturer', 'manufacturerPN',
+      'minimumStockQuantity', 'imageFileID', 'internalPart'];
+    for (const field of fields) {
+      if (req.body[field] !== undefined && req.body[field] !== part[field]) {
+        changes[field] = { old: part[field], new: req.body[field] };
+      }
+    }
+    if (Object.keys(changes).length > 0) {
+      await db.PartRevisionHistory.create({
+        partID: part.id,
+        changedByUserID: req.user?.id || null,
+        changeType: 'updated',
+        changes,
+        createdAt: new Date()
+      });
+    }
+
+    res.json(updated[1]);
+  } catch (error) {
+    next(createError(500, 'Error Updating Part:' + error));
+  }
 }
 
 exports.deletePartByID = (req, res, next) => {
@@ -363,6 +402,260 @@ exports.getPartLocations = async (req, res, next) => {
     res.json({ traces: traceResults, totalQuantity, pendingOrders });
   } catch (error) {
     next(createError(500, 'Error getting part locations: ' + error.message));
+  }
+};
+
+function getNextLetterRevision(current) {
+  if (!current) return 'A';
+  const chars = current.toUpperCase().split('');
+  let i = chars.length - 1;
+  while (i >= 0) {
+    if (chars[i] === 'Z') { chars[i] = 'A'; i--; }
+    else { chars[i] = String.fromCharCode(chars[i].charCodeAt(0) + 1); return chars.join(''); }
+  }
+  return 'A' + chars.join('');
+}
+
+exports.createNewRevision = async (req, res, next) => {
+  let partName = '?';
+  let nextRev = '?';
+  try {
+    const part = await db.Part.findByPk(req.params.id, {
+      include: [{ model: db.BillOfMaterialItem, as: 'bomItems', where: { activeFlag: true }, required: false }]
+    });
+    if (!part) return next(createError(404, 'Part not found'));
+    partName = part.name;
+
+    // Find the latest numeric revision for this part name
+    const allRevisions = await db.Part.findAll({
+      where: { name: part.name },
+      attributes: ['id', 'revision']
+    });
+    const existingRevisions = new Set(allRevisions.map(p => p.revision));
+    const numericRevisions = [...existingRevisions].filter(r => /^\d+$/.test(r));
+    let nextNum = 1;
+    if (numericRevisions.length > 0) {
+      nextNum = Math.max(...numericRevisions.map(r => parseInt(r, 10))) + 1;
+    }
+    nextRev = nextNum.toString().padStart(2, '0');
+    while (existingRevisions.has(nextRev)) {
+      nextNum++;
+      nextRev = nextNum.toString().padStart(2, '0');
+    }
+    const partData = part.toJSON();
+    const newPart = await db.Part.create({
+      name: partData.name,
+      description: partData.description,
+      internalPart: partData.internalPart,
+      vendor: partData.vendor,
+      sku: partData.sku,
+      link: partData.link,
+      minimumOrderQuantity: partData.minimumOrderQuantity,
+      partCategoryID: partData.partCategoryID,
+      serialNumberRequired: partData.serialNumberRequired,
+      lotNumberRequired: partData.lotNumberRequired,
+      defaultUnitOfMeasureID: partData.defaultUnitOfMeasureID,
+      manufacturer: partData.manufacturer,
+      manufacturerPN: partData.manufacturerPN,
+      minimumStockQuantity: partData.minimumStockQuantity,
+      imageFileID: partData.imageFileID,
+      activeFlag: true,
+      revision: nextRev,
+      revisionLocked: false,
+      previousRevisionID: part.id,
+    });
+
+    // Copy BOM items
+    if (partData.bomItems?.length > 0) {
+      await db.BillOfMaterialItem.bulkCreate(
+        partData.bomItems.map(item => ({
+          partID: newPart.id,
+          componentPartID: item.componentPartID,
+          quantity: item.quantity,
+          activeFlag: true,
+        }))
+      );
+    }
+
+    // Record history
+    await db.PartRevisionHistory.create({
+      partID: newPart.id,
+      changedByUserID: req.user?.id || null,
+      changeType: 'new_revision',
+      changes: { previousRevision: { old: null, new: part.revision }, previousPartID: { old: null, new: part.id } },
+      createdAt: new Date()
+    });
+
+    res.json(newPart);
+  } catch (error) {
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return next(createError(409, `Part "${partName}" already has revision "${nextRev}". Existing revisions may need to be cleaned up.`));
+    }
+    if (error.name === 'SequelizeValidationError') {
+      const details = error.errors.map(e => `${e.path}: ${e.message}`).join('; ');
+      return next(createError(400, `Validation failed: ${details}`));
+    }
+    next(createError(500, 'Error creating new revision: ' + error.message));
+  }
+};
+
+exports.releaseToProduction = async (req, res, next) => {
+  let partName = '?';
+  let nextRev = '?';
+  try {
+    const part = await db.Part.findByPk(req.params.id, {
+      include: [{ model: db.BillOfMaterialItem, as: 'bomItems', where: { activeFlag: true }, required: false }]
+    });
+    if (!part) return next(createError(404, 'Part not found'));
+    partName = part.name;
+
+    // Find the latest letter revision for this part name
+    const allRevisions = await db.Part.findAll({
+      where: { name: part.name },
+      attributes: ['revision']
+    });
+    const existingRevisions = new Set(allRevisions.map(p => p.revision));
+    const letterRevisions = allRevisions.map(p => p.revision).filter(r => /^[A-Z]+$/.test(r));
+    nextRev = 'A';
+    if (letterRevisions.length > 0) {
+      const sorted = letterRevisions.sort((a, b) => {
+        if (a.length !== b.length) return a.length - b.length;
+        return a.localeCompare(b);
+      });
+      nextRev = getNextLetterRevision(sorted[sorted.length - 1]);
+    }
+    while (existingRevisions.has(nextRev)) {
+      nextRev = getNextLetterRevision(nextRev);
+    }
+
+    const partData = part.toJSON();
+    const newPart = await db.Part.create({
+      name: partData.name,
+      description: partData.description,
+      internalPart: partData.internalPart,
+      vendor: partData.vendor,
+      sku: partData.sku,
+      link: partData.link,
+      minimumOrderQuantity: partData.minimumOrderQuantity,
+      partCategoryID: partData.partCategoryID,
+      serialNumberRequired: partData.serialNumberRequired,
+      lotNumberRequired: partData.lotNumberRequired,
+      defaultUnitOfMeasureID: partData.defaultUnitOfMeasureID,
+      manufacturer: partData.manufacturer,
+      manufacturerPN: partData.manufacturerPN,
+      minimumStockQuantity: partData.minimumStockQuantity,
+      imageFileID: partData.imageFileID,
+      activeFlag: true,
+      revision: nextRev,
+      revisionLocked: false,
+      previousRevisionID: part.id,
+    });
+
+    // Copy BOM items
+    if (partData.bomItems?.length > 0) {
+      await db.BillOfMaterialItem.bulkCreate(
+        partData.bomItems.map(item => ({
+          partID: newPart.id,
+          componentPartID: item.componentPartID,
+          quantity: item.quantity,
+          activeFlag: true,
+        }))
+      );
+    }
+
+    // Lock the source part
+    await part.update({ revisionLocked: true });
+
+    // Record history for the new part
+    await db.PartRevisionHistory.create({
+      partID: newPart.id,
+      changedByUserID: req.user?.id || null,
+      changeType: 'production_release',
+      changes: { previousRevision: { old: null, new: part.revision }, previousPartID: { old: null, new: part.id } },
+      createdAt: new Date()
+    });
+
+    // Record lock history for the source part
+    await db.PartRevisionHistory.create({
+      partID: part.id,
+      changedByUserID: req.user?.id || null,
+      changeType: 'locked',
+      changes: null,
+      createdAt: new Date()
+    });
+
+    res.json(newPart);
+  } catch (error) {
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return next(createError(409, `Part "${partName}" already has revision "${nextRev}". Existing revisions may need to be cleaned up.`));
+    }
+    if (error.name === 'SequelizeValidationError') {
+      const details = error.errors.map(e => `${e.path}: ${e.message}`).join('; ');
+      return next(createError(400, `Validation failed: ${details}`));
+    }
+    next(createError(500, 'Error releasing to production: ' + error.message));
+  }
+};
+
+exports.lockRevision = async (req, res, next) => {
+  try {
+    const part = await db.Part.findByPk(req.params.id);
+    if (!part) return next(createError(404, 'Part not found'));
+    await part.update({ revisionLocked: true });
+    await db.PartRevisionHistory.create({
+      partID: part.id,
+      changedByUserID: req.user?.id || null,
+      changeType: 'locked',
+      changes: null,
+      createdAt: new Date()
+    });
+    res.json({ success: true });
+  } catch (error) {
+    next(createError(500, 'Error locking revision: ' + error.message));
+  }
+};
+
+exports.unlockRevision = async (req, res, next) => {
+  try {
+    const part = await db.Part.findByPk(req.params.id);
+    if (!part) return next(createError(404, 'Part not found'));
+    await part.update({ revisionLocked: false });
+    await db.PartRevisionHistory.create({
+      partID: part.id,
+      changedByUserID: req.user?.id || null,
+      changeType: 'unlocked',
+      changes: null,
+      createdAt: new Date()
+    });
+    res.json({ success: true });
+  } catch (error) {
+    next(createError(500, 'Error unlocking revision: ' + error.message));
+  }
+};
+
+exports.getRevisionHistory = async (req, res, next) => {
+  try {
+    const history = await db.PartRevisionHistory.findAll({
+      where: { partID: req.params.id },
+      include: [{ model: db.User, as: 'changedBy', attributes: ['id', 'displayName'] }],
+      order: [['createdAt', 'DESC']]
+    });
+    res.json(history);
+  } catch (error) {
+    next(createError(500, 'Error getting revision history: ' + error.message));
+  }
+};
+
+exports.getRevisionsByName = async (req, res, next) => {
+  try {
+    const parts = await db.Part.findAll({
+      where: { name: req.params.name },
+      include: [{ model: db.PartCategory }, { model: db.UploadedFile, as: 'imageFile', attributes: ['id', 'filename', 'mimeType', 'data'] }],
+      order: [['createdAt', 'ASC']]
+    });
+    res.json(parts);
+  } catch (error) {
+    next(createError(500, 'Error getting revisions: ' + error.message));
   }
 };
 

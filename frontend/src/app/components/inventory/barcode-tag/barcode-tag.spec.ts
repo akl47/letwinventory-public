@@ -71,7 +71,10 @@ describe('BarcodeTag', () => {
 
       component.openBarcodeDialog(new MouseEvent('click'));
       expect(dialog.open).toHaveBeenCalledWith(BarcodeDialog, {
-        data: { barcode: 'LOC-001' }
+        data: { barcode: 'LOC-001' },
+        panelClass: 'scanner-dialog-panel',
+        width: '480px',
+        maxHeight: '90vh',
       });
     });
 

@@ -1,6 +1,20 @@
 const db = require('../../../models');
 const createError = require('http-errors');
 
+/**
+ * Validate that a quantity is an integer when the UoM does not allow decimals.
+ * Returns an error message string if invalid, null if valid.
+ */
+async function validateQuantityForUoM(quantity, unitOfMeasureID) {
+  if (!unitOfMeasureID) return null;
+  const uom = await db.UnitOfMeasure.findByPk(unitOfMeasureID);
+  if (!uom || uom.allowDecimal) return null;
+  if (!Number.isInteger(quantity)) {
+    return `Quantity must be a whole number for unit "${uom.name}"`;
+  }
+  return null;
+}
+
 
 exports.createNewTrace = async (req, res, next) => {
   try {
@@ -50,6 +64,10 @@ exports.createNewTrace = async (req, res, next) => {
     } catch (historyError) {
       console.error('Error recording barcode history:', historyError);
     }
+
+    // Validate quantity for UoM
+    const qtyError = await validateQuantityForUoM(req.body.quantity, req.body.unitOfMeasureID);
+    if (qtyError) return next(createError(400, qtyError));
 
     const trace = await db.Trace.create(req.body);
 
@@ -134,6 +152,12 @@ exports.splitTrace = async (req, res, next) => {
     if (splitQuantity <= 0) {
       return next(createError(400, 'Split quantity must be greater than 0'));
     }
+
+    // Validate quantity for UoM
+    const splitQtyError = await validateQuantityForUoM(splitQuantity, sourceData.unitOfMeasureID);
+    if (splitQtyError) return next(createError(400, splitQtyError));
+    const remainderError = await validateQuantityForUoM(sourceData.quantity - splitQuantity, sourceData.unitOfMeasureID);
+    if (remainderError) return next(createError(400, remainderError));
 
     // Get trace barcode category
     const barcodeCategory = await db.BarcodeCategory.findOne({
@@ -332,6 +356,10 @@ exports.adjustQuantity = async (req, res, next) => {
     const traceData = trace.toJSON();
     const oldQuantity = traceData.quantity;
 
+    // Validate quantity for UoM
+    const adjQtyError = await validateQuantityForUoM(newQuantity, traceData.unitOfMeasureID);
+    if (adjQtyError) return next(createError(400, adjQtyError));
+
     if (newQuantity === oldQuantity) {
       return next(createError(400, 'New quantity is the same as current quantity'));
     }
@@ -370,6 +398,397 @@ exports.adjustQuantity = async (req, res, next) => {
 }
 
 /**
+ * Kit a source trace to a target kit/assembly trace.
+ * Deducts quantity from source, records KITTED history on both.
+ */
+exports.kitTrace = async (req, res, next) => {
+  const sourceBarcodeID = parseInt(req.params.barcodeId);
+  const { targetBarcodeId, quantity } = req.body;
+
+  try {
+    if (!targetBarcodeId || !quantity || quantity <= 0) {
+      return next(createError(400, 'targetBarcodeId and positive quantity are required'));
+    }
+
+    // Find source trace
+    const sourceTrace = await db.Trace.findOne({
+      where: { barcodeID: sourceBarcodeID, activeFlag: true },
+      include: [{ model: db.Barcode }]
+    });
+    if (!sourceTrace) {
+      return next(createError(404, 'Source trace not found'));
+    }
+
+    if (quantity > sourceTrace.quantity) {
+      return next(createError(400, 'Insufficient quantity'));
+    }
+
+    // Validate quantity for UoM
+    const kitQtyError = await validateQuantityForUoM(quantity, sourceTrace.unitOfMeasureID);
+    if (kitQtyError) return next(createError(400, kitQtyError));
+
+    // Find target trace and verify it's a kit/assembly
+    const targetTrace = await db.Trace.findOne({
+      where: { barcodeID: targetBarcodeId, activeFlag: true },
+      include: [
+        { model: db.Barcode },
+        {
+          model: db.Part,
+          include: [{ model: db.PartCategory, attributes: ['name'] }]
+        }
+      ]
+    });
+    if (!targetTrace) {
+      return next(createError(404, 'Target trace not found'));
+    }
+
+    const targetCategoryName = targetTrace.Part?.PartCategory?.name;
+    if (targetCategoryName !== 'Kit' && targetCategoryName !== 'Assembly') {
+      return next(createError(400, 'Target trace is not a Kit or Assembly'));
+    }
+
+    // Deduct from source
+    const newSourceQty = sourceTrace.quantity - quantity;
+    await sourceTrace.update({
+      quantity: newSourceQty,
+      activeFlag: newSourceQty > 0
+    });
+    if (newSourceQty <= 0) {
+      await db.Barcode.update({ activeFlag: false }, { where: { id: sourceBarcodeID } });
+    }
+
+    // Record KITTED history on both
+    const kittedAction = await db.BarcodeHistoryActionType.findOne({
+      where: { code: 'KITTED', activeFlag: true }
+    });
+
+    let sourceHistory, targetHistory;
+    if (kittedAction) {
+      sourceHistory = await db.BarcodeHistory.create({
+        barcodeID: sourceBarcodeID,
+        userID: req.user ? req.user.id : null,
+        actionID: kittedAction.id,
+        fromID: sourceBarcodeID,
+        toID: targetBarcodeId,
+        qty: quantity,
+        unitOfMeasureID: sourceTrace.unitOfMeasureID
+      });
+      targetHistory = await db.BarcodeHistory.create({
+        barcodeID: targetBarcodeId,
+        userID: req.user ? req.user.id : null,
+        actionID: kittedAction.id,
+        fromID: sourceBarcodeID,
+        toID: targetBarcodeId,
+        qty: quantity,
+        unitOfMeasureID: sourceTrace.unitOfMeasureID
+      });
+    }
+
+    res.json({
+      sourceTrace: { id: sourceTrace.id, quantity: newSourceQty, barcodeID: sourceBarcodeID, activeFlag: newSourceQty > 0 },
+      targetTrace: { id: targetTrace.id, barcodeID: targetBarcodeId },
+      sourceHistory,
+      targetHistory
+    });
+  } catch (error) {
+    next(createError(500, 'Error kitting trace: ' + error.message));
+  }
+};
+
+/**
+ * Unkit: reverse a kitting operation.
+ * barcodeId = kit/assembly trace, targetBarcodeId = source trace to return qty to.
+ */
+exports.unkitTrace = async (req, res, next) => {
+  const kitBarcodeID = parseInt(req.params.barcodeId);
+  const { targetBarcodeId, quantity } = req.body;
+
+  try {
+    if (!targetBarcodeId || !quantity || quantity <= 0) {
+      return next(createError(400, 'targetBarcodeId and positive quantity are required'));
+    }
+
+    // Find kit trace and verify it's a kit/assembly
+    const kitTrace = await db.Trace.findOne({
+      where: { barcodeID: kitBarcodeID, activeFlag: true },
+      include: [
+        { model: db.Barcode },
+        {
+          model: db.Part,
+          include: [{ model: db.PartCategory, attributes: ['name'] }]
+        }
+      ]
+    });
+    if (!kitTrace) {
+      return next(createError(404, 'Kit trace not found'));
+    }
+
+    const kitCategoryName = kitTrace.Part?.PartCategory?.name;
+    if (kitCategoryName !== 'Kit' && kitCategoryName !== 'Assembly') {
+      return next(createError(400, 'Source trace is not a Kit or Assembly'));
+    }
+
+    // Find target trace (may be inactive if it was fully consumed)
+    let sourceTrace = await db.Trace.findOne({
+      where: { barcodeID: targetBarcodeId },
+      include: [{ model: db.Barcode }]
+    });
+    if (!sourceTrace) {
+      return next(createError(404, 'Target trace not found'));
+    }
+
+    // Validate quantity for UoM
+    const unkitQtyError = await validateQuantityForUoM(quantity, sourceTrace.unitOfMeasureID);
+    if (unkitQtyError) return next(createError(400, unkitQtyError));
+
+    // Restore quantity and reactivate if needed
+    const newSourceQty = sourceTrace.quantity + quantity;
+    await sourceTrace.update({ quantity: newSourceQty, activeFlag: true });
+    await db.Barcode.update({ activeFlag: true }, { where: { id: targetBarcodeId } });
+
+    // Record UNKITTED history on both
+    const unkittedAction = await db.BarcodeHistoryActionType.findOne({
+      where: { code: 'UNKITTED', activeFlag: true }
+    });
+
+    let kitHistory, sourceHistory;
+    if (unkittedAction) {
+      kitHistory = await db.BarcodeHistory.create({
+        barcodeID: kitBarcodeID,
+        userID: req.user ? req.user.id : null,
+        actionID: unkittedAction.id,
+        fromID: kitBarcodeID,
+        toID: targetBarcodeId,
+        qty: quantity,
+        unitOfMeasureID: sourceTrace.unitOfMeasureID
+      });
+      sourceHistory = await db.BarcodeHistory.create({
+        barcodeID: targetBarcodeId,
+        userID: req.user ? req.user.id : null,
+        actionID: unkittedAction.id,
+        fromID: kitBarcodeID,
+        toID: targetBarcodeId,
+        qty: quantity,
+        unitOfMeasureID: sourceTrace.unitOfMeasureID
+      });
+    }
+
+    res.json({
+      kitTrace: { id: kitTrace.id, barcodeID: kitBarcodeID },
+      sourceTrace: { id: sourceTrace.id, quantity: newSourceQty, barcodeID: targetBarcodeId, activeFlag: true },
+      kitHistory,
+      sourceHistory
+    });
+  } catch (error) {
+    next(createError(500, 'Error unkitting trace: ' + error.message));
+  }
+};
+
+/**
+ * Get kit/assembly fulfillment status.
+ * Computes kitted quantities per BOM line from KITTED/UNKITTED history.
+ */
+exports.getKitStatus = async (req, res, next) => {
+  const barcodeID = parseInt(req.params.barcodeId);
+
+  try {
+    // Find trace and verify it's a kit/assembly
+    const trace = await db.Trace.findOne({
+      where: { barcodeID, activeFlag: true },
+      include: [
+        { model: db.Barcode },
+        {
+          model: db.Part,
+          include: [
+            { model: db.PartCategory, attributes: ['name'] },
+            {
+              model: db.BillOfMaterialItem,
+              as: 'bomItems',
+              where: { activeFlag: true },
+              required: false,
+              include: [{
+                model: db.Part,
+                as: 'componentPart',
+                attributes: ['id', 'name', 'revision']
+              }]
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!trace) {
+      return next(createError(404, 'Trace not found'));
+    }
+
+    const categoryName = trace.Part?.PartCategory?.name;
+    if (categoryName !== 'Kit' && categoryName !== 'Assembly') {
+      return next(createError(400, 'Trace is not a Kit or Assembly'));
+    }
+
+    const bomItems = trace.Part?.bomItems || [];
+
+    // Get all KITTED and UNKITTED history for this barcode
+    const kittedAction = await db.BarcodeHistoryActionType.findOne({ where: { code: 'KITTED' } });
+    const unkittedAction = await db.BarcodeHistoryActionType.findOne({ where: { code: 'UNKITTED' } });
+
+    const actionIDs = [kittedAction?.id, unkittedAction?.id].filter(Boolean);
+    const history = actionIDs.length > 0 ? await db.BarcodeHistory.findAll({
+      where: {
+        barcodeID,
+        actionID: actionIDs
+      }
+    }) : [];
+
+    // Calculate kitted quantities per part
+    const kittedByPart = {};
+    for (const entry of history) {
+      // For KITTED: fromID is the source barcode (the part being kitted in)
+      // For UNKITTED: toID is the source barcode (the part being returned to)
+      const sourceBarcodeID = entry.actionID === kittedAction?.id ? entry.fromID : entry.toID;
+      const sourceTrace = await db.Trace.findOne({
+        where: { barcodeID: sourceBarcodeID },
+        attributes: ['partID']
+      });
+      if (!sourceTrace) continue;
+
+      const partID = sourceTrace.partID;
+      if (!kittedByPart[partID]) kittedByPart[partID] = 0;
+
+      if (entry.actionID === kittedAction?.id) {
+        kittedByPart[partID] += entry.qty || 0;
+      } else if (entry.actionID === unkittedAction?.id) {
+        kittedByPart[partID] -= entry.qty || 0;
+      }
+    }
+
+    // Build status per BOM line
+    const bomLines = bomItems.map(item => ({
+      partID: item.componentPartID,
+      partName: item.componentPart?.name || `Part ${item.componentPartID}`,
+      partRevision: item.componentPart?.revision,
+      requiredQty: item.quantity,
+      kittedQty: kittedByPart[item.componentPartID] || 0
+    }));
+
+    const status = bomLines.length === 0
+      ? 'complete'
+      : bomLines.every(l => l.kittedQty >= l.requiredQty) ? 'complete' : 'partial';
+
+    res.json({ status, bomLines });
+  } catch (error) {
+    next(createError(500, 'Error getting kit status: ' + error.message));
+  }
+};
+
+/**
+ * Get all in-progress (partial) kit/assembly builds.
+ * Returns traces whose part category is Kit or Assembly, with BOM progress.
+ */
+exports.getInProgressBuilds = async (req, res, next) => {
+  try {
+    const includeCompleted = req.query.includeCompleted === 'true';
+    const KIT_ASSEMBLY_NAMES = ['Kit', 'Assembly'];
+
+    // Find all active traces for kit/assembly parts
+    const traces = await db.Trace.findAll({
+      where: { activeFlag: true },
+      include: [
+        {
+          model: db.Part,
+          required: true,
+          include: [
+            {
+              model: db.PartCategory,
+              where: { name: KIT_ASSEMBLY_NAMES },
+              attributes: ['id', 'name', 'tagColorHex']
+            },
+            {
+              model: db.BillOfMaterialItem,
+              as: 'bomItems',
+              where: { activeFlag: true },
+              required: false,
+              attributes: ['id', 'componentPartID', 'quantity']
+            }
+          ]
+        },
+        {
+          model: db.Barcode,
+          attributes: ['id', 'barcode']
+        }
+      ],
+      order: [['createdAt', 'DESC']]
+    });
+
+    // For each trace, compute kit status
+    const kittedAction = await db.BarcodeHistoryActionType.findOne({ where: { code: 'KITTED' } });
+    const unkittedAction = await db.BarcodeHistoryActionType.findOne({ where: { code: 'UNKITTED' } });
+    const actionIDs = [kittedAction?.id, unkittedAction?.id].filter(Boolean);
+
+    const builds = [];
+    for (const trace of traces) {
+      const traceData = trace.toJSON();
+      const bomItems = traceData.Part?.bomItems || [];
+      const bomTotal = bomItems.length;
+
+      // Get kitting history for this trace
+      const history = actionIDs.length > 0 ? await db.BarcodeHistory.findAll({
+        where: { barcodeID: traceData.barcodeID, actionID: actionIDs }
+      }) : [];
+
+      // Calculate kitted quantities per part
+      const kittedByPart = {};
+      for (const entry of history) {
+        const sourceBarcodeID = entry.actionID === kittedAction?.id ? entry.fromID : entry.toID;
+        const sourceTrace = await db.Trace.findOne({
+          where: { barcodeID: sourceBarcodeID },
+          attributes: ['partID']
+        });
+        if (!sourceTrace) continue;
+        const partID = sourceTrace.partID;
+        if (!kittedByPart[partID]) kittedByPart[partID] = 0;
+        if (entry.actionID === kittedAction?.id) {
+          kittedByPart[partID] += entry.qty || 0;
+        } else {
+          kittedByPart[partID] -= entry.qty || 0;
+        }
+      }
+
+      // Count fulfilled BOM lines
+      let bomFulfilled = 0;
+      for (const item of bomItems) {
+        if ((kittedByPart[item.componentPartID] || 0) >= item.quantity) {
+          bomFulfilled++;
+        }
+      }
+
+      const status = bomTotal === 0 ? 'complete' : (bomFulfilled === bomTotal ? 'complete' : 'partial');
+
+      if (includeCompleted || status === 'partial') {
+        builds.push({
+          id: traceData.id,
+          barcodeID: traceData.barcodeID,
+          barcode: traceData.Barcode?.barcode,
+          partID: traceData.partID,
+          partName: traceData.Part?.name,
+          partRevision: traceData.Part?.revision,
+          categoryName: traceData.Part?.PartCategory?.name,
+          categoryColor: traceData.Part?.PartCategory?.tagColorHex,
+          status,
+          bomTotal,
+          bomFulfilled,
+          createdAt: traceData.createdAt
+        });
+      }
+    }
+
+    res.json(builds);
+  } catch (error) {
+    next(createError(500, 'Error getting in-progress builds: ' + error.message));
+  }
+};
+
+/**
  * Delete a trace - either reduce quantity or deactivate entirely
  */
 exports.deleteTrace = async (req, res, next) => {
@@ -401,6 +820,10 @@ exports.deleteTrace = async (req, res, next) => {
       if (deleteQuantity <= 0) {
         return next(createError(400, 'Delete quantity must be greater than 0'));
       }
+
+      // Validate quantity for UoM
+      const delQtyError = await validateQuantityForUoM(deleteQuantity, traceData.unitOfMeasureID);
+      if (delQtyError) return next(createError(400, delQtyError));
 
       const newQuantity = traceData.quantity - deleteQuantity;
       await trace.update({ quantity: newQuantity });

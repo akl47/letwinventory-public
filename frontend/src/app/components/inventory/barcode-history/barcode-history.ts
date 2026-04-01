@@ -215,7 +215,8 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
         action,
         barcodeId: this.barcodeId,
         barcode: this.barcodeInfo.barcode,
-        isTrace: this.isTrace()
+        isTrace: this.isTrace(),
+        allowDecimal: this.barcodeInfo.allowDecimal ?? false
       }
     });
 
@@ -243,6 +244,10 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
     this.openActionDialog('adjust');
   }
 
+  onKit() {
+    this.openActionDialog('kit');
+  }
+
   onDelete() {
     this.openActionDialog('delete');
   }
@@ -257,6 +262,8 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
       case 'MERGED': return 'Merged';
       case 'DELETED': return 'Deleted';
       case 'ADJUSTED': return 'Adjusted';
+      case 'KITTED': return 'Kitted';
+      case 'UNKITTED': return 'Unkitted';
       default: return item.actionType?.label || 'Unknown Action';
     }
   }
@@ -271,6 +278,8 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
       case 'MERGED': return 'call_merge';
       case 'DELETED': return 'delete';
       case 'ADJUSTED': return 'tune';
+      case 'KITTED': return 'inventory_2';
+      case 'UNKITTED': return 'output';
       default: return 'history';
     }
   }

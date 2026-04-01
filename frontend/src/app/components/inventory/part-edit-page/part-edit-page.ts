@@ -1,5 +1,5 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
-import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
+import { FormBuilder, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -7,7 +7,7 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatSelectModule } from '@angular/material/select';
-import { CommonModule, Location, TitleCasePipe } from '@angular/common';
+import { CommonModule, DatePipe, KeyValuePipe, Location, TitleCasePipe } from '@angular/common';
 import { forkJoin, of, combineLatest } from 'rxjs';
 import { catchError, take } from 'rxjs/operators';
 import { InventoryService, PartLocationsResult } from '../../../services/inventory.service';
@@ -21,8 +21,11 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatTableModule } from '@angular/material/table';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { WIRE_COLORS } from '../../../utils/harness/wire-color-map';
 import { BarcodeTag } from '../barcode-tag/barcode-tag';
+import { PartNumberPipe, formatPartNumber } from '../../../pipes/part-number.pipe';
+import { PartLink } from '../../common/part-link/part-link';
 
 @Component({
   selector: 'app-part-edit-page',
@@ -30,6 +33,7 @@ import { BarcodeTag } from '../barcode-tag/barcode-tag';
   imports: [
     CommonModule,
     ReactiveFormsModule,
+    FormsModule,
     MatButtonModule,
     MatCardModule,
     MatFormFieldModule,
@@ -40,8 +44,11 @@ import { BarcodeTag } from '../barcode-tag/barcode-tag';
     MatTooltipModule,
     MatTableModule,
     MatProgressSpinnerModule,
+    MatAutocompleteModule,
     BarcodeTag,
-    RouterLink
+    RouterLink,
+    PartNumberPipe,
+    PartLink
   ],
   templateUrl: './part-edit-page.html',
   styleUrl: './part-edit-page.css',
@@ -103,6 +110,35 @@ export class PartEditPage implements OnInit {
   // Cable wire colors
   cableWireColors = signal<{ id: string; color: string; colorCode: string }[]>([]);
   wireColorOptions = WIRE_COLORS;
+
+  // BOM (Kit/Assembly)
+  bomItems = signal<{ id?: number; componentPart: any; partID: number; quantity: number }[]>([]);
+  bomSearchText = signal('');
+  bomColumns = ['name', 'category', 'description', 'quantity', 'actions'];
+  filteredBomParts = computed(() => {
+    const raw = this.bomSearchText();
+    const search = (typeof raw === 'string' ? raw : '').toLowerCase();
+    if (!search) return this.allParts.filter(p => p.activeFlag);
+    return this.allParts.filter(p =>
+      p.activeFlag && (
+        p.name.toLowerCase().includes(search) ||
+        (p.description && p.description.toLowerCase().includes(search)) ||
+        (p.vendor && p.vendor.toLowerCase().includes(search)) ||
+        (p.sku && p.sku.toLowerCase().includes(search))
+      )
+    );
+  });
+  bomDisplayWith = (value: any) => typeof value === 'string' ? value : formatPartNumber(value?.name, value?.revision) || '';
+  newBomQuantity: number = 1;
+  kitStatuses = signal<Record<number, { status: string; bomLines: any[] }>>({});
+
+  // Revision
+  revisionHistory = signal<any[]>([]);
+  allRevisions = signal<Part[]>([]);
+  showRevisionHistory = signal(false);
+  isRevisionAction = signal(false);
+  hasOtherRevisions = computed(() => this.allRevisions().length > 1);
+  pendingRevisionAction = signal<'new_dev' | 'new_prod' | null>(null);
 
   // Stock locations
   locationData = signal<PartLocationsResult | null>(null);
@@ -267,32 +303,28 @@ export class PartEditPage implements OnInit {
   }
 
   private loadReferenceData() {
-    // Combine route params with reference data loading to ensure both are ready
-    combineLatest([
-      this.route.params.pipe(take(1)),
-      forkJoin({
-        categories: this.inventoryService.getPartCategories().pipe(
-          catchError(err => {
-            console.error('Failed to load part categories:', err);
-            return of([]);
-          })
-        ),
-        unitsOfMeasure: this.inventoryService.getUnitsOfMeasure().pipe(
-          catchError(err => {
-            console.error('Failed to load units of measure:', err);
-            return of([]);
-          })
-        ),
-        pinTypes: this.harnessPartsService.getPinTypes().pipe(
-          catchError(err => {
-            console.error('Failed to load pin types:', err);
-            return of([]);
-          })
-        )
-      })
-    ]).subscribe({
-      next: ([params, results]) => {
-        // Set all reference data
+    // Load reference data once, then subscribe to route params for ongoing navigation
+    forkJoin({
+      categories: this.inventoryService.getPartCategories().pipe(
+        catchError(err => {
+          console.error('Failed to load part categories:', err);
+          return of([]);
+        })
+      ),
+      unitsOfMeasure: this.inventoryService.getUnitsOfMeasure().pipe(
+        catchError(err => {
+          console.error('Failed to load units of measure:', err);
+          return of([]);
+        })
+      ),
+      pinTypes: this.harnessPartsService.getPinTypes().pipe(
+        catchError(err => {
+          console.error('Failed to load pin types:', err);
+          return of([]);
+        })
+      )
+    }).subscribe({
+      next: (results) => {
         this.categories.set(results.categories);
         this.unitsOfMeasure.set(results.unitsOfMeasure);
         this.pinTypes.set(results.pinTypes);
@@ -304,21 +336,22 @@ export class PartEditPage implements OnInit {
             this.form.patchValue({ partCategoryID: lockedCategory.id });
             this.form.get('partCategoryID')?.disable();
           }
-          // Disable internalPart checkbox for Harness category
           if (this.lockedCategoryName === 'Harness') {
             this.form.get('internalPart')?.disable();
           }
         }
 
-        // Now load part if in edit mode - reference data is guaranteed to be loaded
-        if (params['id']) {
-          this.isEditMode = true;
-          this.isFormEditMode.set(false);
-          this.loadPart(+params['id']);
-        } else {
-          this.isFormEditMode.set(true);
-          this.isDataLoaded.set(true);
-        }
+        // Subscribe to route params — fires on initial load and on same-component navigation
+        this.route.params.subscribe(params => {
+          if (params['id']) {
+            this.isEditMode = true;
+            this.isFormEditMode.set(false);
+            this.loadPart(+params['id']);
+          } else {
+            this.isFormEditMode.set(true);
+            this.isDataLoaded.set(true);
+          }
+        });
       }
     });
   }
@@ -352,8 +385,12 @@ export class PartEditPage implements OnInit {
         this.partImageFileID.set(part.imageFileID || null);
         // Load harness-specific data
         this.loadHarnessData(part.id, part.PartCategory?.name);
+        // Load BOM data for kits/assemblies
+        this.loadBomData(part.id, part.PartCategory?.name);
         // Load stock locations
         this.loadLocations(part.id);
+        // Load revision data
+        this.loadRevisionData(part);
       },
       error: (err) => {
         console.error('Failed to load part:', err);
@@ -434,6 +471,94 @@ export class PartEditPage implements OnInit {
     }
   }
 
+  private loadBomData(partId: number, categoryName?: string) {
+    if (!categoryName || (categoryName !== 'Kit' && categoryName !== 'Assembly')) return;
+
+    this.inventoryService.getBom(partId).subscribe({
+      next: (data) => {
+        this.bomItems.set(data.bomItems.map(item => ({
+          id: item.id,
+          componentPart: item.componentPart,
+          partID: item.componentPartID || item.componentPart?.id,
+          quantity: item.quantity
+        })));
+      },
+      error: (err) => {
+        console.error('Failed to load BOM:', err);
+      }
+    });
+  }
+
+  onBomPartSelected(part: Part) {
+    const existing = this.bomItems();
+    if (existing.some(b => b.partID === part.id)) return;
+    this.bomItems.set([...existing, {
+      componentPart: { id: part.id, name: part.name, description: part.description, sku: part.sku, vendor: part.vendor, PartCategory: part.PartCategory, defaultUnitOfMeasureID: part.defaultUnitOfMeasureID },
+      partID: part.id,
+      quantity: this.newBomQuantity
+    }]);
+    this.bomSearchText.set('');
+    this.newBomQuantity = 1;
+  }
+
+  getCategoryBgColor(hexColor: string | null | undefined): string {
+    if (!hexColor) return 'rgba(255, 255, 255, 0.2)';
+    const r = parseInt(hexColor.slice(1, 3), 16);
+    const g = parseInt(hexColor.slice(3, 5), 16);
+    const b = parseInt(hexColor.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, 0.2)`;
+  }
+
+  getCategoryTextColor(hexColor: string | null | undefined): string {
+    return hexColor || '#808080';
+  }
+
+  getBomPartUoM(item: any): string {
+    const uomId = item.componentPart?.defaultUnitOfMeasureID;
+    if (!uomId) return '';
+    const uom = this.unitsOfMeasure().find(u => u.id === uomId);
+    return uom?.name ?? '';
+  }
+
+  getBomPartAllowDecimal(item: any): boolean {
+    const uomId = item.componentPart?.defaultUnitOfMeasureID;
+    if (!uomId) return false;
+    const uom = this.unitsOfMeasure().find(u => u.id === uomId);
+    return uom?.allowDecimal ?? false;
+  }
+
+  removeBomItem(index: number) {
+    const items = [...this.bomItems()];
+    items.splice(index, 1);
+    this.bomItems.set(items);
+  }
+
+  updateBomQuantity(index: number, qty: number) {
+    const items = [...this.bomItems()];
+    items[index] = { ...items[index], quantity: qty };
+    this.bomItems.set(items);
+  }
+
+  saveBomData(partId: number) {
+    const bomItems = this.bomItems().map(item => ({
+      partID: item.partID,
+      quantity: item.quantity
+    }));
+    this.inventoryService.updateBom(partId, bomItems).subscribe({
+      next: (data) => {
+        this.bomItems.set(data.bomItems.map(item => ({
+          id: item.id,
+          componentPart: item.componentPart,
+          partID: item.componentPartID || item.componentPart?.id,
+          quantity: item.quantity
+        })));
+      },
+      error: (err) => {
+        this.errorNotification.showError(err.error?.message || 'Failed to save BOM');
+      }
+    });
+  }
+
   loadLocations(partId: number) {
     this.loadingLocations.set(true);
     this.inventoryService.getPartLocations(partId).subscribe({
@@ -478,6 +603,12 @@ export class PartEditPage implements OnInit {
     return this.getCategoryName(categoryId) === 'Electrical Component';
   }
 
+  isKitOrAssembly(): boolean {
+    const categoryId = this.form.get('partCategoryID')?.value as number | null | undefined;
+    const name = this.getCategoryName(categoryId);
+    return name === 'Kit' || name === 'Assembly';
+  }
+
   private updateCategoryValidators(categoryId: number | null | undefined) {
     const categoryName = this.getCategoryName(categoryId);
     const connectorTypeControl = this.form.get('connectorType');
@@ -516,15 +647,20 @@ export class PartEditPage implements OnInit {
   isPartNameTaken(): boolean {
     const currentName = this.form.get('name')?.value?.trim();
     if (!currentName) return false;
+    const currentRevision = this.currentPart?.revision || '00';
 
     if (this.isEditMode && this.currentPart) {
       return this.allParts.some(p =>
         p.name.toLowerCase() === currentName.toLowerCase() &&
+        p.revision === currentRevision &&
         p.id !== this.currentPart!.id
       );
     }
 
-    return this.allParts.some(p => p.name.toLowerCase() === currentName.toLowerCase());
+    return this.allParts.some(p =>
+      p.name.toLowerCase() === currentName.toLowerCase() &&
+      p.revision === currentRevision
+    );
   }
 
   getPartNameError(): string {
@@ -836,6 +972,7 @@ export class PartEditPage implements OnInit {
       this.partImageFileID.set(this.currentPart.imageFileID || null);
     }
     this.isFormEditMode.set(false);
+    this.pendingRevisionAction.set(null);
   }
 
   save() {
@@ -883,6 +1020,19 @@ export class PartEditPage implements OnInit {
             next: (response: any) => {
               const partId = response.id || this.currentPart!.id;
               this.saveHarnessData(partId);
+              if (this.isKitOrAssembly()) {
+                this.saveBomData(partId);
+              }
+              const pending = this.pendingRevisionAction();
+              if (pending) {
+                this.pendingRevisionAction.set(null);
+                if (pending === 'new_dev') {
+                  this.createNewRevision();
+                } else {
+                  this.releaseToProduction();
+                }
+                return;
+              }
               this.errorNotification.showSuccess('Part updated successfully');
               this.isFormEditMode.set(false);
               this.loadPart(partId);
@@ -896,6 +1046,9 @@ export class PartEditPage implements OnInit {
             next: (response: any) => {
               if (!this.lockedCategoryName || this.lockedCategoryName !== 'Harness') {
                 this.saveHarnessData(response.id);
+              }
+              if (this.isKitOrAssembly()) {
+                this.saveBomData(response.id);
               }
               this.errorNotification.showSuccess('Part created successfully');
               this.router.navigate(['/parts']);
@@ -1099,6 +1252,87 @@ export class PartEditPage implements OnInit {
       error: (err) => {
         console.error('Delete failed:', err);
         this.errorNotification.showHttpError(err, 'Failed to delete part');
+      }
+    });
+  }
+
+  // --- Revision methods ---
+
+  private loadRevisionData(part: Part) {
+    this.inventoryService.getPartRevisionHistory(part.id).subscribe({
+      next: (history) => this.revisionHistory.set(history),
+    });
+    this.inventoryService.getPartRevisions(part.name).subscribe({
+      next: (revisions) => this.allRevisions.set(revisions),
+    });
+  }
+
+  onRevisionSelectChange(value: string | number) {
+    if (value === 'new_dev') {
+      this.pendingRevisionAction.set('new_dev');
+    } else if (value === 'new_prod') {
+      this.pendingRevisionAction.set('new_prod');
+    } else if (value !== this.currentPart?.id) {
+      this.router.navigate(['/parts', value, 'edit']);
+    }
+  }
+
+  toggleRevisionHistory() {
+    this.showRevisionHistory.update(v => !v);
+  }
+
+  scrollToRevisionHistory() {
+    this.showRevisionHistory.set(true);
+    setTimeout(() => {
+      document.querySelector('.history-timeline')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
+  createNewRevision() {
+    if (!this.currentPart) return;
+    this.isRevisionAction.set(true);
+    this.inventoryService.createNewRevision(this.currentPart.id).subscribe({
+      next: (newPart) => {
+        this.isRevisionAction.set(false);
+        this.errorNotification.showSuccess(`Created revision ${newPart.revision}`);
+        this.router.navigate(['/parts', newPart.id, 'edit']);
+      },
+      error: (err) => {
+        this.isRevisionAction.set(false);
+        this.errorNotification.showHttpError(err, 'Failed to create new revision');
+      }
+    });
+  }
+
+  releaseToProduction() {
+    if (!this.currentPart) return;
+    this.isRevisionAction.set(true);
+    this.inventoryService.releaseToProduction(this.currentPart.id).subscribe({
+      next: (newPart) => {
+        this.isRevisionAction.set(false);
+        this.errorNotification.showSuccess(`Released as revision ${newPart.revision}`);
+        this.router.navigate(['/parts', newPart.id, 'edit']);
+      },
+      error: (err) => {
+        this.isRevisionAction.set(false);
+        this.errorNotification.showHttpError(err, 'Failed to release to production');
+      }
+    });
+  }
+
+  toggleLock() {
+    if (!this.currentPart) return;
+    const action = this.currentPart.revisionLocked
+      ? this.inventoryService.unlockRevision(this.currentPart.id)
+      : this.inventoryService.lockRevision(this.currentPart.id);
+    action.subscribe({
+      next: () => {
+        const wasLocked = this.currentPart!.revisionLocked;
+        this.errorNotification.showSuccess(wasLocked ? 'Revision unlocked' : 'Revision locked');
+        this.loadPart(this.currentPart!.id);
+      },
+      error: (err) => {
+        this.errorNotification.showHttpError(err, 'Failed to toggle lock');
       }
     });
   }

@@ -27,7 +27,10 @@ export class BarcodeTag {
     }
 
     const dialogRef = this.dialog.open(BarcodeDialog, {
-      data: { barcode: this.barcode }
+      data: { barcode: this.barcode },
+      panelClass: 'scanner-dialog-panel',
+      width: '480px',
+      maxHeight: '90vh',
     });
 
     dialogRef.afterClosed().subscribe(result => {

@@ -33,6 +33,22 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'partID',
         as: 'electricalComponent'
       });
+      Part.hasMany(models.BillOfMaterialItem, {
+        foreignKey: 'partID',
+        as: 'bomItems'
+      });
+      Part.hasMany(models.BillOfMaterialItem, {
+        foreignKey: 'componentPartID',
+        as: 'usedInBoms'
+      });
+      Part.belongsTo(models.Part, {
+        foreignKey: 'previousRevisionID',
+        as: 'previousRevision'
+      });
+      Part.hasMany(models.PartRevisionHistory, {
+        foreignKey: 'partID',
+        as: 'revisionHistory'
+      });
     }
   };
   Part.init({
@@ -44,8 +60,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     name:{
       type: DataTypes.STRING(32),
-      allowNull:false,
-      unique:true
+      allowNull:false
     },
     description: {
       type: DataTypes.STRING(62),
@@ -112,6 +127,20 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
       defaultValue: null
     },
+    revision: {
+      type: DataTypes.STRING(8),
+      allowNull: false,
+      defaultValue: '00'
+    },
+    revisionLocked: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
+    previousRevisionID: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
     createdAt: {
       allowNull: false,
       type: DataTypes.DATE
@@ -123,6 +152,9 @@ module.exports = (sequelize, DataTypes) => {
   }, {
     sequelize,
     modelName: 'Part',
+    indexes: [
+      { unique: true, fields: ['name', 'revision'] }
+    ]
   });
   return Part;
 };

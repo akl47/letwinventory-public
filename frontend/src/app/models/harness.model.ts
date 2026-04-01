@@ -306,7 +306,7 @@ export interface DbElectricalConnector {
   activeFlag: boolean;
   createdAt: string;
   updatedAt: string;
-  part?: { id: number; name: string; imageFile?: UploadedFileRef | null };
+  part?: { id: number; name: string; revision?: string; imageFile?: UploadedFileRef | null };
   pinType?: { id: number; name: string };
 }
 
@@ -320,7 +320,7 @@ export interface DbWire {
   activeFlag: boolean;
   createdAt: string;
   updatedAt: string;
-  part?: { id: number; name: string };
+  part?: { id: number; name: string; revision?: string };
 }
 
 export interface DbCable {
@@ -337,7 +337,7 @@ export interface DbCable {
   activeFlag: boolean;
   createdAt: string;
   updatedAt: string;
-  part?: { id: number; name: string; imageFile?: UploadedFileRef | null };
+  part?: { id: number; name: string; revision?: string; imageFile?: UploadedFileRef | null };
 }
 
 export interface ComponentPin {
@@ -371,7 +371,7 @@ export interface DbElectricalComponent {
   activeFlag: boolean;
   createdAt: string;
   updatedAt: string;
-  part?: { id: number; name: string; imageFile?: UploadedFileRef | null };
+  part?: { id: number; name: string; revision?: string; imageFile?: UploadedFileRef | null };
 }
 
 // Uploaded file reference from backend

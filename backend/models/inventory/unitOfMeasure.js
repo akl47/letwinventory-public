@@ -31,6 +31,11 @@ module.exports = (sequelize, DataTypes) => {
         description: {
             type: DataTypes.STRING,
             allowNull: true
+        },
+        allowDecimal: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: false
         }
     }, {
         sequelize,

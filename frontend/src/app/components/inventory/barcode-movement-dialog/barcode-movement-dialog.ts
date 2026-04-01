@@ -11,13 +11,14 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatRadioModule } from '@angular/material/radio';
 import { InventoryService } from '../../../services/inventory.service';
 
-export type BarcodeActionType = 'move' | 'merge' | 'split' | 'delete' | 'adjust';
+export type BarcodeActionType = 'move' | 'merge' | 'split' | 'delete' | 'adjust' | 'kit';
 
 export interface BarcodeMovementDialogData {
   action: BarcodeActionType;
   barcodeId: number;
   barcode: string;
   isTrace: boolean;
+  allowDecimal?: boolean;
 }
 
 export interface BarcodeMovementDialogResult {
@@ -65,6 +66,10 @@ export class BarcodeMovementDialog {
   // Adjust fields
   adjustQuantity: number | null = null;
 
+  // Kit fields
+  kitTargetBarcode = '';
+  kitQuantity: number | null = null;
+
   // Delete fields
   deleteConfirmation = '';
   deleteType: 'full' | 'partial' = 'full';
@@ -76,6 +81,7 @@ export class BarcodeMovementDialog {
       case 'merge': return 'Merge Barcode';
       case 'split': return 'Split Barcode';
       case 'adjust': return 'Adjust Quantity';
+      case 'kit': return 'Kit to Assembly';
       case 'delete': return 'Delete Barcode';
     }
   }
@@ -86,6 +92,7 @@ export class BarcodeMovementDialog {
       case 'merge': return 'call_merge';
       case 'split': return 'call_split';
       case 'adjust': return 'tune';
+      case 'kit': return 'inventory_2';
       case 'delete': return 'delete';
     }
   }
@@ -100,6 +107,8 @@ export class BarcodeMovementDialog {
         return this.splitQuantity !== null && this.splitQuantity > 0;
       case 'adjust':
         return this.adjustQuantity !== null && this.adjustQuantity > 0;
+      case 'kit':
+        return !!this.kitTargetBarcode.trim() && this.kitQuantity !== null && this.kitQuantity > 0;
       case 'delete':
         if (this.deleteConfirmation !== this.data.barcode) return false;
         if (this.data.isTrace && this.deleteType === 'partial') {
@@ -131,6 +140,9 @@ export class BarcodeMovementDialog {
         break;
       case 'adjust':
         this.executeAdjust();
+        break;
+      case 'kit':
+        this.executeKit();
         break;
       case 'delete':
         this.executeDelete();
@@ -239,6 +251,37 @@ export class BarcodeMovementDialog {
       error: (err) => {
         this.isSubmitting.set(false);
         this.errorMessage.set(err.error?.message || 'Failed to adjust quantity');
+      }
+    });
+  }
+
+  private executeKit() {
+    if (this.kitQuantity === null) return;
+    const barcodeString = this.kitTargetBarcode.trim();
+
+    this.inventoryService.lookupBarcode(barcodeString).subscribe({
+      next: (targetBarcode) => {
+        this.inventoryService.kitTrace(this.data.barcodeId, targetBarcode.id, this.kitQuantity!).subscribe({
+          next: (result) => {
+            this.dialogRef.close({
+              success: true,
+              action: 'kit',
+              data: result
+            });
+          },
+          error: (err) => {
+            this.isSubmitting.set(false);
+            this.errorMessage.set(err.error?.message || 'Failed to kit trace');
+          }
+        });
+      },
+      error: (err) => {
+        this.isSubmitting.set(false);
+        if (err.status === 404) {
+          this.errorMessage.set(`Barcode "${barcodeString}" not found`);
+        } else {
+          this.errorMessage.set(err.error?.message || 'Failed to lookup target barcode');
+        }
       }
     });
   }
