@@ -405,15 +405,50 @@ exports.getPartLocations = async (req, res, next) => {
   }
 };
 
-function getNextLetterRevision(current) {
-  if (!current) return 'A';
-  const chars = current.toUpperCase().split('');
-  let i = chars.length - 1;
-  while (i >= 0) {
-    if (chars[i] === 'Z') { chars[i] = 'A'; i--; }
-    else { chars[i] = String.fromCharCode(chars[i].charCodeAt(0) + 1); return chars.join(''); }
+// Production revision letters: A-Y excluding I, O, Q, S, X, Z
+// Sequence: A B C D E F G H J K L M N P R T U V W Y
+// After Y: AA AB AC ... AY, then BA BB ... BY, etc.
+const REV_LETTERS = 'ABCDEFGHJKLMNPRTUVWY'.split('');
+
+function letterRevToIndex(rev) {
+  const chars = rev.toUpperCase().split('');
+  let index = 0;
+  for (const ch of chars) {
+    const pos = REV_LETTERS.indexOf(ch);
+    if (pos === -1) return -1;
+    index = index * REV_LETTERS.length + pos;
   }
-  return 'A' + chars.join('');
+  // Offset for length: single-letter = 0..19, double-letter starts at 20
+  for (let len = 1; len < chars.length; len++) {
+    index += Math.pow(REV_LETTERS.length, len);
+  }
+  return index;
+}
+
+function indexToLetterRev(index) {
+  // Determine how many characters needed
+  let len = 1;
+  let capacity = REV_LETTERS.length; // 20 single letters
+  while (index >= capacity) {
+    index -= capacity;
+    len++;
+    capacity = Math.pow(REV_LETTERS.length, len);
+  }
+  let result = '';
+  for (let i = len - 1; i >= 0; i--) {
+    const divisor = Math.pow(REV_LETTERS.length, i);
+    const digit = Math.floor(index / divisor);
+    result += REV_LETTERS[digit];
+    index %= divisor;
+  }
+  return result;
+}
+
+function getNextLetterRevision(current) {
+  if (!current) return REV_LETTERS[0];
+  const idx = letterRevToIndex(current);
+  if (idx === -1) return REV_LETTERS[0];
+  return indexToLetterRev(idx + 1);
 }
 
 exports.createNewRevision = async (req, res, next) => {
@@ -516,12 +551,9 @@ exports.releaseToProduction = async (req, res, next) => {
     });
     const existingRevisions = new Set(allRevisions.map(p => p.revision));
     const letterRevisions = allRevisions.map(p => p.revision).filter(r => /^[A-Z]+$/.test(r));
-    nextRev = 'A';
+    nextRev = REV_LETTERS[0];
     if (letterRevisions.length > 0) {
-      const sorted = letterRevisions.sort((a, b) => {
-        if (a.length !== b.length) return a.length - b.length;
-        return a.localeCompare(b);
-      });
+      const sorted = letterRevisions.sort((a, b) => letterRevToIndex(a) - letterRevToIndex(b));
       nextRev = getNextLetterRevision(sorted[sorted.length - 1]);
     }
     while (existingRevisions.has(nextRev)) {

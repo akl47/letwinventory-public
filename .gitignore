@@ -63,3 +63,8 @@ Thumbs.db
 db/*
 data/
 .env
+
+# Review scripts
+scripts/audio/
+scripts/requirements-data.json
+scripts/requirements-data.backup.json
