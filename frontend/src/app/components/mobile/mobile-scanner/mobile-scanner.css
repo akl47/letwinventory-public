@@ -8,6 +8,14 @@
     overflow: hidden;
 }
 
+:host-context(.scanner-dialog-panel) {
+    position: relative;
+    inset: auto;
+    z-index: auto;
+    width: 100%;
+    height: 100%;
+}
+
 .scanner-container {
     position: relative;
     width: 100%;
@@ -355,6 +363,11 @@ video.visible {
 
 .action-reprint {
     background: #37474f !important;
+    color: #fff !important;
+}
+
+.action-history {
+    background: #4527a0 !important;
     color: #fff !important;
 }
 

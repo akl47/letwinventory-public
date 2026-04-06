@@ -10,7 +10,7 @@
 
     <mat-dialog-content>
         <div class="item-info">
-            <div class="item-name">{{ data.orderItem.Part?.name || data.orderItem.name }}</div>
+            <div class="item-name">{{ data.orderItem.Part ? formatPN(data.orderItem.Part) : data.orderItem.name }}</div>
             @if (data.orderItem.Part?.sku) {
                 <div class="item-sku">SKU: {{ data.orderItem.Part?.sku }}</div>
             }

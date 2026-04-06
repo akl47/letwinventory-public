@@ -18,6 +18,7 @@ import { Part } from '../../../models';
 import { InventoryService } from '../../../services/inventory.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
+import { PartNumberPipe, formatPartNumber } from '../../../pipes/part-number.pipe';
 
 interface DialogData {
   existingComponents?: HarnessComponent[];
@@ -39,7 +40,8 @@ interface DialogData {
     MatIconModule,
     MatAutocompleteModule,
     MatProgressSpinnerModule,
-    MatTooltipModule
+    MatTooltipModule,
+    PartNumberPipe
   ],
   templateUrl: './harness-component-dialog.html',
   styleUrls: ['./harness-component-dialog.scss']
@@ -116,7 +118,7 @@ export class HarnessComponentDialog implements OnInit {
   }
 
   displayPart(part: Part): string {
-    return part ? part.name : '';
+    return part ? formatPartNumber(part.name, part.revision) : '';
   }
 
   onPartSelected(part: Part) {

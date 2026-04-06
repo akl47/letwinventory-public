@@ -53,6 +53,20 @@ export const routes: Routes = [
         data: { resource: 'tasks' },
     },
     {
+        path: 'build',
+        title: 'Builds',
+        loadComponent: () =>
+            import('./components/build/build-list-view/build-list-view').then((m) => m.BuildListView),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'build/:barcodeId',
+        title: 'Build Details',
+        loadComponent: () =>
+            import('./components/build/build-view/build-view').then((m) => m.BuildView),
+        canActivate: [authGuard],
+    },
+    {
         path: 'inventory/barcode-history/:id',
         title: 'Barcode History',
         loadComponent: () =>

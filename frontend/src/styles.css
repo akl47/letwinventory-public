@@ -41,6 +41,14 @@ body {
     border-radius: 8px !important;
 }
 
+/* Scanner Dialog Container - removes padding and uses dark background for embedded mobile scanner */
+.scanner-dialog-panel .mat-mdc-dialog-surface {
+    padding: 0 !important;
+    background-color: #1a1a1a !important;
+    border-radius: 12px !important;
+    overflow: hidden;
+}
+
 /* Global Material Menu Padding Fix */
 .mat-mdc-menu-content {
     padding: 0 !important;

@@ -1,6 +1,6 @@
 import { Component, OnInit, OnDestroy, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { FormBuilder, ReactiveFormsModule, FormsModule, Validators } from '@angular/forms';
 import { CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
@@ -23,6 +23,8 @@ import { OrderItemDialog } from '../order-item-dialog/order-item-dialog';
 import { ReceiveLineItemDialog, ReceiveLineItemDialogResult } from '../receive-line-item-dialog/receive-line-item-dialog';
 import { BarcodeDialog } from '../../inventory/barcode-dialog/barcode-dialog';
 import { BarcodeTag } from '../../inventory/barcode-tag/barcode-tag';
+import { PartNumberPipe } from '../../../pipes/part-number.pipe';
+import { PartLink } from '../../common/part-link/part-link';
 
 @Component({
   selector: 'app-order-view',
@@ -43,13 +45,13 @@ import { BarcodeTag } from '../../inventory/barcode-tag/barcode-tag';
     MatTableModule,
     MatTooltipModule,
     BarcodeTag,
-    RouterLink,
+    PartNumberPipe,
+    PartLink,
   ],
   templateUrl: './order-view.html',
   styleUrl: './order-view.css'
 })
 export class OrderView implements OnInit, OnDestroy {
-  tooltipStyle: { [key: string]: string } = {};
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private fb = inject(FormBuilder);
@@ -838,8 +840,10 @@ export class OrderView implements OnInit, OnDestroy {
   openBarcodeDialog(barcodeString?: string) {
     if (barcodeString) {
       this.dialog.open(BarcodeDialog, {
-        width: '500px',
-        data: { barcode: barcodeString }
+        data: { barcode: barcodeString },
+        panelClass: 'scanner-dialog-panel',
+        width: '480px',
+        maxHeight: '90vh',
       });
     }
   }

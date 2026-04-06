@@ -16,6 +16,7 @@ import { Part } from '../../../models';
 import { InventoryService } from '../../../services/inventory.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { WIRE_COLORS, AWG_GAUGES } from '../../../utils/harness/wire-color-map';
+import { PartNumberPipe, formatPartNumber } from '../../../pipes/part-number.pipe';
 import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
 
 interface DialogData {
@@ -43,7 +44,8 @@ interface DialogData {
     CdkDropList,
     CdkDrag,
     CdkDragHandle,
-    CdkDragPlaceholder
+    CdkDragPlaceholder,
+    PartNumberPipe
   ],
   templateUrl: './harness-add-cable-dialog.html',
   styleUrls: ['./harness-add-cable-dialog.scss']
@@ -119,7 +121,7 @@ export class HarnessAddCableDialog implements OnInit {
   }
 
   displayPart(part: Part): string {
-    return part ? part.name : '';
+    return part ? formatPartNumber(part.name, part.revision) : '';
   }
 
   onPartSelected(part: Part) {

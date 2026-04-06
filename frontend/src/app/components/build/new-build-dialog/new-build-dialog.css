@@ -1,0 +1,55 @@
+.dialog-container {
+    min-width: 400px;
+}
+
+h2[mat-dialog-title] {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.action-description {
+    color: var(--mat-sys-on-surface-variant);
+    margin-bottom: 16px;
+}
+
+.full-width {
+    width: 100%;
+}
+
+.part-option small {
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.selected-part-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    background: var(--mat-sys-surface-container-low);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    color: var(--mat-sys-primary);
+    font-weight: 500;
+}
+
+.location-section {
+    margin-bottom: 16px;
+}
+
+.section-label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 8px;
+    color: var(--mat-sys-on-surface-variant);
+}
+
+.error-message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    background: var(--mat-sys-error-container);
+    color: var(--mat-sys-on-error-container);
+    border-radius: 8px;
+}

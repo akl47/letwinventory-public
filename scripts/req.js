@@ -168,6 +168,8 @@ Commands:
   create <json>               Create requirement (returns id)
   update <id> <json>          Update requirement fields
   delete <id>                 Soft-delete requirement (sets activeFlag=false)
+  approve <id>                Approve requirement
+  unapprove <id>              Unapprove requirement
   check                       Exit 1 if any requirements are unapproved
 
 Options:
@@ -277,6 +279,24 @@ Options:
       const res = await api('PUT', `/design/requirement/${id}`, body);
       if (res.status !== 200) { console.error('Error:', res.data); process.exit(1); }
       console.log(`Updated requirement id=${id}`);
+      break;
+    }
+
+    case 'approve': {
+      const id = cleanArgs[1];
+      if (!id) { console.error('Usage: approve <id>'); process.exit(1); }
+      const res = await api('PUT', `/design/requirement/${id}/approve`);
+      if (res.status !== 200) { console.error('Error:', res.data); process.exit(1); }
+      console.log(`Approved requirement id=${id}`);
+      break;
+    }
+
+    case 'unapprove': {
+      const id = cleanArgs[1];
+      if (!id) { console.error('Usage: unapprove <id>'); process.exit(1); }
+      const res = await api('PUT', `/design/requirement/${id}/unapprove`);
+      if (res.status !== 200) { console.error('Error:', res.data); process.exit(1); }
+      console.log(`Unapproved requirement id=${id}`);
       break;
     }
 

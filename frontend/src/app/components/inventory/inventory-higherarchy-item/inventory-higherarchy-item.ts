@@ -7,11 +7,12 @@ import { InventoryTag } from '../../../services/inventory.service';
 import { BarcodeDialog } from '../barcode-dialog/barcode-dialog';
 import { BarcodeTag } from '../barcode-tag/barcode-tag';
 import { InventoryItemDialog } from '../inventory-item-dialog/inventory-item-dialog';
+import { PartNumberPipe } from '../../../pipes/part-number.pipe';
 
 @Component({
   selector: 'app-inventory-higherarchy-item',
   standalone: true,
-  imports: [MatIconModule, MatButtonModule, MatTooltipModule, BarcodeTag, InventoryHigherarchyItem],
+  imports: [MatIconModule, MatButtonModule, MatTooltipModule, BarcodeTag, InventoryHigherarchyItem, PartNumberPipe],
   templateUrl: './inventory-higherarchy-item.html',
   styleUrl: './inventory-higherarchy-item.css',
 })
@@ -54,7 +55,10 @@ export class InventoryHigherarchyItem implements OnInit {
     event.stopPropagation();
     this.barcodeSelected.emit(this.item.id);
     const dialogRef = this.dialog.open(BarcodeDialog, {
-      data: { barcode: this.item.barcode }
+      data: { barcode: this.item.barcode },
+      panelClass: 'scanner-dialog-panel',
+      width: '480px',
+      maxHeight: '90vh',
     });
 
     dialogRef.afterClosed().subscribe(result => {

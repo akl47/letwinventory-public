@@ -33,7 +33,7 @@
             <mat-option [value]="part">
               <div class="part-option">
                 <div class="part-option-main">
-                  <strong>{{ part.sku || 'No SKU' }}</strong> - {{ part.name }}
+                  <strong>{{ part.sku || 'No SKU' }}</strong> - {{ part | partNumber }}
                 </div>
                 <div class="part-option-subtitle">
                   {{ part.description }} | Vendor: {{ part.vendor }}

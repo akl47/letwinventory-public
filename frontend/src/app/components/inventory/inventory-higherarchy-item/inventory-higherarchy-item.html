@@ -7,7 +7,7 @@
             <div class="spacer"></div>
             }
             <span class="item-info">
-                <span class="item-name">{{ item.name }}</span>
+                <span class="item-name">{{ item | partNumber }}</span>
                 @if (item.description) {
                 <span class="item-desc"> - {{ item.description }}</span>
                 }

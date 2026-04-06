@@ -27,7 +27,7 @@
               <img [src]="part.imageFile?.data" class="part-thumbnail" />
             }
             <span class="part-text">
-              <strong>{{ part.name }}</strong>
+              <strong>{{ part | partNumber }}</strong>
               <span class="part-desc">{{ part.description || 'No description' }}</span>
             </span>
           </span>

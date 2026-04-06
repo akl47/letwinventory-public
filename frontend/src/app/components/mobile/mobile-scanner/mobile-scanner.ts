@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, signal, computed, ElementRef, viewChild } from '@angular/core';
+import { Component, OnInit, OnDestroy, Input, Output, EventEmitter, signal, computed, ElementRef, viewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
@@ -13,6 +13,7 @@ import { InventoryService, InventoryTag, Barcode } from '../../../services/inven
 import { inject } from '@angular/core';
 import { Location } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
+import { PartNumberPipe } from '../../../pipes/part-number.pipe';
 
 type ScannerState =
     | 'unsupported'
@@ -41,6 +42,7 @@ type SecondScanAction = 'move' | 'merge';
         MatInputModule,
         MatTooltipModule,
         MatSlideToggleModule,
+        PartNumberPipe,
     ],
     templateUrl: './mobile-scanner.html',
     styleUrl: './mobile-scanner.css',
@@ -50,6 +52,15 @@ export class MobileScanner implements OnInit, OnDestroy {
     private location = inject(Location);
     private route = inject(ActivatedRoute);
     private router = inject(Router);
+
+    /** When set, skips camera init and looks up this barcode immediately. */
+    @Input() initialBarcode?: string;
+
+    /** When true, hides the back button (e.g. when embedded in a dialog). */
+    @Input() embedded = false;
+
+    /** Emitted when the user performs an action that should close the dialog (embedded mode). */
+    @Output() closed = new EventEmitter<boolean>();
 
     videoEl = viewChild<ElementRef<HTMLVideoElement>>('videoElement');
 
@@ -107,9 +118,9 @@ export class MobileScanner implements OnInit, OnDestroy {
     });
 
     ngOnInit() {
-        const barcodeParam = this.route.snapshot.queryParamMap.get('barcode');
-        if (barcodeParam) {
-            this.handleFirstScan(barcodeParam);
+        const barcode = this.initialBarcode || this.route.snapshot.queryParamMap.get('barcode');
+        if (barcode) {
+            this.handleFirstScan(barcode);
             return;
         }
 
@@ -332,14 +343,22 @@ export class MobileScanner implements OnInit, OnDestroy {
         this.secondScanAction.set('move');
         this.secondScanInstruction.set('Scan destination location or box');
         this.state.set('scanning_second');
-        this.startCamera();
+        if (this.embedded) {
+            this.manualInputVisible.set(true);
+        } else {
+            this.startCamera();
+        }
     }
 
     startMerge() {
         this.secondScanAction.set('merge');
         this.secondScanInstruction.set('Scan target barcode to merge into');
         this.state.set('scanning_second');
-        this.startCamera();
+        if (this.embedded) {
+            this.manualInputVisible.set(true);
+        } else {
+            this.startCamera();
+        }
     }
 
     startSplit() {
@@ -464,12 +483,20 @@ export class MobileScanner implements OnInit, OnDestroy {
     }
 
     scanAgain() {
+        if (this.embedded) {
+            this.closed.emit(true);
+            return;
+        }
         this.resetState();
         this.ensureDetector();
         this.startCamera();
     }
 
     tryAgain() {
+        if (this.embedded) {
+            this.closed.emit(false);
+            return;
+        }
         this.resetState();
         this.ensureDetector();
         this.startCamera();
@@ -549,6 +576,7 @@ export class MobileScanner implements OnInit, OnDestroy {
     viewPart() {
         const partId = this.scannedTag()?.partID;
         if (partId) {
+            if (this.embedded) this.closed.emit(true);
             this.router.navigate(['/parts', partId, 'edit']);
         }
     }
@@ -569,7 +597,19 @@ export class MobileScanner implements OnInit, OnDestroy {
         });
     }
 
+    viewHistory() {
+        const barcodeId = this.scannedBarcode()?.id;
+        if (barcodeId) {
+            if (this.embedded) this.closed.emit(true);
+            this.router.navigate(['/inventory/barcode-history', barcodeId]);
+        }
+    }
+
     goBack() {
+        if (this.embedded) {
+            this.closed.emit(false);
+            return;
+        }
         const s = this.state();
         if (s === 'scanning' || s === 'unsupported') {
             this.location.back();

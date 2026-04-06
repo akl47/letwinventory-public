@@ -244,7 +244,7 @@
                   <mat-select [ngModel]="editingPartId()" (ngModelChange)="editingPartId.set($event)">
                     @for (part of parts(); track part.id) {
                     <mat-option [value]="part.id">
-                      {{ part.name }}
+                      {{ part | partNumber }}
                       @if (part.sku) {
                       <span class="part-option-sku"> ({{ part.sku }})</span>
                       }
@@ -262,16 +262,7 @@
                 } @else {
                 @if (item.Part) {
                 <div class="part-info">
-                  <div class="part-name-wrapper" #wrapper
-                    (mouseenter)="tooltipStyle = {'top': wrapper.getBoundingClientRect().top - 8 + 'px', 'left': wrapper.getBoundingClientRect().left + 'px'}"
-                    >
-                    <a [routerLink]="['/parts', item.Part.id, 'edit']" class="part-link">{{ item.Part.name }}</a>
-                    @if (item.Part.imageFile?.data) {
-                    <div class="part-image-tooltip" [ngStyle]="tooltipStyle">
-                      <img [src]="item.Part.imageFile.data" [alt]="item.Part.name">
-                    </div>
-                    }
-                  </div>
+                  <app-part-link [partId]="item.Part.id" [name]="item.Part.name" [revision]="item.Part.revision" [imageData]="item.Part.imageFile?.data"></app-part-link>
                   <div class="part-subtitle">{{ item.Part.description }}</div>
                   @if (item.Part.vendor) {
                   <div class="part-subtitle">SKU: {{ item.Part.sku }} | Vendor: {{ item.Part.vendor }}</div>

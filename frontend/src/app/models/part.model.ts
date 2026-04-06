@@ -19,6 +19,9 @@ export interface Part {
     manufacturer: string | null;
     manufacturerPN: string | null;
     minimumStockQuantity: number | null;
+    revision: string;
+    revisionLocked: boolean;
+    previousRevisionID?: number | null;
     imageFileID?: number | null;
     imageFile?: { id: number; filename: string; mimeType: string; data: string } | null;
     createdAt: string;

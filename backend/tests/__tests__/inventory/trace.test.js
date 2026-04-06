@@ -140,4 +140,33 @@ describe('Trace API', () => {
       expect(deleted.activeFlag).toBe(false);
     });
   });
+
+  describe('Quantity UoM validation', () => {
+    it('rejects decimal quantity for integer-only UoM (Each)', async () => {
+      const auth = await authenticatedRequest();
+      const trace = await createTestTrace({ quantity: 10, unitOfMeasureID: 1 }); // UoM 1 = Each
+      const res = await auth.put(`/api/inventory/trace/adjust-quantity/${trace.barcodeID}`)
+        .send({ newQuantity: 5.5 });
+      expect(res.status).toBe(400);
+      expect(res.body.errorMessage).toContain('whole number');
+    });
+
+    it('allows decimal quantity for decimal UoM (Feet)', async () => {
+      const auth = await authenticatedRequest();
+      const trace = await createTestTrace({ quantity: 10, unitOfMeasureID: 2 }); // UoM 2 = Feet
+      const res = await auth.put(`/api/inventory/trace/adjust-quantity/${trace.barcodeID}`)
+        .send({ newQuantity: 5.5 });
+      expect(res.status).toBe(200);
+      const updated = await db.Trace.findByPk(trace.id);
+      expect(updated.quantity).toBe(5.5);
+    });
+
+    it('allows integer quantity for integer-only UoM', async () => {
+      const auth = await authenticatedRequest();
+      const trace = await createTestTrace({ quantity: 10, unitOfMeasureID: 1 });
+      const res = await auth.put(`/api/inventory/trace/adjust-quantity/${trace.barcodeID}`)
+        .send({ newQuantity: 5 });
+      expect(res.status).toBe(200);
+    });
+  });
 });

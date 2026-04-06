@@ -1,0 +1,95 @@
+<div class="page-container">
+    <div class="table-header">
+        <h2>
+            <mat-icon>build_circle</mat-icon>
+            Builds
+        </h2>
+        <div class="header-actions">
+            <mat-form-field appearance="outline" class="search-field">
+                <mat-label>Search builds</mat-label>
+                <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
+                    placeholder="Search by part name, barcode, or category">
+                <mat-icon matPrefix>search</mat-icon>
+            </mat-form-field>
+            <mat-slide-toggle [checked]="showCompleted()" (change)="toggleShowCompleted()">
+                Show Completed
+            </mat-slide-toggle>
+            <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+                <button mat-flat-button color="primary" (click)="openNewBuild()" [disabled]="!canWrite()">
+                    <mat-icon>add</mat-icon>
+                    New Build
+                </button>
+            </span>
+        </div>
+    </div>
+
+    @if (isLoading()) {
+    <div class="loading-container">
+        <mat-spinner diameter="40"></mat-spinner>
+    </div>
+    } @else if (displayedBuilds().length === 0) {
+    <div class="empty-state">
+        @if (builds().length === 0) {
+        <mat-icon class="empty-icon">build_circle</mat-icon>
+        <p>No builds in progress</p>
+        <p class="empty-hint">Click "New Build" to start building a kit or assembly.</p>
+        } @else {
+        <mat-icon class="empty-icon">search_off</mat-icon>
+        <p>No builds match your search</p>
+        }
+    </div>
+    } @else {
+    <div class="table-wrapper">
+        <table mat-table [dataSource]="displayedBuilds()" class="builds-table" (click)="$event.stopPropagation()">
+            <ng-container matColumnDef="barcode">
+                <th mat-header-cell *matHeaderCellDef>Barcode</th>
+                <td mat-cell *matCellDef="let build">
+                    <app-barcode-tag [barcode]="build.barcode" (dataChanged)="loadBuilds()"></app-barcode-tag>
+                </td>
+            </ng-container>
+
+            <ng-container matColumnDef="partName">
+                <th mat-header-cell *matHeaderCellDef>Part</th>
+                <td mat-cell *matCellDef="let build">{{ build.partName | partNumber:build.partRevision }}</td>
+            </ng-container>
+
+            <ng-container matColumnDef="category">
+                <th mat-header-cell *matHeaderCellDef>Type</th>
+                <td mat-cell *matCellDef="let build">
+                    <span class="category-badge"
+                        [style.background-color]="getCategoryBgColor(build.categoryColor)"
+                        [style.color]="getCategoryTextColor(build.categoryColor)">
+                        {{ build.categoryName }}
+                    </span>
+                </td>
+            </ng-container>
+
+            <ng-container matColumnDef="status">
+                <th mat-header-cell *matHeaderCellDef>Status</th>
+                <td mat-cell *matCellDef="let build">
+                    @if (build.status === 'complete') {
+                    <span class="status-chip status-complete">Complete</span>
+                    } @else {
+                    <span class="status-chip status-partial">Partial</span>
+                    }
+                </td>
+            </ng-container>
+
+            <ng-container matColumnDef="progress">
+                <th mat-header-cell *matHeaderCellDef>Progress</th>
+                <td mat-cell *matCellDef="let build">
+                    <span class="progress-text">{{ build.bomFulfilled }} / {{ build.bomTotal }}</span>
+                </td>
+            </ng-container>
+
+            <ng-container matColumnDef="createdAt">
+                <th mat-header-cell *matHeaderCellDef>Created</th>
+                <td mat-cell *matCellDef="let build">{{ build.createdAt | date:'short' }}</td>
+            </ng-container>
+
+            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+            <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="openBuild(row)" class="clickable-row"></tr>
+        </table>
+    </div>
+    }
+</div>

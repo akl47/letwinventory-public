@@ -1,0 +1,123 @@
+<div class="page-container">
+    <div class="page-header">
+        <button mat-icon-button (click)="goBack()" matTooltip="Back to builds">
+            <mat-icon>arrow_back</mat-icon>
+        </button>
+        <h1>Build</h1>
+        @if (overallStatus() === 'complete') {
+        <span class="status-chip status-complete">Complete</span>
+        } @else {
+        <span class="status-chip status-partial">Partial</span>
+        }
+    </div>
+
+    @if (isLoading()) {
+    <div class="loading-container">
+        <mat-spinner diameter="40"></mat-spinner>
+    </div>
+    } @else if (traceInfo()) {
+
+    <!-- Build Info -->
+    <mat-card class="build-info-card">
+        <mat-card-content>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Part</span>
+                    <span class="info-value">
+                        <app-part-link [partId]="traceInfo()?.partID" [name]="traceInfo()?.name" [revision]="traceInfo()?.revision" [imageData]="partImages()[traceInfo()?.partID]"></app-part-link>
+                    </span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Barcode</span>
+                    <span class="info-value">
+                        <app-barcode-tag [barcode]="traceInfo()?.barcode" (dataChanged)="loadBuildData()"></app-barcode-tag>
+                    </span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Description</span>
+                    <span class="info-value">{{ traceInfo()?.description || '-' }}</span>
+                </div>
+                <div class="info-spacer"></div>
+                <div class="info-item">
+                    <span class="info-label">Created At</span>
+                    <span class="info-value">{{ traceInfo()?.createdAt | date:'MMM d, yyyy h:mm a' }}</span>
+                </div>
+                @if (createdBy()) {
+                <div class="info-item">
+                    <span class="info-label">Created By</span>
+                    <span class="info-value">{{ createdBy() }}</span>
+                </div>
+                }
+            </div>
+        </mat-card-content>
+    </mat-card>
+
+    <!-- BOM Table -->
+    <mat-card class="bom-card">
+        <mat-card-header>
+            <mat-card-title>Bill of Materials</mat-card-title>
+            @if (kitStatus()) {
+            <span class="progress-badge">
+                {{ fulfilledCount() }} / {{ kitStatus()!.bomLines.length }} fulfilled
+            </span>
+            }
+        </mat-card-header>
+        <mat-card-content>
+            @if (kitStatus()?.bomLines?.length) {
+            <div class="table-wrapper">
+                <table mat-table [dataSource]="kitStatus()!.bomLines" class="bom-table">
+                    <ng-container matColumnDef="partName">
+                        <th mat-header-cell *matHeaderCellDef>Part</th>
+                        <td mat-cell *matCellDef="let line">
+                            <app-part-link [partId]="line.partID" [name]="line.partName" [revision]="line.partRevision" [imageData]="partImages()[line.partID]"></app-part-link>
+                        </td>
+                    </ng-container>
+
+                    <ng-container matColumnDef="requiredQty">
+                        <th mat-header-cell *matHeaderCellDef>Required</th>
+                        <td mat-cell *matCellDef="let line">{{ line.requiredQty }}</td>
+                    </ng-container>
+
+                    <ng-container matColumnDef="kittedQty">
+                        <th mat-header-cell *matHeaderCellDef>Kitted</th>
+                        <td mat-cell *matCellDef="let line">{{ line.kittedQty }}</td>
+                    </ng-container>
+
+                    <ng-container matColumnDef="status">
+                        <th mat-header-cell *matHeaderCellDef>Status</th>
+                        <td mat-cell *matCellDef="let line">
+                            @if (getLineStatus(line) === 'fulfilled') {
+                            <span class="status-chip status-complete">Fulfilled</span>
+                            } @else if (getLineStatus(line) === 'partial') {
+                            <span class="status-chip status-partial">{{ line.kittedQty }} / {{ line.requiredQty }}</span>
+                            } @else {
+                            <span class="status-chip status-empty">Needed</span>
+                            }
+                        </td>
+                    </ng-container>
+
+                    <ng-container matColumnDef="actions">
+                        <th mat-header-cell *matHeaderCellDef></th>
+                        <td mat-cell *matCellDef="let line">
+                            @if (getLineStatus(line) !== 'fulfilled') {
+                            <button mat-icon-button (click)="openKitDialog(line)" matTooltip="Kit this part">
+                                <mat-icon>inventory_2</mat-icon>
+                            </button>
+                            }
+                        </td>
+                    </ng-container>
+
+                    <tr mat-header-row *matHeaderRowDef="bomColumns"></tr>
+                    <tr mat-row *matRowDef="let row; columns: bomColumns;"></tr>
+                </table>
+            </div>
+            } @else {
+            <div class="empty-bom">
+                <p>No BOM items defined for this part.</p>
+            </div>
+            }
+        </mat-card-content>
+    </mat-card>
+
+    }
+</div>

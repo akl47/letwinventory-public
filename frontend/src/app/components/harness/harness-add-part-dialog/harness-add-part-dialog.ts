@@ -22,6 +22,7 @@ import {
 } from '../../../models/harness.model';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { WIRE_COLORS, AWG_GAUGES, CONNECTOR_TYPES, CONNECTOR_COLORS } from '../../../utils/harness/wire-color-map';
+import { PartNumberPipe } from '../../../pipes/part-number.pipe';
 
 export type PartType = 'connector' | 'wire' | 'cable';
 
@@ -53,7 +54,8 @@ interface DialogData {
     MatTooltipModule,
     MatTabsModule,
     MatRadioModule,
-    MatProgressSpinnerModule
+    MatProgressSpinnerModule,
+    PartNumberPipe
   ],
   templateUrl: './harness-add-part-dialog.html',
   styleUrls: ['./harness-add-part-dialog.scss']

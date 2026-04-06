@@ -13,6 +13,7 @@ import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { OrderItem } from '../../../models';
 import { InventoryService } from '../../../services/inventory.service';
+import { formatPartNumber } from '../../../pipes/part-number.pipe';
 
 export interface ReceiveLineItemDialogData {
   orderItem: OrderItem;
@@ -74,6 +75,7 @@ export class ReceiveLineItemDialog implements OnInit {
   private inventoryService = inject(InventoryService);
   data: ReceiveLineItemDialogData = inject(MAT_DIALOG_DATA);
 
+  formatPN = (part: any) => formatPartNumber(part?.name, part?.revision);
   receiptType = signal<'full' | 'partial'>('full');
   partialQuantity = signal<number>(1);
   printBarcode = signal<boolean>(false);

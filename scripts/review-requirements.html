@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Requirements Review Station</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0a0c0f;
+  --surface: #12151a;
+  --surface-2: #1a1e25;
+  --surface-3: #222730;
+  --border: #2a2f3a;
+  --border-bright: #3a4050;
+  --text: #c8cdd6;
+  --text-dim: #6b7280;
+  --text-bright: #e8ecf2;
+  --accent: #22d3ee;
+  --accent-dim: rgba(34,211,238,0.12);
+  --accent-glow: rgba(34,211,238,0.25);
+  --approve-color: #34d399;
+  --approve-dim: rgba(52,211,153,0.12);
+  --warn: #f59e0b;
+  --warn-dim: rgba(245,158,11,0.12);
+  --error: #ef4444;
+  --mono: 'JetBrains Mono', monospace;
+  --sans: 'DM Sans', sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Scanline overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Main Layout ── */
+#review-screen { min-height: 100vh; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.5rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.topbar-title {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.topbar-progress {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.topbar-progress strong {
+  color: var(--text-bright);
+}
+
+.filter-pills {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.filter-pill {
+  padding: 0.3rem 0.75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.filter-pill.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.filter-pill:hover:not(.active) {
+  border-color: var(--border-bright);
+  color: var(--text);
+}
+
+.main-content {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 0;
+  height: calc(100vh - 49px);
+}
+
+/* ── Requirement Card ── */
+.req-panel {
+  padding: 2rem 2.5rem;
+  overflow-y: auto;
+}
+
+.req-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.req-id {
+  font-family: var(--mono);
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--text-bright);
+  line-height: 1;
+}
+
+.req-id span {
+  color: var(--text-dim);
+  font-weight: 400;
+  font-size: 0.9rem;
+}
+
+.inline-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.inline-play:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.inline-play.playing {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.req-badges {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.badge {
+  padding: 0.2rem 0.6rem;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.badge-category {
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.badge-approved {
+  background: var(--approve-dim);
+  border: 1px solid rgba(52,211,153,0.3);
+  color: var(--approve-color);
+}
+
+.badge-unapproved {
+  background: var(--warn-dim);
+  border: 1px solid rgba(245,158,11,0.3);
+  color: var(--warn);
+}
+
+.badge-status {
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.req-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.field-group {
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  transition: border-color 0.3s;
+}
+
+.field-group.speaking {
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-dim);
+}
+
+.field-label {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+
+.field-value {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--text-bright);
+}
+
+.field-value.empty {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.field-value.editable {
+  cursor: text;
+  border-radius: 4px;
+  padding: 0.25rem 0.4rem;
+  margin: -0.25rem -0.4rem;
+  transition: background 0.15s;
+}
+
+.field-value.editable:hover {
+  background: var(--surface-2);
+}
+
+.field-edit-textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text-bright);
+  font-family: var(--sans);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+}
+
+.req-meta {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.meta-item {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.meta-item strong {
+  color: var(--text);
+}
+
+/* ── Right Sidebar ── */
+.sidebar {
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.audio-section {
+  padding: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.audio-section-title {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.75rem;
+}
+
+.audio-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.audio-btn {
+  flex: 1;
+  padding: 0.6rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.audio-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.audio-btn.playing {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.audio-status {
+  margin-top: 0.6rem;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  min-height: 1.2em;
+}
+
+/* ── Actions ── */
+.actions-section {
+  padding: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.action-btn {
+  padding: 0.6rem 0.5rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.action-btn:hover { border-color: var(--border-bright); color: var(--text-bright); }
+
+.action-btn.approve {
+  grid-column: 1 / -1;
+  background: var(--approve-dim);
+  border-color: rgba(52,211,153,0.3);
+  color: var(--approve-color);
+  font-weight: 600;
+}
+
+.action-btn.approve:hover {
+  background: rgba(52,211,153,0.2);
+  border-color: var(--approve-color);
+}
+
+/* ── Command Input ── */
+.command-section {
+  padding: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.command-input-wrap {
+  display: flex;
+  align-items: center;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.command-input-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.command-prompt {
+  padding: 0 0.5rem 0 0.75rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--accent);
+  user-select: none;
+}
+
+.command-input {
+  flex: 1;
+  padding: 0.65rem 0.75rem 0.65rem 0;
+  background: transparent;
+  border: none;
+  color: var(--text-bright);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  outline: none;
+}
+
+.command-input::placeholder { color: var(--text-dim); }
+
+.command-help {
+  margin-top: 0.6rem;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  line-height: 1.7;
+}
+
+.command-help kbd {
+  padding: 0.1rem 0.35rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+}
+
+/* ── Log ── */
+.log-section {
+  flex: 1;
+  padding: 1.25rem;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.log-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.log-entry {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid rgba(42,47,58,0.4);
+  animation: logIn 0.2s ease-out;
+}
+
+@keyframes logIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.log-time { color: var(--text-dim); }
+.log-ok { color: var(--approve-color); }
+.log-err { color: var(--error); }
+.log-info { color: var(--accent); }
+.log-warn { color: var(--warn); }
+
+/* ── Empty state ── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 60vh;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.empty-state h2 {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+  color: var(--approve-color);
+}
+
+.empty-state p {
+  font-size: 0.85rem;
+}
+
+/* ── Loading ── */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+  margin-right: 0.4rem;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- Review Screen -->
+<div id="review-screen" style="display:block">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="topbar-title">Requirements Review</div>
+      <div class="topbar-progress" id="progress"></div>
+    </div>
+    <div class="filter-pills">
+      <div class="filter-pill active" data-filter="unapproved" onclick="setFilter('unapproved')">Unapproved</div>
+      <div class="filter-pill" data-filter="all" onclick="setFilter('all')">All</div>
+    </div>
+  </div>
+
+  <div class="main-content">
+    <!-- Left: Requirement Display -->
+    <div class="req-panel" id="req-panel"></div>
+
+    <!-- Right: Controls -->
+    <div class="sidebar">
+      <div class="audio-section">
+        <div class="audio-section-title">Audio</div>
+        <div class="audio-controls">
+          <button class="audio-btn" onclick="speakCurrent()" id="btn-play">&#9654; Read</button>
+          <button class="audio-btn" onclick="stopAudio()">&#9632; Stop</button>
+          <button class="audio-btn" onclick="toggleAutoRead()" id="btn-auto">Auto: ON</button>
+        </div>
+        <div class="audio-status" id="audio-status"></div>
+      </div>
+
+      <div class="actions-section">
+        <div class="audio-section-title">Actions</div>
+        <div class="action-grid">
+          <button class="action-btn approve" onclick="approveCurrent()">&#10003; Approve</button>
+          <button class="action-btn" onclick="prevReq()">&#8592; Prev</button>
+          <button class="action-btn" onclick="nextReq()">Next &#8594;</button>
+          <button class="action-btn" onclick="startEdit('description')">Edit Desc</button>
+          <button class="action-btn" onclick="startEdit('rationale')">Edit Rationale</button>
+          <button class="action-btn" onclick="startEdit('verification')">Edit Verif.</button>
+          <button class="action-btn" onclick="startEdit('validation')">Edit Valid.</button>
+        </div>
+      </div>
+
+      <div class="command-section">
+        <div class="audio-section-title">Command</div>
+        <div class="command-input-wrap">
+          <span class="command-prompt">&gt;</span>
+          <input class="command-input" id="cmd-input" placeholder="type a command..." onkeydown="if(event.key==='Enter')runCommand()">
+        </div>
+        <div class="command-help">
+          <kbd>n</kbd> next &nbsp; <kbd>p</kbd> prev &nbsp; <kbd>a</kbd> approve<br>
+          <kbd>r</kbd> read &nbsp; <kbd>update &lt;field&gt; &lt;text&gt;</kbd>
+        </div>
+      </div>
+
+      <div class="log-section">
+        <div class="audio-section-title">Log</div>
+        <div class="log-entries" id="log-entries"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<audio id="tts-audio" preload="none"></audio>
+
+<script>
+// ── Config ──
+const AUDIO_DIR = 'audio';
+const FIELDS = ['description', 'rationale', 'verification', 'validation', 'parameter'];
+
+// ── State ──
+let allRequirements = [];
+let filteredReqs = [];
+let currentIndex = 0;
+let currentFilter = 'unapproved';
+let autoRead = true;
+let isSpeaking = false;
+let audioQueue = [];
+let currentFieldIndex = -1;
+let activePlayField = null; // which field's play button is active
+
+// ── Hierarchy sort (depth-first) ──
+function sortHierarchical(reqs) {
+  const byParent = new Map();
+  for (const r of reqs) {
+    const pid = r.parentRequirementID || null;
+    if (!byParent.has(pid)) byParent.set(pid, []);
+    byParent.get(pid).push(r);
+  }
+  // Sort children at each level by id
+  for (const children of byParent.values()) {
+    children.sort((a, b) => a.id - b.id);
+  }
+  const result = [];
+  function walk(parentId, depth) {
+    const children = byParent.get(parentId);
+    if (!children) return;
+    for (const child of children) {
+      child._depth = depth;
+      result.push(child);
+      walk(child.id, depth + 1);
+    }
+  }
+  walk(null, 0);
+  return result;
+}
+
+// ── Load requirements from local JSON ──
+async function loadRequirements() {
+  try {
+    const res = await fetch('requirements-data.json');
+    if (!res.ok) throw new Error(`Failed to load requirements-data.json: ${res.status}`);
+    allRequirements = sortHierarchical(await res.json());
+    applyFilter();
+    log('info', `Loaded ${allRequirements.length} requirements (${filteredReqs.length} ${currentFilter})`);
+    if (filteredReqs.length > 0) {
+      renderCurrent();
+      if (autoRead) speakCurrent();
+    } else {
+      renderEmpty();
+    }
+  } catch (e) {
+    log('err', 'Failed to load: ' + e.message);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => loadRequirements());
+
+function applyFilter() {
+  if (currentFilter === 'unapproved') {
+    filteredReqs = allRequirements.filter(r => !r.approved);
+  } else {
+    filteredReqs = [...allRequirements];
+  }
+  if (currentIndex >= filteredReqs.length) currentIndex = Math.max(0, filteredReqs.length - 1);
+  updateProgress();
+}
+
+function setFilter(f) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-pill').forEach(el => {
+    el.classList.toggle('active', el.dataset.filter === f);
+  });
+  applyFilter();
+  if (filteredReqs.length > 0) renderCurrent();
+  else renderEmpty();
+}
+
+function updateProgress() {
+  const el = document.getElementById('progress');
+  if (filteredReqs.length === 0) {
+    el.innerHTML = 'No requirements';
+  } else {
+    el.innerHTML = `<strong>${currentIndex + 1}</strong> of <strong>${filteredReqs.length}</strong>`;
+  }
+}
+
+// ── Render ──
+function renderCurrent() {
+  const req = filteredReqs[currentIndex];
+  if (!req) return renderEmpty();
+
+  const fields = [
+    { key: 'description', label: 'Description' },
+    { key: 'rationale', label: 'Rationale' },
+    { key: 'verification', label: 'Verification' },
+    { key: 'validation', label: 'Validation' },
+    { key: 'parameter', label: 'Parameter' },
+  ];
+
+  const approvedBadge = req.approved
+    ? '<span class="badge badge-approved">Approved</span>'
+    : '<span class="badge badge-unapproved">Unapproved</span>';
+
+  const categoryBadge = req.category
+    ? `<span class="badge badge-category">${esc(req.category.name)}</span>`
+    : '';
+
+  const statusBadge = `<span class="badge badge-status">${esc(req.implementationStatus || 'unknown')}</span>`;
+
+  const parentInfo = req.parentRequirementID
+    ? `<div class="meta-item">Parent: <strong>REQ ${req.parentRequirementID}</strong></div>` : '';
+  const depthInfo = req._depth != null
+    ? `<div class="meta-item">Depth: <strong>${req._depth}</strong></div>` : '';
+
+  const fullPlaying = activePlayField === 'full';
+  document.getElementById('req-panel').innerHTML = `
+    <div class="req-header">
+      <div class="req-id"><span>REQ</span> ${req.id}</div>
+      <button class="inline-play${fullPlaying ? ' playing' : ''}" id="play-full" onclick="togglePlayField('full')" title="${fullPlaying ? 'Stop' : 'Play all fields'}">${fullPlaying ? '&#9632;' : '&#9654;'}</button>
+      <div class="req-badges">
+        ${approvedBadge}
+        ${categoryBadge}
+        ${statusBadge}
+      </div>
+    </div>
+    <div class="req-fields">
+      ${fields.map(f => {
+        const val = req[f.key];
+        const fPlaying = activePlayField === f.key;
+        return `
+          <div class="field-group" id="field-${f.key}">
+            <div class="field-label" style="display:flex;align-items:center;gap:0.5rem;">
+              ${f.label}
+              ${val ? `<button class="inline-play${fPlaying ? ' playing' : ''}" id="play-${f.key}" onclick="togglePlayField('${f.key}')" title="${fPlaying ? 'Stop' : 'Play ' + f.label}">${fPlaying ? '&#9632;' : '&#9654;'}</button>` : ''}
+            </div>
+            <div class="field-value${val ? ' editable' : ' empty'}" ${val ? `onclick="clickEdit('${f.key}')"` : ''}>${val ? esc(val) : '(none)'}</div>
+          </div>`;
+      }).join('')}
+    </div>
+    <div class="req-meta">
+      ${parentInfo}
+      ${depthInfo}
+      <div class="meta-item">Owner: <strong>${esc(req.owner?.displayName || '?')}</strong></div>
+      <div class="meta-item">Created: <strong>${new Date(req.createdAt).toLocaleDateString()}</strong></div>
+    </div>
+  `;
+
+  updateProgress();
+}
+
+function renderEmpty() {
+  document.getElementById('req-panel').innerHTML = `
+    <div class="empty-state">
+      <h2>All Clear</h2>
+      <p>No ${currentFilter === 'unapproved' ? 'unapproved ' : ''}requirements to review.</p>
+    </div>`;
+  updateProgress();
+}
+
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ── Audio (pre-generated local files) ──
+function audioPath(reqId, field) {
+  return `${AUDIO_DIR}/req-${reqId}-${field}.wav`;
+}
+
+function clearFieldHighlights() {
+  document.querySelectorAll('.field-group.speaking').forEach(el => el.classList.remove('speaking'));
+}
+
+function highlightField(field) {
+  clearFieldHighlights();
+  const el = document.getElementById(`field-${field}`);
+  if (el) el.classList.add('speaking');
+}
+
+async function speakCurrent() {
+  const req = filteredReqs[currentIndex];
+  if (!req) return;
+
+  stopAudio();
+
+  // Build queue of fields that have content
+  audioQueue = FIELDS.filter(f => req[f]);
+  currentFieldIndex = -1;
+  isSpeaking = true;
+  document.getElementById('btn-play').classList.add('playing');
+  setAudioStatus('Playing...');
+
+  playNextField(req.id);
+}
+
+function playNextField(reqId) {
+  currentFieldIndex++;
+  if (currentFieldIndex >= audioQueue.length) {
+    // Done with all fields
+    clearFieldHighlights();
+    isSpeaking = false;
+    document.getElementById('btn-play').classList.remove('playing');
+    setAudioStatus('Done');
+    return;
+  }
+
+  const field = audioQueue[currentFieldIndex];
+  highlightField(field);
+  setAudioStatus(`Playing: ${field}`);
+
+  const audio = document.getElementById('tts-audio');
+  audio.src = audioPath(reqId, field);
+  audio.onended = () => playNextField(reqId);
+  audio.onerror = () => {
+    log('warn', `No audio for REQ ${reqId} ${field}`);
+    playNextField(reqId);
+  };
+  audio.play().catch(() => {
+    log('warn', `Cannot play audio for REQ ${reqId} ${field}`);
+    playNextField(reqId);
+  });
+}
+
+function stopAudio() {
+  const audio = document.getElementById('tts-audio');
+  audio.pause();
+  audio.currentTime = 0;
+  audio.onended = null;
+  audioQueue = [];
+  currentFieldIndex = -1;
+  activePlayField = null;
+  clearFieldHighlights();
+  clearInlinePlayStates();
+  isSpeaking = false;
+  document.getElementById('btn-play').classList.remove('playing');
+  setAudioStatus('');
+}
+
+function clearInlinePlayStates() {
+  document.querySelectorAll('.inline-play.playing').forEach(el => el.classList.remove('playing'));
+}
+
+function togglePlayField(field) {
+  // If this field is already playing, stop it
+  if (activePlayField === field) {
+    stopAudio();
+    return;
+  }
+
+  const req = filteredReqs[currentIndex];
+  if (!req) return;
+
+  stopAudio();
+  isSpeaking = true;
+  activePlayField = field;
+
+  // Update button to show stop icon
+  const btn = document.getElementById(`play-${field}`);
+  if (btn) {
+    btn.classList.add('playing');
+    btn.innerHTML = '&#9632;';
+    btn.title = 'Stop';
+  }
+  if (field !== 'full') highlightField(field);
+
+  const label = field === 'full' ? 'full' : field;
+  setAudioStatus(`Playing: ${label}`);
+
+  const onDone = () => {
+    clearFieldHighlights();
+    activePlayField = null;
+    isSpeaking = false;
+    setAudioStatus('Done');
+    // Re-render to reset button icons
+    renderCurrent();
+  };
+
+  const onError = (reason) => {
+    log('warn', `${reason} for REQ ${req.id} ${field}`);
+    clearFieldHighlights();
+    activePlayField = null;
+    isSpeaking = false;
+    setAudioStatus('');
+    renderCurrent();
+  };
+
+  const audio = document.getElementById('tts-audio');
+  audio.src = audioPath(req.id, field);
+  audio.onended = onDone;
+  audio.onerror = () => onError('No audio');
+  audio.play().catch(() => onError('Cannot play audio'));
+}
+
+function clickEdit(field) {
+  const req = filteredReqs[currentIndex];
+  if (!req) return;
+
+  const fieldEl = document.getElementById(`field-${field}`);
+  if (!fieldEl) return;
+
+  const current = req[field] || '';
+  const valueEl = fieldEl.querySelector('.field-value');
+  if (!valueEl) return;
+
+  valueEl.outerHTML = `
+    <textarea class="field-edit-textarea" id="edit-textarea-${field}" onfocus="this.setSelectionRange(this.value.length, this.value.length)">${esc(current)}</textarea>
+    <div style="margin-top:0.5rem;display:flex;gap:0.5rem;">
+      <button onclick="saveClickEdit('${field}')" style="padding:0.4rem 1rem;background:var(--accent);color:var(--bg);border:none;border-radius:3px;font-family:var(--mono);font-size:0.7rem;cursor:pointer;font-weight:600;">Save</button>
+      <button onclick="renderCurrent()" style="padding:0.4rem 1rem;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:3px;font-family:var(--mono);font-size:0.7rem;cursor:pointer;">Cancel</button>
+    </div>`;
+  const textarea = document.getElementById(`edit-textarea-${field}`);
+  if (textarea) textarea.focus();
+}
+
+function saveClickEdit(field) {
+  const textarea = document.getElementById(`edit-textarea-${field}`);
+  if (!textarea) return;
+  updateField(field, textarea.value.trim());
+}
+
+function toggleAutoRead() {
+  autoRead = !autoRead;
+  document.getElementById('btn-auto').textContent = `Auto: ${autoRead ? 'ON' : 'OFF'}`;
+  log('info', `Auto-read ${autoRead ? 'enabled' : 'disabled'}`);
+}
+
+function setAudioStatus(msg) {
+  document.getElementById('audio-status').textContent = msg;
+}
+
+// ── Navigation ──
+function nextReq() {
+  if (currentIndex < filteredReqs.length - 1) {
+    currentIndex++;
+    renderCurrent();
+    if (autoRead) speakCurrent();
+  } else {
+    log('warn', 'Already at last requirement');
+  }
+}
+
+function prevReq() {
+  if (currentIndex > 0) {
+    currentIndex--;
+    renderCurrent();
+    if (autoRead) speakCurrent();
+  } else {
+    log('warn', 'Already at first requirement');
+  }
+}
+
+// ── Persist ──
+async function saveToServer() {
+  try {
+    const res = await fetch('/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(allRequirements, null, 2),
+    });
+    if (!res.ok) throw new Error(`${res.status}`);
+    log('ok', 'Saved to disk');
+  } catch (e) {
+    log('err', 'Save failed: ' + e.message);
+  }
+}
+
+// ── Actions ──
+function approveCurrent() {
+  const req = filteredReqs[currentIndex];
+  if (!req) return;
+  if (req.approved) { log('warn', `REQ ${req.id} already approved`); return; }
+
+  req.approved = true;
+  req.approvedAt = new Date().toISOString();
+  log('ok', `Marked REQ ${req.id} as approved`);
+  saveToServer();
+  renderCurrent();
+
+  if (currentFilter === 'unapproved') {
+    applyFilter();
+    if (filteredReqs.length > 0) {
+      if (currentIndex >= filteredReqs.length) currentIndex = filteredReqs.length - 1;
+      renderCurrent();
+      if (autoRead) speakCurrent();
+    } else {
+      renderEmpty();
+      stopAudio();
+    }
+  }
+}
+
+function updateField(field, value) {
+  const req = filteredReqs[currentIndex];
+  if (!req) return;
+
+  req[field] = value;
+  log('ok', `Updated ${field} on REQ ${req.id}`);
+  saveToServer();
+  renderCurrent();
+}
+
+function startEdit(field) {
+  const req = filteredReqs[currentIndex];
+  if (!req) return;
+
+  const fieldEl = document.getElementById(`field-${field}`);
+  if (!fieldEl) return;
+
+  const current = req[field] || '';
+  fieldEl.innerHTML = `
+    <div class="field-label">${field.toUpperCase()} <span style="color:var(--accent)">(editing)</span></div>
+    <textarea style="width:100%;min-height:80px;padding:0.5rem;background:var(--bg);border:1px solid var(--accent);border-radius:4px;color:var(--text-bright);font-family:var(--sans);font-size:0.9rem;resize:vertical;outline:none;"
+      id="edit-textarea">${esc(current)}</textarea>
+    <div style="margin-top:0.5rem;display:flex;gap:0.5rem;">
+      <button onclick="saveEdit('${field}')" style="padding:0.4rem 1rem;background:var(--accent);color:var(--bg);border:none;border-radius:3px;font-family:var(--mono);font-size:0.7rem;cursor:pointer;font-weight:600;">Save</button>
+      <button onclick="renderCurrent()" style="padding:0.4rem 1rem;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:3px;font-family:var(--mono);font-size:0.7rem;cursor:pointer;">Cancel</button>
+    </div>`;
+  fieldEl.querySelector('textarea').focus();
+}
+
+function saveEdit(field) {
+  const textarea = document.getElementById('edit-textarea');
+  if (!textarea) return;
+  updateField(field, textarea.value.trim());
+}
+
+// ── Command input ──
+function runCommand() {
+  const input = document.getElementById('cmd-input');
+  const raw = input.value.trim();
+  input.value = '';
+  if (!raw) return;
+
+  const [cmd, ...rest] = raw.split(/\s+/);
+  const arg = rest.join(' ');
+
+  switch (cmd.toLowerCase()) {
+    case 'n': case 'next': nextReq(); break;
+    case 'p': case 'prev': prevReq(); break;
+    case 'a': case 'approve': approveCurrent(); break;
+    case 'r': case 'read': speakCurrent(); break;
+    case 'stop': stopAudio(); break;
+    case 'update': {
+      const [field, ...textParts] = rest;
+      const text = textParts.join(' ');
+      if (!field || !text) { log('warn', 'Usage: update <field> <text>'); break; }
+      updateField(field, text);
+      break;
+    }
+    case 'goto': {
+      const id = parseInt(arg);
+      const idx = filteredReqs.findIndex(r => r.id === id);
+      if (idx === -1) { log('warn', `REQ ${id} not found in current filter`); break; }
+      currentIndex = idx;
+      renderCurrent();
+      if (autoRead) speakCurrent();
+      break;
+    }
+    case 'auto': toggleAutoRead(); break;
+    default: log('warn', `Unknown command: ${cmd}`);
+  }
+}
+
+// ── Log ──
+function log(type, msg) {
+  const el = document.getElementById('log-entries');
+  const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-time">${time}</span> <span class="log-${type}">${esc(msg)}</span>`;
+  el.prepend(entry);
+
+  // Keep max 50 entries
+  while (el.children.length > 50) el.removeChild(el.lastChild);
+}
+</script>
+</body>
+</html>

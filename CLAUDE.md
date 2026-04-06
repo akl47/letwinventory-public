@@ -367,3 +367,155 @@ Each session should:
   - `frontend/src/app/components/harness/harness-canvas/harness-canvas.ts` — two-pass wire rendering, updated obstacle bounds
   - `frontend/src/app/models/harness.model.ts` — schemaVersion field
   - `docs/features/wire-harness-editor.md` — updated spec with new behavior
+
+### 2026-03-30
+- **Kitting & Assemblies feature** — full-stack support for Kit and Assembly part categories with bill of materials (BOM) and trace kitting workflow
+  - Two new part categories: Kit (green) and Assembly (blue), seeded via migration
+  - `BillOfMaterialItems` table — links kit/assembly parts to component parts with quantities; unique index on (partID, componentPartID)
+  - BOM API: `GET/PUT /api/inventory/bom/:partId` with DFS cycle detection (direct, indirect, cross-type, self-reference)
+  - Kit/Unkit trace endpoints: `POST /api/inventory/trace/kit/:barcodeId`, `POST /api/inventory/trace/unkit/:barcodeId`
+  - Kit status endpoint: `GET /api/inventory/trace/kit-status/:barcodeId` — computes partial/complete from kitting history vs BOM
+  - KITTED (id: 8) and UNKITTED (id: 9) barcode history action types
+  - Kitting deducts source trace quantity; deactivates trace at 0; unkitting restores and reactivates
+  - Frontend: BOM editor on part-edit-page for Kit/Assembly categories (search, add, remove, quantity editing)
+  - Frontend: Kit action in barcode-movement-dialog (target barcode + quantity)
+  - Frontend: KITTED/UNKITTED labels and icons in barcode-history
+  - Frontend: Kit button on barcode-history action bar for trace barcodes
+  - Frontend: `getBom()`, `updateBom()`, `kitTrace()`, `unkitTrace()`, `getKitStatus()` in inventory.service.ts
+  - 20 requirements created (REQ 193-213) in Inventory category
+- **Files created:**
+  - `backend/models/inventory/billOfMaterialItem.js` — Sequelize model
+  - `backend/api/inventory/bom/controller.js` — BOM CRUD + cycle detection
+  - `backend/api/inventory/bom/routes.js` — Express routes
+  - `backend/migrations/20260330000000-add-kitting-support.js` — table + category/action type seeds
+  - `backend/tests/__tests__/inventory/bom.test.js` — BOM API tests (CRUD, cycle detection)
+  - `backend/tests/__tests__/inventory/kitting.test.js` — kit/unkit/status tests
+  - `docs/features/kitting.md` — feature spec
+- **Files modified:**
+  - `backend/models/inventory/part.js` — added bomItems/usedInBoms associations
+  - `backend/api/inventory/trace/controller.js` — kitTrace, unkitTrace, getKitStatus handlers
+  - `backend/api/inventory/trace/routes.js` — kit/unkit/kit-status routes
+  - `backend/tests/setup.js` — Kit/Assembly categories, KITTED/UNKITTED action types, BillOfMaterialItem cleanup
+  - `frontend/src/app/services/inventory.service.ts` — BOM + kitting methods
+  - `frontend/src/app/services/inventory.service.spec.ts` — BOM + kitting service tests
+  - `frontend/src/app/components/inventory/part-edit-page/part-edit-page.ts` — BOM state, isKitOrAssembly(), loadBomData, saveBomData, search/add/remove BOM items
+  - `frontend/src/app/components/inventory/part-edit-page/part-edit-page.html` — BOM editor section
+  - `frontend/src/app/components/inventory/part-edit-page/part-edit-page.css` — BOM styles
+  - `frontend/src/app/components/inventory/barcode-movement-dialog/barcode-movement-dialog.ts` — kit action type + executeKit
+  - `frontend/src/app/components/inventory/barcode-movement-dialog/barcode-movement-dialog.html` — kit form
+  - `frontend/src/app/components/inventory/barcode-movement-dialog/barcode-movement-dialog.spec.ts` — kit action tests
+  - `frontend/src/app/components/inventory/barcode-history/barcode-history.ts` — KITTED/UNKITTED labels/icons, onKit()
+  - `frontend/src/app/components/inventory/barcode-history/barcode-history.html` — Kit button
+  - `frontend/src/app/components/inventory/barcode-history/barcode-history.spec.ts` — KITTED/UNKITTED + onKit tests
+
+### 2026-03-31
+- **UoM integer-only quantity validation:**
+  - `allowDecimal` BOOLEAN on UnitOfMeasures (default false); migration updates continuous UoMs (gal, g, kg, in, ft, m, mm)
+  - `validateQuantityForUoM()` helper in trace controller; validation in createNewTrace, splitTrace, adjustQuantity, kitTrace, unkitTrace, deleteTrace
+  - BOM API validates component part quantities against their UoM
+  - `buildTag` extended to include `unitOfMeasureID` and `allowDecimal` on Trace tags
+  - Frontend: dynamic `[step]`/`[min]` on all quantity inputs (barcode-movement-dialog, mobile-scanner, inventory-item-dialog, BOM)
+  - UoM API returns `allowDecimal` field
+- **BOM UI improvements:**
+  - Table uses `locations-table` CSS classes (consistent with Stock Locations)
+  - Part autocomplete (mat-autocomplete) replacing custom search, searches name/description/vendor/SKU
+  - Category badge column with colored pill
+  - UoM label in qty column
+  - Part names as links to part edit page
+  - BOM qty inputs respect component part's UoM `allowDecimal`
+- **Build feature** — top-level Build page for assembling kits/assemblies
+  - New nav rail item "Build" with `build_circle` icon, gated by inventory access
+  - Routes: `/build` (list view), `/build/:barcodeId` (detail view)
+  - `GET /api/inventory/trace/in-progress-builds` endpoint — returns partial kit/assembly traces with BOM progress
+  - Build list view: table of in-progress builds with barcode, part name, category badge, progress (N/M), created date; searchable
+  - New build dialog: autocomplete filtered to Kit/Assembly parts, creates trace, navigates to detail view
+  - Build detail view: part info card, BOM fulfillment table (required/kitted/status per line), barcode scan input
+  - Barcode scan workflow: scan → lookup → match BOM line → quantity prompt → kit → refresh status
+  - Complete builds show "Complete" badge and are excluded from the list
+  - 6 requirements created (REQ 214-219) in Inventory category
+- **Files created:**
+  - `backend/migrations/20260331000000-add-allow-decimal-to-uom.js`
+  - `backend/tests/__tests__/inventory/build.test.js`
+  - `frontend/src/app/components/build/build-list-view/build-list-view.ts` + `.html` + `.css` + `.spec.ts`
+  - `frontend/src/app/components/build/build-view/build-view.ts` + `.html` + `.css` + `.spec.ts`
+  - `frontend/src/app/components/build/new-build-dialog/new-build-dialog.ts` + `.html` + `.css` + `.spec.ts`
+  - `docs/features/build.md`
+- **Files modified:**
+  - `backend/models/inventory/unitOfMeasure.js` — added `allowDecimal` field
+  - `backend/api/inventory/unitofmeasure/controller.js` — added `allowDecimal` to attributes
+  - `backend/api/inventory/trace/controller.js` — `validateQuantityForUoM` helper + calls in 6 methods, `getInProgressBuilds` handler
+  - `backend/api/inventory/trace/routes.js` — in-progress-builds route (before /:id to avoid param conflict)
+  - `backend/api/inventory/bom/controller.js` — BOM qty UoM validation, `defaultUnitOfMeasureID` in component part attributes
+  - `backend/api/inventory/barcode/controller.js` — `buildTag` includes UoM data for traces
+  - `backend/tests/setup.js` — UoM seeds with `allowDecimal`
+  - `backend/tests/__tests__/inventory/trace.test.js` — UoM quantity validation tests
+  - `backend/tests/__tests__/inventory/kitting.test.js` — decimal qty validation tests
+  - `frontend/src/app/app.routes.ts` — `/build` and `/build/:barcodeId` routes
+  - `frontend/src/app/components/common/nav/nav.component.ts` — build NavGroup, prefixes
+  - `frontend/src/app/components/common/nav/nav.component.html` — build rail item + flyout
+  - `frontend/src/app/models/trace.model.ts` — `allowDecimal` on UnitOfMeasure
+  - `frontend/src/app/models/inventory-tag.model.ts` — `unitOfMeasureID`, `allowDecimal`
+  - `frontend/src/app/services/inventory.service.ts` — `getInProgressBuilds()`
+  - `frontend/src/app/services/inventory.service.spec.ts` — build service test
+  - `frontend/src/app/components/inventory/inventory-item-dialog/inventory-item-dialog.ts` + `.html` — `allowDecimal` computed, dynamic step/min
+  - `frontend/src/app/components/inventory/barcode-movement-dialog/barcode-movement-dialog.ts` + `.html` — `allowDecimal` in dialog data, dynamic step/min
+  - `frontend/src/app/components/inventory/barcode-history/barcode-history.ts` — passes `allowDecimal` to dialog
+  - `frontend/src/app/components/mobile/mobile-scanner/mobile-scanner.html` — dynamic step/min on 3 qty inputs
+  - `frontend/src/app/components/inventory/part-edit-page/part-edit-page.ts` — BOM autocomplete, category helpers, UoM helpers, `MatAutocompleteModule`
+  - `frontend/src/app/components/inventory/part-edit-page/part-edit-page.html` — BOM table rewrite (locations-table, autocomplete, category badge, UoM, part links)
+  - `frontend/src/app/components/inventory/part-edit-page/part-edit-page.css` — part-link, category-badge, BOM qty styles
+
+### 2026-03-31 (continued)
+- **Kitting/Build UI improvements:**
+  - Fixed `searchText().toLowerCase()` TypeError in BOM autocomplete and new-build-dialog (mat-autocomplete writing object to string signal)
+  - New build dialog: location selector (required), uses `getLocationBarcodes()` API
+  - Build detail page: part links with hover image preview, barcode tags, kit dialog per BOM line, created at/by info
+  - Build list page: reformatted to match parts table layout, "Show Completed" toggle, status column, barcode tags
+  - Status chips use translucent backgrounds with primary color text
+- **Barcode dialog replaced with embedded mobile scanner:**
+  - `BarcodeDialog` is now a thin wrapper embedding `MobileScanner` component
+  - `MobileScanner` gains `@Input() initialBarcode`, `@Input() embedded`, `@Output() closed`
+  - In embedded mode: back button closes dialog, "History" button navigates to barcode history, camera-dependent features use manual input
+  - Global `scanner-dialog-panel` CSS class for dialog styling
+  - All barcode tag openers updated with new dialog config
+  - Barcode preview moved above action buttons, "History" button added to action grid
+  - Barcode in barcode-history header is now a clickable `<app-barcode-tag>`
+- **Part Revisions feature** (REQ 220-227) — full-stack revision tracking for parts
+  - `revision` STRING(8), `revisionLocked` BOOLEAN, `previousRevisionID` INTEGER FK added to Parts table
+  - Unique constraint changed from `name` to `(name, revision)` composite
+  - `PartRevisionHistory` table for audit trail (changeType: created/updated/locked/unlocked/new_revision/production_release)
+  - Revision scheme: external parts default `0`, internal parts start at `01` (dev numeric), letters `A, B, C...` for production
+  - New API endpoints: `POST /:id/new-revision`, `POST /:id/release`, `PUT /:id/lock`, `PUT /:id/unlock`, `GET /:id/revision-history`, `GET /revisions/:name`
+  - Part edit page: revision badge in header, lock/unlock toggle, "New Rev" and "Release" buttons, revision history timeline, all revisions section
+  - Parts table: new "Rev" column
+  - 8 requirements created (REQ 220-227) in Parts category
+- **Files created:**
+  - `backend/migrations/20260331100000-add-part-revisions.js`
+  - `backend/models/inventory/partRevisionHistory.js`
+  - `backend/tests/__tests__/inventory/partRevision.test.js`
+  - `frontend/src/app/components/build/kit-line-dialog/kit-line-dialog.ts` + `.html` + `.css`
+  - `frontend/src/app/components/build/build-list-view/` — reformatted
+  - `docs/features/part-rev.md`
+- **Files modified:**
+  - `backend/models/inventory/part.js` — revision, revisionLocked, previousRevisionID fields + associations
+  - `backend/api/inventory/part/controller.js` — revision endpoints, default revision in create, lock check in update, history recording
+  - `backend/api/inventory/part/routes.js` — 6 new routes
+  - `backend/api/inventory/trace/controller.js` — includeCompleted param, buildTag createdAt
+  - `backend/api/inventory/barcode/controller.js` — buildTag includes createdAt
+  - `backend/tests/setup.js` — PartRevisionHistory cleanup
+  - `backend/tests/helpers.js` — createTestPart includes revision default
+  - `frontend/src/app/models/part.model.ts` — revision, revisionLocked, previousRevisionID
+  - `frontend/src/app/models/inventory-tag.model.ts` — createdAt
+  - `frontend/src/app/services/inventory.service.ts` — revision API methods, getInProgressBuilds includeCompleted
+  - `frontend/src/app/components/inventory/part-edit-page/` — revision controls, history, all revisions
+  - `frontend/src/app/components/inventory/parts-table-view/` — revision column
+  - `frontend/src/app/components/inventory/barcode-dialog/barcode-dialog.ts` — replaced with MobileScanner wrapper
+  - `frontend/src/app/components/inventory/barcode-tag/barcode-tag.ts` — scanner dialog panel config
+  - `frontend/src/app/components/inventory/barcode-history/barcode-history.html` — barcode tag
+  - `frontend/src/app/components/inventory/inventory-higherarchy-item/inventory-higherarchy-item.ts` — dialog config
+  - `frontend/src/app/components/orders/order-view/order-view.ts` — dialog config
+  - `frontend/src/app/components/mobile/mobile-scanner/` — embedded mode, history button, layout reorder
+  - `frontend/src/app/components/build/build-view/` — part links, barcode tags, kit dialog, revision display
+  - `frontend/src/app/components/build/build-list-view/` — reformatted, status column, show completed
+  - `frontend/src/app/components/build/new-build-dialog/` — location selector
+  - `frontend/src/styles.css` — scanner-dialog-panel class

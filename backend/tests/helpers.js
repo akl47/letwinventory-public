@@ -46,6 +46,7 @@ async function createTestPart(overrides = {}) {
     minimumOrderQuantity: 1,
     partCategoryID: 1,
     activeFlag: true,
+    revision: overrides.internalPart ? '01' : '00',
     ...overrides,
   });
 }
