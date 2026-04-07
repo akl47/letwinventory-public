@@ -19,8 +19,8 @@ module.exports = (sequelize, DataTypes) => {
     partID: { type: DataTypes.INTEGER, allowNull: false },
     changedByUserID: { type: DataTypes.INTEGER, allowNull: true },
     changeType: {
-      type: DataTypes.STRING(20), allowNull: false,
-      validate: { isIn: [['created', 'updated', 'locked', 'unlocked', 'new_revision', 'production_release']] }
+      type: DataTypes.ENUM('created', 'updated', 'locked', 'unlocked', 'new_revision', 'production_release'),
+      allowNull: false
     },
     changes: { type: DataTypes.JSON, allowNull: true },
     createdAt: { allowNull: false, type: DataTypes.DATE }

@@ -67,6 +67,11 @@
     font-size: 14px;
 }
 
+.approval-banner.draft {
+    background-color: var(--mat-sys-surface-container);
+    color: var(--mat-sys-on-surface-variant);
+}
+
 .approval-banner.approved {
     background-color: #1b5e20;
     color: #a5d6a7;

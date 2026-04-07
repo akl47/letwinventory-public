@@ -60,6 +60,12 @@ export class DesignRequirementService {
         );
     }
 
+    submit(id: number): Observable<DesignRequirement> {
+        return this.http.put<DesignRequirement>(`${this.apiUrl}/${id}/submit`, {}).pipe(
+            tap(() => this.clearCache())
+        );
+    }
+
     implement(id: number): Observable<DesignRequirement> {
         return this.http.put<DesignRequirement>(`${this.apiUrl}/${id}/implement`, {}).pipe(
             tap(() => this.clearCache())

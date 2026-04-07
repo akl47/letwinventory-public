@@ -19,18 +19,23 @@
         </h2>
         <span class="spacer"></span>
         @if (isEditMode && currentRequirement() && canWrite()) {
-        @if (currentRequirement()?.approved) {
-        <button mat-stroked-button (click)="unapprove()">
-            <mat-icon>undo</mat-icon>
-            Unapprove
+        @if (currentRequirement()?.approvalStatus === 'draft') {
+        <button mat-flat-button color="primary" (click)="submitForReview()">
+            <mat-icon>send</mat-icon>
+            Submit for Review
         </button>
-        } @else {
+        } @else if (currentRequirement()?.approvalStatus === 'unapproved') {
         <button mat-flat-button color="primary" (click)="approve()">
             <mat-icon>check_circle</mat-icon>
             Approve
         </button>
+        } @else if (currentRequirement()?.approvalStatus === 'approved') {
+        <button mat-stroked-button (click)="unapprove()">
+            <mat-icon>undo</mat-icon>
+            Unapprove
+        </button>
         }
-        @if (currentRequirement()?.approved && currentRequirement()?.implementationStatus === 'not_implemented') {
+        @if (currentRequirement()?.approvalStatus === 'approved' && currentRequirement()?.implementationStatus === 'not_implemented') {
         <button mat-flat-button (click)="implementRequirement()">
             <mat-icon>build</mat-icon>
             Implement
@@ -62,7 +67,7 @@
         </button>
         <button mat-flat-button color="primary" (click)="save()" [disabled]="form.invalid">
             <mat-icon>save</mat-icon>
-            {{ isEditMode ? ((currentRequirement()?.approved || currentRequirement()?.implementationStatus !== 'not_implemented') && hasFormChanges() ? 'Save and Reset Status' : 'Save') :
+            {{ isEditMode ? ((currentRequirement()?.approvalStatus === 'approved' || currentRequirement()?.implementationStatus !== 'not_implemented') && hasFormChanges() ? 'Save and Reset Status' : 'Save') :
             'Create' }}
         </button>
         } @else {
@@ -79,21 +84,25 @@
         <!-- Approval Status -->
         @if (isEditMode && currentRequirement()) {
         <div class="approval-banner"
-            [class.approved]="currentRequirement()?.approved && currentRequirement()?.implementationStatus === 'not_implemented'"
+            [class.approved]="currentRequirement()?.approvalStatus === 'approved' && currentRequirement()?.implementationStatus === 'not_implemented'"
             [class.implemented]="currentRequirement()?.implementationStatus === 'implemented'"
-            [class.validated]="currentRequirement()?.implementationStatus === 'validated'">
+            [class.validated]="currentRequirement()?.implementationStatus === 'validated'"
+            [class.draft]="currentRequirement()?.approvalStatus === 'draft'">
             @if (currentRequirement()?.implementationStatus === 'validated') {
             <mat-icon>verified</mat-icon>
             <span>Validated — Implementation verified and accepted</span>
             } @else if (currentRequirement()?.implementationStatus === 'implemented') {
             <mat-icon>build</mat-icon>
             <span>Implemented by {{ currentRequirement()?.implementedBy?.displayName || 'Unknown' }} on {{ currentRequirement()?.implementedAt | date:'medium' }}</span>
-            } @else if (currentRequirement()?.approved) {
+            } @else if (currentRequirement()?.approvalStatus === 'approved') {
             <mat-icon>check_circle</mat-icon>
             <span>Approved by {{ currentRequirement()?.approvedBy?.displayName || 'Unknown' }} on {{ currentRequirement()?.approvedAt | date:'medium' }}</span>
+            } @else if (currentRequirement()?.approvalStatus === 'draft') {
+            <mat-icon>edit_note</mat-icon>
+            <span>Draft — Not yet submitted for review</span>
             } @else {
             <mat-icon>pending</mat-icon>
-            <span>Draft — Not yet approved</span>
+            <span>Awaiting Approval</span>
             }
         </div>
         }

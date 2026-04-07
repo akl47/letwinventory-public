@@ -159,7 +159,7 @@ describe('DesignRequirementService', () => {
             const req = httpMock.expectOne(`${API_URL}/4/approve`);
             expect(req.request.method).toBe('PUT');
             expect(req.request.body).toEqual({});
-            req.flush({ id: 4, approved: true });
+            req.flush({ id: 4, approvalStatus: 'approved' });
         });
 
         it('should clear cache after approving', () => {
@@ -183,7 +183,7 @@ describe('DesignRequirementService', () => {
             const req = httpMock.expectOne(`${API_URL}/4/unapprove`);
             expect(req.request.method).toBe('PUT');
             expect(req.request.body).toEqual({});
-            req.flush({ id: 4, approved: false });
+            req.flush({ id: 4, approvalStatus: 'unapproved' });
         });
 
         it('should clear cache after unapproving', () => {
@@ -192,6 +192,30 @@ describe('DesignRequirementService', () => {
 
             service.unapprove(1).subscribe();
             httpMock.expectOne(`${API_URL}/1/unapprove`).flush({});
+
+            service.getAll().subscribe();
+            const req = httpMock.expectOne(API_URL);
+            expect(req.request.method).toBe('GET');
+            req.flush([]);
+        });
+    });
+
+    describe('submit', () => {
+        it('should PUT to /design/requirement/:id/submit', () => {
+            service.submit(4).subscribe();
+
+            const req = httpMock.expectOne(`${API_URL}/4/submit`);
+            expect(req.request.method).toBe('PUT');
+            expect(req.request.body).toEqual({});
+            req.flush({ id: 4, approvalStatus: 'unapproved' });
+        });
+
+        it('should clear cache after submitting', () => {
+            service.getAll().subscribe();
+            httpMock.expectOne(API_URL).flush([]);
+
+            service.submit(1).subscribe();
+            httpMock.expectOne(`${API_URL}/1/submit`).flush({});
 
             service.getAll().subscribe();
             const req = httpMock.expectOne(API_URL);

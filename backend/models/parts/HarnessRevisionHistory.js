@@ -39,11 +39,8 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
     changeType: {
-      type: DataTypes.STRING(50),
-      allowNull: false,
-      validate: {
-        isIn: [['created', 'updated', 'submitted_review', 'rejected', 'released', 'new_revision', 'production_release']]
-      }
+      type: DataTypes.ENUM('created', 'updated', 'submitted_review', 'rejected', 'released', 'new_revision', 'production_release'),
+      allowNull: false
     },
     changeNotes: {
       type: DataTypes.TEXT,

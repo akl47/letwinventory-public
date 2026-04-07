@@ -30,11 +30,8 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false
     },
     changeType: {
-      type: DataTypes.STRING(20),
-      allowNull: false,
-      validate: {
-        isIn: [['created', 'updated', 'approved', 'unapproved', 'deleted', 'implemented', 'validated', 'unimplemented']]
-      }
+      type: DataTypes.ENUM('created', 'updated', 'approved', 'unapproved', 'submitted', 'deleted', 'implemented', 'validated', 'unimplemented'),
+      allowNull: false
     },
     changes: {
       type: DataTypes.JSONB,

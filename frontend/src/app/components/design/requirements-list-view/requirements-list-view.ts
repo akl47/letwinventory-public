@@ -72,7 +72,8 @@ export class RequirementsListView implements OnInit {
     hideChildren = signal(false);
 
     statusOptions = [
-        { value: 'unapproved', label: 'Unapproved', icon: 'pending', cssClass: 'status-icon-draft' },
+        { value: 'draft', label: 'Draft', icon: 'edit_note', cssClass: 'status-icon-draft' },
+        { value: 'unapproved', label: 'Unapproved', icon: 'pending', cssClass: 'status-icon-unapproved' },
         { value: 'approved', label: 'Approved', icon: 'check_circle', cssClass: 'status-icon-approved' },
         { value: 'not_implemented', label: 'Not Implemented', icon: 'code_off', cssClass: 'status-icon-not-implemented' },
         { value: 'implemented', label: 'Implemented', icon: 'build', cssClass: 'status-icon-implemented' },
@@ -160,7 +161,7 @@ export class RequirementsListView implements OnInit {
 
         const allDescendantsApproved = (id: number): boolean => {
             const children = childrenMap.get(id) || [];
-            return children.every(c => c.approved && allDescendantsApproved(c.id));
+            return children.every(c => c.approvalStatus === 'approved' && allDescendantsApproved(c.id));
         };
 
         // Build flat tree rows
@@ -191,8 +192,7 @@ export class RequirementsListView implements OnInit {
         }
 
         const matchesStatus = (req: DesignRequirement): boolean => {
-            const approvalStatus = req.approved ? 'approved' : 'unapproved';
-            return statuses.has(approvalStatus) && statuses.has(req.implementationStatus);
+            return statuses.has(req.approvalStatus) && statuses.has(req.implementationStatus);
         };
 
         // Pre-compute which nodes have a status-matching descendant

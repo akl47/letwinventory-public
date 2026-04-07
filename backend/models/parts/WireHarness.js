@@ -73,12 +73,9 @@ module.exports = (sequelize, DataTypes) => {
     },
     // Revision control fields
     releaseState: {
-      type: DataTypes.STRING(20),
+      type: DataTypes.ENUM('draft', 'review', 'released'),
       allowNull: false,
-      defaultValue: 'draft',
-      validate: {
-        isIn: [['draft', 'review', 'released']]
-      }
+      defaultValue: 'draft'
     },
     releasedAt: {
       type: DataTypes.DATE,
