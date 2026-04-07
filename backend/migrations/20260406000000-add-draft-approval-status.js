@@ -31,9 +31,15 @@ module.exports = {
 
       // Migrate data from approved boolean if it still exists
       if (table.approved) {
-        await queryInterface.sequelize.query(
-          `UPDATE "DesignRequirements" SET "approvalStatus" = CASE WHEN "approved" = true THEN 'approved' ELSE 'unapproved' END`
-        );
+        if (isPostgres) {
+          await queryInterface.sequelize.query(
+            `UPDATE "DesignRequirements" SET "approvalStatus" = CASE WHEN "approved" = true THEN 'approved'::"enum_DesignRequirements_approvalStatus" ELSE 'unapproved'::"enum_DesignRequirements_approvalStatus" END`
+          );
+        } else {
+          await queryInterface.sequelize.query(
+            `UPDATE "DesignRequirements" SET "approvalStatus" = CASE WHEN "approved" = true THEN 'approved' ELSE 'unapproved' END`
+          );
+        }
       }
     } else if (isPostgres) {
       // Column already exists as STRING from a previous run — convert to ENUM
@@ -61,6 +67,7 @@ module.exports = {
 
   async down(queryInterface, Sequelize) {
     const table = await queryInterface.describeTable('DesignRequirements');
+    const isPostgres = queryInterface.sequelize.getDialect() === 'postgres';
 
     if (!table.approved) {
       await queryInterface.addColumn('DesignRequirements', 'approved', {
@@ -71,13 +78,18 @@ module.exports = {
     }
 
     if (table.approvalStatus) {
-      await queryInterface.sequelize.query(
-        `UPDATE "DesignRequirements" SET "approved" = CASE WHEN "approvalStatus" = 'approved' THEN true ELSE false END`
-      );
+      if (isPostgres) {
+        await queryInterface.sequelize.query(
+          `UPDATE "DesignRequirements" SET "approved" = CASE WHEN "approvalStatus" = 'approved'::"enum_DesignRequirements_approvalStatus" THEN true ELSE false END`
+        );
+      } else {
+        await queryInterface.sequelize.query(
+          `UPDATE "DesignRequirements" SET "approved" = CASE WHEN "approvalStatus" = 'approved' THEN true ELSE false END`
+        );
+      }
       await queryInterface.removeColumn('DesignRequirements', 'approvalStatus');
     }
 
-    const isPostgres = queryInterface.sequelize.getDialect() === 'postgres';
     if (isPostgres) {
       await queryInterface.sequelize.query('DROP TYPE IF EXISTS "enum_DesignRequirements_approvalStatus"');
     }
