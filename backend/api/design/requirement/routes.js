@@ -11,6 +11,7 @@ router.get('/:id/history', checkToken, checkPermission('requirements', 'read'), 
 router.put('/:id/take-ownership', checkToken, checkPermission('requirements', 'write'), controller.takeOwnership);
 router.put('/:id/approve', checkToken, checkPermission('requirements', 'approve'), controller.approve);
 router.put('/:id/unapprove', checkToken, checkPermission('requirements', 'approve'), controller.unapprove);
+router.put('/:id/submit', checkToken, checkPermission('requirements', 'write'), controller.submit);
 router.put('/:id/implement', checkToken, checkPermission('requirements', 'write'), controller.implement);
 router.put('/:id/validate', checkToken, checkPermission('requirements', 'approve'), controller.validate);
 router.put('/:id/unimplement', checkToken, checkPermission('requirements', 'write'), controller.unimplement);

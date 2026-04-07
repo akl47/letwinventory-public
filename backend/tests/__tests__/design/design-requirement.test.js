@@ -42,7 +42,7 @@ describe('Design Requirements API', () => {
       expect(res.body.description).toBe('The system shall do X');
       expect(res.body.rationale).toBe('Because Y');
       expect(res.body.ownerUserID).toBe(auth.user.id);
-      expect(res.body.approved).toBe(false);
+      expect(res.body.approvalStatus).toBe('draft');
       expect(res.body.activeFlag).toBe(true);
     });
 
@@ -248,27 +248,82 @@ describe('Design Requirements API', () => {
   });
 
   describe('Approval (REQ-DES-003)', () => {
-    it('approves a requirement', async () => {
+    it('submits a draft requirement for review', async () => {
+      const auth = await authenticatedRequest();
+      const project = await createTestProject(auth.user);
+      const req = await createTestRequirement(auth, project.id);
+
+      expect(req.approvalStatus).toBe('draft');
+      const res = await auth.put(`/api/design/requirement/${req.id}/submit`);
+      expect(res.status).toBe(200);
+      expect(res.body.approvalStatus).toBe('unapproved');
+    });
+
+    it('rejects submit on non-draft requirement', async () => {
+      const auth = await authenticatedRequest();
+      const project = await createTestProject(auth.user);
+      const req = await createTestRequirement(auth, project.id);
+
+      await auth.put(`/api/design/requirement/${req.id}/submit`);
+      const res = await auth.put(`/api/design/requirement/${req.id}/submit`);
+      expect(res.status).toBe(400);
+    });
+
+    it('approves an unapproved requirement', async () => {
+      const auth = await authenticatedRequest();
+      const project = await createTestProject(auth.user);
+      const req = await createTestRequirement(auth, project.id);
+
+      await auth.put(`/api/design/requirement/${req.id}/submit`);
+      const res = await auth.put(`/api/design/requirement/${req.id}/approve`);
+      expect(res.status).toBe(200);
+      expect(res.body.approvalStatus).toBe('approved');
+      expect(res.body.approvedByUserID).toBe(auth.user.id);
+    });
+
+    it('rejects approve on draft requirement', async () => {
       const auth = await authenticatedRequest();
       const project = await createTestProject(auth.user);
       const req = await createTestRequirement(auth, project.id);
 
       const res = await auth.put(`/api/design/requirement/${req.id}/approve`);
-      expect(res.status).toBe(200);
-      expect(res.body.approved).toBe(true);
-      expect(res.body.approvedByUserID).toBe(auth.user.id);
+      expect(res.status).toBe(400);
     });
 
-    it('unapproves a requirement', async () => {
+    it('unapproves an approved requirement', async () => {
       const auth = await authenticatedRequest();
       const project = await createTestProject(auth.user);
       const req = await createTestRequirement(auth, project.id);
 
+      await auth.put(`/api/design/requirement/${req.id}/submit`);
       await auth.put(`/api/design/requirement/${req.id}/approve`);
       const res = await auth.put(`/api/design/requirement/${req.id}/unapprove`);
       expect(res.status).toBe(200);
-      expect(res.body.approved).toBe(false);
+      expect(res.body.approvalStatus).toBe('unapproved');
       expect(res.body.approvedByUserID).toBeNull();
+    });
+
+    it('rejects unapprove on non-approved requirement', async () => {
+      const auth = await authenticatedRequest();
+      const project = await createTestProject(auth.user);
+      const req = await createTestRequirement(auth, project.id);
+
+      const res = await auth.put(`/api/design/requirement/${req.id}/unapprove`);
+      expect(res.status).toBe(400);
+    });
+
+    it('auto-resets to unapproved on edit of approved requirement', async () => {
+      const auth = await authenticatedRequest();
+      const project = await createTestProject(auth.user);
+      const req = await createTestRequirement(auth, project.id);
+
+      await auth.put(`/api/design/requirement/${req.id}/submit`);
+      await auth.put(`/api/design/requirement/${req.id}/approve`);
+      await auth.put(`/api/design/requirement/${req.id}`)
+        .send({ description: 'Edited after approval' });
+
+      const res = await auth.get(`/api/design/requirement/${req.id}`);
+      expect(res.body.approvalStatus).toBe('unapproved');
     });
 
     it('GET includes approvedBy association', async () => {
@@ -276,6 +331,7 @@ describe('Design Requirements API', () => {
       const project = await createTestProject(auth.user);
       const req = await createTestRequirement(auth, project.id);
 
+      await auth.put(`/api/design/requirement/${req.id}/submit`);
       await auth.put(`/api/design/requirement/${req.id}/approve`);
       const res = await auth.get(`/api/design/requirement/${req.id}`);
       expect(res.body.approvedBy).toBeDefined();

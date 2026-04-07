@@ -89,18 +89,34 @@ describe('Requirement History (REQ-DES-008 — REQ-DES-010)', () => {
     });
   });
 
+  describe('History on submit (REQ-DES-009)', () => {
+    it('records history when requirement is submitted', async () => {
+      const auth = await authenticatedRequest();
+      const project = await createTestProject(auth.user);
+      const req = await createTestRequirement(auth, project.id);
+
+      await auth.put(`/api/design/requirement/${req.id}/submit`);
+
+      const res = await auth.get(`/api/design/requirement/${req.id}/history`);
+      const submitEntry = res.body[0];
+      expect(submitEntry.changeType).toBe('submitted');
+      expect(submitEntry.changes.approvalStatus).toEqual({ from: 'draft', to: 'unapproved' });
+    });
+  });
+
   describe('History on approve (REQ-DES-009)', () => {
     it('records history when requirement is approved', async () => {
       const auth = await authenticatedRequest();
       const project = await createTestProject(auth.user);
       const req = await createTestRequirement(auth, project.id);
 
+      await auth.put(`/api/design/requirement/${req.id}/submit`);
       await auth.put(`/api/design/requirement/${req.id}/approve`);
 
       const res = await auth.get(`/api/design/requirement/${req.id}/history`);
       const approveEntry = res.body[0];
       expect(approveEntry.changeType).toBe('approved');
-      expect(approveEntry.changes.approved).toEqual({ from: false, to: true });
+      expect(approveEntry.changes.approvalStatus).toEqual({ from: 'unapproved', to: 'approved' });
       expect(approveEntry.changes.approvedByUserID).toEqual(expect.objectContaining({ from: null, to: auth.user.id }));
     });
   });
@@ -111,13 +127,14 @@ describe('Requirement History (REQ-DES-008 — REQ-DES-010)', () => {
       const project = await createTestProject(auth.user);
       const req = await createTestRequirement(auth, project.id);
 
+      await auth.put(`/api/design/requirement/${req.id}/submit`);
       await auth.put(`/api/design/requirement/${req.id}/approve`);
       await auth.put(`/api/design/requirement/${req.id}/unapprove`);
 
       const res = await auth.get(`/api/design/requirement/${req.id}/history`);
       const unapproveEntry = res.body[0];
       expect(unapproveEntry.changeType).toBe('unapproved');
-      expect(unapproveEntry.changes.approved).toEqual({ from: true, to: false });
+      expect(unapproveEntry.changes.approvalStatus).toEqual({ from: 'approved', to: 'unapproved' });
       expect(unapproveEntry.changes.approvedByUserID).toEqual(expect.objectContaining({ from: auth.user.id, to: null }));
     });
   });
@@ -189,22 +206,24 @@ describe('Requirement History (REQ-DES-008 — REQ-DES-010)', () => {
       const project = await createTestProject(auth.user);
       const req = await createTestRequirement(auth, project.id, { description: 'Original' });
 
-      // Approve first
+      // Submit and approve first
+      await auth.put(`/api/design/requirement/${req.id}/submit`);
       await auth.put(`/api/design/requirement/${req.id}/approve`);
 
       // Edit — should auto-unapprove
       const updateRes = await auth.put(`/api/design/requirement/${req.id}`)
         .send({ description: 'Changed' });
-      expect(updateRes.body.approved).toBe(false);
+      expect(updateRes.body.approvalStatus).toBe('unapproved');
       expect(updateRes.body.approvedByUserID).toBeNull();
 
-      // History should show: unapproved, updated, approved, created (DESC)
+      // History should show: unapproved, updated, approved, submitted, created (DESC)
       const res = await auth.get(`/api/design/requirement/${req.id}/history`);
-      expect(res.body.length).toBe(4);
+      expect(res.body.length).toBe(5);
       expect(res.body[0].changeType).toBe('unapproved');
       expect(res.body[1].changeType).toBe('updated');
       expect(res.body[2].changeType).toBe('approved');
-      expect(res.body[3].changeType).toBe('created');
+      expect(res.body[3].changeType).toBe('submitted');
+      expect(res.body[4].changeType).toBe('created');
     });
 
     it('does not unapprove when update has no actual changes', async () => {
@@ -212,26 +231,30 @@ describe('Requirement History (REQ-DES-008 — REQ-DES-010)', () => {
       const project = await createTestProject(auth.user);
       const req = await createTestRequirement(auth, project.id, { description: 'Same' });
 
+      await auth.put(`/api/design/requirement/${req.id}/submit`);
       await auth.put(`/api/design/requirement/${req.id}/approve`);
       await auth.put(`/api/design/requirement/${req.id}`)
         .send({ description: 'Same' });
 
       const fetched = await auth.get(`/api/design/requirement/${req.id}`);
-      expect(fetched.body.approved).toBe(true);
+      expect(fetched.body.approvalStatus).toBe('approved');
     });
   });
 
   describe('Full lifecycle audit trail (QMS)', () => {
-    it('records complete lifecycle: create → update → approve → unapprove → delete', async () => {
+    it('records complete lifecycle: create → update → submit → approve → unapprove → delete', async () => {
       const auth = await authenticatedRequest();
       const project = await createTestProject(auth.user);
 
-      // Create
+      // Create (starts as draft)
       const req = await createTestRequirement(auth, project.id, { description: 'Lifecycle test' });
 
-      // Update (not yet approved, so no auto-unapprove)
+      // Update (still draft, no auto-unapprove)
       await auth.put(`/api/design/requirement/${req.id}`)
         .send({ description: 'Lifecycle test v2' });
+
+      // Submit
+      await auth.put(`/api/design/requirement/${req.id}/submit`);
 
       // Approve
       await auth.put(`/api/design/requirement/${req.id}/approve`);
@@ -244,14 +267,15 @@ describe('Requirement History (REQ-DES-008 — REQ-DES-010)', () => {
 
       const res = await auth.get(`/api/design/requirement/${req.id}/history`);
       expect(res.status).toBe(200);
-      expect(res.body.length).toBe(5);
+      expect(res.body.length).toBe(6);
 
-      // DESC order: deleted, unapproved, approved, updated, created
+      // DESC order: deleted, unapproved, approved, submitted, updated, created
       expect(res.body[0].changeType).toBe('deleted');
       expect(res.body[1].changeType).toBe('unapproved');
       expect(res.body[2].changeType).toBe('approved');
-      expect(res.body[3].changeType).toBe('updated');
-      expect(res.body[4].changeType).toBe('created');
+      expect(res.body[3].changeType).toBe('submitted');
+      expect(res.body[4].changeType).toBe('updated');
+      expect(res.body[5].changeType).toBe('created');
 
       // Every entry has a user and timestamp
       for (const entry of res.body) {

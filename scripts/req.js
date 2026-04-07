@@ -170,7 +170,8 @@ Commands:
   delete <id>                 Soft-delete requirement (sets activeFlag=false)
   approve <id>                Approve requirement
   unapprove <id>              Unapprove requirement
-  check                       Exit 1 if any requirements are unapproved
+  submit <id>                 Submit draft requirement for review
+  check                       Exit 1 if any unapproved (non-draft) requirements exist
 
 Options:
   --url <base_url>            API base URL (default: ${DEFAULT_BASE_URL})`);
@@ -188,14 +189,14 @@ Options:
       const res = await api('GET', `/design/requirement${query}`);
       if (res.status !== 200) { console.error('Error:', res.data); process.exit(1); }
       if (res.data.length === 0) { console.log('No requirements found.'); return; }
-      console.log(padEnd('ID', 6) + padEnd('Approved', 10) + padEnd('Category', 25) + 'Description');
-      console.log('-'.repeat(100));
+      console.log(padEnd('ID', 6) + padEnd('Status', 14) + padEnd('Category', 25) + 'Description');
+      console.log('-'.repeat(104));
       for (const r of res.data) {
         console.log(
           padEnd(r.id, 6) +
-          padEnd(r.approved ? 'Yes' : 'No', 10) +
+          padEnd(r.approvalStatus || 'unknown', 14) +
           padEnd(truncate(r.category?.name || '-', 23), 25) +
-          truncate(r.description, 60)
+          truncate(r.description, 56)
         );
       }
       console.log(`\n${res.data.length} requirement(s)`);
@@ -219,7 +220,7 @@ Options:
           id: r.id,
           description: r.description || '',
           category: catMap[r.categoryID] || null,
-          approved: r.approved || false,
+          approvalStatus: r.approvalStatus || 'draft',
           rationale: r.rationale || null,
           verification: r.verification || null,
           validation: r.validation || null,
@@ -351,11 +352,22 @@ Options:
       break;
     }
 
+    case 'submit': {
+      const id = cleanArgs[1];
+      if (!id) { console.error('Usage: submit <id>'); process.exit(1); }
+      const res = await api('PUT', `/design/requirement/${id}/submit`);
+      if (res.status !== 200) { console.error('Error:', res.data); process.exit(1); }
+      console.log(`Submitted requirement id=${id} for review`);
+      break;
+    }
+
     case 'check': {
       const res = await api('GET', '/design/requirement');
       if (res.status !== 200) { console.error('Error:', res.data); process.exit(1); }
-      const unapproved = res.data.filter(r => !r.approved);
-      console.log(`Total: ${res.data.length}, Approved: ${res.data.length - unapproved.length}, Unapproved: ${unapproved.length}`);
+      const draft = res.data.filter(r => r.approvalStatus === 'draft');
+      const unapproved = res.data.filter(r => r.approvalStatus === 'unapproved');
+      const approved = res.data.filter(r => r.approvalStatus === 'approved');
+      console.log(`Total: ${res.data.length}, Approved: ${approved.length}, Unapproved: ${unapproved.length}, Draft: ${draft.length}`);
       if (unapproved.length > 0) {
         console.log('\nUnapproved requirements:');
         for (const r of unapproved) {
@@ -363,7 +375,7 @@ Options:
         }
         process.exit(1);
       }
-      console.log('All requirements are approved.');
+      console.log('All submitted requirements are approved.' + (draft.length > 0 ? ` (${draft.length} draft(s) excluded)` : ''));
       break;
     }
 

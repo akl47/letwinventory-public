@@ -29,7 +29,7 @@ describe('RequirementsListView', () => {
     const mockRequirements: DesignRequirement[] = [
         {
             id: 1, description: 'System shall support login', rationale: 'Security', parameter: '',
-            projectID: 1, ownerUserID: 1, approved: true, activeFlag: true, implementationStatus: 'not_implemented',
+            projectID: 1, ownerUserID: 1, approvalStatus: 'approved' as const, activeFlag: true, implementationStatus: 'not_implemented',
             createdAt: new Date(), updatedAt: new Date(),
             category: { id: 1, name: 'Functional', activeFlag: true },
             owner: { id: 1, displayName: 'Alice', email: 'alice@test.com' },
@@ -37,14 +37,14 @@ describe('RequirementsListView', () => {
         },
         {
             id: 2, description: 'Login shall use OAuth', rationale: 'Standards', parameter: '',
-            parentRequirementID: 1, projectID: 1, ownerUserID: 1, approved: false, activeFlag: true, implementationStatus: 'not_implemented',
+            parentRequirementID: 1, projectID: 1, ownerUserID: 1, approvalStatus: 'unapproved' as const, activeFlag: true, implementationStatus: 'not_implemented',
             createdAt: new Date(), updatedAt: new Date(),
             category: { id: 1, name: 'Functional', activeFlag: true },
             owner: { id: 1, displayName: 'Alice', email: 'alice@test.com' },
         },
         {
             id: 3, description: 'System shall handle errors', rationale: 'Reliability', parameter: '',
-            projectID: 2, ownerUserID: 2, approved: false, activeFlag: true, implementationStatus: 'not_implemented',
+            projectID: 2, ownerUserID: 2, approvalStatus: 'unapproved' as const, activeFlag: true, implementationStatus: 'not_implemented',
             createdAt: new Date(), updatedAt: new Date(),
         },
     ];
@@ -115,7 +115,7 @@ describe('RequirementsListView', () => {
         // Deselect 'unapproved' — only approved items should remain
         component.toggleStatus('unapproved');
         const rows = component.displayedRows();
-        expect(rows.every(r => r.requirement.approved)).toBe(true);
+        expect(rows.every(r => r.requirement.approvalStatus === 'approved')).toBe(true);
     });
 
     it('should toggle hideChildren and collapse tree', () => {

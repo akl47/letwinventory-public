@@ -259,6 +259,16 @@ export class RequirementEditPage implements OnInit {
         });
     }
 
+    submitForReview() {
+        if (!this.currentRequirement()) return;
+        this.requirementService.submit(this.currentRequirement()!.id).subscribe({
+            next: () => {
+                this.loadRequirement(this.currentRequirement()!.id);
+                if (this.showHistory()) this.loadHistory();
+            }
+        });
+    }
+
     implementRequirement() {
         if (!this.currentRequirement()) return;
         this.requirementService.implement(this.currentRequirement()!.id).subscribe({
@@ -338,6 +348,7 @@ export class RequirementEditPage implements OnInit {
             updated: 'edit',
             approved: 'check_circle',
             unapproved: 'undo',
+            submitted: 'send',
             deleted: 'delete',
             implemented: 'build',
             validated: 'verified',
@@ -352,6 +363,7 @@ export class RequirementEditPage implements OnInit {
             updated: 'Updated',
             approved: 'Approved',
             unapproved: 'Unapproved',
+            submitted: 'Submitted for Review',
             deleted: 'Deleted',
             implemented: 'Implemented',
             validated: 'Validated',
@@ -371,6 +383,7 @@ export class RequirementEditPage implements OnInit {
             projectID: 'Project',
             categoryID: 'Category',
             approved: 'Approved',
+            approvalStatus: 'Approval Status',
             ownerUserID: 'Owner',
             approvedByUserID: 'Approved By',
             implementationStatus: 'Implementation Status',

@@ -519,3 +519,36 @@ Each session should:
   - `frontend/src/app/components/build/build-list-view/` — reformatted, status column, show completed
   - `frontend/src/app/components/build/new-build-dialog/` — location selector
   - `frontend/src/styles.css` — scanner-dialog-panel class
+
+### 2026-04-07
+- **Draft Requirements feature** — three-state approval workflow (draft → unapproved → approved) replacing boolean `approved` field
+  - `approvalStatus` STRING(20) enum replaces `approved` BOOLEAN on DesignRequirements
+  - New requirements default to `draft`; explicit "Submit for Review" action transitions to `unapproved`
+  - Approve guard: rejects draft requirements (must submit first)
+  - Unapprove guard: rejects non-approved requirements
+  - Edit auto-reset: approved → unapproved (not back to draft)
+  - Draft requirements hidden by default in list view status filter
+  - `req.js check` only fails on unapproved (ignores draft); `req.js submit <id>` command added
+  - RequirementHistory records `submitted` changeType
+  - 6 requirements created (REQ 228-233) in Design Requirements category
+- **Files created:**
+  - `backend/migrations/20260406000000-add-draft-approval-status.js` — adds approvalStatus, migrates data, removes approved
+  - `docs/features/draft-requirements.md` — feature spec
+- **Files modified:**
+  - `backend/models/design/designRequirement.js` — approvalStatus field replacing approved
+  - `backend/api/design/requirement/controller.js` — submit handler, approve/unapprove guards, auto-reset logic
+  - `backend/api/design/requirement/routes.js` — submit route
+  - `scripts/req.js` — submit command, check ignores drafts, list shows approvalStatus
+  - `frontend/src/app/models/design-requirement.model.ts` — approvalStatus type, submitted changeType
+  - `frontend/src/app/services/design-requirement.service.ts` — submit() method
+  - `frontend/src/app/services/design-requirement.service.spec.ts` — submit tests, updated flush values
+  - `frontend/src/app/components/design/requirements-list-view/requirements-list-view.ts` — draft status option, matchesStatus uses approvalStatus
+  - `frontend/src/app/components/design/requirements-list-view/requirements-list-view.html` — three-state icons
+  - `frontend/src/app/components/design/requirements-list-view/requirements-list-view.css` — status-icon-unapproved style
+  - `frontend/src/app/components/design/requirements-list-view/requirements-list-view.spec.ts` — approvalStatus mock data
+  - `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.ts` — submitForReview(), submitted history type
+  - `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.html` — three-state buttons and banner
+  - `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.css` — draft banner style
+  - `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.spec.ts` — approvalStatus mock data
+  - `backend/tests/__tests__/design/design-requirement.test.js` — submit, approve guard, auto-reset tests
+  - `backend/tests/__tests__/design/requirement-history.test.js` — submit history, updated lifecycle test

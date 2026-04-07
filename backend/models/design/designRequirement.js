@@ -77,10 +77,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.INTEGER,
       allowNull: false
     },
-    approved: {
-      type: DataTypes.BOOLEAN,
+    approvalStatus: {
+      type: DataTypes.ENUM('draft', 'unapproved', 'approved'),
       allowNull: false,
-      defaultValue: false
+      defaultValue: 'draft'
     },
     approvedByUserID: {
       type: DataTypes.INTEGER,
@@ -91,7 +91,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
     implementationStatus: {
-      type: DataTypes.STRING(20),
+      type: DataTypes.ENUM('not_implemented', 'implemented', 'validated'),
       allowNull: false,
       defaultValue: 'not_implemented'
     },

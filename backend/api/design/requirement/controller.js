@@ -114,7 +114,7 @@ exports.update = async (req, res) => {
     }
 
     // Strip approval and implementation fields — must use dedicated endpoints
-    delete req.body.approved;
+    delete req.body.approvalStatus;
     delete req.body.approvedByUserID;
     delete req.body.approvedAt;
     delete req.body.implementationStatus;
@@ -139,11 +139,11 @@ exports.update = async (req, res) => {
       await recordHistory(requirement.id, req.user.id, 'updated', changes, changeNotes);
 
       // Auto-unapprove on edit
-      if (requirement.approved) {
+      if (requirement.approvalStatus === 'approved') {
         const previousApprover = requirement.approvedByUserID;
-        await requirement.update({ approved: false, approvedByUserID: null, approvedAt: null });
+        await requirement.update({ approvalStatus: 'unapproved', approvedByUserID: null, approvedAt: null });
         await recordHistory(requirement.id, req.user.id, 'unapproved', {
-          approved: { from: true, to: false },
+          approvalStatus: { from: 'approved', to: 'unapproved' },
           approvedByUserID: { from: previousApprover, to: null }
         });
       }
@@ -195,13 +195,16 @@ exports.approve = async (req, res) => {
     if (!requirement) {
       return res.status(404).json({ error: 'Requirement not found' });
     }
+    if (requirement.approvalStatus !== 'unapproved') {
+      return res.status(400).json({ error: 'Requirement must be in unapproved status to approve' });
+    }
     await requirement.update({
-      approved: true,
+      approvalStatus: 'approved',
       approvedByUserID: req.user.id,
       approvedAt: new Date()
     });
     await recordHistory(requirement.id, req.user.id, 'approved', {
-      approved: { from: false, to: true },
+      approvalStatus: { from: 'unapproved', to: 'approved' },
       approvedByUserID: { from: null, to: req.user.id }
     });
     res.json(requirement);
@@ -216,15 +219,37 @@ exports.unapprove = async (req, res) => {
     if (!requirement) {
       return res.status(404).json({ error: 'Requirement not found' });
     }
+    if (requirement.approvalStatus !== 'approved') {
+      return res.status(400).json({ error: 'Requirement must be in approved status to unapprove' });
+    }
     const previousApprover = requirement.approvedByUserID;
     await requirement.update({
-      approved: false,
+      approvalStatus: 'unapproved',
       approvedByUserID: null,
       approvedAt: null
     });
     await recordHistory(requirement.id, req.user.id, 'unapproved', {
-      approved: { from: true, to: false },
+      approvalStatus: { from: 'approved', to: 'unapproved' },
       approvedByUserID: { from: previousApprover, to: null }
+    });
+    res.json(requirement);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.submit = async (req, res) => {
+  try {
+    const requirement = await db.DesignRequirement.findByPk(req.params.id);
+    if (!requirement) {
+      return res.status(404).json({ error: 'Requirement not found' });
+    }
+    if (requirement.approvalStatus !== 'draft') {
+      return res.status(400).json({ error: 'Only draft requirements can be submitted for review' });
+    }
+    await requirement.update({ approvalStatus: 'unapproved' });
+    await recordHistory(requirement.id, req.user.id, 'submitted', {
+      approvalStatus: { from: 'draft', to: 'unapproved' }
     });
     res.json(requirement);
   } catch (error) {
@@ -238,7 +263,7 @@ exports.implement = async (req, res) => {
     if (!requirement) {
       return res.status(404).json({ error: 'Requirement not found' });
     }
-    if (!requirement.approved) {
+    if (requirement.approvalStatus !== 'approved') {
       return res.status(400).json({ error: 'Requirement must be approved before marking as implemented' });
     }
     await requirement.update({

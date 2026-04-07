@@ -109,7 +109,7 @@
                             </span>
                             }
 
-                            @if (row.requirement.approved) {
+                            @if (row.requirement.approvalStatus === 'approved') {
                             @if (row.childrenAllApproved) {
                             <mat-icon class="status-icon-approved"
                                 [matTooltip]="'Approved by ' + (row.requirement.approvedBy?.displayName || 'Unknown')">check_circle</mat-icon>
@@ -117,8 +117,10 @@
                             <mat-icon class="status-icon-partial"
                                 matTooltip="Approved, but some children are not">check_circle</mat-icon>
                             }
+                            } @else if (row.requirement.approvalStatus === 'draft') {
+                            <mat-icon class="status-icon-draft" matTooltip="Draft">edit_note</mat-icon>
                             } @else {
-                            <mat-icon class="status-icon-draft" matTooltip="Draft">pending</mat-icon>
+                            <mat-icon class="status-icon-unapproved" matTooltip="Awaiting Approval">pending</mat-icon>
                             }
                             @if (row.requirement.implementationStatus === 'validated') {
                             <mat-icon class="status-icon-validated" matTooltip="Validated">verified</mat-icon>
@@ -170,13 +172,13 @@
                             {{ row.requirement.owner.displayName }}
                         </span>
                         }
-                        @if (row.requirement.approved && row.requirement.approvedBy) {
+                        @if (row.requirement.approvalStatus === 'approved' && row.requirement.approvedBy) {
                         <span class="footer-item">
                             <span class="footer-label">Approved by:</span>
                             {{ row.requirement.approvedBy.displayName }}
                         </span>
                         }
-                        @if (row.requirement.approved && row.requirement.updatedAt) {
+                        @if (row.requirement.approvalStatus === 'approved' && row.requirement.updatedAt) {
                         <span class="footer-item">
                             <span class="footer-label">Approved:</span>
                             {{ formatDate(row.requirement.updatedAt) }}
