@@ -14,8 +14,9 @@ const mockWorkOrder = {
   engineeringMasterID: 1,
   status: 'in_progress',
   quantity: 5,
+  locationBarcodeID: null,
   master: {
-    id: 1, name: 'PCB Assembly', revision: 'A',
+    id: 1, name: 'PCB Assembly', revision: '01',
     steps: [
       { id: 1, stepNumber: 10, title: 'Step 1', instructions: 'Do step 1', parts: [], tooling: [], markers: [] },
       { id: 2, stepNumber: 20, title: 'Step 2', instructions: 'Do step 2', parts: [], tooling: [], markers: [] },
@@ -25,6 +26,7 @@ const mockWorkOrder = {
   stepCompletions: [
     { id: 1, stepID: 1, completedByUserID: 3, completedAt: '2026-04-07T10:00:00Z', user: { displayName: 'John' } },
   ],
+  outputTraces: [],
   createdByUserID: 1,
   createdAt: '2026-04-07T09:00:00Z',
 };
@@ -80,7 +82,7 @@ describe('WorkOrderView', () => {
   it('should show master name and revision', () => {
     const wo = component.workOrder()!;
     expect(wo.master.name).toBe('PCB Assembly');
-    expect(wo.master.revision).toBe('A');
+    expect(wo.master.revision).toBe('01');
   });
 
   it('should show quantity', () => {
