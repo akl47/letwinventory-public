@@ -13,6 +13,7 @@ export interface InventoryTag {
     manufacturerPN?: string; // For Trace items
     unitOfMeasureID?: number; // For Trace items
     allowDecimal?: boolean; // For Trace items — from UoM
+    wip?: boolean; // For Trace items — work in progress (WO output)
     createdAt?: string;
     // properties from backend query
     type: 'Location' | 'Box' | 'Trace' | 'Equipment';

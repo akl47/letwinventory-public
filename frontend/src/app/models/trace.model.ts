@@ -16,6 +16,7 @@ export interface Trace {
     orderItemID: number | null;
     barcodeID: number;
     activeFlag: boolean;
+    wip: boolean;
     serialNumber: string | null;
     lotNumber: string | null;
     createdAt: string;

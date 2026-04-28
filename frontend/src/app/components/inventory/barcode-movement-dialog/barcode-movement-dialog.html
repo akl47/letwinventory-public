@@ -60,15 +60,38 @@
 
         <!-- Kit Form -->
         @if (data.action === 'kit') {
-            <p class="action-description">Kit this trace to a kit or assembly barcode.</p>
+            @if (data.kitToTarget) {
+              <p class="action-description">Scan the source part barcode to kit to this work order.</p>
+            } @else {
+              <p class="action-description">Kit this trace to a kit or assembly barcode.</p>
+            }
             <mat-form-field appearance="outline" class="full-width">
-                <mat-label>Target Kit/Assembly Barcode</mat-label>
+                <mat-label>{{ data.kitToTarget ? 'Source Part Barcode' : 'Target Kit/Assembly Barcode' }}</mat-label>
                 <input matInput [(ngModel)]="kitTargetBarcode"
-                       placeholder="Scan or enter kit/assembly barcode">
-                <mat-icon matPrefix>inventory_2</mat-icon>
+                       [placeholder]="data.kitToTarget ? 'Scan or enter source part barcode' : 'Scan or enter kit/assembly barcode'">
+                <mat-icon matPrefix>{{ data.kitToTarget ? 'qr_code_scanner' : 'inventory_2' }}</mat-icon>
             </mat-form-field>
             <mat-form-field appearance="outline" class="full-width">
                 <mat-label>Quantity to Kit</mat-label>
+                <input matInput type="number" [(ngModel)]="kitQuantity"
+                       placeholder="Enter quantity"
+                       [min]="data.allowDecimal ? 0.01 : 1"
+                       [step]="data.allowDecimal ? 'any' : '1'">
+                <mat-icon matPrefix>tag</mat-icon>
+            </mat-form-field>
+        }
+
+        <!-- Unkit Form -->
+        @if (data.action === 'unkit') {
+            <p class="action-description">Enter the barcode of the part to return from this work order.</p>
+            <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Part Barcode to Dekit</mat-label>
+                <input matInput [(ngModel)]="kitTargetBarcode"
+                       placeholder="Scan or enter part barcode">
+                <mat-icon matPrefix>qr_code_scanner</mat-icon>
+            </mat-form-field>
+            <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Quantity to Dekit</mat-label>
                 <input matInput type="number" [(ngModel)]="kitQuantity"
                        placeholder="Enter quantity"
                        [min]="data.allowDecimal ? 0.01 : 1"

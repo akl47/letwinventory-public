@@ -237,6 +237,18 @@ async function createTestWireEnd(overrides = {}) {
   });
 }
 
+async function createTestEngineeringMaster(user, overrides = {}) {
+  return db.EngineeringMaster.create({
+    name: overrides.name || `Master ${Date.now()}`,
+    description: overrides.description || 'Test engineering master',
+    revision: overrides.revision || '01',
+    releaseState: overrides.releaseState || 'draft',
+    createdByUserID: user.id,
+    activeFlag: true,
+    ...overrides,
+  });
+}
+
 async function createTestGroup(overrides = {}) {
   return db.UserGroup.create({
     name: overrides.name || `Group-${Date.now()}`,
@@ -284,6 +296,7 @@ module.exports = {
   createTestComponent,
   createTestHarness,
   createTestWireEnd,
+  createTestEngineeringMaster,
   createTestGroup,
   addUserToGroup,
   assignGroupPermission,

@@ -38,8 +38,13 @@ module.exports = (sequelize, DataTypes) => {
     },
     data: {
       type: DataTypes.TEXT,
-      allowNull: false,
-      comment: 'Base64 encoded file data'
+      allowNull: true,
+      comment: 'Base64 encoded file data (legacy — new files use filePath)'
+    },
+    filePath: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+      comment: 'Relative path to file on disk (from FILE_STORAGE_PATH)'
     },
     uploadedBy: {
       type: DataTypes.INTEGER,

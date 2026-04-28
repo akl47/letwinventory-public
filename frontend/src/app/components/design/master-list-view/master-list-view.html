@@ -1,0 +1,73 @@
+<div class="page-container">
+  <div class="page-header">
+    <h2>Engineering Masters</h2>
+    <div class="header-actions">
+      <mat-form-field appearance="outline" class="search-field">
+        <mat-label>Search</mat-label>
+        <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)" placeholder="Search masters...">
+        <mat-icon matSuffix>search</mat-icon>
+      </mat-form-field>
+      @if (canWrite()) {
+        <button mat-flat-button color="primary" (click)="createMaster()">
+          <mat-icon>add</mat-icon> New Master
+        </button>
+      }
+    </div>
+  </div>
+
+  @if (isLoading()) {
+    <div class="loading-container">
+      <mat-spinner diameter="40"></mat-spinner>
+    </div>
+  } @else if (displayedMasters().length === 0) {
+    <div class="empty-state">
+      <mat-icon>description</mat-icon>
+      <p>No engineering masters found</p>
+    </div>
+  } @else {
+    <table mat-table [dataSource]="displayedMasters()" class="mat-elevation-z1">
+      <ng-container matColumnDef="name">
+        <th mat-header-cell *matHeaderCellDef>Name</th>
+        <td mat-cell *matCellDef="let master">{{ master.name }}</td>
+      </ng-container>
+
+      <ng-container matColumnDef="revision">
+        <th mat-header-cell *matHeaderCellDef>EM Rev</th>
+        <td mat-cell *matCellDef="let master">
+          <span class="revision-badge">EM Rev {{ master.revision }}</span>
+        </td>
+      </ng-container>
+
+      <ng-container matColumnDef="releaseState">
+        <th mat-header-cell *matHeaderCellDef>State</th>
+        <td mat-cell *matCellDef="let master">
+          <span class="state-chip" [style.background-color]="getStateColor(master.releaseState) + '33'" [style.color]="getStateColor(master.releaseState)">
+            {{ master.releaseState }}
+          </span>
+        </td>
+      </ng-container>
+
+      <ng-container matColumnDef="outputParts">
+        <th mat-header-cell *matHeaderCellDef>Output</th>
+        <td mat-cell *matCellDef="let master">
+          @for (op of master.outputParts; track op.id) {
+            <span class="output-part">{{ op.part?.name }} (×{{ op.part?.UnitOfMeasure?.allowDecimal ? op.quantity : (op.quantity | number:'1.0-0') }})</span>
+          }
+        </td>
+      </ng-container>
+
+      <ng-container matColumnDef="steps">
+        <th mat-header-cell *matHeaderCellDef>Steps</th>
+        <td mat-cell *matCellDef="let master">{{ master.stepCount }}</td>
+      </ng-container>
+
+      <ng-container matColumnDef="createdAt">
+        <th mat-header-cell *matHeaderCellDef>Created</th>
+        <td mat-cell *matCellDef="let master">{{ master.createdAt | date:'shortDate' }}</td>
+      </ng-container>
+
+      <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+      <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="openMaster(row)" class="clickable-row"></tr>
+    </table>
+  }
+</div>

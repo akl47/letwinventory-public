@@ -407,6 +407,8 @@ async function buildTag(barcode, opts = {}) {
     tag.manufacturerPN = tagDataJson.Part?.manufacturerPN;
     tag.unitOfMeasureID = tagDataJson.unitOfMeasureID;
     tag.allowDecimal = tagDataJson.unitOfMeasure?.allowDecimal ?? false;
+    tag.workOrderID = tagDataJson.workOrderID || null;
+    tag.wip = tagDataJson.wip || false;
   }
 
   return tag;

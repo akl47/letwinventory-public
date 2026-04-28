@@ -5,7 +5,7 @@ const router = express.Router();
 const controller = require('./controller');
 const checkToken = require('../../middleware/checkToken.js');
 
-// GET /api/files/:id - Get file metadata by ID (no permission check — file IDs are opaque references)
+// GET /api/files/:id - Get file metadata by ID
 router.get('/:id', checkToken, controller.getFileById);
 
 // GET /api/files/:id/data - Get file data (for displaying images)

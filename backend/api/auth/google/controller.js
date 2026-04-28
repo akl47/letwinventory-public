@@ -129,11 +129,13 @@ exports.handleCallback = (req, res, next) => {
           httpOnly: false, // Frontend needs to read this
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
+          path: '/',
           maxAge: 15 * 60 * 1000 // 15 minutes
         }).cookie('refresh_token', refreshTokenRaw, {
           httpOnly: true, // Not accessible via JavaScript
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
+          path: '/',
           maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
         }).cookie('name', encodeURI(user.displayName), {
           httpOnly: false, // Allow frontend to read the name

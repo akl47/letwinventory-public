@@ -1,0 +1,252 @@
+@if (isLoading()) {
+  <div class="loading-container">
+    <mat-spinner diameter="40"></mat-spinner>
+  </div>
+} @else if (workOrder(); as wo) {
+  <div class="page-container" [class.fullscreen]="isFullscreen()">
+    <!-- Header -->
+    <div class="page-header">
+      <div class="header-left">
+        @if (!isFullscreen()) {
+          <button mat-icon-button (click)="router.navigate(['/build/work-orders'])">
+            <mat-icon>arrow_back</mat-icon>
+          </button>
+        }
+        <h2>WO #{{ wo.id }}</h2>
+        <span class="status-chip" [style.background-color]="getStatusColor(wo.status) + '33'" [style.color]="getStatusColor(wo.status)">
+          {{ formatStatus(wo.status) }}
+        </span>
+        <span class="info-item"><strong>{{ wo.master.name }}</strong> (EM Rev {{ wo.master.revision }})</span>
+        <span class="info-item">Qty: {{ wo.quantity }}</span>
+        @if (wo.locationBarcode) {
+          <span class="info-item location-info">
+            <app-barcode-tag [barcode]="wo.locationBarcode.barcode"></app-barcode-tag>
+            <span class="loc-name">{{ $any(wo.locationBarcode).location?.name || $any(wo.locationBarcode).box?.name || $any(wo.locationBarcode).location?.description || $any(wo.locationBarcode).box?.description || '' }}</span>
+          </span>
+        }
+      </div>
+    </div>
+
+    <!-- Main layout -->
+    <div class="wo-layout">
+      <!-- Left sidebar: nav -->
+      <div class="wo-sidebar" [class.collapsed]="sidebarCollapsed()">
+        <div class="nav-item" [class.active]="selectedStepId() === null" (click)="selectedStepId.set(null)">
+          <mat-icon>info</mat-icon>
+          <span>Overview</span>
+        </div>
+        <div class="nav-divider"></div>
+        <div class="nav-header">Steps</div>
+        @for (step of wo.master.steps; track step.id) {
+          <div class="nav-item" [class.active]="selectedStepId() === step.id" [class.completed]="isStepCompleted(step.id)" (click)="selectedStepId.set(step.id)">
+            <span class="nav-step-num">{{ step.stepNumber }}</span>
+            <span class="nav-step-name">{{ step.title }}</span>
+            @if (isStepCompleted(step.id)) {
+              <mat-icon class="nav-check">check_circle</mat-icon>
+            }
+          </div>
+        }
+      </div>
+
+      <!-- Sidebar toggle -->
+      <div class="sidebar-toggle-track" (click)="sidebarCollapsed.set(!sidebarCollapsed())">
+        <mat-icon>{{ sidebarCollapsed() ? 'chevron_right' : 'chevron_left' }}</mat-icon>
+      </div>
+
+      <!-- Main content -->
+      <div class="wo-main" #woMainContainer [class.fullscreen]="isFullscreen()">
+        <!-- Overview panel -->
+        @if (selectedStepId() === null) {
+          <div class="overview-panel">
+            <!-- Output Traces -->
+            @if (wo.outputTraces.length) {
+              <div class="section-card">
+                <h4>Output Parts</h4>
+                @for (trace of wo.outputTraces; track trace.id) {
+                  <div class="trace-item">
+                    <app-barcode-tag [barcode]="trace.Barcode?.barcode || ''"></app-barcode-tag>
+                    <app-part-link [partId]="trace.partID" [name]="trace.Part?.name || ''" [revision]="trace.Part?.revision" [imageFileId]="$any(trace.Part)?.imageFileID"></app-part-link>
+                    <span class="trace-qty">× {{ trace.quantity }}</span>
+                  </div>
+                }
+              </div>
+            }
+
+            <!-- BOM Fulfillment -->
+            <div class="section-card">
+              <h4>BOM Fulfillment</h4>
+              @if (kitStatus()?.bomStatus?.length) {
+                <table class="bom-fulfillment-table">
+                  <thead>
+                    <tr>
+                      <th>Type</th>
+                      <th>Part</th>
+                      <th>Step</th>
+                      <th>Required</th>
+                      <th>Status</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (line of kitStatus()!.bomStatus; track line.partID) {
+                      <tr [class.complete]="line.status === 'complete'">
+                        <td>
+                          <span class="type-badge" [class]="line.isTool ? 'tool' : 'part'">
+                            {{ line.isTool ? 'Tool' : 'Part' }}
+                          </span>
+                        </td>
+                        <td>
+                          <app-part-link [partId]="line.partID" [name]="line.partName" [revision]="line.partRevision"></app-part-link>
+                        </td>
+                        <td class="step-cell">{{ partStepMap().get(line.partID) || '—' }}</td>
+                        <td>{{ line.required }}</td>
+                        <td>
+                          @if (line.kitted === 0) {
+                            <span class="bom-status-chip not-kitted">Not Kitted</span>
+                          } @else if (line.status === 'complete') {
+                            <span class="bom-status-chip complete">Complete</span>
+                          } @else {
+                            <span class="bom-status-chip partial">{{ line.kitted }} / {{ line.required }}</span>
+                          }
+                        </td>
+                        <td class="bom-actions-cell">
+                          @if (canWrite() && wo.status !== 'complete') {
+                            @if (line.status !== 'complete' && !line.isTool) {
+                              <button mat-icon-button class="kit-line-btn" matTooltip="Kit this part"
+                                      (click)="openKitDialogForLine(line)">
+                                <mat-icon>inventory_2</mat-icon>
+                              </button>
+                            }
+                            @if (line.kitted > 0 && !line.isTool) {
+                              <button mat-icon-button class="dekit-line-btn" matTooltip="Dekit this part"
+                                      (click)="openDekitDialogForLine(line)">
+                                <mat-icon>undo</mat-icon>
+                              </button>
+                            }
+                          }
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              } @else {
+                <p class="empty-hint">No BOM items for this Engineering Master.</p>
+              }
+            </div>
+
+            <!-- Complete Work Order -->
+            @if (allStepsCompleted() && wo.status !== 'complete' && canWrite()) {
+              <div class="complete-wo-section">
+                <button mat-flat-button color="primary" class="complete-wo-btn" (click)="completeWorkOrder()">
+                  <mat-icon>done_all</mat-icon> Complete Work Order
+                </button>
+              </div>
+            }
+          </div>
+        }
+
+        <!-- Step view -->
+        @if (selectedStep(); as step) {
+          <div class="step-content">
+            <!-- Step header with actions -->
+            <div class="step-title-bar">
+              <span class="step-number">Step {{ step.stepNumber }}</span>
+              <span class="step-title">{{ step.title }}</span>
+              <div class="step-actions">
+                @if (!isStepCompleted(step.id) && step.id === nextStepID() && canWrite()) {
+                  <span [matTooltip]="!areStepPartsKitted(step) ? 'Kit all parts before completing this step' : ''">
+                    <button mat-flat-button color="primary" class="complete-btn"
+                      [disabled]="!areStepPartsKitted(step)"
+                      (click)="completeStep(step.id)">
+                      <mat-icon>check</mat-icon> Complete Step
+                    </button>
+                  </span>
+                }
+                @if (isStepCompleted(step.id) && canWrite()) {
+                  @if (getStepCompletion(step.id)?.stepID === wo.stepCompletions[wo.stepCompletions.length - 1]?.stepID) {
+                    <button mat-stroked-button (click)="uncompleteStep(step.id)">
+                      <mat-icon>undo</mat-icon> Undo
+                    </button>
+                  }
+                }
+                @if (isStepCompleted(step.id)) {
+                  <span class="completed-badge">
+                    <mat-icon>check_circle</mat-icon>
+                    {{ getStepCompletion(step.id)?.completedBy?.displayName }} · {{ getStepCompletion(step.id)?.completedAt | date:'short' }}
+                  </span>
+                }
+                <button mat-icon-button (click)="toggleFullscreen()" [matTooltip]="isFullscreen() ? 'Exit fullscreen (Esc)' : 'Fullscreen'">
+                  <mat-icon>{{ isFullscreen() ? 'fullscreen_exit' : 'fullscreen' }}</mat-icon>
+                </button>
+              </div>
+            </div>
+
+            <div class="step-layout">
+              <!-- Left sidebar: Parts & Tooling -->
+              <div class="step-sidebar">
+                <div class="sidebar-section">
+                  <h4>Parts</h4>
+                  @for (item of step.parts; track item.partID; let i = $index) {
+                    <div class="item-row">
+                      <img [src]="'assets/pin-' + pinLetter(i) + '.svg'" class="item-pin" draggable="false">
+                      <app-part-link [partId]="item.partID" [name]="item.part.name" [revision]="item.part.revision" [imageFileId]="$any(item.part).imageFileID || $any(item.part).imageFile?.id"></app-part-link>
+                      <span class="item-qty">× {{ item.quantity }}</span>
+                      @if (isPartKitted(item.partID)) {
+                        <mat-icon class="kit-check">check_circle</mat-icon>
+                      } @else if (canWrite()) {
+                        <button mat-icon-button class="kit-btn" matTooltip="Kit this part" (click)="openKitDialogWithQty(getUnkittedQty(item.partID))">
+                          <mat-icon>inventory_2</mat-icon>
+                        </button>
+                      }
+                    </div>
+                  } @empty {
+                    <p class="empty-hint">No parts</p>
+                  }
+                </div>
+                @if (step.tooling.length) {
+                  <div class="sidebar-section">
+                    <h4>Tooling</h4>
+                    @for (item of step.tooling; track item.partID; let i = $index) {
+                      <div class="item-row">
+                        <img [src]="'assets/pin-' + pinLetter(step.parts.length + i) + '.svg'" class="item-pin" draggable="false">
+                        <app-part-link [partId]="item.partID" [name]="item.part.name" [revision]="item.part.revision" [imageFileId]="$any(item.part).imageFileID || $any(item.part).imageFile?.id"></app-part-link>
+                        <span class="item-qty">× {{ item.quantity }}</span>
+                      </div>
+                    }
+                  </div>
+                }
+              </div>
+
+              <!-- Center: Canvas with pin markers -->
+              <div class="step-canvas">
+                @if (step.imageFileID) {
+                  <img [appAuthImg]="step.imageFileID" alt="Step image" class="step-image" draggable="false">
+                } @else {
+                  <div class="canvas-placeholder">
+                    <mat-icon>image</mat-icon>
+                    <p>No image</p>
+                  </div>
+                }
+
+                @for (marker of step.markers; track $index) {
+                  <div class="pin-marker" [style.left.px]="marker.x - 17" [style.top.px]="marker.y - 50">
+                    <img [src]="'assets/pin-' + marker.label + '.svg'" class="pin-svg" draggable="false"
+                         onerror="this.src='assets/pin-A.svg'">
+                  </div>
+                }
+              </div>
+            </div>
+
+            <!-- Instructions -->
+            @if (step.instructions) {
+              <div class="instructions-bar">
+                <mat-icon>description</mat-icon>
+                <span>{{ step.instructions }}</span>
+              </div>
+            }
+          </div>
+        }
+      </div>
+    </div>
+  </div>
+}

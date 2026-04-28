@@ -49,7 +49,7 @@ export class NavComponent implements OnInit, OnDestroy {
     protected readonly openGroup = signal<NavGroup | null>(null);
 
     private readonly inventoryPrefixes = ['/inventory', '/parts', '/equipment', '/orders'];
-    private readonly designPrefixes = ['/requirements', '/harness'];
+    private readonly designPrefixes = ['/requirements', '/harness', '/design'];
     private readonly toolsPrefixes = ['/tools'];
     private readonly buildPrefixes = ['/build'];
     private readonly adminPrefixes = ['/admin'];
@@ -62,8 +62,11 @@ export class NavComponent implements OnInit, OnDestroy {
     protected readonly hasDesignAccess = computed(() => this.authService.hasAnyPermission('requirements'));
     protected readonly hasHarnessAccess = computed(() => this.authService.hasAnyPermission('harness'));
     protected readonly hasAdminAccess = computed(() => this.authService.hasAnyPermission('admin'));
+    protected readonly hasMfgPlanningAccess = computed(() => this.authService.hasAnyPermission('manufacturing_planning'));
+    protected readonly hasMfgExecutionAccess = computed(() => this.authService.hasAnyPermission('manufacturing_execution'));
     protected readonly hasInventoryGroupAccess = computed(() => this.hasPartsAccess() || this.hasInventoryAccess() || this.hasEquipmentAccess() || this.hasOrdersAccess());
-    protected readonly hasDesignGroupAccess = computed(() => this.hasDesignAccess() || this.hasHarnessAccess());
+    protected readonly hasDesignGroupAccess = computed(() => this.hasDesignAccess() || this.hasHarnessAccess() || this.hasMfgPlanningAccess());
+    protected readonly hasBuildGroupAccess = computed(() => this.hasInventoryAccess() || this.hasMfgExecutionAccess());
     protected readonly isImpersonating = this.authService.isImpersonating;
 
     ngOnInit() {

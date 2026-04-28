@@ -1,7 +1,9 @@
 'use strict';
 
+const path = require('path');
 const db = require('../../models');
 const { UploadedFile } = db;
+const fileStorage = require('../../util/fileStorage');
 
 // Get all files
 const getFiles = async (req, res) => {
@@ -30,12 +32,8 @@ const getFiles = async (req, res) => {
 const getFileById = async (req, res) => {
   try {
     const { id } = req.params;
-    const { includeData = 'false' } = req.query;
 
-    const attributes = ['id', 'filename', 'mimeType', 'fileSize', 'createdAt', 'updatedAt'];
-    if (includeData === 'true') {
-      attributes.push('data');
-    }
+    const attributes = ['id', 'filename', 'mimeType', 'fileSize', 'filePath', 'createdAt', 'updatedAt'];
 
     const file = await UploadedFile.findByPk(id, { attributes });
 
@@ -50,32 +48,45 @@ const getFileById = async (req, res) => {
   }
 };
 
-// Get file data (for displaying images)
+// Get file data — streams binary from disk or falls back to base64 in DB
 const getFileData = async (req, res) => {
   try {
     const { id } = req.params;
 
     const file = await UploadedFile.findByPk(id, {
-      attributes: ['data', 'mimeType', 'filename']
+      attributes: ['id', 'mimeType', 'filename', 'filePath', 'data']
     });
 
     if (!file) {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Return the base64 data with proper content type
-    res.json({
-      data: file.data,
-      mimeType: file.mimeType,
-      filename: file.filename
-    });
+    // Prefer disk file
+    if (file.filePath && fileStorage.fileExists(file.filePath)) {
+      const absPath = fileStorage.getAbsolutePath(file.filePath);
+      res.set('Content-Type', file.mimeType);
+      res.set('Cache-Control', 'public, max-age=86400');
+      res.set('Content-Disposition', `inline; filename="${file.filename}"`);
+      return res.sendFile(absPath);
+    }
+
+    // Fall back to base64 data in DB (legacy)
+    if (file.data) {
+      const buffer = fileStorage.decodeBase64(file.data);
+      res.set('Content-Type', file.mimeType);
+      res.set('Cache-Control', 'public, max-age=86400');
+      res.set('Content-Disposition', `inline; filename="${file.filename}"`);
+      return res.send(buffer);
+    }
+
+    res.status(404).json({ error: 'File data not available' });
   } catch (error) {
     console.error('Error fetching file data:', error);
     res.status(500).json({ error: 'Failed to fetch file data' });
   }
 };
 
-// Upload a new file
+// Upload a new file — saves to disk
 const uploadFile = async (req, res) => {
   try {
     const { filename, mimeType, data } = req.body;
@@ -84,16 +95,15 @@ const uploadFile = async (req, res) => {
       return res.status(400).json({ error: 'filename, mimeType, and data are required' });
     }
 
-    // Calculate file size from base64 data
-    // Base64 encodes 3 bytes into 4 characters, so we estimate the original size
-    const base64Data = data.replace(/^data:[^;]+;base64,/, '');
-    const fileSize = Math.round((base64Data.length * 3) / 4);
+    const buffer = fileStorage.decodeBase64(data);
+    const filePath = fileStorage.saveFile(buffer, mimeType, filename);
 
     const file = await UploadedFile.create({
       filename,
       mimeType,
-      fileSize,
-      data: base64Data.startsWith('data:') ? data : `data:${mimeType};base64,${base64Data}`,
+      fileSize: buffer.length,
+      filePath,
+      data: null,
       uploadedBy: req.user?.id || null,
       activeFlag: true
     });

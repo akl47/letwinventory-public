@@ -339,6 +339,7 @@ exports.refreshToken = async (req, res) => {
       httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
+      path: '/',
       maxAge: 15 * 60 * 1000 // 15 minutes
     }).json({
       accessToken,

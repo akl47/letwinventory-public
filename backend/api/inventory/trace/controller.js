@@ -443,8 +443,10 @@ exports.kitTrace = async (req, res, next) => {
     }
 
     const targetCategoryName = targetTrace.Part?.PartCategory?.name;
-    if (targetCategoryName !== 'Kit' && targetCategoryName !== 'Assembly') {
-      return next(createError(400, 'Target trace is not a Kit or Assembly'));
+    const isKitOrAssembly = targetCategoryName === 'Kit' || targetCategoryName === 'Assembly';
+    const isWorkOrderTrace = !!targetTrace.workOrderID;
+    if (!isKitOrAssembly && !isWorkOrderTrace) {
+      return next(createError(400, 'Target trace is not a Kit, Assembly, or Work Order output'));
     }
 
     // Deduct from source
@@ -482,6 +484,14 @@ exports.kitTrace = async (req, res, next) => {
         qty: quantity,
         unitOfMeasureID: sourceTrace.unitOfMeasureID
       });
+    }
+
+    // Auto-transition WO to in_progress if kitting to a WO trace
+    if (isWorkOrderTrace && targetTrace.workOrderID) {
+      const wo = await db.WorkOrder.findByPk(targetTrace.workOrderID);
+      if (wo && wo.status === 'not_started') {
+        await wo.update({ status: 'in_progress' });
+      }
     }
 
     res.json({
@@ -524,8 +534,10 @@ exports.unkitTrace = async (req, res, next) => {
     }
 
     const kitCategoryName = kitTrace.Part?.PartCategory?.name;
-    if (kitCategoryName !== 'Kit' && kitCategoryName !== 'Assembly') {
-      return next(createError(400, 'Source trace is not a Kit or Assembly'));
+    const isKitOrAssembly = kitCategoryName === 'Kit' || kitCategoryName === 'Assembly';
+    const isWorkOrderTrace = !!kitTrace.workOrderID;
+    if (!isKitOrAssembly && !isWorkOrderTrace) {
+      return next(createError(400, 'Source trace is not a Kit, Assembly, or Work Order output'));
     }
 
     // Find target trace (may be inactive if it was fully consumed)

@@ -30,7 +30,7 @@ exports.getAllOrders = (req, res, next) => {
               {
                 model: db.UploadedFile,
                 as: 'imageFile',
-                attributes: ['id', 'filename', 'mimeType', 'data']
+                attributes: ['id', 'filename', 'mimeType']
               }
             ]
           },
@@ -77,7 +77,7 @@ exports.getOrderById = (req, res, next) => {
               {
                 model: db.UploadedFile,
                 as: 'imageFile',
-                attributes: ['id', 'filename', 'mimeType', 'data']
+                attributes: ['id', 'filename', 'mimeType']
               }
             ]
           },

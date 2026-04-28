@@ -75,7 +75,9 @@
                 <ng-container matColumnDef="from">
                     <th mat-header-cell *matHeaderCellDef>From</th>
                     <td mat-cell *matCellDef="let item">
-                        @if (item.actionType?.code === 'RECEIVED' && item.orderInfo) {
+                        @if (item.actionType?.code === 'CREATED' && barcodeInfo?.workOrderID) {
+                            <a class="wo-link" [routerLink]="['/build/work-orders', barcodeInfo.workOrderID]">WO #{{ barcodeInfo.workOrderID }}</a>
+                        } @else if (item.actionType?.code === 'RECEIVED' && item.orderInfo) {
                             <a [routerLink]="['/orders', item.orderInfo.orderID]" class="order-link">
                                 Order #{{ item.orderInfo.orderID }} - Line {{ item.orderInfo.lineNumber }}
                             </a>
@@ -101,11 +103,7 @@
                 <ng-container matColumnDef="qty">
                     <th mat-header-cell *matHeaderCellDef>Qty</th>
                     <td mat-cell *matCellDef="let item">
-                        @if (item.qty !== null) {
-                            {{ item.qty }} {{ item.unitOfMeasure?.name || '' }}
-                        } @else {
-                            -
-                        }
+                        <span [class]="getQtyClass(item)">{{ formatQty(item) }}</span>
                     </td>
                 </ng-container>
 

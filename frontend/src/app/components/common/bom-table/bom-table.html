@@ -1,0 +1,93 @@
+@if (items.length) {
+<div class="bom-table-wrapper" [class.compact]="compact">
+  <table mat-table [dataSource]="items" [trackBy]="trackByPartId" class="bom-table">
+    <ng-container matColumnDef="type">
+      <th mat-header-cell *matHeaderCellDef>Type</th>
+      <td mat-cell *matCellDef="let item">
+        @if (item.typeBadge) {
+        <span class="type-badge" [class]="item.typeBadgeClass || ''">{{ item.typeBadge }}</span>
+        }
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="name">
+      <th mat-header-cell *matHeaderCellDef>Part</th>
+      <td mat-cell *matCellDef="let item">
+        <app-part-link [partId]="item.partID" [name]="item.partName" [revision]="item.partRevision"
+          [imageFileId]="item.partImageFileId"></app-part-link>
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="category">
+      <th mat-header-cell *matHeaderCellDef>Category</th>
+      <td mat-cell *matCellDef="let item">
+        @if (item.categoryName) {
+        <span class="category-badge" [style.background-color]="getCategoryBgColor(item.categoryColor)"
+          [style.color]="item.categoryColor || '#808080'">
+          {{ item.categoryName }}
+        </span>
+        }
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="description">
+      <th mat-header-cell *matHeaderCellDef>Description</th>
+      <td mat-cell *matCellDef="let item">{{ item.partDescription || '' }}</td>
+    </ng-container>
+
+    <ng-container matColumnDef="quantity">
+      <th mat-header-cell *matHeaderCellDef>Qty</th>
+      <td mat-cell *matCellDef="let item; let i = index">
+        @if (editable) {
+        <span class="bom-qty-row">
+          <input type="number" [value]="formatQty(item)" [min]="item.allowDecimal ? 0.01 : 1"
+            [step]="item.allowDecimal ? 'any' : '1'" (change)="onQtyChange(i, $any($event.target).valueAsNumber)"
+            class="bom-qty-input">
+          @if (item.uomName) {
+          <span class="bom-uom">{{ item.uomName }}</span>
+          }
+        </span>
+        } @else {
+        {{ displayQty(item) }}
+        @if (item.uomName) {
+        <span class="bom-uom">{{ item.uomName }}</span>
+        }
+        }
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="pin">
+      <th mat-header-cell *matHeaderCellDef></th>
+      <td mat-cell *matCellDef="let item; let i = index">
+        <img [src]="getPinSrc(item)" class="pin-drag-handle" draggable="false"
+             (mousedown)="onPinMouseDown($event, item, i)"
+             [matTooltip]="'Drag to place ' + item.pinLetter + ' on image'">
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="extra">
+      <th mat-header-cell *matHeaderCellDef>{{ extraHeader }}</th>
+      <td mat-cell *matCellDef="let item">
+        <span class="extra-cell">
+          @if (item.warning) {
+            <mat-icon class="warning-icon" matTooltip="Not assigned to any step">warning</mat-icon>
+          }
+          {{ item.extra || '' }}
+        </span>
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="actions">
+      <th mat-header-cell *matHeaderCellDef></th>
+      <td mat-cell *matCellDef="let item; let i = index" (click)="onRemoveClick(i)">
+        <button mat-icon-button color="warn">
+          <mat-icon>delete</mat-icon>
+        </button>
+      </td>
+    </ng-container>
+
+    <tr mat-header-row *matHeaderRowDef="columns"></tr>
+    <tr mat-row *matRowDef="let row; columns: columns;"></tr>
+  </table>
+</div>
+}

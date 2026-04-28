@@ -169,12 +169,28 @@
     gap: 8px;
 }
 
+.wo-link {
+    color: var(--mat-sys-primary);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 12px;
+    padding: 2px 8px;
+    background: rgba(25, 118, 210, 0.1);
+    border-radius: 4px;
+}
+.wo-link:hover {
+    text-decoration: underline;
+}
+
 .action-icon {
     color: var(--mat-sys-primary);
     font-size: 20px;
     width: 20px;
     height: 20px;
 }
+
+.qty-positive { color: #4caf50; font-weight: 500; }
+.qty-negative { color: #f44336; font-weight: 500; }
 
 .location-value {
     font-family: monospace;

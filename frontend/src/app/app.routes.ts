@@ -60,6 +60,30 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'build/work-orders',
+        title: 'Work Orders',
+        loadComponent: () =>
+            import('./components/build/work-order-list-view/work-order-list-view').then((m) => m.WorkOrderListView),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'manufacturing_execution' },
+    },
+    {
+        path: 'build/work-orders/new',
+        title: 'New Work Order',
+        loadComponent: () =>
+            import('./components/build/new-work-order-page/new-work-order-page').then((m) => m.NewWorkOrderPage),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'manufacturing_execution' },
+    },
+    {
+        path: 'build/work-orders/:id',
+        title: 'Work Order',
+        loadComponent: () =>
+            import('./components/build/work-order-view/work-order-view').then((m) => m.WorkOrderView),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'manufacturing_execution' },
+    },
+    {
         path: 'build/:barcodeId',
         title: 'Build Details',
         loadComponent: () =>
@@ -161,6 +185,30 @@ export const routes: Routes = [
             import('./components/harness/harness-page/harness-page').then((m) => m.HarnessPage),
         canActivate: [authGuard, permissionGuard],
         data: { resource: 'harness' },
+    },
+    {
+        path: 'design/masters',
+        title: 'Engineering Masters',
+        loadComponent: () =>
+            import('./components/design/master-list-view/master-list-view').then((m) => m.MasterListView),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'manufacturing_planning' },
+    },
+    {
+        path: 'design/masters/new',
+        title: 'New Engineering Master',
+        loadComponent: () =>
+            import('./components/design/master-editor/master-editor').then((m) => m.MasterEditor),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'manufacturing_planning' },
+    },
+    {
+        path: 'design/masters/:id/edit',
+        title: 'Edit Engineering Master',
+        loadComponent: () =>
+            import('./components/design/master-editor/master-editor').then((m) => m.MasterEditor),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'manufacturing_planning' },
     },
     {
         path: 'requirements',

@@ -262,7 +262,7 @@
                 } @else {
                 @if (item.Part) {
                 <div class="part-info">
-                  <app-part-link [partId]="item.Part.id" [name]="item.Part.name" [revision]="item.Part.revision" [imageData]="item.Part.imageFile?.data"></app-part-link>
+                  <app-part-link [partId]="item.Part.id" [name]="item.Part.name" [revision]="item.Part.revision" [imageFileId]="item.Part.imageFile?.id"></app-part-link>
                   <div class="part-subtitle">{{ item.Part.description }}</div>
                   @if (item.Part.vendor) {
                   <div class="part-subtitle">SKU: {{ item.Part.sku }} | Vendor: {{ item.Part.vendor }}</div>

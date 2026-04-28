@@ -36,11 +36,11 @@ exports.getAllComponents = async (req, res, next) => {
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
           as: 'pinoutDiagramFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }, {
           model: db.UploadedFile,
           as: 'componentImageFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }] : [])
       ]
     });
@@ -66,11 +66,11 @@ exports.getComponentById = async (req, res, next) => {
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
           as: 'pinoutDiagramFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }, {
           model: db.UploadedFile,
           as: 'componentImageFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }] : [])
       ]
     });
@@ -156,11 +156,11 @@ exports.updateComponent = async (req, res, next) => {
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
           as: 'pinoutDiagramFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }, {
           model: db.UploadedFile,
           as: 'componentImageFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }] : [])
       ]
     });
@@ -184,17 +184,17 @@ exports.getComponentByPartId = async (req, res, next) => {
           include: db.UploadedFile ? [{
             model: db.UploadedFile,
             as: 'imageFile',
-            attributes: ['id', 'filename', 'mimeType', 'data']
+            attributes: ['id', 'filename', 'mimeType']
           }] : []
         }] : []),
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
           as: 'pinoutDiagramFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }, {
           model: db.UploadedFile,
           as: 'componentImageFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }] : [])
       ]
     });

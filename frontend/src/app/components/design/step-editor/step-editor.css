@@ -1,0 +1,47 @@
+/* Step editor fills available height */
+:host { display: flex; flex-direction: column; height: 100%; }
+
+/* Step header */
+.step-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; flex-shrink: 0; }
+.step-header-fields { display: flex; align-items: center; gap: 8px; flex: 1; }
+.step-number-field { width: 80px; }
+.step-number-field .mat-mdc-form-field-subscript-wrapper { display: none; }
+.title-field { flex: 1; }
+.title-field .mat-mdc-form-field-subscript-wrapper { display: none; }
+.step-number-label { font-weight: 700; color: #888; font-size: 16px; min-width: 30px; }
+.step-title-label { font-weight: 500; font-size: 16px; }
+
+/* Three-panel layout — fills remaining height */
+.step-layout { display: flex; gap: 0; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; flex: 1; min-height: 0; }
+.step-sidebar { width: 280px; min-width: 280px; border-right: 1px solid rgba(255,255,255,0.1); padding: 12px; overflow-y: auto; }
+.sidebar-section { margin-bottom: 16px; }
+.sidebar-section h4 { margin: 0; font-size: 13px; text-transform: uppercase; color: #888; letter-spacing: 0.5px; }
+.sidebar-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.edit-toggle-btn { width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; }
+.edit-toggle-btn mat-icon { font-size: 18px; width: 18px; height: 18px; line-height: 18px; }
+.small-btn { width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.small-btn mat-icon { font-size: 16px; width: 16px; height: 16px; line-height: 16px; }
+.add-field { width: 100%; font-size: 12px; margin-top: 4px; }
+.add-field .mat-mdc-form-field-subscript-wrapper { display: none; }
+.empty-hint { color: #666; font-style: italic; font-size: 12px; margin: 4px 0; }
+
+/* Canvas — image scales to fit */
+.step-canvas { flex: 1; position: relative; background: #1a1a1a; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.step-image { max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; }
+.canvas-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; color: #666; }
+.canvas-placeholder mat-icon { font-size: 48px; width: 48px; height: 48px; }
+.pin-marker { position: absolute; z-index: 2; }
+.pin-marker.draggable { cursor: grab; }
+.pin-marker.draggable:active, .pin-marker.dragging { cursor: grabbing; opacity: 0.8; }
+.pin-svg { width: 34px; height: 50px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4)); }
+.upload-btn { position: absolute; bottom: 12px; right: 12px; }
+.image-actions { position: absolute; bottom: 12px; right: 12px; display: flex; gap: 8px; z-index: 3; }
+.image-action-btn { width: 36px; height: 36px; }
+
+.bom-hint { color: #4caf50; font-size: 11px; margin-left: 4px; }
+
+/* Bottom bar: Instructions — fixed at bottom */
+.step-bottom { margin-top: 8px; flex-shrink: 0; }
+.instructions-field { width: 100%; }
+.instructions-field .mat-mdc-form-field-subscript-wrapper { display: none; }
+.instructions-text { padding: 8px; color: #ccc; font-size: 14px; }

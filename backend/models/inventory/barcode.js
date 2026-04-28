@@ -9,6 +9,14 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'barcodeCategoryID',
         onDelete: 'CASCADE'
       })
+      Barcode.hasOne(models.Location, {
+        foreignKey: 'barcodeID',
+        as: 'location'
+      })
+      Barcode.hasOne(models.Box, {
+        foreignKey: 'barcodeID',
+        as: 'box'
+      })
     }
   };
   Barcode.init({

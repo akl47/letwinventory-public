@@ -59,7 +59,7 @@ exports.searchPartsByCategory = async (req, res, next) => {
       {
         model: db.UploadedFile,
         as: 'imageFile',
-        attributes: ['id', 'filename', 'mimeType', 'data']
+        attributes: ['id', 'filename', 'mimeType']
       }
     ];
 
@@ -74,7 +74,7 @@ exports.searchPartsByCategory = async (req, res, next) => {
         include: [{
           model: db.UploadedFile,
           as: 'connectorImageFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }]
       });
     } else if (categoryLower === 'cable') {
@@ -86,7 +86,7 @@ exports.searchPartsByCategory = async (req, res, next) => {
         include: [{
           model: db.UploadedFile,
           as: 'cableDiagramFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }]
       });
     } else if (categoryLower === 'electrical component') {
@@ -98,7 +98,7 @@ exports.searchPartsByCategory = async (req, res, next) => {
         include: [{
           model: db.UploadedFile,
           as: 'componentImageFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }]
       });
     }
@@ -156,7 +156,12 @@ exports.getAllParts = (req, res, next) => {
       {
         model: db.UploadedFile,
         as: 'imageFile',
-        attributes: ['id', 'filename', 'mimeType', 'data']
+        attributes: ['id', 'filename', 'mimeType']
+      },
+      {
+        model: db.UnitOfMeasure,
+        as: 'UnitOfMeasure',
+        attributes: ['id', 'name', 'allowDecimal']
       }
     ]
   }).then(parts => {
@@ -179,7 +184,7 @@ exports.getPartByID = (req, res, next) => {
       {
         model: db.UploadedFile,
         as: 'imageFile',
-        attributes: ['id', 'filename', 'mimeType', 'data']
+        attributes: ['id', 'filename', 'mimeType']
       }
     ]
   }).then(part => {
@@ -682,7 +687,7 @@ exports.getRevisionsByName = async (req, res, next) => {
   try {
     const parts = await db.Part.findAll({
       where: { name: req.params.name },
-      include: [{ model: db.PartCategory }, { model: db.UploadedFile, as: 'imageFile', attributes: ['id', 'filename', 'mimeType', 'data'] }],
+      include: [{ model: db.PartCategory }, { model: db.UploadedFile, as: 'imageFile', attributes: ['id', 'filename', 'mimeType'] }],
       order: [['createdAt', 'ASC']]
     });
     res.json(parts);

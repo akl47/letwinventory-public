@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, signal, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatDialogModule, MatDialogRef, MAT_DIALOG_DATA } from '@angular/material/dialog';
@@ -11,7 +11,7 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatRadioModule } from '@angular/material/radio';
 import { InventoryService } from '../../../services/inventory.service';
 
-export type BarcodeActionType = 'move' | 'merge' | 'split' | 'delete' | 'adjust' | 'kit';
+export type BarcodeActionType = 'move' | 'merge' | 'split' | 'delete' | 'adjust' | 'kit' | 'unkit';
 
 export interface BarcodeMovementDialogData {
   action: BarcodeActionType;
@@ -19,6 +19,9 @@ export interface BarcodeMovementDialogData {
   barcode: string;
   isTrace: boolean;
   allowDecimal?: boolean;
+  defaultQuantity?: number;
+  /** For kit action: if true, barcodeId is the TARGET and user enters the SOURCE */
+  kitToTarget?: boolean;
 }
 
 export interface BarcodeMovementDialogResult {
@@ -46,7 +49,7 @@ export interface BarcodeMovementDialogResult {
   templateUrl: './barcode-movement-dialog.html',
   styleUrl: './barcode-movement-dialog.css'
 })
-export class BarcodeMovementDialog {
+export class BarcodeMovementDialog implements OnInit {
   private dialogRef = inject(MatDialogRef<BarcodeMovementDialog>);
   private inventoryService = inject(InventoryService);
   data: BarcodeMovementDialogData = inject(MAT_DIALOG_DATA);
@@ -70,6 +73,12 @@ export class BarcodeMovementDialog {
   kitTargetBarcode = '';
   kitQuantity: number | null = null;
 
+  ngOnInit() {
+    if (this.data.action === 'kit' && this.data.defaultQuantity) {
+      this.kitQuantity = this.data.defaultQuantity;
+    }
+  }
+
   // Delete fields
   deleteConfirmation = '';
   deleteType: 'full' | 'partial' = 'full';
@@ -82,6 +91,7 @@ export class BarcodeMovementDialog {
       case 'split': return 'Split Barcode';
       case 'adjust': return 'Adjust Quantity';
       case 'kit': return 'Kit to Assembly';
+      case 'unkit': return 'Dekit from Assembly';
       case 'delete': return 'Delete Barcode';
     }
   }
@@ -93,6 +103,7 @@ export class BarcodeMovementDialog {
       case 'split': return 'call_split';
       case 'adjust': return 'tune';
       case 'kit': return 'inventory_2';
+      case 'unkit': return 'undo';
       case 'delete': return 'delete';
     }
   }
@@ -108,6 +119,7 @@ export class BarcodeMovementDialog {
       case 'adjust':
         return this.adjustQuantity !== null && this.adjustQuantity > 0;
       case 'kit':
+      case 'unkit':
         return !!this.kitTargetBarcode.trim() && this.kitQuantity !== null && this.kitQuantity > 0;
       case 'delete':
         if (this.deleteConfirmation !== this.data.barcode) return false;
@@ -143,6 +155,9 @@ export class BarcodeMovementDialog {
         break;
       case 'kit':
         this.executeKit();
+        break;
+      case 'unkit':
+        this.executeUnkit();
         break;
       case 'delete':
         this.executeDelete();
@@ -260,8 +275,11 @@ export class BarcodeMovementDialog {
     const barcodeString = this.kitTargetBarcode.trim();
 
     this.inventoryService.lookupBarcode(barcodeString).subscribe({
-      next: (targetBarcode) => {
-        this.inventoryService.kitTrace(this.data.barcodeId, targetBarcode.id, this.kitQuantity!).subscribe({
+      next: (scannedBarcode) => {
+        // If kitToTarget, data.barcodeId is the target and the scanned barcode is the source
+        const sourceBarcodeId = this.data.kitToTarget ? scannedBarcode.id : this.data.barcodeId;
+        const targetBarcodeId = this.data.kitToTarget ? this.data.barcodeId : scannedBarcode.id;
+        this.inventoryService.kitTrace(sourceBarcodeId, targetBarcodeId, this.kitQuantity!).subscribe({
           next: (result) => {
             this.dialogRef.close({
               success: true,
@@ -271,7 +289,7 @@ export class BarcodeMovementDialog {
           },
           error: (err) => {
             this.isSubmitting.set(false);
-            this.errorMessage.set(err.error?.message || 'Failed to kit trace');
+            this.errorMessage.set(err.error?.errorMessage || err.error?.message || 'Failed to kit trace');
           }
         });
       },
@@ -281,6 +299,34 @@ export class BarcodeMovementDialog {
           this.errorMessage.set(`Barcode "${barcodeString}" not found`);
         } else {
           this.errorMessage.set(err.error?.message || 'Failed to lookup target barcode');
+        }
+      }
+    });
+  }
+
+  private executeUnkit() {
+    if (this.kitQuantity === null) return;
+    const barcodeString = this.kitTargetBarcode.trim();
+
+    this.inventoryService.lookupBarcode(barcodeString).subscribe({
+      next: (targetBarcode) => {
+        // data.barcodeId = the kit/WO trace, targetBarcode = the part barcode to return to
+        this.inventoryService.unkitTrace(this.data.barcodeId, targetBarcode.id, this.kitQuantity!).subscribe({
+          next: (result) => {
+            this.dialogRef.close({ success: true, action: 'unkit', data: result });
+          },
+          error: (err) => {
+            this.isSubmitting.set(false);
+            this.errorMessage.set(err.error?.errorMessage || err.error?.message || 'Failed to dekit');
+          }
+        });
+      },
+      error: (err) => {
+        this.isSubmitting.set(false);
+        if (err.status === 404) {
+          this.errorMessage.set(`Barcode "${barcodeString}" not found`);
+        } else {
+          this.errorMessage.set(err.error?.message || 'Failed to lookup barcode');
         }
       }
     });

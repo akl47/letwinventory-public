@@ -1,0 +1,315 @@
+@if (isLoading()) {
+  <div class="loading-container">
+    <mat-spinner diameter="40"></mat-spinner>
+  </div>
+} @else {
+  <div class="page-container">
+    <!-- Header -->
+    <div class="page-header">
+      <div class="header-left">
+        <button mat-icon-button (click)="router.navigate(['/design/masters'])">
+          <mat-icon>arrow_back</mat-icon>
+        </button>
+        @if (isNew()) {
+          <h2>New Engineering Master</h2>
+        } @else {
+          <h2>{{ master()?.name }}</h2>
+          <span class="revision-badge">EM Rev {{ master()?.revision }}</span>
+          <span class="state-chip" [style.background-color]="getStateColor(master()?.releaseState || '') + '33'" [style.color]="getStateColor(master()?.releaseState || '')">
+            {{ master()?.releaseState }}
+          </span>
+          @if (isSaving()) {
+            <span class="saving-indicator">Saving...</span>
+          } @else if (isEditable()) {
+            <span class="saved-indicator">Saved</span>
+          }
+        }
+      </div>
+      <div class="header-actions">
+        @if (isNew() && canWrite()) {
+          <button mat-flat-button color="primary" (click)="save()" [disabled]="!canSave()">
+            <mat-icon>save</mat-icon> Create
+          </button>
+        }
+        @if (!isNew() && isEditable() && canWrite() && master()?.releaseState === 'draft') {
+          <button mat-stroked-button (click)="submitForReview()">
+            <mat-icon>send</mat-icon> Submit for Review
+          </button>
+          <button mat-stroked-button color="warn" (click)="confirmDeleteMaster()">
+            <mat-icon>delete</mat-icon> Delete
+          </button>
+        }
+        @if (master()?.releaseState === 'review' && canWrite()) {
+          <button mat-flat-button color="primary" (click)="release()">
+            <mat-icon>verified</mat-icon> Release
+          </button>
+          <button mat-stroked-button (click)="reject()">
+            <mat-icon>undo</mat-icon> Reject
+          </button>
+        }
+        @if (master()?.releaseState === 'released' && canWrite()) {
+          <button mat-stroked-button (click)="newRevision()">
+            <mat-icon>content_copy</mat-icon> New Revision
+          </button>
+        }
+      </div>
+    </div>
+
+    @if (!isNew()) {
+      <div class="editor-layout">
+        <!-- Left Sidebar: Step List -->
+        <div class="step-sidebar" [class.collapsed]="emSidebarCollapsed()">
+          <div class="step-list-item" [class.active]="selectedStepId() === null && !showHistory()" (click)="selectedStepId.set(null); showHistory.set(false)">
+            <mat-icon>info</mat-icon>
+            <span>Overview</span>
+          </div>
+          <div class="step-list-divider"></div>
+          <div class="step-list-header">
+            <span>Steps</span>
+            @if (isEditable() && canWrite()) {
+              <button mat-icon-button class="add-step-btn" (click)="addStep()" matTooltip="Add Step">
+                <mat-icon>add</mat-icon>
+              </button>
+            }
+          </div>
+          @for (step of master()?.steps; track step.id) {
+            <div class="step-list-item" [class.active]="selectedStepId() === step.id" (click)="selectedStepId.set(step.id); showHistory.set(false)">
+              <span class="step-num">{{ step.stepNumber }}</span>
+              <span class="step-name">{{ step.title }}</span>
+              @if (isEditable() && canWrite()) {
+                <button mat-icon-button class="step-delete-btn" (click)="confirmDeleteStep(step); $event.stopPropagation()" matTooltip="Delete step">
+                  <mat-icon>close</mat-icon>
+                </button>
+              }
+            </div>
+          } @empty {
+            <div class="step-list-empty">No steps yet</div>
+          }
+          <div class="step-list-divider"></div>
+          <div class="step-list-item" [class.active]="showHistory() && selectedStepId() === null" (click)="showHistory.set(true); selectedStepId.set(null); refreshHistory()">
+            <mat-icon>history</mat-icon>
+            <span>History ({{ history().length }})</span>
+          </div>
+        </div>
+
+        <!-- Sidebar toggle -->
+        <div class="sidebar-toggle-track" (click)="emSidebarCollapsed.set(!emSidebarCollapsed())">
+          <mat-icon>{{ emSidebarCollapsed() ? 'chevron_right' : 'chevron_left' }}</mat-icon>
+        </div>
+
+        <!-- Main Content -->
+        <div class="editor-main">
+          @if (selectedStepId() === null && !showHistory()) {
+            <!-- Overview Panel -->
+            <div class="overview-panel">
+              <h3>Overview</h3>
+
+              <!-- Description -->
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Description</mat-label>
+                <textarea matInput [ngModel]="description()" (ngModelChange)="description.set($event)" (blur)="onDescriptionBlur()" [disabled]="!isEditable()" rows="4"></textarea>
+              </mat-form-field>
+
+              <!-- Output Parts -->
+              <div class="section-header">
+                <h4>Output Parts</h4>
+                @if (isEditable()) {
+                  <button mat-icon-button class="edit-toggle-btn" (click)="editingOutputParts.set(!editingOutputParts())" [matTooltip]="editingOutputParts() ? 'Done' : 'Edit'">
+                    <mat-icon>{{ editingOutputParts() ? 'check' : 'edit' }}</mat-icon>
+                  </button>
+                }
+              </div>
+              @if (!mainOutputPart() && isEditable()) {
+                <p class="required-hint">A main output part is required. The master name will be derived from the first part.</p>
+              }
+              <app-bom-table
+                [items]="outputPartBomItems()"
+                [editable]="editingOutputParts()"
+                [showType]="true"
+                [showCategory]="false"
+                (quantityChanged)="updateOutputPartQty($event.index, $event.quantity)"
+                (removed)="removeOutputPart($event)">
+              </app-bom-table>
+              @if (editingOutputParts()) {
+                <mat-form-field appearance="outline" class="full-width">
+                  <mat-label>Add output part</mat-label>
+                  <input matInput [ngModel]="outputPartSearch()" (ngModelChange)="searchOutputParts($event)" [matAutocomplete]="outputPartAuto" placeholder="Search by name">
+                  <mat-icon matPrefix>search</mat-icon>
+                  <mat-autocomplete #outputPartAuto="matAutocomplete" (optionSelected)="addOutputPart($event.option.value)">
+                    @for (part of outputPartResults(); track part.id) {
+                      <mat-option [value]="part">{{ part.name }}{{ part.revision && part.revision !== '00' && part.revision !== '0' ? ' Rev ' + part.revision : '' }}</mat-option>
+                    }
+                  </mat-autocomplete>
+                </mat-form-field>
+              }
+
+              <!-- Aggregated BOM -->
+              <div class="section-header" style="margin-top: 24px;">
+                <h4>Bill of Materials</h4>
+                @if (isEditable()) {
+                  <div class="section-header-actions">
+                    @if (editingBom()) {
+                      <button mat-stroked-button class="sync-bom-btn" (click)="syncBomFromParts()">
+                        <mat-icon>sync</mat-icon> Sync from Part BOM
+                      </button>
+                    }
+                    <button mat-icon-button class="edit-toggle-btn" (click)="editingBom.set(!editingBom())" [matTooltip]="editingBom() ? 'Done' : 'Edit'">
+                      <mat-icon>{{ editingBom() ? 'check' : 'edit' }}</mat-icon>
+                    </button>
+                  </div>
+                }
+              </div>
+              <app-bom-table
+                [items]="aggregatedBomItems()"
+                [editable]="editingBom()"
+                [showType]="true"
+                [showCategory]="false"
+                [showExtra]="true"
+                extraHeader="Assignment"
+                (quantityChanged)="updateBomQty($event.index, $event.quantity)"
+                (removed)="removeBomItem($event)">
+              </app-bom-table>
+              @if (!aggregatedBomItems().length) {
+                <p class="empty-hint">No parts or tools in BOM yet.</p>
+              }
+              @if (editingBom()) {
+                <mat-form-field appearance="outline" class="full-width">
+                  <mat-label>Add part to BOM</mat-label>
+                  <input matInput [ngModel]="bomSearch()" (ngModelChange)="searchBomParts($event)" [matAutocomplete]="bomAuto" placeholder="Search by name">
+                  <mat-icon matPrefix>search</mat-icon>
+                  <mat-autocomplete #bomAuto="matAutocomplete">
+                    @for (part of bomSearchResults(); track part.id) {
+                      <mat-option [value]="part.name">
+                        <div class="bom-add-option">
+                          <span>{{ part.name }}{{ part.revision && part.revision !== '00' && part.revision !== '0' ? ' Rev ' + part.revision : '' }}</span>
+                          <span class="bom-add-btns">
+                            <button mat-button class="bom-add-type-btn" (click)="addBomPart(part, false); $event.stopPropagation()">+ Part</button>
+                            <button mat-button class="bom-add-type-btn" (click)="addBomPart(part, true); $event.stopPropagation()">+ Tool</button>
+                          </span>
+                        </div>
+                      </mat-option>
+                    }
+                  </mat-autocomplete>
+                </mat-form-field>
+              }
+            </div>
+          }
+
+          @if (selectedStep(); as step) {
+            <!-- Step Editor -->
+            <app-step-editor
+              [step]="step"
+              [editable]="isEditable()"
+              [unassignedBomParts]="unassignedBomParts()"
+              [unassignedBomTools]="unassignedBomTools()"
+              (changed)="onStepChanged()"
+              (historyChanged)="onStepContentChanged()">
+            </app-step-editor>
+          }
+
+          @if (showHistory() && selectedStepId() === null) {
+            <!-- History Panel -->
+            <div class="history-panel">
+              <h3>Change History</h3>
+              <div class="history-timeline">
+                @for (entry of history(); track entry.id) {
+                  <div class="history-entry">
+                    <div class="history-entry-header">
+                      <mat-icon class="history-type-icon" [class]="'type-' + entry.changeType">{{ getHistoryIcon(entry.changeType) }}</mat-icon>
+                      <span class="history-type-label">{{ getChangeTypeLabel(entry.changeType) }}</span>
+                      <span class="history-user">{{ entry.changedBy?.displayName || 'Unknown' }}</span>
+                      <span class="history-timestamp">{{ entry.createdAt | date:'medium' }}</span>
+                    </div>
+                    @if (entry.changes && (entry.changeType === 'updated' || entry.changeType === 'created')) {
+                      <div class="history-diffs">
+                        @for (field of getChangedFields(entry.changes); track field) {
+                          @if (isDiffFormat(entry.changes[field])) {
+                            <!-- Diff format: added/removed/changed -->
+                            <div class="history-diff-section">
+                              <span class="diff-field">{{ getFieldLabel(field) }}:</span>
+                              @for (item of entry.changes[field].added || []; track item) {
+                                <div class="diff-line diff-added">
+                                  <mat-icon>add_circle_outline</mat-icon>
+                                  <span>{{ item }}</span>
+                                </div>
+                              }
+                              @for (item of entry.changes[field].removed || []; track item) {
+                                <div class="diff-line diff-removed">
+                                  <mat-icon>remove_circle_outline</mat-icon>
+                                  <span>{{ item }}</span>
+                                </div>
+                              }
+                              @for (item of entry.changes[field].changed || []; track item.to) {
+                                <div class="diff-line diff-changed">
+                                  <mat-icon>swap_horiz</mat-icon>
+                                  <span class="diff-from">{{ item.from }}</span>
+                                  <mat-icon class="diff-arrow">arrow_forward</mat-icon>
+                                  <span class="diff-to">{{ item.to }}</span>
+                                </div>
+                              }
+                            </div>
+                          } @else {
+                            <!-- Simple from/to format -->
+                            <div class="history-diff">
+                              <span class="diff-field">{{ getFieldLabel(field) }}:</span>
+                              <span class="diff-from">{{ entry.changes[field].from ?? '(empty)' }}</span>
+                              <mat-icon class="diff-arrow">arrow_forward</mat-icon>
+                              <span class="diff-to">{{ entry.changes[field].to ?? '(empty)' }}</span>
+                            </div>
+                          }
+                        }
+                      </div>
+                    }
+                  </div>
+                } @empty {
+                  <p class="empty-hint">No history yet.</p>
+                }
+              </div>
+            </div>
+          }
+        </div>
+      </div>
+    } @else {
+      <!-- New Master Form: select main output part first -->
+      <div class="form-section">
+        <h3>Select the main output part</h3>
+        <p class="empty-hint">The engineering master will be named after this part.</p>
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Search for a part</mat-label>
+          <input matInput [ngModel]="outputPartSearch()" (ngModelChange)="searchOutputParts($event)" [matAutocomplete]="newMainPartAuto">
+          <mat-autocomplete #newMainPartAuto="matAutocomplete" (optionSelected)="selectNewMainPart($event.option.value)">
+            @for (part of outputPartResults(); track part.id) {
+              <mat-option [value]="part">{{ part.name }}{{ part.revision && part.revision !== '00' && part.revision !== '0' ? ' Rev ' + part.revision : '' }}</mat-option>
+            }
+          </mat-autocomplete>
+        </mat-form-field>
+        @if (newMainPart()) {
+          <div class="new-main-part-preview">
+            <span class="part-name">{{ newMainPart()!.name }}</span>
+            @if (newMainPart()!.revision && newMainPart()!.revision !== '00' && newMainPart()!.revision !== '0') {
+              <span class="part-rev">Rev {{ newMainPart()!.revision }}</span>
+            }
+            <button mat-icon-button (click)="newMainPart.set(null)" matTooltip="Clear">
+              <mat-icon>close</mat-icon>
+            </button>
+          </div>
+          @if (existingEmWarning()) {
+            <div class="existing-em-warning">
+              <mat-icon>warning</mat-icon>
+              <div>
+                <p>An Engineering Master already exists for this part: <strong>{{ existingEmWarning()!.masterName }}</strong> (EM Rev {{ existingEmWarning()!.revision }})</p>
+                <p>Consider creating a new revision of the existing master instead.</p>
+                <a [routerLink]="['/design/masters', existingEmWarning()!.masterId, 'edit']" class="em-link">Open existing master</a>
+              </div>
+            </div>
+          }
+          <p class="derived-name">Master will be named: <strong>{{ newMainPart()!.revision && newMainPart()!.revision !== '00' && newMainPart()!.revision !== '0' ? newMainPart()!.name + ' Rev ' + newMainPart()!.revision : newMainPart()!.name }}</strong></p>
+          <mat-form-field appearance="outline" class="full-width">
+            <mat-label>Description (optional)</mat-label>
+            <textarea matInput [ngModel]="description()" (ngModelChange)="description.set($event)" rows="3"></textarea>
+          </mat-form-field>
+        }
+      </div>
+    }
+  </div>
+}

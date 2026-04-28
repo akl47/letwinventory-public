@@ -34,14 +34,16 @@
                     <input matInput type="number" [(ngModel)]="kitQuantity" min="1"
                            [max]="scanResult()!.tag.quantity">
                 </mat-form-field>
-                <button mat-flat-button color="primary" (click)="confirmKit()"
-                        [disabled]="!kitQuantity || kitQuantity <= 0 || isKitting()">
-                    @if (isKitting()) {
-                        <mat-spinner diameter="20"></mat-spinner>
-                    } @else {
-                        <mat-icon>inventory_2</mat-icon> Kit
-                    }
+                @if (isKitting()) {
+                <button mat-flat-button color="primary" disabled>
+                    <mat-spinner diameter="20"></mat-spinner>
                 </button>
+                } @else {
+                <button mat-flat-button color="primary" (click)="confirmKit()"
+                        [disabled]="!kitQuantity || kitQuantity <= 0">
+                    <mat-icon>inventory_2</mat-icon> Kit
+                </button>
+                }
                 <button mat-button (click)="clearScan()">Clear</button>
             </div>
         </div>

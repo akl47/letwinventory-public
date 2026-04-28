@@ -17,6 +17,8 @@ import { InventoryService } from '../../../services/inventory.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { WIRE_COLORS, AWG_GAUGES } from '../../../utils/harness/wire-color-map';
 import { PartNumberPipe, formatPartNumber } from '../../../pipes/part-number.pipe';
+import { AuthImgDirective } from '../../../directives/auth-img.directive';
+import { environment } from '../../../../environments/environment';
 import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
 
 interface DialogData {
@@ -45,7 +47,8 @@ interface DialogData {
     CdkDrag,
     CdkDragHandle,
     CdkDragPlaceholder,
-    PartNumberPipe
+    PartNumberPipe,
+    AuthImgDirective
   ],
   templateUrl: './harness-add-cable-dialog.html',
   styleUrls: ['./harness-add-cable-dialog.scss']
@@ -218,7 +221,7 @@ export class HarnessAddCableDialog implements OnInit {
       partId: this.selectedPart()?.id || this.editPartId,
       partName: this.selectedPart()?.name || this.editPartName,
       // Use Part image, fall back to cable diagram image
-      cableDiagramImage: this.selectedPart()?.imageFile?.data || this.cableDiagramImage
+      cableDiagramImage: (this.selectedPart()?.imageFile?.id ? `${environment.apiUrl}/files/${this.selectedPart()!.imageFile!.id}/data` : null) || this.cableDiagramImage
     };
 
     this.dialogRef.close(cable);

@@ -122,7 +122,7 @@ async function seedReferenceData() {
   ]);
 
   // Permissions (9 resources x 3 actions + extras)
-  const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin'];
+  const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin', 'manufacturing_planning', 'manufacturing_execution'];
   const actions = ['read', 'write', 'delete'];
   let permId = 1;
   const permRows = [];
@@ -160,6 +160,8 @@ afterEach(async () => {
     'TaskTimeTracking', 'TaskHistory', 'Task', 'ScheduledTask',
     'TaskList', 'Project',
     'BillOfMaterialItem',
+    'WorkOrderStepCompletion', 'WorkOrder',
+    'EngineeringMasterHistory', 'EngineeringMasterBomItem', 'EngineeringMasterStepMarker', 'EngineeringMasterStepItem', 'EngineeringMasterStep', 'EngineeringMasterOutputPart', 'EngineeringMaster',
     'BarcodeHistory', 'Trace', 'Equipment', 'OrderItem', 'Order',
     'Box', 'Location', 'Barcode',
     'PartRevisionHistory', 'Part', 'UploadedFile', 'PushSubscription', 'Printer', 'ApiKeyPermission', 'ApiKey', 'RefreshToken', 'User',

@@ -9,6 +9,7 @@ services:
     volumes:
       - ./backend:/usr/src
       - ./backend/node_modules:/usr/src/node_modules # Remove this if you have pure JS dependencies
+      - ./data/files:/data/files
     ports:
       - ${BACKEND_PORT}:${BACKEND_PORT}
     depends_on:

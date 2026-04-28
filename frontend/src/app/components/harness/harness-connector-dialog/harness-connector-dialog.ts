@@ -16,6 +16,8 @@ import { InventoryService } from '../../../services/inventory.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { CONNECTOR_COLORS } from '../../../utils/harness/wire-color-map';
 import { PartNumberPipe, formatPartNumber } from '../../../pipes/part-number.pipe';
+import { AuthImgDirective } from '../../../directives/auth-img.directive';
+import { environment } from '../../../../environments/environment';
 import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
 
 interface DialogData {
@@ -40,7 +42,8 @@ interface DialogData {
     MatAutocompleteModule,
     MatProgressSpinnerModule,
     MatTooltipModule,
-    PartNumberPipe
+    PartNumberPipe,
+    AuthImgDirective,
   ],
   templateUrl: './harness-connector-dialog.html',
   styleUrls: ['./harness-connector-dialog.scss']
@@ -230,7 +233,7 @@ export class HarnessConnectorDialog implements OnInit {
       partId: this.selectedPart()?.id || this.editPartId,
       partName: this.selectedPart()?.name || this.editPartName,
       // Use Part image, fall back to linked connector image or preserved edit image
-      connectorImage: this.selectedPart()?.imageFile?.data || linked?.connectorImage || this.editConnectorImage,
+      connectorImage: (this.selectedPart()?.imageFile?.id ? `${environment.apiUrl}/files/${this.selectedPart()!.imageFile!.id}/data` : null) || linked?.connectorImage || this.editConnectorImage,
       pinoutDiagramImage: linked?.pinoutDiagramImage || this.editPinoutDiagramImage
     };
 

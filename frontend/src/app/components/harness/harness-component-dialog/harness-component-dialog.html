@@ -23,8 +23,8 @@
         @for (part of filteredParts(); track part.id) {
         <mat-option [value]="part">
           <span class="part-option">
-            @if (part.imageFile?.data) {
-              <img [src]="part.imageFile?.data" class="part-thumbnail" />
+            @if (part.imageFile?.id) {
+              <img [appAuthImg]="part.imageFile?.id" class="part-thumbnail" />
             }
             <span class="part-text">
               <strong>{{ part | partNumber }}</strong>

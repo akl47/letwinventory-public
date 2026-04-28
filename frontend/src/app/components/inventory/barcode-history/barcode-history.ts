@@ -289,4 +289,56 @@ export class BarcodeHistoryComponent implements OnInit, OnDestroy {
     if (!bc) return 'None';
     return bc.barcode;
   }
+
+  /** Format qty with +/- sign based on whether this action adds or removes from this barcode */
+  formatQty(item: BarcodeHistory): string {
+    if (item.qty === null || item.qty === undefined) return '-';
+    const code = item.actionType?.code;
+    const qty = item.qty;
+    const uom = item.unitOfMeasure?.name || '';
+
+    // Actions that always add to this barcode
+    if (code === 'CREATED' || code === 'RECEIVED') {
+      return `+${qty} ${uom}`.trim();
+    }
+
+    // Actions that always remove from this barcode
+    if (code === 'DELETED') {
+      return `-${qty} ${uom}`.trim();
+    }
+
+    // Adjusted — show absolute (it's a set, not a delta)
+    if (code === 'ADJUSTED') {
+      return `${qty} ${uom}`.trim();
+    }
+
+    // Directional actions: determine sign by comparing barcodeID with fromID/toID
+    // If this barcode is the source (barcodeID === fromID), qty is leaving → negative
+    // If this barcode is the destination (barcodeID === toID), qty is arriving → positive
+    if (code === 'KITTED' || code === 'UNKITTED' || code === 'SPLIT' || code === 'MERGED') {
+      if (item.barcodeID === item.fromID) {
+        return `-${qty} ${uom}`.trim();
+      }
+      if (item.barcodeID === item.toID) {
+        return `+${qty} ${uom}`.trim();
+      }
+    }
+
+    // Fallback
+    return `${qty} ${uom}`.trim();
+  }
+
+  /** CSS class for qty: positive (green), negative (red), or neutral */
+  getQtyClass(item: BarcodeHistory): string {
+    if (item.qty === null || item.qty === undefined) return '';
+    const code = item.actionType?.code;
+    if (code === 'CREATED' || code === 'RECEIVED') return 'qty-positive';
+    if (code === 'DELETED') return 'qty-negative';
+    if (code === 'ADJUSTED') return '';
+    if (code === 'KITTED' || code === 'UNKITTED' || code === 'SPLIT' || code === 'MERGED') {
+      if (item.barcodeID === item.fromID) return 'qty-negative';
+      if (item.barcodeID === item.toID) return 'qty-positive';
+    }
+    return '';
+  }
 }
