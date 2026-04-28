@@ -116,7 +116,7 @@ describe('Kitting API', () => {
       const res = await auth.post(`/api/inventory/trace/kit/${sourceTrace.barcodeID}`)
         .send({ targetBarcodeId: regularTrace.barcodeID, quantity: 5 });
       expect(res.status).toBe(400);
-      expect(res.body.errorMessage).toContain('not a Kit or Assembly');
+      expect(res.body.errorMessage).toContain('not a Kit, Assembly, or Work Order output');
     });
 
     it('rejects insufficient quantity', async () => {
@@ -270,7 +270,7 @@ describe('Kitting API', () => {
       const res = await auth.post(`/api/inventory/trace/unkit/${regularTrace.barcodeID}`)
         .send({ targetBarcodeId: sourceTrace.barcodeID, quantity: 5 });
       expect(res.status).toBe(400);
-      expect(res.body.errorMessage).toContain('not a Kit or Assembly');
+      expect(res.body.errorMessage).toContain('not a Kit, Assembly, or Work Order output');
     });
   });
 

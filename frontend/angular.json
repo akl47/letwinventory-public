@@ -79,7 +79,9 @@
           "builder": "@angular/build:dev-server",
           "options": {
             "poll": 2000,
-            "allowedHosts": ["dev.letwin.co"]
+            "allowedHosts": [
+              "dev.letwin.co"
+            ]
           },
           "configurations": {
             "production": {
@@ -98,7 +100,9 @@
         "test": {
           "builder": "@angular/build:unit-test",
           "options": {
-            "setupFiles": ["src/test-setup.ts"]
+            "setupFiles": [
+              "src/test-setup.ts"
+            ]
           }
         }
       }

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="34" height="50" viewBox="-1 -1 36 52">
+  <ellipse cx="16" cy="48" rx="4" ry="1.5" fill="rgba(0,0,0,0.15)"/>
+  <path d="M16 2C8.268 2 2 8.268 2 16c0 4 1.5 7.6 4 10.5C8 29 12.5 32 16 46c3.5-14 8-17 10-19.5C28.5 23.6 30 20 30 16 30 8.268 23.732 2 16 2z" fill="#009688" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+  <text x="16" y="21" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="white">L</text>
+</svg>

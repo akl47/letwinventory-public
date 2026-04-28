@@ -19,6 +19,8 @@ import { InventoryService } from '../../../services/inventory.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
 import { PartNumberPipe, formatPartNumber } from '../../../pipes/part-number.pipe';
+import { AuthImgDirective } from '../../../directives/auth-img.directive';
+import { environment } from '../../../../environments/environment';
 
 interface DialogData {
   existingComponents?: HarnessComponent[];
@@ -41,7 +43,8 @@ interface DialogData {
     MatAutocompleteModule,
     MatProgressSpinnerModule,
     MatTooltipModule,
-    PartNumberPipe
+    PartNumberPipe,
+    AuthImgDirective
   ],
   templateUrl: './harness-component-dialog.html',
   styleUrls: ['./harness-component-dialog.scss']
@@ -220,7 +223,7 @@ export class HarnessComponentDialog implements OnInit {
       partId: this.selectedPart()?.id || this.editPartId,
       partName: this.selectedPart()?.name || this.editPartName,
       // Use Part image, fall back to linked component image or preserved edit image
-      componentImage: this.selectedPart()?.imageFile?.data || linked?.componentImage || this.editComponentImage,
+      componentImage: (this.selectedPart()?.imageFile?.id ? `${environment.apiUrl}/files/${this.selectedPart()!.imageFile!.id}/data` : null) || linked?.componentImage || this.editComponentImage,
       pinoutDiagramImage: linked?.pinoutDiagramImage || this.editPinoutDiagramImage
     };
 

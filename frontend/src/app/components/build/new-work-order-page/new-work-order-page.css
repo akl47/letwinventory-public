@@ -1,0 +1,17 @@
+.page-container { padding: 24px; max-width: 700px; }
+.page-header { display: flex; align-items: center; gap: 8px; margin-bottom: 24px; }
+.page-header h2 { margin: 0; }
+.form-content h4 { margin: 24px 0 8px 0; }
+.form-content h4:first-child { margin-top: 0; }
+.full-width { width: 100%; }
+.qty-field { width: 150px; }
+.revision-badge { background: rgba(255, 255, 255, 0.1); border-radius: 4px; padding: 2px 8px; font-weight: 500; font-size: 12px; margin-left: 8px; }
+.selected-card { margin-bottom: 8px; }
+.selected-item { display: flex; align-items: center; justify-content: space-between; }
+.location-type, .option-type { color: #888; font-size: 12px; margin-left: 8px; }
+.option-rev { color: #888; font-size: 12px; margin-left: 4px; }
+.preview-list { display: flex; flex-direction: column; gap: 4px; }
+.preview-item { display: flex; justify-content: space-between; padding: 8px 12px; background: rgba(255, 255, 255, 0.04); border-radius: 4px; }
+.preview-qty { color: #888; font-weight: 500; }
+.preview-note { color: #888; font-size: 13px; font-style: italic; margin-top: 8px; }
+.form-actions { margin-top: 32px; }

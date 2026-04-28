@@ -17,6 +17,8 @@ import { HarnessService } from '../../../services/harness.service';
 import { Part, PartCategory, UnitOfMeasure } from '../../../models';
 import { DbHarnessConnector, DbHarnessWire, DbHarnessCable, DbElectricalComponent, ElectricalPinType, ComponentPinGroup, createEmptyHarnessData } from '../../../models/harness.model';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
+import { environment } from '../../../../environments/environment';
+import { AuthImgDirective } from '../../../directives/auth-img.directive';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatTableModule } from '@angular/material/table';
@@ -48,7 +50,8 @@ import { PartLink } from '../../common/part-link/part-link';
     BarcodeTag,
     RouterLink,
     PartNumberPipe,
-    PartLink
+    PartLink,
+    AuthImgDirective,
   ],
   templateUrl: './part-edit-page.html',
   styleUrl: './part-edit-page.css',
@@ -381,7 +384,7 @@ export class PartEditPage implements OnInit {
         this.isLoadingPart = false;
         this.isDataLoaded.set(true);
         // Load part image
-        this.partImage.set(part.imageFile?.data || null);
+        this.partImage.set(null);
         this.partImageFileID.set(part.imageFileID || null);
         // Load harness-specific data
         this.loadHarnessData(part.id, part.PartCategory?.name);
@@ -967,7 +970,7 @@ export class PartEditPage implements OnInit {
         manufacturerPN: this.currentPart.manufacturerPN || ''
       });
       // Restore part image state
-      this.partImage.set(this.currentPart.imageFile?.data || null);
+      this.partImage.set(null);
       this.partImageFile.set(null);
       this.partImageFileID.set(this.currentPart.imageFileID || null);
     }

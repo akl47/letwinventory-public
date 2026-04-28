@@ -21,6 +21,10 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'orderItemID',
         onDelete: 'SET NULL'
       })
+      Trace.belongsTo(models.WorkOrder,{
+        foreignKey: 'workOrderID',
+        onDelete: 'SET NULL'
+      })
     }
   };
   Trace.init({
@@ -46,6 +50,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.INTEGER,
       allowNull: true
     },
+    workOrderID: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
     barcodeID: {
       type: DataTypes.INTEGER,
       allowNull:false,
@@ -55,6 +63,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       allowNull:false,
       defaultValue:true
+    },
+    wip: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
     },
     serialNumber: {
       type: DataTypes.STRING,

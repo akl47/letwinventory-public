@@ -19,7 +19,7 @@ exports.getAllCables = async (req, res, next) => {
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
           as: 'cableDiagramFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }] : [])
       ]
     });
@@ -44,7 +44,7 @@ exports.getCableById = async (req, res, next) => {
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
           as: 'cableDiagramFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }] : [])
       ]
     });
@@ -132,7 +132,7 @@ exports.updateCable = async (req, res, next) => {
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
           as: 'cableDiagramFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }] : [])
       ]
     });
@@ -156,13 +156,13 @@ exports.getCableByPartId = async (req, res, next) => {
           include: db.UploadedFile ? [{
             model: db.UploadedFile,
             as: 'imageFile',
-            attributes: ['id', 'filename', 'mimeType', 'data']
+            attributes: ['id', 'filename', 'mimeType']
           }] : []
         }] : []),
         ...(db.UploadedFile ? [{
           model: db.UploadedFile,
           as: 'cableDiagramFile',
-          attributes: ['id', 'filename', 'mimeType', 'data']
+          attributes: ['id', 'filename', 'mimeType']
         }] : [])
       ]
     });

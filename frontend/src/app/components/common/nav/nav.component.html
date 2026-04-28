@@ -55,7 +55,7 @@
                     <span class="rail-label">Tools</span>
                 </div>
 
-                @if (hasInventoryAccess()) {
+                @if (hasBuildGroupAccess()) {
                 <!-- Build - group toggle -->
                 <div class="rail-item" [class.active]="isGroupActive('build')" (click)="toggleGroup('build')">
                     <div class="rail-icon-container">
@@ -137,6 +137,12 @@
                         <span matListItemTitle>Harness Design</span>
                     </a>
                     }
+                    @if (hasMfgPlanningAccess()) {
+                    <a mat-list-item routerLink="/design/masters" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>description</mat-icon>
+                        <span matListItemTitle>Engineering Masters</span>
+                    </a>
+                    }
                     }
                     @if (openGroup() === 'tools') {
                     <a mat-list-item routerLink="/tools/outline" routerLinkActive="active-link" (click)="closePanel()">
@@ -145,10 +151,19 @@
                     </a>
                     }
                     @if (openGroup() === 'build') {
+                    @if (hasInventoryAccess()) {
                     <a mat-list-item routerLink="/build" routerLinkActive="active-link" (click)="closePanel()">
                         <mat-icon matListItemIcon>inventory_2</mat-icon>
                         <span matListItemTitle>Builds</span>
                     </a>
+                    }
+                    @if (hasMfgExecutionAccess()) {
+                    <a mat-list-item routerLink="/build/work-orders" routerLinkActive="active-link"
+                        (click)="closePanel()">
+                        <mat-icon matListItemIcon>assignment</mat-icon>
+                        <span matListItemTitle>Work Orders</span>
+                    </a>
+                    }
                     }
 
                     @if (openGroup() === 'admin') {

@@ -5,6 +5,8 @@ services:
       - .env.production
     environment:
       NODE_ENV: production
+    volumes:
+      - ./data/files:/data/files
     ports:
       - ${BACKEND_PORT}:${BACKEND_PORT}
     container_name: letwinventory-backend-prod

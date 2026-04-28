@@ -20,7 +20,11 @@ The webapp runs in a Docker container that automatically builds on file changes.
 
 **New feature workflow (strictly follow this order):**
 
-1. **Requirements first.** Use `node scripts/req.js` to create requirements in the database. List existing categories with `node scripts/req.js categories`. Create each requirement with `node scripts/req.js create '<json>'`, presenting each to the user for approval before moving on. All requirements must include `description`, `rationale`, `verification`, and `validation`. If anything is ambiguous or uncertain, ask — do not guess.
+1. **Requirements first.** Use `node scripts/req.js` to create requirements in the database. List existing categories with `node scripts/req.js categories`. Create each requirement with `node scripts/req.js create '<json>'`, presenting each to the user for approval before moving on. All requirements must include `description`, `rationale`, `verification`, `validation`, and `parentRequirementID`. If anything is ambiguous or uncertain, ask — do not guess.
+   - **Every requirement must have a parent.** Use `node scripts/req.js tree /tmp/req-tree.json` to view the hierarchy and find the correct parent. Never create orphan (parentless) requirements.
+   - **Hierarchy rules:** Each category has exactly one root requirement. New requirements go under their category's root. If a new category is needed, create a root requirement for it under the appropriate QMS clause (REQ 98) or System root (REQ 1) first.
+   - **Key category roots:** Engineering Masters (REQ 265), Work Instructions (REQ 266, under 265), Work Orders (REQ 267), Barcode (REQ 149), Inventory (REQ 123), Parts (REQ 152), Tools (REQ 174)
+   - **Default new requirements to `unapproved`, not draft.** After `create`, run `node scripts/req.js submit <id>` to transition draft → unapproved so the requirement is visible by default in the list view and counted by `req.js check`. Only leave a requirement in `draft` state if the user explicitly asks for it (e.g., for an exploratory or speculative requirement that should be hidden from the default workflow). Note: requirements created under an already-approved parent may be auto-approved by the API; if the user wanted them unapproved, run `unapprove <id>` (requires `requirements.approve` permission).
 2. **Tests second.** Write tests for the approved requirements: backend (Jest), frontend (Karma spec), and E2E (Playwright) where applicable. Tests should fail at this point (they validate unimplemented behavior).
 3. **Link tests to requirements.** Update requirements via `node scripts/req.js update <id> '<json>'` to add test file references to the `verification` field.
 4. **Implement the feature.** Write the code to make the tests pass.
@@ -47,6 +51,17 @@ Before implementing:
 - If you write 200 lines and it could be 50, rewrite it.
 
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 2.5. Error Messages Must Be Useful
+
+**Never pass raw database errors to the user. Always catch specific failures and explain what went wrong in plain English.**
+
+- Catch unique constraint violations and say what's duplicated: `"An Engineering Master with this name and revision already exists"`
+- Catch foreign key violations and say what's missing: `"Part ID 123 does not exist"`
+- Catch validation errors and say what's wrong: `"Quantity must be greater than 0"`
+- Include the field or entity name in the message so the user knows where to look
+- Generic `"Validation error"` or `"Internal server error"` with no context is never acceptable
+- In `catch` blocks, check `error.name === 'SequelizeUniqueConstraintError'` etc. and produce a human message before falling back to `error.message`
 
 ## 3. Surgical Changes
 
@@ -79,6 +94,53 @@ For multi-step tasks, state a brief plan:
 2. [Step] → verify: [check]
 3. [Step] → verify: [check]
 ```
+
+## 5. Debugging Discipline
+
+**Diagnose at the right layer. Don't chase symptoms.**
+
+### Instrument first, fix second
+When the user reports a bug, the first round of changes should be **diagnostic logging**, not fixes. Add logs that prove which layer is broken before changing any code. Three minutes of logging beats thirty minutes of guessing.
+
+For UI bugs, instrument **all relevant events at once**, not one at a time:
+- Click bug → log mousedown, click, AND a document-level click listener in the same round
+- Render bug → log component lifecycle hooks (`ngOnChanges`, `ngOnInit`)
+- Data bug → log the input data shape at the boundary of each layer
+
+### Read the symptom precisely
+Specific symptoms have specific fingerprints. Match the symptom to the right layer before touching anything:
+
+| Symptom | Almost always | Almost never |
+|---------|---------------|--------------|
+| Mousedown fires but click does not | DOM element destroyed/replaced between mousedown and mouseup | CSS / pointer-events / z-index |
+| Hover doesn't trigger | Element is being recreated or `mouseenter` handler is missing | Tooltip CSS positioning |
+| Image doesn't load | Wrong URL, missing auth, or `src` not bound | Image element styling |
+| Component doesn't re-render after data change | Object reference didn't change (mutation instead of replacement) | Change detection strategy |
+| Data missing in template | Backend include / attributes list / nested association | Frontend mapping |
+
+When mousedown fires but click does not, jump straight to **DOM lifecycle**. The element you pressed on no longer exists when mouseup arrives. Common causes:
+- Template binding to a method (not a memoized signal) that returns new arrays each render → mat-table / `@for` recreates rows on every change detection cycle
+- Missing `trackBy` function on a `*ngFor` or `mat-table`
+- Parent component re-rendering on every event due to mutated input
+
+### Compare instances when something works in one place but not another
+If component X works in caller A but fails in caller B, **list every difference between the two callers** and look for the one that affects fundamental Angular semantics — not visual differences:
+- Method call vs computed signal (changes object identity each render)
+- Mutated array vs new array (changes reference)
+- Missing vs present `trackBy`
+- Different change detection strategy
+- Different lifecycle (input from `@Input` vs from `inject()`)
+
+The visual differences (`compact`, `showPin`, etc.) almost never matter. The semantic differences almost always do.
+
+### Trust confirmed layers
+Once a debug log proves a layer is correct, **stop touching that layer**. If the data shows valid IDs, the data layer is fine — move up the stack. Don't keep tweaking the proven-correct layer because you don't know where else to look.
+
+### Pick the most diagnostic symptom
+When given multiple symptoms ("hover doesn't work AND click doesn't work"), pick the **most specific one** and chase it to the root before trying to explain anything else. "Click event never fires" is far more diagnostic than "image doesn't show" — it points at a smaller set of possible causes.
+
+### Don't anchor on the first plausible theory
+The first cause that comes to mind is usually wrong if the symptom is unusual. If the first fix didn't work, **discard the theory entirely** and start from the symptom again — don't keep adding patches to a wrong theory.
 
 ---
 
@@ -216,8 +278,10 @@ Migrations in `backend/migrations/` — run via `npx sequelize-cli db:migrate`:
 ### Requirements System
 - **CLI:** `scripts/req.js` — create, update, delete, list, approve, history, categories, create-category, update-category, delete-category
 - **Auth:** test-login with `claude@letwin.co`, JWT cached 55min in `/tmp`
-- **Hierarchy:** req 1 is root → QMS (98) contains ~149 quality-affecting reqs organized by regulatory clause (820.x / ISO 13485); G5 (147, System Infrastructure) stays outside QMS
-- **Categories:** ~30 categories; each has exactly 1 root requirement; zero cross-category parent links
+- **Hierarchy:** req 1 is root → QMS (98) contains quality-affecting reqs organized by regulatory clause (820.x / ISO 13485); G5 (147, System Infrastructure) stays outside QMS. Use `node scripts/req.js tree /tmp/req-tree.json` to export and inspect the full tree.
+- **Categories:** ~36 categories; each has exactly 1 root requirement; zero cross-category parent links
+- **Key category roots:** Engineering Masters (265), Work Instructions (266, child of 265), Work Orders (267), Barcode (149), Inventory (123), Parts (152), Tools (174), Authentication (155), Authorization (156), Planning (161), Harness (163), Design Requirements (165), Orders (167), File Management (80)
+- **Hierarchy rule:** Every new requirement MUST have a `parentRequirementID`. Find the correct parent by checking the category root or a more specific parent within the category. Never create orphan requirements.
 - **History:** immutable RequirementHistory table with changedByUserID FK, auto-recorded on all mutations
 - **Status filter:** 5-status AND-based filter (approved/unapproved × not_implemented/implemented/validated)
 - **Custom command:** `.claude/commands/feature.md` — `/feature` slash command for guided workflow
@@ -552,3 +616,55 @@ Each session should:
   - `frontend/src/app/components/design/requirement-edit-page/requirement-edit-page.spec.ts` — approvalStatus mock data
   - `backend/tests/__tests__/design/design-requirement.test.js` — submit, approve guard, auto-reset tests
   - `backend/tests/__tests__/design/requirement-history.test.js` — submit history, updated lifecycle test
+  - `backend/migrations/20260406000000-add-draft-approval-status.js` — fixed PostgreSQL enum cast in data migration
+
+### 2026-04-07 (continued)
+- **Visual Work Instructions feature** — full-stack Engineering Masters and Work Orders for manufacturing
+  - **Engineering Masters**: version-controlled (A, B, C...) step-by-step work instructions under Design nav
+  - **Steps**: ordered by 10s (10, 20, 30...), each with background image, pin markers, parts list, tooling list, and text instructions
+  - **Three-panel layout**: left sidebar (parts/tooling), center canvas (image + draggable pin markers), bottom bar (instructions)
+  - **Release workflow**: draft → review → released; new revision copies all steps/items/markers
+  - **Work Orders**: created from released masters with production quantity; operators mark steps complete sequentially
+  - **Step execution tracking**: user ID + timestamp per step completion; only most recent step can be uncompleted
+  - **Permissions**: `manufacturing_planning` (read/write/delete) for masters, `manufacturing_execution` (read/write/delete) for work orders
+  - 12 requirements created (REQ 234-245) in Manufacturing category (id=33)
+- **Database**: 8 new tables
+  - `EngineeringMasters` — name, description, revision, releaseState, previousRevisionID, createdByUserID, releasedByUserID
+  - `EngineeringMasterOutputParts` — masterID + partID + quantity
+  - `EngineeringMasterSteps` — stepNumber (default 10), title, instructions, imageFileID
+  - `EngineeringMasterStepItems` — stepID + partID + quantity + isTool
+  - `EngineeringMasterStepMarkers` — stepID + label + x + y
+  - `EngineeringMasterHistory` — immutable audit trail (changeType, changes, snapshotData, changedByUserID)
+  - `WorkOrders` — engineeringMasterID, status (not_started/in_progress/complete), quantity, createdByUserID
+  - `WorkOrderStepCompletions` — workOrderID + stepID + completedByUserID + completedAt
+  - 6 new permissions seeded (manufacturing_planning × 3 + manufacturing_execution × 3)
+- **Files created:**
+  - `backend/migrations/20260407000000-create-manufacturing-tables.js` — 8 tables + permissions
+  - `backend/models/manufacturing/engineeringMaster.js`
+  - `backend/models/manufacturing/engineeringMasterOutputPart.js`
+  - `backend/models/manufacturing/engineeringMasterStep.js`
+  - `backend/models/manufacturing/engineeringMasterStepItem.js`
+  - `backend/models/manufacturing/engineeringMasterStepMarker.js`
+  - `backend/models/manufacturing/engineeringMasterHistory.js`
+  - `backend/models/manufacturing/workOrder.js`
+  - `backend/models/manufacturing/workOrderStepCompletion.js`
+  - `backend/api/manufacturing/master/controller.js` + `routes.js`
+  - `backend/api/manufacturing/master-step/controller.js` + `routes.js`
+  - `backend/api/manufacturing/work-order/controller.js` + `routes.js`
+  - `backend/tests/__tests__/manufacturing/engineering-master.test.js` — 25 tests
+  - `backend/tests/__tests__/manufacturing/work-order.test.js` — 16 tests
+  - `frontend/src/app/models/engineering-master.model.ts`
+  - `frontend/src/app/models/work-order.model.ts`
+  - `frontend/src/app/services/manufacturing.service.ts` + `.spec.ts`
+  - `frontend/src/app/components/design/master-list-view/` — list view (ts, html, css, spec)
+  - `frontend/src/app/components/design/master-editor/` — editor with output parts, steps, history (ts, html, css, spec)
+  - `frontend/src/app/components/design/step-editor/` — three-panel step editor with canvas, markers, parts/tooling (ts, html, css, spec)
+  - `frontend/src/app/components/build/work-order-list-view/` — list view with status filter (ts, html, css, spec)
+  - `frontend/src/app/components/build/work-order-view/` — execution view with step navigator and completion tracking (ts, html, css, spec)
+  - `docs/features/visual-work-instructions.md` — feature spec
+- **Files modified:**
+  - `backend/tests/setup.js` — manufacturing table cleanup + manufacturing permissions seeded
+  - `backend/tests/helpers.js` — `createTestEngineeringMaster()` factory
+  - `frontend/src/app/app.routes.ts` — 5 new routes (masters list/new/edit, work-orders list/detail); reordered build routes
+  - `frontend/src/app/components/common/nav/nav.component.ts` — designPrefixes includes '/design', hasMfgPlanningAccess, hasMfgExecutionAccess, hasBuildGroupAccess
+  - `frontend/src/app/components/common/nav/nav.component.html` — "Engineering Masters" under Design, "Work Orders" under Build, Build gated by hasBuildGroupAccess

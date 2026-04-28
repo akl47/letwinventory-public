@@ -18,6 +18,7 @@ import { FormsModule } from '@angular/forms';
 import { InventoryService } from '../../../services/inventory.service';
 import { AuthService } from '../../../services/auth.service';
 import { Part, PartCategory } from '../../../models';
+import { AuthImgDirective } from '../../../directives/auth-img.directive';
 
 @Component({
   selector: 'app-parts-table-view',
@@ -36,7 +37,8 @@ import { Part, PartCategory } from '../../../models';
     MatMenuModule,
     MatCheckboxModule,
     MatDividerModule,
-    FormsModule
+    FormsModule,
+    AuthImgDirective,
   ],
   templateUrl: './parts-table-view.html',
   styleUrl: './parts-table-view.css',

@@ -1,4 +1,5 @@
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const Sequelize = require('sequelize');
 const jwt = require('jsonwebtoken');
@@ -11,6 +12,8 @@ process.env.FRONTEND_URL = 'http://localhost:4200';
 process.env.GOOGLE_CLIENT_ID = 'test-client-id';
 process.env.GOOGLE_CLIENT_SECRET = 'test-client-secret';
 process.env.GOOGLE_CALLBACK_URL = 'http://localhost:3999/api/auth/google/callback';
+process.env.FILE_STORAGE_PATH = path.join(os.tmpdir(), 'letwinventory-test-files');
+fs.mkdirSync(process.env.FILE_STORAGE_PATH, { recursive: true });
 
 // Create SQLite in-memory Sequelize instance
 const sequelize = new Sequelize({
@@ -122,7 +125,7 @@ async function seedReferenceData() {
   ]);
 
   // Permissions (9 resources x 3 actions + extras)
-  const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin'];
+  const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin', 'manufacturing_planning', 'manufacturing_execution'];
   const actions = ['read', 'write', 'delete'];
   let permId = 1;
   const permRows = [];
@@ -160,6 +163,8 @@ afterEach(async () => {
     'TaskTimeTracking', 'TaskHistory', 'Task', 'ScheduledTask',
     'TaskList', 'Project',
     'BillOfMaterialItem',
+    'WorkOrderStepCompletion', 'WorkOrder',
+    'EngineeringMasterHistory', 'EngineeringMasterBomItem', 'EngineeringMasterStepMarker', 'EngineeringMasterStepItem', 'EngineeringMasterStep', 'EngineeringMasterOutputPart', 'EngineeringMaster',
     'BarcodeHistory', 'Trace', 'Equipment', 'OrderItem', 'Order',
     'Box', 'Location', 'Barcode',
     'PartRevisionHistory', 'Part', 'UploadedFile', 'PushSubscription', 'Printer', 'ApiKeyPermission', 'ApiKey', 'RefreshToken', 'User',

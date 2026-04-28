@@ -56,7 +56,6 @@ describe('Connector API', () => {
       expect(res.body.part).toBeDefined();
       expect(res.body.part.imageFile).toBeDefined();
       expect(res.body.part.imageFile.id).toBe(file.id);
-      expect(res.body.part.imageFile.data).toBeDefined();
     });
 
     it('returns null for nonexistent part id', async () => {

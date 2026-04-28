@@ -1,0 +1,165 @@
+<!-- Step header: number + title -->
+<div class="step-header">
+  <div class="step-header-fields">
+    @if (editable) {
+      <mat-form-field appearance="outline" class="step-number-field">
+        <mat-label>#</mat-label>
+        <input matInput type="number" [ngModel]="step.stepNumber" (blur)="saveStepNumber($any($event.target).value)" step="10" min="1">
+      </mat-form-field>
+      <mat-form-field appearance="outline" class="title-field">
+        <mat-label>Step Title</mat-label>
+        <input matInput [ngModel]="step.title" (blur)="saveTitle($any($event.target).value)">
+      </mat-form-field>
+    } @else {
+      <span class="step-number-label">{{ step.stepNumber }}</span>
+      <span class="step-title-label">{{ step.title }}</span>
+    }
+  </div>
+</div>
+
+<div class="step-layout">
+  <!-- Left sidebar: Tooling & Parts -->
+  <div class="step-sidebar">
+    <!-- Tooling -->
+    <div class="sidebar-section">
+      <div class="sidebar-section-header">
+        <h4>Tooling</h4>
+        @if (editable) {
+          <button mat-icon-button class="edit-toggle-btn" (click)="editingTools.set(!editingTools())" [matTooltip]="editingTools() ? 'Done' : 'Edit'">
+            <mat-icon>{{ editingTools() ? 'check' : 'edit' }}</mat-icon>
+          </button>
+        }
+      </div>
+      <app-bom-table
+        [items]="cachedToolBomItems"
+        [editable]="editingTools()"
+        [showCategory]="false"
+        [compact]="true"
+        [showPin]="editable"
+        (quantityChanged)="onToolQtyChanged($event)"
+        (removed)="onToolRemoved($event)"
+        (pinDragStarted)="onPinDragFromTable($event)">
+      </app-bom-table>
+      @if (!step.tooling.length && !editingTools()) {
+        <p class="empty-hint">No tooling</p>
+      }
+      @if (editingTools()) {
+        <mat-form-field appearance="outline" class="add-field">
+          <mat-label>Add tool</mat-label>
+          <input matInput [ngModel]="toolSearch()" (ngModelChange)="searchTools($event)" (focus)="onToolSearchFocus()" [matAutocomplete]="toolAuto" placeholder="Search by name">
+          <mat-icon matPrefix>search</mat-icon>
+          <mat-autocomplete #toolAuto="matAutocomplete" (optionSelected)="addTool($event.option.value)">
+            @for (t of toolResults(); track t.id) {
+              <mat-option [value]="t">
+                {{ t.name }}{{ t.revision && t.revision !== '00' && t.revision !== '0' ? ' Rev ' + t.revision : '' }}
+                @if (t._fromBom) {
+                  <span class="bom-hint">(from BOM)</span>
+                }
+              </mat-option>
+            }
+          </mat-autocomplete>
+        </mat-form-field>
+      }
+    </div>
+
+    <!-- Parts -->
+    <div class="sidebar-section">
+      <div class="sidebar-section-header">
+        <h4>Parts</h4>
+        @if (editable) {
+          <button mat-icon-button class="edit-toggle-btn" (click)="editingParts.set(!editingParts())" [matTooltip]="editingParts() ? 'Done' : 'Edit'">
+            <mat-icon>{{ editingParts() ? 'check' : 'edit' }}</mat-icon>
+          </button>
+        }
+      </div>
+      <app-bom-table
+        [items]="cachedPartBomItems"
+        [editable]="editingParts()"
+        [showCategory]="false"
+        [compact]="true"
+        [showPin]="editable"
+        (quantityChanged)="onPartQtyChanged($event)"
+        (removed)="onPartRemoved($event)"
+        (pinDragStarted)="onPinDragFromTable($event)">
+      </app-bom-table>
+      @if (!step.parts.length && !editingParts()) {
+        <p class="empty-hint">No parts</p>
+      }
+      @if (editingParts()) {
+        <mat-form-field appearance="outline" class="add-field">
+          <mat-label>Add part</mat-label>
+          <input matInput [ngModel]="partSearch()" (ngModelChange)="searchParts($event)" (focus)="onPartSearchFocus()" [matAutocomplete]="partAuto" placeholder="Search by name">
+          <mat-icon matPrefix>search</mat-icon>
+          <mat-autocomplete #partAuto="matAutocomplete" (optionSelected)="addPart($event.option.value)">
+            @for (p of partResults(); track p.id) {
+              <mat-option [value]="p">
+                {{ p.name }}{{ p.revision && p.revision !== '00' && p.revision !== '0' ? ' Rev ' + p.revision : '' }}
+                @if (p._fromBom) {
+                  <span class="bom-hint">(from BOM)</span>
+                }
+              </mat-option>
+            }
+          </mat-autocomplete>
+        </mat-form-field>
+      }
+    </div>
+  </div>
+
+  <!-- Center: Canvas with image and markers -->
+  <div class="step-canvas" #canvasContainer
+       [style.cursor]="pendingPin() ? 'url(assets/pin-' + pendingPin() + '.svg) 17 50, crosshair' : ''"
+       (click)="onCanvasClickForPin($event)">
+    @if (step.imageFileID) {
+      <img [appAuthImg]="step.imageFileID" alt="Step image" class="step-image" draggable="false">
+    } @else {
+      <div class="canvas-placeholder">
+        @if (editable) {
+          <button mat-stroked-button (click)="triggerImageUpload(); $event.stopPropagation()">
+            <mat-icon>upload</mat-icon> Upload Image
+          </button>
+        } @else {
+          <mat-icon>image</mat-icon>
+          <p>No image</p>
+        }
+      </div>
+    }
+
+    <!-- Pin markers -->
+    @for (marker of step.markers; track $index) {
+      <div class="pin-marker"
+        [style.left.px]="(draggingMarker() === marker && dragPosition() ? dragPosition()!.x : marker.x) - 17"
+        [style.top.px]="(draggingMarker() === marker && dragPosition() ? dragPosition()!.y : marker.y) - 50"
+        [class.draggable]="editable"
+        [class.dragging]="draggingMarker() === marker"
+        (mousedown)="onMarkerMouseDown($event, marker)"
+        (dblclick)="onMarkerDblClick($event, marker)">
+        <img [src]="'assets/pin-' + marker.label + '.svg'" class="pin-svg" draggable="false"
+             onerror="this.src='assets/pin-A.svg'">
+      </div>
+    }
+
+    @if (editable && step.imageFileID) {
+      <div class="image-actions">
+        <button mat-mini-fab class="image-action-btn" (click)="triggerImageUpload(); $event.stopPropagation()" matTooltip="Change image">
+          <mat-icon>upload</mat-icon>
+        </button>
+        <button mat-mini-fab color="warn" class="image-action-btn" (click)="confirmRemoveImage(); $event.stopPropagation()" matTooltip="Remove image">
+          <mat-icon>delete</mat-icon>
+        </button>
+      </div>
+    }
+    <input #fileInput type="file" accept="image/*" style="display:none" (change)="onImageSelected($event)">
+  </div>
+</div>
+
+<!-- Bottom bar: Instructions -->
+<div class="step-bottom">
+  @if (editable) {
+    <mat-form-field appearance="outline" class="instructions-field">
+      <mat-label>Instructions</mat-label>
+      <textarea matInput [ngModel]="step.instructions" (blur)="saveInstructions($any($event.target).value)" rows="3"></textarea>
+    </mat-form-field>
+  } @else {
+    <div class="instructions-text">{{ step.instructions }}</div>
+  }
+</div>

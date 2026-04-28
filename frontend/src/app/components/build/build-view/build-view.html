@@ -24,7 +24,7 @@
                 <div class="info-item">
                     <span class="info-label">Part</span>
                     <span class="info-value">
-                        <app-part-link [partId]="traceInfo()?.partID" [name]="traceInfo()?.name" [revision]="traceInfo()?.revision" [imageData]="partImages()[traceInfo()?.partID]"></app-part-link>
+                        <app-part-link [partId]="traceInfo()?.partID" [name]="traceInfo()?.name" [revision]="traceInfo()?.revision" [imageFileId]="partImages()[traceInfo()?.partID]"></app-part-link>
                     </span>
                 </div>
                 <div class="info-item">
@@ -69,7 +69,7 @@
                     <ng-container matColumnDef="partName">
                         <th mat-header-cell *matHeaderCellDef>Part</th>
                         <td mat-cell *matCellDef="let line">
-                            <app-part-link [partId]="line.partID" [name]="line.partName" [revision]="line.partRevision" [imageData]="partImages()[line.partID]"></app-part-link>
+                            <app-part-link [partId]="line.partID" [name]="line.partName" [revision]="line.partRevision" [imageFileId]="partImages()[line.partID]"></app-part-link>
                         </td>
                     </ng-container>
 

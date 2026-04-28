@@ -87,7 +87,7 @@ exports.getBom = async (req, res, next) => {
         attributes: ['id', 'name', 'description', 'sku', 'vendor', 'defaultUnitOfMeasureID', 'revision', 'imageFileID'],
         include: [
           { model: db.PartCategory, attributes: ['id', 'name', 'tagColorHex'] },
-          { model: db.UploadedFile, as: 'imageFile', attributes: ['id', 'data'] }
+          { model: db.UploadedFile, as: 'imageFile', attributes: ['id'] }
         ]
       }],
       order: [['id', 'ASC']]

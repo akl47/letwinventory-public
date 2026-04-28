@@ -49,7 +49,7 @@ export class BuildView implements OnInit {
   bomColumns = ['partName', 'requiredQty', 'kittedQty', 'status', 'actions'];
 
   // Part images keyed by partID
-  partImages = signal<Record<number, string>>({});
+  partImages = signal<Record<number, number>>({});
 
   overallStatus = computed(() => this.kitStatus()?.status || 'partial');
   fulfilledCount = computed(() => {
@@ -76,8 +76,8 @@ export class BuildView implements OnInit {
           this.inventoryService.getPartById(tag.partID).subscribe({
             next: (part) => {
               this.partInfo.set(part);
-              if (part.imageFile?.data) {
-                this.partImages.update(m => ({ ...m, [part.id]: part.imageFile!.data }));
+              if (part.imageFile?.id) {
+                this.partImages.update(m => ({ ...m, [part.id]: part.imageFile!.id }));
               }
             }
           });
@@ -124,8 +124,8 @@ export class BuildView implements OnInit {
     for (const partId of partIds) {
       this.inventoryService.getPartById(partId).subscribe({
         next: (part) => {
-          if (part.imageFile?.data) {
-            this.partImages.update(m => ({ ...m, [part.id]: part.imageFile!.data }));
+          if (part.imageFile?.id) {
+            this.partImages.update(m => ({ ...m, [part.id]: part.imageFile!.id }));
           }
         }
       });

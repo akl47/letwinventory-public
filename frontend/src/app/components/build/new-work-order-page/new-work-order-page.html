@@ -1,0 +1,101 @@
+<div class="page-container">
+  <div class="page-header">
+    <button mat-icon-button (click)="router.navigate(['/build/work-orders'])">
+      <mat-icon>arrow_back</mat-icon>
+    </button>
+    <h2>New Work Order</h2>
+  </div>
+
+  <div class="form-content">
+    <!-- Select Engineering Master -->
+    <h4>Engineering Master</h4>
+    @if (selectedMaster(); as master) {
+      <mat-card class="selected-card">
+        <mat-card-content>
+          <div class="selected-item">
+            <div>
+              <strong>{{ master.name }}</strong>
+              <span class="revision-badge">EM Rev {{ master.revision }}</span>
+            </div>
+            <button mat-icon-button (click)="clearMaster()"><mat-icon>close</mat-icon></button>
+          </div>
+        </mat-card-content>
+      </mat-card>
+    } @else {
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Search released Engineering Masters</mat-label>
+        <input matInput [ngModel]="masterSearch()" (ngModelChange)="searchMasters($event)" [matAutocomplete]="masterAuto" placeholder="Search by name">
+        <mat-icon matPrefix>search</mat-icon>
+        <mat-autocomplete #masterAuto="matAutocomplete" (optionSelected)="selectMaster($event.option.value)" [displayWith]="displayMaster">
+          @for (m of masterResults(); track m.id) {
+            <mat-option [value]="m">
+              {{ m.name }} <span class="option-rev">EM Rev {{ m.revision }}</span>
+            </mat-option>
+          }
+        </mat-autocomplete>
+      </mat-form-field>
+    }
+
+    <!-- Quantity -->
+    <h4>Production Quantity</h4>
+    <mat-form-field appearance="outline" class="qty-field">
+      <mat-label>Quantity</mat-label>
+      <input matInput type="number" [ngModel]="quantity()" (ngModelChange)="quantity.set($event)" min="1" step="1">
+    </mat-form-field>
+
+    <!-- Select Location -->
+    <h4>Output Location</h4>
+    @if (selectedLocation(); as loc) {
+      <mat-card class="selected-card">
+        <mat-card-content>
+          <div class="selected-item">
+            <div>
+              <strong>{{ loc.barcode }}</strong> — {{ loc.name || loc.description }}
+              <span class="location-type">{{ loc.type }}</span>
+            </div>
+            <button mat-icon-button (click)="clearLocation()"><mat-icon>close</mat-icon></button>
+          </div>
+        </mat-card-content>
+      </mat-card>
+    } @else {
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Search locations</mat-label>
+        <input matInput [ngModel]="locationSearch()" (ngModelChange)="searchLocations($event)" [matAutocomplete]="locationAuto" placeholder="Search by barcode or name">
+        <mat-icon matPrefix>search</mat-icon>
+        <mat-autocomplete #locationAuto="matAutocomplete" (optionSelected)="selectLocation($event.option.value)" [displayWith]="displayLocation">
+          @for (loc of locationResults(); track loc.id) {
+            <mat-option [value]="loc">
+              <strong>{{ loc.barcode }}</strong> — {{ loc.name || loc.description }}
+              <span class="option-type">{{ loc.type }}</span>
+            </mat-option>
+          }
+        </mat-autocomplete>
+      </mat-form-field>
+    }
+
+    <!-- Preview -->
+    @if (selectedMaster() && outputPreview().length) {
+      <h4>Output Parts Preview</h4>
+      <div class="preview-list">
+        @for (op of outputPreview(); track op.name) {
+          <div class="preview-item">
+            <span>{{ op.name }}{{ op.revision && op.revision !== '00' && op.revision !== '0' ? ' Rev ' + op.revision : '' }}</span>
+            <span class="preview-qty">× {{ op.quantity }}</span>
+          </div>
+        }
+      </div>
+      <p class="preview-note">Traces will be created for these parts at the selected location.</p>
+    }
+
+    <!-- Create Button -->
+    <div class="form-actions">
+      @if (isCreating()) {
+        <button mat-flat-button color="primary" disabled>Creating...</button>
+      } @else {
+        <button mat-flat-button color="primary" [disabled]="!canCreate()" (click)="create()">
+          <mat-icon>add</mat-icon> Create Work Order
+        </button>
+      }
+    </div>
+  </div>
+</div>

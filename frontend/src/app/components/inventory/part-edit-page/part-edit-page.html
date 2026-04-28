@@ -347,9 +347,13 @@
                 @if (isFormEditMode() || !isEditMode) {
                 <div class="image-upload-section">
                     <div class="image-upload-card">
-                        @if (partImage()) {
+                        @if (partImage() || partImageFileID()) {
                         <div class="image-preview">
+                            @if (partImage()) {
                             <img [src]="partImage()" alt="Part image">
+                            } @else {
+                            <img [appAuthImg]="partImageFileID()" alt="Part image">
+                            }
                             <button mat-icon-button class="remove-image" (click)="removePartImage()">
                                 <mat-icon>close</mat-icon>
                             </button>
@@ -365,10 +369,10 @@
                     </div>
                 </div>
                 } @else {
-                @if (partImage()) {
+                @if (partImageFileID()) {
                 <div class="image-display-row">
                     <div class="image-display">
-                        <img [src]="partImage()" alt="Part image">
+                        <img [appAuthImg]="partImageFileID()" alt="Part image">
                     </div>
                 </div>
                 } @else {
@@ -828,7 +832,7 @@
                         <ng-container matColumnDef="name">
                             <th mat-header-cell *matHeaderCellDef>Part</th>
                             <td mat-cell *matCellDef="let item">
-                                <app-part-link [partId]="item.partID" [name]="item.componentPart?.name" [revision]="item.componentPart?.revision" [imageData]="item.componentPart?.imageFile?.data"></app-part-link>
+                                <app-part-link [partId]="item.partID" [name]="item.componentPart?.name" [revision]="item.componentPart?.revision" [imageFileId]="item.componentPart?.imageFile?.id"></app-part-link>
                             </td>
                         </ng-container>
                         <ng-container matColumnDef="description">
