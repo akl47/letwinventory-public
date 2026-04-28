@@ -57,17 +57,22 @@ module.exports = (sequelize, DataTypes) => {
       beforeValidate: async (barcode, options) => {
         // Only generate barcode if it's undefined and we have a category ID
         if (typeof barcode.barcode == 'undefined' && barcode.barcodeCategoryID) {
-          let next_id = await sequelize.query("SELECT * FROM \"Barcodes_id_seq\";", { raw: true })
+          let next_barcode_value;
+          if (sequelize.getDialect() === 'sqlite') {
+            const max = await sequelize.models.Barcode.max('id');
+            next_barcode_value = (max || 0) + 1;
+          } else {
+            const next_id = await sequelize.query("SELECT * FROM \"Barcodes_id_seq\";", { raw: true })
+            if (next_id[0][0].is_called) {
+              next_barcode_value = parseInt(next_id[0][0].last_value) + 1
+            } else {
+              next_barcode_value = parseInt(next_id[0][0].last_value)
+            }
+          }
           let prefix = await sequelize.query("select prefix from \"BarcodeCategories\" where id = :id", {
             replacements: { id: barcode.barcodeCategoryID },
             type: sequelize.QueryTypes.SELECT
           })
-          let next_barcode_value = 1;
-          if (next_id[0][0].is_called) {
-            next_barcode_value = parseInt(next_id[0][0].last_value) + 1
-          } else {
-            next_barcode_value = parseInt(next_id[0][0].last_value)
-          }
 
           barcode.barcode = prefix[0].prefix + '-' + (next_barcode_value).toString(16).padStart(6, '0').toUpperCase();
           console.log("Generated barcode:", barcode.barcode)

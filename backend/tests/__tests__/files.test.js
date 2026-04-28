@@ -5,21 +5,15 @@ const getApp = () => require('../app');
 
 describe('Files API', () => {
   describe('GET /api/files/:id', () => {
-    it('gets file by id without data by default', async () => {
+    it('returns file metadata without binary data', async () => {
       const auth = await authenticatedRequest();
       const file = await createTestFile({ uploadedBy: auth.user.id });
       const res = await auth.get(`/api/files/${file.id}`);
       expect(res.status).toBe(200);
       expect(res.body.id).toBe(file.id);
       expect(res.body.filename).toBe(file.filename);
-    });
-
-    it('gets file by id with data when requested', async () => {
-      const auth = await authenticatedRequest();
-      const file = await createTestFile({ uploadedBy: auth.user.id });
-      const res = await auth.get(`/api/files/${file.id}?includeData=true`);
-      expect(res.status).toBe(200);
-      expect(res.body.data).toBeDefined();
+      expect(res.body.mimeType).toBe(file.mimeType);
+      expect(res.body.data).toBeUndefined();
     });
 
     it('returns 404 for nonexistent file', async () => {
@@ -30,13 +24,14 @@ describe('Files API', () => {
   });
 
   describe('GET /api/files/:id/data', () => {
-    it('gets file binary data', async () => {
+    it('streams binary file content with the correct Content-Type', async () => {
       const auth = await authenticatedRequest();
       const file = await createTestFile({ uploadedBy: auth.user.id });
-      const res = await auth.get(`/api/files/${file.id}/data`);
+      const res = await auth.get(`/api/files/${file.id}/data`).buffer(true);
       expect(res.status).toBe(200);
-      expect(res.body.data).toBeDefined();
-      expect(res.body.mimeType).toBe('image/png');
+      expect(res.headers['content-type']).toMatch(/image\/png/);
+      expect(res.body).toBeInstanceOf(Buffer);
+      expect(res.body.length).toBeGreaterThan(0);
     });
 
     it('returns 404 for nonexistent file', async () => {

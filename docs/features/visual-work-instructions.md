@@ -10,7 +10,7 @@ Manufacturing processes require clear, repeatable instructions that operators ca
 |--------|-------|-------------|
 | REQ 234 | Engineering Master CRUD | Create, read, update, and delete Engineering Masters with name, description, output parts, and revision control |
 | REQ 235 | Engineering Master Steps | Ordered steps (default numbering 10, 20, 30...) with background image, text instructions, parts list, tooling list, and pin markers |
-| REQ 236 | Engineering Master Revision Control | Version-controlled masters (A, B, C...) with release workflow (draft → review → released); editing a released master creates a new revision |
+| REQ 236 | Engineering Master Revision Control | Version-controlled masters (01, 02, 03...) with release workflow (draft → review → released); editing a released master creates a new revision |
 | REQ 237 | Engineering Master History | Immutable audit trail of all changes to an Engineering Master |
 | REQ 238 | Step Pin Markers | Draggable map-style pin markers on the step canvas, each with a label and x/y position |
 | REQ 239 | Step Parts and Tooling | Each step references parts (materials) and tooling (tools) from inventory with quantities; displayed in left sidebar |
@@ -269,7 +269,7 @@ Response 400: "Cannot delete a Work Order that has been started"
 | id | INTEGER | PK, auto-increment |
 | name | STRING(255) | NOT NULL |
 | description | TEXT | NULL |
-| revision | STRING(8) | NOT NULL, default 'A' |
+| revision | STRING(8) | NOT NULL, default '01' |
 | releaseState | ENUM('draft','review','released') | NOT NULL, default 'draft' |
 | previousRevisionID | INTEGER | FK → EngineeringMasters.id, NULL |
 | createdByUserID | INTEGER | FK → Users.id, NOT NULL |

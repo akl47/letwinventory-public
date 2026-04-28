@@ -97,7 +97,7 @@ export interface WoDekitDialogData {
           @if (isSubmitting()) {
             <mat-spinner diameter="20"></mat-spinner>
           } @else {
-            <mat-icon>undo</mat-icon> Dekit
+            <ng-container><mat-icon>undo</mat-icon> Dekit</ng-container>
           }
         </button>
       </mat-dialog-actions>

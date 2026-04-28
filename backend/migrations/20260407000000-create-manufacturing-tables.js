@@ -9,7 +9,7 @@ module.exports = {
       id: { type: Sequelize.INTEGER, primaryKey: true, autoIncrement: true },
       name: { type: Sequelize.STRING(255), allowNull: false },
       description: { type: Sequelize.TEXT, allowNull: true },
-      revision: { type: Sequelize.STRING(8), allowNull: false, defaultValue: 'A' },
+      revision: { type: Sequelize.STRING(8), allowNull: false, defaultValue: '01' },
       releaseState: { type: Sequelize.STRING(20), allowNull: false, defaultValue: 'draft' },
       previousRevisionID: {
         type: Sequelize.INTEGER, allowNull: true,

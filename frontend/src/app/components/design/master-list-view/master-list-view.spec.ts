@@ -8,10 +8,23 @@ import { vi } from 'vitest';
 
 import { MasterListView } from './master-list-view';
 import { ManufacturingService } from '../../../services/manufacturing.service';
+import { EngineeringMaster } from '../../../models/engineering-master.model';
 
-const mockMasters = [
-  { id: 1, name: 'PCB Assembly', description: 'PCB process', revision: 'A', releaseState: 'released', stepCount: 3, createdAt: '2026-04-07T10:00:00Z' },
-  { id: 2, name: 'Cable Build', description: 'Cable process', revision: 'A', releaseState: 'draft', stepCount: 2, createdAt: '2026-04-07T11:00:00Z' },
+const baseFields = {
+  previousRevisionID: null,
+  createdByUserID: 1,
+  releasedByUserID: null,
+  releasedAt: null,
+  activeFlag: true,
+  outputParts: [],
+  bomItems: [],
+  steps: [],
+  updatedAt: '2026-04-07T11:00:00Z',
+};
+
+const mockMasters: EngineeringMaster[] = [
+  { id: 1, name: 'PCB Assembly', description: 'PCB process', revision: '01', releaseState: 'released', stepCount: 3, createdAt: '2026-04-07T10:00:00Z', ...baseFields },
+  { id: 2, name: 'Cable Build', description: 'Cable process', revision: '01', releaseState: 'draft', stepCount: 2, createdAt: '2026-04-07T11:00:00Z', ...baseFields },
 ];
 
 describe('MasterListView', () => {

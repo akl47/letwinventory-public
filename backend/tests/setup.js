@@ -1,4 +1,5 @@
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const Sequelize = require('sequelize');
 const jwt = require('jsonwebtoken');
@@ -11,6 +12,8 @@ process.env.FRONTEND_URL = 'http://localhost:4200';
 process.env.GOOGLE_CLIENT_ID = 'test-client-id';
 process.env.GOOGLE_CLIENT_SECRET = 'test-client-secret';
 process.env.GOOGLE_CALLBACK_URL = 'http://localhost:3999/api/auth/google/callback';
+process.env.FILE_STORAGE_PATH = path.join(os.tmpdir(), 'letwinventory-test-files');
+fs.mkdirSync(process.env.FILE_STORAGE_PATH, { recursive: true });
 
 // Create SQLite in-memory Sequelize instance
 const sequelize = new Sequelize({

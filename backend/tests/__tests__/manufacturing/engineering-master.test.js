@@ -23,7 +23,7 @@ describe('Engineering Master API', () => {
 
       expect(res.status).toBe(201);
       expect(res.body.name).toBe('Test Master');
-      expect(res.body.revision).toBe('A');
+      expect(res.body.revision).toBe('01');
       expect(res.body.releaseState).toBe('draft');
     });
 
@@ -199,7 +199,7 @@ describe('Engineering Master API', () => {
       const auth = await authenticatedRequest();
       const master = await createTestEngineeringMaster(auth.user, {
         releaseState: 'released',
-        revision: 'A',
+        revision: '01',
       });
       // Add a step to the released master to verify it gets copied
       await db.EngineeringMasterStep.create({
@@ -211,7 +211,7 @@ describe('Engineering Master API', () => {
       const res = await auth.post(`${API}/${master.id}/new-revision`);
 
       expect(res.status).toBe(201);
-      expect(res.body.revision).toBe('B');
+      expect(res.body.revision).toBe('02');
       expect(res.body.releaseState).toBe('draft');
       expect(res.body.previousRevisionID).toBe(master.id);
     });
@@ -221,11 +221,11 @@ describe('Engineering Master API', () => {
       const masterA = await createTestEngineeringMaster(auth.user, {
         name: 'Rev Test',
         releaseState: 'released',
-        revision: 'A',
+        revision: '01',
       });
       await createTestEngineeringMaster(auth.user, {
         name: 'Rev Test',
-        revision: 'B',
+        revision: '02',
         previousRevisionID: masterA.id,
       });
 
