@@ -136,6 +136,8 @@ async function seedReferenceData() {
   }
   permRows.push({ id: permId++, resource: 'requirements', action: 'approve' });
   permRows.push({ id: permId++, resource: 'admin', action: 'impersonate' });
+  permRows.push({ id: permId++, resource: 'manufacturing_execution', action: 'work_order_delete' });
+  permRows.push({ id: permId++, resource: 'manufacturing_execution', action: 'work_order_undelete' });
   await db.Permission.bulkCreate(permRows);
 
   // Admin group with all permissions

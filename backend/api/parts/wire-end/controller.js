@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 // Get all wire ends
 exports.getAllWireEnds = async (req, res, next) => {
@@ -14,7 +15,7 @@ exports.getAllWireEnds = async (req, res, next) => {
 
     res.json(wireEnds);
   } catch (error) {
-    next(createError(500, 'Error Getting Wire Ends: ' + error.message));
+    next(humanizeError(error, 'Error Getting Wire Ends'));
   }
 };
 
@@ -31,7 +32,7 @@ exports.getWireEndById = async (req, res, next) => {
 
     res.json(wireEnd);
   } catch (error) {
-    next(createError(500, 'Error Getting Wire End: ' + error.message));
+    next(humanizeError(error, 'Error Getting Wire End'));
   }
 };
 
@@ -48,7 +49,7 @@ exports.getWireEndByCode = async (req, res, next) => {
 
     res.json(wireEnd);
   } catch (error) {
-    next(createError(500, 'Error Getting Wire End by Code: ' + error.message));
+    next(humanizeError(error, 'Error Getting Wire End by Code'));
   }
 };
 
@@ -78,7 +79,7 @@ exports.createWireEnd = async (req, res, next) => {
 
     res.status(201).json(wireEnd);
   } catch (error) {
-    next(createError(500, 'Error Creating Wire End: ' + error.message));
+    next(humanizeError(error, 'Error Creating Wire End'));
   }
 };
 
@@ -108,7 +109,7 @@ exports.updateWireEnd = async (req, res, next) => {
 
     res.json(updatedWireEnd);
   } catch (error) {
-    next(createError(500, 'Error Updating Wire End: ' + error.message));
+    next(humanizeError(error, 'Error Updating Wire End'));
   }
 };
 
@@ -133,6 +134,6 @@ exports.deleteWireEnd = async (req, res, next) => {
 
     res.json({ message: 'Wire End deleted successfully' });
   } catch (error) {
-    next(createError(500, 'Error Deleting Wire End: ' + error.message));
+    next(humanizeError(error, 'Error Deleting Wire End'));
   }
 };

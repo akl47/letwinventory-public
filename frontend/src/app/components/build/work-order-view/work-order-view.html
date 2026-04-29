@@ -24,6 +24,24 @@
             <span class="loc-name">{{ $any(wo.locationBarcode).location?.name || $any(wo.locationBarcode).box?.name || $any(wo.locationBarcode).location?.description || $any(wo.locationBarcode).box?.description || '' }}</span>
           </span>
         }
+        @if (!wo.activeFlag) {
+          <span class="info-item deleted-banner" [matTooltip]="wo.deletionReason || ''">
+            <mat-icon>delete_forever</mat-icon>
+            Deleted{{ wo.deletedAt ? ' on ' + (wo.deletedAt | date:'shortDate') : '' }}
+          </span>
+        }
+      </div>
+      <div class="header-right">
+        @if (canDelete()) {
+          <button mat-stroked-button color="warn" (click)="openDeleteDialog()">
+            <mat-icon>delete</mat-icon> Delete
+          </button>
+        }
+        @if (canRestore()) {
+          <button mat-stroked-button (click)="restoreWorkOrder()">
+            <mat-icon>restore</mat-icon> Restore
+          </button>
+        }
       </div>
     </div>
 

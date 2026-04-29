@@ -1,19 +1,5 @@
 const createError = require('http-errors');
-
-function humanizeError(error, context) {
-  if (error.name === 'SequelizeUniqueConstraintError') {
-    const fields = error.errors?.map(e => e.path).join(', ') || 'unknown fields';
-    return createError(409, `${context}: A record with the same ${fields} already exists`);
-  }
-  if (error.name === 'SequelizeValidationError') {
-    const msgs = error.errors?.map(e => e.message).join('; ') || error.message;
-    return createError(400, `${context}: ${msgs}`);
-  }
-  if (error.name === 'SequelizeForeignKeyConstraintError') {
-    return createError(400, `${context}: Referenced record does not exist`);
-  }
-  return createError(500, `${context}: ${error.message}`);
-}
+const humanizeError = require('../../../util/humanizeError');
 
 function masterStepIncludes() {
   return [
@@ -89,7 +75,11 @@ function workOrderIncludes() {
 // GET /
 exports.getAll = async (req, res, next) => {
   try {
-    const where = { activeFlag: true };
+    const where = {};
+    const includeDeleted = req.query.includeDeleted === 'true' || req.query.includeDeleted === '1';
+    if (!includeDeleted) {
+      where.activeFlag = true;
+    }
     if (req.query.status) {
       where.status = req.query.status;
     }
@@ -131,7 +121,7 @@ exports.getAll = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Failed to fetch work orders: ' + error.message));
+    next(humanizeError(error, 'Failed to fetch work orders'));
   }
 };
 
@@ -142,7 +132,7 @@ exports.getById = async (req, res, next) => {
       include: workOrderIncludes(),
     });
 
-    if (!wo || !wo.activeFlag) {
+    if (!wo) {
       return next(createError(404, 'Work Order not found'));
     }
 
@@ -160,7 +150,7 @@ exports.getById = async (req, res, next) => {
 
     res.json(json);
   } catch (error) {
-    next(createError(500, 'Failed to fetch work order: ' + error.message));
+    next(humanizeError(error, 'Failed to fetch work order'));
   }
 };
 
@@ -250,11 +240,15 @@ exports.remove = async (req, res, next) => {
     if (!wo || !wo.activeFlag) {
       return next(createError(404, 'Work Order not found'));
     }
-    if (wo.status !== 'not_started') {
-      return next(createError(400, 'Cannot delete a Work Order that has been started'));
+    if (wo.status === 'complete') {
+      return next(createError(400, 'Cannot delete a completed Work Order'));
+    }
+    const reason = (req.body?.deletionReason || '').trim();
+    if (!reason) {
+      return next(createError(400, 'A deletion reason is required'));
     }
 
-    // Deactivate output traces
+    // Deactivate output traces and their barcodes (round-trips on undelete)
     const traces = await db.Trace.findAll({ where: { workOrderID: wo.id } });
     for (const trace of traces) {
       await trace.update({ activeFlag: false });
@@ -262,10 +256,46 @@ exports.remove = async (req, res, next) => {
       if (barcode) await barcode.update({ activeFlag: false });
     }
 
-    await wo.update({ activeFlag: false });
+    await wo.update({
+      activeFlag: false,
+      deletionReason: reason,
+      deletedByUserID: req.user.id,
+      deletedAt: new Date(),
+    });
     res.json({ message: 'Work Order deleted' });
   } catch (error) {
-    next(createError(500, 'Failed to delete work order: ' + error.message));
+    next(humanizeError(error, 'Failed to delete work order'));
+  }
+};
+
+// POST /:id/undelete
+exports.undelete = async (req, res, next) => {
+  try {
+    const wo = await db.WorkOrder.findByPk(req.params.id);
+    if (!wo) {
+      return next(createError(404, 'Work Order not found'));
+    }
+    if (wo.activeFlag) {
+      return next(createError(400, 'Work Order is not deleted'));
+    }
+
+    // Reactivate output traces and their barcodes
+    const traces = await db.Trace.findAll({ where: { workOrderID: wo.id } });
+    for (const trace of traces) {
+      await trace.update({ activeFlag: true });
+      const barcode = await db.Barcode.findByPk(trace.barcodeID);
+      if (barcode) await barcode.update({ activeFlag: true });
+    }
+
+    await wo.update({
+      activeFlag: true,
+      deletionReason: null,
+      deletedByUserID: null,
+      deletedAt: null,
+    });
+    res.json({ message: 'Work Order restored' });
+  } catch (error) {
+    next(humanizeError(error, 'Failed to undelete work order'));
   }
 };
 
@@ -402,7 +432,7 @@ exports.getKitStatus = async (req, res, next) => {
       overallStatus: bomStatus.length === 0 || bomStatus.every(b => b.status === 'complete') ? 'complete' : 'partial',
     });
   } catch (error) {
-    next(createError(500, 'Failed to get kit status: ' + error.message));
+    next(humanizeError(error, 'Failed to get kit status'));
   }
 };
 
@@ -461,7 +491,7 @@ exports.completeStep = async (req, res, next) => {
     });
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Failed to complete step: ' + error.message));
+    next(humanizeError(error, 'Failed to complete step'));
   }
 };
 
@@ -496,7 +526,7 @@ exports.uncompleteStep = async (req, res, next) => {
 
     res.json({ message: 'Step completion removed' });
   } catch (error) {
-    next(createError(500, 'Failed to uncomplete step: ' + error.message));
+    next(humanizeError(error, 'Failed to uncomplete step'));
   }
 };
 
@@ -527,6 +557,6 @@ exports.complete = async (req, res, next) => {
     const result = await db.WorkOrder.findByPk(wo.id, { include: workOrderIncludes() });
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Failed to complete work order: ' + error.message));
+    next(humanizeError(error, 'Failed to complete work order'));
   }
 };

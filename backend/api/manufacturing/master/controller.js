@@ -1,20 +1,5 @@
 const createError = require('http-errors');
-
-function humanizeError(error, context) {
-  if (error.name === 'SequelizeUniqueConstraintError') {
-    const fields = error.errors?.map(e => e.path).join(', ') || 'unknown fields';
-    const values = error.errors?.map(e => e.value).join(', ') || '';
-    return createError(409, `${context}: A record with the same ${fields} already exists${values ? ' (' + values + ')' : ''}`);
-  }
-  if (error.name === 'SequelizeValidationError') {
-    const msgs = error.errors?.map(e => e.message).join('; ') || error.message;
-    return createError(400, `${context}: ${msgs}`);
-  }
-  if (error.name === 'SequelizeForeignKeyConstraintError') {
-    return createError(400, `${context}: Referenced record does not exist`);
-  }
-  return createError(500, `${context}: ${error.message}`);
-}
+const humanizeError = require('../../../util/humanizeError');
 
 const STEP_INCLUDE = [
   {
@@ -174,7 +159,7 @@ exports.getAll = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Failed to fetch engineering masters: ' + error.message));
+    next(humanizeError(error, 'Failed to fetch engineering masters'));
   }
 };
 
@@ -191,7 +176,7 @@ exports.getById = async (req, res, next) => {
 
     res.json(formatMasterResponse(master));
   } catch (error) {
-    next(createError(500, 'Failed to fetch engineering master: ' + error.message));
+    next(humanizeError(error, 'Failed to fetch engineering master'));
   }
 };
 
@@ -327,7 +312,7 @@ exports.remove = async (req, res, next) => {
 
     res.json({ message: 'Engineering Master deleted' });
   } catch (error) {
-    next(createError(500, 'Failed to delete engineering master: ' + error.message));
+    next(humanizeError(error, 'Failed to delete engineering master'));
   }
 };
 
@@ -378,7 +363,7 @@ exports.submitForReview = async (req, res, next) => {
     }
     res.json(response);
   } catch (error) {
-    next(createError(500, 'Failed to submit for review: ' + error.message));
+    next(humanizeError(error, 'Failed to submit for review'));
   }
 };
 
@@ -399,7 +384,7 @@ exports.reject = async (req, res, next) => {
     const result = await db.EngineeringMaster.findByPk(master.id, { include: masterIncludes() });
     res.json(formatMasterResponse(result));
   } catch (error) {
-    next(createError(500, 'Failed to reject: ' + error.message));
+    next(humanizeError(error, 'Failed to reject'));
   }
 };
 
@@ -424,7 +409,7 @@ exports.release = async (req, res, next) => {
     const result = await db.EngineeringMaster.findByPk(master.id, { include: masterIncludes() });
     res.json(formatMasterResponse(result));
   } catch (error) {
-    next(createError(500, 'Failed to release: ' + error.message));
+    next(humanizeError(error, 'Failed to release'));
   }
 };
 
@@ -542,7 +527,7 @@ exports.getHistory = async (req, res, next) => {
     });
     res.json(history);
   } catch (error) {
-    next(createError(500, 'Failed to fetch history: ' + error.message));
+    next(humanizeError(error, 'Failed to fetch history'));
   }
 };
 
@@ -572,7 +557,7 @@ exports.getRevisions = async (req, res, next) => {
 
     res.json(allMasters);
   } catch (error) {
-    next(createError(500, 'Failed to fetch revisions: ' + error.message));
+    next(humanizeError(error, 'Failed to fetch revisions'));
   }
 };
 

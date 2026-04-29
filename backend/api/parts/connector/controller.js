@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 // Get all connectors
 exports.getAllConnectors = async (req, res, next) => {
@@ -35,7 +36,7 @@ exports.getAllConnectors = async (req, res, next) => {
 
     res.json(connectors);
   } catch (error) {
-    next(createError(500, 'Error Getting Connectors: ' + error.message));
+    next(humanizeError(error, 'Error Getting Connectors'));
   }
 };
 
@@ -73,7 +74,7 @@ exports.getConnectorById = async (req, res, next) => {
 
     res.json(connector);
   } catch (error) {
-    next(createError(500, 'Error Getting Connector: ' + error.message));
+    next(humanizeError(error, 'Error Getting Connector'));
   }
 };
 
@@ -117,7 +118,7 @@ exports.createConnector = async (req, res, next) => {
 
     res.status(201).json(connector);
   } catch (error) {
-    next(createError(500, 'Error Creating Connector: ' + error.message));
+    next(humanizeError(error, 'Error Creating Connector'));
   }
 };
 
@@ -175,7 +176,7 @@ exports.updateConnector = async (req, res, next) => {
 
     res.json(updatedConnector);
   } catch (error) {
-    next(createError(500, 'Error Updating Connector: ' + error.message));
+    next(humanizeError(error, 'Error Updating Connector'));
   }
 };
 
@@ -218,7 +219,7 @@ exports.getConnectorByPartId = async (req, res, next) => {
 
     res.json(connector);
   } catch (error) {
-    next(createError(500, 'Error Getting Connector by Part ID: ' + error.message));
+    next(humanizeError(error, 'Error Getting Connector by Part ID'));
   }
 };
 
@@ -233,7 +234,7 @@ exports.getAllPinTypes = async (req, res, next) => {
 
     res.json(pinTypes);
   } catch (error) {
-    next(createError(500, 'Error Getting Pin Types: ' + error.message));
+    next(humanizeError(error, 'Error Getting Pin Types'));
   }
 };
 
@@ -258,6 +259,6 @@ exports.deleteConnector = async (req, res, next) => {
 
     res.json({ message: 'Connector deleted successfully' });
   } catch (error) {
-    next(createError(500, 'Error Deleting Connector: ' + error.message));
+    next(humanizeError(error, 'Error Deleting Connector'));
   }
 };

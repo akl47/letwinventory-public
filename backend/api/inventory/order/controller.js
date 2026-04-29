@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 exports.getAllOrders = (req, res, next) => {
   db.Order.findAll({
@@ -44,7 +45,7 @@ exports.getAllOrders = (req, res, next) => {
   }).then(orders => {
     res.json(orders);
   }).catch(error => {
-    next(createError(500, 'Error Getting Orders: ' + error));
+    next(humanizeError(error, 'Error Getting Orders'));
   });
 };
 
@@ -115,7 +116,7 @@ exports.getOrderById = (req, res, next) => {
     }
     res.json(order);
   }).catch(error => {
-    next(createError(500, 'Error Getting Order: ' + error));
+    next(humanizeError(error, 'Error Getting Order'));
   });
 };
 
@@ -132,7 +133,7 @@ exports.createNewOrder = (req, res, next) => {
   }).then(order => {
     res.json(order);
   }).catch(error => {
-    next(createError(500, 'Error Creating Order: ' + error));
+    next(humanizeError(error, 'Error Creating Order'));
   });
 };
 
@@ -145,7 +146,7 @@ exports.updateOrderByID = (req, res, next) => {
   }).then(updated => {
     res.json(updated[1]);
   }).catch(error => {
-    next(createError(500, 'Error Updating Order: ' + error));
+    next(humanizeError(error, 'Error Updating Order'));
   });
 };
 
@@ -169,10 +170,10 @@ exports.deleteOrderByID = (req, res, next) => {
     }).then(deletedOrder => {
       res.json(deletedOrder);
     }).catch(error => {
-      next(createError(500, 'Error Deleting Order: ' + error));
+      next(humanizeError(error, 'Error Deleting Order'));
     });
   }).catch(error => {
-    next(createError(500, 'Error Finding Order: ' + error));
+    next(humanizeError(error, 'Error Finding Order'));
   });
 };
 
@@ -184,7 +185,7 @@ exports.getOrderStatuses = (req, res, next) => {
   }).then(statuses => {
     res.json(statuses);
   }).catch(error => {
-    next(createError(500, 'Error Getting Order Statuses: ' + error));
+    next(humanizeError(error, 'Error Getting Order Statuses'));
   });
 };
 
@@ -196,7 +197,7 @@ exports.getOrderLineTypes = (req, res, next) => {
   }).then(lineTypes => {
     res.json(lineTypes);
   }).catch(error => {
-    next(createError(500, 'Error Getting Order Line Types: ' + error));
+    next(humanizeError(error, 'Error Getting Order Line Types'));
   });
 };
 
@@ -456,6 +457,6 @@ exports.bulkImport = async (req, res, next) => {
     if (!dryRun && transaction) {
       await transaction.rollback();
     }
-    next(createError(500, 'Error during bulk import: ' + error.message));
+    next(humanizeError(error, 'Error during bulk import'));
   }
 };

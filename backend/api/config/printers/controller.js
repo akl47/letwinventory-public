@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 exports.getAllPrinters = (req, res, next) => {
   db.Printer.findAll({
@@ -9,6 +10,6 @@ exports.getAllPrinters = (req, res, next) => {
   }).then(printers => {
     res.json(printers);
   }).catch(error => {
-    next(createError(500, 'Error Getting Printers: ' + error));
+    next(humanizeError(error, 'Error Getting Printers'));
   });
 };

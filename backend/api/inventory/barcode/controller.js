@@ -2,6 +2,7 @@ const db = require('../../../models');
 const Net = require('net');
 const createError = require('http-errors');
 const printAgentService = require('../../../services/printAgentService');
+const humanizeError = require('../../../util/humanizeError');
 
 // ============================================
 // Controller Methods
@@ -14,7 +15,7 @@ exports.getQueuedUpdatedByID = async (req, res, next) => {
     });
     res.json(queuedUpdate);
   } catch (error) {
-    next(createError(500, `Error getting queued update: ${error.message}`));
+    next(humanizeError(error, 'Failed to get queued update'));
   }
 };
 
@@ -55,7 +56,7 @@ exports.printBarcodeByID = async (req, res, next) => {
       res.json({ message: "Label printed successfully" });
     }
   } catch (error) {
-    next(createError(500, `Error printing barcode: ${error.message}`));
+    next(humanizeError(error, 'Failed to print barcode'));
   }
 };
 
@@ -72,7 +73,7 @@ exports.displayBarcode = async (req, res, next) => {
     const zpl = await generateZPL(barcode, labelSize);
     res.send(zpl);
   } catch (error) {
-    next(createError(500, `Error displaying barcode: ${error.message}`));
+    next(humanizeError(error, 'Failed to display barcode'));
   }
 };
 
@@ -90,7 +91,7 @@ exports.getTagByID = async (req, res, next) => {
     const tag = await buildTag(barcode, { includeInactive });
     res.json(tag);
   } catch (error) {
-    next(createError(500, `Error getting tag: ${error.message}`));
+    next(humanizeError(error, 'Failed to get tag'));
   }
 };
 
@@ -99,7 +100,7 @@ exports.getTagChainByID = async (req, res, next) => {
     const tagChain = await buildTagChain(req.params.id);
     res.json(tagChain);
   } catch (error) {
-    next(createError(500, `Error getting tag chain: ${error.message}`));
+    next(humanizeError(error, 'Failed to get tag chain'));
   }
 };
 
@@ -134,7 +135,7 @@ exports.getAllTags = async (req, res, next) => {
     `);
     res.json(results);
   } catch (error) {
-    next(createError(500, `Error getting tags: ${error.message}`));
+    next(humanizeError(error, 'Failed to get tags'));
   }
 };
 
@@ -148,7 +149,7 @@ exports.getAllBarcodes = async (req, res, next) => {
     });
     res.json(barcodes);
   } catch (error) {
-    next(createError(500, `Error getting barcodes: ${error.message}`));
+    next(humanizeError(error, 'Failed to get barcodes'));
   }
 };
 
@@ -194,7 +195,7 @@ exports.getLocationBarcodes = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, `Error getting location barcodes: ${error.message}`));
+    next(humanizeError(error, 'Failed to get location barcodes'));
   }
 };
 
@@ -221,7 +222,7 @@ exports.getBarcodeByString = async (req, res, next) => {
 
     res.json(barcode);
   } catch (error) {
-    next(createError(500, `Error finding barcode: ${error.message}`));
+    next(humanizeError(error, 'Failed to find barcode'));
   }
 };
 
@@ -232,7 +233,7 @@ exports.getBarcodeCategories = async (req, res, next) => {
     });
     res.json(categories);
   } catch (error) {
-    next(createError(500, `Error getting barcode categories: ${error.message}`));
+    next(humanizeError(error, 'Failed to get barcode categories'));
   }
 };
 
@@ -296,7 +297,7 @@ exports.moveBarcodeByID = async (req, res, next) => {
     res.json(result[0][0]);
   } catch (error) {
     console.error('Move barcode error:', error);
-    next(createError(500, `Error moving barcode: ${error.message}`));
+    next(humanizeError(error, 'Failed to move barcode'));
   }
 };
 
@@ -336,7 +337,7 @@ exports.deleteBarcodeByID = async (req, res, next) => {
 
     res.json({ message: 'Barcode marked as inactive', id: barcodeId });
   } catch (error) {
-    next(createError(500, `Error deleting barcode: ${error.message}`));
+    next(humanizeError(error, 'Failed to delete barcode'));
   }
 };
 

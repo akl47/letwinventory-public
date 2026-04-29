@@ -8,12 +8,15 @@ import { vi } from 'vitest';
 
 import { WorkOrderView } from './work-order-view';
 import { ManufacturingService } from '../../../services/manufacturing.service';
+import { AuthService } from '../../../services/auth.service';
+import { MatDialog } from '@angular/material/dialog';
 
 const mockWorkOrder = {
   id: 1,
   engineeringMasterID: 1,
   status: 'in_progress',
   quantity: 5,
+  activeFlag: true,
   locationBarcodeID: null,
   master: {
     id: 1, name: 'PCB Assembly', revision: '01',
@@ -99,5 +102,79 @@ describe('WorkOrderView', () => {
     expect(steps[0].stepNumber).toBe(10);
     expect(steps[1].stepNumber).toBe(20);
     expect(steps[2].stepNumber).toBe(30);
+  });
+
+  describe('Delete & Restore actions', () => {
+    let authService: AuthService;
+
+    beforeEach(() => {
+      authService = TestBed.inject(AuthService);
+    });
+
+    it('shows delete control when user has work_order_delete and WO is not complete', () => {
+      vi.spyOn(authService, 'hasPermission').mockImplementation(
+        (r, a) => r === 'manufacturing_execution' && a === 'work_order_delete',
+      );
+
+      expect(component.canDelete()).toBe(true);
+    });
+
+    it('hides delete control when WO is complete', () => {
+      vi.spyOn(authService, 'hasPermission').mockReturnValue(true);
+      vi.spyOn(manufacturingService, 'getWorkOrder').mockReturnValue(
+        of({ ...mockWorkOrder, status: 'complete' } as any),
+      );
+      component.loadWorkOrder(1);
+
+      expect(component.canDelete()).toBe(false);
+    });
+
+    it('opens the delete dialog with kitted/completed counts', () => {
+      vi.spyOn(authService, 'hasPermission').mockReturnValue(true);
+      const dialog = TestBed.inject(MatDialog);
+      const openSpy = vi.spyOn(dialog, 'open').mockReturnValue({
+        afterClosed: () => of(undefined),
+      } as any);
+
+      component.openDeleteDialog();
+
+      expect(openSpy).toHaveBeenCalled();
+      const data = openSpy.mock.calls[0][1]?.data as any;
+      expect(data.workOrderId).toBe(1);
+      expect(data.completedSteps).toBe(1);
+    });
+
+    it('calls deleteWorkOrder when dialog returns a reason', () => {
+      vi.spyOn(authService, 'hasPermission').mockReturnValue(true);
+      const dialog = TestBed.inject(MatDialog);
+      vi.spyOn(dialog, 'open').mockReturnValue({
+        afterClosed: () => of({ deletionReason: 'wrong rev' }),
+      } as any);
+      const deleteSpy = vi
+        .spyOn(manufacturingService, 'deleteWorkOrder')
+        .mockReturnValue(of({}));
+
+      component.openDeleteDialog();
+
+      expect(deleteSpy).toHaveBeenCalledWith(1, 'wrong rev');
+    });
+
+    it('shows restore control when WO is deleted and user has undelete', () => {
+      vi.spyOn(authService, 'hasPermission').mockImplementation(
+        (r, a) => r === 'manufacturing_execution' && a === 'work_order_undelete',
+      );
+      vi.spyOn(manufacturingService, 'getWorkOrder').mockReturnValue(
+        of({ ...mockWorkOrder, activeFlag: false, deletionReason: 'oops' } as any),
+      );
+      component.loadWorkOrder(1);
+
+      expect(component.canRestore()).toBe(true);
+    });
+
+    it('hides restore control when WO is active', () => {
+      vi.spyOn(authService, 'hasPermission').mockReturnValue(true);
+
+      expect(component.canRestore()).toBe(false);
+    });
   });
 });

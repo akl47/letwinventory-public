@@ -12,3 +12,6 @@
 .revision-badge { background: rgba(255, 255, 255, 0.1); border-radius: 4px; padding: 2px 8px; font-weight: 500; font-size: 13px; }
 .status-chip { border-radius: 12px; padding: 2px 10px; font-size: 12px; font-weight: 500; }
 table { width: 100%; }
+.deleted-row { opacity: 0.55; text-decoration: line-through; }
+.deleted-row .status-chip, .deleted-row .revision-badge { text-decoration: none; }
+.deletion-info { color: #b00020; cursor: help; }

@@ -109,7 +109,7 @@ describe('Work Order API', () => {
       expect(res.body.quantity).toBe(3);
     });
 
-    it('deletes a not_started work order', async () => {
+    it('deletes a not_started work order with a reason', async () => {
       const auth = await authenticatedRequest();
       const { master } = await createReleasedMaster(auth.user);
       const createRes = await auth.post(WO_API).send({
@@ -117,27 +117,10 @@ describe('Work Order API', () => {
         quantity: 1,
       });
 
-      const res = await auth.delete(`${WO_API}/${createRes.body.id}`);
+      const res = await auth.delete(`${WO_API}/${createRes.body.id}`)
+        .send({ deletionReason: 'Created in error' });
 
       expect(res.status).toBe(200);
-    });
-
-    it('rejects delete of started work order', async () => {
-      const auth = await authenticatedRequest();
-      const { master, steps } = await createReleasedMaster(auth.user);
-      const createRes = await auth.post(WO_API).send({
-        engineeringMasterID: master.id,
-        quantity: 1,
-      });
-
-      // Complete first step to start it
-      await auth.post(`${WO_API}/${createRes.body.id}/complete-step`).send({
-        stepID: steps[0].id,
-      });
-
-      const res = await auth.delete(`${WO_API}/${createRes.body.id}`);
-
-      expect(res.status).toBe(400);
     });
 
     it('returns 404 for nonexistent work order', async () => {
@@ -347,6 +330,214 @@ describe('Work Order API', () => {
       const res = await auth.get(WO_API);
 
       expect(res.status).toBe(200);
+    });
+  });
+
+  // REQ 283-289 — Soft delete with reason, undelete, permissions
+  describe('Soft Delete & Undelete', () => {
+    async function createBarcodeForLocation() {
+      const cat = await db.BarcodeCategory.findOne({ where: { prefix: 'LOC' } })
+        || await db.BarcodeCategory.findOne({ where: { prefix: 'AKL' } });
+      return db.Barcode.create({ barcodeCategoryID: cat.id, parentBarcodeID: 0, activeFlag: true });
+    }
+
+    async function createWoWithOutput(auth) {
+      const { master } = await createReleasedMaster(auth.user);
+      const part = await createTestPart();
+      await db.EngineeringMasterOutputPart.create({
+        engineeringMasterID: master.id,
+        partID: part.id,
+        quantity: 1,
+      });
+      const loc = await createBarcodeForLocation();
+      const create = await auth.post(WO_API).send({
+        engineeringMasterID: master.id,
+        quantity: 2,
+        locationBarcodeID: loc.id,
+      });
+      return { woId: create.body.id, master, part };
+    }
+
+    it('soft-deletes a not_started WO and persists audit fields', async () => {
+      const auth = await authenticatedRequest();
+      const { woId } = await createWoWithOutput(auth);
+
+      const res = await auth.delete(`${WO_API}/${woId}`)
+        .send({ deletionReason: 'Created in error' });
+
+      expect(res.status).toBe(200);
+      const wo = await db.WorkOrder.findByPk(woId);
+      expect(wo.activeFlag).toBe(false);
+      expect(wo.deletionReason).toBe('Created in error');
+      expect(wo.deletedByUserID).toBe(auth.user.id);
+      expect(wo.deletedAt).toBeTruthy();
+    });
+
+    it('soft-deletes an in_progress WO with a reason', async () => {
+      const auth = await authenticatedRequest();
+      const { master, steps } = await createReleasedMaster(auth.user);
+      const create = await auth.post(WO_API).send({ engineeringMasterID: master.id, quantity: 1 });
+      await auth.post(`${WO_API}/${create.body.id}/complete-step`).send({ stepID: steps[0].id });
+
+      const res = await auth.delete(`${WO_API}/${create.body.id}`)
+        .send({ deletionReason: 'Aborted' });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('rejects delete without a reason', async () => {
+      const auth = await authenticatedRequest();
+      const { woId } = await createWoWithOutput(auth);
+
+      const res = await auth.delete(`${WO_API}/${woId}`).send({});
+
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects delete of a completed WO', async () => {
+      const auth = await authenticatedRequest();
+      const { master, steps } = await createReleasedMaster(auth.user);
+      const wo = await auth.post(WO_API).send({ engineeringMasterID: master.id, quantity: 1 });
+      for (const step of steps) {
+        await auth.post(`${WO_API}/${wo.body.id}/complete-step`).send({ stepID: step.id });
+      }
+      await auth.post(`${WO_API}/${wo.body.id}/complete`);
+
+      const res = await auth.delete(`${WO_API}/${wo.body.id}`)
+        .send({ deletionReason: 'Mistake' });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('deactivates output WIP traces and barcodes on delete', async () => {
+      const auth = await authenticatedRequest();
+      const { woId } = await createWoWithOutput(auth);
+      const tracesBefore = await db.Trace.findAll({ where: { workOrderID: woId } });
+      expect(tracesBefore.length).toBeGreaterThan(0);
+      expect(tracesBefore.every(t => t.activeFlag)).toBe(true);
+
+      await auth.delete(`${WO_API}/${woId}`).send({ deletionReason: 'cleanup' });
+
+      const tracesAfter = await db.Trace.findAll({ where: { workOrderID: woId } });
+      expect(tracesAfter.every(t => t.activeFlag === false)).toBe(true);
+      for (const trace of tracesAfter) {
+        const bc = await db.Barcode.findByPk(trace.barcodeID);
+        expect(bc.activeFlag).toBe(false);
+      }
+    });
+
+    it('reactivates output WIP traces and barcodes on undelete', async () => {
+      const auth = await authenticatedRequest();
+      const { woId } = await createWoWithOutput(auth);
+      await auth.delete(`${WO_API}/${woId}`).send({ deletionReason: 'cleanup' });
+
+      const res = await auth.post(`${WO_API}/${woId}/undelete`);
+
+      expect(res.status).toBe(200);
+      const wo = await db.WorkOrder.findByPk(woId);
+      expect(wo.activeFlag).toBe(true);
+      expect(wo.deletionReason).toBeNull();
+      expect(wo.deletedByUserID).toBeNull();
+      expect(wo.deletedAt).toBeNull();
+      const traces = await db.Trace.findAll({ where: { workOrderID: woId } });
+      expect(traces.every(t => t.activeFlag)).toBe(true);
+      for (const trace of traces) {
+        const bc = await db.Barcode.findByPk(trace.barcodeID);
+        expect(bc.activeFlag).toBe(true);
+      }
+    });
+
+    it('rejects undelete on a non-deleted WO', async () => {
+      const auth = await authenticatedRequest();
+      const { woId } = await createWoWithOutput(auth);
+
+      const res = await auth.post(`${WO_API}/${woId}/undelete`);
+
+      expect(res.status).toBe(400);
+    });
+
+    it('does not modify kitted source traces when WO is deleted', async () => {
+      const auth = await authenticatedRequest();
+      const { woId } = await createWoWithOutput(auth);
+      const wipTrace = (await db.Trace.findAll({ where: { workOrderID: woId } }))[0];
+
+      // Create a source trace and kit it into the WO's WIP output
+      const sourcePart = await createTestPart();
+      const aklCat = await db.BarcodeCategory.findOne({ where: { prefix: 'AKL' } });
+      const sourceBarcode = await db.Barcode.create({ barcodeCategoryID: aklCat.id, parentBarcodeID: 0, activeFlag: true });
+      const sourceTrace = await db.Trace.create({
+        partID: sourcePart.id,
+        quantity: 10,
+        unitOfMeasureID: 1,
+        barcodeID: sourceBarcode.id,
+        activeFlag: true,
+      });
+
+      await auth.post(`/api/inventory/trace/kit/${sourceBarcode.id}`)
+        .send({ targetBarcodeId: wipTrace.barcodeID, quantity: 3 });
+
+      const sourceAfterKit = await db.Trace.findByPk(sourceTrace.id);
+      const sourceQtyAfterKit = Number(sourceAfterKit.quantity);
+      const kittedHistoryBefore = await db.BarcodeHistory.count({
+        where: { barcodeID: sourceBarcode.id },
+      });
+
+      await auth.delete(`${WO_API}/${woId}`).send({ deletionReason: 'change of plan' });
+
+      const sourceAfterDelete = await db.Trace.findByPk(sourceTrace.id);
+      expect(Number(sourceAfterDelete.quantity)).toBe(sourceQtyAfterKit);
+      expect(sourceAfterDelete.activeFlag).toBe(sourceAfterKit.activeFlag);
+      const kittedHistoryAfter = await db.BarcodeHistory.count({
+        where: { barcodeID: sourceBarcode.id },
+      });
+      expect(kittedHistoryAfter).toBe(kittedHistoryBefore);
+    });
+
+    it('hides deleted WOs from default list and reveals via includeDeleted', async () => {
+      const auth = await authenticatedRequest();
+      const { woId } = await createWoWithOutput(auth);
+      await auth.delete(`${WO_API}/${woId}`).send({ deletionReason: 'cleanup' });
+
+      const defaultList = await auth.get(WO_API);
+      expect(defaultList.body.find(w => w.id === woId)).toBeUndefined();
+
+      const includedList = await auth.get(`${WO_API}?includeDeleted=true`);
+      expect(includedList.body.find(w => w.id === woId)).toBeDefined();
+    });
+
+    it('rejects delete without manufacturing_execution.work_order_delete', async () => {
+      const auth = await authenticatedRequest(null, { grantPermissions: false });
+      const { assignUserPermission } = require('../../helpers');
+      // Grant everything except work_order_delete
+      const allPerms = await db.Permission.findAll();
+      for (const p of allPerms) {
+        if (!(p.resource === 'manufacturing_execution' && p.action === 'work_order_delete')) {
+          await assignUserPermission(auth.user.id, p.id);
+        }
+      }
+      const { woId } = await createWoWithOutput(auth);
+
+      const res = await auth.delete(`${WO_API}/${woId}`).send({ deletionReason: 'x' });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('rejects undelete without manufacturing_execution.work_order_undelete', async () => {
+      // Single-user setup: grant everything, delete a WO, then revoke the undelete perm.
+      const auth = await authenticatedRequest();
+      const { woId } = await createWoWithOutput(auth);
+      await auth.delete(`${WO_API}/${woId}`).send({ deletionReason: 'x' });
+
+      const undeletePerm = await db.Permission.findOne({
+        where: { resource: 'manufacturing_execution', action: 'work_order_undelete' },
+      });
+      await db.UserPermission.destroy({
+        where: { userID: auth.user.id, permissionID: undeletePerm.id },
+      });
+
+      const res = await auth.post(`${WO_API}/${woId}/undelete`);
+
+      expect(res.status).toBe(403);
     });
   });
 });

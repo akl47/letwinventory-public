@@ -21,6 +21,9 @@ module.exports = (sequelize, DataTypes) => {
     locationBarcodeID: { type: DataTypes.INTEGER, allowNull: true },
     completedAt: { type: DataTypes.DATE, allowNull: true },
     activeFlag: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    deletionReason: { type: DataTypes.TEXT, allowNull: true },
+    deletedByUserID: { type: DataTypes.INTEGER, allowNull: true },
+    deletedAt: { type: DataTypes.DATE, allowNull: true },
     createdAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
     updatedAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
   }, {

@@ -1,0 +1,33 @@
+<h2 mat-dialog-title>Delete Work Order</h2>
+<mat-dialog-content>
+  <p>You are about to delete <strong>{{ data.workOrderName }}</strong>.</p>
+
+  @if (hasKittedWarning() || hasCompletedStepsWarning()) {
+    <div class="warning-box">
+      <mat-icon>warning</mat-icon>
+      <div>
+        @if (hasKittedWarning()) {
+          <div>This work order has <strong>{{ data.kittedCount }}</strong> kitted trace(s). Kitted parts will remain kitted; you can dekit or scrap them separately.</div>
+        }
+        @if (hasCompletedStepsWarning()) {
+          <div>This work order has <strong>{{ data.completedSteps }}</strong> completed step(s).</div>
+        }
+      </div>
+    </div>
+  }
+
+  <mat-form-field appearance="outline" class="full-width">
+    <mat-label>Reason for deletion</mat-label>
+    <textarea
+      matInput
+      [ngModel]="reason()"
+      (ngModelChange)="reason.set($event)"
+      rows="3"
+      required
+      placeholder="Explain why this work order is being deleted"></textarea>
+  </mat-form-field>
+</mat-dialog-content>
+<mat-dialog-actions align="end">
+  <button mat-button (click)="cancel()">Cancel</button>
+  <button mat-flat-button color="warn" [disabled]="!canSubmit()" (click)="confirm()">Delete</button>
+</mat-dialog-actions>

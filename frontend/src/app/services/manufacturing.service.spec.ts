@@ -201,11 +201,26 @@ describe('ManufacturingService', () => {
       req.flush({});
     });
 
-    it('should DELETE a work order', () => {
-      service.deleteWorkOrder(1).subscribe();
+    it('should DELETE a work order with a reason in the body', () => {
+      service.deleteWorkOrder(1, 'Created in error').subscribe();
       const req = httpMock.expectOne(`${WO_API}/1`);
       expect(req.request.method).toBe('DELETE');
+      expect(req.request.body).toEqual({ deletionReason: 'Created in error' });
       req.flush({});
+    });
+
+    it('should POST to undelete a work order', () => {
+      service.undeleteWorkOrder(1).subscribe();
+      const req = httpMock.expectOne(`${WO_API}/1/undelete`);
+      expect(req.request.method).toBe('POST');
+      req.flush({});
+    });
+
+    it('should pass includeDeleted to getWorkOrders', () => {
+      service.getWorkOrders(undefined, true).subscribe();
+      const req = httpMock.expectOne(`${WO_API}?includeDeleted=true`);
+      expect(req.request.method).toBe('GET');
+      req.flush([]);
     });
   });
 });

@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 exports.getAllEquipment = async (req, res, next) => {
   try {
@@ -18,7 +19,7 @@ exports.getAllEquipment = async (req, res, next) => {
     });
     res.json(equipment);
   } catch (error) {
-    next(createError(500, 'Error Getting Equipment: ' + error));
+    next(humanizeError(error, 'Error Getting Equipment'));
   }
 };
 
@@ -41,7 +42,7 @@ exports.getEquipmentByID = async (req, res, next) => {
     }
     res.json(equipment);
   } catch (error) {
-    next(createError(500, 'Error Getting Equipment: ' + error));
+    next(humanizeError(error, 'Error Getting Equipment'));
   }
 };
 
@@ -84,7 +85,7 @@ exports.createNewEquipment = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error Creating Equipment: ' + error));
+    next(humanizeError(error, 'Error Creating Equipment'));
   }
 };
 
@@ -114,7 +115,7 @@ exports.updateEquipmentByID = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error Updating Equipment: ' + error));
+    next(humanizeError(error, 'Error Updating Equipment'));
   }
 };
 
@@ -185,7 +186,7 @@ exports.receiveEquipment = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error Receiving Equipment: ' + error));
+    next(humanizeError(error, 'Error Receiving Equipment'));
   }
 };
 
@@ -216,6 +217,6 @@ exports.deleteEquipmentByID = async (req, res, next) => {
 
     res.json({ message: 'Equipment deleted successfully' });
   } catch (error) {
-    next(createError(500, 'Error Deleting Equipment: ' + error));
+    next(humanizeError(error, 'Error Deleting Equipment'));
   }
 };

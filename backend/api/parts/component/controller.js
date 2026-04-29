@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 // Enrich component pin groups with matingConnector from ElectricalPinType
 async function enrichPinGroups(component) {
@@ -48,7 +49,7 @@ exports.getAllComponents = async (req, res, next) => {
     const enriched = await Promise.all(components.map(c => enrichPinGroups(c.toJSON())));
     res.json(enriched);
   } catch (error) {
-    next(createError(500, 'Error Getting Components: ' + error.message));
+    next(humanizeError(error, 'Error Getting Components'));
   }
 };
 
@@ -81,7 +82,7 @@ exports.getComponentById = async (req, res, next) => {
 
     res.json(await enrichPinGroups(component.toJSON()));
   } catch (error) {
-    next(createError(500, 'Error Getting Component: ' + error.message));
+    next(humanizeError(error, 'Error Getting Component'));
   }
 };
 
@@ -117,7 +118,7 @@ exports.createComponent = async (req, res, next) => {
 
     res.status(201).json(await enrichPinGroups(component.toJSON()));
   } catch (error) {
-    next(createError(500, 'Error Creating Component: ' + error.message));
+    next(humanizeError(error, 'Error Creating Component'));
   }
 };
 
@@ -167,7 +168,7 @@ exports.updateComponent = async (req, res, next) => {
 
     res.json(await enrichPinGroups(updatedComponent.toJSON()));
   } catch (error) {
-    next(createError(500, 'Error Updating Component: ' + error.message));
+    next(humanizeError(error, 'Error Updating Component'));
   }
 };
 
@@ -205,7 +206,7 @@ exports.getComponentByPartId = async (req, res, next) => {
 
     res.json(await enrichPinGroups(component.toJSON()));
   } catch (error) {
-    next(createError(500, 'Error Getting Component by Part ID: ' + error.message));
+    next(humanizeError(error, 'Error Getting Component by Part ID'));
   }
 };
 
@@ -230,6 +231,6 @@ exports.deleteComponent = async (req, res, next) => {
 
     res.json({ message: 'Component deleted successfully' });
   } catch (error) {
-    next(createError(500, 'Error Deleting Component: ' + error.message));
+    next(humanizeError(error, 'Error Deleting Component'));
   }
 };

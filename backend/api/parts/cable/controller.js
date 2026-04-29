@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 // Get all cables
 exports.getAllCables = async (req, res, next) => {
@@ -26,7 +27,7 @@ exports.getAllCables = async (req, res, next) => {
 
     res.json(cables);
   } catch (error) {
-    next(createError(500, 'Error Getting Cables: ' + error.message));
+    next(humanizeError(error, 'Error Getting Cables'));
   }
 };
 
@@ -55,7 +56,7 @@ exports.getCableById = async (req, res, next) => {
 
     res.json(cable);
   } catch (error) {
-    next(createError(500, 'Error Getting Cable: ' + error.message));
+    next(humanizeError(error, 'Error Getting Cable'));
   }
 };
 
@@ -93,7 +94,7 @@ exports.createCable = async (req, res, next) => {
 
     res.status(201).json(cable);
   } catch (error) {
-    next(createError(500, 'Error Creating Cable: ' + error.message));
+    next(humanizeError(error, 'Error Creating Cable'));
   }
 };
 
@@ -139,7 +140,7 @@ exports.updateCable = async (req, res, next) => {
 
     res.json(updatedCable);
   } catch (error) {
-    next(createError(500, 'Error Updating Cable: ' + error.message));
+    next(humanizeError(error, 'Error Updating Cable'));
   }
 };
 
@@ -173,7 +174,7 @@ exports.getCableByPartId = async (req, res, next) => {
 
     res.json(cable);
   } catch (error) {
-    next(createError(500, 'Error Getting Cable by Part ID: ' + error.message));
+    next(humanizeError(error, 'Error Getting Cable by Part ID'));
   }
 };
 
@@ -198,6 +199,6 @@ exports.deleteCable = async (req, res, next) => {
 
     res.json({ message: 'Cable deleted successfully' });
   } catch (error) {
-    next(createError(500, 'Error Deleting Cable: ' + error.message));
+    next(humanizeError(error, 'Error Deleting Cable'));
   }
 };

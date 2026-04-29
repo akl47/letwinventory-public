@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 /**
  * Validate that a quantity is an integer when the UoM does not allow decimals.
@@ -82,7 +83,7 @@ exports.createNewTrace = async (req, res, next) => {
 
     res.json(traceWithBarcode);
   } catch (error) {
-    next(createError(500, 'Error Creating Trace: ' + error.message));
+    next(humanizeError(error, 'Error Creating Trace'));
   }
 }
 
@@ -95,7 +96,7 @@ exports.getTraceByID = (req, res, next) => {
   }).then(trace => {
     res.json(trace)
   }).catch(error => {
-    next(createError(500, 'Error Finding Trace:' + error))
+    next(humanizeError(error, 'Error Finding Trace'))
   })
 }
 
@@ -109,7 +110,7 @@ exports.getTracesByPartID = (req, res, next) => {
   }).then(trace => {
     res.json(trace)
   }).catch(error => {
-    next(createError(500, 'Error Finding Trace:' + error))
+    next(humanizeError(error, 'Error Finding Trace'))
   })
 }
 
@@ -120,7 +121,7 @@ exports.updateTrace = (req, res, next) => {
   }).then(updated => {
     res.json(updated[1])
   }).catch(error => {
-    next(createError(500, 'Error Updating Trace:' + error))
+    next(humanizeError(error, 'Error Updating Trace'))
   })
 }
 
@@ -234,7 +235,7 @@ exports.splitTrace = async (req, res, next) => {
       }
     });
   } catch (error) {
-    next(createError(500, 'Error splitting trace: ' + error.message));
+    next(humanizeError(error, 'Error splitting trace'));
   }
 }
 
@@ -328,7 +329,7 @@ exports.mergeTrace = async (req, res, next) => {
       mergedBarcodeID: mergeBarcodeId
     });
   } catch (error) {
-    next(createError(500, 'Error merging traces: ' + error.message));
+    next(humanizeError(error, 'Error merging traces'));
   }
 }
 
@@ -393,7 +394,7 @@ exports.adjustQuantity = async (req, res, next) => {
       reason: reason || null
     });
   } catch (error) {
-    next(createError(500, 'Error adjusting quantity: ' + error.message));
+    next(humanizeError(error, 'Error adjusting quantity'));
   }
 }
 
@@ -501,7 +502,7 @@ exports.kitTrace = async (req, res, next) => {
       targetHistory
     });
   } catch (error) {
-    next(createError(500, 'Error kitting trace: ' + error.message));
+    next(humanizeError(error, 'Error kitting trace'));
   }
 };
 
@@ -592,7 +593,7 @@ exports.unkitTrace = async (req, res, next) => {
       sourceHistory
     });
   } catch (error) {
-    next(createError(500, 'Error unkitting trace: ' + error.message));
+    next(humanizeError(error, 'Error unkitting trace'));
   }
 };
 
@@ -689,7 +690,7 @@ exports.getKitStatus = async (req, res, next) => {
 
     res.json({ status, bomLines });
   } catch (error) {
-    next(createError(500, 'Error getting kit status: ' + error.message));
+    next(humanizeError(error, 'Error getting kit status'));
   }
 };
 
@@ -796,7 +797,7 @@ exports.getInProgressBuilds = async (req, res, next) => {
 
     res.json(builds);
   } catch (error) {
-    next(createError(500, 'Error getting in-progress builds: ' + error.message));
+    next(humanizeError(error, 'Error getting in-progress builds'));
   }
 };
 
@@ -890,6 +891,6 @@ exports.deleteTrace = async (req, res, next) => {
       });
     }
   } catch (error) {
-    next(createError(500, 'Error deleting trace: ' + error.message));
+    next(humanizeError(error, 'Error deleting trace'));
   }
 }

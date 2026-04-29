@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 // Helper function to recalculate and update order status based on received quantities
 async function recalculateOrderStatus(orderID) {
@@ -74,7 +75,7 @@ exports.getOrderItemsByOrderID = (req, res, next) => {
   }).then(items => {
     res.json(items);
   }).catch(error => {
-    next(createError(500, 'Error Getting Order Items: ' + error));
+    next(humanizeError(error, 'Error Getting Order Items'));
   });
 };
 
@@ -111,7 +112,7 @@ exports.createOrderItem = (req, res, next) => {
   }).then(item => {
     res.json(item);
   }).catch(error => {
-    next(createError(500, 'Error Creating Order Item: ' + error));
+    next(humanizeError(error, 'Error Creating Order Item'));
   });
 };
 
@@ -184,7 +185,7 @@ exports.updateOrderItem = async (req, res, next) => {
 
     res.json(item);
   } catch (error) {
-    next(createError(500, 'Error Updating Order Item: ' + error));
+    next(humanizeError(error, 'Error Updating Order Item'));
   }
 };
 
@@ -208,9 +209,9 @@ exports.deleteOrderItem = (req, res, next) => {
     }).then(deletedItem => {
       res.json(deletedItem);
     }).catch(error => {
-      next(createError(500, 'Error Deleting Order Item: ' + error));
+      next(humanizeError(error, 'Error Deleting Order Item'));
     });
   }).catch(error => {
-    next(createError(500, 'Error Finding Order Item: ' + error));
+    next(humanizeError(error, 'Error Finding Order Item'));
   });
 };

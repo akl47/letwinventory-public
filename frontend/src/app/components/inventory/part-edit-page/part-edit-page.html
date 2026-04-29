@@ -159,11 +159,13 @@
                         <div class="form-row">
                             <mat-form-field appearance="outline">
                                 <mat-label>Minimum Order Quantity</mat-label>
-                                <input matInput formControlName="minimumOrderQuantity" type="number" min="1" required>
+                                <input matInput formControlName="minimumOrderQuantity" type="number"
+                                    [min]="partAllowsDecimal() ? 0.01 : 1"
+                                    [step]="partAllowsDecimal() ? 'any' : '1'" required>
                                 @if (form.get('minimumOrderQuantity')?.hasError('required') && form.get('minimumOrderQuantity')?.touched) {
                                 <mat-error>Minimum order quantity is required</mat-error>
                                 } @else if (form.get('minimumOrderQuantity')?.hasError('min')) {
-                                <mat-error>Must be at least 1</mat-error>
+                                <mat-error>{{ partAllowsDecimal() ? 'Must be greater than 0' : 'Must be at least 1' }}</mat-error>
                                 }
                             </mat-form-field>
 

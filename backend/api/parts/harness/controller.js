@@ -1,6 +1,7 @@
 const db = require('../../../models');
 const createError = require('http-errors');
 const { Op } = require('sequelize');
+const humanizeError = require('../../../util/humanizeError');
 
 // Helper: Check if adding childId as sub-harness of parentId would create a cycle
 async function wouldCreateCycle(parentId, childId, visited = new Set()) {
@@ -116,7 +117,7 @@ exports.getAllHarnesses = async (req, res, next) => {
       }
     });
   } catch (error) {
-    next(createError(500, 'Error Getting Harnesses: ' + error.message));
+    next(humanizeError(error, 'Error Getting Harnesses'));
   }
 };
 
@@ -144,7 +145,7 @@ exports.getHarnessById = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error Getting Harness: ' + error.message));
+    next(humanizeError(error, 'Error Getting Harness'));
   }
 };
 
@@ -162,7 +163,7 @@ exports.getNextPartNumber = async (req, res, next) => {
 
     res.json({ partNumber, nextId });
   } catch (error) {
-    next(createError(500, 'Error getting next part number: ' + error.message));
+    next(humanizeError(error, 'Error getting next part number'));
   }
 };
 
@@ -236,7 +237,7 @@ exports.createHarness = async (req, res, next) => {
 
     res.status(201).json(result);
   } catch (error) {
-    next(createError(500, 'Error Creating Harness: ' + error.message));
+    next(humanizeError(error, 'Error Creating Harness'));
   }
 };
 
@@ -331,7 +332,7 @@ exports.updateHarness = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error Updating Harness: ' + error.message));
+    next(humanizeError(error, 'Error Updating Harness'));
   }
 };
 
@@ -364,7 +365,7 @@ exports.deleteHarness = async (req, res, next) => {
 
     res.json({ message: 'Harness deleted successfully' });
   } catch (error) {
-    next(createError(500, 'Error Deleting Harness: ' + error.message));
+    next(humanizeError(error, 'Error Deleting Harness'));
   }
 };
 
@@ -527,7 +528,7 @@ exports.validateHarness = async (req, res, next) => {
       errors
     });
   } catch (error) {
-    next(createError(500, 'Error Validating Harness: ' + error.message));
+    next(humanizeError(error, 'Error Validating Harness'));
   }
 };
 
@@ -566,7 +567,7 @@ exports.getSubHarnessData = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error fetching sub-harness data: ' + error.message));
+    next(humanizeError(error, 'Error fetching sub-harness data'));
   }
 };
 
@@ -583,7 +584,7 @@ exports.getParentHarnesses = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error fetching parent harnesses: ' + error.message));
+    next(humanizeError(error, 'Error fetching parent harnesses'));
   }
 };
 
@@ -700,7 +701,7 @@ exports.submitForReview = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error submitting for review: ' + error.message));
+    next(humanizeError(error, 'Error submitting for review'));
   }
 };
 
@@ -732,7 +733,7 @@ exports.rejectHarness = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error rejecting harness: ' + error.message));
+    next(humanizeError(error, 'Error rejecting harness'));
   }
 };
 
@@ -774,7 +775,7 @@ exports.releaseHarness = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error releasing harness: ' + error.message));
+    next(humanizeError(error, 'Error releasing harness'));
   }
 };
 
@@ -839,7 +840,7 @@ exports.releaseProduction = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error creating production release: ' + error.message));
+    next(humanizeError(error, 'Error creating production release'));
   }
 };
 
@@ -855,7 +856,7 @@ exports.getHistory = async (req, res, next) => {
 
     res.json(history);
   } catch (error) {
-    next(createError(500, 'Error fetching history: ' + error.message));
+    next(humanizeError(error, 'Error fetching history'));
   }
 };
 
@@ -902,7 +903,7 @@ exports.getAllRevisions = async (req, res, next) => {
 
     res.json(revisions);
   } catch (error) {
-    next(createError(500, 'Error fetching revisions: ' + error.message));
+    next(humanizeError(error, 'Error fetching revisions'));
   }
 };
 
@@ -946,6 +947,6 @@ exports.revertToSnapshot = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error reverting to snapshot: ' + error.message));
+    next(humanizeError(error, 'Error reverting to snapshot'));
   }
 };

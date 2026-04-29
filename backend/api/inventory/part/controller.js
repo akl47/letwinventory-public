@@ -2,6 +2,7 @@ const db = require('../../../models');
 const createError = require('http-errors');
 const { Op } = require('sequelize');
 const { buildTagChain } = require('../barcode/controller');
+const humanizeError = require('../../../util/humanizeError');
 
 exports.getAllPartCategories = (req, res, next) => {
   db.PartCategory.findAll({
@@ -15,7 +16,7 @@ exports.getAllPartCategories = (req, res, next) => {
   }).then(categories => {
     res.json(categories)
   }).catch(error => {
-    next(createError(500, 'Error Getting Part Categories:' + error))
+    next(humanizeError(error, 'Failed to get part categories'))
   })
 }
 
@@ -131,7 +132,7 @@ exports.searchPartsByCategory = async (req, res, next) => {
 
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error searching parts: ' + error.message));
+    next(humanizeError(error, 'Failed to search parts'));
   }
 };
 
@@ -167,7 +168,7 @@ exports.getAllParts = (req, res, next) => {
   }).then(parts => {
     res.json(parts)
   }).catch(error => {
-    next(createError(500, 'Error Getting Parts:' + error))
+    next(humanizeError(error, 'Failed to get parts'))
   })
 }
 
@@ -193,7 +194,7 @@ exports.getPartByID = (req, res, next) => {
     }
     res.json(part)
   }).catch(error => {
-    next(createError(500, 'Error Getting Part:' + error))
+    next(humanizeError(error, 'Failed to get part'))
   })
 }
 
@@ -224,7 +225,7 @@ exports.createNewPart = async (req, res, next) => {
 
     res.json(part);
   } catch (error) {
-    next(createError(500, 'Error Creating New Part:' + error));
+    next(humanizeError(error, 'Failed to create part'));
   }
 }
 
@@ -268,7 +269,7 @@ exports.updatePartByID = async (req, res, next) => {
 
     res.json(updated[1]);
   } catch (error) {
-    next(createError(500, 'Error Updating Part:' + error));
+    next(humanizeError(error, 'Failed to update part'));
   }
 }
 
@@ -289,10 +290,10 @@ exports.deletePartByID = (req, res, next) => {
     }).then(deletedPart => {
       res.json(deletedPart)
     }).catch(error => {
-      next(createError(500, 'Error Updating Part:' + error))
+      next(humanizeError(error, 'Failed to update part'))
     })
   }).catch(error => {
-    next(createError(500, 'Error Getting Part:' + error))
+    next(humanizeError(error, 'Failed to get part'))
   })
 }
 
@@ -313,7 +314,7 @@ exports.getStockLevels = async (req, res, next) => {
     });
     res.json(result);
   } catch (error) {
-    next(createError(500, 'Error getting stock levels: ' + error.message));
+    next(humanizeError(error, 'Failed to get stock levels'));
   }
 };
 
@@ -406,7 +407,7 @@ exports.getPartLocations = async (req, res, next) => {
 
     res.json({ traces: traceResults, totalQuantity, pendingOrders });
   } catch (error) {
-    next(createError(500, 'Error getting part locations: ' + error.message));
+    next(humanizeError(error, 'Failed to get part locations'));
   }
 };
 
@@ -535,7 +536,7 @@ exports.createNewRevision = async (req, res, next) => {
       const details = error.errors.map(e => `${e.path}: ${e.message}`).join('; ');
       return next(createError(400, `Validation failed: ${details}`));
     }
-    next(createError(500, 'Error creating new revision: ' + error.message));
+    next(humanizeError(error, 'Failed to create new revision'));
   }
 };
 
@@ -630,7 +631,7 @@ exports.releaseToProduction = async (req, res, next) => {
       const details = error.errors.map(e => `${e.path}: ${e.message}`).join('; ');
       return next(createError(400, `Validation failed: ${details}`));
     }
-    next(createError(500, 'Error releasing to production: ' + error.message));
+    next(humanizeError(error, 'Failed to release to production'));
   }
 };
 
@@ -648,7 +649,7 @@ exports.lockRevision = async (req, res, next) => {
     });
     res.json({ success: true });
   } catch (error) {
-    next(createError(500, 'Error locking revision: ' + error.message));
+    next(humanizeError(error, 'Failed to lock revision'));
   }
 };
 
@@ -666,7 +667,7 @@ exports.unlockRevision = async (req, res, next) => {
     });
     res.json({ success: true });
   } catch (error) {
-    next(createError(500, 'Error unlocking revision: ' + error.message));
+    next(humanizeError(error, 'Failed to unlock revision'));
   }
 };
 
@@ -679,7 +680,7 @@ exports.getRevisionHistory = async (req, res, next) => {
     });
     res.json(history);
   } catch (error) {
-    next(createError(500, 'Error getting revision history: ' + error.message));
+    next(humanizeError(error, 'Failed to get revision history'));
   }
 };
 
@@ -692,7 +693,7 @@ exports.getRevisionsByName = async (req, res, next) => {
     });
     res.json(parts);
   } catch (error) {
-    next(createError(500, 'Error getting revisions: ' + error.message));
+    next(humanizeError(error, 'Failed to get revisions'));
   }
 };
 

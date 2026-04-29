@@ -1,20 +1,6 @@
 const createError = require('http-errors');
 const fileStorage = require('../../../util/fileStorage');
-
-function humanizeError(error, context) {
-  if (error.name === 'SequelizeUniqueConstraintError') {
-    const fields = error.errors?.map(e => e.path).join(', ') || 'unknown fields';
-    return createError(409, `${context}: A record with the same ${fields} already exists`);
-  }
-  if (error.name === 'SequelizeValidationError') {
-    const msgs = error.errors?.map(e => e.message).join('; ') || error.message;
-    return createError(400, `${context}: ${msgs}`);
-  }
-  if (error.name === 'SequelizeForeignKeyConstraintError') {
-    return createError(400, `${context}: Referenced record does not exist`);
-  }
-  return createError(500, `${context}: ${error.message}`);
-}
+const humanizeError = require('../../../util/humanizeError');
 
 async function logHistory(masterID, changeType, userID, changes = null) {
   await db.EngineeringMasterHistory.create({
@@ -291,7 +277,7 @@ exports.remove = async (req, res, next) => {
     res.json({ message: 'Step deleted' });
   } catch (error) {
     if (error.status) return next(error);
-    next(createError(500, 'Failed to delete step: ' + error.message));
+    next(humanizeError(error, 'Failed to delete step'));
   }
 };
 
@@ -317,7 +303,7 @@ exports.reorder = async (req, res, next) => {
     res.json(result);
   } catch (error) {
     if (error.status) return next(error);
-    next(createError(500, 'Failed to reorder step: ' + error.message));
+    next(humanizeError(error, 'Failed to reorder step'));
   }
 };
 
@@ -360,7 +346,7 @@ exports.uploadImage = async (req, res, next) => {
     res.json(result);
   } catch (error) {
     if (error.status) return next(error);
-    next(createError(500, 'Failed to upload image: ' + error.message));
+    next(humanizeError(error, 'Failed to upload image'));
   }
 };
 
@@ -389,6 +375,6 @@ exports.deleteImage = async (req, res, next) => {
     res.json(result);
   } catch (error) {
     if (error.status) return next(error);
-    next(createError(500, 'Failed to remove image: ' + error.message));
+    next(humanizeError(error, 'Failed to remove image'));
   }
 };

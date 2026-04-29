@@ -413,13 +413,13 @@ export class StepEditor implements DoCheck {
   }
 
   updatePartQty(index: number, qty: number) {
-    if (isNaN(qty) || qty < 1) return;
+    if (isNaN(qty) || qty <= 0) return;
     this.step.parts[index] = { ...this.step.parts[index], quantity: qty };
     this.saveItems([...this.step.parts], this.step.tooling);
   }
 
   updateToolQty(index: number, qty: number) {
-    if (isNaN(qty) || qty < 1) return;
+    if (isNaN(qty) || qty <= 0) return;
     this.step.tooling[index] = { ...this.step.tooling[index], quantity: qty };
     this.saveItems(this.step.parts, [...this.step.tooling]);
   }
