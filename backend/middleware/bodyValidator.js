@@ -40,8 +40,7 @@ exports.location = (req,res,next) => {
     }
 
     if(error_message.length > 0) {
-        next(new RestError(error_message,400));
-        // TODO fix error handling
+        return next(new RestError(error_message,400));
     }
     req.body = return_body
     next()
@@ -121,8 +120,7 @@ exports.box = (req,res,next) => {
     }
 
     if(error_message.length > 0) {
-        next(new RestError(error_message,400));
-        // TODO fix error handling
+        return next(new RestError(error_message,400));
     }
     req.body = return_body
     next()
@@ -191,8 +189,7 @@ exports.trace = (req,res,next) => {
 
     })
     if(!!error_message) {
-        next(new RestError(error_message,400));
-        // TODO fix error handling
+        return next(new RestError(error_message,400));
     }
     req.body = return_body
     next()
@@ -259,8 +256,7 @@ exports.part = (req,res,next) => {
 
     })
     if(!!error_message) {
-        next(new RestError(error_message,400));
-        // TODO fix error handling
+        return next(new RestError(error_message,400));
     }
     req.body = return_body
     next()
@@ -277,7 +273,17 @@ exports.part = (req,res,next) => {
             } catch (error) {
                 error_message += ' ' + attribute + ' is a '+typeof req.body[attribute]+'. Should be a number.'
             }
-            
+
+        } else if (type=="DECIMAL" || type=="FLOAT" || type=="DOUBLE" || type=="REAL") {
+            try {
+                if(validator.isFloat(req.body[attribute].toString())) {
+                    return_body[attribute] = parseFloat(req.body[attribute])
+                } else {
+                    error_message += ' ' + attribute + ' is a '+typeof req.body[attribute]+'. Should be a number.'
+                }
+            } catch (error) {
+                error_message += ' ' + attribute + ' is a '+typeof req.body[attribute]+'. Should be a number.'
+            }
         } else if (type=="STRING") {
             try {
                 if(validator.isLength(req.body[attribute],{min:0})) {
@@ -326,7 +332,7 @@ exports.order = (req,res,next) => {
         }
     })
     if(!!error_message) {
-        next(new RestError(error_message,400));
+        return next(new RestError(error_message,400));
     }
     req.body = return_body
     next()
@@ -413,7 +419,7 @@ exports.orderItem = (req,res,next) => {
     }
 
     if(!!error_message) {
-        next(new RestError(error_message,400));
+        return next(new RestError(error_message,400));
     }
     req.body = return_body
     next()

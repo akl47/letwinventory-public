@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 // Get all wires
 exports.getAllWires = async (req, res, next) => {
@@ -19,7 +20,7 @@ exports.getAllWires = async (req, res, next) => {
 
     res.json(wires);
   } catch (error) {
-    next(createError(500, 'Error Getting Wires: ' + error.message));
+    next(humanizeError(error, 'Error Getting Wires'));
   }
 };
 
@@ -41,7 +42,7 @@ exports.getWireById = async (req, res, next) => {
 
     res.json(wire);
   } catch (error) {
-    next(createError(500, 'Error Getting Wire: ' + error.message));
+    next(humanizeError(error, 'Error Getting Wire'));
   }
 };
 
@@ -67,7 +68,7 @@ exports.createWire = async (req, res, next) => {
 
     res.status(201).json(wire);
   } catch (error) {
-    next(createError(500, 'Error Creating Wire: ' + error.message));
+    next(humanizeError(error, 'Error Creating Wire'));
   }
 };
 
@@ -105,7 +106,7 @@ exports.updateWire = async (req, res, next) => {
 
     res.json(updatedWire);
   } catch (error) {
-    next(createError(500, 'Error Updating Wire: ' + error.message));
+    next(humanizeError(error, 'Error Updating Wire'));
   }
 };
 
@@ -127,7 +128,7 @@ exports.getWireByPartId = async (req, res, next) => {
 
     res.json(wire);
   } catch (error) {
-    next(createError(500, 'Error Getting Wire by Part ID: ' + error.message));
+    next(humanizeError(error, 'Error Getting Wire by Part ID'));
   }
 };
 
@@ -152,6 +153,6 @@ exports.deleteWire = async (req, res, next) => {
 
     res.json({ message: 'Wire deleted successfully' });
   } catch (error) {
-    next(createError(500, 'Error Deleting Wire: ' + error.message));
+    next(humanizeError(error, 'Error Deleting Wire'));
   }
 };

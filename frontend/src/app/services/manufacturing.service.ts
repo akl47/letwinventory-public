@@ -87,8 +87,11 @@ export class ManufacturingService {
   }
 
   // Work Orders
-  getWorkOrders(status?: string): Observable<WorkOrder[]> {
-    const url = status ? `${this.woUrl}?status=${status}` : this.woUrl;
+  getWorkOrders(status?: string, includeDeleted?: boolean): Observable<WorkOrder[]> {
+    const params: string[] = [];
+    if (status) params.push(`status=${encodeURIComponent(status)}`);
+    if (includeDeleted) params.push('includeDeleted=true');
+    const url = params.length ? `${this.woUrl}?${params.join('&')}` : this.woUrl;
     return this.http.get<WorkOrder[]>(url);
   }
 
@@ -104,8 +107,12 @@ export class ManufacturingService {
     return this.http.get<WorkOrderKitStatus>(`${this.woUrl}/${id}/kit-status`);
   }
 
-  deleteWorkOrder(id: number): Observable<any> {
-    return this.http.delete(`${this.woUrl}/${id}`);
+  deleteWorkOrder(id: number, deletionReason: string): Observable<any> {
+    return this.http.request('DELETE', `${this.woUrl}/${id}`, { body: { deletionReason } });
+  }
+
+  undeleteWorkOrder(id: number): Observable<any> {
+    return this.http.post(`${this.woUrl}/${id}/undelete`, {});
   }
 
   completeStep(workOrderId: number, stepID: number): Observable<WorkOrderStepCompletion> {

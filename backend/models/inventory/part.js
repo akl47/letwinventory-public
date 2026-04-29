@@ -88,7 +88,7 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue:true
     },
     minimumOrderQuantity: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.DECIMAL(10, 2),
       allowNull:false
     },
     partCategoryID: {

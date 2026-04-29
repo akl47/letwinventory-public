@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 exports.getAllUnitsOfMeasure = (req, res, next) => {
   db.UnitOfMeasure.findAll({
@@ -8,6 +9,6 @@ exports.getAllUnitsOfMeasure = (req, res, next) => {
   }).then(unitsOfMeasure => {
     res.json(unitsOfMeasure);
   }).catch(error => {
-    next(createError(500, 'Error Getting Units of Measure: ' + error));
+    next(humanizeError(error, 'Error Getting Units of Measure'));
   });
 };

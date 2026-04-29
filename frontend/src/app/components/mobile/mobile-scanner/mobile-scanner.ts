@@ -292,7 +292,7 @@ export class MobileScanner implements OnInit, OnDestroy {
             next: (barcode) => {
                 this.scannedBarcode.set(barcode);
                 forkJoin({
-                    tag: this.inventoryService.getTagById(barcode.id),
+                    tag: this.inventoryService.getTagById(barcode.id, true),
                     chain: this.inventoryService.getTagChain(barcode.id),
                 }).subscribe({
                     next: ({ tag, chain }) => {
@@ -322,7 +322,7 @@ export class MobileScanner implements OnInit, OnDestroy {
         this.inventoryService.lookupBarcode(barcodeString).subscribe({
             next: (destBarcode) => {
                 this.secondScannedBarcode.set(destBarcode);
-                this.inventoryService.getTagById(destBarcode.id).subscribe({
+                this.inventoryService.getTagById(destBarcode.id, true).subscribe({
                     next: (tag) => {
                         this.secondScannedTag.set(tag);
                         this.state.set('confirming_second');
@@ -466,7 +466,7 @@ export class MobileScanner implements OnInit, OnDestroy {
         if (!barcodeId) return;
         this.state.set('loading');
         forkJoin({
-            tag: this.inventoryService.getTagById(barcodeId),
+            tag: this.inventoryService.getTagById(barcodeId, true),
             chain: this.inventoryService.getTagChain(barcodeId),
         }).subscribe({
             next: ({ tag, chain }) => {

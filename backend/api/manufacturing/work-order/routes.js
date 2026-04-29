@@ -10,7 +10,8 @@ router.get('/:id/kit-status', checkToken, checkPermission('manufacturing_executi
 
 // CRUD
 router.post('/', checkToken, checkPermission('manufacturing_execution', 'write'), controller.create);
-router.delete('/:id', checkToken, checkPermission('manufacturing_execution', 'delete'), controller.remove);
+router.delete('/:id', checkToken, checkPermission('manufacturing_execution', 'work_order_delete'), controller.remove);
+router.post('/:id/undelete', checkToken, checkPermission('manufacturing_execution', 'work_order_undelete'), controller.undelete);
 
 // Step execution
 router.post('/:id/complete-step', checkToken, checkPermission('manufacturing_execution', 'write'), controller.completeStep);

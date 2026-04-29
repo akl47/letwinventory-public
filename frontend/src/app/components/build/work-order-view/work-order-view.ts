@@ -16,6 +16,7 @@ import { ManufacturingService } from '../../../services/manufacturing.service';
 import { AuthService } from '../../../services/auth.service';
 import { WorkOrder, WorkOrderKitStatus, WorkOrderBomLine } from '../../../models/work-order.model';
 import { WoDekitDialog, WoDekitDialogData } from '../wo-dekit-dialog/wo-dekit-dialog';
+import { DeleteWorkOrderDialog, DeleteWorkOrderDialogData, DeleteWorkOrderDialogResult } from '../delete-work-order-dialog/delete-work-order-dialog';
 
 @Component({
   selector: 'app-work-order-view',
@@ -52,6 +53,26 @@ export class WorkOrderView implements OnInit {
   });
 
   canWrite = computed(() => this.authService.hasPermission('manufacturing_execution', 'write'));
+
+  canDelete(): boolean {
+    const wo = this.workOrder();
+    if (!wo || !wo.activeFlag || wo.status === 'complete') return false;
+    return this.authService.hasPermission('manufacturing_execution', 'work_order_delete');
+  }
+
+  canRestore(): boolean {
+    const wo = this.workOrder();
+    if (!wo || wo.activeFlag) return false;
+    return this.authService.hasPermission('manufacturing_execution', 'work_order_undelete');
+  }
+
+  kittedTraceCount = computed(() => {
+    const ks = this.kitStatus();
+    if (!ks?.bomStatus) return 0;
+    return ks.bomStatus.reduce((sum, line) => sum + (line.kittedTraces?.length || 0), 0);
+  });
+
+  completedStepsCount = computed(() => this.workOrder()?.stepCompletions.length ?? 0);
 
   nextStepID = computed(() => {
     const wo = this.workOrder();
@@ -341,5 +362,39 @@ export class WorkOrderView implements OnInit {
     if (!document.fullscreenElement) {
       this.isFullscreen.set(false);
     }
+  }
+
+  openDeleteDialog() {
+    const wo = this.workOrder();
+    if (!wo) return;
+    const data: DeleteWorkOrderDialogData = {
+      workOrderId: wo.id,
+      workOrderName: `WO #${wo.id} — ${wo.master?.name ?? ''}`,
+      kittedCount: this.kittedTraceCount(),
+      completedSteps: this.completedStepsCount(),
+    };
+    const ref = this.dialog.open<DeleteWorkOrderDialog, DeleteWorkOrderDialogData, DeleteWorkOrderDialogResult>(
+      DeleteWorkOrderDialog, { data, width: '480px' }
+    );
+    ref.afterClosed().subscribe(result => {
+      if (!result) return;
+      this.manufacturingService.deleteWorkOrder(wo.id, result.deletionReason).subscribe({
+        next: () => {
+          this.snackBar.open('Work Order deleted', 'Dismiss', { duration: 3000 });
+          this.loadWorkOrder(wo.id);
+        },
+      });
+    });
+  }
+
+  restoreWorkOrder() {
+    const wo = this.workOrder();
+    if (!wo) return;
+    this.manufacturingService.undeleteWorkOrder(wo.id).subscribe({
+      next: () => {
+        this.snackBar.open('Work Order restored', 'Dismiss', { duration: 3000 });
+        this.loadWorkOrder(wo.id);
+      },
+    });
   }
 }

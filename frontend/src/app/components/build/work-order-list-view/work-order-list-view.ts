@@ -12,6 +12,7 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog } from '@angular/material/dialog';
 import { MatChipsModule } from '@angular/material/chips';
+import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { ManufacturingService } from '../../../services/manufacturing.service';
 import { AuthService } from '../../../services/auth.service';
 import { WorkOrder } from '../../../models/work-order.model';
@@ -23,7 +24,7 @@ import { WorkOrder } from '../../../models/work-order.model';
     CommonModule, FormsModule,
     MatTableModule, MatButtonModule, MatIconModule,
     MatFormFieldModule, MatInputModule, MatSelectModule,
-    MatProgressSpinnerModule, MatTooltipModule, MatChipsModule,
+    MatProgressSpinnerModule, MatTooltipModule, MatChipsModule, MatSlideToggleModule,
   ],
   templateUrl: './work-order-list-view.html',
   styleUrl: './work-order-list-view.css',
@@ -34,12 +35,18 @@ export class WorkOrderListView implements OnInit {
   private authService = inject(AuthService);
 
   canWrite = computed(() => this.authService.hasPermission('manufacturing_execution', 'write'));
+  canUndelete = computed(() => this.authService.hasPermission('manufacturing_execution', 'work_order_undelete'));
 
   workOrders = signal<WorkOrder[]>([]);
   isLoading = signal(true);
   searchText = signal('');
   statusFilter = signal<string>('');
-  displayedColumns = ['id', 'masterName', 'revision', 'status', 'progress', 'quantity', 'location', 'createdAt'];
+  showDeleted = signal(false);
+  displayedColumns = computed(() => {
+    const cols = ['id', 'masterName', 'revision', 'status', 'progress', 'quantity', 'location', 'createdAt'];
+    if (this.showDeleted()) cols.push('deletionInfo', 'restore');
+    return cols;
+  });
 
   displayedWorkOrders = computed(() => {
     let filtered = this.workOrders();
@@ -63,12 +70,24 @@ export class WorkOrderListView implements OnInit {
 
   loadWorkOrders() {
     this.isLoading.set(true);
-    this.manufacturingService.getWorkOrders().subscribe({
+    this.manufacturingService.getWorkOrders(undefined, this.showDeleted()).subscribe({
       next: (workOrders) => {
         this.workOrders.set(workOrders);
         this.isLoading.set(false);
       },
       error: () => this.isLoading.set(false),
+    });
+  }
+
+  toggleShowDeleted() {
+    this.showDeleted.set(!this.showDeleted());
+    this.loadWorkOrders();
+  }
+
+  restoreWorkOrder(wo: WorkOrder, event?: Event) {
+    event?.stopPropagation();
+    this.manufacturingService.undeleteWorkOrder(wo.id).subscribe({
+      next: () => this.loadWorkOrders(),
     });
   }
 

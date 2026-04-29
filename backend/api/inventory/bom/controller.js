@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const createError = require('http-errors');
+const humanizeError = require('../../../util/humanizeError');
 
 const KIT_ASSEMBLY_NAMES = ['Kit', 'Assembly'];
 
@@ -95,7 +96,7 @@ exports.getBom = async (req, res, next) => {
 
     res.json({ bomItems });
   } catch (error) {
-    next(createError(500, 'Error getting BOM: ' + error.message));
+    next(humanizeError(error, 'Error getting BOM'));
   }
 };
 
@@ -178,6 +179,6 @@ exports.updateBom = async (req, res, next) => {
 
     res.json({ bomItems: updatedBom });
   } catch (error) {
-    next(createError(500, 'Error updating BOM: ' + error.message));
+    next(humanizeError(error, 'Error updating BOM'));
   }
 };

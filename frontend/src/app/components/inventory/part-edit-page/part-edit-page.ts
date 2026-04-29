@@ -214,6 +214,11 @@ export class PartEditPage implements OnInit {
       }
     });
 
+    // Watch for default UoM changes to update min order qty validator
+    this.form.get('defaultUnitOfMeasureID')?.valueChanges.subscribe(() => {
+      this.updateMinOrderQtyValidator();
+    });
+
     // Watch for category changes to update validators
     this.form.get('partCategoryID')?.valueChanges.subscribe(categoryId => {
       this.updateCategoryValidators(categoryId);
@@ -331,6 +336,7 @@ export class PartEditPage implements OnInit {
         this.categories.set(results.categories);
         this.unitsOfMeasure.set(results.unitsOfMeasure);
         this.pinTypes.set(results.pinTypes);
+        this.updateMinOrderQtyValidator();
 
         // If locked to a category, set it and disable the control
         if (this.lockedCategoryName) {
@@ -528,6 +534,21 @@ export class PartEditPage implements OnInit {
     if (!uomId) return false;
     const uom = this.unitsOfMeasure().find(u => u.id === uomId);
     return uom?.allowDecimal ?? false;
+  }
+
+  partAllowsDecimal(): boolean {
+    const uomId = this.form?.get('defaultUnitOfMeasureID')?.value;
+    if (!uomId) return false;
+    const uom = this.unitsOfMeasure().find(u => u.id === uomId);
+    return uom?.allowDecimal ?? false;
+  }
+
+  private updateMinOrderQtyValidator() {
+    const ctrl = this.form?.get('minimumOrderQuantity');
+    if (!ctrl) return;
+    const min = this.partAllowsDecimal() ? 0.01 : 1;
+    ctrl.setValidators([Validators.required, Validators.min(min)]);
+    ctrl.updateValueAndValidity({ emitEvent: false });
   }
 
   removeBomItem(index: number) {
@@ -936,7 +957,9 @@ export class PartEditPage implements OnInit {
       errors.push('Minimum order quantity is required');
     }
     if (this.form.get('minimumOrderQuantity')?.hasError('min')) {
-      errors.push('Minimum order quantity must be at least 1');
+      errors.push(this.partAllowsDecimal()
+        ? 'Minimum order quantity must be greater than 0'
+        : 'Minimum order quantity must be at least 1');
     }
 
     return errors;

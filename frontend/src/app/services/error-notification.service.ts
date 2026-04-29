@@ -86,6 +86,8 @@ export class ErrorNotificationService {
       if (error.error) {
         if (typeof error.error === 'string') {
           detailedMessage = error.error;
+        } else if (error.error.errorMessage) {
+          detailedMessage = error.error.errorMessage;
         } else if (error.error.message) {
           detailedMessage = error.error.message;
         } else if (error.error.error) {
@@ -134,7 +136,7 @@ export class ErrorNotificationService {
         case 503:
           return 'Service temporarily unavailable. Please try again later.';
         default:
-          return error.statusText || `An error occurred (${error.status})`;
+          return `An error occurred (${error.status})`;
       }
     }
 

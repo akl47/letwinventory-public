@@ -15,6 +15,9 @@ export interface WorkOrder {
   createdByUserID: number;
   completedAt: string | null;
   activeFlag: boolean;
+  deletionReason?: string | null;
+  deletedByUserID?: number | null;
+  deletedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
