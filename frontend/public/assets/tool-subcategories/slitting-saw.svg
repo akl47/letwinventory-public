@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" color="white" viewBox="0 0 480 460" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Top chamfer of arbor -->
+    <line x1="218" y1="68" x2="262" y2="68"/>
+    <line x1="210" y1="80" x2="218" y2="68"/>
+    <line x1="262" y1="68" x2="270" y2="80"/>
+
+    <!-- Arbor (long vertical cylindrical shaft, 3/4" Ø in this scale) -->
+    <line x1="210" y1="80" x2="210" y2="265"/>
+    <line x1="270" y1="80" x2="270" y2="265"/>
+
+    <!-- Top hub/flange (clamps the saw from above; slightly wider than the arbor) -->
+    <line x1="210" y1="265" x2="195" y2="270"/>
+    <line x1="270" y1="265" x2="285" y2="270"/>
+    <line x1="195" y1="270" x2="195" y2="285"/>
+    <line x1="285" y1="270" x2="285" y2="285"/>
+
+    <!-- Saw blade seen edge-on: long thin horizontal rectangle (3" Ø, 1/16" thick — ~30:1 visual ratio).
+         Drawn as a closed rectangle interrupted by the central hubs. -->
+    <line x1="120" y1="285" x2="195" y2="285"/>
+    <line x1="285" y1="285" x2="360" y2="285"/>
+    <line x1="120" y1="293" x2="195" y2="293"/>
+    <line x1="285" y1="293" x2="360" y2="293"/>
+    <!-- Closing edges of the saw rectangle (left and right ends) -->
+    <line x1="120" y1="285" x2="120" y2="293"/>
+    <line x1="360" y1="285" x2="360" y2="293"/>
+
+
+    <!-- Bottom hub/flange (mirror of top) -->
+    <line x1="195" y1="293" x2="195" y2="308"/>
+    <line x1="285" y1="293" x2="285" y2="308"/>
+    <line x1="195" y1="308" x2="210" y2="313"/>
+    <line x1="285" y1="308" x2="270" y2="313"/>
+
+    <!-- Threaded extension below the bottom flange (smaller Ø; takes the retaining nut) -->
+    <line x1="220" y1="313" x2="220" y2="345"/>
+    <line x1="260" y1="313" x2="260" y2="345"/>
+    <line x1="210" y1="313" x2="220" y2="313"/>
+    <line x1="270" y1="313" x2="260" y2="313"/>
+    <line x1="220" y1="345" x2="260" y2="345"/>
+    <!-- Faint horizontal lines suggesting the thread profile -->
+    <g stroke-width="0.7">
+      <line x1="220" y1="320" x2="260" y2="320"/>
+      <line x1="220" y1="326" x2="260" y2="326"/>
+      <line x1="220" y1="332" x2="260" y2="332"/>
+      <line x1="220" y1="338" x2="260" y2="338"/>
+    </g>
+
+    <!-- Centerline of the arbor / saw axis -->
+    <line x1="240" y1="60" x2="240" y2="360" stroke-dasharray="1 6" stroke-width="0.6" opacity="0.45"/>
+  </g>
+
+  <g fill="currentColor" stroke="currentColor" stroke-width="0.9" font-size="12">
+    <!-- Bore / Shank Diameter (the arbor) -->
+    <line x1="210" y1="42" x2="270" y2="42" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="210" y1="44" x2="210" y2="68" stroke-dasharray="3 3"/>
+    <line x1="270" y1="44" x2="270" y2="68" stroke-dasharray="3 3"/>
+    <text x="240" y="32" text-anchor="middle" stroke="none">Shank Diameter (arbor / bore)</text>
+
+    <!-- Saw Diameter (across the visible width of the disc edge) -->
+    <line x1="120" y1="395" x2="360" y2="395" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="120" y1="295" x2="120" y2="398" stroke-dasharray="3 3"/>
+    <line x1="360" y1="295" x2="360" y2="398" stroke-dasharray="3 3"/>
+    <text x="240" y="412" text-anchor="middle" stroke="none">Diameter</text>
+
+    <!-- Saw thickness — labelled "Overall Length" since the Tool model uses that field -->
+    <line x1="430" y1="285" x2="430" y2="293" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="370" y1="285" x2="433" y2="285" stroke-dasharray="3 3"/>
+    <line x1="370" y1="293" x2="433" y2="293" stroke-dasharray="3 3"/>
+    <text x="442" y="294" stroke="none">Overall Length (thickness)</text>
+  </g>
+</svg>

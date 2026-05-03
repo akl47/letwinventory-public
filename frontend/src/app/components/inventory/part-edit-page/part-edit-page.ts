@@ -2,6 +2,7 @@ import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { FormBuilder, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatCardModule } from '@angular/material/card';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
@@ -11,6 +12,8 @@ import { CommonModule, DatePipe, KeyValuePipe, Location, TitleCasePipe } from '@
 import { forkJoin, of, combineLatest } from 'rxjs';
 import { catchError, take } from 'rxjs/operators';
 import { InventoryService, PartLocationsResult } from '../../../services/inventory.service';
+import { ToolsService } from '../../../services/tools.service';
+import { Tool, ToolCategory, ToolSubcategory } from '../../../models/tool.model';
 import { AuthService } from '../../../services/auth.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { HarnessService } from '../../../services/harness.service';
@@ -19,6 +22,7 @@ import { DbHarnessConnector, DbHarnessWire, DbHarnessCable, DbElectricalComponen
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { environment } from '../../../../environments/environment';
 import { AuthImgDirective } from '../../../directives/auth-img.directive';
+import { InlineSvgDirective } from '../../../directives/inline-svg.directive';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatTableModule } from '@angular/material/table';
@@ -37,6 +41,7 @@ import { PartLink } from '../../common/part-link/part-link';
     ReactiveFormsModule,
     FormsModule,
     MatButtonModule,
+    MatButtonToggleModule,
     MatCardModule,
     MatFormFieldModule,
     MatInputModule,
@@ -52,6 +57,7 @@ import { PartLink } from '../../common/part-link/part-link';
     PartNumberPipe,
     PartLink,
     AuthImgDirective,
+    InlineSvgDirective,
   ],
   templateUrl: './part-edit-page.html',
   styleUrl: './part-edit-page.css',
@@ -61,6 +67,7 @@ export class PartEditPage implements OnInit {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private inventoryService = inject(InventoryService);
+  private toolsService = inject(ToolsService);
   private authService = inject(AuthService);
   private harnessPartsService = inject(HarnessPartsService);
   private harnessService = inject(HarnessService);
@@ -80,6 +87,85 @@ export class PartEditPage implements OnInit {
   categories = signal<PartCategory[]>([]);
   unitsOfMeasure = signal<UnitOfMeasure[]>([]);
   pinTypes = signal<ElectricalPinType[]>([]);
+  toolCategories = signal<ToolCategory[]>([]);
+  toolSubcategories = signal<ToolSubcategory[]>([]);
+  toolCategoryFilter = signal<number | null>(null);
+  currentTool = signal<Tool | null>(null);
+  toolSubcategorySearch = signal('');
+  /** When a dimension input is focused, set this to the corresponding `data-dim` key
+   *  on the SVG (one of: 'diameter' | 'overall-length' | 'flute-length' |
+   *  'shank-diameter' | 'tip-angle'). Null → no highlight. */
+  highlightedDimension = signal<string | null>(null);
+
+  setHighlight(key: string | null) {
+    this.highlightedDimension.set(key);
+  }
+
+  /** Display unit for tool dimensions. DB always stores mm; this only affects what the
+   *  user sees and types in the form. Persisted per-user in localStorage. */
+  toolUnit = signal<'mm' | 'in'>(
+    (typeof localStorage !== 'undefined' && localStorage.getItem('toolUnit') === 'in') ? 'in' : 'mm',
+  );
+
+  /** Length form fields that are affected by the unit toggle. Excludes tipAngle (degrees)
+   *  and integer counts (numberOfFlutes, numberOfSteps). */
+  private readonly toolLengthFields = [
+    'toolDiameter', 'toolOverallLength', 'toolFluteLength', 'toolShankDiameter',
+    'toolCornerRadius', 'toolReducedShankDiameter', 'toolSquareDriveSize', 'toolStepDelta',
+  ] as const;
+
+  private mmToDisplay(mm: number | null | undefined): number | null {
+    if (mm === null || mm === undefined) return null;
+    const n = Number(mm);
+    if (this.toolUnit() === 'in') return Math.round((n / 25.4) * 1000) / 1000;
+    return Math.round(n * 1000) / 1000;
+  }
+
+  private displayToMm(value: number | string | null | undefined): number | null {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    if (Number.isNaN(n)) return null;
+    if (this.toolUnit() === 'in') return Math.round(n * 25.4 * 1000) / 1000;
+    return Math.round(n * 1000) / 1000;
+  }
+
+  onToolUnitChange(unit: 'mm' | 'in') {
+    if (unit === this.toolUnit()) return;
+    // Convert each length field's current display value into the new unit.
+    const factor = unit === 'in' ? 1 / 25.4 : 25.4;
+    const patch: Record<string, number | null> = {};
+    for (const f of this.toolLengthFields) {
+      const v: any = this.form?.get(f)?.value;
+      if (v !== null && v !== undefined && v !== '') {
+        patch[f] = Math.round(Number(v) * factor * 1000) / 1000;
+      }
+    }
+    this.toolUnit.set(unit);
+    if (typeof localStorage !== 'undefined') localStorage.setItem('toolUnit', unit);
+    if (Object.keys(patch).length) this.form.patchValue(patch);
+  }
+
+  toolUnitLabel(): string {
+    return this.toolUnit();
+  }
+
+  /** Public helper for templates: convert a stored-mm value into the current display unit. */
+  displayLength(mm: number | string | null | undefined): string {
+    if (mm === null || mm === undefined || mm === '') return '—';
+    const n = this.mmToDisplay(mm as any);
+    return n === null ? '—' : String(n);
+  }
+
+  filteredToolSubcategories = computed(() => {
+    const q = this.toolSubcategorySearch().toLowerCase().trim();
+    const catId = this.toolCategoryFilter();
+    let all = this.toolSubcategories();
+    if (catId) {
+      all = all.filter(s => (s.categories || []).some(c => c.id === catId));
+    }
+    if (!q) return all;
+    return all.filter(s => s.name.toLowerCase().includes(q));
+  });
 
   // Harness-specific data
   existingConnector = signal<DbHarnessConnector | null>(null);
@@ -183,7 +269,23 @@ export class PartEditPage implements OnInit {
     wireGauge: ['22'],
     // Cable fields
     cableWireCount: [1, [Validators.min(1)]],
-    cableGauge: ['22']
+    cableGauge: ['22'],
+    // Tool fields
+    toolSubcategoryID: [null as number | null],
+    toolDiameter: [null as number | null],
+    toolNumberOfFlutes: [null as number | null],
+    toolOverallLength: [null as number | null],
+    toolFluteLength: [null as number | null],
+    toolShankDiameter: [null as number | null],
+    toolTipAngle: [null as number | null],
+    toolCornerRadius: [null as number | null],
+    toolReducedShankDiameter: [null as number | null],
+    toolSquareDriveSize: [null as number | null],
+    toolNumberOfSteps: [null as number | null],
+    toolStepDelta: [null as number | null],
+    toolMaterial: [''],
+    toolCoating: [''],
+    toolNotes: [''],
   });
 
   ngOnInit() {
@@ -338,6 +440,19 @@ export class PartEditPage implements OnInit {
         this.pinTypes.set(results.pinTypes);
         this.updateMinOrderQtyValidator();
 
+        // Load tool categories + subcategories (independent — failure should not block reference data)
+        this.toolsService.getToolCategories().subscribe({
+          next: (cats) => this.toolCategories.set(cats),
+          error: () => this.toolCategories.set([]),
+        });
+        this.toolsService.getToolSubcategories().subscribe({
+          next: (subs) => {
+            this.toolSubcategories.set(subs);
+            this.syncToolSubcategoryDisplay();
+          },
+          error: () => this.toolSubcategories.set([]),
+        });
+
         // If locked to a category, set it and disable the control
         if (this.lockedCategoryName) {
           const lockedCategory = results.categories.find(c => c.name === this.lockedCategoryName);
@@ -400,6 +515,8 @@ export class PartEditPage implements OnInit {
         this.loadLocations(part.id);
         // Load revision data
         this.loadRevisionData(part);
+        // Load tool data
+        this.loadToolForPart(part.id);
       },
       error: (err) => {
         console.error('Failed to load part:', err);
@@ -541,6 +658,191 @@ export class PartEditPage implements OnInit {
     if (!uomId) return false;
     const uom = this.unitsOfMeasure().find(u => u.id === uomId);
     return uom?.allowDecimal ?? false;
+  }
+
+  showToolFields(): boolean {
+    return !!this.form?.get('toolSubcategoryID')?.value;
+  }
+
+  showSubcategoryField(): boolean {
+    return this.toolCategoryFilter() !== null || !!this.form?.get('toolSubcategoryID')?.value;
+  }
+
+  displayToolSubcategory = (sub: ToolSubcategory | string | null): string => {
+    if (!sub) return '';
+    if (typeof sub === 'string') return sub;
+    return sub.name;
+  };
+
+  formatSubcategoryCategories(sub: ToolSubcategory): string {
+    return (sub.categories || []).map(c => c.name).join(' / ');
+  }
+
+  /** Resolve the asset path for the currently-selected subcategory's diagram, or '' if none. */
+  toolDiagramPath(): string {
+    const id = this.form?.get('toolSubcategoryID')?.value;
+    if (!id) return '';
+    const sub = this.toolSubcategories().find(s => s.id === id);
+    if (!sub) return '';
+    const slug = sub.name
+      .toLowerCase()
+      .replace(/\s*\/\s*/g, '-')
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9-]/g, '');
+    return `assets/tool-subcategories/${slug}.svg`;
+  }
+
+  private selectedSubcategoryName(): string {
+    const id = this.form?.get('toolSubcategoryID')?.value;
+    if (!id) return '';
+    return this.toolSubcategories().find(s => s.id === id)?.name ?? '';
+  }
+
+  /** Whether the currently-selected subcategory uses the given extra dimension. */
+  toolFieldApplies(field: 'cornerRadius' | 'reducedShankDiameter' | 'squareDriveSize' | 'numberOfSteps' | 'stepDelta'): boolean {
+    const name = this.selectedSubcategoryName().toLowerCase();
+    if (!name) return false;
+    switch (field) {
+      case 'cornerRadius':
+        return name.includes('bull nose');
+      case 'reducedShankDiameter':
+        return name.includes('dovetail');
+      case 'squareDriveSize':
+        return name === 'tap' || name.includes('tap');
+      case 'numberOfSteps':
+      case 'stepDelta':
+        return name.includes('step drill');
+    }
+  }
+
+  onToolCategoryFilterChange(id: number | null) {
+    this.toolCategoryFilter.set(id);
+    // Clear subcategory if it no longer fits the new category
+    if (id) {
+      const subId = this.form.get('toolSubcategoryID')?.value;
+      if (subId) {
+        const sub = this.toolSubcategories().find(s => s.id === subId);
+        if (!sub || !(sub.categories || []).some(c => c.id === id)) {
+          this.clearToolSubcategory();
+        }
+      }
+    }
+  }
+
+  onToolSubcategorySearchInput(value: string) {
+    this.toolSubcategorySearch.set(value);
+    if (!value) {
+      this.form.patchValue({ toolSubcategoryID: null });
+    }
+  }
+
+  onToolSubcategorySelected(sub: ToolSubcategory) {
+    this.toolSubcategorySearch.set(sub.name);
+    this.form.patchValue({ toolSubcategoryID: sub.id });
+  }
+
+  onToolSubcategoryBlur() {
+    // If the typed text doesn't match a known subcategory exactly, snap back to the last selected one.
+    const text = this.toolSubcategorySearch();
+    const id = this.form.get('toolSubcategoryID')?.value;
+    const match = this.toolSubcategories().find(s => s.name === text);
+    if (!match && id) {
+      const current = this.toolSubcategories().find(s => s.id === id);
+      this.toolSubcategorySearch.set(current?.name ?? '');
+    } else if (!match && !id) {
+      this.toolSubcategorySearch.set('');
+    }
+  }
+
+  clearToolSubcategory() {
+    this.toolSubcategorySearch.set('');
+    this.form.patchValue({ toolSubcategoryID: null });
+  }
+
+  private syncToolSubcategoryDisplay() {
+    const id = this.form.get('toolSubcategoryID')?.value;
+    if (!id) {
+      this.toolSubcategorySearch.set('');
+      // Don't auto-clear the category filter on load — user may have picked it manually
+      return;
+    }
+    const sub = this.toolSubcategories().find(s => s.id === id);
+    this.toolSubcategorySearch.set(sub?.name ?? '');
+    // If no category filter is active and the subcategory has at least one category,
+    // pre-select the first one so the dropdown reflects a sensible default.
+    if (this.toolCategoryFilter() === null && sub?.categories?.length) {
+      this.toolCategoryFilter.set(sub.categories[0].id);
+    }
+  }
+
+  private loadToolForPart(partID: number) {
+    this.toolsService.getToolByPart(partID).subscribe({
+      next: (tool) => {
+        this.currentTool.set(tool);
+        const num = (v: any) => (v !== null && v !== undefined ? Number(v) : null);
+        this.form.patchValue({
+          toolSubcategoryID: tool.activeFlag ? tool.toolSubcategoryID : null,
+          toolDiameter: this.mmToDisplay(tool.diameter as any),
+          toolNumberOfFlutes: tool.numberOfFlutes ?? null,
+          toolOverallLength: this.mmToDisplay(tool.overallLength as any),
+          toolFluteLength: this.mmToDisplay(tool.fluteLength as any),
+          toolShankDiameter: this.mmToDisplay(tool.shankDiameter as any),
+          toolTipAngle: num(tool.tipAngle),
+          toolCornerRadius: this.mmToDisplay(tool.cornerRadius as any),
+          toolReducedShankDiameter: this.mmToDisplay(tool.reducedShankDiameter as any),
+          toolSquareDriveSize: this.mmToDisplay(tool.squareDriveSize as any),
+          toolNumberOfSteps: tool.numberOfSteps ?? null,
+          toolStepDelta: this.mmToDisplay(tool.stepDelta as any),
+          toolMaterial: tool.toolMaterial || '',
+          toolCoating: tool.coating || '',
+          toolNotes: tool.notes || '',
+        });
+        this.syncToolSubcategoryDisplay();
+      },
+      error: () => {
+        // 404 = no tool record exists yet — leave currentTool null
+        this.currentTool.set(null);
+      },
+    });
+  }
+
+  private saveToolForPart(partID: number) {
+    const fv = this.form.getRawValue();
+    const subcategoryID = (fv as any).toolSubcategoryID;
+    const tool = this.currentTool();
+    const payload = {
+      partID,
+      toolSubcategoryID: subcategoryID ?? tool?.toolSubcategoryID ?? undefined,
+      diameter: this.displayToMm((fv as any).toolDiameter),
+      numberOfFlutes: (fv as any).toolNumberOfFlutes ?? null,
+      overallLength: this.displayToMm((fv as any).toolOverallLength),
+      fluteLength: this.displayToMm((fv as any).toolFluteLength),
+      shankDiameter: this.displayToMm((fv as any).toolShankDiameter),
+      tipAngle: (fv as any).toolTipAngle ?? null,
+      cornerRadius: this.displayToMm((fv as any).toolCornerRadius),
+      reducedShankDiameter: this.displayToMm((fv as any).toolReducedShankDiameter),
+      squareDriveSize: this.displayToMm((fv as any).toolSquareDriveSize),
+      numberOfSteps: (fv as any).toolNumberOfSteps ?? null,
+      stepDelta: this.displayToMm((fv as any).toolStepDelta),
+      toolMaterial: (fv as any).toolMaterial || null,
+      coating: (fv as any).toolCoating || null,
+      notes: (fv as any).toolNotes || null,
+      activeFlag: !!subcategoryID,
+    };
+
+    if (tool) {
+      // PUT — partID immutable, server ignores it
+      const { partID: _ignored, ...putBody } = payload;
+      this.toolsService.updateTool(tool.id, putBody as any).subscribe({
+        next: (updated) => this.currentTool.set(updated),
+      });
+    } else if (subcategoryID) {
+      // POST — only create if a subcategory was actually selected
+      this.toolsService.createTool(payload as any).subscribe({
+        next: (created) => this.currentTool.set(created),
+      });
+    }
+    // else: no tool record and subcategory is None → no-op
   }
 
   private updateMinOrderQtyValidator() {
@@ -1049,6 +1351,7 @@ export class PartEditPage implements OnInit {
               if (this.isKitOrAssembly()) {
                 this.saveBomData(partId);
               }
+              this.saveToolForPart(partId);
               const pending = this.pendingRevisionAction();
               if (pending) {
                 this.pendingRevisionAction.set(null);
@@ -1076,6 +1379,7 @@ export class PartEditPage implements OnInit {
               if (this.isKitOrAssembly()) {
                 this.saveBomData(response.id);
               }
+              this.saveToolForPart(response.id);
               this.errorNotification.showSuccess('Part created successfully');
               this.router.navigate(['/parts']);
             },

@@ -96,13 +96,13 @@ export class BuildListView implements OnInit {
     });
     dialogRef.afterClosed().subscribe((result: any) => {
       if (result?.barcodeId) {
-        this.router.navigate(['/build', result.barcodeId]);
+        this.router.navigate(['/kits', result.barcodeId]);
       }
     });
   }
 
   openBuild(build: any) {
-    this.router.navigate(['/build', build.barcodeID]);
+    this.router.navigate(['/kits', build.barcodeID]);
   }
 
   getCategoryBgColor(hex: string | null): string {

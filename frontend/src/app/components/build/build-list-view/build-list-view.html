@@ -2,11 +2,11 @@
     <div class="table-header">
         <h2>
             <mat-icon>build_circle</mat-icon>
-            Builds
+            Kits
         </h2>
         <div class="header-actions">
             <mat-form-field appearance="outline" class="search-field">
-                <mat-label>Search builds</mat-label>
+                <mat-label>Search kits</mat-label>
                 <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
                     placeholder="Search by part name, barcode, or category">
                 <mat-icon matPrefix>search</mat-icon>
@@ -17,7 +17,7 @@
             <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
                 <button mat-flat-button color="primary" (click)="openNewBuild()" [disabled]="!canWrite()">
                     <mat-icon>add</mat-icon>
-                    New Build
+                    New Kit
                 </button>
             </span>
         </div>

@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" color="white" viewBox="0 0 360 720" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Square drive (where the tap wrench grips) -->
+    <line x1="160" y1="60" x2="200" y2="60"/>
+    <line x1="160" y1="60" x2="160" y2="100"/>
+    <line x1="200" y1="60" x2="200" y2="100"/>
+    <!-- Reduced neck between square drive and round shank -->
+    <line x1="160" y1="100" x2="155" y2="115"/>
+    <line x1="200" y1="100" x2="205" y2="115"/>
+    <!-- Round shank -->
+    <line x1="155" y1="115" x2="155" y2="365"/>
+    <line x1="205" y1="115" x2="205" y2="365"/>
+    <!-- Slope to threaded body — body is the same width as the shank for taps -->
+    <line x1="155" y1="365" x2="138" y2="380"/>
+    <line x1="205" y1="365" x2="222" y2="380"/>
+    <!-- Threaded body OUTLINE — sawtooth profile shows the major / minor diameters of the threads -->
+    <path d="M 138,380 L 132,388 L 138,396 L 132,404 L 138,412 L 132,420 L 138,428 L 132,436 L 138,444 L 132,452 L 138,460 L 132,468 L 138,476 L 132,484 L 138,492 L 132,500 L 138,508 L 132,516 L 138,524 L 132,532 L 138,540 L 132,548 L 138,556"/>
+    <path d="M 222,380 L 228,388 L 222,396 L 228,404 L 222,412 L 228,420 L 222,428 L 228,436 L 222,444 L 228,452 L 222,460 L 228,468 L 222,476 L 228,484 L 222,492 L 228,500 L 222,508 L 228,516 L 222,524 L 228,532 L 222,540 L 228,548 L 222,556"/>
+    <!-- Lead chamfer at the tip — first few threads taper inwards -->
+    <line x1="138" y1="556" x2="148" y2="586"/>
+    <line x1="222" y1="556" x2="212" y2="586"/>
+    <line x1="148" y1="586" x2="212" y2="586" stroke-width="2"/>
+    <!-- Axial flute grooves running through the threads (3 visible flutes) -->
+    <g stroke-width="1.5">
+      <line x1="160" y1="380" x2="160" y2="582"/>
+      <line x1="180" y1="380" x2="180" y2="586"/>
+      <line x1="200" y1="380" x2="200" y2="582"/>
+    </g>
+    <line x1="180" y1="60" x2="180" y2="600" stroke-dasharray="1 6" stroke-width="0.6" opacity="0.45"/>
+  </g>
+  <g fill="currentColor" stroke="currentColor" stroke-width="0.9" font-size="12">
+    <line x1="155" y1="40" x2="205" y2="40" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="155" y1="42" x2="155" y2="115" stroke-dasharray="3 3"/>
+    <line x1="205" y1="42" x2="205" y2="115" stroke-dasharray="3 3"/>
+    <text x="180" y="30" text-anchor="middle" stroke="none">Shank Diameter</text>
+    <line x1="68" y1="60" x2="68" y2="586" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="60" y1="60" x2="158" y2="60" stroke-dasharray="3 3"/>
+    <line x1="60" y1="586" x2="148" y2="586" stroke-dasharray="3 3"/>
+    <text x="52" y="324" text-anchor="middle" stroke="none" transform="rotate(-90 52,324)" font-weight="600">Overall Length</text>
+    <line x1="270" y1="380" x2="270" y2="586" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="228" y1="380" x2="273" y2="380" stroke-dasharray="3 3"/>
+    <line x1="212" y1="586" x2="273" y2="586" stroke-dasharray="3 3"/>
+    <text x="286" y="478" text-anchor="middle" stroke="none" transform="rotate(-90 286,478)">Flute Length (thread)</text>
+    <line x1="125" y1="640" x2="235" y2="640" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="125" y1="555" x2="125" y2="643" stroke-dasharray="3 3"/>
+    <line x1="235" y1="555" x2="235" y2="643" stroke-dasharray="3 3"/>
+    <text x="180" y="660" text-anchor="middle" stroke="none">Diameter (major)</text>
+    <!-- Square Drive Size — leader pointing to the square drive at the top of the tap -->
+    <line x1="260" y1="80" x2="205" y2="80" marker-end="url(#arr)" stroke-width="0.9"/>
+    <text x="266" y="84" stroke="none">Square Drive Size</text>
+  </g>
+</svg>

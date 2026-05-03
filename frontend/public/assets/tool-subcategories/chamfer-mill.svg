@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" color="white" viewBox="0 0 360 600" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Top chamfer -->
+    <line x1="135" y1="68" x2="225" y2="68"/>
+    <line x1="125" y1="80" x2="135" y2="68"/>
+    <line x1="225" y1="68" x2="235" y2="80"/>
+    <!-- Long cylindrical shank — chamfer mills are mostly shank with a short cone -->
+    <line x1="125" y1="80" x2="125" y2="380"/>
+    <line x1="235" y1="80" x2="235" y2="380"/>
+    <!-- Conical cutting head (90° included = 45° per side from vertical).
+         Cone narrows from full shank Ø to a tiny flat tip — a single short cone. -->
+    <line x1="125" y1="380" x2="173" y2="428"/>
+    <line x1="235" y1="380" x2="187" y2="428"/>
+    <!-- Tiny flat tip (preserves the cutting point in production tools) -->
+    <line x1="173" y1="428" x2="187" y2="428" stroke-width="2"/>
+    <!-- Cutting flutes running along the cone (4 flutes, 2 visible) -->
+    <g stroke-width="1.2">
+      <line x1="148" y1="380" x2="178" y2="425"/>
+      <line x1="180" y1="380" x2="180" y2="428"/>
+      <line x1="212" y1="380" x2="182" y2="425"/>
+    </g>
+    <line x1="180" y1="68" x2="180" y2="438" stroke-dasharray="1 6" stroke-width="0.6" opacity="0.45"/>
+  </g>
+  <g fill="currentColor" stroke="currentColor" stroke-width="0.9" font-size="12">
+    <line x1="125" y1="40" x2="235" y2="40" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="125" y1="42" x2="125" y2="68" stroke-dasharray="3 3"/>
+    <line x1="235" y1="42" x2="235" y2="68" stroke-dasharray="3 3"/>
+    <text x="180" y="30" text-anchor="middle" stroke="none">Shank Diameter</text>
+    <line x1="68" y1="68" x2="68" y2="428" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="60" y1="68" x2="123" y2="68" stroke-dasharray="3 3"/>
+    <line x1="60" y1="428" x2="171" y2="428" stroke-dasharray="3 3"/>
+    <text x="52" y="248" text-anchor="middle" stroke="none" transform="rotate(-90 52,248)" font-weight="600">Overall Length</text>
+    <!-- Diameter at the largest point of the cone (= shank Ø) -->
+    <line x1="125" y1="475" x2="235" y2="475" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="125" y1="380" x2="125" y2="478" stroke-dasharray="3 3"/>
+    <line x1="235" y1="380" x2="235" y2="478" stroke-dasharray="3 3"/>
+    <text x="180" y="495" text-anchor="middle" stroke="none">Diameter (largest)</text>
+    <line x1="248" y1="424" x2="200" y2="420" marker-end="url(#arr)" stroke-width="0.9"/>
+    <text x="254" y="428" stroke="none">Tip Angle</text>
+  </g>
+</svg>

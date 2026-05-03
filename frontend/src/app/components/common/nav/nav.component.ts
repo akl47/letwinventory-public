@@ -50,8 +50,8 @@ export class NavComponent implements OnInit, OnDestroy {
 
     private readonly inventoryPrefixes = ['/inventory', '/parts', '/equipment', '/orders'];
     private readonly designPrefixes = ['/requirements', '/harness', '/design'];
-    private readonly toolsPrefixes = ['/tools'];
-    private readonly buildPrefixes = ['/build'];
+    private readonly toolsPrefixes = ['/tools/outline'];
+    private readonly buildPrefixes = ['/build', '/kits', '/tools/catalog'];
     private readonly adminPrefixes = ['/admin'];
     protected readonly hasTasksAccess = computed(() => this.authService.hasAnyPermission('tasks'));
     protected readonly hasProjectsAccess = computed(() => this.authService.hasAnyPermission('projects'));

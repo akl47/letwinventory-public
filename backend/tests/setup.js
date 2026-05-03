@@ -125,7 +125,7 @@ async function seedReferenceData() {
   ]);
 
   // Permissions (9 resources x 3 actions + extras)
-  const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin', 'manufacturing_planning', 'manufacturing_execution'];
+  const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin', 'manufacturing_planning', 'manufacturing_execution', 'tools'];
   const actions = ['read', 'write', 'delete'];
   let permId = 1;
   const permRows = [];
@@ -138,7 +138,58 @@ async function seedReferenceData() {
   permRows.push({ id: permId++, resource: 'admin', action: 'impersonate' });
   permRows.push({ id: permId++, resource: 'manufacturing_execution', action: 'work_order_delete' });
   permRows.push({ id: permId++, resource: 'manufacturing_execution', action: 'work_order_undelete' });
+  permRows.push({ id: permId++, resource: 'admin', action: 'manage_tool_categories' });
   await db.Permission.bulkCreate(permRows);
+
+  // Tool Categories (5 broad groupings — must match migration seed)
+  const TOOL_CATEGORIES = [
+    { id: 1, name: 'Hand Tools' },
+    { id: 2, name: 'Power Tools' },
+    { id: 3, name: 'Mill Tools' },
+    { id: 4, name: 'Lathe Tools' },
+    { id: 5, name: 'General Purpose' },
+  ];
+  await db.ToolCategory.bulkCreate(
+    TOOL_CATEGORIES.map(c => ({ ...c, description: '', activeFlag: true }))
+  );
+
+  // Tool Subcategories (36 leaves — must match migration seed)
+  const TOOL_SUBCATEGORIES = [
+    { id: 1, name: 'Hammer' }, { id: 2, name: 'Screwdriver' }, { id: 3, name: 'Wrench' },
+    { id: 4, name: 'Pliers' }, { id: 5, name: 'Hand Saw' }, { id: 6, name: 'File' },
+    { id: 7, name: 'Chisel' },
+    { id: 8, name: 'Cordless Drill' }, { id: 9, name: 'Angle Grinder' },
+    { id: 10, name: 'Circular Saw' }, { id: 11, name: 'Sander' },
+    { id: 12, name: 'Square End Mill' }, { id: 13, name: 'Ball End Mill' },
+    { id: 14, name: 'Bull Nose End Mill' }, { id: 15, name: 'Chamfer Mill' },
+    { id: 16, name: 'Tapered End Mill' }, { id: 17, name: 'Roughing End Mill' },
+    { id: 18, name: 'Lollipop Mill' }, { id: 19, name: 'Dovetail Cutter' },
+    { id: 20, name: 'T-Slot Cutter' }, { id: 21, name: 'Woodruff Cutter' },
+    { id: 22, name: 'Thread Mill' }, { id: 23, name: 'V-Bit' }, { id: 24, name: 'Face Mill' },
+    { id: 25, name: 'Fly Cutter' }, { id: 26, name: 'Slitting Saw' },
+    { id: 27, name: 'Drill Bit' }, { id: 28, name: 'Spot Drill' },
+    { id: 29, name: 'Center Drill' }, { id: 30, name: 'Step Drill' },
+    { id: 31, name: 'Core Drill' }, { id: 32, name: 'Counterbore' },
+    { id: 33, name: 'Countersink' }, { id: 34, name: 'Reamer' },
+    { id: 35, name: 'Boring Bar / Boring Head' }, { id: 36, name: 'Tap' },
+  ];
+  await db.ToolSubcategory.bulkCreate(
+    TOOL_SUBCATEGORIES.map(s => ({ ...s, description: '', activeFlag: true }))
+  );
+
+  // Category ↔ Subcategory many-to-many links
+  const LINKS = [
+    [1, 1], [1, 2], [1, 3], [1, 4], [1, 5], [1, 6], [1, 7],
+    [2, 8], [2, 9], [2, 10], [2, 11],
+    [3, 12], [3, 13], [3, 14], [3, 15], [3, 16], [3, 17], [3, 18], [3, 19], [3, 20], [3, 21],
+    [3, 22], [3, 23], [3, 24], [3, 25], [3, 26],
+    [3, 27], [3, 28], [3, 32], [3, 33], [3, 34], [3, 36],
+    [4, 35], [4, 27], [4, 29], [4, 34], [4, 36],
+    [5, 27], [5, 28], [5, 29], [5, 30], [5, 31], [5, 32], [5, 33], [5, 34], [5, 36],
+  ];
+  await db.ToolCategorySubcategory.bulkCreate(
+    LINKS.map(([catID, subID]) => ({ toolCategoryID: catID, toolSubcategoryID: subID }))
+  );
 
   // Admin group with all permissions
   const adminGroup = await db.UserGroup.create({ id: 1, name: 'Admin', description: 'Full access' });
@@ -165,6 +216,7 @@ afterEach(async () => {
     'TaskTimeTracking', 'TaskHistory', 'Task', 'ScheduledTask',
     'TaskList', 'Project',
     'BillOfMaterialItem',
+    'Tool',
     'WorkOrderStepCompletion', 'WorkOrder',
     'EngineeringMasterHistory', 'EngineeringMasterBomItem', 'EngineeringMasterStepMarker', 'EngineeringMasterStepItem', 'EngineeringMasterStep', 'EngineeringMasterOutputPart', 'EngineeringMaster',
     'BarcodeHistory', 'Trace', 'Equipment', 'OrderItem', 'Order',

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" color="white" viewBox="0 0 360 720" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+    <line x1="135" y1="68" x2="225" y2="68"/>
+    <line x1="125" y1="80" x2="135" y2="68"/>
+    <line x1="225" y1="68" x2="235" y2="80"/>
+    <line x1="125" y1="80" x2="125" y2="332"/>
+    <line x1="235" y1="80" x2="235" y2="332"/>
+    <line x1="125" y1="332" x2="138" y2="350"/>
+    <line x1="235" y1="332" x2="222" y2="350"/>
+    <!-- Stepped diameters (5 progressively smaller cylinders) -->
+    <line x1="138" y1="350" x2="138" y2="395"/><line x1="222" y1="350" x2="222" y2="395"/>
+    <line x1="138" y1="395" x2="146" y2="395"/><line x1="222" y1="395" x2="214" y2="395"/>
+    <line x1="146" y1="395" x2="146" y2="430"/><line x1="214" y1="395" x2="214" y2="430"/>
+    <line x1="146" y1="430" x2="154" y2="430"/><line x1="214" y1="430" x2="206" y2="430"/>
+    <line x1="154" y1="430" x2="154" y2="465"/><line x1="206" y1="430" x2="206" y2="465"/>
+    <line x1="154" y1="465" x2="162" y2="465"/><line x1="206" y1="465" x2="198" y2="465"/>
+    <line x1="162" y1="465" x2="162" y2="500"/><line x1="198" y1="465" x2="198" y2="500"/>
+    <line x1="162" y1="500" x2="170" y2="500"/><line x1="198" y1="500" x2="190" y2="500"/>
+    <line x1="170" y1="500" x2="170" y2="535"/><line x1="190" y1="500" x2="190" y2="535"/>
+    <!-- Pointed tip -->
+    <line x1="170" y1="535" x2="180" y2="555"/>
+    <line x1="190" y1="535" x2="180" y2="555"/>
+    <g stroke-width="1.2">
+      <path d="M 144,360 C 168,372 188,384 218,392"/>
+      <path d="M 152,400 C 174,408 192,418 212,425"/>
+      <path d="M 160,438 C 174,448 188,458 204,463"/>
+      <path d="M 165,475 C 175,484 188,490 197,495"/>
+      <path d="M 172,510 C 178,518 188,525 195,530"/>
+    </g>
+    <line x1="180" y1="68" x2="180" y2="565" stroke-dasharray="1 6" stroke-width="0.6" opacity="0.45"/>
+  </g>
+  <g fill="currentColor" stroke="currentColor" stroke-width="0.9" font-size="12">
+    <line x1="125" y1="40" x2="235" y2="40" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="125" y1="42" x2="125" y2="68" stroke-dasharray="3 3"/>
+    <line x1="235" y1="42" x2="235" y2="68" stroke-dasharray="3 3"/>
+    <text x="180" y="30" text-anchor="middle" stroke="none">Shank Diameter</text>
+    <line x1="68" y1="68" x2="68" y2="555" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="60" y1="68" x2="123" y2="68" stroke-dasharray="3 3"/>
+    <line x1="60" y1="555" x2="178" y2="555" stroke-dasharray="3 3"/>
+    <text x="52" y="312" text-anchor="middle" stroke="none" transform="rotate(-90 52,312)" font-weight="600">Overall Length</text>
+    <line x1="270" y1="350" x2="270" y2="535" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="224" y1="350" x2="273" y2="350" stroke-dasharray="3 3"/>
+    <line x1="192" y1="535" x2="273" y2="535" stroke-dasharray="3 3"/>
+    <text x="286" y="442" text-anchor="middle" stroke="none" transform="rotate(-90 286,442)">Flute Length</text>
+    <line x1="138" y1="600" x2="222" y2="600" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="138" y1="395" x2="138" y2="603" stroke-dasharray="3 3"/>
+    <line x1="222" y1="395" x2="222" y2="603" stroke-dasharray="3 3"/>
+    <text x="180" y="620" text-anchor="middle" stroke="none">Diameter (largest step)</text>
+  </g>
+</svg>

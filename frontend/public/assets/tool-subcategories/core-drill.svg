@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" color="white" viewBox="0 0 360 720" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Top chamfer on the narrow shank -->
+    <line x1="158" y1="68" x2="202" y2="68"/>
+    <line x1="150" y1="80" x2="158" y2="68"/>
+    <line x1="202" y1="68" x2="210" y2="80"/>
+    <!-- Reduced-diameter shank -->
+    <line x1="150" y1="80" x2="150" y2="332"/>
+    <line x1="210" y1="80" x2="210" y2="332"/>
+    <!-- Sloped step OUT to the wider cutter body -->
+    <line x1="150" y1="332" x2="125" y2="350"/>
+    <line x1="210" y1="332" x2="235" y2="350"/>
+    <!-- Cutter body outer walls (wider than the shank) -->
+    <line x1="125" y1="350" x2="125" y2="560"/>
+    <line x1="235" y1="350" x2="235" y2="560"/>
+    <!-- Hollow interior — annular cutters cut a ring, leaving a solid slug in the middle.
+         The inner walls of the cutter cup are visible from the open bottom. -->
+    <line x1="148" y1="430" x2="148" y2="560"/>
+    <line x1="212" y1="430" x2="212" y2="560"/>
+    <!-- Closed top of the hollow cup -->
+    <path d="M 148,430 Q 180,422 212,430"/>
+    <!-- Square-cornered bottom rings — straight line from the outer wall across to the inner wall -->
+    <line x1="125" y1="560" x2="148" y2="560" stroke-width="2"/>
+    <line x1="212" y1="560" x2="235" y2="560" stroke-width="2"/>
+    <!-- Pilot — looks like a small drill (cylindrical body with a sharp tip), centered on the cutter axis -->
+    <line x1="174" y1="430" x2="174" y2="600"/>
+    <line x1="186" y1="430" x2="186" y2="600"/>
+    <line x1="174" y1="600" x2="180" y2="608"/>
+    <line x1="186" y1="600" x2="180" y2="608"/>
+    <g stroke-width="1.0">
+      <path d="M 174,440 C 178,470 184,510 186,595"/>
+      <path d="M 176,475 C 180,510 184,545 186,595"/>
+    </g>
+    <!-- Centerline -->
+    <line x1="180" y1="68" x2="180" y2="615" stroke-dasharray="1 6" stroke-width="0.6" opacity="0.45"/>
+  </g>
+  <g fill="currentColor" stroke="currentColor" stroke-width="0.9" font-size="12">
+    <!-- Shank Diameter (the narrow upper shank) -->
+    <line x1="150" y1="40" x2="210" y2="40" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="150" y1="42" x2="150" y2="68" stroke-dasharray="3 3"/>
+    <line x1="210" y1="42" x2="210" y2="68" stroke-dasharray="3 3"/>
+    <text x="180" y="30" text-anchor="middle" stroke="none">Shank Diameter</text>
+    <!-- Overall Length (top to pilot tip) -->
+    <line x1="68" y1="68" x2="68" y2="608" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="60" y1="68" x2="148" y2="68" stroke-dasharray="3 3"/>
+    <line x1="60" y1="608" x2="178" y2="608" stroke-dasharray="3 3"/>
+    <text x="52" y="338" text-anchor="middle" stroke="none" transform="rotate(-90 52,338)" font-weight="600">Overall Length</text>
+    <!-- Flute Length (cutter body) -->
+    <line x1="280" y1="350" x2="280" y2="560" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="237" y1="350" x2="283" y2="350" stroke-dasharray="3 3"/>
+    <line x1="237" y1="560" x2="283" y2="560" stroke-dasharray="3 3"/>
+    <text x="296" y="455" text-anchor="middle" stroke="none" transform="rotate(-90 296,455)">Flute Length</text>
+    <!-- Diameter (outer cutting diameter — wider than the shank) -->
+    <line x1="125" y1="660" x2="235" y2="660" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="125" y1="562" x2="125" y2="663" stroke-dasharray="3 3"/>
+    <line x1="235" y1="562" x2="235" y2="663" stroke-dasharray="3 3"/>
+    <text x="180" y="680" text-anchor="middle" stroke="none">Diameter</text>
+    <!-- Pilot callout -->
+    <line x1="248" y1="595" x2="192" y2="595" marker-end="url(#arr)" stroke-width="0.9"/>
+    <text x="254" y="599" stroke="none">Pilot</text>
+  </g>
+</svg>

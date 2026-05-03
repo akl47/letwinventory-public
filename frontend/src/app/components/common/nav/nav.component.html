@@ -152,9 +152,9 @@
                     }
                     @if (openGroup() === 'build') {
                     @if (hasInventoryAccess()) {
-                    <a mat-list-item routerLink="/build" routerLinkActive="active-link" (click)="closePanel()">
+                    <a mat-list-item routerLink="/kits" routerLinkActive="active-link" (click)="closePanel()">
                         <mat-icon matListItemIcon>inventory_2</mat-icon>
-                        <span matListItemTitle>Builds</span>
+                        <span matListItemTitle>Kits</span>
                     </a>
                     }
                     @if (hasMfgExecutionAccess()) {
@@ -164,6 +164,10 @@
                         <span matListItemTitle>Work Orders</span>
                     </a>
                     }
+                    <a mat-list-item routerLink="/tools/catalog" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>build</mat-icon>
+                        <span matListItemTitle>Tool Catalog</span>
+                    </a>
                     }
 
                     @if (openGroup() === 'admin') {

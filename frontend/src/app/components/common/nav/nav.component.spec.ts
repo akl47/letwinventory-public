@@ -151,9 +151,9 @@ describe('NavComponent', () => {
 
   // ── REQ 174: Tools Navigation Group ─────────────────────────────────────
   describe('Tools navigation group (REQ 174)', () => {
-    it('should have tools in toolsPrefixes', () => {
+    it('should have /tools/outline in toolsPrefixes', () => {
       expect((component as any).toolsPrefixes).toBeDefined();
-      expect((component as any).toolsPrefixes).toContain('/tools');
+      expect((component as any).toolsPrefixes).toContain('/tools/outline');
     });
 
     it('should toggle tools group', () => {
@@ -167,13 +167,20 @@ describe('NavComponent', () => {
       expect((component as any).openGroup()).toBeNull();
     });
 
-    it('should detect tools route as active', () => {
+    it('should detect /tools/outline as tools active', () => {
       vi.spyOn(router, 'url', 'get').mockReturnValue('/tools/outline');
       expect(component.isGroupActive('tools' as any)).toBe(true);
     });
 
     it('should not detect non-tools route as tools active', () => {
       vi.spyOn(router, 'url', 'get').mockReturnValue('/inventory');
+      expect(component.isGroupActive('tools' as any)).toBe(false);
+    });
+
+    // REQ 297 — Tool Catalog now lives under the Build group
+    it('should detect /tools/catalog as build active (moved under Build group)', () => {
+      vi.spyOn(router, 'url', 'get').mockReturnValue('/tools/catalog');
+      expect(component.isGroupActive('build' as any)).toBe(true);
       expect(component.isGroupActive('tools' as any)).toBe(false);
     });
   });

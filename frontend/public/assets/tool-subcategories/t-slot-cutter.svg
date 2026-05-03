@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" color="white" viewBox="0 0 360 720" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+    <line x1="135" y1="68" x2="225" y2="68"/>
+    <line x1="125" y1="80" x2="135" y2="68"/>
+    <line x1="225" y1="68" x2="235" y2="80"/>
+    <line x1="125" y1="80" x2="125" y2="332"/>
+    <line x1="235" y1="80" x2="235" y2="332"/>
+    <!-- Sharp reduction to a narrow neck -->
+    <line x1="125" y1="332" x2="155" y2="360"/>
+    <line x1="235" y1="332" x2="205" y2="360"/>
+    <line x1="155" y1="360" x2="155" y2="500"/>
+    <line x1="205" y1="360" x2="205" y2="500"/>
+    <!-- Wide T-slot disc cutter at the tip -->
+    <line x1="155" y1="500" x2="100" y2="500"/>
+    <line x1="205" y1="500" x2="260" y2="500"/>
+    <line x1="100" y1="500" x2="100" y2="565"/>
+    <line x1="260" y1="500" x2="260" y2="565"/>
+    <line x1="100" y1="565" x2="260" y2="565" stroke-width="2"/>
+    <line x1="100" y1="500" x2="100" y2="565" stroke-width="2"/>
+    <line x1="260" y1="500" x2="260" y2="565" stroke-width="2"/>
+    <!-- Flutes around disc periphery (short tick marks) -->
+    <g stroke-width="1.1">
+      <line x1="100" y1="510" x2="106" y2="514"/>
+      <line x1="100" y1="525" x2="106" y2="529"/>
+      <line x1="100" y1="540" x2="106" y2="544"/>
+      <line x1="100" y1="555" x2="106" y2="559"/>
+      <line x1="260" y1="510" x2="254" y2="514"/>
+      <line x1="260" y1="525" x2="254" y2="529"/>
+      <line x1="260" y1="540" x2="254" y2="544"/>
+      <line x1="260" y1="555" x2="254" y2="559"/>
+      <line x1="115" y1="565" x2="115" y2="558"/>
+      <line x1="135" y1="565" x2="135" y2="558"/>
+      <line x1="155" y1="565" x2="155" y2="558"/>
+      <line x1="175" y1="565" x2="175" y2="558"/>
+      <line x1="205" y1="565" x2="205" y2="558"/>
+      <line x1="225" y1="565" x2="225" y2="558"/>
+      <line x1="245" y1="565" x2="245" y2="558"/>
+    </g>
+    <line x1="180" y1="68" x2="180" y2="580" stroke-dasharray="1 6" stroke-width="0.6" opacity="0.45"/>
+  </g>
+  <g fill="currentColor" stroke="currentColor" stroke-width="0.9" font-size="12">
+    <line x1="125" y1="40" x2="235" y2="40" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="125" y1="42" x2="125" y2="68" stroke-dasharray="3 3"/>
+    <line x1="235" y1="42" x2="235" y2="68" stroke-dasharray="3 3"/>
+    <text x="180" y="30" text-anchor="middle" stroke="none">Shank Diameter</text>
+    <line x1="50" y1="68" x2="50" y2="565" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="42" y1="68" x2="123" y2="68" stroke-dasharray="3 3"/>
+    <line x1="42" y1="565" x2="98" y2="565" stroke-dasharray="3 3"/>
+    <text x="34" y="316" text-anchor="middle" stroke="none" transform="rotate(-90 34,316)" font-weight="600">Overall Length</text>
+    <line x1="298" y1="500" x2="298" y2="565" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="262" y1="500" x2="301" y2="500" stroke-dasharray="3 3"/>
+    <line x1="262" y1="565" x2="301" y2="565" stroke-dasharray="3 3"/>
+    <text x="312" y="540" text-anchor="middle" stroke="none" transform="rotate(-90 312,540)">Flute Length</text>
+    <line x1="100" y1="610" x2="260" y2="610" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="100" y1="567" x2="100" y2="613" stroke-dasharray="3 3"/>
+    <line x1="260" y1="567" x2="260" y2="613" stroke-dasharray="3 3"/>
+    <text x="180" y="630" text-anchor="middle" stroke="none">Diameter (disc)</text>
+  </g>
+</svg>

@@ -668,3 +668,32 @@ Each session should:
   - `frontend/src/app/app.routes.ts` — 5 new routes (masters list/new/edit, work-orders list/detail); reordered build routes
   - `frontend/src/app/components/common/nav/nav.component.ts` — designPrefixes includes '/design', hasMfgPlanningAccess, hasMfgExecutionAccess, hasBuildGroupAccess
   - `frontend/src/app/components/common/nav/nav.component.html` — "Engineering Masters" under Design, "Work Orders" under Build, Build gated by hasBuildGroupAccess
+
+### 2026-05-03
+- **Tool Catalog feature** — first-class workshop tool tracking linked 1:1 to Parts; multi-step taxonomy with categories ⇄ subcategories M:N
+  - **Schema**: `ToolCategories` (5 broad groupings — Hand Tools, Power Tools, Mill Tools, Lathe Tools, General Purpose), `ToolSubcategories` (36 leaves seeded), `ToolCategorySubcategories` join (M:N), `Tools` (partID UNIQUE FK + toolSubcategoryID FK + dimension columns)
+  - **Tool dimensions** (all DECIMAL(10,3), nullable, mm): diameter, overallLength, fluteLength, shankDiameter, numberOfFlutes (INT), tipAngle (DECIMAL(5,2) deg), toolMaterial, coating, notes
+  - **Soft-delete preserves field values** — clearing the subcategory on the Part edit page sets `activeFlag=false` but keeps every dimension; reactivating restores the row intact
+  - **Two-step UX on Part edit page**: pick Tool Category → autocomplete narrows to subcategories under it → tool dimension fields appear. Subcategory is what's saved (`toolSubcategoryID`); category is UX-only filter
+  - **Tool Catalog browse page** at `/tools/catalog` with Category + Subcategory filters and name/description search; rows link to part edit page
+  - **Permissions**: `tools.read/write/delete` resource (didn't exist before — Tool Outline was frontend-only) and new `admin.manage_tool_categories` special action for taxonomy CRUD; Tool record CRUD reuses `parts.write/delete`
+  - **25 SVG diagrams** at `frontend/public/assets/tool-subcategories/` showing each subcategory's geometry with labelled dimensions; line-drawing style with `color="white"` default + `currentColor` strokes; `InlineSvgDirective` fetches via HttpClient and inlines so theme `color` inheritance works (light by default, dark via `prefers-color-scheme: light`)
+  - 10 requirements created (REQ 290-299) in Tools category — REQ 290 is the group root under REQ 184
+- **Files created:**
+  - `backend/migrations/20260501000000-create-tools.js` — 4 tables + 4 permissions seed
+  - `backend/models/tools/{tool,toolCategory,toolSubcategory,toolCategorySubcategory}.js`
+  - `backend/api/tools/tool/{controller,routes}.js`
+  - `backend/api/tools/tool-category/{controller,routes}.js`
+  - `backend/api/tools/tool-subcategory/{controller,routes}.js`
+  - `backend/tests/__tests__/tools/{tool,tool-category}.test.js`
+  - `frontend/src/app/models/tool.model.ts`
+  - `frontend/src/app/services/tools.service.ts` + `.spec.ts`
+  - `frontend/src/app/directives/inline-svg.directive.ts`
+  - `frontend/src/app/components/tools/tool-catalog-view/{ts,html,css,spec.ts}`
+  - `frontend/public/assets/tool-subcategories/*.svg` — 25 files (square-end-mill, ball-end-mill, bull-nose-end-mill, chamfer-mill, tapered-end-mill, roughing-end-mill, lollipop-mill, dovetail-cutter, t-slot-cutter, woodruff-cutter, thread-mill, v-bit, face-mill, fly-cutter, slitting-saw, drill-bit, spot-drill, center-drill, step-drill, core-drill, counterbore, countersink, reamer, boring-bar-boring-head, tap)
+  - `docs/features/tool_catalog.md`
+- **Files modified:**
+  - `backend/tests/setup.js` — `tools` resource added to permissions list, `admin.manage_tool_categories` extra perm seeded, ToolCategories/ToolSubcategories/ToolCategorySubcategories seeded as reference data, `Tool` added to per-test cleanup
+  - `frontend/src/app/app.routes.ts` — `/tools/catalog` route
+  - `frontend/src/app/components/common/nav/nav.component.html` — Tool Catalog flyout entry
+  - `frontend/src/app/components/inventory/part-edit-page/part-edit-page.{ts,html,css}` — Tool Properties expansion panel: category dropdown, subcategory autocomplete, dimension fields, inline SVG diagram with theme-aware color

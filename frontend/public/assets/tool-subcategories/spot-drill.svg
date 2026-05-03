@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" color="white" viewBox="0 0 360 600" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Top chamfer -->
+    <line x1="148" y1="68" x2="212" y2="68"/>
+    <line x1="138" y1="80" x2="148" y2="68"/>
+    <line x1="212" y1="68" x2="222" y2="80"/>
+    <!-- Uniform body — shank Ø = cutting Ø, no diameter step -->
+    <line x1="138" y1="80" x2="138" y2="430"/>
+    <line x1="222" y1="80" x2="222" y2="430"/>
+    <!-- Steep point (~90°) — short distance from body to point -->
+    <line x1="138" y1="430" x2="180" y2="478"/>
+    <line x1="222" y1="430" x2="180" y2="478"/>
+    <!-- Cutting flutes only on the tapered tip cone (smooth body above). -->
+    <g stroke-width="1.2">
+      <path d="M 155,430 C 168,448 175,462 180,475"/>
+      <path d="M 205,430 C 192,448 185,462 180,475"/>
+    </g>
+    <line x1="180" y1="68" x2="180" y2="488" stroke-dasharray="1 6" stroke-width="0.6" opacity="0.45"/>
+  </g>
+  <g fill="currentColor" stroke="currentColor" stroke-width="0.9" font-size="12">
+    <!-- Shank Diameter (= cutting Ø since the body is uniform) -->
+    <line x1="138" y1="40" x2="222" y2="40" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="138" y1="42" x2="138" y2="68" stroke-dasharray="3 3"/>
+    <line x1="222" y1="42" x2="222" y2="68" stroke-dasharray="3 3"/>
+    <text x="180" y="30" text-anchor="middle" stroke="none">Shank Diameter</text>
+    <!-- Overall Length -->
+    <line x1="68" y1="68" x2="68" y2="478" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="60" y1="68" x2="136" y2="68" stroke-dasharray="3 3"/>
+    <line x1="60" y1="478" x2="178" y2="478" stroke-dasharray="3 3"/>
+    <text x="52" y="270" text-anchor="middle" stroke="none" transform="rotate(-90 52,270)" font-weight="600">Overall Length</text>
+    <!-- Flute Length (the full body since there's no separate shank) -->
+    <line x1="270" y1="80" x2="270" y2="430" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="224" y1="80" x2="273" y2="80" stroke-dasharray="3 3"/>
+    <line x1="224" y1="430" x2="273" y2="430" stroke-dasharray="3 3"/>
+    <text x="286" y="255" text-anchor="middle" stroke="none" transform="rotate(-90 286,255)">Flute Length</text>
+    <!-- Diameter (same as shank) -->
+    <line x1="138" y1="510" x2="222" y2="510" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="138" y1="432" x2="138" y2="513" stroke-dasharray="3 3"/>
+    <line x1="222" y1="432" x2="222" y2="513" stroke-dasharray="3 3"/>
+    <text x="180" y="530" text-anchor="middle" stroke="none">Diameter</text>
+    <!-- Tip Angle callout -->
+    <line x1="248" y1="475" x2="195" y2="465" marker-end="url(#arr)" stroke-width="0.9"/>
+    <text x="254" y="479" stroke="none">Tip Angle</text>
+  </g>
+</svg>
