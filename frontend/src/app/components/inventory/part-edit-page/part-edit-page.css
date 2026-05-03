@@ -859,6 +859,11 @@ mat-checkbox {
     color: #4CAF50;
 }
 
+.tool-unit-toggle {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 0 8px;
+}
 .tool-properties-grid {
     display: flex;
     gap: 24px;

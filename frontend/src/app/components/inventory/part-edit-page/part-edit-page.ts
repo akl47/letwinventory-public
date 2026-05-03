@@ -2,6 +2,7 @@ import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { FormBuilder, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatCardModule } from '@angular/material/card';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
@@ -40,6 +41,7 @@ import { PartLink } from '../../common/part-link/part-link';
     ReactiveFormsModule,
     FormsModule,
     MatButtonModule,
+    MatButtonToggleModule,
     MatCardModule,
     MatFormFieldModule,
     MatInputModule,
@@ -97,6 +99,61 @@ export class PartEditPage implements OnInit {
 
   setHighlight(key: string | null) {
     this.highlightedDimension.set(key);
+  }
+
+  /** Display unit for tool dimensions. DB always stores mm; this only affects what the
+   *  user sees and types in the form. Persisted per-user in localStorage. */
+  toolUnit = signal<'mm' | 'in'>(
+    (typeof localStorage !== 'undefined' && localStorage.getItem('toolUnit') === 'in') ? 'in' : 'mm',
+  );
+
+  /** Length form fields that are affected by the unit toggle. Excludes tipAngle (degrees)
+   *  and integer counts (numberOfFlutes, numberOfSteps). */
+  private readonly toolLengthFields = [
+    'toolDiameter', 'toolOverallLength', 'toolFluteLength', 'toolShankDiameter',
+    'toolCornerRadius', 'toolReducedShankDiameter', 'toolSquareDriveSize', 'toolStepDelta',
+  ] as const;
+
+  private mmToDisplay(mm: number | null | undefined): number | null {
+    if (mm === null || mm === undefined) return null;
+    const n = Number(mm);
+    if (this.toolUnit() === 'in') return Math.round((n / 25.4) * 1000) / 1000;
+    return Math.round(n * 1000) / 1000;
+  }
+
+  private displayToMm(value: number | string | null | undefined): number | null {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    if (Number.isNaN(n)) return null;
+    if (this.toolUnit() === 'in') return Math.round(n * 25.4 * 1000) / 1000;
+    return Math.round(n * 1000) / 1000;
+  }
+
+  onToolUnitChange(unit: 'mm' | 'in') {
+    if (unit === this.toolUnit()) return;
+    // Convert each length field's current display value into the new unit.
+    const factor = unit === 'in' ? 1 / 25.4 : 25.4;
+    const patch: Record<string, number | null> = {};
+    for (const f of this.toolLengthFields) {
+      const v: any = this.form?.get(f)?.value;
+      if (v !== null && v !== undefined && v !== '') {
+        patch[f] = Math.round(Number(v) * factor * 1000) / 1000;
+      }
+    }
+    this.toolUnit.set(unit);
+    if (typeof localStorage !== 'undefined') localStorage.setItem('toolUnit', unit);
+    if (Object.keys(patch).length) this.form.patchValue(patch);
+  }
+
+  toolUnitLabel(): string {
+    return this.toolUnit();
+  }
+
+  /** Public helper for templates: convert a stored-mm value into the current display unit. */
+  displayLength(mm: number | string | null | undefined): string {
+    if (mm === null || mm === undefined || mm === '') return '—';
+    const n = this.mmToDisplay(mm as any);
+    return n === null ? '—' : String(n);
   }
 
   filteredToolSubcategories = computed(() => {
@@ -725,17 +782,17 @@ export class PartEditPage implements OnInit {
         const num = (v: any) => (v !== null && v !== undefined ? Number(v) : null);
         this.form.patchValue({
           toolSubcategoryID: tool.activeFlag ? tool.toolSubcategoryID : null,
-          toolDiameter: num(tool.diameter),
+          toolDiameter: this.mmToDisplay(tool.diameter as any),
           toolNumberOfFlutes: tool.numberOfFlutes ?? null,
-          toolOverallLength: num(tool.overallLength),
-          toolFluteLength: num(tool.fluteLength),
-          toolShankDiameter: num(tool.shankDiameter),
+          toolOverallLength: this.mmToDisplay(tool.overallLength as any),
+          toolFluteLength: this.mmToDisplay(tool.fluteLength as any),
+          toolShankDiameter: this.mmToDisplay(tool.shankDiameter as any),
           toolTipAngle: num(tool.tipAngle),
-          toolCornerRadius: num(tool.cornerRadius),
-          toolReducedShankDiameter: num(tool.reducedShankDiameter),
-          toolSquareDriveSize: num(tool.squareDriveSize),
+          toolCornerRadius: this.mmToDisplay(tool.cornerRadius as any),
+          toolReducedShankDiameter: this.mmToDisplay(tool.reducedShankDiameter as any),
+          toolSquareDriveSize: this.mmToDisplay(tool.squareDriveSize as any),
           toolNumberOfSteps: tool.numberOfSteps ?? null,
-          toolStepDelta: num(tool.stepDelta),
+          toolStepDelta: this.mmToDisplay(tool.stepDelta as any),
           toolMaterial: tool.toolMaterial || '',
           toolCoating: tool.coating || '',
           toolNotes: tool.notes || '',
@@ -756,17 +813,17 @@ export class PartEditPage implements OnInit {
     const payload = {
       partID,
       toolSubcategoryID: subcategoryID ?? tool?.toolSubcategoryID ?? undefined,
-      diameter: (fv as any).toolDiameter ?? null,
+      diameter: this.displayToMm((fv as any).toolDiameter),
       numberOfFlutes: (fv as any).toolNumberOfFlutes ?? null,
-      overallLength: (fv as any).toolOverallLength ?? null,
-      fluteLength: (fv as any).toolFluteLength ?? null,
-      shankDiameter: (fv as any).toolShankDiameter ?? null,
+      overallLength: this.displayToMm((fv as any).toolOverallLength),
+      fluteLength: this.displayToMm((fv as any).toolFluteLength),
+      shankDiameter: this.displayToMm((fv as any).toolShankDiameter),
       tipAngle: (fv as any).toolTipAngle ?? null,
-      cornerRadius: (fv as any).toolCornerRadius ?? null,
-      reducedShankDiameter: (fv as any).toolReducedShankDiameter ?? null,
-      squareDriveSize: (fv as any).toolSquareDriveSize ?? null,
+      cornerRadius: this.displayToMm((fv as any).toolCornerRadius),
+      reducedShankDiameter: this.displayToMm((fv as any).toolReducedShankDiameter),
+      squareDriveSize: this.displayToMm((fv as any).toolSquareDriveSize),
       numberOfSteps: (fv as any).toolNumberOfSteps ?? null,
-      stepDelta: (fv as any).toolStepDelta ?? null,
+      stepDelta: this.displayToMm((fv as any).toolStepDelta),
       toolMaterial: (fv as any).toolMaterial || null,
       coating: (fv as any).toolCoating || null,
       notes: (fv as any).toolNotes || null,

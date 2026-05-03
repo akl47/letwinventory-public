@@ -81,19 +81,19 @@ describe('ToolCatalogView', () => {
     component.onCategoryFilterChange(4); // Lathe Tools
     // Drill Bit belongs to Lathe Tools, Square End Mill does not
     expect(component.displayedTools().length).toBe(1);
-    expect(component.displayedTools()[0].part.name).toBe('DR-001');
+    expect(component.displayedTools()[0]?.part?.name).toBe('DR-001');
   });
 
   it('filters by subcategory', () => {
     component.subcategoryFilter.set(12);
     expect(component.displayedTools().length).toBe(1);
-    expect(component.displayedTools()[0].part.name).toBe('EM-001');
+    expect(component.displayedTools()[0]?.part?.name).toBe('EM-001');
   });
 
   it('filters by search text matching part name', () => {
     component.onSearchChange('EM');
     expect(component.displayedTools().length).toBe(1);
-    expect(component.displayedTools()[0].part.name).toBe('EM-001');
+    expect(component.displayedTools()[0]?.part?.name).toBe('EM-001');
   });
 
   it('filters subcategory dropdown when category is chosen', () => {
