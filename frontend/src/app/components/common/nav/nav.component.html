@@ -149,6 +149,10 @@
                         <mat-icon matListItemIcon>straighten</mat-icon>
                         <span matListItemTitle>Tool Outline</span>
                     </a>
+                    <a mat-list-item routerLink="/tools/catalog" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>build</mat-icon>
+                        <span matListItemTitle>Tool Catalog</span>
+                    </a>
                     }
                     @if (openGroup() === 'build') {
                     @if (hasInventoryAccess()) {

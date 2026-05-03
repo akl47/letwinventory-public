@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" color="white" viewBox="0 0 360 720" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+    <line x1="135" y1="68" x2="225" y2="68"/>
+    <line x1="125" y1="80" x2="135" y2="68"/>
+    <line x1="225" y1="68" x2="235" y2="80"/>
+    <line x1="125" y1="80" x2="125" y2="332"/>
+    <line x1="235" y1="80" x2="235" y2="332"/>
+    <line x1="125" y1="332" x2="138" y2="350"/>
+    <line x1="235" y1="332" x2="222" y2="350"/>
+    <line x1="138" y1="350" x2="138" y2="568"/>
+    <line x1="222" y1="350" x2="222" y2="568"/>
+    <!-- Bull nose: small corner radii (~12) blending into a flat middle -->
+    <path d="M 138,568 A 12,12 0 0 0 150,580 L 210,580 A 12,12 0 0 0 222,568"/>
+    <g stroke-width="1.2">
+      <path d="M 138,350 C 175,360 185,370 222,378"/>
+      <path d="M 138,378 C 175,388 185,400 222,408"/>
+      <path d="M 138,408 C 175,418 185,430 222,438"/>
+      <path d="M 138,438 C 175,448 185,460 222,468"/>
+      <path d="M 138,468 C 175,478 185,490 222,498"/>
+      <path d="M 138,498 C 175,508 185,520 222,528"/>
+      <path d="M 138,528 C 175,538 185,548 222,556"/>
+      <path d="M 138,558 C 168,564 178,572 215,568"/>
+    </g>
+    <g stroke-width="0.7" stroke-dasharray="3 4" opacity="0.45">
+      <path d="M 222,358 C 185,368 175,380 138,388"/>
+      <path d="M 222,388 C 185,398 175,410 138,418"/>
+      <path d="M 222,418 C 185,428 175,440 138,448"/>
+      <path d="M 222,448 C 185,458 175,470 138,478"/>
+      <path d="M 222,478 C 185,488 175,500 138,508"/>
+      <path d="M 222,508 C 185,518 175,530 138,538"/>
+    </g>
+    <!-- Small radius arrow callout -->
+    <line x1="180" y1="68" x2="180" y2="600" stroke-dasharray="1 6" stroke-width="0.6" opacity="0.45"/>
+  </g>
+  <g fill="currentColor" stroke="currentColor" stroke-width="0.9" font-size="12">
+    <line x1="125" y1="40" x2="235" y2="40" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="125" y1="42" x2="125" y2="68" stroke-dasharray="3 3"/>
+    <line x1="235" y1="42" x2="235" y2="68" stroke-dasharray="3 3"/>
+    <text x="180" y="30" text-anchor="middle" stroke="none">Shank Diameter</text>
+    <line x1="68" y1="68" x2="68" y2="580" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="60" y1="68" x2="123" y2="68" stroke-dasharray="3 3"/>
+    <line x1="60" y1="580" x2="150" y2="580" stroke-dasharray="3 3"/>
+    <text x="52" y="324" text-anchor="middle" stroke="none" transform="rotate(-90 52,324)" font-weight="600">Overall Length</text>
+    <line x1="270" y1="350" x2="270" y2="580" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="224" y1="350" x2="273" y2="350" stroke-dasharray="3 3"/>
+    <line x1="224" y1="580" x2="273" y2="580" stroke-dasharray="3 3"/>
+    <text x="286" y="464" text-anchor="middle" stroke="none" transform="rotate(-90 286,464)">Flute Length</text>
+    <line x1="138" y1="625" x2="222" y2="625" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="138" y1="582" x2="138" y2="628" stroke-dasharray="3 3"/>
+    <line x1="222" y1="582" x2="222" y2="628" stroke-dasharray="3 3"/>
+    <text x="180" y="645" text-anchor="middle" stroke="none">Diameter</text>
+    <!-- Corner Radius callout pointing at the bottom-right rounded corner -->
+    <line x1="275" y1="615" x2="225" y2="582" marker-end="url(#arr)" stroke-width="0.9"/>
+    <text x="278" y="622" stroke="none">Corner Radius</text>
+  </g>
+</svg>

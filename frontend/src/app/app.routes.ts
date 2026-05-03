@@ -281,6 +281,13 @@ export const routes: Routes = [
             import('./components/tools/tool-outline/tool-outline').then((m) => m.ToolOutlineComponent),
     },
     {
+        path: 'tools/catalog',
+        title: 'Tool Catalog',
+        loadComponent: () =>
+            import('./components/tools/tool-catalog-view/tool-catalog-view').then((m) => m.ToolCatalogView),
+        canActivate: [authGuard],
+    },
+    {
         path: 'settings',
         title: 'Settings',
         loadComponent: () =>

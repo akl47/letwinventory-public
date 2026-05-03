@@ -858,3 +858,64 @@ mat-checkbox {
 .change-new {
     color: #4CAF50;
 }
+
+.tool-properties-grid {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    margin: 12px 0 16px;
+}
+.tool-properties-grid .tool-fields {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.tool-properties-grid .tool-diagram {
+    flex: 0 0 320px;
+    margin: 0;
+}
+.tool-diagram {
+    display: flex;
+    justify-content: center;
+    /* Default: white/light lines (good for the dark theme). */
+    color: #f0f0f0;
+}
+@media (prefers-color-scheme: light) {
+    .tool-diagram { color: #222; }
+}
+.tool-diagram svg {
+    max-width: 320px;
+    width: 100%;
+    height: auto;
+}
+/* Highlight a single dimension callout when its input is focused.
+   Inputs set [data-highlight="<key>"] on .tool-diagram; the directive stamps
+   matching [data-dim="<key>"] onto each callout's elements after SVG injection.
+   ::ng-deep is required because the SVG is dynamically injected via innerHTML
+   and so doesn't carry the component's view-encapsulation attribute, which means
+   the descendant selector wouldn't match without piercing encapsulation. */
+:host ::ng-deep .tool-diagram[data-highlight] [data-dim] {
+    opacity: 0.35;
+    transition: opacity 120ms, color 120ms;
+}
+:host ::ng-deep .tool-diagram[data-highlight="diameter"] [data-dim="diameter"],
+:host ::ng-deep .tool-diagram[data-highlight="overall-length"] [data-dim="overall-length"],
+:host ::ng-deep .tool-diagram[data-highlight="flute-length"] [data-dim="flute-length"],
+:host ::ng-deep .tool-diagram[data-highlight="shank-diameter"] [data-dim="shank-diameter"],
+:host ::ng-deep .tool-diagram[data-highlight="tip-angle"] [data-dim="tip-angle"],
+:host ::ng-deep .tool-diagram[data-highlight="corner-radius"] [data-dim="corner-radius"],
+:host ::ng-deep .tool-diagram[data-highlight="reduced-shank"] [data-dim="reduced-shank"],
+:host ::ng-deep .tool-diagram[data-highlight="square-drive"] [data-dim="square-drive"],
+:host ::ng-deep .tool-diagram[data-highlight="number-of-steps"] [data-dim="number-of-steps"],
+:host ::ng-deep .tool-diagram[data-highlight="step-delta"] [data-dim="step-delta"] {
+    opacity: 1;
+    color: #ffd54f;
+}
+@media (max-width: 720px) {
+    .tool-properties-grid {
+        flex-direction: column;
+    }
+    .tool-properties-grid .tool-diagram {
+        flex: 0 0 auto;
+        align-self: center;
+    }
+}

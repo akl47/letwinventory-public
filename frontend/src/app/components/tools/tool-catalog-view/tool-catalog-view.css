@@ -1,0 +1,14 @@
+.page-container { padding: 24px; }
+.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
+.page-header h2 { margin: 0; }
+.header-actions { display: flex; align-items: center; gap: 12px; }
+.search-field, .filter-field { width: 220px; }
+.search-field .mat-mdc-form-field-subscript-wrapper,
+.filter-field .mat-mdc-form-field-subscript-wrapper { display: none; }
+.loading-container { display: flex; justify-content: center; padding: 48px; }
+.empty-state { display: flex; flex-direction: column; align-items: center; padding: 48px; color: #888; }
+.empty-state mat-icon { font-size: 48px; width: 48px; height: 48px; margin-bottom: 12px; }
+.clickable-row { cursor: pointer; }
+.clickable-row:hover { background-color: rgba(255, 255, 255, 0.04); }
+.category-badge { background: rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 2px 10px; font-size: 12px; font-weight: 500; }
+table { width: 100%; }

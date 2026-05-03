@@ -508,4 +508,60 @@ describe('PartEditPage', () => {
       expect(inventoryService.deletePart).not.toHaveBeenCalled();
     });
   });
+
+  // REQ 295 — Tool Properties section on Part edit page
+  describe('Tool Properties (REQ 295)', () => {
+    it('exposes toolCategories, toolSubcategories, and currentTool signals', () => {
+      const c = component as any;
+      expect(c.toolCategories).toBeDefined();
+      expect(c.toolSubcategories).toBeDefined();
+      expect(c.currentTool).toBeDefined();
+    });
+
+    it('hides dimension fields when no Tool Subcategory is selected', () => {
+      const c = component as any;
+      c.form.patchValue({ toolSubcategoryID: null });
+      expect(typeof c.showToolFields).toBe('function');
+      expect(c.showToolFields()).toBe(false);
+    });
+
+    it('shows dimension fields once a Tool Subcategory is selected', () => {
+      const c = component as any;
+      c.toolSubcategories.set([{ id: 12, name: 'Square End Mill', activeFlag: true, categories: [{ id: 3, name: 'Mill Tools', activeFlag: true }] }]);
+      c.form.patchValue({ toolSubcategoryID: 12 });
+      expect(c.showToolFields()).toBe(true);
+    });
+
+    it('hides the subcategory autocomplete until a category is picked (or a subcategory pre-exists)', () => {
+      const c = component as any;
+      c.toolCategoryFilter.set(null);
+      c.form.patchValue({ toolSubcategoryID: null });
+      expect(c.showSubcategoryField()).toBe(false);
+
+      c.toolCategoryFilter.set(3);
+      expect(c.showSubcategoryField()).toBe(true);
+    });
+
+    it('filters subcategories by the chosen category', () => {
+      const c = component as any;
+      c.toolSubcategories.set([
+        { id: 12, name: 'Square End Mill', activeFlag: true, categories: [{ id: 3, name: 'Mill Tools' }] },
+        { id: 1,  name: 'Hammer',          activeFlag: true, categories: [{ id: 1, name: 'Hand Tools' }] },
+      ]);
+      c.toolCategoryFilter.set(3); // Mill Tools
+      const filtered = c.filteredToolSubcategories();
+      expect(filtered.length).toBe(1);
+      expect(filtered[0].name).toBe('Square End Mill');
+    });
+
+    it('clears the subcategory if the new category does not contain it', () => {
+      const c = component as any;
+      c.toolSubcategories.set([
+        { id: 12, name: 'Square End Mill', activeFlag: true, categories: [{ id: 3, name: 'Mill Tools' }] },
+      ]);
+      c.form.patchValue({ toolSubcategoryID: 12 });
+      c.onToolCategoryFilterChange(1); // Hand Tools — Square End Mill is NOT under it
+      expect(c.form.get('toolSubcategoryID').value).toBeNull();
+    });
+  });
 });

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" color="white" viewBox="0 0 360 720" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+    <line x1="135" y1="68" x2="225" y2="68"/>
+    <line x1="125" y1="80" x2="135" y2="68"/>
+    <line x1="225" y1="68" x2="235" y2="80"/>
+    <line x1="125" y1="80" x2="125" y2="332"/>
+    <line x1="235" y1="80" x2="235" y2="332"/>
+    <!-- Steep neck reduction: shank narrows sharply into a thin neck -->
+    <line x1="125" y1="332" x2="168" y2="370"/>
+    <line x1="235" y1="332" x2="192" y2="370"/>
+    <!-- Thin neck -->
+    <line x1="168" y1="370" x2="168" y2="510"/>
+    <line x1="192" y1="370" x2="192" y2="510"/>
+    <!-- Spherical cutter (wider than the neck — undercut) -->
+    <path d="M 168,510 A 38,38 0 1 0 192,510 Z"/>
+    <!-- Longitudinal flutes — meridian curves running pole to pole on the ball -->
+    <g stroke-width="1.1" fill="none">
+      <path d="M 168,510 C 145,525 145,575 180,584"/>
+      <path d="M 174,510 C 160,530 160,570 180,584"/>
+      <path d="M 186,510 C 200,530 200,570 180,584"/>
+      <path d="M 192,510 C 215,525 215,575 180,584"/>
+    </g>
+    <line x1="180" y1="68" x2="180" y2="610" stroke-dasharray="1 6" stroke-width="0.6" opacity="0.45"/>
+  </g>
+  <g fill="currentColor" stroke="currentColor" stroke-width="0.9" font-size="12">
+    <line x1="125" y1="40" x2="235" y2="40" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="125" y1="42" x2="125" y2="68" stroke-dasharray="3 3"/>
+    <line x1="235" y1="42" x2="235" y2="68" stroke-dasharray="3 3"/>
+    <text x="180" y="30" text-anchor="middle" stroke="none">Shank Diameter</text>
+    <line x1="68" y1="68" x2="68" y2="600" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="60" y1="68" x2="123" y2="68" stroke-dasharray="3 3"/>
+    <line x1="60" y1="600" x2="180" y2="600" stroke-dasharray="3 3"/>
+    <text x="52" y="334" text-anchor="middle" stroke="none" transform="rotate(-90 52,334)" font-weight="600">Overall Length</text>
+    <line x1="270" y1="370" x2="270" y2="510" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="194" y1="370" x2="273" y2="370" stroke-dasharray="3 3"/>
+    <line x1="194" y1="510" x2="273" y2="510" stroke-dasharray="3 3"/>
+    <text x="286" y="444" text-anchor="middle" stroke="none" transform="rotate(-90 286,444)">Flute Length (neck)</text>
+    <!-- Diameter measured at the ball -->
+    <line x1="142" y1="640" x2="218" y2="640" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="142" y1="548" x2="142" y2="643" stroke-dasharray="3 3"/>
+    <line x1="218" y1="548" x2="218" y2="643" stroke-dasharray="3 3"/>
+    <text x="180" y="660" text-anchor="middle" stroke="none">Diameter (ball)</text>
+  </g>
+</svg>

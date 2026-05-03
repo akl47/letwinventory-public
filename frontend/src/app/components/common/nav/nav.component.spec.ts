@@ -176,5 +176,11 @@ describe('NavComponent', () => {
       vi.spyOn(router, 'url', 'get').mockReturnValue('/inventory');
       expect(component.isGroupActive('tools' as any)).toBe(false);
     });
+
+    // REQ 297 — Tool Catalog nav entry
+    it('should detect /tools/catalog as tools active', () => {
+      vi.spyOn(router, 'url', 'get').mockReturnValue('/tools/catalog');
+      expect(component.isGroupActive('tools' as any)).toBe(true);
+    });
   });
 });

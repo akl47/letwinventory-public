@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" color="white" viewBox="0 0 360 720" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Top chamfer on the narrow shank -->
+    <line x1="158" y1="68" x2="202" y2="68"/>
+    <line x1="150" y1="80" x2="158" y2="68"/>
+    <line x1="202" y1="68" x2="210" y2="80"/>
+    <!-- Narrow shank — smaller diameter than the cutter body -->
+    <line x1="150" y1="80" x2="150" y2="332"/>
+    <line x1="210" y1="80" x2="210" y2="332"/>
+    <!-- Sloped step OUT to the wider cutter body -->
+    <line x1="150" y1="332" x2="125" y2="350"/>
+    <line x1="210" y1="332" x2="235" y2="350"/>
+    <!-- Cutter body sides (wider than the shank) -->
+    <line x1="125" y1="350" x2="125" y2="540"/>
+    <line x1="235" y1="350" x2="235" y2="540"/>
+    <!-- Flat cutting bottom (full cutter width, with a hole in the centre for the pilot) -->
+    <line x1="125" y1="540" x2="170" y2="540" stroke-width="2"/>
+    <line x1="190" y1="540" x2="235" y2="540" stroke-width="2"/>
+    <!-- Pilot pin — concentric, smaller diameter, extending below the cutter -->
+    <line x1="170" y1="540" x2="170" y2="612"/>
+    <line x1="190" y1="540" x2="190" y2="612"/>
+    <!-- Rounded pilot tip -->
+    <path d="M 170,612 Q 180,620 190,612"/>
+    <!-- Pilot replacement seam (some counterbores have a removable pilot) -->
+    <line x1="170" y1="556" x2="190" y2="556" stroke-width="0.9" stroke-dasharray="2 3"/>
+    <!-- Helical flutes on the cutter body -->
+    <g stroke-width="1.2">
+      <path d="M 125,355 C 175,365 185,375 235,383"/>
+      <path d="M 125,383 C 175,393 185,405 235,413"/>
+      <path d="M 125,413 C 175,423 185,435 235,443"/>
+      <path d="M 125,443 C 175,453 185,465 235,473"/>
+      <path d="M 125,473 C 175,483 185,495 235,503"/>
+      <path d="M 125,503 C 175,513 185,525 235,533"/>
+    </g>
+    <line x1="180" y1="68" x2="180" y2="625" stroke-dasharray="1 6" stroke-width="0.6" opacity="0.45"/>
+  </g>
+  <g fill="currentColor" stroke="currentColor" stroke-width="0.9" font-size="12">
+    <!-- Shank Diameter (smaller, narrow shank) -->
+    <line x1="150" y1="40" x2="210" y2="40" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="150" y1="42" x2="150" y2="68" stroke-dasharray="3 3"/>
+    <line x1="210" y1="42" x2="210" y2="68" stroke-dasharray="3 3"/>
+    <text x="180" y="30" text-anchor="middle" stroke="none">Shank Diameter</text>
+    <!-- Overall Length -->
+    <line x1="68" y1="68" x2="68" y2="618" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="60" y1="68" x2="148" y2="68" stroke-dasharray="3 3"/>
+    <line x1="60" y1="618" x2="170" y2="618" stroke-dasharray="3 3"/>
+    <text x="52" y="340" text-anchor="middle" stroke="none" transform="rotate(-90 52,340)" font-weight="600">Overall Length</text>
+    <!-- Flute Length -->
+    <line x1="280" y1="350" x2="280" y2="540" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="237" y1="350" x2="283" y2="350" stroke-dasharray="3 3"/>
+    <line x1="237" y1="540" x2="283" y2="540" stroke-dasharray="3 3"/>
+    <text x="296" y="445" text-anchor="middle" stroke="none" transform="rotate(-90 296,445)">Flute Length</text>
+    <!-- Diameter (cutter body — the largest, wider than the shank) -->
+    <line x1="125" y1="660" x2="235" y2="660" marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <line x1="125" y1="542" x2="125" y2="663" stroke-dasharray="3 3"/>
+    <line x1="235" y1="542" x2="235" y2="663" stroke-dasharray="3 3"/>
+    <text x="180" y="680" text-anchor="middle" stroke="none">Diameter</text>
+    <!-- Pilot callout -->
+    <line x1="245" y1="585" x2="195" y2="580" marker-end="url(#arr)" stroke-width="0.9"/>
+    <text x="252" y="589" stroke="none">Pilot</text>
+  </g>
+</svg>

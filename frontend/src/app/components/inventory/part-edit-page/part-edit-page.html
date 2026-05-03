@@ -386,6 +386,190 @@
             </mat-card-content>
         </mat-card>
 
+        <!-- Tool Properties -->
+        @if (isEditMode) {
+        <mat-card class="category-card">
+            <mat-card-header>
+                <mat-card-title>Tool Properties</mat-card-title>
+            </mat-card-header>
+            <mat-card-content>
+                @if (isFormEditMode() || !isEditMode) {
+                <form [formGroup]="form" class="part-form">
+                    <div class="form-row">
+                        <mat-form-field appearance="outline">
+                            <mat-label>Tool Category</mat-label>
+                            <mat-select [ngModel]="toolCategoryFilter()"
+                                (ngModelChange)="onToolCategoryFilterChange($event)"
+                                [ngModelOptions]="{standalone: true}">
+                                <mat-option [value]="null">(None)</mat-option>
+                                @for (cat of toolCategories(); track cat.id) {
+                                    <mat-option [value]="cat.id">{{ cat.name }}</mat-option>
+                                }
+                            </mat-select>
+                            <mat-hint>Pick a category to narrow the subcategory list.</mat-hint>
+                        </mat-form-field>
+
+                        @if (showSubcategoryField()) {
+                        <mat-form-field appearance="outline">
+                            <mat-label>Tool Subcategory</mat-label>
+                            <input matInput
+                                [matAutocomplete]="toolSubcategoryAuto"
+                                [ngModel]="toolSubcategorySearch()"
+                                (ngModelChange)="onToolSubcategorySearchInput($event)"
+                                [ngModelOptions]="{standalone: true}"
+                                (blur)="onToolSubcategoryBlur()"
+                                placeholder="Type to search subcategories">
+                            @if (toolSubcategorySearch()) {
+                                <button mat-icon-button matSuffix type="button" (click)="clearToolSubcategory(); $event.stopPropagation()">
+                                    <mat-icon>close</mat-icon>
+                                </button>
+                            }
+                            <mat-autocomplete #toolSubcategoryAuto="matAutocomplete"
+                                [displayWith]="displayToolSubcategory"
+                                (optionSelected)="onToolSubcategorySelected($event.option.value)">
+                                @for (sub of filteredToolSubcategories(); track sub.id) {
+                                    <mat-option [value]="sub">
+                                        {{ sub.name }}
+                                        @if (sub.categories?.length) {
+                                            <span class="subcat-cats"> &nbsp;— {{ formatSubcategoryCategories(sub) }}</span>
+                                        }
+                                    </mat-option>
+                                }
+                            </mat-autocomplete>
+                            <mat-hint>Clearing this field hides the part from the catalog but preserves its values.</mat-hint>
+                        </mat-form-field>
+                        }
+                    </div>
+                    @if (showToolFields()) {
+                    <div class="tool-properties-grid">
+                        <div class="tool-fields">
+                            <div class="form-row">
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Diameter (mm)</mat-label>
+                                    <input matInput formControlName="toolDiameter" type="number" min="0.001" step="any"
+                                        (focus)="setHighlight('diameter')"
+                                        (blur)="setHighlight(null)">
+                                </mat-form-field>
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Number of Flutes</mat-label>
+                                    <input matInput formControlName="toolNumberOfFlutes" type="number" min="1" step="1">
+                                </mat-form-field>
+                            </div>
+                            <div class="form-row">
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Overall Length (mm)</mat-label>
+                                    <input matInput formControlName="toolOverallLength" type="number" min="0.001" step="any"
+                                        (focus)="setHighlight('overall-length')"
+                                        (blur)="setHighlight(null)">
+                                </mat-form-field>
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Flute Length (mm)</mat-label>
+                                    <input matInput formControlName="toolFluteLength" type="number" min="0.001" step="any"
+                                        (focus)="setHighlight('flute-length')"
+                                        (blur)="setHighlight(null)">
+                                </mat-form-field>
+                            </div>
+                            <div class="form-row">
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Shank Diameter (mm)</mat-label>
+                                    <input matInput formControlName="toolShankDiameter" type="number" min="0.001" step="any"
+                                        (focus)="setHighlight('shank-diameter')"
+                                        (blur)="setHighlight(null)">
+                                </mat-form-field>
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Tip Angle (°)</mat-label>
+                                    <input matInput formControlName="toolTipAngle" type="number" min="0.001" step="any"
+                                        (focus)="setHighlight('tip-angle')"
+                                        (blur)="setHighlight(null)">
+                                </mat-form-field>
+                            </div>
+                            @if (toolFieldApplies('cornerRadius')) {
+                            <div class="form-row">
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Corner Radius (mm)</mat-label>
+                                    <input matInput formControlName="toolCornerRadius" type="number" min="0.001" step="any"
+                                        (focus)="setHighlight('corner-radius')"
+                                        (blur)="setHighlight(null)">
+                                </mat-form-field>
+                            </div>
+                            }
+                            @if (toolFieldApplies('reducedShankDiameter')) {
+                            <div class="form-row">
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Reduced Shank Diameter (mm)</mat-label>
+                                    <input matInput formControlName="toolReducedShankDiameter" type="number" min="0.001" step="any"
+                                        (focus)="setHighlight('reduced-shank')"
+                                        (blur)="setHighlight(null)">
+                                </mat-form-field>
+                            </div>
+                            }
+                            @if (toolFieldApplies('squareDriveSize')) {
+                            <div class="form-row">
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Square Drive Size (mm)</mat-label>
+                                    <input matInput formControlName="toolSquareDriveSize" type="number" min="0.001" step="any"
+                                        (focus)="setHighlight('square-drive')"
+                                        (blur)="setHighlight(null)">
+                                </mat-form-field>
+                            </div>
+                            }
+                            @if (toolFieldApplies('numberOfSteps') || toolFieldApplies('stepDelta')) {
+                            <div class="form-row">
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Number of Steps</mat-label>
+                                    <input matInput formControlName="toolNumberOfSteps" type="number" min="1" step="1"
+                                        (focus)="setHighlight('number-of-steps')"
+                                        (blur)="setHighlight(null)">
+                                </mat-form-field>
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Step Delta (mm)</mat-label>
+                                    <input matInput formControlName="toolStepDelta" type="number" min="0.001" step="any"
+                                        (focus)="setHighlight('step-delta')"
+                                        (blur)="setHighlight(null)">
+                                </mat-form-field>
+                            </div>
+                            }
+                            <div class="form-row">
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Tool Material</mat-label>
+                                    <input matInput formControlName="toolMaterial" placeholder="e.g., Carbide, HSS">
+                                </mat-form-field>
+                                <mat-form-field appearance="outline">
+                                    <mat-label>Coating</mat-label>
+                                    <input matInput formControlName="toolCoating" placeholder="e.g., TiN, AlTiN, uncoated">
+                                </mat-form-field>
+                            </div>
+                        </div>
+                        @if (toolDiagramPath()) {
+                        <div class="tool-diagram"
+                             [attr.data-highlight]="highlightedDimension()"
+                             [appInlineSvg]="toolDiagramPath()"></div>
+                        }
+                    </div>
+                    <mat-form-field appearance="outline" class="full-width">
+                        <mat-label>Notes</mat-label>
+                        <textarea matInput formControlName="toolNotes" rows="2"></textarea>
+                    </mat-form-field>
+                    }
+                </form>
+                } @else if (currentTool()) {
+                <div class="view-info">
+                    <div class="info-row">
+                        <div class="info-item"><div class="info-label">Subcategory</div><div class="info-value">{{ currentTool()?.toolSubcategory?.name || '—' }}</div></div>
+                        <div class="info-item"><div class="info-label">Diameter (mm)</div><div class="info-value">{{ currentTool()?.diameter ?? '—' }}</div></div>
+                        <div class="info-item"><div class="info-label"># Flutes</div><div class="info-value">{{ currentTool()?.numberOfFlutes ?? '—' }}</div></div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-item"><div class="info-label">Overall Length</div><div class="info-value">{{ currentTool()?.overallLength ?? '—' }}</div></div>
+                        <div class="info-item"><div class="info-label">Flute Length</div><div class="info-value">{{ currentTool()?.fluteLength ?? '—' }}</div></div>
+                        <div class="info-item"><div class="info-label">Material</div><div class="info-value">{{ currentTool()?.toolMaterial || '—' }}</div></div>
+                    </div>
+                </div>
+                }
+            </mat-card-content>
+        </mat-card>
+        }
+
         <!-- Connector-specific fields -->
         @if (isConnector()) {
         <mat-card class="category-card">
