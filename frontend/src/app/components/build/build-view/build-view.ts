@@ -156,6 +156,6 @@ export class BuildView implements OnInit {
   }
 
   goBack() {
-    this.router.navigate(['/build']);
+    this.router.navigate(['/kits']);
   }
 }

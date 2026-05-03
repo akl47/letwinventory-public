@@ -53,8 +53,8 @@ export const routes: Routes = [
         data: { resource: 'tasks' },
     },
     {
-        path: 'build',
-        title: 'Builds',
+        path: 'kits',
+        title: 'Kits',
         loadComponent: () =>
             import('./components/build/build-list-view/build-list-view').then((m) => m.BuildListView),
         canActivate: [authGuard],
@@ -84,8 +84,8 @@ export const routes: Routes = [
         data: { resource: 'manufacturing_execution' },
     },
     {
-        path: 'build/:barcodeId',
-        title: 'Build Details',
+        path: 'kits/:barcodeId',
+        title: 'Kit Details',
         loadComponent: () =>
             import('./components/build/build-view/build-view').then((m) => m.BuildView),
         canActivate: [authGuard],

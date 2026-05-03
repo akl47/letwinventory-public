@@ -3,7 +3,7 @@
         <button mat-icon-button (click)="cancel()">
             <mat-icon>arrow_back</mat-icon>
         </button>
-        <h2>{{ isEditMode ? 'Part #' + (currentPart | partNumber:undefined:hasOtherRevisions()) : (lockedCategoryName === 'Harness' ? 'New Harness Part' : 'New Part') }}</h2>
+        <h2>{{ isEditMode ? 'Part ' + (currentPart | partNumber:undefined:hasOtherRevisions()) : (lockedCategoryName === 'Harness' ? 'New Harness Part' : 'New Part') }}</h2>
         @if (isEditMode && currentPart?.revisionLocked) {
         <span class="lock-badge"><mat-icon>lock</mat-icon> Locked</span>
         }
