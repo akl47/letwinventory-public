@@ -442,11 +442,15 @@
                     </div>
                     @if (showToolFields()) {
                     <div class="tool-unit-toggle">
-                        <mat-button-toggle-group [value]="toolUnit()"
-                            (change)="onToolUnitChange($event.value)" aria-label="Length units">
-                            <mat-button-toggle value="mm">mm</mat-button-toggle>
-                            <mat-button-toggle value="in">in</mat-button-toggle>
-                        </mat-button-toggle-group>
+                        <span class="unit-toggle">
+                            <span class="unit-label" [class.active]="toolUnit() === 'mm'">mm</span>
+                            <mat-slide-toggle hideIcon
+                                [checked]="toolUnit() === 'in'"
+                                (change)="onToolUnitChange($event.checked ? 'in' : 'mm')"
+                                aria-label="Length units">
+                            </mat-slide-toggle>
+                            <span class="unit-label" [class.active]="toolUnit() === 'in'">in</span>
+                        </span>
                     </div>
                     <div class="tool-properties-grid">
                         <div class="tool-fields">
@@ -562,11 +566,15 @@
                 } @else if (currentTool()) {
                 <div class="view-info">
                     <div class="tool-unit-toggle">
-                        <mat-button-toggle-group [value]="toolUnit()"
-                            (change)="onToolUnitChange($event.value)" aria-label="Length units">
-                            <mat-button-toggle value="mm">mm</mat-button-toggle>
-                            <mat-button-toggle value="in">in</mat-button-toggle>
-                        </mat-button-toggle-group>
+                        <span class="unit-toggle">
+                            <span class="unit-label" [class.active]="toolUnit() === 'mm'">mm</span>
+                            <mat-slide-toggle hideIcon
+                                [checked]="toolUnit() === 'in'"
+                                (change)="onToolUnitChange($event.checked ? 'in' : 'mm')"
+                                aria-label="Length units">
+                            </mat-slide-toggle>
+                            <span class="unit-label" [class.active]="toolUnit() === 'in'">in</span>
+                        </span>
                     </div>
                     <div class="info-row">
                         <div class="info-item"><div class="info-label">Subcategory</div><div class="info-value">{{ currentTool()?.toolSubcategory?.name || '—' }}</div></div>
