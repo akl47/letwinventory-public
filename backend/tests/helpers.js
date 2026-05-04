@@ -37,9 +37,11 @@ async function authenticatedRequest(user, { grantPermissions = true } = {}) {
 
 // --- Factories ---
 
+let _partCounter = 0;
 async function createTestPart(overrides = {}) {
+  _partCounter++;
   return db.Part.create({
-    name: `Test Part ${Date.now()}`,
+    name: `Test Part ${Date.now()}-${_partCounter}`,
     description: 'A test part',
     internalPart: false,
     vendor: 'Test Vendor',

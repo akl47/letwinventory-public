@@ -2,7 +2,7 @@ import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { FormBuilder, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
-import { MatButtonToggleModule } from '@angular/material/button-toggle';
+import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatCardModule } from '@angular/material/card';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
@@ -41,7 +41,7 @@ import { PartLink } from '../../common/part-link/part-link';
     ReactiveFormsModule,
     FormsModule,
     MatButtonModule,
-    MatButtonToggleModule,
+    MatSlideToggleModule,
     MatCardModule,
     MatFormFieldModule,
     MatInputModule,

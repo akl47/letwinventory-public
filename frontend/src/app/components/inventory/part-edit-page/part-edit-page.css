@@ -864,6 +864,29 @@ mat-checkbox {
     justify-content: flex-end;
     margin: 0 0 8px;
 }
+.unit-toggle { display: inline-flex; align-items: center; gap: 8px; }
+.unit-toggle .unit-label {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.5);
+    user-select: none;
+    transition: color 120ms;
+}
+.unit-toggle .unit-label.active { color: rgba(255, 255, 255, 0.95); font-weight: 500; }
+@media (prefers-color-scheme: light) {
+    .unit-toggle .unit-label { color: rgba(0, 0, 0, 0.5); }
+    .unit-toggle .unit-label.active { color: rgba(0, 0, 0, 0.87); }
+}
+:host ::ng-deep .unit-toggle .mdc-switch .mdc-switch__track::before,
+:host ::ng-deep .unit-toggle .mdc-switch .mdc-switch__track::after {
+    background: rgba(128, 128, 128, 0.5) !important;
+    border-color: transparent !important;
+}
+:host ::ng-deep .unit-toggle .mdc-switch .mdc-switch__handle::after {
+    background: #cfcfcf !important;
+}
+:host ::ng-deep .unit-toggle .mdc-switch .mdc-switch__shadow { box-shadow: none !important; }
+:host ::ng-deep .unit-toggle .mdc-switch__ripple,
+:host ::ng-deep .unit-toggle .mat-mdc-slide-toggle .mat-ripple-element { display: none !important; }
 .tool-properties-grid {
     display: flex;
     gap: 24px;
