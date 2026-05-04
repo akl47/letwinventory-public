@@ -47,6 +47,7 @@
       <p>No tools yet — add tool properties from a Part's edit page.</p>
     </div>
   } @else {
+    <div class="table-wrapper">
     <table mat-table [dataSource]="paginatedTools()" matSort
            [matSortActive]="sortField()" [matSortDirection]="sortDirection()"
            (matSortChange)="onSortChange($event)" class="mat-elevation-z1">
@@ -87,9 +88,10 @@
         <td mat-cell *matCellDef="let t">{{ t.toolMaterial || '' }}</td>
       </ng-container>
 
-      <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+      <tr mat-header-row *matHeaderRowDef="displayedColumns; sticky: true"></tr>
       <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="openTool(row)" class="clickable-row"></tr>
     </table>
+    </div>
 
     <mat-paginator
       [length]="totalCount()"
