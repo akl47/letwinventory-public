@@ -21,6 +21,7 @@ import { ProjectService } from '../../../services/project.service';
 import { DesignRequirement } from '../../../models/design-requirement.model';
 import { Project } from '../../../models/project.model';
 import { CategoryBadge } from '../../common/category-badge/category-badge';
+import { TtsPlayButton } from '../../common/tts-play-button/tts-play-button';
 
 interface TreeRow {
     requirement: DesignRequirement;
@@ -51,6 +52,7 @@ interface TreeRow {
         MatDividerModule,
         MatSlideToggleModule,
         CategoryBadge,
+        TtsPlayButton,
     ],
     templateUrl: './requirements-list-view.html',
     styleUrl: './requirements-list-view.css'

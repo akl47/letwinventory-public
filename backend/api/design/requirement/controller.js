@@ -1,4 +1,5 @@
 const db = require('../../../models');
+const { warmRequirementCache } = require('../../../services/ttsCache');
 
 const TRACKED_FIELDS = ['description', 'rationale', 'parameter', 'verification', 'validation', 'parentRequirementID', 'projectID', 'categoryID', 'designFeatureID'];
 
@@ -61,6 +62,8 @@ exports.create = async (req, res) => {
       }
     }
     await recordHistory(requirement.id, req.user.id, 'created', changes);
+
+    warmRequirementCache(requirement);
 
     res.status(201).json(requirement);
   } catch (error) {
@@ -159,6 +162,8 @@ exports.update = async (req, res) => {
         });
       }
     }
+
+    warmRequirementCache(requirement);
 
     res.json(requirement);
   } catch (error) {

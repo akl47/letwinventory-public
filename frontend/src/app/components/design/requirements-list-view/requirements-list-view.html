@@ -91,6 +91,9 @@
                     <mat-expansion-panel-header>
                         <mat-panel-title>
                             <span class="card-description">{{ row.requirement.description }}</span>
+                            <span class="row-tts" (click)="$event.stopPropagation()">
+                                <app-tts-play-button [reqId]="row.requirement.id" field="all" />
+                            </span>
                         </mat-panel-title>
                         <mat-panel-description>
                             @if (row.childCount > 0) {
@@ -141,25 +144,50 @@
 
                     <div class="detail-grid">
                         <div class="detail-field full-width">
-                            <span class="detail-label">Description</span>
+                            <span class="detail-label">
+                                Description
+                                @if (row.requirement.description) {
+                                    <app-tts-play-button [reqId]="row.requirement.id" field="description" />
+                                }
+                            </span>
                             <span class="detail-value">{{ row.requirement.description }}</span>
                         </div>
 
                         <div class="detail-field full-width">
-                            <span class="detail-label">Rationale</span>
+                            <span class="detail-label">
+                                Rationale
+                                @if (row.requirement.rationale) {
+                                    <app-tts-play-button [reqId]="row.requirement.id" field="rationale" />
+                                }
+                            </span>
                             <span class="detail-value">{{ row.requirement.rationale }}</span>
                         </div>
 
                         <div class="detail-field full-width">
-                            <span class="detail-label">Parameters</span>
+                            <span class="detail-label">
+                                Parameters
+                                @if (row.requirement.parameter) {
+                                    <app-tts-play-button [reqId]="row.requirement.id" field="parameter" />
+                                }
+                            </span>
                             <span class="detail-value">{{ row.requirement.parameter }}</span>
                         </div>
                         <div class="detail-field">
-                            <span class="detail-label">Verification</span>
+                            <span class="detail-label">
+                                Verification
+                                @if (row.requirement.verification) {
+                                    <app-tts-play-button [reqId]="row.requirement.id" field="verification" />
+                                }
+                            </span>
                             <span class="detail-value">{{ row.requirement.verification }}</span>
                         </div>
                         <div class="detail-field">
-                            <span class="detail-label">Validation</span>
+                            <span class="detail-label">
+                                Validation
+                                @if (row.requirement.validation) {
+                                    <app-tts-play-button [reqId]="row.requirement.id" field="validation" />
+                                }
+                            </span>
                             <span class="detail-value">{{ row.requirement.validation }}</span>
                         </div>
 

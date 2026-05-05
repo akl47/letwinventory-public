@@ -173,6 +173,9 @@ mat-form-field {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--mat-sys-on-surface-variant);
+    display: flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .info-value {

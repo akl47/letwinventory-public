@@ -332,6 +332,9 @@ mat-expansion-panel-header mat-panel-description {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: rgba(255, 255, 255, 0.4);
+    display: flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .detail-value {
@@ -420,4 +423,11 @@ mat-expansion-panel-header mat-panel-description {
     mat-expansion-panel-header mat-panel-description {
         display: none;
     }
+}
+
+.row-tts {
+    margin-left: 8px;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
 }

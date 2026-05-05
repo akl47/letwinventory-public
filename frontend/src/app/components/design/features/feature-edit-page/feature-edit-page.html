@@ -339,7 +339,13 @@
                       <mat-icon>{{ isReqExpanded(r.id) ? 'expand_less' : 'expand_more' }}</mat-icon>
                     </button>
                     <a class="req-id" [routerLink]="['/requirements', r.id, 'edit']" (click)="$event.stopPropagation()">#{{ r.id }}</a>
-                    <span class="req-desc">{{ r.description }}</span>
+                    <span class="req-desc">
+                      <span class="req-desc-text">{{ r.description }}</span>
+                      <span class="req-tts-row" (click)="$event.stopPropagation()">
+                        <app-tts-play-button [reqId]="r.id" field="description" />
+                        <app-tts-play-button [reqId]="r.id" field="all" />
+                      </span>
+                    </span>
                     <app-category-badge [label]="r.approvalStatus" [variant]="stateVariant(r.approvalStatus)" />
                     <span class="req-actions" (click)="$event.stopPropagation()">
                       @if (r.approvalStatus === 'draft' && canWriteReqs()) {
@@ -367,25 +373,37 @@
                       @if (r.rationale) {
                         <div class="detail-row">
                           <span class="detail-label">Rationale</span>
-                          <span class="detail-value">{{ r.rationale }}</span>
+                          <span class="detail-value">
+                            <span class="detail-text">{{ r.rationale }}</span>
+                            <app-tts-play-button [reqId]="r.id" field="rationale" />
+                          </span>
                         </div>
                       }
                       @if (r.parameter) {
                         <div class="detail-row">
                           <span class="detail-label">Parameter</span>
-                          <span class="detail-value">{{ r.parameter }}</span>
+                          <span class="detail-value">
+                            <span class="detail-text">{{ r.parameter }}</span>
+                            <app-tts-play-button [reqId]="r.id" field="parameter" />
+                          </span>
                         </div>
                       }
                       @if (r.verification) {
                         <div class="detail-row">
                           <span class="detail-label">Verification</span>
-                          <span class="detail-value">{{ r.verification }}</span>
+                          <span class="detail-value">
+                            <span class="detail-text">{{ r.verification }}</span>
+                            <app-tts-play-button [reqId]="r.id" field="verification" />
+                          </span>
                         </div>
                       }
                       @if (r.validation) {
                         <div class="detail-row">
                           <span class="detail-label">Validation</span>
-                          <span class="detail-value">{{ r.validation }}</span>
+                          <span class="detail-value">
+                            <span class="detail-text">{{ r.validation }}</span>
+                            <app-tts-play-button [reqId]="r.id" field="validation" />
+                          </span>
                         </div>
                       }
                       <div class="detail-row">

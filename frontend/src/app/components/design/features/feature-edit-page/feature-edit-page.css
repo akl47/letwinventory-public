@@ -251,11 +251,28 @@ mat-card mat-card-content { padding-top: 8px; }
     opacity: 0.9;
     font-size: 14px;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
 }
 
-.req-item.expanded .req-header .req-desc {
+.req-header .req-desc-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+
+.req-header .req-tts-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.req-item.expanded .req-header .req-desc-text {
     white-space: normal;
     text-overflow: clip;
 }
@@ -300,6 +317,14 @@ mat-card mat-card-content { padding-top: 8px; }
     line-height: 1.5;
     color: rgba(255, 255, 255, 0.85);
     word-break: break-word;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.detail-text {
+    flex: 1;
+    min-width: 0;
 }
 
 .detail-value a {

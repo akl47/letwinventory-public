@@ -223,7 +223,9 @@ afterEach(async () => {
     'EngineeringMasterHistory', 'EngineeringMasterBomItem', 'EngineeringMasterStepMarker', 'EngineeringMasterStepItem', 'EngineeringMasterStep', 'EngineeringMasterOutputPart', 'EngineeringMaster',
     'BarcodeHistory', 'Trace', 'Equipment', 'OrderItem', 'Order',
     'Box', 'Location', 'Barcode',
-    'PartRevisionHistory', 'Part', 'UploadedFile', 'PushSubscription', 'Printer', 'ApiKeyPermission', 'ApiKey', 'RefreshToken', 'User',
+    'PartRevisionHistory', 'Part', 'UploadedFile', 'PushSubscription', 'Printer', 'ApiKeyPermission', 'ApiKey', 'RefreshToken',
+    'TtsAudio',
+    'User',
   ];
 
   for (const table of tablesToClean) {

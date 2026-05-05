@@ -17,6 +17,9 @@
             New Requirement
             }
         </h2>
+        @if (isEditMode && currentRequirement()?.id) {
+            <app-tts-play-button [reqId]="currentRequirement()!.id" field="all" />
+        }
         <span class="spacer"></span>
         @if (isEditMode && currentRequirement() && canWrite()) {
         @if (currentRequirement()?.approvalStatus === 'draft') {
@@ -227,27 +230,52 @@
                     </div>
 
                     <div class="info-item">
-                        <div class="info-label">Description</div>
+                        <div class="info-label">
+                            <span>Description</span>
+                            @if (currentRequirement()?.id && currentRequirement()?.description) {
+                                <app-tts-play-button [reqId]="currentRequirement()!.id" field="description" />
+                            }
+                        </div>
                         <div class="info-value description-text">{{ currentRequirement()?.description || '-' }}</div>
                     </div>
 
                     <div class="info-item">
-                        <div class="info-label">Rationale</div>
+                        <div class="info-label">
+                            <span>Rationale</span>
+                            @if (currentRequirement()?.id && currentRequirement()?.rationale) {
+                                <app-tts-play-button [reqId]="currentRequirement()!.id" field="rationale" />
+                            }
+                        </div>
                         <div class="info-value description-text">{{ currentRequirement()?.rationale || '-' }}</div>
                     </div>
 
                     <div class="info-item">
-                        <div class="info-label">Parameter</div>
+                        <div class="info-label">
+                            <span>Parameter</span>
+                            @if (currentRequirement()?.id && currentRequirement()?.parameter) {
+                                <app-tts-play-button [reqId]="currentRequirement()!.id" field="parameter" />
+                            }
+                        </div>
                         <div class="info-value description-text">{{ currentRequirement()?.parameter || '-' }}</div>
                     </div>
 
                     <div class="info-row">
                         <div class="info-item">
-                            <div class="info-label">Verification</div>
+                            <div class="info-label">
+                                <span>Verification</span>
+                                @if (currentRequirement()?.id && currentRequirement()?.verification) {
+                                    <app-tts-play-button [reqId]="currentRequirement()!.id" field="verification" />
+                                }
+                            </div>
                             <div class="info-value description-text">{{ currentRequirement()?.verification || '-' }}</div>
                         </div>
                         <div class="info-item">
-                            <div class="info-label">Validation</div>
+                            <div class="info-label">
+                                <span>Validation</span>
+                                @if (currentRequirement()?.id && currentRequirement()?.validation) {
+                                    <app-tts-play-button [reqId]="currentRequirement()!.id" field="validation" />
+                                }
+                            </div>
                             <div class="info-value description-text">{{ currentRequirement()?.validation || '-' }}</div>
                         </div>
                     </div>

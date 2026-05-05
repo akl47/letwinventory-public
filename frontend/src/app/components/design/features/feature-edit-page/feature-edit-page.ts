@@ -31,6 +31,8 @@ import {
     BranchPickerDialog, BranchPickerInput, BranchPickerResult,
 } from '../branch-picker-dialog/branch-picker-dialog';
 import { GithubBranchCommit } from '../../../../services/design-feature.service';
+import { TtsService } from '../../../../services/tts.service';
+import { TtsPlayButton } from '../../../common/tts-play-button/tts-play-button';
 
 @Component({
     selector: 'app-feature-edit-page',
@@ -41,7 +43,7 @@ import { GithubBranchCommit } from '../../../../services/design-feature.service'
         MatButtonModule, MatIconModule, MatExpansionModule, MatTableModule,
         MatTooltipModule, MatAutocompleteModule, MatProgressSpinnerModule,
         MatDialogModule,
-        GithubLinkPipe, CategoryBadge,
+        GithubLinkPipe, CategoryBadge, TtsPlayButton,
     ],
     templateUrl: './feature-edit-page.html',
     styleUrl: './feature-edit-page.css',
@@ -55,6 +57,19 @@ export class FeatureEditPage implements OnInit {
     private projectService = inject(ProjectService);
     private authService = inject(AuthService);
     private dialog = inject(MatDialog);
+    private ttsService = inject(TtsService);
+
+    playFieldTts(reqId: number, field: string) {
+        this.ttsService.toggleRequirementField(reqId, field).catch(err => {
+            this.error.set(err?.error?.error || err?.message || 'TTS failed');
+        });
+    }
+    isFieldPlaying(reqId: number, field: string): boolean {
+        return this.ttsService.isPlaying(this.ttsService.requirementFieldKey(reqId, field));
+    }
+    isFieldLoadingTts(reqId: number, field: string): boolean {
+        return this.ttsService.isLoading(this.ttsService.requirementFieldKey(reqId, field));
+    }
 
     feature = signal<DesignFeature | null>(null);
     history = signal<DesignFeatureHistoryEntry[]>([]);
