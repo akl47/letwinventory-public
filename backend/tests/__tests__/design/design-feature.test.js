@@ -1,4 +1,4 @@
-const { authenticatedRequest, createTestProject, assignAllPermissions } = require('../../helpers');
+const { authenticatedRequest, createTestProject, createTestUser } = require('../../helpers');
 const request = require('supertest');
 
 const getApp = () => require('../../app');
@@ -305,7 +305,8 @@ describe('Design Feature API (REQ 301, 304, 305, 306, 307)', () => {
 
   describe('Permissions (REQ 306)', () => {
     it('returns 403 on POST without features.write', async () => {
-      const auth = await authenticatedRequest(undefined, { grantPermissions: false });
+      const user = await createTestUser({ displayName: 'no-write-user' });
+      const auth = await authenticatedRequest(user, { grantPermissions: false });
       // Grant only features.read so the request is authenticated but unauthorized.
       const readPerm = await db.Permission.findOne({ where: { resource: 'features', action: 'read' } });
       await db.UserPermission.create({ userID: auth.user.id, permissionID: readPerm.id });
@@ -322,7 +323,8 @@ describe('Design Feature API (REQ 301, 304, 305, 306, 307)', () => {
       const project = await createTestProject(author.user);
       const feature = await createTestFeature(author, project.id);
 
-      const reader = await authenticatedRequest(undefined, { grantPermissions: false });
+      const readerUser = await createTestUser({ displayName: 'reader-no-delete' });
+      const reader = await authenticatedRequest(readerUser, { grantPermissions: false });
       const readPerm = await db.Permission.findOne({ where: { resource: 'features', action: 'read' } });
       const writePerm = await db.Permission.findOne({ where: { resource: 'features', action: 'write' } });
       await db.UserPermission.bulkCreate([

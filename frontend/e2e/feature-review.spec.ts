@@ -14,11 +14,13 @@ test.describe('Feature Review', () => {
   });
 
   test('full lifecycle: create draft → submit → approve → release', async ({ page }) => {
-    const slug = `e2e-feature-${Date.now()}`;
+    // Unique name → unique auto-derived slug, so re-running this E2E doesn't
+    // collide with previous runs that left rows behind in dev.
+    const uniqueName = `E2E Feature ${Date.now()}`;
     await page.goto('/#/features/new');
 
     // Fill name and submit. The page should navigate to /features/:id/edit.
-    await page.locator('[data-test="input-name"], input[name="name"]').first().fill('E2E Feature');
+    await page.locator('[data-test="input-name"], input[name="name"]').first().fill(uniqueName);
     // Pick a project — assume the first option works.
     const projectSelect = page.locator('mat-select, [data-test="select-project"]').first();
     if (await projectSelect.isVisible()) {

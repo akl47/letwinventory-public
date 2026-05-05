@@ -52,8 +52,9 @@ describe('migrate-feature-docs.js (REQ 311)', () => {
   it('creates a DesignFeature record per MD file with correct fields', async () => {
     writeFixture(tmpDir, 'build.md', '# Build\n\nFirst paragraph.\n\nSecond paragraph.\n');
     const auth = await authenticatedRequest();
+    const project = await createTestProject(auth.user);
 
-    const result = await migrate.run({ dir: tmpDir, auth });
+    const result = await migrate.run({ dir: tmpDir, auth, projectID: project.id });
 
     expect(result.created).toHaveLength(1);
     const created = result.created[0];
@@ -74,8 +75,9 @@ describe('migrate-feature-docs.js (REQ 311)', () => {
     });
 
     const reqIDs = [r1.body.id, r2.body.id];
+    // Use the parens form that matches the strict regex.
     writeFixture(tmpDir, 'kitting.md',
-      `# Kitting\n\nThis feature touches REQ ${reqIDs[0]} and REQ ${reqIDs[1]}.\n`);
+      `# Kitting\n\nThis feature touches (REQ ${reqIDs[0]}) and (REQ ${reqIDs[1]}).\n`);
 
     const result = await migrate.run({ dir: tmpDir, auth, projectID: project.id });
     expect(result.created).toHaveLength(1);
@@ -114,11 +116,12 @@ describe('migrate-feature-docs.js (REQ 311)', () => {
   it('is idempotent on re-run by slug', async () => {
     writeFixture(tmpDir, 'kitting.md', '# Kitting\n\nbody\n');
     const auth = await authenticatedRequest();
+    const project = await createTestProject(auth.user);
 
-    const first = await migrate.run({ dir: tmpDir, auth });
+    const first = await migrate.run({ dir: tmpDir, auth, projectID: project.id });
     expect(first.created).toHaveLength(1);
 
-    const second = await migrate.run({ dir: tmpDir, auth });
+    const second = await migrate.run({ dir: tmpDir, auth, projectID: project.id });
     expect(second.created).toHaveLength(0);
     expect(second.skipped).toContain('kitting');
 
@@ -128,10 +131,12 @@ describe('migrate-feature-docs.js (REQ 311)', () => {
   });
 
   it('warns on REQ N references that do not exist in the DB but does not fail', async () => {
-    writeFixture(tmpDir, 'orphan.md', '# Orphan\n\nReferences REQ 999999 which does not exist.\n');
+    // Reference uses parens form so the strict regex picks it up.
+    writeFixture(tmpDir, 'orphan.md', '# Orphan\n\nReferences (REQ 999999) which does not exist.\n');
     const auth = await authenticatedRequest();
+    const project = await createTestProject(auth.user);
 
-    const result = await migrate.run({ dir: tmpDir, auth });
+    const result = await migrate.run({ dir: tmpDir, auth, projectID: project.id });
     expect(result.created).toHaveLength(1);
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(result.warnings.join('\n')).toMatch(/999999/);

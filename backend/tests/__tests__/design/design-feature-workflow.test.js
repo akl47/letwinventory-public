@@ -1,4 +1,4 @@
-const { authenticatedRequest, createTestProject } = require('../../helpers');
+const { authenticatedRequest, createTestProject, createTestUser } = require('../../helpers');
 
 async function createFeature(auth, projectID, overrides = {}) {
   const res = await auth.post('/api/design/feature').send({
@@ -143,7 +143,8 @@ describe('Design Feature Workflow (REQ 302, 306)', () => {
       const feature = await createFeature(author, project.id);
       await author.post(`/api/design/feature/${feature.id}/submit`);
 
-      const reviewer = await authenticatedRequest(undefined, { grantPermissions: false });
+      const reviewerUser = await createTestUser({ displayName: 'reviewer-no-approve' });
+      const reviewer = await authenticatedRequest(reviewerUser, { grantPermissions: false });
       // Grant features.read + features.write but NOT features.approve.
       const perms = await db.Permission.findAll({ where: { resource: 'features' } });
       const allowed = perms.filter(p => p.action === 'read' || p.action === 'write');
@@ -160,7 +161,8 @@ describe('Design Feature Workflow (REQ 302, 306)', () => {
       await author.post(`/api/design/feature/${feature.id}/submit`);
       await author.post(`/api/design/feature/${feature.id}/approve`);
 
-      const reviewer = await authenticatedRequest(undefined, { grantPermissions: false });
+      const reviewerUser = await createTestUser({ displayName: 'reviewer-no-release' });
+      const reviewer = await authenticatedRequest(reviewerUser, { grantPermissions: false });
       const perms = await db.Permission.findAll({ where: { resource: 'features' } });
       const allowed = perms.filter(p => p.action === 'read' || p.action === 'write');
       await db.UserPermission.bulkCreate(allowed.map(p => ({ userID: reviewer.user.id, permissionID: p.id })));

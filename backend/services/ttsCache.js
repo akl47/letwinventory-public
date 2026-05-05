@@ -137,6 +137,9 @@ function buildCombinedRequirementText(requirement) {
  */
 function warmRequirementCache(requirement) {
   if (!requirement) return;
+  // Tests don't have a TTS service reachable; skipping prevents Jest from
+  // hanging on async HTTP requests that never complete.
+  if (process.env.NODE_ENV === 'test') return;
   (async () => {
     for (const field of REQUIREMENT_TTS_FIELDS) {
       const raw = requirement[field];

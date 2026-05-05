@@ -85,11 +85,13 @@ describe('FeatureListView', () => {
         expect(rows.length).toBeGreaterThanOrEqual(3);
     });
 
-    it('groups features by project', () => {
-        // Either groups visually present or component exposes a grouped() signal.
-        const grouped = (component as any).groupedFeatures?.() || (component as any).featureGroups?.();
-        expect(grouped).toBeDefined();
-        expect(grouped.length).toBe(2); // two distinct projects in mock data
+    it('shows project name as a column for each row', () => {
+        // The table now uses a flat layout with a Project column instead of
+        // grouping. Each row should render the project name.
+        const cells = fixture.nativeElement.querySelectorAll('td');
+        const text = Array.from(cells).map((c: any) => c.textContent || '').join(' ');
+        expect(text).toContain('Project A');
+        expect(text).toContain('Project B');
     });
 
     it('filters by review state', () => {
