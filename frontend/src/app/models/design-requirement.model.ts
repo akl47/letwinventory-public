@@ -24,6 +24,7 @@ export interface DesignRequirement {
     parentRequirementID?: number;
     projectID: number;
     categoryID?: number;
+    designFeatureID?: number | null;
     verification?: string;
     validation?: string;
     ownerUserID: number;

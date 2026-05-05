@@ -20,6 +20,7 @@ import { matchesSearch } from '../../../utils/search';
 import { ProjectService } from '../../../services/project.service';
 import { DesignRequirement } from '../../../models/design-requirement.model';
 import { Project } from '../../../models/project.model';
+import { CategoryBadge } from '../../common/category-badge/category-badge';
 
 interface TreeRow {
     requirement: DesignRequirement;
@@ -49,6 +50,7 @@ interface TreeRow {
         MatMenuModule,
         MatDividerModule,
         MatSlideToggleModule,
+        CategoryBadge,
     ],
     templateUrl: './requirements-list-view.html',
     styleUrl: './requirements-list-view.css'

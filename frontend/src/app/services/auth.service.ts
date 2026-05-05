@@ -300,4 +300,16 @@ export class AuthService {
     revokeSession(id: number): Observable<void> {
         return this.http.delete<void>(`${environment.apiUrl}/auth/user/sessions/${id}`);
     }
+
+    getGithubPATStatus(): Observable<{ configured: boolean }> {
+        return this.http.get<{ configured: boolean }>(`${environment.apiUrl}/auth/user/github-pat`);
+    }
+
+    setGithubPAT(pat: string): Observable<{ configured: boolean }> {
+        return this.http.put<{ configured: boolean }>(`${environment.apiUrl}/auth/user/github-pat`, { pat });
+    }
+
+    clearGithubPAT(): Observable<{ configured: boolean }> {
+        return this.http.delete<{ configured: boolean }>(`${environment.apiUrl}/auth/user/github-pat`);
+    }
 }

@@ -124,8 +124,8 @@ async function seedReferenceData() {
     { id: 2, name: 'Power', activeFlag: true },
   ]);
 
-  // Permissions (9 resources x 3 actions + extras)
-  const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin', 'manufacturing_planning', 'manufacturing_execution', 'tools'];
+  // Permissions (resources x 3 actions + extras)
+  const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin', 'manufacturing_planning', 'manufacturing_execution', 'tools', 'features'];
   const actions = ['read', 'write', 'delete'];
   let permId = 1;
   const permRows = [];
@@ -139,6 +139,7 @@ async function seedReferenceData() {
   permRows.push({ id: permId++, resource: 'manufacturing_execution', action: 'work_order_delete' });
   permRows.push({ id: permId++, resource: 'manufacturing_execution', action: 'work_order_undelete' });
   permRows.push({ id: permId++, resource: 'admin', action: 'manage_tool_categories' });
+  permRows.push({ id: permId++, resource: 'features', action: 'approve' });
   await db.Permission.bulkCreate(permRows);
 
   // Tool Categories (5 broad groupings — must match migration seed)
@@ -210,6 +211,7 @@ beforeAll(async () => {
 afterEach(async () => {
   const tablesToClean = [
     'UserPermission', 'GroupPermission', 'UserGroupMember', 'UserGroup',
+    'DesignFeatureHistory', 'DesignFeature',
     'RequirementHistory', 'DesignRequirement', 'RequirementCategory',
     'HarnessRevisionHistory', 'WireHarness', 'WireEnd',
     'ElectricalComponent', 'Cable', 'Wire', 'ElectricalConnector',

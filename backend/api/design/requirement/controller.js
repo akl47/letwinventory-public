@@ -1,6 +1,6 @@
 const db = require('../../../models');
 
-const TRACKED_FIELDS = ['description', 'rationale', 'parameter', 'verification', 'validation', 'parentRequirementID', 'projectID', 'categoryID'];
+const TRACKED_FIELDS = ['description', 'rationale', 'parameter', 'verification', 'validation', 'parentRequirementID', 'projectID', 'categoryID', 'designFeatureID'];
 
 const requirementIncludes = [
   {

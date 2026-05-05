@@ -56,11 +56,7 @@
             <ng-container matColumnDef="category">
                 <th mat-header-cell *matHeaderCellDef>Type</th>
                 <td mat-cell *matCellDef="let build">
-                    <span class="category-badge"
-                        [style.background-color]="getCategoryBgColor(build.categoryColor)"
-                        [style.color]="getCategoryTextColor(build.categoryColor)">
-                        {{ build.categoryName }}
-                    </span>
+                    <app-category-badge [label]="build.categoryName" [colorHex]="build.categoryColor" />
                 </td>
             </ng-container>
 

@@ -6,6 +6,8 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatExpansionModule } from '@angular/material/expansion';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatInputModule } from '@angular/material/input';
 import { NotificationService } from '../../../services/notification.service';
 import { AuthService, ApiKey, Session } from '../../../services/auth.service';
 import { AdminService } from '../../../services/admin.service';
@@ -25,6 +27,8 @@ import { PermissionGridComponent } from '../../admin/permission-grid/permission-
         MatExpansionModule,
         MatTooltipModule,
         MatDialogModule,
+        MatFormFieldModule,
+        MatInputModule,
         PermissionGridComponent,
     ],
     templateUrl: './settings-page.html',
@@ -55,11 +59,17 @@ export class SettingsPage implements OnInit {
     myPermissionCount = computed(() => this.myPermissionIds().size);
     permissionTooltips = signal<Record<string, string>>({});
 
+    githubPATConfigured = signal(false);
+    githubPATInput = signal('');
+    githubPATSaving = signal(false);
+    githubPATError = signal<string | null>(null);
+
     ngOnInit() {
         this.permissionState.set(this.notificationService.getPermissionState());
         this.loadSubscriptions();
         this.loadSessions();
         this.loadApiKeys();
+        this.loadGithubPATStatus();
         this.adminService.getPermissions().subscribe({
             next: (perms) => {
                 this.allPermissions.set(perms);
@@ -199,5 +209,46 @@ export class SettingsPage implements OnInit {
 
     isExpired(key: ApiKey): boolean {
         return !!key.expiresAt && new Date(key.expiresAt) < new Date();
+    }
+
+    private loadGithubPATStatus() {
+        this.authService.getGithubPATStatus().subscribe({
+            next: (s) => this.githubPATConfigured.set(!!s.configured),
+            error: () => this.githubPATConfigured.set(false),
+        });
+    }
+
+    saveGithubPAT() {
+        const pat = this.githubPATInput().trim();
+        if (!pat) return;
+        this.githubPATSaving.set(true);
+        this.githubPATError.set(null);
+        this.authService.setGithubPAT(pat).subscribe({
+            next: () => {
+                this.githubPATConfigured.set(true);
+                this.githubPATInput.set('');
+                this.githubPATSaving.set(false);
+            },
+            error: (err) => {
+                this.githubPATError.set(err?.error?.error || 'Failed to save token');
+                this.githubPATSaving.set(false);
+            },
+        });
+    }
+
+    clearGithubPAT() {
+        this.githubPATSaving.set(true);
+        this.githubPATError.set(null);
+        this.authService.clearGithubPAT().subscribe({
+            next: () => {
+                this.githubPATConfigured.set(false);
+                this.githubPATInput.set('');
+                this.githubPATSaving.set(false);
+            },
+            error: (err) => {
+                this.githubPATError.set(err?.error?.error || 'Failed to clear token');
+                this.githubPATSaving.set(false);
+            },
+        });
     }
 }

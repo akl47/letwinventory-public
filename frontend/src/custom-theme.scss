@@ -14,6 +14,21 @@ html {
     ));
 }
 
+// Scoped density helpers — apply these classes to compress specific
+// components without changing the global density. Centering and padding
+// stay correct because Material recomputes them from the density token.
+.dense-icon-button-1 {
+  @include mat.icon-button-density(-1);
+}
+
+.dense-icon-button-2 {
+  @include mat.icon-button-density(-2);
+}
+
+.dense-icon-button-3 {
+  @include mat.icon-button-density(-3);
+}
+
 body {
   // Default the application to a light color theme. This can be changed to
   // `dark` to enable the dark color theme, or to `light dark` to defer to the

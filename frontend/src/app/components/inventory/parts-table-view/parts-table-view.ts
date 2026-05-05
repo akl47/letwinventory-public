@@ -19,6 +19,7 @@ import { InventoryService } from '../../../services/inventory.service';
 import { AuthService } from '../../../services/auth.service';
 import { Part, PartCategory } from '../../../models';
 import { AuthImgDirective } from '../../../directives/auth-img.directive';
+import { CategoryBadge } from '../../common/category-badge/category-badge';
 
 @Component({
   selector: 'app-parts-table-view',
@@ -39,6 +40,7 @@ import { AuthImgDirective } from '../../../directives/auth-img.directive';
     MatDividerModule,
     FormsModule,
     AuthImgDirective,
+    CategoryBadge,
   ],
   templateUrl: './parts-table-view.html',
   styleUrl: './parts-table-view.css',
@@ -457,23 +459,6 @@ export class PartsTableView implements OnInit {
   deletePart(part: Part) {
     // This method is kept for potential future use, but delete is handled in the dialog
     console.log('Delete part:', part);
-  }
-
-  getCategoryBgColor(hexColor: string | null | undefined): string {
-    if (!hexColor) return 'rgba(255, 255, 255, 0.2)';
-    // Create a lighter background from the tag color
-    return this.hexToRgba(hexColor, 0.2);
-  }
-
-  getCategoryTextColor(hexColor: string | null | undefined): string {
-    return hexColor || '#808080';
-  }
-
-  private hexToRgba(hex: string, alpha: number): string {
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
   private getSortValue(part: Part, column: string): string | number | null {

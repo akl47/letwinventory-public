@@ -1,0 +1,113 @@
+<div class="feature-list-container">
+  <div class="table-header">
+    <h2>
+      <mat-icon>view_kanban</mat-icon>
+      Features
+    </h2>
+    <div class="header-actions">
+      <mat-form-field appearance="outline" class="search-field">
+        <mat-label>Search features</mat-label>
+        <input matInput
+          [value]="searchText()"
+          (input)="onFilterChange(searchText.set.bind(searchText), $any($event.target).value)"
+          placeholder="Search by name, slug, or description" />
+        <mat-icon matPrefix>search</mat-icon>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="filter-field">
+        <mat-label>Project</mat-label>
+        <mat-select [value]="selectedProjectID()"
+          (selectionChange)="onFilterChange(selectedProjectID.set.bind(selectedProjectID), $event.value)">
+          <mat-option [value]="null">All projects</mat-option>
+          @for (p of projects(); track p.id) {
+            <mat-option [value]="p.id">{{ p.name }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="filter-field">
+        <mat-label>State</mat-label>
+        <mat-select [value]="selectedReviewState()"
+          (selectionChange)="onFilterChange(selectedReviewState.set.bind(selectedReviewState), $event.value)">
+          <mat-option [value]="null">Any state</mat-option>
+          @for (s of reviewStates; track s) {
+            <mat-option [value]="s">{{ s }}</mat-option>
+          }
+        </mat-select>
+      </mat-form-field>
+
+      <a mat-flat-button color="primary" routerLink="/features/new">
+        <mat-icon>add</mat-icon>
+        New Feature
+      </a>
+    </div>
+  </div>
+
+  @if (loading()) {
+    <div class="loading"><mat-spinner diameter="32"></mat-spinner></div>
+  } @else if (error()) {
+    <div class="error-banner" data-test="error">{{ error() }}</div>
+  } @else if (filteredFeatures().length === 0) {
+    <div class="no-data" data-test="empty">
+      <mat-icon>view_kanban</mat-icon>
+      <p>No features found. Try adjusting your filters or <a routerLink="/features/new">create one</a>.</p>
+    </div>
+  } @else {
+    <div class="table-wrapper">
+      <table mat-table [dataSource]="displayedFeatures()" class="feature-table">
+        <ng-container matColumnDef="name">
+          <th mat-header-cell *matHeaderCellDef>Name</th>
+          <td mat-cell *matCellDef="let f" class="name-cell">
+            <a [routerLink]="['/features', f.id, 'edit']">{{ f.name }}</a>
+            <div class="slug">{{ f.slug }}</div>
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="project">
+          <th mat-header-cell *matHeaderCellDef>Project</th>
+          <td mat-cell *matCellDef="let f">{{ projectName(f.projectID) }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="owner">
+          <th mat-header-cell *matHeaderCellDef>Owner</th>
+          <td mat-cell *matCellDef="let f">{{ f.owner?.displayName || '—' }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="reviewState">
+          <th mat-header-cell *matHeaderCellDef>State</th>
+          <td mat-cell *matCellDef="let f">
+            <app-category-badge data-test="state-badge"
+              [label]="f.reviewState" [variant]="stateVariant(f.reviewState)" />
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="requirementCount">
+          <th mat-header-cell *matHeaderCellDef>Reqs</th>
+          <td mat-cell *matCellDef="let f">{{ f.requirementCount || 0 }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="branch">
+          <th mat-header-cell *matHeaderCellDef>Branch</th>
+          <td mat-cell *matCellDef="let f">{{ f.branchName || '—' }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="updatedAt">
+          <th mat-header-cell *matHeaderCellDef>Updated</th>
+          <td mat-cell *matCellDef="let f">{{ f.updatedAt | date:'shortDate' }}</td>
+        </ng-container>
+
+        <tr mat-header-row *matHeaderRowDef="displayedColumns; sticky: true"></tr>
+        <tr mat-row class="feature-row" *matRowDef="let row; columns: displayedColumns;"></tr>
+      </table>
+    </div>
+
+    <mat-paginator
+      [length]="filteredFeatures().length"
+      [pageSize]="pageSize()"
+      [pageIndex]="pageIndex()"
+      [pageSizeOptions]="pageSizeOptions"
+      (page)="onPageChange($event)"
+      showFirstLastButtons>
+    </mat-paginator>
+  }
+</div>

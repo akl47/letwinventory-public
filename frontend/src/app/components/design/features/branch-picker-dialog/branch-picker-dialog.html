@@ -1,0 +1,120 @@
+<h2 mat-dialog-title>Pick a GitHub branch</h2>
+
+<mat-dialog-content class="dialog-content">
+  @if (loadErrors().length > 0) {
+    <div class="warning-banner">
+      Could not load some repos:
+      <ul>
+        @for (e of loadErrors(); track e) {
+          <li>{{ e }}</li>
+        }
+      </ul>
+    </div>
+  }
+
+  @if (error()) {
+    <div class="error-banner">{{ error() }}</div>
+  }
+
+  @if (!loading()) {
+    <div class="filters-row">
+      @if (repos().length > 1) {
+        <mat-form-field appearance="outline" class="repo-filter">
+          <mat-label>Repository</mat-label>
+          <mat-select [value]="selectedRepo()" (selectionChange)="selectedRepo.set($event.value)">
+            <mat-option [value]="null">All ({{ repos().length }})</mat-option>
+            @for (r of repos(); track r) {
+              <mat-option [value]="r">{{ r }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+      }
+
+      <mat-form-field appearance="outline" class="search-field">
+        <mat-label>Filter branches</mat-label>
+        <input matInput
+          [value]="searchText()"
+          (input)="searchText.set($any($event.target).value)" />
+        <mat-icon matPrefix>filter_list</mat-icon>
+      </mat-form-field>
+
+      @if (deletedCount() > 0) {
+        <button mat-stroked-button
+          [class.toggled]="showDeleted()"
+          (click)="showDeleted.set(!showDeleted())">
+          <mat-icon>{{ showDeleted() ? 'visibility' : 'visibility_off' }}</mat-icon>
+          {{ showDeleted() ? 'Hide' : 'Show' }} deleted ({{ deletedCount() }})
+        </button>
+      }
+    </div>
+  }
+
+  @if (loading()) {
+    <div class="loading"><mat-spinner diameter="32"></mat-spinner></div>
+  } @else if (branches().length > 0) {
+    <div class="branch-list">
+      @for (b of filteredBranches(); track b.repo + ':' + b.name) {
+        <div class="branch-row" [class.deleted]="b.deleted">
+          <div class="branch-main">
+            <div class="branch-head">
+              <span class="branch-name mono">{{ b.name }}</span>
+              <span class="repo-tag">{{ b.repo }}</span>
+              @if (b.isDefault) {
+                <app-category-badge label="default" subtle />
+              }
+              @if (b.deleted) {
+                <app-category-badge label="deleted" variant="error" />
+              }
+              <span class="branch-time">{{ relativeTime(b.committedDate) }}</span>
+            </div>
+            <div class="branch-subject">{{ b.subject || '—' }}</div>
+            @if (b.pulls.length > 0) {
+              <div class="branch-prs">
+                @for (p of b.pulls; track p.number) {
+                  <a class="pr-chip" [href]="p.url" target="_blank" rel="noopener"
+                    (click)="$event.stopPropagation()">
+                    <app-category-badge
+                      [label]="(p.isDraft && p.state === 'open' ? 'draft #' : '#') + p.number + ' ' + p.state"
+                      [variant]="prVariant(p.state)" />
+                    <span class="pr-title">{{ p.title }}</span>
+                  </a>
+                }
+              </div>
+            }
+          </div>
+          <div class="branch-actions">
+            @if (b.pulls.length > 1) {
+              <button mat-stroked-button [matMenuTriggerFor]="prMenu">
+                <mat-icon>arrow_drop_down</mat-icon> Use with PR…
+              </button>
+              <mat-menu #prMenu="matMenu">
+                <button mat-menu-item (click)="pickBranch(b)">
+                  Use branch only (no PR)
+                </button>
+                @for (p of b.pulls; track p.number) {
+                  <button mat-menu-item (click)="pickBranchWithPR(b, p)">
+                    #{{ p.number }} — {{ p.title | slice:0:60 }}
+                  </button>
+                }
+              </mat-menu>
+            }
+            <button mat-flat-button color="primary" (click)="pickBranch(b)">
+              <mat-icon>check</mat-icon> Use this branch
+            </button>
+          </div>
+        </div>
+      } @empty {
+        <div class="muted">No branches match the filter.</div>
+      }
+    </div>
+  } @else {
+    <div class="empty-hint">
+      No branches were returned. Make sure GITHUB_REPOS is configured on the
+      backend and your PAT has access.
+    </div>
+  }
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button (click)="cancel()">Cancel</button>
+</mat-dialog-actions>

@@ -14,4 +14,8 @@ router.delete("/sessions/:id", checkToken, controller.revokeSession);
 
 router.put("/", checkToken, controller.updateUser);
 
+router.get("/github-pat", checkToken, controller.getGithubPATStatus);
+router.put("/github-pat", checkToken, controller.setGithubPAT);
+router.delete("/github-pat", checkToken, controller.clearGithubPAT);
+
 module.exports = router;

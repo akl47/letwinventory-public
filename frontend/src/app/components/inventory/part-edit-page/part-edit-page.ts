@@ -32,6 +32,7 @@ import { WIRE_COLORS } from '../../../utils/harness/wire-color-map';
 import { BarcodeTag } from '../barcode-tag/barcode-tag';
 import { PartNumberPipe, formatPartNumber } from '../../../pipes/part-number.pipe';
 import { PartLink } from '../../common/part-link/part-link';
+import { CategoryBadge } from '../../common/category-badge/category-badge';
 
 @Component({
   selector: 'app-part-edit-page',
@@ -58,6 +59,7 @@ import { PartLink } from '../../common/part-link/part-link';
     PartLink,
     AuthImgDirective,
     InlineSvgDirective,
+    CategoryBadge,
   ],
   templateUrl: './part-edit-page.html',
   styleUrl: './part-edit-page.css',
@@ -625,18 +627,6 @@ export class PartEditPage implements OnInit {
     }]);
     this.bomSearchText.set('');
     this.newBomQuantity = 1;
-  }
-
-  getCategoryBgColor(hexColor: string | null | undefined): string {
-    if (!hexColor) return 'rgba(255, 255, 255, 0.2)';
-    const r = parseInt(hexColor.slice(1, 3), 16);
-    const g = parseInt(hexColor.slice(3, 5), 16);
-    const b = parseInt(hexColor.slice(5, 7), 16);
-    return `rgba(${r}, ${g}, ${b}, 0.2)`;
-  }
-
-  getCategoryTextColor(hexColor: string | null | undefined): string {
-    return hexColor || '#808080';
   }
 
   getBomPartUoM(item: any): string {

@@ -197,16 +197,7 @@ mat-checkbox {
     line-height: 1.5;
 }
 
-.category-badge {
-    display: inline-block;
-    padding: 4px 10px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: white;
-}
+/* category-badge styles moved to common CategoryBadge component */
 
 /* Color indicator for wire/cable colors */
 .color-indicator {
@@ -684,14 +675,7 @@ mat-checkbox {
     }
 }
 
-.category-badge {
-    padding: 4px 12px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
+/* category-badge styles moved to common CategoryBadge component */
 
 /* BOM Section */
 .bom-qty-input {

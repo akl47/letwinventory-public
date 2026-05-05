@@ -203,11 +203,9 @@
                                             }
                                         </mat-select>
                                     } @else {
-                                        <span class="category-badge"
-                                            [style.background-color]="getCategoryBgColor(getCategory(item.partCategoryID)?.tagColorHex)"
-                                            [style.color]="getCategoryTextColor(getCategory(item.partCategoryID)?.tagColorHex)">
-                                            {{ getCategoryName(item.partCategoryID) }}
-                                        </span>
+                                        <app-category-badge
+                                            [label]="getCategoryName(item.partCategoryID)"
+                                            [colorHex]="getCategory(item.partCategoryID)?.tagColorHex" />
                                     }
                                 </td>
                             </ng-container>

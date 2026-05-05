@@ -100,7 +100,7 @@
                             </span>
                             }
                             @if (row.requirement.category) {
-                            <span class="category-badge">{{ row.requirement.category.name }}</span>
+                            <app-category-badge [label]="row.requirement.category.name" subtle />
                             }
                             @if (row.requirement.project) {
                             <span class="project-tag"
