@@ -1,5 +1,16 @@
 'use strict';
 
+/**
+ * Combined migration for the Feature Review system. Subsumes what were
+ * originally three migrations:
+ *   - 20260504000000-add-design-feature-review (base tables)
+ *   - 20260505000000-add-github-sync           (PAT + PR metadata)
+ *   - 20260505100000-add-github-repo-to-features (repo field)
+ *
+ * The merged version is what fresh installs should run; on systems that
+ * applied the originals separately, see the README/notes for the
+ * SequelizeMeta cleanup steps.
+ */
 module.exports = {
   async up(queryInterface, Sequelize) {
     const now = Sequelize.literal('NOW()');
@@ -42,6 +53,17 @@ module.exports = {
       branchName: { type: Sequelize.STRING(255), allowNull: true },
       prURL: { type: Sequelize.STRING(500), allowNull: true },
       commitRefs: { type: Sequelize.JSON, allowNull: true },
+
+      // Cached GitHub PR metadata (populated by Sync from GitHub).
+      prState: { type: Sequelize.STRING(20), allowNull: true },
+      prTitle: { type: Sequelize.STRING(500), allowNull: true },
+      prMergedAt: { type: Sequelize.DATE, allowNull: true },
+      prHeadSha: { type: Sequelize.STRING(64), allowNull: true },
+      lastSyncedAt: { type: Sequelize.DATE, allowNull: true },
+
+      // owner/repo for branch-only features (when prURL hasn't been set yet).
+      githubRepo: { type: Sequelize.STRING(255), allowNull: true },
+
       activeFlag: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: true },
       createdAt: { type: Sequelize.DATE, allowNull: false, defaultValue: now },
       updatedAt: { type: Sequelize.DATE, allowNull: false, defaultValue: now },
@@ -87,6 +109,14 @@ module.exports = {
     });
     await queryInterface.addIndex('DesignRequirements', ['designFeatureID']);
 
+    // Per-user GitHub Personal Access Token. Stored as plaintext TEXT —
+    // protect with the existing auth boundary (only the owning user can
+    // read/write their own value via /api/auth/user/github-pat).
+    await queryInterface.addColumn('Users', 'githubPAT', {
+      type: Sequelize.TEXT,
+      allowNull: true,
+    });
+
     // Seed 'features' permission resource (read/write/delete) + features.approve.
     const permNow = new Date();
     const newPerms = [
@@ -117,6 +147,7 @@ module.exports = {
   },
 
   async down(queryInterface) {
+    await queryInterface.removeColumn('Users', 'githubPAT');
     await queryInterface.removeColumn('DesignRequirements', 'designFeatureID');
     await queryInterface.dropTable('DesignFeatureHistory');
     await queryInterface.dropTable('DesignFeatures');
