@@ -235,6 +235,30 @@ export const routes: Routes = [
         data: { resource: 'requirements' },
     },
     {
+        path: 'features',
+        title: 'Features',
+        loadComponent: () =>
+            import('./components/design/features/feature-list-view/feature-list-view').then((m) => m.FeatureListView),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'features' },
+    },
+    {
+        path: 'features/new',
+        title: 'New Feature',
+        loadComponent: () =>
+            import('./components/design/features/feature-new-page/feature-new-page').then((m) => m.FeatureNewPage),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'features' },
+    },
+    {
+        path: 'features/:id/edit',
+        title: 'Edit Feature',
+        loadComponent: () =>
+            import('./components/design/features/feature-edit-page/feature-edit-page').then((m) => m.FeatureEditPage),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'features' },
+    },
+    {
         path: 'admin/groups',
         title: 'User Groups',
         loadComponent: () =>

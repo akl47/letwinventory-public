@@ -1,0 +1,24 @@
+.feature-new-page {
+  max-width: 640px;
+  margin: 24px auto;
+  padding: 0 16px;
+}
+
+.full-width {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.error-banner {
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: rgba(244, 67, 54, 0.12);
+  color: #f44336;
+  margin-bottom: 12px;
+}

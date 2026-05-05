@@ -11,8 +11,11 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 
-const TOKEN_CACHE = '/tmp/letwinventory-claude-token.json';
 const DEFAULT_BASE_URL = 'https://letwinventory.letwin.co/api';
+function tokenCachePath(baseUrl) {
+  const safe = baseUrl.replace(/[^a-z0-9]/gi, '-').toLowerCase().slice(0, 64);
+  return `/tmp/letwinventory-claude-token-${safe}.json`;
+}
 
 // Load env vars from .env.claude (simple key=value parsing, no dotenv dependency)
 const envPath = path.join(__dirname, '..', '.env.claude');
@@ -99,19 +102,20 @@ function authRequest(method, urlStr, token, body) {
 }
 
 async function getToken(baseUrl) {
+  const cachePath = tokenCachePath(baseUrl);
   // Check cache
-  if (fs.existsSync(TOKEN_CACHE)) {
+  if (fs.existsSync(cachePath)) {
     try {
-      const cached = JSON.parse(fs.readFileSync(TOKEN_CACHE, 'utf8'));
+      const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
       if (cached.expiresAt > Date.now() + 60000) { // 1min buffer
         return cached.token;
       }
     } catch { /* re-auth */ }
   }
 
-  const apiKey = process.env.PROD_API_KEY;
+  const apiKey = process.env.DEV_TEMP_API_KEY || process.env.PROD_API_KEY;
   if (!apiKey) {
-    console.error('No PROD_API_KEY found. Set it in .env.claude or as an environment variable.');
+    console.error('No API key found. Set DEV_TEMP_API_KEY (for dev) or PROD_API_KEY (for prod) in .env.claude or your environment.');
     process.exit(1);
   }
 
@@ -124,7 +128,7 @@ async function getToken(baseUrl) {
 
   const token = res.data.accessToken;
   // exchanged tokens expire in 1h
-  fs.writeFileSync(TOKEN_CACHE, JSON.stringify({
+  fs.writeFileSync(cachePath, JSON.stringify({
     token,
     expiresAt: Date.now() + 55 * 60 * 1000, // 55min to be safe
   }));
@@ -263,12 +267,26 @@ Options:
 
     case 'create': {
       const json = cleanArgs[1];
-      if (!json) { console.error('Usage: create <json>'); process.exit(1); }
+      if (!json) { console.error('Usage: create <json> [--feature <id>]'); process.exit(1); }
       const body = JSON.parse(json);
       if (!body.projectID) body.projectID = 1;
       const res = await api('POST', '/design/requirement', body);
       if (res.status !== 201) { console.error('Error:', res.data); process.exit(1); }
-      console.log(`Created requirement id=${res.data.id}`);
+      const requirementID = res.data.id;
+
+      // Optional --feature <id> auto-links the new requirement to a DesignFeature.
+      const featureIdx = cleanArgs.indexOf('--feature');
+      if (featureIdx !== -1 && cleanArgs[featureIdx + 1]) {
+        const featureID = cleanArgs[featureIdx + 1];
+        const linkRes = await api('POST', `/design/feature/${featureID}/link-requirement`, { requirementID });
+        if (linkRes.status !== 200) {
+          console.error(`Created requirement id=${requirementID} but failed to link to feature ${featureID}:`, linkRes.data);
+          process.exit(1);
+        }
+        console.log(`Created requirement id=${requirementID} (linked to feature ${featureID})`);
+      } else {
+        console.log(`Created requirement id=${requirementID}`);
+      }
       break;
     }
 

@@ -21,6 +21,7 @@ import { DesignRequirement, RequirementCategory, RequirementHistoryEntry } from 
 import { Project } from '../../../models/project.model';
 import { CategoryManageDialog } from '../category-manage-dialog/category-manage-dialog';
 import { AuthService } from '../../../services/auth.service';
+import { TtsPlayButton } from '../../common/tts-play-button/tts-play-button';
 
 @Component({
     selector: 'app-requirement-edit-page',
@@ -37,6 +38,7 @@ import { AuthService } from '../../../services/auth.service';
         MatProgressSpinnerModule,
         MatTooltipModule,
         MatCardModule,
+        TtsPlayButton,
     ],
     templateUrl: './requirement-edit-page.html',
     styleUrl: './requirement-edit-page.css'

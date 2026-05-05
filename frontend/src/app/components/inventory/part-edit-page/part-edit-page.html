@@ -106,9 +106,9 @@
                             <div class="info-item">
                                 <div class="info-label">Category</div>
                                 <div class="info-value">
-                                    <span class="category-badge" [style.background-color]="currentPart?.PartCategory?.tagColorHex || '#808080'">
-                                        {{ currentPart?.PartCategory?.name || '-' }}
-                                    </span>
+                                    <app-category-badge
+                                        [label]="currentPart?.PartCategory?.name || '-'"
+                                        [colorHex]="currentPart?.PartCategory?.tagColorHex" />
                                 </div>
                             </div>
                         </div>
@@ -1050,11 +1050,9 @@
                         <ng-container matColumnDef="category">
                             <th mat-header-cell *matHeaderCellDef>Category</th>
                             <td mat-cell *matCellDef="let item">
-                                <span class="category-badge"
-                                    [style.background-color]="getCategoryBgColor(item.componentPart?.PartCategory?.tagColorHex)"
-                                    [style.color]="getCategoryTextColor(item.componentPart?.PartCategory?.tagColorHex)">
-                                    {{ item.componentPart?.PartCategory?.name || 'Unknown' }}
-                                </span>
+                                <app-category-badge
+                                    [label]="item.componentPart?.PartCategory?.name || 'Unknown'"
+                                    [colorHex]="item.componentPart?.PartCategory?.tagColorHex" />
                             </td>
                         </ng-container>
                         <ng-container matColumnDef="quantity">

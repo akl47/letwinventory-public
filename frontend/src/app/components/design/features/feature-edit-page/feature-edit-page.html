@@ -1,0 +1,464 @@
+<div class="page-container">
+  <div class="header">
+    <button mat-icon-button (click)="back()">
+      <mat-icon>arrow_back</mat-icon>
+    </button>
+    <h2>{{ feature()?.name || 'Feature' }}</h2>
+    @if (feature()) {
+      <app-category-badge data-test="state-badge"
+        [label]="feature()!.reviewState"
+        [variant]="stateVariant(feature()!.reviewState)" />
+    }
+    <span class="spacer"></span>
+
+    @if (feature() && !loading()) {
+      <!-- Workflow buttons (always visible) -->
+      @if (canSubmit()) {
+        <button mat-stroked-button data-test="action-submit" (click)="transition('submit')">
+          <mat-icon>send</mat-icon> Submit
+        </button>
+      }
+      @if (canApproveBtn()) {
+        <button mat-flat-button color="primary" data-test="action-approve"
+          [disabled]="!canApprove()"
+          [matTooltip]="canApprove() ? '' : 'Requires features.approve permission'"
+          (click)="transition('approve')">
+          <mat-icon>check_circle</mat-icon> Approve
+        </button>
+      }
+      @if (canReject()) {
+        <button mat-stroked-button data-test="action-reject" (click)="transition('reject')">
+          <mat-icon>cancel</mat-icon> Reject
+        </button>
+      }
+      @if (canReleaseBtn()) {
+        <button mat-flat-button color="accent" data-test="action-release"
+          [disabled]="!canApprove()"
+          [matTooltip]="canApprove() ? '' : 'Requires features.approve permission'"
+          (click)="transition('release')">
+          <mat-icon>publish</mat-icon> Release
+        </button>
+      }
+
+      <!-- Edit / Save / Cancel -->
+      @if (!isFormEditMode()) {
+        <span [matTooltip]="isReleased() ? 'Released features are read-only' : (canWrite() ? '' : 'You do not have permission')">
+          <button mat-button (click)="enableEdit()" [disabled]="!canWrite() || isReleased()">
+            <mat-icon>edit</mat-icon> Edit
+          </button>
+        </span>
+      } @else {
+        <button mat-button (click)="cancelEdit()">
+          <mat-icon>close</mat-icon> Cancel
+        </button>
+        <button mat-flat-button color="primary" (click)="save()" [disabled]="saving()">
+          <mat-icon>save</mat-icon> {{ saving() ? 'Saving…' : 'Save' }}
+        </button>
+      }
+    }
+  </div>
+
+  @if (loading()) {
+    <div class="loading"><mat-spinner diameter="32"></mat-spinner></div>
+  } @else if (!feature()) {
+    <div class="content-wrapper">
+      <div class="error-banner">{{ error() || 'Feature not found' }}</div>
+    </div>
+  } @else {
+    <ng-container *ngIf="feature() as f">
+      <div class="content-wrapper">
+
+        @if (isReleased()) {
+          <div class="readonly-banner" data-test="readonly-banner">
+            <mat-icon>lock</mat-icon>
+            This feature has been released and is read-only.
+          </div>
+        }
+        @if (error()) {
+          <div class="error-banner">{{ error() }}</div>
+        }
+
+        <div class="two-column-layout">
+          <!-- Metadata card -->
+          <mat-card>
+            <mat-card-header><mat-card-title>Overview</mat-card-title></mat-card-header>
+            <mat-card-content>
+              @if (isFormEditMode()) {
+                <div class="form-row">
+                  <mat-form-field appearance="outline">
+                    <mat-label>Name</mat-label>
+                    <input matInput [value]="name()" (input)="name.set($any($event.target).value)" />
+                  </mat-form-field>
+                  <mat-form-field appearance="outline">
+                    <mat-label>Project</mat-label>
+                    <mat-select [value]="projectID()" (selectionChange)="projectID.set($event.value)">
+                      @for (p of projects(); track p.id) {
+                        <mat-option [value]="p.id">{{ p.name }}</mat-option>
+                      }
+                    </mat-select>
+                  </mat-form-field>
+                </div>
+                <mat-form-field appearance="outline" class="full-width">
+                  <mat-label>Description</mat-label>
+                  <input matInput [value]="description()" (input)="description.set($any($event.target).value)" />
+                </mat-form-field>
+              } @else {
+                <div class="view-row">
+                  <span class="view-label">Slug</span>
+                  <span class="view-value mono">{{ f.slug }}</span>
+                </div>
+                <div class="view-row">
+                  <span class="view-label">Project</span>
+                  <span class="view-value">{{ projectName(f.projectID) }}</span>
+                </div>
+                <div class="view-row">
+                  <span class="view-label">Owner</span>
+                  <span class="view-value">{{ f.owner?.displayName || '—' }}</span>
+                </div>
+                <div class="view-row">
+                  <span class="view-label">Description</span>
+                  <span class="view-value">{{ f.description || '—' }}</span>
+                </div>
+                <div class="view-row">
+                  <span class="view-label">Updated</span>
+                  <span class="view-value">{{ f.updatedAt | date:'medium' }}</span>
+                </div>
+              }
+            </mat-card-content>
+          </mat-card>
+
+          <!-- GitHub card (always read-only display; pick / sync are the only actions) -->
+          <mat-card class="github-card" data-test="github-links">
+            <mat-card-header class="github-header">
+              <mat-card-title>GitHub</mat-card-title>
+              <span class="github-header-actions">
+                @if (f.lastSyncedAt) {
+                  <span class="muted">Last synced {{ f.lastSyncedAt | date:'short' }}</span>
+                }
+                <button mat-stroked-button
+                  [disabled]="!canWrite()"
+                  [matTooltip]="canWrite() ? 'Browse branches and pick one' : 'No permission'"
+                  (click)="openBranchPicker()">
+                  <mat-icon>account_tree</mat-icon>
+                  Pick branch…
+                </button>
+                <button mat-flat-button color="primary"
+                  [disabled]="syncingGithub() || !canWrite() || !f.prURL"
+                  [matTooltip]="!f.prURL ? 'Pick a branch with a PR first' : (canWrite() ? 'Fetch PR + commits from GitHub' : 'No permission')"
+                  (click)="syncGithub()">
+                  <mat-icon>sync</mat-icon>
+                  {{ syncingGithub() ? 'Syncing…' : 'Sync' }}
+                </button>
+              </span>
+            </mat-card-header>
+            <mat-card-content>
+              @if (!f.branchName && !f.prURL) {
+                <div class="empty-hint">
+                  No branch linked yet. Click <strong>Pick branch…</strong> to link this feature to a GitHub branch / PR.
+                </div>
+              } @else {
+                <div class="view-row">
+                  <span class="view-label">Repo</span>
+                  <span class="view-value mono">{{ effectiveRepo() || '—' }}</span>
+                </div>
+                <div class="view-row">
+                  <span class="view-label">Branch</span>
+                  <span class="view-value mono">{{ f.branchName || '—' }}</span>
+                </div>
+                <div class="view-row">
+                  <span class="view-label">PR</span>
+                  <span class="view-value">
+                    @if (f.prURL) {
+                      @if (f.prURL | githubLink; as info) {
+                        <a [href]="info.url" target="_blank" rel="noopener" class="link-card">
+                          <mat-icon>merge_type</mat-icon>{{ info.label }}
+                        </a>
+                      } @else {
+                        <a [href]="f.prURL" target="_blank" rel="noopener">{{ f.prURL }}</a>
+                      }
+                      @if (f.prState) {
+                        <app-category-badge [label]="f.prState" [variant]="prStateVariant(f.prState)" />
+                      }
+                    } @else {
+                      <span class="muted">No PR yet</span>
+                    }
+                  </span>
+                </div>
+                @if (f.prTitle) {
+                  <div class="view-row">
+                    <span class="view-label">PR Title</span>
+                    <span class="view-value">{{ f.prTitle }}</span>
+                  </div>
+                }
+                @if (f.prMergedAt) {
+                  <div class="view-row">
+                    <span class="view-label">Merged</span>
+                    <span class="view-value">{{ f.prMergedAt | date:'medium' }}</span>
+                  </div>
+                }
+                @if (f.prHeadSha) {
+                  <div class="view-row">
+                    <span class="view-label">Head SHA</span>
+                    <span class="view-value mono">{{ f.prHeadSha.slice(0, 7) }}</span>
+                  </div>
+                }
+              }
+
+              <!-- PR commits — populated by Sync; read-only -->
+              @if (commitRefs().length > 0) {
+                <h4 class="subsection-title">PR commits ({{ commitRefs().length }})</h4>
+                <table class="commits-table">
+                  <thead>
+                    <tr><th>SHA</th><th>Subject</th></tr>
+                  </thead>
+                  <tbody>
+                    @for (c of commitRefs(); track c.sha) {
+                      <tr>
+                        <td class="mono">
+                          @if (c.url) {
+                            <a [href]="c.url" target="_blank" rel="noopener">{{ c.sha.slice(0, 7) }}</a>
+                          } @else {
+                            {{ c.sha.slice(0, 7) }}
+                          }
+                        </td>
+                        <td>{{ c.subject || '—' }}</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              }
+
+              <!-- Branch commits (read-only, separate from PR commits above) -->
+              @if (f.branchName) {
+                <div class="branch-commits-section">
+                  <button mat-button class="branch-commits-toggle" (click)="toggleBranchCommits()">
+                    <mat-icon>{{ showBranchCommits() ? 'expand_less' : 'expand_more' }}</mat-icon>
+                    Commits on branch <span class="mono">{{ f.branchName }}</span>
+                    @if (branchCommits().length > 0) {
+                      <span class="muted">({{ branchCommits().length }})</span>
+                    }
+                  </button>
+                  @if (showBranchCommits()) {
+                    @if (branchCommitsLoading()) {
+                      <div class="loading"><mat-spinner diameter="24"></mat-spinner></div>
+                    } @else if (branchCommitsError()) {
+                      <div class="error-banner">{{ branchCommitsError() }}</div>
+                    } @else if (branchCommits().length === 0) {
+                      <div class="muted">No commits found on this branch (or PAT lacks access).</div>
+                    } @else {
+                      <table class="commits-table">
+                        <thead>
+                          <tr><th>SHA</th><th>Subject</th><th>Author</th><th>When</th></tr>
+                        </thead>
+                        <tbody>
+                          @for (c of branchCommits(); track c.sha) {
+                            <tr>
+                              <td class="mono">
+                                <a [href]="c.url" target="_blank" rel="noopener">{{ c.sha.slice(0, 7) }}</a>
+                              </td>
+                              <td>{{ c.subject || '—' }}</td>
+                              <td>{{ c.author || '—' }}</td>
+                              <td>{{ c.committedDate | date:'short' }}</td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    }
+                  }
+                </div>
+              }
+            </mat-card-content>
+          </mat-card>
+        </div>
+
+        <!-- Markdown body (collapsible) -->
+        <mat-expansion-panel class="body-panel" [expanded]="true">
+          <mat-expansion-panel-header>
+            <mat-panel-title>Body</mat-panel-title>
+          </mat-expansion-panel-header>
+          @if (isFormEditMode()) {
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Markdown body</mat-label>
+              <textarea matInput rows="20" class="markdown-body"
+                [value]="markdownBody()"
+                (input)="markdownBody.set($any($event.target).value)"></textarea>
+            </mat-form-field>
+          } @else {
+            <pre class="markdown-view" data-test="markdown-body">{{ f.markdownBody || '(empty)' }}</pre>
+          }
+        </mat-expansion-panel>
+
+        <!-- Linked Requirements -->
+        <mat-card data-test="linked-requirements">
+          <mat-card-header class="reqs-header">
+            <mat-card-title>Linked Requirements ({{ linkedRequirements().length }})</mat-card-title>
+            @if (pendingApprovalCount() > 0) {
+              <span class="reqs-header-actions">
+                <span class="pending-count">{{ pendingApprovalCount() }} pending</span>
+                <button mat-flat-button color="primary"
+                  [disabled]="bulkApproving() || !canApproveReqs()"
+                  [matTooltip]="canApproveReqs() ? 'Submit any drafts and approve all unapproved' : 'Requires requirements.approve permission'"
+                  (click)="approveAllRequirements()">
+                  <mat-icon>done_all</mat-icon>
+                  {{ bulkApproving() ? 'Approving…' : 'Approve all (' + pendingApprovalCount() + ')' }}
+                </button>
+              </span>
+            }
+          </mat-card-header>
+          <mat-card-content>
+            @if (isFormEditMode()) {
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Add requirement</mat-label>
+                <input matInput
+                  [matAutocomplete]="auto"
+                  [value]="requirementSearchText()"
+                  (input)="requirementSearchText.set($any($event.target).value)" />
+                <mat-autocomplete #auto="matAutocomplete"
+                  [displayWith]="displayRequirement"
+                  (optionSelected)="selectRequirementForLink($event)">
+                  @for (r of filteredRequirements(); track r.id) {
+                    <mat-option [value]="r">
+                      <strong>#{{ r.id }}</strong> — {{ r.description | slice:0:90 }}
+                    </mat-option>
+                  }
+                </mat-autocomplete>
+              </mat-form-field>
+            }
+
+            <div class="req-list">
+              @for (node of linkedRequirementsTree(); track node.req.id) {
+                @let r = node.req;
+                <div class="req-item"
+                  [class.expanded]="isReqExpanded(r.id)"
+                  [class.req-child]="node.depth > 0"
+                  [style.--req-depth]="node.depth">
+                  <div class="req-header" (click)="toggleReqExpansion(r.id)">
+                    <button mat-icon-button class="expand-btn dense-icon-button-2"
+                      [attr.aria-label]="isReqExpanded(r.id) ? 'Collapse' : 'Expand'"
+                      (click)="$event.stopPropagation(); toggleReqExpansion(r.id)">
+                      <mat-icon>{{ isReqExpanded(r.id) ? 'expand_less' : 'expand_more' }}</mat-icon>
+                    </button>
+                    <a class="req-id" [routerLink]="['/requirements', r.id, 'edit']" (click)="$event.stopPropagation()">#{{ r.id }}</a>
+                    <span class="req-desc">
+                      <span class="req-desc-text">{{ r.description }}</span>
+                      <span class="req-tts-row" (click)="$event.stopPropagation()">
+                        <app-tts-play-button [reqId]="r.id" field="description" />
+                        <app-tts-play-button [reqId]="r.id" field="all" />
+                      </span>
+                    </span>
+                    <app-category-badge [label]="r.approvalStatus" [variant]="stateVariant(r.approvalStatus)" />
+                    <span class="req-actions" (click)="$event.stopPropagation()">
+                      @if (r.approvalStatus === 'draft' && canWriteReqs()) {
+                        <button mat-stroked-button (click)="submitRequirement(r.id)" matTooltip="Submit for review">
+                          <mat-icon>send</mat-icon> Submit
+                        </button>
+                      }
+                      @if (r.approvalStatus === 'unapproved') {
+                        <button mat-flat-button color="primary"
+                          [disabled]="!canApproveReqs()"
+                          [matTooltip]="canApproveReqs() ? 'Approve this requirement' : 'Requires requirements.approve permission'"
+                          (click)="approveRequirement(r.id)">
+                          <mat-icon>check_circle</mat-icon> Approve
+                        </button>
+                      }
+                      @if (isFormEditMode()) {
+                        <button mat-icon-button (click)="unlinkRequirement(r.id)" matTooltip="Unlink">
+                          <mat-icon>link_off</mat-icon>
+                        </button>
+                      }
+                    </span>
+                  </div>
+                  @if (isReqExpanded(r.id)) {
+                    <div class="req-detail">
+                      @if (r.rationale) {
+                        <div class="detail-row">
+                          <span class="detail-label">Rationale</span>
+                          <span class="detail-value">
+                            <span class="detail-text">{{ r.rationale }}</span>
+                            <app-tts-play-button [reqId]="r.id" field="rationale" />
+                          </span>
+                        </div>
+                      }
+                      @if (r.parameter) {
+                        <div class="detail-row">
+                          <span class="detail-label">Parameter</span>
+                          <span class="detail-value">
+                            <span class="detail-text">{{ r.parameter }}</span>
+                            <app-tts-play-button [reqId]="r.id" field="parameter" />
+                          </span>
+                        </div>
+                      }
+                      @if (r.verification) {
+                        <div class="detail-row">
+                          <span class="detail-label">Verification</span>
+                          <span class="detail-value">
+                            <span class="detail-text">{{ r.verification }}</span>
+                            <app-tts-play-button [reqId]="r.id" field="verification" />
+                          </span>
+                        </div>
+                      }
+                      @if (r.validation) {
+                        <div class="detail-row">
+                          <span class="detail-label">Validation</span>
+                          <span class="detail-value">
+                            <span class="detail-text">{{ r.validation }}</span>
+                            <app-tts-play-button [reqId]="r.id" field="validation" />
+                          </span>
+                        </div>
+                      }
+                      <div class="detail-row">
+                        <span class="detail-label">Implementation</span>
+                        <span class="detail-value">{{ r.implementationStatus }}</span>
+                      </div>
+                      @if (r.category) {
+                        <div class="detail-row">
+                          <span class="detail-label">Category</span>
+                          <span class="detail-value">{{ r.category.name }}</span>
+                        </div>
+                      }
+                      @if (r.parentRequirementID) {
+                        <div class="detail-row">
+                          <span class="detail-label">Parent</span>
+                          <span class="detail-value">
+                            <a [routerLink]="['/requirements', r.parentRequirementID, 'edit']">#{{ r.parentRequirementID }}</a>
+                          </span>
+                        </div>
+                      }
+                    </div>
+                  }
+                </div>
+              } @empty {
+                <div class="muted">No requirements linked yet.</div>
+              }
+            </div>
+          </mat-card-content>
+        </mat-card>
+
+        <!-- History -->
+        <mat-expansion-panel class="history-panel" data-test="history-timeline">
+          <mat-expansion-panel-header>
+            <mat-panel-title>History</mat-panel-title>
+            <mat-panel-description>{{ history().length }} entries</mat-panel-description>
+          </mat-expansion-panel-header>
+          <ul class="history-list">
+            @for (h of history(); track h.id) {
+              <li>
+                <div class="hist-head">
+                  <strong>{{ h.changeType }}</strong>
+                  <span class="muted"> by {{ h.changedByUser?.displayName || '?' }} on {{ h.createdAt | date:'short' }}</span>
+                </div>
+                @if (h.changes) {
+                  <pre class="hist-changes">{{ h.changes | json }}</pre>
+                }
+                @if (h.changeNotes) {
+                  <div class="hist-notes">{{ h.changeNotes }}</div>
+                }
+              </li>
+            }
+          </ul>
+        </mat-expansion-panel>
+
+      </div>
+    </ng-container>
+  }
+</div>

@@ -32,6 +32,10 @@ module.exports = (sequelize, DataTypes) => {
         as: 'category',
         foreignKey: 'categoryID'
       });
+      DesignRequirement.belongsTo(models.DesignFeature, {
+        as: 'designFeature',
+        foreignKey: 'designFeatureID'
+      });
     }
   };
   DesignRequirement.init({
@@ -62,6 +66,10 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false
     },
     categoryID: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    designFeatureID: {
       type: DataTypes.INTEGER,
       allowNull: true
     },

@@ -214,5 +214,74 @@
             </mat-accordion>
         </div>
 
+        <!-- GitHub Integration -->
+        <div class="card-row">
+            <mat-accordion>
+                <mat-expansion-panel>
+                    <mat-expansion-panel-header>
+                        <mat-panel-title>
+                            <span class="card-title">GitHub Integration</span>
+                        </mat-panel-title>
+                        <mat-panel-description>
+                            @if (githubPATConfigured()) {
+                                <span class="status-chip granted">Token configured</span>
+                            } @else {
+                                <span class="status-chip default">Not configured</span>
+                            }
+                        </mat-panel-description>
+                    </mat-expansion-panel-header>
+
+                    <div class="panel-section">
+                        <p class="muted">
+                            Add a GitHub Personal Access Token to enable "Sync from GitHub" on Feature pages.
+                            The token needs <code>repo</code> scope (or fine-grained access to the repos you want to sync).
+                            Get one at
+                            <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a>.
+                        </p>
+
+                        @if (githubPATConfigured()) {
+                            <div class="status-row granted">
+                                <mat-icon>check_circle</mat-icon>
+                                <span>A token is currently saved for your account. The value is never shown back; replace or remove it below.</span>
+                            </div>
+                        }
+
+                        <div class="github-pat-form">
+                            <mat-form-field appearance="outline" class="full-width">
+                                <mat-label>{{ githubPATConfigured() ? 'Replace token' : 'Personal Access Token' }}</mat-label>
+                                <input matInput
+                                    type="password"
+                                    autocomplete="off"
+                                    placeholder="ghp_..."
+                                    [value]="githubPATInput()"
+                                    (input)="githubPATInput.set($any($event.target).value)" />
+                            </mat-form-field>
+
+                            <div class="github-pat-actions">
+                                <button mat-flat-button color="primary"
+                                    [disabled]="githubPATSaving() || !githubPATInput().trim()"
+                                    (click)="saveGithubPAT()">
+                                    <mat-icon>save</mat-icon>
+                                    {{ githubPATSaving() ? 'Saving…' : 'Save' }}
+                                </button>
+                                @if (githubPATConfigured()) {
+                                    <button mat-stroked-button class="mat-custom-error"
+                                        [disabled]="githubPATSaving()"
+                                        (click)="clearGithubPAT()">
+                                        <mat-icon>delete</mat-icon>
+                                        Remove
+                                    </button>
+                                }
+                            </div>
+
+                            @if (githubPATError()) {
+                                <div class="error-banner">{{ githubPATError() }}</div>
+                            }
+                        </div>
+                    </div>
+                </mat-expansion-panel>
+            </mat-accordion>
+        </div>
+
     </div>
 </div>

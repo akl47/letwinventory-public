@@ -5,6 +5,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { PartLink } from '../part-link/part-link';
+import { CategoryBadge } from '../category-badge/category-badge';
 
 export interface BomItem {
   partID: number;
@@ -32,7 +33,7 @@ export interface BomItem {
 @Component({
   selector: 'app-bom-table',
   standalone: true,
-  imports: [CommonModule, MatTableModule, MatButtonModule, MatIconModule, MatTooltipModule, PartLink],
+  imports: [CommonModule, MatTableModule, MatButtonModule, MatIconModule, MatTooltipModule, PartLink, CategoryBadge],
   templateUrl: './bom-table.html',
   styleUrl: './bom-table.css',
 })
@@ -67,14 +68,6 @@ export class BomTable implements OnChanges {
     if (this.showExtra) cols.push('extra');
     if (this.editable) cols.push('actions');
     this.columns = cols;
-  }
-
-  getCategoryBgColor(hex: string | null | undefined): string {
-    if (!hex) return 'rgba(255, 255, 255, 0.2)';
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `rgba(${r}, ${g}, ${b}, 0.2)`;
   }
 
   formatQty(item: BomItem): number {

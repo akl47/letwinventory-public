@@ -51,6 +51,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    githubPAT: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
     activeFlag: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

@@ -131,6 +131,12 @@
                         <span matListItemTitle>Requirements</span>
                     </a>
                     }
+                    @if (hasFeaturesAccess()) {
+                    <a mat-list-item routerLink="/features" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>view_kanban</mat-icon>
+                        <span matListItemTitle>Features</span>
+                    </a>
+                    }
                     @if (hasHarnessAccess()) {
                     <a mat-list-item routerLink="/harness" routerLinkActive="active-link" (click)="closePanel()">
                         <mat-icon matListItemIcon>cable</mat-icon>

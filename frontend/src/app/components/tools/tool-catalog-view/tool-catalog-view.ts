@@ -14,6 +14,7 @@ import { MatSortModule, Sort } from '@angular/material/sort';
 import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { ToolsService } from '../../../services/tools.service';
 import { Tool, ToolCategory, ToolSubcategory } from '../../../models/tool.model';
+import { CategoryBadge } from '../../common/category-badge/category-badge';
 
 const INCH_PER_MM = 1 / 25.4;
 
@@ -25,6 +26,7 @@ const INCH_PER_MM = 1 / 25.4;
     MatTableModule, MatButtonModule, MatSlideToggleModule, MatIconModule,
     MatFormFieldModule, MatInputModule, MatSelectModule,
     MatProgressSpinnerModule, MatSortModule, MatPaginatorModule,
+    CategoryBadge,
   ],
   templateUrl: './tool-catalog-view.html',
   styleUrl: './tool-catalog-view.css',

@@ -10,30 +10,45 @@ Ask me:
 
 Do not proceed until I confirm your understanding is correct.
 
-## Step 2: Write Feature Spec
+## Step 2: Create the Feature Record (DB-backed)
 
-Create a full specification document at `docs/features/$ARGUMENTS.md` containing:
+Instead of writing a Markdown spec file, create a `DesignFeature` record in the database that becomes the canonical home for this feature's documentation, requirement links, and GitHub linkage.
 
-- **Context**: Why this feature is needed, what problem it solves
-- **Requirements**: Detailed requirement descriptions with rationale, verification criteria, and validation criteria
-- **API Contracts**: Endpoint definitions (method, path, request/response shapes) for any new or modified APIs
-- **UI Design**: Description of UI components, layout, user interactions, and states (loading, empty, error)
-- **Database Changes**: Schema changes (new tables, columns, migrations) if applicable
-- **Test Scenarios**: Key test cases for backend, frontend, and E2E
-- **Implementation Notes**: Files to create/modify, existing patterns to follow, edge cases
-
-Present the spec to me for review. Do not proceed until I approve it.
+1. Pick a slug from `$ARGUMENTS` (kebab-case).
+2. Draft a markdown body covering:
+   - **Context** — why the feature is needed, what problem it solves
+   - **API Contracts** — endpoint definitions (method, path, request/response shapes)
+   - **UI Design** — components, layout, states (loading, empty, error)
+   - **Database Changes** — schema changes if applicable
+   - **Test Scenarios** — key cases per layer
+   - **Implementation Notes** — files to create/modify, existing patterns, edge cases
+3. Create the record:
+   ```
+   node scripts/feature.js create '{
+     "name": "<Display Name>",
+     "slug": "<kebab-slug>",
+     "description": "<one-line>",
+     "markdownBody": "<full markdown body>",
+     "projectID": <project>
+   }'
+   ```
+4. Note the returned feature id — call it `$FEATURE_ID`. Use it in later steps.
+5. Present the markdownBody back to me and **do not proceed until I approve it**.
 
 ## Step 3: Create Requirements
 
 1. List existing categories: `node scripts/req.js categories`
-2. For each requirement from the spec, draft it with `description`, `rationale`, `verification`, and `validation` fields
-3. Present each requirement to me for approval before creating it with `node scripts/req.js create '<json>'`
-4. If anything is ambiguous, STOP and ask — do not guess
-5. If `req.js` fails or the API is unreachable, STOP and tell me
-6. Update the spec doc with the created requirement IDs
+2. For each requirement, draft `description` + `rationale` + `verification` + `validation` + `parentRequirementID` JSON
+3. Present each to me for approval, then create with:
+   ```
+   node scripts/req.js create '<json>' --feature $FEATURE_ID
+   ```
+   The `--feature` flag auto-links the requirement to the DesignFeature record.
+4. After create, run `node scripts/req.js submit <id>` to move from `draft` → `unapproved`
+5. If anything is ambiguous, STOP and ask — do not guess
+6. If `req.js` or `feature.js` fails, STOP and tell me
 
-Do not proceed to tests until ALL requirements are approved and created.
+Do not proceed to tests until ALL requirements are created and linked.
 
 ## Step 4: Write Tests
 
@@ -51,11 +66,21 @@ Update each requirement to add test file references to the `verification` field:
 
 ## Step 6: Implement
 
-Write the code to make the tests pass. Follow existing patterns in the codebase. Ask before running tests.
+Write the code to make the tests pass. Follow existing patterns. Ask before running tests.
 
-## Step 7: Verify
+## Step 7: Add GitHub Linkage to the Feature Record
 
-1. Run `node scripts/req.js list --project <id>` to review all requirements
-2. Confirm every requirement is fully met
-3. Flag any that are partially met or missed
-4. Update CLAUDE.md with a session entry documenting the changes
+Once a branch and PR exist:
+```
+node scripts/feature.js update $FEATURE_ID '{
+  "branchName": "<branch>",
+  "prURL": "<pr URL>",
+  "commitRefs": [{"sha": "<sha>", "url": "<url>", "subject": "<commit subject>"}, ...]
+}'
+```
+
+## Step 8: Verify and Submit for Review
+
+1. Run `node scripts/req.js list --project <id>` to confirm requirement coverage
+2. Run `node scripts/feature.js submit $FEATURE_ID` to move feature from draft → in_review
+3. Update CLAUDE.md with a session entry summarizing surprises or non-obvious decisions

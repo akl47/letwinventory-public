@@ -230,8 +230,15 @@ exports.testLogin = async (req, res) => {
       if (db.Permission && db.UserPermission) {
         let allPerms = await db.Permission.findAll({ attributes: ['id'] });
         if (allPerms.length === 0) {
-          // Seed permissions (sequelize.sync() creates empty tables)
-          const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin'];
+          // Seed permissions (sequelize.sync() creates empty tables). Keep
+          // this list in lockstep with backend/tests/setup.js so test
+          // environments mirror what migrations would produce in prod.
+          const resources = [
+            'tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders',
+            'harness', 'requirements', 'admin',
+            'manufacturing_planning', 'manufacturing_execution',
+            'tools', 'features',
+          ];
           const actions = ['read', 'write', 'delete'];
           const rows = [];
           for (const resource of resources) {
@@ -241,6 +248,10 @@ exports.testLogin = async (req, res) => {
           }
           rows.push({ resource: 'requirements', action: 'approve' });
           rows.push({ resource: 'admin', action: 'impersonate' });
+          rows.push({ resource: 'manufacturing_execution', action: 'work_order_delete' });
+          rows.push({ resource: 'manufacturing_execution', action: 'work_order_undelete' });
+          rows.push({ resource: 'admin', action: 'manage_tool_categories' });
+          rows.push({ resource: 'features', action: 'approve' });
           await db.Permission.bulkCreate(rows, { ignoreDuplicates: true });
           allPerms = await db.Permission.findAll({ attributes: ['id'] });
         }

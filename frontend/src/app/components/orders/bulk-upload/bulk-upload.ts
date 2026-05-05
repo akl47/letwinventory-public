@@ -19,6 +19,7 @@ import { InventoryService, BulkImportResult, BulkImportOrderItem, BulkImportOrde
 import { PartCategory } from '../../../models';
 import { detectAndParse } from '../../../utils/pdf-parsers/parser-registry';
 import { ParsedOrder } from '../../../utils/pdf-parsers/parser.interface';
+import { CategoryBadge } from '../../common/category-badge/category-badge';
 
 interface EditableOrderItem extends BulkImportOrderItem {
     index: number;
@@ -42,7 +43,8 @@ interface EditableOrderItem extends BulkImportOrderItem {
         MatTooltipModule,
         MatDatepickerModule,
         MatNativeDateModule,
-        MatSelectModule
+        MatSelectModule,
+        CategoryBadge,
     ],
     templateUrl: './bulk-upload.html',
     styleUrl: './bulk-upload.css'
@@ -556,15 +558,4 @@ export class BulkUploadComponent {
         return this.getCategory(categoryId)?.name || '-';
     }
 
-    getCategoryBgColor(hex: string | null | undefined): string {
-        if (!hex) return 'rgba(255, 255, 255, 0.2)';
-        const r = parseInt(hex.slice(1, 3), 16);
-        const g = parseInt(hex.slice(3, 5), 16);
-        const b = parseInt(hex.slice(5, 7), 16);
-        return `rgba(${r}, ${g}, ${b}, 0.2)`;
-    }
-
-    getCategoryTextColor(hex: string | null | undefined): string {
-        return hex || '#808080';
-    }
 }

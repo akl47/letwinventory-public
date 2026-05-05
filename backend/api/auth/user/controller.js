@@ -268,6 +268,46 @@ exports.revokeSession = async (req, res) => {
 };
 
 /**
+ * Returns whether the current user has a GitHub PAT configured.
+ * Never returns the value itself.
+ */
+exports.getGithubPATStatus = async (req, res) => {
+  try {
+    const user = await db.User.findByPk(req.user.id, { attributes: ['githubPAT'] });
+    res.json({ configured: !!(user && user.githubPAT) });
+  } catch (error) {
+    res.status(500).json({ error: 'Error reading PAT status' });
+  }
+};
+
+/**
+ * Sets the current user's GitHub PAT. Body: { pat: "ghp_..." }.
+ */
+exports.setGithubPAT = async (req, res) => {
+  try {
+    const pat = req.body && typeof req.body.pat === 'string' ? req.body.pat.trim() : '';
+    if (!pat) return res.status(400).json({ error: 'pat is required' });
+    if (pat.length > 200) return res.status(400).json({ error: 'pat is implausibly long' });
+    await db.User.update({ githubPAT: pat }, { where: { id: req.user.id } });
+    res.json({ configured: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Error saving PAT' });
+  }
+};
+
+/**
+ * Clears the current user's GitHub PAT.
+ */
+exports.clearGithubPAT = async (req, res) => {
+  try {
+    await db.User.update({ githubPAT: null }, { where: { id: req.user.id } });
+    res.json({ configured: false });
+  } catch (error) {
+    res.status(500).json({ error: 'Error clearing PAT' });
+  }
+};
+
+/**
  * Refresh access token using refresh token from httpOnly cookie
  */
 exports.refreshToken = async (req, res) => {

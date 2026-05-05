@@ -1,0 +1,479 @@
+:host {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.page-container {
+    flex: 1;
+    overflow-y: auto;
+    background-color: var(--mat-sys-surface-container-lowest);
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 24px;
+    background-color: var(--mat-sys-surface);
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+    box-shadow: 0 2px 4px rgba(255, 255, 255, 0.05);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    flex-wrap: wrap;
+}
+
+.header h2 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 400;
+    color: var(--mat-sys-on-surface);
+}
+
+.spacer { flex: 1; }
+
+.loading {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.content-wrapper {
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.two-column-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+mat-card {
+    box-shadow: 0 1px 3px rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+}
+
+mat-card mat-card-content { padding-top: 8px; }
+
+.full-width { width: 100%; }
+
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+/* Read-only view */
+.view-row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.view-row:last-child { border-bottom: none; }
+.view-label {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.55);
+    align-self: center;
+}
+.view-value {
+    font-size: 14px;
+    word-break: break-word;
+}
+
+.mono { font-family: monospace; font-size: 13px; }
+
+.markdown-body {
+    font-family: monospace;
+    min-height: 400px;
+    font-size: 13px;
+}
+
+.markdown-view {
+    background: rgba(0, 0, 0, 0.18);
+    padding: 16px 18px;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    max-height: none;
+    overflow: visible;
+}
+
+.readonly-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(33, 150, 243, 0.12);
+    color: #64B5F6;
+    padding: 10px 14px;
+    border-radius: 6px;
+}
+
+.error-banner {
+    padding: 10px 14px;
+    background: rgba(244, 67, 54, 0.12);
+    color: #f44336;
+    border-radius: 6px;
+}
+
+.commits-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.commits-table th,
+.commits-table td {
+    padding: 8px 6px;
+    text-align: left;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 13px;
+    vertical-align: top;
+}
+
+.commits-table th {
+    background-color: var(--mat-sys-surface-container);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.cell-input {
+    width: 100%;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: inherit;
+    padding: 4px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+.cell-input.mono { font-family: monospace; }
+
+.link-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.05);
+    text-decoration: none;
+    color: var(--mat-sys-primary);
+}
+.link-card mat-icon { font-size: 18px; height: 18px; width: 18px; }
+
+/* Expandable requirement list */
+.req-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.req-item {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    transition: background-color 0.15s ease;
+    --req-depth: 0;
+    padding-left: calc(var(--req-depth) * 24px);
+    position: relative;
+}
+
+.req-item:last-child { border-bottom: none; }
+
+.req-item.expanded {
+    background-color: rgba(255, 255, 255, 0.03);
+}
+
+/* Vertical guide line + connector for indented children. */
+.req-item.req-child::before {
+    content: '';
+    position: absolute;
+    left: calc((var(--req-depth) - 1) * 24px + 8px);
+    top: 0;
+    bottom: 50%;
+    width: 1px;
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.req-item.req-child::after {
+    content: '';
+    position: absolute;
+    left: calc((var(--req-depth) - 1) * 24px + 8px);
+    top: 50%;
+    width: 12px;
+    height: 1px;
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.req-header {
+    display: grid;
+    grid-template-columns: 36px 70px 1fr 110px auto;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+    cursor: pointer;
+    user-select: none;
+}
+
+.req-header:hover {
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+/* Density handled by .dense-icon-button-2 class on the button itself. */
+.req-header .expand-btn { margin: 0; }
+
+.req-header .req-id {
+    color: var(--mat-sys-primary);
+    text-decoration: none;
+    font-weight: 500;
+    font-family: monospace;
+    font-size: 14px;
+}
+
+.req-header .req-id:hover { text-decoration: underline; }
+
+.req-header .req-desc {
+    opacity: 0.9;
+    font-size: 14px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.req-header .req-desc-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+
+.req-header .req-tts-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.req-item.expanded .req-header .req-desc-text {
+    white-space: normal;
+    text-overflow: clip;
+}
+
+.req-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.req-detail {
+    padding: 8px 16px 16px 64px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    background-color: rgba(0, 0, 0, 0.12);
+}
+
+.detail-row {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.detail-row:last-child { border-bottom: none; }
+
+.detail-label {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    font-weight: 500;
+    align-self: start;
+    padding-top: 2px;
+}
+
+.detail-value {
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.85);
+    word-break: break-word;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.detail-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.detail-value a {
+    color: var(--mat-sys-primary);
+    text-decoration: none;
+}
+.detail-value a:hover { text-decoration: underline; }
+
+.empty-hint {
+    padding: 24px 16px;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 14px;
+    border: 1px dashed rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+}
+
+.branch-commits-section {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.branch-commits-toggle {
+    width: 100%;
+    justify-content: flex-start;
+    text-align: left;
+}
+
+.branch-commits-toggle .mono {
+    margin: 0 6px;
+    color: var(--mat-sys-primary);
+}
+
+.github-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.github-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+}
+
+.subsection-title {
+    margin: 16px 0 8px 0;
+    font-size: 13px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgba(255, 255, 255, 0.65);
+}
+
+.reqs-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.reqs-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+}
+
+.pending-count {
+    font-size: 12px;
+    color: #FFB74D;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 500;
+}
+
+.add-commit-btn {
+    margin-top: 8px;
+}
+
+/* Match the surface color of the surrounding mat-cards on this page so the
+   accordion blends in instead of sitting on a transparent / mismatched bg. */
+.body-panel.mat-expansion-panel {
+    background: var(--mat-sys-surface-container-low);
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(255, 255, 255, 0.1);
+}
+
+.body-panel.mat-expansion-panel:not(.mat-expanded) .mat-expansion-panel-header:hover,
+.body-panel.mat-expansion-panel .mat-expansion-panel-header.mat-expanded {
+    background: var(--mat-sys-surface-container-low);
+}
+
+/* state badges now use the common <app-category-badge> with variants. */
+
+.history-panel.mat-expansion-panel {
+    background: var(--mat-sys-surface-container-low);
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(255, 255, 255, 0.1);
+}
+
+.history-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-height: 480px;
+    overflow-y: auto;
+}
+
+.history-list li {
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.hist-changes {
+    background: rgba(255, 255, 255, 0.03);
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    max-height: 180px;
+    overflow: auto;
+    margin: 6px 0 0;
+}
+
+.hist-notes {
+    font-style: italic;
+    opacity: 0.85;
+    margin-top: 6px;
+}
+
+.muted {
+    opacity: 0.6;
+    font-size: 0.85em;
+}
+
+@media (max-width: 768px) {
+    .two-column-layout { grid-template-columns: 1fr; }
+    .form-row { grid-template-columns: 1fr; }
+    .view-row { grid-template-columns: 1fr; gap: 2px; }
+    .req-header { grid-template-columns: 32px 60px 1fr; gap: 8px; }
+    .req-header .state-badge,
+    .req-header .req-actions { grid-column: 2 / -1; }
+    .req-detail { padding-left: 32px; }
+    .detail-row { grid-template-columns: 1fr; gap: 2px; }
+    .header { padding: 12px 16px; }
+    .content-wrapper { padding: 16px; }
+}

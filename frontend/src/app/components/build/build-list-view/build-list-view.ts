@@ -16,6 +16,7 @@ import { AuthService } from '../../../services/auth.service';
 import { NewBuildDialog } from '../new-build-dialog/new-build-dialog';
 import { BarcodeTag } from '../../inventory/barcode-tag/barcode-tag';
 import { PartNumberPipe } from '../../../pipes/part-number.pipe';
+import { CategoryBadge } from '../../common/category-badge/category-badge';
 
 @Component({
   selector: 'app-build-list-view',
@@ -33,6 +34,7 @@ import { PartNumberPipe } from '../../../pipes/part-number.pipe';
     MatSlideToggleModule,
     BarcodeTag,
     PartNumberPipe,
+    CategoryBadge,
   ],
   templateUrl: './build-list-view.html',
   styleUrl: './build-list-view.css',
@@ -105,15 +107,4 @@ export class BuildListView implements OnInit {
     this.router.navigate(['/kits', build.barcodeID]);
   }
 
-  getCategoryBgColor(hex: string | null): string {
-    if (!hex) return 'rgba(255, 255, 255, 0.2)';
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `rgba(${r}, ${g}, ${b}, 0.2)`;
-  }
-
-  getCategoryTextColor(hex: string | null): string {
-    return hex || '#808080';
-  }
 }

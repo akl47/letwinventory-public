@@ -333,18 +333,8 @@ describe('PartsTableView', () => {
   });
 
   describe('utility methods', () => {
-    it('getCategoryBgColor should return rgba for valid hex', () => {
-      expect(component.getCategoryBgColor('#FF0000')).toBe('rgba(255, 0, 0, 0.2)');
-    });
-
-    it('getCategoryBgColor should return fallback for null', () => {
-      expect(component.getCategoryBgColor(null)).toBe('rgba(255, 255, 255, 0.2)');
-    });
-
-    it('getCategoryTextColor should return hex or fallback', () => {
-      expect(component.getCategoryTextColor('#FF0000')).toBe('#FF0000');
-      expect(component.getCategoryTextColor(null)).toBe('#808080');
-    });
+    // Color helpers moved into the shared CategoryBadge component; tests for
+    // them live alongside that component now.
 
     it('onRowMouseDown should prevent default for middle click', () => {
       const event = new MouseEvent('mousedown', { button: 1 });
