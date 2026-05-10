@@ -7,7 +7,7 @@ on:
 jobs:
   check-requirements:
     name: All Requirements Approved
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     env:
       PROD_API_URL: ${{ secrets.PROD_API_URL }}
       PROD_API_KEY: ${{ secrets.PROD_API_KEY }}
