@@ -47,6 +47,30 @@
     min-width: 80px;
 }
 
+.extra-header,
+.extra-cell {
+    text-align: left;
+    min-width: 200px;
+    width: 1%;
+}
+
+.perm-table td.extra-cell {
+    vertical-align: middle;
+}
+
+.extra-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.extra-action {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    line-height: 1.4;
+}
+
 @media (max-width: 768px) {
     .perm-table th,
     .perm-table td {

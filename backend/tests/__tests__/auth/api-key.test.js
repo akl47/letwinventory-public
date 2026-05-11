@@ -110,6 +110,170 @@ describe('API Key Management', () => {
     });
   });
 
+  describe('POST /:id/regenerate', () => {
+    it('revokes the old key and returns a new raw key', async () => {
+      const { post } = await authenticatedRequest();
+      const createRes = await post(BASE_URL).send({ name: 'Regen Key' });
+      const oldId = createRes.body.id;
+      const oldRawKey = createRes.body.key;
+
+      const res = await post(`${BASE_URL}/${oldId}/regenerate`);
+
+      expect(res.status).toBe(201);
+      expect(res.body.id).toBeDefined();
+      expect(res.body.id).not.toBe(oldId);
+      expect(res.body.key).toMatch(/^lwinv_[0-9a-f]{64}$/);
+      expect(res.body.key).not.toBe(oldRawKey);
+      expect(res.body.name).toBe('Regen Key');
+
+      const oldRow = await db.ApiKey.findByPk(oldId);
+      expect(oldRow.activeFlag).toBe(false);
+    });
+
+    it('copies the original permissions onto the new key', async () => {
+      const { post } = await authenticatedRequest();
+      const perms = await db.Permission.findAll({ limit: 3 });
+      const permIds = perms.map(p => p.id).sort();
+      const createRes = await post(BASE_URL).send({ name: 'Perms Carry', permissionIds: permIds });
+
+      const res = await post(`${BASE_URL}/${createRes.body.id}/regenerate`);
+
+      expect(res.status).toBe(201);
+      expect(res.body.permissions).toHaveLength(3);
+      expect(res.body.permissions.map(p => p.id).sort()).toEqual(permIds);
+    });
+
+    it('preserves the original expiresAt', async () => {
+      const { post } = await authenticatedRequest();
+      const futureDate = new Date(Date.now() + 86400000).toISOString();
+      const createRes = await post(BASE_URL).send({ name: 'Exp Carry', expiresAt: futureDate });
+
+      const res = await post(`${BASE_URL}/${createRes.body.id}/regenerate`);
+
+      expect(res.status).toBe(201);
+      expect(new Date(res.body.expiresAt).toISOString()).toBe(futureDate);
+    });
+
+    it('preserves null expiresAt (never-expires)', async () => {
+      const { post } = await authenticatedRequest();
+      const createRes = await post(BASE_URL).send({ name: 'No Exp Carry' });
+
+      const res = await post(`${BASE_URL}/${createRes.body.id}/regenerate`);
+
+      expect(res.status).toBe(201);
+      expect(res.body.expiresAt).toBeNull();
+    });
+
+    it('intersects permissions with user current effective set', async () => {
+      // Create a user with all permissions, generate a key, then strip a permission from the user.
+      const user = await createTestUser({ googleID: 'g-regen-intersect', email: 'regen-int@test.com', displayName: 'RegenInt' });
+      await assignAllPermissions(user.id);
+      const token = generateToken(user);
+      const app = getApp();
+
+      const createRes = await request(app)
+        .post(BASE_URL)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Intersect Regen' });
+      const allPerms = await db.Permission.findAll();
+      expect(createRes.body.permissions).toHaveLength(allPerms.length);
+
+      const removed = allPerms[0];
+      await db.UserPermission.destroy({ where: { userID: user.id, permissionID: removed.id } });
+
+      const res = await request(app)
+        .post(`${BASE_URL}/${createRes.body.id}/regenerate`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(201);
+      const returnedKeys = res.body.permissions.map(p => `${p.resource}.${p.action}`);
+      expect(returnedKeys).not.toContain(`${removed.resource}.${removed.action}`);
+      expect(res.body.permissions).toHaveLength(allPerms.length - 1);
+    });
+
+    it('issues a working token via /token for the new key', async () => {
+      const { post } = await authenticatedRequest();
+      const createRes = await post(BASE_URL).send({ name: 'Regen Exchange' });
+      const regenRes = await post(`${BASE_URL}/${createRes.body.id}/regenerate`);
+
+      const app = getApp();
+      const exchangeRes = await request(app).post(`${BASE_URL}/token`).send({ key: regenRes.body.key });
+      expect(exchangeRes.status).toBe(200);
+      expect(exchangeRes.body.accessToken).toBeDefined();
+    });
+
+    it('rejects the old raw key after regenerate', async () => {
+      const { post } = await authenticatedRequest();
+      const createRes = await post(BASE_URL).send({ name: 'Old Key Dies' });
+      await post(`${BASE_URL}/${createRes.body.id}/regenerate`);
+
+      const app = getApp();
+      const exchangeRes = await request(app).post(`${BASE_URL}/token`).send({ key: createRes.body.key });
+      expect(exchangeRes.status).toBe(401);
+    });
+
+    it('returns 404 for another user\'s key', async () => {
+      const user1 = await createTestUser({ googleID: 'g-regen-1', email: 'regen1@test.com', displayName: 'Regen1' });
+      const req1 = await authenticatedRequest(user1);
+      const createRes = await req1.post(BASE_URL).send({ name: 'User1 Key' });
+
+      const user2 = await createTestUser({ googleID: 'g-regen-2', email: 'regen2@test.com', displayName: 'Regen2' });
+      const req2 = await authenticatedRequest(user2);
+      const res = await req2.post(`${BASE_URL}/${createRes.body.id}/regenerate`);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 for an already-revoked key', async () => {
+      const { post, delete: del } = await authenticatedRequest();
+      const createRes = await post(BASE_URL).send({ name: 'Revoked Then Regen' });
+      await del(`${BASE_URL}/${createRes.body.id}`);
+
+      const res = await post(`${BASE_URL}/${createRes.body.id}/regenerate`);
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 for nonexistent key', async () => {
+      const { post } = await authenticatedRequest();
+      const res = await post(`${BASE_URL}/99999/regenerate`);
+      expect(res.status).toBe(404);
+    });
+
+    it('overrides expiresAt when an ISO date is provided in the body', async () => {
+      const { post } = await authenticatedRequest();
+      const originalExpiry = new Date(Date.now() + 86400000).toISOString();
+      const createRes = await post(BASE_URL).send({ name: 'Override Date', expiresAt: originalExpiry });
+
+      const newExpiry = new Date(Date.now() + 30 * 86400000).toISOString();
+      const res = await post(`${BASE_URL}/${createRes.body.id}/regenerate`).send({ expiresAt: newExpiry });
+
+      expect(res.status).toBe(201);
+      expect(new Date(res.body.expiresAt).toISOString()).toBe(newExpiry);
+    });
+
+    it('clears expiresAt when expiresAt=null is provided in the body', async () => {
+      const { post } = await authenticatedRequest();
+      const originalExpiry = new Date(Date.now() + 86400000).toISOString();
+      const createRes = await post(BASE_URL).send({ name: 'Clear Date', expiresAt: originalExpiry });
+
+      const res = await post(`${BASE_URL}/${createRes.body.id}/regenerate`).send({ expiresAt: null });
+
+      expect(res.status).toBe(201);
+      expect(res.body.expiresAt).toBeNull();
+    });
+
+    it('preserves original expiresAt when body omits the field entirely', async () => {
+      const { post } = await authenticatedRequest();
+      const originalExpiry = new Date(Date.now() + 86400000).toISOString();
+      const createRes = await post(BASE_URL).send({ name: 'Preserve Date', expiresAt: originalExpiry });
+
+      const res = await post(`${BASE_URL}/${createRes.body.id}/regenerate`);
+
+      expect(res.status).toBe(201);
+      expect(new Date(res.body.expiresAt).toISOString()).toBe(originalExpiry);
+    });
+  });
+
   describe('POST /token (exchange)', () => {
     it('should return a JWT with correct user info', async () => {
       const { post, user } = await authenticatedRequest();

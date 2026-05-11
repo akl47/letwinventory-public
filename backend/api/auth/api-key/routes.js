@@ -6,6 +6,7 @@ router.post('/', checkToken, controller.create);
 router.get('/', checkToken, controller.list);
 router.delete('/:id', checkToken, controller.revoke);
 router.get('/:id/permissions', checkToken, controller.getPermissions);
+router.post('/:id/regenerate', checkToken, controller.regenerate);
 router.post('/token', controller.exchangeToken);
 
 module.exports = router;

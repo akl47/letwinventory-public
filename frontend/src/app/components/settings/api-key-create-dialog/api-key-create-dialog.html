@@ -13,12 +13,16 @@
         <div class="field-label">Expiration</div>
         <mat-radio-group [(ngModel)]="expirationMode" class="expiration-options">
             <mat-radio-button value="never">Never expires</mat-radio-button>
-            <mat-radio-button value="date">Expires on date</mat-radio-button>
+            <mat-radio-button value="7d">7 days from today</mat-radio-button>
+            <mat-radio-button value="30d">30 days from today</mat-radio-button>
+            <mat-radio-button value="60d">60 days from today</mat-radio-button>
+            <mat-radio-button value="90d">90 days from today</mat-radio-button>
+            <mat-radio-button value="date">Pick a date</mat-radio-button>
         </mat-radio-group>
         @if (expirationMode === 'date') {
         <mat-form-field appearance="outline" class="date-field">
             <mat-label>Expiration date</mat-label>
-            <input matInput [matDatepicker]="picker" [(ngModel)]="expiresAt" [min]="minDate">
+            <input matInput [matDatepicker]="picker" [(ngModel)]="customExpiresAt" [min]="minDate">
             <mat-datepicker-toggle matIconSuffix [for]="picker"></mat-datepicker-toggle>
             <mat-datepicker #picker></mat-datepicker>
         </mat-form-field>

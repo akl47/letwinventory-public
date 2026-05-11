@@ -1,346 +1,131 @@
 :host {
-    display: flex;
-    flex-direction: column;
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
 }
 
 .parts-table-container {
-    padding: 24px;
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+  padding: 24px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.table-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 24px;
-    gap: 16px;
-    flex-wrap: wrap;
+.page-header {
+  margin-bottom: 24px;
 }
 
-.table-header h2 {
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 28px;
-    font-weight: 500;
+.page-header h2 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 28px;
+  font-weight: 500;
 }
 
-.table-header h2 mat-icon {
-    font-size: 32px;
-    width: 32px;
-    height: 32px;
-}
-
-.header-actions {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    flex: 1;
-    justify-content: flex-end;
-}
-
-/* Filter Button Styles */
-.filter-btn {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 0 12px;
-    height: 36px;
-    background-color: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 4px;
-    color: rgba(255, 255, 255, 0.7);
-    cursor: pointer;
-    transition: background-color 0.2s;
-}
-
-.filter-btn:hover {
-    background-color: rgba(255, 255, 255, 0.1);
-}
-
-.filter-btn.has-filter {
-    color: var(--mat-sys-primary);
-    background-color: rgba(var(--mat-sys-primary-rgb), 0.15);
-    border-color: var(--mat-sys-primary);
-}
-
-.filter-btn .mdc-button__label {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.filter-btn .dropdown-icon {
-    margin-left: 4px;
-    margin-right: -8px;
-}
-
-/* Category Chips in Filter Button */
-.category-chips {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.category-chip {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 24px;
-    height: 20px;
-    padding: 0 6px;
-    border-radius: 3px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-}
-
-.no-selection,
-.all-selected {
-    font-size: 14px;
-}
-
-/* Filter Menu Styles */
-.menu-header,
-.menu-item {
-    padding: 8px 16px;
-}
-
-.menu-header {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.category-color {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border-radius: 3px;
-    margin-right: 8px;
-    vertical-align: middle;
-}
-
-/* Filter Badge */
-.filter-badge {
-    background-color: var(--mat-sys-primary);
-    color: white;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 6px;
-    border-radius: 10px;
-    margin-left: 4px;
-}
-
-/* Filter Menu Section Headers */
-.menu-section-header {
-    padding: 8px 16px 4px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: rgba(255, 255, 255, 0.5);
-}
-
-/* Type Color Indicators */
-.type-color {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border-radius: 3px;
-    margin-right: 8px;
-    vertical-align: middle;
-}
-
-.type-color.internal {
-    background-color: var(--mat-sys-secondary-container);
-}
-
-.type-color.vendor {
-    background-color: var(--mat-sys-tertiary-container);
-}
-
-.search-field {
-    min-width: 300px;
-    flex: 1;
-    max-width: 500px;
-}
-
-.table-wrapper {
-    flex: 1;
-    overflow: auto;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 4px;
-    margin-bottom: 16px;
-}
-
-.parts-table {
-    width: 100%;
-}
-
-.parts-table th {
-    background-color: var(--mat-sys-surface-container);
-    font-weight: 600;
-    font-size: 14px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.parts-table td {
-    font-size: 14px;
-}
-
-.parts-table tr.clickable-row {
-    cursor: pointer;
-}
-
-.parts-table tr.clickable-row:hover {
-    background-color: var(--mat-sys-surface-container-low);
+.page-header h2 mat-icon {
+  font-size: 32px;
+  width: 32px;
+  height: 32px;
 }
 
 .sku-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    text-decoration: none;
-    color: var(--mat-sys-primary);
-    transition: color 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-decoration: none;
+  color: var(--mat-sys-primary);
+  transition: color 0.2s;
+  position: relative;
+  z-index: 2;
 }
 
 .sku-link:hover {
-    color: var(--mat-sys-primary-dark);
-    text-decoration: underline;
+  color: var(--mat-sys-primary-dark);
+  text-decoration: underline;
 }
 
 .link-icon {
-    font-size: 16px;
-    width: 16px;
-    height: 16px;
+  font-size: 16px;
+  width: 16px;
+  height: 16px;
 }
 
 .part-type {
-    padding: 4px 12px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .part-type.internal {
-    background-color: var(--mat-sys-secondary-container);
-    color: var(--mat-sys-on-secondary-container);
+  background-color: var(--mat-sys-secondary-container);
+  color: var(--mat-sys-on-secondary-container);
 }
 
 .part-type.external {
-    background-color: var(--mat-sys-tertiary-container);
-    color: var(--mat-sys-on-tertiary-container);
+  background-color: var(--mat-sys-tertiary-container);
+  color: var(--mat-sys-on-tertiary-container);
 }
 
-/* category-badge styles moved to common CategoryBadge component */
-
-/* Image preview */
 .image-preview-trigger {
-    position: relative;
-    display: inline-block;
+  position: relative;
+  display: inline-block;
+  z-index: 2;
 }
 
 .image-icon {
-    font-size: 20px;
-    width: 20px;
-    height: 20px;
-    color: rgba(255, 255, 255, 0.5);
+  font-size: 20px;
+  width: 20px;
+  height: 20px;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .image-preview-trigger:hover .image-icon {
-    color: rgba(255, 255, 255, 0.8);
+  color: rgba(255, 255, 255, 0.8);
 }
 
 .image-preview-tooltip {
-    display: none;
-    position: fixed;
-    z-index: 1000;
-    background: var(--mat-sys-surface-container);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-    padding: 8px;
-    max-width: 200px;
-    pointer-events: none;
-    transform: translateY(-100%);
+  display: none;
+  position: fixed;
+  z-index: 1000;
+  background: var(--mat-sys-surface-container);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 8px;
+  max-width: 200px;
+  pointer-events: none;
+  transform: translateY(-100%);
 }
 
 .image-preview-trigger:hover .image-preview-tooltip {
-    display: block;
+  display: block;
 }
 
 .image-preview-tooltip img {
-    max-width: 100%;
-    border-radius: 4px;
-    display: block;
+  max-width: 100%;
+  border-radius: 4px;
+  display: block;
 }
 
-.no-data {
-    text-align: center;
-    padding: 48px 24px;
-    color: rgba(255, 255, 255, 0.54);
-}
-
-.no-data mat-icon {
-    font-size: 64px;
-    width: 64px;
-    height: 64px;
-    margin-bottom: 16px;
-    opacity: 0.3;
-}
-
-.no-data p {
-    margin: 0;
-    font-size: 16px;
-}
-
-/* Low stock warning */
 .low-stock {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    color: #ffb74d;
-    font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #ffb74d;
+  font-weight: 500;
 }
 
 .low-stock-icon {
-    font-size: 16px;
-    width: 16px;
-    height: 16px;
-    color: #ffb74d;
-}
-
-mat-paginator {
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
-}
-
-/* Responsive adjustments */
-@media (max-width: 768px) {
-    .table-header {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .search-field {
-        max-width: 100%;
-    }
-
-    .parts-table {
-        font-size: 12px;
-    }
-
-    .parts-table th,
-    .parts-table td {
-        padding: 8px 4px;
-    }
+  font-size: 16px;
+  width: 16px;
+  height: 16px;
+  color: #ffb74d;
 }

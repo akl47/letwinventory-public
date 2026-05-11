@@ -74,24 +74,51 @@ describe('PermissionGridComponent', () => {
     });
   });
 
-  describe('actions', () => {
-    it('should include base actions', () => {
-      const actions = component.actions();
-      expect(actions).toContain('read');
-      expect(actions).toContain('write');
-      expect(actions).toContain('delete');
+  describe('coreActionColumns', () => {
+    it('returns the core actions present in the input', () => {
+      const cols = component.coreActionColumns();
+      expect(cols).toEqual(['read', 'write', 'delete']);
     });
 
-    it('should include extra actions beyond base', () => {
-      const actions = component.actions();
-      expect(actions).toContain('approve');
+    it('omits a core action when it is absent from every permission', () => {
+      fixture.componentRef.setInput('permissions', [
+        { id: 1, resource: 'tasks', action: 'read' },
+        { id: 2, resource: 'tasks', action: 'write' },
+      ]);
+      fixture.detectChanges();
+      const cols = component.coreActionColumns();
+      expect(cols).toEqual(['read', 'write']);
+    });
+  });
+
+  describe('extraActionsFor', () => {
+    it('returns the non-RWD permissions for the requested resource', () => {
+      const extras = component.extraActionsFor('requirements');
+      expect(extras.map(p => p.action)).toEqual(['approve']);
     });
 
-    it('should have base actions first', () => {
-      const actions = component.actions();
-      expect(actions[0]).toBe('read');
-      expect(actions[1]).toBe('write');
-      expect(actions[2]).toBe('delete');
+    it('returns an empty list for resources with only core actions', () => {
+      expect(component.extraActionsFor('tasks')).toEqual([]);
+    });
+  });
+
+  describe('hasExtraActions', () => {
+    it('is true when at least one permission is non-RWD', () => {
+      expect(component.hasExtraActions()).toBe(true);
+    });
+  });
+
+  describe('humanize', () => {
+    it('replaces underscores with spaces', () => {
+      expect(component.humanize('manufacturing_planning')).toBe('Manufacturing Planning');
+    });
+
+    it('title-cases each word', () => {
+      expect(component.humanize('work_order_undelete')).toBe('Work Order Undelete');
+    });
+
+    it('leaves simple labels capitalised', () => {
+      expect(component.humanize('read')).toBe('Read');
     });
   });
 

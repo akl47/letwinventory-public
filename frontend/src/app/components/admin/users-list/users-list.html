@@ -1,77 +1,54 @@
 <div class="users-list-container">
-    <div class="list-header">
-        <h2>
-            <mat-icon>admin_panel_settings</mat-icon>
-            Users
-        </h2>
-        <div class="header-actions">
-            <mat-form-field appearance="outline" class="search-field">
-                <mat-label>Search users</mat-label>
-                <input matInput [ngModel]="searchQuery()" (ngModelChange)="searchQuery.set($event)"
-                    placeholder="Search by name or email">
-                <mat-icon matPrefix>search</mat-icon>
-            </mat-form-field>
-            <mat-slide-toggle [checked]="showInactive()" (change)="showInactive.set($event.checked)" color="primary">
-                Show Inactive
-            </mat-slide-toggle>
-            <button mat-flat-button color="primary" (click)="openCreateDialog()">
-                <mat-icon>person_add</mat-icon>
-                Add User
-            </button>
-        </div>
-    </div>
+  <div class="page-header">
+    <h2>
+      <mat-icon>admin_panel_settings</mat-icon>
+      Users
+    </h2>
+  </div>
 
-    @if (isLoading()) {
+  @if (isLoading()) {
     <div class="loading-state">
-        <mat-spinner diameter="48"></mat-spinner>
-        <p>Loading users...</p>
+      <mat-spinner diameter="48"></mat-spinner>
+      <p>Loading users...</p>
     </div>
-    } @else if (filteredUsers().length === 0) {
-    <div class="no-data">
-        <mat-icon>group_off</mat-icon>
-        <p>No users found</p>
-    </div>
-    } @else {
-    <div class="table-wrapper">
-        <table mat-table [dataSource]="filteredUsers()" class="users-table">
-            <!-- Display Name Column -->
-            <ng-container matColumnDef="displayName">
-                <th mat-header-cell *matHeaderCellDef>Name</th>
-                <td mat-cell *matCellDef="let user" [class.inactive-user]="user.activeFlag === false">
-                    <strong>{{ user.displayName }}</strong>
-                    @if (user.activeFlag === false) {
-                    <span class="inactive-badge">Inactive</span>
-                    }
-                </td>
-            </ng-container>
+  } @else {
+    <app-data-table
+      [data]="users()"
+      [columns]="columns"
+      [filterSections]="filterSections"
+      [searchKeys]="searchKeys"
+      [defaultSort]="{ key: 'displayName', dir: 'asc' }"
+      searchPlaceholder="Search by name or email">
 
-            <!-- Email Column -->
-            <ng-container matColumnDef="email">
-                <th mat-header-cell *matHeaderCellDef>Email</th>
-                <td mat-cell *matCellDef="let user" [class.inactive-user]="user.activeFlag === false">{{ user.email }}</td>
-            </ng-container>
+      <div dataTableToolbar>
+        <button mat-flat-button color="primary" (click)="openCreateDialog()">
+          <mat-icon>person_add</mat-icon>
+          Add User
+        </button>
+      </div>
 
-            <!-- Groups Column -->
-            <ng-container matColumnDef="groups">
-                <th mat-header-cell *matHeaderCellDef>Groups</th>
-                <td mat-cell *matCellDef="let user" [class.inactive-user]="user.activeFlag === false">
-                    <span class="group-chips">{{ getGroupNames(user) }}</span>
-                </td>
-            </ng-container>
+      <ng-template appColumn="displayName" let-user>
+        <span [class.inactive-user]="user.activeFlag === false">
+          <strong>{{ user.displayName }}</strong>
+          @if (user.activeFlag === false) {
+            <span class="inactive-badge">Inactive</span>
+          }
+        </span>
+      </ng-template>
 
-            <!-- Actions Column -->
-            <ng-container matColumnDef="actions">
-                <th mat-header-cell *matHeaderCellDef>Actions</th>
-                <td mat-cell *matCellDef="let user">
-                    <button mat-icon-button (click)="navigateToUser(user.id)" matTooltip="Edit permissions">
-                        <mat-icon>edit</mat-icon>
-                    </button>
-                </td>
-            </ng-container>
+      <ng-template appColumn="email" let-user>
+        <span [class.inactive-user]="user.activeFlag === false">{{ user.email }}</span>
+      </ng-template>
 
-            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-            <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
-        </table>
-    </div>
-    }
+      <ng-template appColumn="groups" let-user>
+        <span class="group-chips" [class.inactive-user]="user.activeFlag === false">{{ getGroupNames(user) }}</span>
+      </ng-template>
+
+      <ng-template appColumn="actions" let-user>
+        <button mat-icon-button (click)="navigateToUser(user.id); $event.stopPropagation()" matTooltip="Edit permissions">
+          <mat-icon>edit</mat-icon>
+        </button>
+      </ng-template>
+    </app-data-table>
+  }
 </div>

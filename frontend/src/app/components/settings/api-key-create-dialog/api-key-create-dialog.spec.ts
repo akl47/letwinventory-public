@@ -132,4 +132,59 @@ describe('ApiKeyCreateDialog', () => {
 
         expect(dialogRef.close).toHaveBeenCalledWith(true);
     });
+
+    describe('expiration picker', () => {
+        function daysFromNow(days: number): number {
+            return Date.now() + days * 86400000;
+        }
+
+        it.each([
+            ['7d', 7],
+            ['30d', 30],
+            ['60d', 60],
+            ['90d', 90],
+        ])('sends expiresAt ~%s in the future for mode %s', (mode, days) => {
+            const spy = vi.spyOn(authService, 'createApiKey').mockReturnValue(
+                of({ id: 1, name: 'Test', key: 'k', createdAt: '2026-01-01' })
+            );
+            component.name.set('Test Key');
+            component.expirationMode = mode as any;
+
+            component.create();
+
+            const arg = spy.mock.calls[0][0] as { expiresAt?: string };
+            expect(arg.expiresAt).toBeDefined();
+            const expectedMs = daysFromNow(days);
+            const actualMs = new Date(arg.expiresAt!).getTime();
+            expect(Math.abs(actualMs - expectedMs)).toBeLessThan(5000);
+        });
+
+        it('omits expiresAt when mode is never', () => {
+            const spy = vi.spyOn(authService, 'createApiKey').mockReturnValue(
+                of({ id: 1, name: 'Test', key: 'k', createdAt: '2026-01-01' })
+            );
+            component.name.set('Test Key');
+            component.expirationMode = 'never';
+
+            component.create();
+
+            const arg = spy.mock.calls[0][0] as { expiresAt?: string };
+            expect(arg.expiresAt).toBeUndefined();
+        });
+
+        it('sends the custom date for mode date', () => {
+            const spy = vi.spyOn(authService, 'createApiKey').mockReturnValue(
+                of({ id: 1, name: 'Test', key: 'k', createdAt: '2026-01-01' })
+            );
+            component.name.set('Test Key');
+            component.expirationMode = 'date';
+            const picked = new Date('2027-06-15T12:00:00Z');
+            component.customExpiresAt = picked;
+
+            component.create();
+
+            const arg = spy.mock.calls[0][0] as { expiresAt?: string };
+            expect(arg.expiresAt).toBe(picked.toISOString());
+        });
+    });
 });

@@ -1,219 +1,85 @@
 <div class="parts-table-container">
-    <div class="table-header">
-        <h2>
-            <mat-icon>precision_manufacturing</mat-icon>
-            Parts Catalog
-        </h2>
-        <div class="header-actions">
-            <!-- Filter Dropdown -->
-            <button mat-button class="filter-btn" [matMenuTriggerFor]="filterMenu"
-                [class.has-filter]="activeFilterCount() > 0">
-                <mat-icon>filter_list</mat-icon>
-                <span>Filter</span>
-                @if (activeFilterCount() > 0) {
-                <span class="filter-badge">{{ activeFilterCount() }}</span>
-                }
-            </button>
-            <mat-menu #filterMenu="matMenu" class="filter-menu">
-                <!-- Categories Section -->
-                <div class="menu-section-header">Categories</div>
-                <div class="menu-header" (click)="$event.stopPropagation()">
-                    <mat-checkbox [checked]="allCategoriesSelected()" [indeterminate]="someCategoriesSelected()"
-                        (change)="toggleAllCategories()">
-                        All Categories
-                    </mat-checkbox>
-                </div>
-                @for (cat of categories(); track cat.id) {
-                <div class="menu-item" (click)="$event.stopPropagation()">
-                    <mat-checkbox [checked]="isCategorySelected(cat.id)" (change)="toggleCategory(cat.id)">
-                        <span class="category-color" [style.background-color]="cat.tagColorHex || '#808080'"></span>
-                        {{ cat.name }}
-                    </mat-checkbox>
-                </div>
-                }
-                <mat-divider></mat-divider>
-                <!-- Part Type Section -->
-                <div class="menu-section-header">Part Type</div>
-                <div class="menu-header" (click)="$event.stopPropagation()">
-                    <mat-checkbox [checked]="allTypesSelected()" [indeterminate]="someTypesSelected()"
-                        (change)="toggleAllTypes()">
-                        All Types
-                    </mat-checkbox>
-                </div>
-                <div class="menu-item" (click)="$event.stopPropagation()">
-                    <mat-checkbox [checked]="showInternal()" (change)="toggleInternal()">
-                        <span class="type-color internal"></span>
-                        Internal
-                    </mat-checkbox>
-                </div>
-                <div class="menu-item" (click)="$event.stopPropagation()">
-                    <mat-checkbox [checked]="showVendor()" (change)="toggleVendor()">
-                        <span class="type-color vendor"></span>
-                        Vendor
-                    </mat-checkbox>
-                </div>
-            </mat-menu>
+  <div class="page-header">
+    <h2>
+      <mat-icon>precision_manufacturing</mat-icon>
+      Parts Catalog
+    </h2>
+  </div>
 
-            <mat-form-field appearance="outline" class="search-field">
-                <mat-label>Search parts</mat-label>
-                <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
-                    placeholder="Search by name, description, category, vendor, or SKU">
-                <mat-icon matPrefix>search</mat-icon>
-            </mat-form-field>
-            <mat-slide-toggle [checked]="lowStockOnly()" (change)="onToggleLowStock($event.checked)" color="warn">
-                Low Stock Only
-            </mat-slide-toggle>
-            <mat-slide-toggle [checked]="showInactive()" (change)="onToggleInactive($event.checked)" color="primary">
-                Show Inactive
-            </mat-slide-toggle>
-            <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
-                <button mat-flat-button color="primary" (click)="openNewPartDialog()" [disabled]="!canWrite()">
-                    <mat-icon>add</mat-icon>
-                    New Part
-                </button>
-            </span>
-        </div>
-    </div>
+  @if (categoriesLoaded()) {
+    <app-data-table
+      [data]="allParts()"
+      [columns]="columns"
+      [filterSections]="filterSections()"
+      [searchKeys]="searchKeys"
+      [defaultSort]="{ key: 'name', dir: 'asc' }"
+      [rowHref]="rowHref"
+      searchPlaceholder="Search by name, description, category, vendor, or SKU"
+      (rowClick)="editPart($event)">
 
-    <div class="table-wrapper">
-        <table mat-table [dataSource]="displayedParts()" matSort (matSortChange)="onSortChange($event)"
-            class="parts-table">
-            <!-- Image Column -->
-            <ng-container matColumnDef="image">
-                <th mat-header-cell *matHeaderCellDef></th>
-                <td mat-cell *matCellDef="let part">
-                    <a class="row-overlay" [href]="'/#/parts/' + part.id + '/edit'"
-                        (click)="$event.preventDefault()"></a>
-                    @if (part.imageFile?.id) {
-                    <div class="image-preview-trigger" #imgWrapper
-                        (mouseenter)="imageTooltipStyle = {'top': imgWrapper.getBoundingClientRect().top - 8 + 'px', 'left': imgWrapper.getBoundingClientRect().left + 'px'}">
-                        <mat-icon class="image-icon">image</mat-icon>
-                        <div class="image-preview-tooltip" [ngStyle]="imageTooltipStyle">
-                            <img [appAuthImg]="part.imageFile.id" [alt]="part.name">
-                        </div>
-                    </div>
-                    }
-                </td>
-            </ng-container>
+      <div dataTableToolbar>
+        <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+          <button mat-flat-button color="primary" (click)="openNewPartDialog()" [disabled]="!canWrite()">
+            <mat-icon>add</mat-icon>
+            New Part
+          </button>
+        </span>
+      </div>
 
-            <!-- Name Column -->
-            <ng-container matColumnDef="name">
-                <th mat-header-cell *matHeaderCellDef mat-sort-header>Part Number</th>
-                <td mat-cell *matCellDef="let part">
-                    <span><strong>{{ part.name }}</strong></span>
-                </td>
-            </ng-container>
+      <ng-template appColumn="image" let-part>
+        @if (part.imageFile?.id) {
+          <div class="image-preview-trigger" #imgWrapper
+            (mouseenter)="imageTooltipStyle = {'top': imgWrapper.getBoundingClientRect().top - 8 + 'px', 'left': imgWrapper.getBoundingClientRect().left + 'px'}">
+            <mat-icon class="image-icon">image</mat-icon>
+            <div class="image-preview-tooltip" [ngStyle]="imageTooltipStyle">
+              <img [appAuthImg]="part.imageFile.id" [alt]="part.name">
+            </div>
+          </div>
+        }
+      </ng-template>
 
-            <!-- Revision Column -->
-            <ng-container matColumnDef="revision">
-                <th mat-header-cell *matHeaderCellDef mat-sort-header>Rev</th>
-                <td mat-cell *matCellDef="let part">{{ part.revision }}</td>
-            </ng-container>
+      <ng-template appColumn="name" let-part>
+        <strong>{{ part.name }}</strong>
+      </ng-template>
 
-            <!-- Description Column -->
-            <ng-container matColumnDef="description">
-                <th mat-header-cell *matHeaderCellDef mat-sort-header>Description</th>
-                <td mat-cell *matCellDef="let part">{{ part.description || '-' }}</td>
-            </ng-container>
+      <ng-template appColumn="description" let-part>{{ part.description || '-' }}</ng-template>
 
-            <!-- Category Column -->
-            <ng-container matColumnDef="category">
-                <th mat-header-cell *matHeaderCellDef mat-sort-header>Category</th>
-                <td mat-cell *matCellDef="let part">
-                    <app-category-badge
-                        [label]="part.PartCategory?.name || 'Unknown'"
-                        [colorHex]="part.PartCategory?.tagColorHex" />
-                </td>
-            </ng-container>
+      <ng-template appColumn="category" let-part>
+        <app-category-badge
+          [label]="part.PartCategory?.name || 'Unknown'"
+          [colorHex]="part.PartCategory?.tagColorHex" />
+      </ng-template>
 
-            <!-- Vendor Column -->
-            <ng-container matColumnDef="vendor">
-                <th mat-header-cell *matHeaderCellDef mat-sort-header>Vendor</th>
-                <td mat-cell *matCellDef="let part">{{ part.vendor }}</td>
-            </ng-container>
+      <ng-template appColumn="sku" let-part>
+        @if (part.link) {
+          <a [href]="part.link" target="_blank" class="sku-link" (click)="$event.stopPropagation()">
+            {{ part.sku || '-' }}
+            <mat-icon class="link-icon">open_in_new</mat-icon>
+          </a>
+        } @else {
+          {{ part.sku || '-' }}
+        }
+      </ng-template>
 
-            <!-- SKU Column -->
-            <ng-container matColumnDef="sku">
-                <th mat-header-cell *matHeaderCellDef mat-sort-header>SKU</th>
-                <td mat-cell *matCellDef="let part">
-                    @if (part.link) {
-                    <a [href]="part.link" target="_blank" class="sku-link">
-                        {{ part.sku || '-' }}
-                        <mat-icon class="link-icon">open_in_new</mat-icon>
-                    </a>
-                    } @else {
-                    {{ part.sku || '-' }}
-                    }
-                </td>
-            </ng-container>
+      <ng-template appColumn="inStock" let-part>
+        <span [class.low-stock]="isLowStock(part)">
+          {{ getStockQuantity(part) }}
+          @if (isLowStock(part)) {
+            <mat-icon class="low-stock-icon"
+              matTooltip="Below minimum stock ({{ part.minimumStockQuantity }})">warning</mat-icon>
+          }
+        </span>
+      </ng-template>
 
+      <ng-template appColumn="minimumStockQuantity" let-part>{{ part.minimumStockQuantity ?? '-' }}</ng-template>
 
+      <ng-template appColumn="internalPart" let-part>
+        <span class="part-type" [class.internal]="part.internalPart" [class.external]="!part.internalPart">
+          {{ part.internalPart ? 'Internal' : 'Vendor' }}
+        </span>
+      </ng-template>
 
-            <!-- In Stock Column -->
-            <ng-container matColumnDef="inStock">
-                <th mat-header-cell *matHeaderCellDef mat-sort-header>In Stock</th>
-                <td mat-cell *matCellDef="let part">
-                    <span [class.low-stock]="isLowStock(part)">
-                        {{ getStockQuantity(part) }}
-                        @if (isLowStock(part)) {
-                        <mat-icon class="low-stock-icon"
-                            matTooltip="Below minimum stock ({{ part.minimumStockQuantity }})">warning</mat-icon>
-                        }
-                    </span>
-                </td>
-            </ng-container>
-
-            <!-- Min Stock Quantity Column -->
-            <ng-container matColumnDef="minimumStockQuantity">
-                <th mat-header-cell *matHeaderCellDef mat-sort-header>Min Stock Qty</th>
-                <td mat-cell *matCellDef="let part">{{ part.minimumStockQuantity ?? '-' }}</td>
-            </ng-container>
-
-            <!-- Min Order Quantity Column -->
-            <ng-container matColumnDef="minimumOrderQuantity">
-                <th mat-header-cell *matHeaderCellDef mat-sort-header>Min Order Qty</th>
-                <td mat-cell *matCellDef="let part">{{ part.minimumOrderQuantity }}</td>
-            </ng-container>
-
-            <!-- Internal Part Column -->
-            <ng-container matColumnDef="internalPart">
-                <th mat-header-cell *matHeaderCellDef mat-sort-header>Type</th>
-                <td mat-cell *matCellDef="let part">
-                    <span class="part-type" [class.internal]="part.internalPart" [class.external]="!part.internalPart">
-                        {{ part.internalPart ? 'Internal' : 'Vendor' }}
-                    </span>
-                </td>
-            </ng-container>
-
-            <!-- Created Date Column -->
-            <ng-container matColumnDef="createdAt">
-                <th mat-header-cell *matHeaderCellDef mat-sort-header>Created</th>
-                <td mat-cell *matCellDef="let part">{{ part.createdAt | date:'MMM d, y' }}</td>
-            </ng-container>
-
-            <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-            <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="editPart(row)"
-                (mousedown)="onRowMouseDown($event)" (auxclick)="onRowAuxClick($event, row)" class="clickable-row">
-            </tr>
-
-            <!-- No data row -->
-            <tr class="mat-row" *matNoDataRow>
-                <td class="mat-cell" [attr.colspan]="displayedColumns.length">
-                    <div class="no-data">
-                        @if (searchText()) {
-                        <mat-icon>search_off</mat-icon>
-                        <p>No parts found matching "{{ searchText() }}"</p>
-                        } @else {
-                        <mat-icon>inventory_2</mat-icon>
-                        <p>No parts available</p>
-                        }
-                    </div>
-                </td>
-            </tr>
-        </table>
-    </div>
-
-    <mat-paginator [length]="getTotalCount()" [pageSize]="pageSize()" [pageIndex]="pageIndex()"
-        [pageSizeOptions]="pageSizeOptions" (page)="onPageChange($event)" showFirstLastButtons>
-    </mat-paginator>
+      <ng-template appColumn="createdAt" let-part>{{ part.createdAt | date:'MMM d, y' }}</ng-template>
+    </app-data-table>
+  }
 </div>

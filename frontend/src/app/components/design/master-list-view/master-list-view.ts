@@ -1,27 +1,26 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
-import { FormsModule } from '@angular/forms';
-import { MatTableModule } from '@angular/material/table';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatInputModule } from '@angular/material/input';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { MatChipsModule } from '@angular/material/chips';
 import { ManufacturingService } from '../../../services/manufacturing.service';
 import { AuthService } from '../../../services/auth.service';
 import { EngineeringMaster } from '../../../models/engineering-master.model';
+import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-table/data-table';
 
 @Component({
   selector: 'app-master-list-view',
   standalone: true,
   imports: [
-    CommonModule, FormsModule,
-    MatTableModule, MatButtonModule, MatIconModule,
-    MatFormFieldModule, MatInputModule,
-    MatProgressSpinnerModule, MatTooltipModule, MatChipsModule,
+    CommonModule,
+    MatButtonModule,
+    MatIconModule,
+    MatProgressSpinnerModule,
+    MatTooltipModule,
+    DataTable,
+    DataTableColumnDef,
   ],
   templateUrl: './master-list-view.html',
   styleUrl: './master-list-view.css',
@@ -35,20 +34,19 @@ export class MasterListView implements OnInit {
 
   masters = signal<EngineeringMaster[]>([]);
   isLoading = signal(true);
-  searchText = signal('');
-  displayedColumns = ['name', 'revision', 'releaseState', 'outputParts', 'steps', 'createdAt'];
 
-  displayedMasters = computed(() => {
-    const search = this.searchText().toLowerCase();
-    let filtered = this.masters();
-    if (search) {
-      filtered = filtered.filter(m =>
-        m.name?.toLowerCase().includes(search) ||
-        m.description?.toLowerCase().includes(search)
-      );
-    }
-    return filtered;
-  });
+  columns: ColumnDef<EngineeringMaster>[] = [
+    { key: 'name', header: 'Name', sortable: true },
+    { key: 'revision', header: 'EM Rev', sortable: true },
+    { key: 'releaseState', header: 'State', sortable: true },
+    { key: 'outputParts', header: 'Output' },
+    { key: 'steps', header: 'Steps', sortable: true, sortValue: m => m.stepCount },
+    { key: 'createdAt', header: 'Created', sortable: true, sortValue: m => m.createdAt ? new Date(m.createdAt).getTime() : null },
+  ];
+
+  searchKeys = ['name', 'description'];
+
+  rowHref = (m: EngineeringMaster) => `/design/masters/${m.id}/edit`;
 
   ngOnInit() {
     this.loadMasters();
@@ -63,10 +61,6 @@ export class MasterListView implements OnInit {
       },
       error: () => this.isLoading.set(false),
     });
-  }
-
-  onSearchChange(value: string) {
-    this.searchText.set(value);
   }
 
   createMaster() {

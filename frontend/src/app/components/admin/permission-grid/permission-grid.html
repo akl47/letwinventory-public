@@ -11,15 +11,18 @@
                 @if (showAllColumn()) {
                 <th class="action-header">All</th>
                 }
-                @for (action of actions(); track action) {
-                <th class="action-header">{{ action | titlecase }}</th>
+                @for (action of coreActionColumns(); track action) {
+                <th class="action-header">{{ humanize(action) }}</th>
+                }
+                @if (hasExtraActions()) {
+                <th class="action-header extra-header">Other</th>
                 }
             </tr>
         </thead>
         <tbody>
             @for (group of permissionsByResource(); track group.resource) {
             <tr>
-                <td class="resource-cell">{{ group.resource | titlecase }}</td>
+                <td class="resource-cell">{{ humanize(group.resource) }}</td>
                 @if (showAllColumn()) {
                 <td class="action-cell">
                     <mat-checkbox [checked]="isAllSelectedForResource(group.resource)"
@@ -29,7 +32,7 @@
                     </mat-checkbox>
                 </td>
                 }
-                @for (action of actions(); track action) {
+                @for (action of coreActionColumns(); track action) {
                 <td class="action-cell">
                     @if (getPermissionForCell(group.resource, action); as perm) {
                     <span [matTooltip]="getTooltip(group.resource, action)">
@@ -39,6 +42,21 @@
                         </mat-checkbox>
                     </span>
                     }
+                </td>
+                }
+                @if (hasExtraActions()) {
+                <td class="action-cell extra-cell">
+                    <div class="extra-list">
+                        @for (perm of extraActionsFor(group.resource); track perm.id) {
+                        <span class="extra-action" [matTooltip]="getTooltip(group.resource, perm.action)">
+                            <mat-checkbox [checked]="isPermissionSelected(perm.id)"
+                                          [disabled]="disabled()"
+                                          (change)="togglePermission(perm.id)">
+                                {{ humanize(perm.action) }}
+                            </mat-checkbox>
+                        </span>
+                        }
+                    </div>
                 </td>
                 }
             </tr>

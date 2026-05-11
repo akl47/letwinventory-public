@@ -1,105 +1,54 @@
 <div class="page-container">
   <div class="page-header">
     <h2>Tool Catalog</h2>
-    <div class="header-actions">
-      <mat-form-field appearance="outline" class="filter-field">
-        <mat-label>Category</mat-label>
-        <mat-select [ngModel]="categoryFilter()" (ngModelChange)="onCategoryFilterChange($event)">
-          <mat-option [value]="null">All</mat-option>
-          @for (cat of categories(); track cat.id) {
-            <mat-option [value]="cat.id">{{ cat.name }}</mat-option>
-          }
-        </mat-select>
-      </mat-form-field>
-      <mat-form-field appearance="outline" class="filter-field">
-        <mat-label>Subcategory</mat-label>
-        <mat-select [ngModel]="subcategoryFilter()" (ngModelChange)="onSubcategoryFilterChange($event)">
-          <mat-option [value]="null">All</mat-option>
-          @for (sub of filteredSubcategories(); track sub.id) {
-            <mat-option [value]="sub.id">{{ sub.name }}</mat-option>
-          }
-        </mat-select>
-      </mat-form-field>
-      <mat-form-field appearance="outline" class="search-field">
-        <mat-label>Search</mat-label>
-        <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)" placeholder="Part name or description">
-        <mat-icon matSuffix>search</mat-icon>
-      </mat-form-field>
-      <span class="unit-toggle">
-        <span class="unit-label" [class.active]="toolUnit() === 'mm'">mm</span>
-        <mat-slide-toggle hideIcon
-          [checked]="toolUnit() === 'in'"
-          (change)="onUnitToggle($event.checked ? 'in' : 'mm')"
-          aria-label="Length units">
-        </mat-slide-toggle>
-        <span class="unit-label" [class.active]="toolUnit() === 'in'">in</span>
-      </span>
-    </div>
   </div>
 
-  @if (isLoading()) {
+  @if (!ready()) {
     <div class="loading-container">
       <mat-spinner diameter="40"></mat-spinner>
     </div>
-  } @else if (displayedTools().length === 0) {
-    <div class="empty-state">
-      <mat-icon>build</mat-icon>
-      <p>No tools yet — add tool properties from a Part's edit page.</p>
-    </div>
   } @else {
-    <div class="table-wrapper">
-    <table mat-table [dataSource]="paginatedTools()" matSort
-           [matSortActive]="sortField()" [matSortDirection]="sortDirection()"
-           (matSortChange)="onSortChange($event)" class="mat-elevation-z1">
-      <ng-container matColumnDef="partName">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header>Part #</th>
-        <td mat-cell *matCellDef="let t">{{ t.part?.name }}</td>
-      </ng-container>
+    <app-data-table
+      [data]="tools()"
+      [columns]="columns"
+      [filterSections]="filterSections()"
+      [searchKeys]="searchKeys"
+      [defaultSort]="{ key: 'diameter', dir: 'asc' }"
+      [rowHref]="rowHref"
+      searchPlaceholder="Part name or description"
+      (rowClick)="openTool($event)">
 
-      <ng-container matColumnDef="description">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header>Description</th>
-        <td mat-cell *matCellDef="let t">{{ t.part?.description || '' }}</td>
-      </ng-container>
+      <div dataTableToolbar>
+        <span class="unit-toggle">
+          <span class="unit-label" [class.active]="toolUnit() === 'mm'">mm</span>
+          <mat-slide-toggle hideIcon
+            [checked]="toolUnit() === 'in'"
+            (change)="onUnitToggle($event.checked ? 'in' : 'mm')"
+            aria-label="Length units">
+          </mat-slide-toggle>
+          <span class="unit-label" [class.active]="toolUnit() === 'in'">in</span>
+        </span>
+      </div>
 
-      <ng-container matColumnDef="subcategory">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header>Subcategory</th>
-        <td mat-cell *matCellDef="let t">
-          <app-category-badge [label]="t.toolSubcategory?.name || ''" subtle />
-        </td>
-      </ng-container>
+      <ng-template appColumn="partName" let-t>{{ t.part?.name }}</ng-template>
 
-      <ng-container matColumnDef="categories">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header>Categories</th>
-        <td mat-cell *matCellDef="let t" class="categories-cell">{{ formatCategories(t) }}</td>
-      </ng-container>
+      <ng-template appColumn="description" let-t>{{ t.part?.description || '' }}</ng-template>
 
-      <ng-container matColumnDef="diameter">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header>Diameter ({{ toolUnit() }})</th>
-        <td mat-cell *matCellDef="let t">{{ displayLength(t.diameter) }}</td>
-      </ng-container>
+      <ng-template appColumn="subcategory" let-t>
+        <app-category-badge [label]="t.toolSubcategory?.name || ''" subtle />
+      </ng-template>
 
-      <ng-container matColumnDef="flutes">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header># Flutes</th>
-        <td mat-cell *matCellDef="let t">{{ t.numberOfFlutes ?? '' }}</td>
-      </ng-container>
+      <ng-template appColumn="categories" let-t>
+        <span class="categories-cell">{{ formatCategories(t) }}</span>
+      </ng-template>
 
-      <ng-container matColumnDef="material">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header>Material</th>
-        <td mat-cell *matCellDef="let t">{{ t.toolMaterial || '' }}</td>
-      </ng-container>
+      <ng-template appColumn="diameter" let-t>
+        <span [title]="'Diameter (' + toolUnit() + ')'">{{ displayLength(t.diameter) }}</span>
+      </ng-template>
 
-      <tr mat-header-row *matHeaderRowDef="displayedColumns; sticky: true"></tr>
-      <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="openTool(row)" class="clickable-row"></tr>
-    </table>
-    </div>
+      <ng-template appColumn="flutes" let-t>{{ t.numberOfFlutes ?? '' }}</ng-template>
 
-    <mat-paginator
-      [length]="totalCount()"
-      [pageSize]="pageSize()"
-      [pageIndex]="pageIndex()"
-      [pageSizeOptions]="pageSizeOptions"
-      (page)="onPageChange($event)"
-      showFirstLastButtons>
-    </mat-paginator>
+      <ng-template appColumn="material" let-t>{{ t.toolMaterial || '' }}</ng-template>
+    </app-data-table>
   }
 </div>

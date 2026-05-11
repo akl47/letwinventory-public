@@ -111,6 +111,75 @@ exports.revoke = async (req, res, next) => {
   }
 };
 
+exports.regenerate = async (req, res, next) => {
+  try {
+    const existing = await db.ApiKey.findOne({
+      where: { id: req.params.id, userID: req.user.id, activeFlag: true },
+      include: [{
+        model: db.Permission,
+        as: 'permissions',
+        attributes: ['id', 'resource', 'action'],
+        through: { attributes: [] }
+      }]
+    });
+    if (!existing) {
+      return next(new RestError('API key not found', 404));
+    }
+
+    // Intersect the original key's permissions with the user's current effective set,
+    // so a stripped-down user can't preserve old privileges by regenerating.
+    const userPerms = await loadEffectivePermissions(req.user.id);
+    const carryPermIds = existing.permissions
+      .filter(p => userPerms.has(`${p.resource}.${p.action}`))
+      .map(p => p.id);
+
+    // expiresAt is overridable: explicit value (incl. null) wins; absent key
+    // preserves the original key's expiration.
+    let newExpiresAt = existing.expiresAt;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'expiresAt')) {
+      newExpiresAt = req.body.expiresAt ? new Date(req.body.expiresAt) : null;
+    }
+
+    const rawKey = 'lwinv_' + crypto.randomBytes(32).toString('hex');
+    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+
+    // Revoke the old, create the new — soft-delete preserves audit history.
+    await existing.update({ activeFlag: false });
+    const apiKey = await db.ApiKey.create({
+      keyHash,
+      name: existing.name,
+      userID: req.user.id,
+      expiresAt: newExpiresAt,
+    });
+
+    if (carryPermIds.length > 0) {
+      await db.ApiKeyPermission.bulkCreate(
+        carryPermIds.map(pid => ({ apiKeyID: apiKey.id, permissionID: pid }))
+      );
+    }
+
+    const keyWithPerms = await db.ApiKey.findByPk(apiKey.id, {
+      include: [{
+        model: db.Permission,
+        as: 'permissions',
+        attributes: ['id', 'resource', 'action'],
+        through: { attributes: [] }
+      }]
+    });
+
+    res.status(201).json({
+      id: apiKey.id,
+      name: apiKey.name,
+      key: rawKey,
+      createdAt: apiKey.createdAt,
+      expiresAt: apiKey.expiresAt,
+      permissions: keyWithPerms.permissions,
+    });
+  } catch (error) {
+    next(new RestError('Error regenerating API key', 500));
+  }
+};
+
 exports.exchangeToken = async (req, res, next) => {
   try {
     const { key } = req.body;
