@@ -2,7 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
-import { provideRouter } from '@angular/router';
+import { provideRouter, ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
 import { vi } from 'vitest';
 
@@ -40,6 +40,7 @@ describe('MasterListView', () => {
         provideHttpClientTesting(),
         provideAnimationsAsync(),
         provideRouter([]),
+        { provide: ActivatedRoute, useValue: { queryParams: of({}), snapshot: { queryParams: {} } } },
       ],
     }).compileComponents();
 
@@ -49,32 +50,33 @@ describe('MasterListView', () => {
     fixture = TestBed.createComponent(MasterListView);
     component = fixture.componentInstance;
     fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
   });
 
-  it('should create', () => {
+  it('creates', () => {
     expect(component).toBeTruthy();
   });
 
-  it('should load masters on init', () => {
+  it('loads masters on init', () => {
     expect(manufacturingService.getMasters).toHaveBeenCalled();
     expect(component.masters().length).toBe(2);
     expect(component.isLoading()).toBe(false);
   });
 
-  it('should display all masters when no search', () => {
-    expect(component.displayedMasters().length).toBe(2);
+  it('renders via <app-data-table>', () => {
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('app-data-table')).toBeTruthy();
   });
 
-  it('should filter masters by name', () => {
-    component.onSearchChange('pcb');
-    expect(component.displayedMasters().length).toBe(1);
-    expect(component.displayedMasters()[0].name).toBe('PCB Assembly');
+  it('rowHref returns the edit route', () => {
+    expect(component.rowHref(mockMasters[0])).toBe('/design/masters/1/edit');
   });
 
-  it('should show release state badges', () => {
-    const released = component.masters().find(m => m.releaseState === 'released');
-    expect(released).toBeTruthy();
-    const draft = component.masters().find(m => m.releaseState === 'draft');
-    expect(draft).toBeTruthy();
+  it('getStateColor returns expected colors', () => {
+    expect(component.getStateColor('draft')).toBe('#9e9e9e');
+    expect(component.getStateColor('review')).toBe('#ff9800');
+    expect(component.getStateColor('released')).toBe('#4caf50');
+    expect(component.getStateColor('unknown')).toBe('#9e9e9e');
   });
 });

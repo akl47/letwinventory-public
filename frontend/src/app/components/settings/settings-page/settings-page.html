@@ -178,32 +178,56 @@
                     @if (apiKeys().length > 0) {
                     <div class="panel-section">
                         @for (key of apiKeys(); track key.id) {
-                        <div class="list-row">
-                            <mat-icon class="list-row-icon" [class.expired-icon]="isExpired(key)">vpn_key</mat-icon>
-                            <div class="list-row-text">
-                                <span class="list-row-title" [class.expired-text]="isExpired(key)">{{ key.name }}</span>
-                                <span class="list-row-sub">
-                                    Created {{ key.createdAt | date:'MMM d, y' }}
-                                    @if (key.lastUsedAt) {
-                                        · Last used {{ key.lastUsedAt | date:'MMM d, y' }}
-                                    }
-                                    @if (key.permissions) {
-                                        · {{ key.permissions.length }} of {{ totalPermissions() }} permissions
-                                    }
-                                    @if (key.expiresAt) {
-                                        @if (isExpired(key)) {
-                                            · <span class="expired-badge">Expired</span>
-                                        } @else {
-                                            · Expires {{ key.expiresAt | date:'MMM d, y' }}
+                        <div class="api-key-row" [class.expanded]="isApiKeyExpanded(key.id)">
+                            <div class="list-row">
+                                <button mat-icon-button class="expand-btn"
+                                    (click)="toggleApiKeyExpanded(key.id)"
+                                    [attr.aria-expanded]="isApiKeyExpanded(key.id)"
+                                    [attr.aria-label]="isApiKeyExpanded(key.id) ? 'Collapse permissions' : 'Expand permissions'">
+                                    <mat-icon>{{ isApiKeyExpanded(key.id) ? 'expand_less' : 'expand_more' }}</mat-icon>
+                                </button>
+                                <mat-icon class="list-row-icon" [class.expired-icon]="isExpired(key)">vpn_key</mat-icon>
+                                <div class="list-row-text">
+                                    <span class="list-row-title" [class.expired-text]="isExpired(key)">{{ key.name }}</span>
+                                    <span class="list-row-sub">
+                                        Created {{ key.createdAt | date:'MMM d, y' }}
+                                        @if (key.lastUsedAt) {
+                                            · Last used {{ key.lastUsedAt | date:'MMM d, y' }}
                                         }
-                                    } @else {
-                                        · Never expires
-                                    }
-                                </span>
+                                        @if (key.permissions) {
+                                            · {{ key.permissions.length }} of {{ totalPermissions() }} permissions
+                                        }
+                                        @if (key.expiresAt) {
+                                            @if (isExpired(key)) {
+                                                · <span class="expired-badge">Expired</span>
+                                            } @else {
+                                                · Expires {{ key.expiresAt | date:'MMM d, y' }}
+                                            }
+                                        } @else {
+                                            · Never expires
+                                        }
+                                    </span>
+                                </div>
+                                <button mat-icon-button (click)="regenerateApiKey(key)" matTooltip="Regenerate (revokes old key)">
+                                    <mat-icon>autorenew</mat-icon>
+                                </button>
+                                <button mat-icon-button (click)="revokeApiKey(key.id)" matTooltip="Revoke API key">
+                                    <mat-icon>delete</mat-icon>
+                                </button>
                             </div>
-                            <button mat-icon-button (click)="revokeApiKey(key.id)" matTooltip="Revoke API key">
-                                <mat-icon>delete</mat-icon>
-                            </button>
+                            @if (isApiKeyExpanded(key.id)) {
+                                <div class="api-key-permissions">
+                                    @if (key.permissions && key.permissions.length > 0) {
+                                        <div class="permission-list">
+                                            @for (p of key.permissions; track p.id) {
+                                                <span class="permission-chip">{{ p.resource }}.{{ p.action }}</span>
+                                            }
+                                        </div>
+                                    } @else {
+                                        <div class="permission-empty">No permissions granted.</div>
+                                    }
+                                </div>
+                            }
                         </div>
                         }
                     </div>

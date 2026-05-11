@@ -1,0 +1,135 @@
+<div class="data-table-container">
+  <div class="data-table-toolbar">
+    <mat-form-field appearance="outline" class="search-field">
+      <mat-label>{{ searchPlaceholder }}</mat-label>
+      <input
+        matInput
+        [ngModel]="searchText()"
+        (ngModelChange)="onSearchChange($event)"
+        [placeholder]="searchPlaceholder">
+      <mat-icon matPrefix>search</mat-icon>
+    </mat-form-field>
+
+    @if (filterSections && filterSections.length > 0) {
+      <button
+        mat-button
+        type="button"
+        class="filter-btn"
+        [matMenuTriggerFor]="filterMenu"
+        [class.has-filter]="activeFilterCount() > 0">
+        <mat-icon>filter_list</mat-icon>
+        <span>Filter</span>
+        @if (activeFilterCount() > 0) {
+          <span class="filter-badge">{{ activeFilterCount() }}</span>
+        }
+      </button>
+      <mat-menu #filterMenu="matMenu" class="data-table-filter-menu">
+        @for (section of filterSections; track section.key; let isLast = $last) {
+          <div class="menu-section-header">{{ section.label }}</div>
+          @if (isMultiSelectSection(section)) {
+            <div class="menu-header" (click)="$event.stopPropagation()">
+              <mat-checkbox
+                [checked]="isAllSelected(section.key)"
+                [indeterminate]="isSomeSelected(section.key)"
+                (change)="toggleAll(section.key)">
+                All {{ section.label }}
+              </mat-checkbox>
+            </div>
+            @for (opt of section.options; track opt.id) {
+              <div class="menu-item" (click)="$event.stopPropagation()">
+                <mat-checkbox
+                  [checked]="isSelected(section.key, opt.id)"
+                  (change)="toggleFilterSelection(section.key, opt.id)">
+                  @if (opt.colorHex) {
+                    <span class="option-color" [style.background-color]="opt.colorHex"></span>
+                  }
+                  {{ opt.label }}
+                </mat-checkbox>
+              </div>
+            }
+          } @else if (isToggleSection(section)) {
+            <div class="menu-item" (click)="$event.stopPropagation()">
+              <mat-checkbox
+                [checked]="$any(filterValues()[section.key])"
+                (change)="setFilterValue(section.key, $event.checked)">
+                {{ section.label }}
+              </mat-checkbox>
+            </div>
+          }
+          @if (!isLast) {
+            <mat-divider></mat-divider>
+          }
+        }
+      </mat-menu>
+    }
+
+    <div class="toolbar-extra">
+      <ng-content select="[dataTableToolbar]"></ng-content>
+    </div>
+  </div>
+
+  <div class="table-wrapper">
+    <table
+      mat-table
+      [dataSource]="displayedRows()"
+      matSort
+      [matSortActive]="sortColumn()"
+      [matSortDirection]="sortDirection()"
+      (matSortChange)="onSortChange($event)"
+      class="data-table">
+      @for (col of columns; track col.key; let isFirst = $first) {
+        <ng-container [matColumnDef]="col.key">
+          @if (col.sortable) {
+            <th mat-header-cell *matHeaderCellDef mat-sort-header>{{ col.header }}</th>
+          } @else {
+            <th mat-header-cell *matHeaderCellDef>{{ col.header }}</th>
+          }
+          <td mat-cell *matCellDef="let row" class="data-cell" [attr.data-col]="col.key">
+            @if (isFirst && rowHref) {
+              <a class="row-overlay"
+                [href]="'/#' + rowHref(row)"
+                (click)="$event.preventDefault()"
+                tabindex="-1"
+                aria-hidden="true"></a>
+            }
+            @if (getColumnTemplate(col.key); as tpl) {
+              <ng-container *ngTemplateOutlet="tpl; context: { $implicit: row }"></ng-container>
+            } @else {
+              {{ getCellValue(row, col.key) }}
+            }
+          </td>
+        </ng-container>
+      }
+      <tr mat-header-row *matHeaderRowDef="columnKeys"></tr>
+      <tr
+        mat-row
+        *matRowDef="let row; columns: columnKeys"
+        class="data-row clickable-row"
+        (click)="onRowClick(row)"
+        (mousedown)="onRowMouseDown($event)"></tr>
+
+      <tr class="mat-row" *matNoDataRow>
+        <td class="mat-cell" [attr.colspan]="columns.length">
+          <div class="no-data">
+            @if (searchText()) {
+              <mat-icon>search_off</mat-icon>
+              <p>No results matching "{{ searchText() }}"</p>
+            } @else {
+              <mat-icon>inbox</mat-icon>
+              <p>No data</p>
+            }
+          </div>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <mat-paginator
+    [length]="totalCount()"
+    [pageSize]="pageSize()"
+    [pageIndex]="pageIndex()"
+    [pageSizeOptions]="pageSizeOptions"
+    (page)="onPageChange($event)"
+    showFirstLastButtons>
+  </mat-paginator>
+</div>

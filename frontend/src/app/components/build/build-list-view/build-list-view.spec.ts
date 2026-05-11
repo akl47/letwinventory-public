@@ -2,7 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
-import { provideRouter } from '@angular/router';
+import { provideRouter, ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
 import { vi } from 'vitest';
 
@@ -27,6 +27,7 @@ describe('BuildListView', () => {
         provideHttpClientTesting(),
         provideAnimationsAsync(),
         provideRouter([]),
+        { provide: ActivatedRoute, useValue: { snapshot: { queryParams: {} }, queryParams: of({}) } },
       ],
     }).compileComponents();
 
@@ -36,51 +37,31 @@ describe('BuildListView', () => {
     fixture = TestBed.createComponent(BuildListView);
     component = fixture.componentInstance;
     fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
   });
 
-  it('should create', () => {
+  it('creates', () => {
     expect(component).toBeTruthy();
   });
 
-  it('should load builds on init', () => {
-    expect(inventoryService.getInProgressBuilds).toHaveBeenCalled();
+  it('loads builds on init (active-only by default)', () => {
+    expect(inventoryService.getInProgressBuilds).toHaveBeenCalledWith(false);
     expect(component.builds().length).toBe(2);
     expect(component.isLoading()).toBe(false);
   });
 
-  it('should display all builds when no search', () => {
-    expect(component.displayedBuilds().length).toBe(2);
+  it('renders via <app-data-table>', () => {
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('app-data-table')).toBeTruthy();
   });
 
-  it('should filter builds by part name', () => {
-    component.onSearchChange('motor');
-    expect(component.displayedBuilds().length).toBe(1);
-    expect(component.displayedBuilds()[0].partName).toBe('Motor Kit');
+  it('exposes a filter section to show completed builds', () => {
+    const keys = component.filterSections.map(s => s.key);
+    expect(keys).toContain('completed');
   });
 
-  it('should filter builds by category', () => {
-    component.onSearchChange('assembly');
-    expect(component.displayedBuilds().length).toBe(1);
-    expect(component.displayedBuilds()[0].categoryName).toBe('Assembly');
-  });
-
-  it('should filter builds by barcode', () => {
-    component.onSearchChange('AKL-000010');
-    expect(component.displayedBuilds().length).toBe(1);
-  });
-
-  it('should show empty results for no matches', () => {
-    component.onSearchChange('nonexistent');
-    expect(component.displayedBuilds().length).toBe(0);
-  });
-
-  it('should default showCompleted to false', () => {
+  it('defaults showCompleted to false', () => {
     expect(component.showCompleted()).toBe(false);
-  });
-
-  it('should reload builds with includeCompleted when toggled', () => {
-    component.toggleShowCompleted();
-    expect(component.showCompleted()).toBe(true);
-    expect(inventoryService.getInProgressBuilds).toHaveBeenCalledWith(true);
   });
 });

@@ -40,55 +40,38 @@ test.describe('Navigation', () => {
 });
 
 test.describe('Middle-click opens new tab', () => {
-  test('parts table row middle-click opens new tab', async ({ page, context }) => {
-    await page.goto('/#/parts');
+  // The shared <app-data-table> renders an absolutely-positioned overlay
+  // anchor inside each row's first cell, so middle-click opens via the
+  // browser's native anchor behaviour (popup -> navigation), not a sync
+  // window.open. Wait for the popup to navigate past about:blank before
+  // asserting the URL.
+  async function expectMiddleClickOpens(page: import('@playwright/test').Page, context: import('@playwright/test').BrowserContext, route: string, urlFragment: string) {
+    await page.goto(route);
     const table = page.locator('table, mat-table');
     await expect(table.first()).toBeVisible({ timeout: 10000 });
 
     const row = page.locator('tr.clickable-row, tr[mat-row]').first();
-    if (await row.count() > 0) {
-      // Listen for new page (tab) to be opened
-      const newPagePromise = context.waitForEvent('page', { timeout: 5000 }).catch(() => null);
-      await row.click({ button: 'middle' });
-      const newPage = await newPagePromise;
-      if (newPage) {
-        expect(newPage.url()).toContain('/parts/');
-        await newPage.close();
-      }
-    }
+    if (await row.count() === 0) return;
+
+    const newPagePromise = context.waitForEvent('page', { timeout: 5000 }).catch(() => null);
+    await row.click({ button: 'middle' });
+    const newPage = await newPagePromise;
+    if (!newPage) return;
+
+    await newPage.waitForURL((url) => url.toString().includes(urlFragment), { timeout: 5000 });
+    expect(newPage.url()).toContain(urlFragment);
+    await newPage.close();
+  }
+
+  test('parts table row middle-click opens new tab', async ({ page, context }) => {
+    await expectMiddleClickOpens(page, context, '/#/parts', '/parts/');
   });
 
   test('orders table row middle-click opens new tab', async ({ page, context }) => {
-    await page.goto('/#/orders');
-    const table = page.locator('table, mat-table');
-    await expect(table.first()).toBeVisible({ timeout: 10000 });
-
-    const row = page.locator('tr.clickable-row, tr[mat-row]').first();
-    if (await row.count() > 0) {
-      const newPagePromise = context.waitForEvent('page', { timeout: 5000 }).catch(() => null);
-      await row.click({ button: 'middle' });
-      const newPage = await newPagePromise;
-      if (newPage) {
-        expect(newPage.url()).toContain('/orders/');
-        await newPage.close();
-      }
-    }
+    await expectMiddleClickOpens(page, context, '/#/orders', '/orders/');
   });
 
   test('harness table row middle-click opens new tab', async ({ page, context }) => {
-    await page.goto('/#/harness');
-    const table = page.locator('table, mat-table');
-    await expect(table.first()).toBeVisible({ timeout: 10000 });
-
-    const row = page.locator('tr.clickable-row, tr[mat-row]').first();
-    if (await row.count() > 0) {
-      const newPagePromise = context.waitForEvent('page', { timeout: 5000 }).catch(() => null);
-      await row.click({ button: 'middle' });
-      const newPage = await newPagePromise;
-      if (newPage) {
-        expect(newPage.url()).toContain('/harness/');
-        await newPage.close();
-      }
-    }
+    await expectMiddleClickOpens(page, context, '/#/harness', '/harness/');
   });
 });

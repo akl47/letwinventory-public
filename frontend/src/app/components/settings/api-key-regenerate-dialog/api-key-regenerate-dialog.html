@@ -1,0 +1,68 @@
+@if (!newKey()) {
+  <h2 mat-dialog-title>Regenerate API Key</h2>
+
+  <mat-dialog-content>
+    <p>
+      Regenerating <strong>{{ data.name }}</strong> will:
+    </p>
+    <ul class="regen-list">
+      <li>Immediately invalidate the current key.</li>
+      <li>Issue a new key with the same name and permissions.</li>
+    </ul>
+
+    <div class="field-group">
+      <div class="field-label">New expiration</div>
+      <mat-radio-group [(ngModel)]="expirationMode" class="expiration-options">
+        <mat-radio-button value="never">Never expires</mat-radio-button>
+        <mat-radio-button value="7d">7 days from today</mat-radio-button>
+        <mat-radio-button value="30d">30 days from today</mat-radio-button>
+        <mat-radio-button value="60d">60 days from today</mat-radio-button>
+        <mat-radio-button value="90d">90 days from today</mat-radio-button>
+        <mat-radio-button value="date">Pick a date</mat-radio-button>
+      </mat-radio-group>
+      @if (expirationMode === 'date') {
+        <mat-form-field appearance="outline" class="date-field">
+          <mat-label>Expiration date</mat-label>
+          <input matInput [matDatepicker]="picker" [(ngModel)]="customExpiresAt" [min]="minDate">
+          <mat-datepicker-toggle matIconSuffix [for]="picker"></mat-datepicker-toggle>
+          <mat-datepicker #picker></mat-datepicker>
+        </mat-form-field>
+      }
+    </div>
+
+    <p class="regen-warn">Any system using the old key will stop working until updated.</p>
+    @if (error()) {
+      <div class="regen-error">{{ error() }}</div>
+    }
+  </mat-dialog-content>
+
+  <mat-dialog-actions align="end">
+    <button mat-button (click)="close()" [disabled]="busy()">Cancel</button>
+    <button mat-flat-button color="warn" (click)="regenerate()" [disabled]="busy()">
+      @if (busy()) {
+        <mat-spinner diameter="18"></mat-spinner>
+      } @else {
+        <mat-icon>autorenew</mat-icon>
+      }
+      Regenerate
+    </button>
+  </mat-dialog-actions>
+} @else {
+  <h2 mat-dialog-title>API Key Regenerated</h2>
+
+  <mat-dialog-content>
+    <div class="key-created">
+      <div class="key-warning">Copy this key now. It won't be shown again.</div>
+      <div class="key-value-row">
+        <code class="key-value">{{ newKey() }}</code>
+        <button mat-icon-button (click)="copyKey()">
+          <mat-icon>content_copy</mat-icon>
+        </button>
+      </div>
+    </div>
+  </mat-dialog-content>
+
+  <mat-dialog-actions align="end">
+    <button mat-flat-button color="primary" (click)="close()">Done</button>
+  </mat-dialog-actions>
+}

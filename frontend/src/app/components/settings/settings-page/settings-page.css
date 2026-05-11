@@ -1,3 +1,39 @@
+.api-key-row {
+    display: flex;
+    flex-direction: column;
+}
+
+.api-key-row .expand-btn {
+    margin-right: 4px;
+}
+
+.api-key-permissions {
+    padding: 4px 16px 12px 56px;
+}
+
+.permission-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.permission-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-family: monospace;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.85);
+    letter-spacing: 0.3px;
+}
+
+.permission-empty {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.5);
+    font-style: italic;
+}
+
 :host {
     display: flex;
     flex-direction: column;

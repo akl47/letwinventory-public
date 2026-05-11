@@ -9,7 +9,10 @@ import { vi } from 'vitest';
 
 import { SettingsPage } from './settings-page';
 import { NotificationService } from '../../../services/notification.service';
+import { AuthService, ApiKey } from '../../../services/auth.service';
+import { MatDialog } from '@angular/material/dialog';
 import { PushSubscriptionRecord } from '../../../models/notification.model';
+import { ApiKeyRegenerateDialog } from '../api-key-regenerate-dialog/api-key-regenerate-dialog';
 
 describe('SettingsPage', () => {
   let component: SettingsPage;
@@ -176,6 +179,97 @@ describe('SettingsPage', () => {
     it('should have thisDeviceRegistered as false initially', () => {
       // Without service worker, this stays false
       expect(component.thisDeviceRegistered()).toBe(false);
+    });
+  });
+
+  describe('API key expand & regenerate', () => {
+    const mockApiKeys: ApiKey[] = [
+      {
+        id: 1, name: 'CI Bot', lastUsedAt: null, expiresAt: null,
+        createdAt: '2026-01-01T00:00:00Z',
+        permissions: [
+          { id: 11, resource: 'tasks', action: 'read' },
+          { id: 12, resource: 'tasks', action: 'write' },
+          { id: 13, resource: 'parts', action: 'read' },
+        ],
+      },
+      {
+        id: 2, name: 'Read-only', lastUsedAt: null, expiresAt: null,
+        createdAt: '2026-01-02T00:00:00Z',
+        permissions: [{ id: 11, resource: 'tasks', action: 'read' }],
+      },
+    ];
+
+    let openSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(async () => {
+      const authService = TestBed.inject(AuthService);
+      vi.spyOn(authService, 'getApiKeys').mockReturnValue(of(mockApiKeys));
+      // Spy on the component's own injected dialog reference — TestBed.inject(MatDialog)
+      // can resolve to a different instance than the one the component captured via
+      // inject() during construction.
+      const dialog = (component as unknown as { dialog: MatDialog }).dialog;
+      openSpy = vi.spyOn(dialog, 'open').mockReturnValue({
+        afterClosed: () => of(false),
+      } as any);
+      // Component already created; reload api keys with the new mock.
+      (component as unknown as { loadApiKeys: () => void })['loadApiKeys']();
+      await fixture.whenStable();
+      fixture.detectChanges();
+    });
+
+    it('starts with all keys collapsed', () => {
+      expect(component.isApiKeyExpanded(1)).toBe(false);
+      expect(component.isApiKeyExpanded(2)).toBe(false);
+    });
+
+    it('toggleApiKeyExpanded flips a single row independently', () => {
+      component.toggleApiKeyExpanded(1);
+      expect(component.isApiKeyExpanded(1)).toBe(true);
+      expect(component.isApiKeyExpanded(2)).toBe(false);
+      component.toggleApiKeyExpanded(2);
+      expect(component.isApiKeyExpanded(1)).toBe(true);
+      expect(component.isApiKeyExpanded(2)).toBe(true);
+      component.toggleApiKeyExpanded(1);
+      expect(component.isApiKeyExpanded(1)).toBe(false);
+      expect(component.isApiKeyExpanded(2)).toBe(true);
+    });
+
+    it('renders permission chips only when row is expanded', () => {
+      component.apiKeys.set(mockApiKeys);
+      fixture.detectChanges();
+      // Collapsed: no permission lists rendered
+      expect(fixture.nativeElement.querySelectorAll('.permission-chip').length).toBe(0);
+
+      component.toggleApiKeyExpanded(1);
+      fixture.detectChanges();
+      const chipsAfterFirstExpand = fixture.nativeElement.querySelectorAll('.permission-chip');
+      expect(chipsAfterFirstExpand.length).toBe(3);
+      const labels = Array.from(chipsAfterFirstExpand).map((c: any) => c.textContent.trim());
+      expect(labels).toContain('tasks.read');
+      expect(labels).toContain('tasks.write');
+      expect(labels).toContain('parts.read');
+
+      component.toggleApiKeyExpanded(2);
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelectorAll('.permission-chip').length).toBe(4);
+    });
+
+    it('regenerateApiKey opens ApiKeyRegenerateDialog with the key id and name', () => {
+      component.regenerateApiKey(mockApiKeys[0]);
+      expect(openSpy).toHaveBeenCalled();
+      const call = openSpy.mock.calls[openSpy.mock.calls.length - 1];
+      expect(call[0]).toBe(ApiKeyRegenerateDialog);
+      expect((call[1] as any).data).toEqual({ id: 1, name: 'CI Bot', expiresAt: null });
+    });
+
+    it('regenerateApiKey reloads the api key list when the dialog reports success', () => {
+      const authService = TestBed.inject(AuthService);
+      // Re-mock the dialog to report a successful regenerate this time.
+      openSpy.mockReturnValue({ afterClosed: () => of(true) } as any);
+      const getKeysSpy = vi.spyOn(authService, 'getApiKeys').mockReturnValue(of(mockApiKeys));
+      component.regenerateApiKey(mockApiKeys[0]);
+      expect(getKeysSpy).toHaveBeenCalled();
     });
   });
 });

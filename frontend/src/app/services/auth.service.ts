@@ -284,6 +284,13 @@ export class AuthService {
         return this.http.delete<void>(`${environment.apiUrl}/auth/api-key/${id}`);
     }
 
+    regenerateApiKey(id: number, body: { expiresAt?: string | null } = {}): Observable<{ id: number; name: string; key: string; createdAt: string; expiresAt: string | null; permissions: Permission[] }> {
+        return this.http.post<{ id: number; name: string; key: string; createdAt: string; expiresAt: string | null; permissions: Permission[] }>(
+            `${environment.apiUrl}/auth/api-key/${id}/regenerate`,
+            body,
+        );
+    }
+
     getApiKeyPermissions(id: number): Observable<Permission[]> {
         return this.http.get<Permission[]>(`${environment.apiUrl}/auth/api-key/${id}/permissions`);
     }

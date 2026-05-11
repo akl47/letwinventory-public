@@ -1,36 +1,25 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule, Location } from '@angular/common';
-import { MatTableModule } from '@angular/material/table';
-import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
-import { MatSortModule, Sort } from '@angular/material/sort';
-import { MatInputModule } from '@angular/material/input';
-import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
-import { FormsModule } from '@angular/forms';
 import { ScheduledTaskService } from '../../../services/scheduled-task.service';
 import { ScheduledTask } from '../../../models/scheduled-task.model';
 import { ScheduledTaskEditDialog } from '../scheduled-task-edit-dialog/scheduled-task-edit-dialog';
+import { DataTable, DataTableColumnDef, ColumnDef, FilterSection } from '../../common/data-table/data-table';
 
 @Component({
   selector: 'app-scheduled-tasks-list-view',
   standalone: true,
   imports: [
     CommonModule,
-    MatTableModule,
-    MatPaginatorModule,
-    MatSortModule,
-    MatInputModule,
-    MatFormFieldModule,
     MatButtonModule,
     MatIconModule,
     MatTooltipModule,
-    MatSlideToggleModule,
     MatDialogModule,
-    FormsModule
+    DataTable,
+    DataTableColumnDef,
   ],
   templateUrl: './scheduled-tasks-list-view.html',
   styleUrl: './scheduled-tasks-list-view.css',
@@ -41,146 +30,70 @@ export class ScheduledTasksListView implements OnInit {
   private location = inject(Location);
 
   allItems = signal<ScheduledTask[]>([]);
-  displayedItems = signal<ScheduledTask[]>([]);
-  searchText = signal<string>('');
-  showInactive = signal<boolean>(false);
+  showInactiveLoaded = signal<boolean>(false);
 
-  displayedColumns: string[] = ['name', 'cronExpression', 'cronDescription', 'taskList', 'project', 'notifyOnCreate', 'nextRunAt', 'lastRunAt'];
+  columns: ColumnDef<ScheduledTask>[] = [
+    { key: 'name', header: 'Name', sortable: true },
+    { key: 'cronExpression', header: 'Schedule', sortable: true },
+    { key: 'cronDescription', header: 'Description' },
+    { key: 'taskList', header: 'Task List', sortable: true, sortValue: t => t.taskList?.name?.toLowerCase() ?? null },
+    { key: 'project', header: 'Project', sortable: true, sortValue: t => t.project?.name?.toLowerCase() ?? null },
+    { key: 'notifyOnCreate', header: 'Notify', sortable: true },
+    { key: 'nextRunAt', header: 'Next Run', sortable: true, sortValue: t => t.nextRunAt ? new Date(t.nextRunAt).getTime() : null },
+    { key: 'lastRunAt', header: 'Last Run', sortable: true, sortValue: t => t.lastRunAt ? new Date(t.lastRunAt).getTime() : null },
+  ];
 
-  // Pagination
-  pageSize = signal<number>(10);
-  pageIndex = signal<number>(0);
-  pageSizeOptions = [5, 10, 25, 50];
+  filterSections: FilterSection<ScheduledTask>[] = [
+    {
+      type: 'toggle',
+      key: 'inactive',
+      label: 'Show Inactive',
+      default: false,
+      predicate: (t, on) => {
+        if (on) {
+          this.ensureInactiveLoaded();
+          return true;
+        }
+        return t.activeFlag === true;
+      },
+    },
+  ];
 
-  // Sorting
-  sortColumn = signal<string>('name');
-  sortDirection = signal<'asc' | 'desc'>('asc');
+  searchKeys = ['name', 'cronExpression', 'taskList.name', 'project.name'];
 
   ngOnInit() {
-    this.loadData();
+    this.loadData(false);
   }
 
   goBack() {
     this.location.back();
   }
 
-  loadData() {
+  loadData(includeInactive: boolean) {
     this.scheduledTaskService.clearCache();
-    this.scheduledTaskService.getAll(this.showInactive()).subscribe({
+    this.scheduledTaskService.getAll(includeInactive).subscribe({
       next: (items) => {
         this.allItems.set(items);
-        this.applyFiltersAndSort();
+        this.showInactiveLoaded.set(includeInactive);
       },
-      error: (err) => {
-        console.error('Error loading scheduled tasks:', err);
-      }
+      error: (err) => console.error('Error loading scheduled tasks:', err),
     });
   }
 
-  applyFiltersAndSort() {
-    let filtered = [...this.allItems()];
-
-    if (!this.showInactive()) {
-      filtered = filtered.filter(item => item.activeFlag === true);
+  private ensureInactiveLoaded() {
+    if (!this.showInactiveLoaded()) {
+      this.loadData(true);
     }
-
-    const search = this.searchText().toLowerCase();
-    if (search) {
-      filtered = filtered.filter(item =>
-        item.name.toLowerCase().includes(search) ||
-        item.cronExpression.toLowerCase().includes(search) ||
-        item.taskList?.name?.toLowerCase().includes(search) ||
-        item.project?.name?.toLowerCase().includes(search)
-      );
-    }
-
-    const sortCol = this.sortColumn();
-    const sortDir = this.sortDirection();
-    filtered.sort((a, b) => {
-      const aVal = this.getSortValue(a, sortCol);
-      const bVal = this.getSortValue(b, sortCol);
-
-      if (aVal === null && bVal === null) return 0;
-      if (aVal === null) return sortDir === 'asc' ? 1 : -1;
-      if (bVal === null) return sortDir === 'asc' ? -1 : 1;
-
-      const comparison = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-      return sortDir === 'asc' ? comparison : -comparison;
-    });
-
-    const startIndex = this.pageIndex() * this.pageSize();
-    const endIndex = startIndex + this.pageSize();
-    this.displayedItems.set(filtered.slice(startIndex, endIndex));
-  }
-
-  onSearchChange(value: string) {
-    this.searchText.set(value);
-    this.pageIndex.set(0);
-    this.applyFiltersAndSort();
-  }
-
-  onPageChange(event: PageEvent) {
-    this.pageIndex.set(event.pageIndex);
-    this.pageSize.set(event.pageSize);
-    this.applyFiltersAndSort();
-  }
-
-  onSortChange(sort: Sort) {
-    this.sortColumn.set(sort.active);
-    this.sortDirection.set(sort.direction as 'asc' | 'desc' || 'asc');
-    this.applyFiltersAndSort();
-  }
-
-  onToggleInactive(checked: boolean) {
-    this.showInactive.set(checked);
-    this.pageIndex.set(0);
-    this.loadData();
-  }
-
-  getTotalCount(): number {
-    let filtered = [...this.allItems()];
-
-    if (!this.showInactive()) {
-      filtered = filtered.filter(item => item.activeFlag === true);
-    }
-
-    const search = this.searchText().toLowerCase();
-    if (search) {
-      filtered = filtered.filter(item =>
-        item.name.toLowerCase().includes(search) ||
-        item.cronExpression.toLowerCase().includes(search) ||
-        item.taskList?.name?.toLowerCase().includes(search) ||
-        item.project?.name?.toLowerCase().includes(search)
-      );
-    }
-
-    return filtered.length;
   }
 
   openNewDialog() {
-    const dialogRef = this.dialog.open(ScheduledTaskEditDialog, {
-      width: '550px',
-      data: {}
-    });
-
-    dialogRef.afterClosed().subscribe(result => {
-      if (result) {
-        this.loadData();
-      }
-    });
+    const dialogRef = this.dialog.open(ScheduledTaskEditDialog, { width: '550px', data: {} });
+    dialogRef.afterClosed().subscribe(result => { if (result) this.loadData(this.showInactiveLoaded()); });
   }
 
   editItem(item: ScheduledTask) {
-    const dialogRef = this.dialog.open(ScheduledTaskEditDialog, {
-      width: '550px',
-      data: { scheduledTask: item }
-    });
-
-    dialogRef.afterClosed().subscribe(result => {
-      if (result) {
-        this.loadData();
-      }
-    });
+    const dialogRef = this.dialog.open(ScheduledTaskEditDialog, { width: '550px', data: { scheduledTask: item } });
+    dialogRef.afterClosed().subscribe(result => { if (result) this.loadData(this.showInactiveLoaded()); });
   }
 
   cronToEnglish(expr: string): string {
@@ -205,24 +118,6 @@ export class ScheduledTasksListView implements OnInit {
       return descs.join(' ');
     } catch {
       return expr;
-    }
-  }
-
-  private getSortValue(item: ScheduledTask, column: string): string | number | null {
-    switch (column) {
-      case 'nextRunAt':
-        return item.nextRunAt ? new Date(item.nextRunAt).getTime() : null;
-      case 'lastRunAt':
-        return item.lastRunAt ? new Date(item.lastRunAt).getTime() : null;
-      case 'taskList':
-        return item.taskList?.name?.toLowerCase() || null;
-      case 'project':
-        return item.project?.name?.toLowerCase() || null;
-      default:
-        const val = (item as any)[column];
-        if (val === undefined || val === null) return null;
-        if (typeof val === 'string') return val.toLowerCase();
-        return val;
     }
   }
 }

@@ -24,6 +24,25 @@ export class PermissionGridComponent {
         'orders', 'harness', 'requirements', 'admin',
     ];
 
+    private readonly coreActions = ['read', 'write', 'delete'];
+
+    /** Replaces underscores with spaces and title-cases each word. */
+    humanize(text: string): string {
+        return text.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    /** Core action columns, narrowed to those that actually appear in the input set. */
+    coreActionColumns = computed(() => {
+        const present = new Set(this.permissions().map(p => p.action));
+        return this.coreActions.filter(a => present.has(a));
+    });
+
+    /** Non-core actions for a given resource, rendered in the "Other" column. */
+    extraActionsFor(resource: string): Permission[] {
+        return this.permissions()
+            .filter(p => p.resource === resource && !this.coreActions.includes(p.action));
+    }
+
     permissionsByResource = computed(() => {
         const perms = this.permissions();
         const map = new Map<string, Permission[]>();
@@ -42,13 +61,9 @@ export class PermissionGridComponent {
             });
     });
 
-    actions = computed(() => {
-        const base = ['read', 'write', 'delete'];
-        const allActions = new Set(this.permissions().map(p => p.action));
-        for (const a of allActions) {
-            if (!base.includes(a)) base.push(a);
-        }
-        return base;
+    /** True if any resource carries an action that isn't read/write/delete. */
+    hasExtraActions = computed(() => {
+        return this.permissions().some(p => !this.coreActions.includes(p.action));
     });
 
     getPermissionForCell(resource: string, action: string): Permission | undefined {

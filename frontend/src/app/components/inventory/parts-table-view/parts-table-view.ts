@@ -1,46 +1,28 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Router, ActivatedRoute } from '@angular/router';
-import { MatTableModule } from '@angular/material/table';
-import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
-import { MatSortModule, Sort } from '@angular/material/sort';
-import { MatInputModule } from '@angular/material/input';
-import { MatFormFieldModule } from '@angular/material/form-field';
+import { Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import { MatSlideToggleModule } from '@angular/material/slide-toggle';
-import { MatMenuModule } from '@angular/material/menu';
-import { MatCheckboxModule } from '@angular/material/checkbox';
-import { MatDividerModule } from '@angular/material/divider';
-import { filterBySearch } from '../../../utils/search';
-import { FormsModule } from '@angular/forms';
 import { InventoryService } from '../../../services/inventory.service';
 import { AuthService } from '../../../services/auth.service';
 import { Part, PartCategory } from '../../../models';
 import { AuthImgDirective } from '../../../directives/auth-img.directive';
 import { CategoryBadge } from '../../common/category-badge/category-badge';
+import { DataTable, DataTableColumnDef, ColumnDef, FilterSection } from '../../common/data-table/data-table';
 
 @Component({
   selector: 'app-parts-table-view',
   standalone: true,
   imports: [
     CommonModule,
-    MatTableModule,
-    MatPaginatorModule,
-    MatSortModule,
-    MatInputModule,
-    MatFormFieldModule,
     MatButtonModule,
     MatIconModule,
     MatTooltipModule,
-    MatSlideToggleModule,
-    MatMenuModule,
-    MatCheckboxModule,
-    MatDividerModule,
-    FormsModule,
     AuthImgDirective,
     CategoryBadge,
+    DataTable,
+    DataTableColumnDef,
   ],
   templateUrl: './parts-table-view.html',
   styleUrl: './parts-table-view.css',
@@ -49,173 +31,99 @@ export class PartsTableView implements OnInit {
   private inventoryService = inject(InventoryService);
   private authService = inject(AuthService);
   private router = inject(Router);
-  private route = inject(ActivatedRoute);
+
   canWrite = computed(() => this.authService.hasPermission('parts', 'write'));
 
   allParts = signal<Part[]>([]);
-  displayedParts = signal<Part[]>([]);
   stockLevels = signal<Record<number, number>>({});
-  searchText = signal<string>('');
-  showInactive = signal<boolean>(false);
-  lowStockOnly = signal<boolean>(false);
+  categories = signal<PartCategory[]>([]);
+  categoriesLoaded = signal<boolean>(false);
   imageTooltipStyle: Record<string, string> = {};
 
-  // Category filter
-  categories = signal<PartCategory[]>([]);
-  selectedCategoryIds = signal<Set<number>>(new Set());
+  columns: ColumnDef<Part>[] = [
+    { key: 'image', header: '' },
+    { key: 'name', header: 'Part Number', sortable: true },
+    { key: 'revision', header: 'Rev', sortable: true },
+    { key: 'description', header: 'Description', sortable: true },
+    { key: 'category', header: 'Category', sortable: true, sortValue: p => p.PartCategory?.name?.toLowerCase() ?? null },
+    { key: 'vendor', header: 'Vendor', sortable: true },
+    { key: 'sku', header: 'SKU', sortable: true },
+    { key: 'minimumOrderQuantity', header: 'Min Order Qty', sortable: true },
+    { key: 'inStock', header: 'In Stock', sortable: true, sortValue: p => this.getStockQuantity(p) },
+    { key: 'minimumStockQuantity', header: 'Min Stock Qty', sortable: true, sortValue: p => p.minimumStockQuantity ?? null },
+    { key: 'internalPart', header: 'Type', sortable: true },
+    { key: 'createdAt', header: 'Created', sortable: true, sortValue: p => p.createdAt ? new Date(p.createdAt).getTime() : null },
+  ];
 
-  // Part type filter
-  showInternal = signal<boolean>(true);
-  showVendor = signal<boolean>(true);
+  filterSections = computed<FilterSection<Part>[]>(() => [
+    {
+      type: 'multiSelect',
+      key: 'categories',
+      label: 'Categories',
+      options: this.categories().map(c => ({
+        id: c.id,
+        label: c.name,
+        colorHex: c.tagColorHex ? `#${c.tagColorHex}` : '#808080',
+      })),
+      accessor: (p: Part) => p.PartCategory?.id ?? null,
+    },
+    {
+      type: 'multiSelect',
+      key: 'partType',
+      label: 'Part Type',
+      options: [
+        { id: 'internal', label: 'Internal' },
+        { id: 'vendor', label: 'Vendor' },
+      ],
+      accessor: (p: Part) => (p.internalPart ? 'internal' : 'vendor'),
+    },
+    {
+      type: 'toggle',
+      key: 'inactive',
+      label: 'Show Inactive',
+      default: false,
+      predicate: (p, on) => on || p.activeFlag === true,
+    },
+    {
+      type: 'toggle',
+      key: 'lowStock',
+      label: 'Low Stock Only',
+      default: false,
+      predicate: (p, on) => !on || this.isLowStock(p),
+    },
+  ]);
 
-  displayedColumns: string[] = ['image', 'name', 'revision', 'description', 'category', 'vendor', 'sku', 'minimumOrderQuantity', 'inStock', 'minimumStockQuantity', 'internalPart', 'createdAt'];
+  searchKeys = ['name', 'description', 'vendor', 'sku', 'PartCategory.name'];
 
-  // Pagination
-  pageSize = signal<number>(10);
-  pageIndex = signal<number>(0);
-  pageSizeOptions = [5, 10, 25, 50, 100];
-
-  // Sorting
-  sortColumn = signal<string>('name');
-  sortDirection = signal<'asc' | 'desc'>('asc');
-
-  // Computed: check if all categories are selected
-  allCategoriesSelected = computed(() => {
-    const cats = this.categories();
-    const selected = this.selectedCategoryIds();
-    return cats.length > 0 && cats.every(c => selected.has(c.id));
-  });
-
-  // Computed: check if some but not all categories are selected
-  someCategoriesSelected = computed(() => {
-    const cats = this.categories();
-    const selected = this.selectedCategoryIds();
-    const selectedCount = cats.filter(c => selected.has(c.id)).length;
-    return selectedCount > 0 && selectedCount < cats.length;
-  });
-
-  // Computed: get selected categories for chip display
-  selectedCategories = computed(() => {
-    const cats = this.categories();
-    const selected = this.selectedCategoryIds();
-    return cats.filter(c => selected.has(c.id));
-  });
-
-  // Computed: count of hidden categories (for filter indicator)
-  hiddenCategoryCount = computed(() => {
-    const cats = this.categories();
-    const selected = this.selectedCategoryIds();
-    return cats.filter(c => !selected.has(c.id)).length;
-  });
-
-  // Computed: check if all types are selected
-  allTypesSelected = computed(() => {
-    return this.showInternal() && this.showVendor();
-  });
-
-  // Computed: check if some but not all types are selected
-  someTypesSelected = computed(() => {
-    const internal = this.showInternal();
-    const vendor = this.showVendor();
-    return (internal || vendor) && !(internal && vendor);
-  });
-
-  // Computed: count of active filters (categories + types)
-  activeFilterCount = computed(() => {
-    let count = this.hiddenCategoryCount();
-    if (!this.showInternal()) count++;
-    if (!this.showVendor()) count++;
-    return count;
-  });
-
-  private initializedFromQuery = false;
+  rowHref = (p: Part) => `/parts/${p.id}/edit`;
 
   ngOnInit() {
     this.loadData();
   }
 
   loadData() {
-    // Load categories first, then parts
     this.inventoryService.getPartCategories().subscribe({
       next: (categories) => {
         this.categories.set(categories);
-        // Select all categories by default
-        this.selectedCategoryIds.set(new Set(categories.map(c => c.id)));
-        // Apply query params after categories are loaded
-        this.applyQueryParams();
-        // Now load parts after categories are ready
+        this.categoriesLoaded.set(true);
         this.loadParts();
       },
       error: (err) => {
         console.error('Error loading categories:', err);
-        this.applyQueryParams();
-        // Still try to load parts even if categories fail
+        this.categoriesLoaded.set(true);
         this.loadParts();
-      }
+      },
     });
-  }
-
-  private applyQueryParams() {
-    const params = this.route.snapshot.queryParams;
-    if (params['search']) this.searchText.set(params['search']);
-    if (params['inactive'] === 'true') this.showInactive.set(true);
-    if (params['lowStock'] === 'true') this.lowStockOnly.set(true);
-    if (params['internal'] !== undefined) this.showInternal.set(params['internal'] !== 'false');
-    if (params['vendor'] !== undefined) this.showVendor.set(params['vendor'] !== 'false');
-    if (params['sort']) this.sortColumn.set(params['sort']);
-    if (params['dir'] === 'asc' || params['dir'] === 'desc') this.sortDirection.set(params['dir']);
-    if (params['page']) this.pageIndex.set(parseInt(params['page'], 10) || 0);
-    if (params['pageSize']) this.pageSize.set(parseInt(params['pageSize'], 10) || 10);
-    if (params['categories']) {
-      const ids = params['categories'].split(',').map((s: string) => parseInt(s, 10)).filter((n: number) => !isNaN(n));
-      this.selectedCategoryIds.set(new Set(ids));
-    }
-    this.initializedFromQuery = true;
-  }
-
-  private updateQueryParams() {
-    if (!this.initializedFromQuery) return;
-    const params: Record<string, string> = {};
-    const search = this.searchText();
-    if (search) params['search'] = search;
-    if (this.showInactive()) params['inactive'] = 'true';
-    if (this.lowStockOnly()) params['lowStock'] = 'true';
-    if (!this.showInternal()) params['internal'] = 'false';
-    if (!this.showVendor()) params['vendor'] = 'false';
-    const sortCol = this.sortColumn();
-    const sortDir = this.sortDirection();
-    if (sortCol !== 'name' || sortDir !== 'asc') {
-      params['sort'] = sortCol;
-      params['dir'] = sortDir;
-    }
-    if (this.pageIndex() > 0) params['page'] = String(this.pageIndex());
-    if (this.pageSize() !== 10) params['pageSize'] = String(this.pageSize());
-    // Only include categories param if not all selected
-    const allCats = this.categories();
-    const selected = this.selectedCategoryIds();
-    if (allCats.length > 0 && selected.size < allCats.length) {
-      params['categories'] = Array.from(selected).join(',');
-    }
-    this.router.navigate([], { relativeTo: this.route, queryParams: params, replaceUrl: true });
   }
 
   loadParts() {
     this.inventoryService.getAllParts().subscribe({
-      next: (parts) => {
-        this.allParts.set(parts);
-        this.applyFiltersAndSort();
-      },
-      error: (err) => {
-        console.error('Error loading parts:', err);
-      }
+      next: (parts) => this.allParts.set(parts),
+      error: (err) => console.error('Error loading parts:', err),
     });
     this.inventoryService.getStockLevels().subscribe({
-      next: (levels) => {
-        this.stockLevels.set(levels);
-      },
-      error: (err) => {
-        console.error('Error loading stock levels:', err);
-      }
+      next: (levels) => this.stockLevels.set(levels),
+      error: (err) => console.error('Error loading stock levels:', err),
     });
   }
 
@@ -228,254 +136,11 @@ export class PartsTableView implements OnInit {
     return this.getStockQuantity(part) < part.minimumStockQuantity;
   }
 
-  applyFiltersAndSort() {
-    let filtered = [...this.allParts()];
-
-    // Filter by active flag
-    if (!this.showInactive()) {
-      filtered = filtered.filter(part => part.activeFlag === true);
-    }
-
-    // Filter by category
-    const selectedCats = this.selectedCategoryIds();
-    if (selectedCats.size === 0) {
-      // No categories selected - show nothing
-      filtered = [];
-    } else if (selectedCats.size < this.categories().length) {
-      // Some categories selected - filter by them
-      filtered = filtered.filter(part => {
-        const categoryId = part.PartCategory?.id;
-        return categoryId && selectedCats.has(categoryId);
-      });
-    }
-    // If all categories selected, no filtering needed
-
-    // Filter by part type (internal/vendor)
-    const showInternal = this.showInternal();
-    const showVendor = this.showVendor();
-    if (!showInternal && !showVendor) {
-      filtered = [];
-    } else if (!showInternal) {
-      filtered = filtered.filter(part => part.internalPart === false);
-    } else if (!showVendor) {
-      filtered = filtered.filter(part => part.internalPart === true);
-    }
-
-    // Apply search filter
-    filtered = filterBySearch(filtered, this.searchText(), ['name', 'description', 'vendor', 'sku', 'PartCategory.name']);
-
-    // Filter low stock only
-    if (this.lowStockOnly()) {
-      filtered = filtered.filter(part => this.isLowStock(part));
-    }
-
-    // Apply sorting
-    const sortCol = this.sortColumn();
-    const sortDir = this.sortDirection();
-    filtered.sort((a, b) => {
-      const aVal = this.getSortValue(a, sortCol);
-      const bVal = this.getSortValue(b, sortCol);
-
-      // Handle nulls - sort nulls last
-      if (aVal === null && bVal === null) return 0;
-      if (aVal === null) return sortDir === 'asc' ? 1 : -1;
-      if (bVal === null) return sortDir === 'asc' ? -1 : 1;
-
-      const comparison = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-      return sortDir === 'asc' ? comparison : -comparison;
-    });
-
-    // Apply pagination
-    const startIndex = this.pageIndex() * this.pageSize();
-    const endIndex = startIndex + this.pageSize();
-    this.displayedParts.set(filtered.slice(startIndex, endIndex));
-  }
-
-  onSearchChange(value: string) {
-    this.searchText.set(value);
-    this.pageIndex.set(0);
-    this.applyFiltersAndSort();
-    this.updateQueryParams();
-  }
-
-  onPageChange(event: PageEvent) {
-    this.pageIndex.set(event.pageIndex);
-    this.pageSize.set(event.pageSize);
-    this.applyFiltersAndSort();
-    this.updateQueryParams();
-  }
-
-  onSortChange(sort: Sort) {
-    this.sortColumn.set(sort.active);
-    this.sortDirection.set(sort.direction as 'asc' | 'desc' || 'asc');
-    this.applyFiltersAndSort();
-    this.updateQueryParams();
-  }
-
-  onToggleInactive(checked: boolean) {
-    this.showInactive.set(checked);
-    this.pageIndex.set(0);
-    this.applyFiltersAndSort();
-    this.updateQueryParams();
-  }
-
-  onToggleLowStock(checked: boolean) {
-    this.lowStockOnly.set(checked);
-    this.pageIndex.set(0);
-    this.applyFiltersAndSort();
-    this.updateQueryParams();
-  }
-
-  // Category filter methods
-  isCategorySelected(categoryId: number): boolean {
-    return this.selectedCategoryIds().has(categoryId);
-  }
-
-  toggleCategory(categoryId: number): void {
-    const current = this.selectedCategoryIds();
-    const newSet = new Set(current);
-    if (newSet.has(categoryId)) {
-      newSet.delete(categoryId);
-    } else {
-      newSet.add(categoryId);
-    }
-    this.selectedCategoryIds.set(newSet);
-    this.pageIndex.set(0);
-    this.applyFiltersAndSort();
-    this.updateQueryParams();
-  }
-
-  toggleAllCategories(): void {
-    const cats = this.categories();
-    if (this.allCategoriesSelected()) {
-      this.selectedCategoryIds.set(new Set());
-    } else {
-      this.selectedCategoryIds.set(new Set(cats.map(c => c.id)));
-    }
-    this.pageIndex.set(0);
-    this.applyFiltersAndSort();
-    this.updateQueryParams();
-  }
-
-  // Part type filter methods
-  toggleInternal(): void {
-    this.showInternal.update(v => !v);
-    this.pageIndex.set(0);
-    this.applyFiltersAndSort();
-    this.updateQueryParams();
-  }
-
-  toggleVendor(): void {
-    this.showVendor.update(v => !v);
-    this.pageIndex.set(0);
-    this.applyFiltersAndSort();
-    this.updateQueryParams();
-  }
-
-  toggleAllTypes(): void {
-    if (this.allTypesSelected()) {
-      this.showInternal.set(false);
-      this.showVendor.set(false);
-    } else {
-      this.showInternal.set(true);
-      this.showVendor.set(true);
-    }
-    this.pageIndex.set(0);
-    this.applyFiltersAndSort();
-    this.updateQueryParams();
-  }
-
-  getTotalCount(): number {
-    let filtered = [...this.allParts()];
-
-    // Filter by active flag
-    if (!this.showInactive()) {
-      filtered = filtered.filter(part => part.activeFlag === true);
-    }
-
-    // Filter by category
-    const selectedCats = this.selectedCategoryIds();
-    if (selectedCats.size === 0) {
-      // No categories selected - show nothing
-      filtered = [];
-    } else if (selectedCats.size < this.categories().length) {
-      // Some categories selected - filter by them
-      filtered = filtered.filter(part => {
-        const categoryId = part.PartCategory?.id;
-        return categoryId && selectedCats.has(categoryId);
-      });
-    }
-    // If all categories selected, no filtering needed
-
-    // Filter by part type (internal/vendor)
-    const showInternal = this.showInternal();
-    const showVendor = this.showVendor();
-    if (!showInternal && !showVendor) {
-      filtered = [];
-    } else if (!showInternal) {
-      filtered = filtered.filter(part => part.internalPart === false);
-    } else if (!showVendor) {
-      filtered = filtered.filter(part => part.internalPart === true);
-    }
-
-    // Apply search filter
-    filtered = filterBySearch(filtered, this.searchText(), ['name', 'description', 'vendor', 'sku', 'PartCategory.name']);
-
-    // Filter low stock only
-    if (this.lowStockOnly()) {
-      filtered = filtered.filter(part => this.isLowStock(part));
-    }
-
-    return filtered.length;
-  }
-
-  openLink(link: string) {
-    if (link) {
-      window.open(link, '_blank');
-    }
-  }
-
   openNewPartDialog() {
     this.router.navigate(['/parts/new']);
   }
 
   editPart(part: Part) {
     this.router.navigate(['/parts', part.id, 'edit']);
-  }
-
-  onRowMouseDown(event: MouseEvent) {
-    if (event.button === 1) {
-      event.preventDefault();
-    }
-  }
-
-  onRowAuxClick(event: MouseEvent, part: Part) {
-    if (event.button === 1) {
-      event.preventDefault();
-      window.open(`/#/parts/${part.id}/edit`, '_blank');
-    }
-  }
-
-  deletePart(part: Part) {
-    // This method is kept for potential future use, but delete is handled in the dialog
-    console.log('Delete part:', part);
-  }
-
-  private getSortValue(part: Part, column: string): string | number | null {
-    switch (column) {
-      case 'category':
-        return part.PartCategory?.name?.toLowerCase() ?? null;
-      case 'inStock':
-        return this.getStockQuantity(part);
-      case 'minimumStockQuantity':
-        return part.minimumStockQuantity ?? null;
-      case 'createdAt':
-        return part.createdAt ? new Date(part.createdAt).getTime() : null;
-      default:
-        const val = (part as any)[column];
-        if (val === undefined || val === null) return null;
-        if (typeof val === 'string') return val.toLowerCase();
-        return val;
-    }
   }
 }

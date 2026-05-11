@@ -2,7 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
-import { provideRouter, Router } from '@angular/router';
+import { provideRouter, Router, ActivatedRoute } from '@angular/router';
 import { of, throwError } from 'rxjs';
 import { vi } from 'vitest';
 
@@ -29,6 +29,7 @@ describe('GroupsList', () => {
         provideHttpClientTesting(),
         provideAnimationsAsync(),
         provideRouter([]),
+        { provide: ActivatedRoute, useValue: { queryParams: of({}), snapshot: { queryParams: {} } } },
       ],
     }).compileComponents();
 
@@ -44,37 +45,41 @@ describe('GroupsList', () => {
     await fixture.whenStable();
   });
 
-  it('should create', () => {
+  it('creates', () => {
     expect(component).toBeTruthy();
   });
 
-  it('should load groups on init', () => {
+  it('loads groups on init', () => {
     expect(adminService.getGroups).toHaveBeenCalled();
     expect(component.groups()).toEqual(mockGroups);
-    expect(component.groups()!.length).toBe(2);
   });
 
-  it('should set empty array on error', () => {
+  it('sets empty array on error', () => {
     vi.spyOn(adminService, 'getGroups').mockReturnValue(throwError(() => new Error('fail')));
     component.loadGroups();
     expect(component.groups()).toEqual([]);
   });
 
-  it('should navigate to new group', () => {
+  it('renders via <app-data-table>', () => {
+    fixture.detectChanges();
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('app-data-table')).toBeTruthy();
+  });
+
+  it('navigates to new group', () => {
     component.navigateToNew();
     expect(router.navigate).toHaveBeenCalledWith(['/admin/groups/new']);
   });
 
-  it('should navigate to edit group', () => {
+  it('navigates to edit group', () => {
     component.navigateToEdit(5);
     expect(router.navigate).toHaveBeenCalledWith(['/admin/groups', 5]);
   });
 
-  it('should delete group and reload', () => {
+  it('deletes group and reloads', () => {
     vi.spyOn(adminService, 'getGroups').mockReturnValue(of([mockGroups[1]]));
     component.deleteGroup(1);
     expect(adminService.deleteGroup).toHaveBeenCalledWith(1);
-    // After delete, loadGroups is called again
     expect(component.groups()!.length).toBe(1);
   });
 });

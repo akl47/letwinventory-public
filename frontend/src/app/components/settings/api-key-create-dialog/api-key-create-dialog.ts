@@ -13,6 +13,7 @@ import { AdminService } from '../../../services/admin.service';
 import { AuthService } from '../../../services/auth.service';
 import { Permission } from '../../../models/permission.model';
 import { PermissionGridComponent } from '../../admin/permission-grid/permission-grid';
+import { ExpirationMode, computeExpiresAt } from '../../../utils/expiration';
 
 @Component({
     selector: 'app-api-key-create-dialog',
@@ -39,8 +40,8 @@ export class ApiKeyCreateDialog implements OnInit {
     private authService = inject(AuthService);
 
     name = signal('');
-    expirationMode: 'never' | 'date' = 'never';
-    expiresAt: Date | null = null;
+    expirationMode: ExpirationMode = 'never';
+    customExpiresAt: Date | null = null;
     minDate = new Date();
 
     allPermissions = signal<Permission[]>([]);
@@ -67,13 +68,12 @@ export class ApiKeyCreateDialog implements OnInit {
         if (!this.name().trim()) return;
         this.creating.set(true);
 
-        const data: any = {
+        const data: { name: string; permissionIds: number[]; expiresAt?: string | null } = {
             name: this.name().trim(),
             permissionIds: Array.from(this.selectedPermissionIds()),
         };
-        if (this.expirationMode === 'date' && this.expiresAt) {
-            data.expiresAt = this.expiresAt.toISOString();
-        }
+        const expiresAt = computeExpiresAt(this.expirationMode, this.customExpiresAt);
+        if (expiresAt) data.expiresAt = expiresAt.toISOString();
 
         this.authService.createApiKey(data).subscribe({
             next: (result) => {

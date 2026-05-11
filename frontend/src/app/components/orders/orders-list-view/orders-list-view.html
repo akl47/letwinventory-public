@@ -1,158 +1,69 @@
 <div class="orders-table-container">
-  <div class="table-header">
+  <div class="page-header">
     <h2>
       <mat-icon>shopping_cart</mat-icon>
       Orders
     </h2>
-    <div class="header-actions">
-      <!-- Status Filter Dropdown -->
-      <button mat-button class="filter-btn" [matMenuTriggerFor]="filterMenu"
-        [class.has-filter]="hiddenStatusCount() > 0">
-        <mat-icon>filter_list</mat-icon>
-        <span>Filter</span>
-        @if (hiddenStatusCount() > 0) {
-        <span class="filter-badge">{{ hiddenStatusCount() }}</span>
-        }
-      </button>
-      <mat-menu #filterMenu="matMenu" class="filter-menu">
-        <div class="menu-section-header">Status</div>
-        <div class="menu-header" (click)="$event.stopPropagation()">
-          <mat-checkbox [checked]="allStatusesSelected()" [indeterminate]="someStatusesSelected()"
-            (change)="toggleAllStatuses()">
-            All Statuses
-          </mat-checkbox>
-        </div>
-        @for (status of statuses(); track status.id) {
-        <div class="menu-item" (click)="$event.stopPropagation()">
-          <mat-checkbox [checked]="isStatusSelected(status.id)" (change)="toggleStatus(status.id)">
-            <span class="status-color" [style.background-color]="status.tagColor || '#808080'"></span>
-            {{ status.name }}
-          </mat-checkbox>
-        </div>
-        }
-      </mat-menu>
-
-      <mat-form-field appearance="outline" class="search-field">
-        <mat-label>Search orders</mat-label>
-        <input matInput [ngModel]="searchText()" (ngModelChange)="onSearchChange($event)"
-          placeholder="Search by order #, vendor, status, or notes">
-        <mat-icon matPrefix>search</mat-icon>
-      </mat-form-field>
-      <mat-slide-toggle [checked]="showInactive()" (change)="onToggleInactive($event.checked)" color="primary">
-        Show Inactive
-      </mat-slide-toggle>
-      <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
-        <button mat-stroked-button (click)="openBulkUpload()" [disabled]="!canWrite()">
-          <mat-icon>upload_file</mat-icon>
-          Bulk Import
-        </button>
-      </span>
-      <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
-        <button mat-flat-button color="primary" (click)="createNewOrder()" [disabled]="!canWrite()">
-          <mat-icon>add</mat-icon>
-          New Order
-        </button>
-      </span>
-    </div>
   </div>
 
-  <div class="table-wrapper">
-    <table mat-table [dataSource]="displayedOrders()" matSort (matSortChange)="onSortChange($event)"
-      class="orders-table">
-      <!-- Order Number Column -->
-      <ng-container matColumnDef="orderID">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header>Order #</th>
-        <td mat-cell *matCellDef="let order">
-          <a class="row-overlay" [href]="'/#/orders/' + order.id" (click)="$event.preventDefault()"></a>
-          <span><strong>{{ order.id }}</strong></span>
-        </td>
-      </ng-container>
+  @if (statusesLoaded()) {
+    <app-data-table
+      [data]="allOrders()"
+      [columns]="columns"
+      [filterSections]="filterSections()"
+      [searchKeys]="searchKeys"
+      [defaultSort]="{ key: 'placedDate', dir: 'desc' }"
+      [defaultPageSize]="25"
+      [pageSizeOptions]="[10, 25, 50, 100]"
+      [rowHref]="rowHref"
+      searchPlaceholder="Search by order #, vendor, status, or notes"
+      (rowClick)="viewOrder($event)">
 
-      <!-- Vendor Column -->
-      <ng-container matColumnDef="vendor">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header>Vendor</th>
-        <td mat-cell *matCellDef="let order">{{ order.vendor || '-' }}</td>
-      </ng-container>
-
-      <!-- Description Column -->
-      <ng-container matColumnDef="description">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header>Description</th>
-        <td mat-cell *matCellDef="let order">{{ order.description || '-' }}</td>
-      </ng-container>
-
-      <!-- Placed Date Column -->
-      <ng-container matColumnDef="placedDate">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header>Placed Date</th>
-        <td mat-cell *matCellDef="let order">
-          {{ order.placedDate | date: 'mediumDate' }}
-        </td>
-      </ng-container>
-
-      <!-- Status Column -->
-      <ng-container matColumnDef="status">
-        <th mat-header-cell *matHeaderCellDef mat-sort-header>Status</th>
-        <td mat-cell *matCellDef="let order">
-          <span class="status-badge" [style.background-color]="order.OrderStatus?.tagColor || '#cccccc'"
-            [style.color]="getContrastColor(order.OrderStatus?.tagColor || '#cccccc')">
-            {{ order.OrderStatus?.name || 'Unknown' }}
-          </span>
-        </td>
-      </ng-container>
-
-      <!-- Item Count Column -->
-      <ng-container matColumnDef="itemCount">
-        <th mat-header-cell *matHeaderCellDef>Items</th>
-        <td mat-cell *matCellDef="let order">
-          {{ calculateItemCount(order) }}
-        </td>
-      </ng-container>
-
-      <!-- Total Price Column -->
-      <ng-container matColumnDef="totalPrice">
-        <th mat-header-cell *matHeaderCellDef>Total</th>
-        <td mat-cell *matCellDef="let order">
-          ${{ calculateTotalPrice(order).toFixed(2) }}
-        </td>
-      </ng-container>
-
-      <!-- Actions Column -->
-      <ng-container matColumnDef="actions">
-        <th mat-header-cell *matHeaderCellDef>Actions</th>
-        <td mat-cell *matCellDef="let order">
-          <button mat-icon-button (click)="viewOrder(order); $event.stopPropagation()" matTooltip="View order details">
-            <mat-icon>visibility</mat-icon>
+      <div dataTableToolbar>
+        <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+          <button mat-stroked-button (click)="openBulkUpload()" [disabled]="!canWrite()">
+            <mat-icon>upload_file</mat-icon>
+            Bulk Import
           </button>
-          @if (order.link) {
-          <button mat-icon-button (click)="$event.stopPropagation(); openOrderLink(order.link)"
-            matTooltip="Open order link">
+        </span>
+        <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
+          <button mat-flat-button color="primary" (click)="createNewOrder()" [disabled]="!canWrite()">
+            <mat-icon>add</mat-icon>
+            New Order
+          </button>
+        </span>
+      </div>
+
+      <ng-template appColumn="orderID" let-order>
+        <strong>{{ order.id }}</strong>
+      </ng-template>
+
+      <ng-template appColumn="vendor" let-order>{{ order.vendor || '-' }}</ng-template>
+
+      <ng-template appColumn="description" let-order>{{ order.description || '-' }}</ng-template>
+
+      <ng-template appColumn="placedDate" let-order>{{ order.placedDate | date: 'mediumDate' }}</ng-template>
+
+      <ng-template appColumn="status" let-order>
+        <app-category-badge
+          [label]="order.OrderStatus?.name || 'Unknown'"
+          [colorHex]="order.OrderStatus?.tagColor" />
+      </ng-template>
+
+      <ng-template appColumn="itemCount" let-order>{{ calculateItemCount(order) }}</ng-template>
+
+      <ng-template appColumn="totalPrice" let-order>${{ calculateTotalPrice(order).toFixed(2) }}</ng-template>
+
+      <ng-template appColumn="actions" let-order>
+        <button mat-icon-button (click)="viewOrder(order); $event.stopPropagation()" matTooltip="View order details">
+          <mat-icon>visibility</mat-icon>
+        </button>
+        @if (order.link) {
+          <button mat-icon-button (click)="$event.stopPropagation(); openOrderLink(order.link)" matTooltip="Open order link">
             <mat-icon>link</mat-icon>
           </button>
-          }
-        </td>
-      </ng-container>
-
-      <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-      <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="viewOrder(row)"
-        (mousedown)="onRowMouseDown($event)" (auxclick)="onRowAuxClick($event, row)" class="clickable-row"></tr>
-
-      <!-- No data row -->
-      <tr class="mat-row" *matNoDataRow>
-        <td class="mat-cell" [attr.colspan]="displayedColumns.length">
-          <div class="no-data">
-            @if (searchText()) {
-            <mat-icon>search_off</mat-icon>
-            <p>No orders found matching "{{ searchText() }}"</p>
-            } @else {
-            <mat-icon>shopping_cart</mat-icon>
-            <p>No orders available</p>
-            }
-          </div>
-        </td>
-      </tr>
-    </table>
-  </div>
-
-  <mat-paginator [length]="getTotalCount()" [pageSize]="pageSize()" [pageIndex]="pageIndex()"
-    [pageSizeOptions]="pageSizeOptions" (page)="onPageChange($event)" showFirstLastButtons>
-  </mat-paginator>
+        }
+      </ng-template>
+    </app-data-table>
+  }
 </div>

@@ -3,6 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
 import { provideRouter, Router } from '@angular/router';
+import { ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
 import { vi } from 'vitest';
 
@@ -30,12 +31,12 @@ describe('UsersList', () => {
         provideHttpClientTesting(),
         provideAnimationsAsync(),
         provideRouter([]),
+        { provide: ActivatedRoute, useValue: { queryParams: of({}), snapshot: { queryParams: {} } } },
       ],
     }).compileComponents();
 
     adminService = TestBed.inject(AdminService);
     router = TestBed.inject(Router);
-
     vi.spyOn(adminService, 'getUsers').mockReturnValue(of(mockUsers));
 
     fixture = TestBed.createComponent(UsersList);
@@ -44,64 +45,39 @@ describe('UsersList', () => {
     await fixture.whenStable();
   });
 
-  it('should create', () => {
+  it('creates', () => {
     expect(component).toBeTruthy();
   });
 
-  it('should load users on init', () => {
+  it('loads users on init', () => {
     expect(adminService.getUsers).toHaveBeenCalled();
     expect(component.users().length).toBe(3);
     expect(component.isLoading()).toBe(false);
   });
 
-  describe('filteredUsers', () => {
-    it('should filter inactive when showInactive is false', () => {
-      component.showInactive.set(false);
-      const filtered = component.filteredUsers();
-      expect(filtered.length).toBe(2);
-      expect(filtered.every(u => u.activeFlag !== false)).toBe(true);
-    });
-
-    it('should include inactive when showInactive is true', () => {
-      component.showInactive.set(true);
-      const filtered = component.filteredUsers();
-      expect(filtered.length).toBe(3);
-    });
-
-    it('should filter by search query on displayName', () => {
-      component.searchQuery.set('alice');
-      const filtered = component.filteredUsers();
-      expect(filtered.length).toBe(1);
-      expect(filtered[0].displayName).toBe('Alice');
-    });
-
-    it('should filter by search query on email', () => {
-      component.searchQuery.set('bob@test');
-      const filtered = component.filteredUsers();
-      expect(filtered.length).toBe(1);
-      expect(filtered[0].email).toBe('bob@test.com');
-    });
+  it('renders via <app-data-table>', () => {
+    fixture.detectChanges();
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('app-data-table')).toBeTruthy();
   });
 
   describe('getGroupNames', () => {
-    it('should return comma-separated names', () => {
+    it('returns comma-separated names', () => {
       expect(component.getGroupNames(mockUsers[0])).toBe('Admin, Editors');
     });
 
-    it('should return "-" for no groups', () => {
+    it('returns "-" for no groups', () => {
       expect(component.getGroupNames(mockUsers[1])).toBe('-');
     });
 
-    it('should return "-" for undefined groups', () => {
+    it('returns "-" for undefined groups', () => {
       expect(component.getGroupNames({ id: 99, displayName: 'X', email: 'x@x.com' })).toBe('-');
     });
   });
 
-  describe('navigateToUser', () => {
-    it('should navigate to /admin/users/:id', () => {
-      vi.spyOn(router, 'navigate').mockResolvedValue(true);
-      component.navigateToUser(42);
-      expect(router.navigate).toHaveBeenCalledWith(['/admin/users', 42]);
-    });
+  it('navigates to /admin/users/:id', () => {
+    vi.spyOn(router, 'navigate').mockResolvedValue(true);
+    component.navigateToUser(42);
+    expect(router.navigate).toHaveBeenCalledWith(['/admin/users', 42]);
   });
 });

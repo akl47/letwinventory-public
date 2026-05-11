@@ -14,6 +14,7 @@ import { AdminService } from '../../../services/admin.service';
 import { PushSubscriptionRecord } from '../../../models/notification.model';
 import { Permission } from '../../../models/permission.model';
 import { ApiKeyCreateDialog } from '../api-key-create-dialog/api-key-create-dialog';
+import { ApiKeyRegenerateDialog } from '../api-key-regenerate-dialog/api-key-regenerate-dialog';
 import { PermissionGridComponent } from '../../admin/permission-grid/permission-grid';
 
 @Component({
@@ -52,6 +53,7 @@ export class SettingsPage implements OnInit {
     currentSessionId = signal<number | null>(null);
 
     apiKeys = signal<ApiKey[]>([]);
+    expandedApiKeyIds = signal<Set<number>>(new Set());
     allPermissions = signal<Permission[]>([]);
     totalPermissions = signal(0);
 
@@ -204,6 +206,28 @@ export class SettingsPage implements OnInit {
     revokeApiKey(id: number) {
         this.authService.revokeApiKey(id).subscribe({
             next: () => this.loadApiKeys()
+        });
+    }
+
+    regenerateApiKey(key: ApiKey) {
+        const ref = this.dialog.open(ApiKeyRegenerateDialog, {
+            data: { id: key.id, name: key.name, expiresAt: key.expiresAt },
+            width: '480px',
+        });
+        ref.afterClosed().subscribe((regenerated: boolean) => {
+            if (regenerated) this.loadApiKeys();
+        });
+    }
+
+    isApiKeyExpanded(id: number): boolean {
+        return this.expandedApiKeyIds().has(id);
+    }
+
+    toggleApiKeyExpanded(id: number) {
+        this.expandedApiKeyIds.update(set => {
+            const next = new Set(set);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
         });
     }
 

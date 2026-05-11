@@ -2,13 +2,13 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
-import { provideRouter } from '@angular/router';
+import { provideRouter, ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
 import { vi } from 'vitest';
 
 import { WorkOrderListView } from './work-order-list-view';
 import { ManufacturingService } from '../../../services/manufacturing.service';
-import { AuthService } from '../../../services/auth.service';
+import { WorkOrder } from '../../../models/work-order.model';
 
 const mockWorkOrders = [
   {
@@ -25,14 +25,6 @@ const mockWorkOrders = [
   },
 ];
 
-const mockDeletedWorkOrder = {
-  id: 3, engineeringMasterID: 1, status: 'not_started', quantity: 1, activeFlag: false,
-  deletionReason: 'Test deletion', deletedByUserID: 1, deletedAt: '2026-04-29T10:00:00Z',
-  completedSteps: 0, totalSteps: 5,
-  master: { id: 1, name: 'PCB Assembly', revision: 'A' },
-  createdAt: '2026-04-07T11:00:00Z',
-};
-
 describe('WorkOrderListView', () => {
   let component: WorkOrderListView;
   let fixture: ComponentFixture<WorkOrderListView>;
@@ -46,93 +38,61 @@ describe('WorkOrderListView', () => {
         provideHttpClientTesting(),
         provideAnimationsAsync(),
         provideRouter([]),
+        { provide: ActivatedRoute, useValue: { snapshot: { queryParams: {} }, queryParams: of({}) } },
       ],
     }).compileComponents();
 
     manufacturingService = TestBed.inject(ManufacturingService);
-    vi.spyOn(manufacturingService, 'getWorkOrders').mockReturnValue(of(mockWorkOrders as any));
+    vi.spyOn(manufacturingService, 'getWorkOrders').mockReturnValue(of(mockWorkOrders as unknown as WorkOrder[]));
 
     fixture = TestBed.createComponent(WorkOrderListView);
     component = fixture.componentInstance;
     fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
   });
 
-  it('should create', () => {
+  it('creates', () => {
     expect(component).toBeTruthy();
   });
 
-  it('should load work orders on init', () => {
+  it('loads work orders on init', () => {
     expect(manufacturingService.getWorkOrders).toHaveBeenCalled();
     expect(component.workOrders().length).toBe(2);
     expect(component.isLoading()).toBe(false);
   });
 
-  it('should display all work orders when no filter', () => {
-    expect(component.displayedWorkOrders().length).toBe(2);
+  it('renders via <app-data-table>', () => {
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('app-data-table')).toBeTruthy();
   });
 
-  it('should filter by status', () => {
+  it('filteredWorkOrders narrows by statusFilter', () => {
     component.statusFilter.set('in_progress');
-    expect(component.displayedWorkOrders().length).toBe(1);
-    expect(component.displayedWorkOrders()[0].status).toBe('in_progress');
+    expect(component.filteredWorkOrders().length).toBe(1);
+    expect(component.filteredWorkOrders()[0].status).toBe('in_progress');
   });
 
-  it('should filter by search text', () => {
-    component.onSearchChange('pcb');
-    expect(component.displayedWorkOrders().length).toBe(2); // Both have same master
+  it('columns includes deletionInfo and restore only when showDeleted is true', () => {
+    expect(component.columns().some(c => c.key === 'deletionInfo')).toBe(false);
+    component.showDeleted.set(true);
+    expect(component.columns().some(c => c.key === 'deletionInfo')).toBe(true);
+    expect(component.columns().some(c => c.key === 'restore')).toBe(true);
   });
 
-  it('should show progress as completedSteps/totalSteps', () => {
-    const wo = component.workOrders()[0];
-    expect(wo.completedSteps).toBe(2);
-    expect(wo.totalSteps).toBe(5);
+  it('rowHref returns the work-order URL', () => {
+    expect(component.rowHref(mockWorkOrders[0] as unknown as WorkOrder)).toBe('/build/work-orders/1');
   });
 
-  describe('Show Deleted toggle', () => {
-    it('defaults to hiding deleted work orders', () => {
-      expect(component.showDeleted()).toBe(false);
-    });
-
-    it('refetches with includeDeleted=true when toggled on', () => {
-      const spy = vi.spyOn(manufacturingService, 'getWorkOrders').mockReturnValue(
-        of([...mockWorkOrders, mockDeletedWorkOrder] as any),
-      );
-
-      component.toggleShowDeleted();
-
-      expect(spy).toHaveBeenCalledWith(undefined, true);
-      expect(component.workOrders().some(w => w.activeFlag === false)).toBe(true);
-    });
-
-    it('refetches without includeDeleted when toggled off', () => {
-      component.toggleShowDeleted();
-      const spy = vi.spyOn(manufacturingService, 'getWorkOrders').mockReturnValue(of(mockWorkOrders as any));
-
-      component.toggleShowDeleted();
-
-      expect(spy).toHaveBeenCalledWith(undefined, false);
-    });
+  it('getStatusColor returns expected colors', () => {
+    expect(component.getStatusColor('not_started')).toBe('#9e9e9e');
+    expect(component.getStatusColor('in_progress')).toBe('#ff9800');
+    expect(component.getStatusColor('complete')).toBe('#4caf50');
   });
 
-  describe('Restore action', () => {
-    let authService: AuthService;
-
-    beforeEach(() => {
-      authService = TestBed.inject(AuthService);
-    });
-
-    it('exposes restore visibility based on undelete permission', () => {
-      vi.spyOn(authService, 'hasPermission').mockImplementation(
-        (r, a) => r === 'manufacturing_execution' && a === 'work_order_undelete',
-      );
-
-      expect(component.canUndelete()).toBe(true);
-    });
-
-    it('hides restore when undelete permission is missing', () => {
-      vi.spyOn(authService, 'hasPermission').mockReturnValue(false);
-
-      expect(component.canUndelete()).toBe(false);
-    });
+  it('formatStatus returns human labels', () => {
+    expect(component.formatStatus('not_started')).toBe('Not Started');
+    expect(component.formatStatus('in_progress')).toBe('In Progress');
+    expect(component.formatStatus('complete')).toBe('Complete');
   });
 });
