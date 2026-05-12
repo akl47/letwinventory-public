@@ -2,8 +2,8 @@ import { Component, Input, OnChanges, SimpleChanges, computed, inject, signal } 
 import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
-import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatSnackBar } from '@angular/material/snack-bar';
 import { TtsService } from '../../../services/tts.service';
 
 /**
@@ -19,7 +19,7 @@ import { TtsService } from '../../../services/tts.service';
     standalone: true,
     imports: [
         CommonModule,
-        MatButtonModule, MatIconModule, MatProgressSpinnerModule, MatTooltipModule,
+        MatButtonModule, MatIconModule, MatTooltipModule,
     ],
     template: `
         <button mat-icon-button class="dense-icon-button-2"
@@ -28,7 +28,11 @@ import { TtsService } from '../../../services/tts.service';
             [matTooltip]="tooltip()"
             (click)="toggle($event)">
             @if (isLoading()) {
-                <mat-spinner diameter="16"></mat-spinner>
+                @if (progress() > 0) {
+                    <span class="tts-progress-pct">{{ progress() }}%</span>
+                } @else {
+                    <mat-icon class="tts-spin">progress_activity</mat-icon>
+                }
             } @else if (isPlaying()) {
                 <mat-icon>stop_circle</mat-icon>
             } @else if (isCached()) {
@@ -38,9 +42,25 @@ import { TtsService } from '../../../services/tts.service';
             }
         </button>
     `,
+    styles: [`
+        .tts-spin {
+            animation: tts-spin-rotate 1s linear infinite;
+        }
+        @keyframes tts-spin-rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .tts-progress-pct {
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1;
+            letter-spacing: -0.5px;
+        }
+    `],
 })
 export class TtsPlayButton implements OnChanges {
     private tts = inject(TtsService);
+    private snackBar = inject(MatSnackBar);
 
     private reqIdSig = signal<number | null>(null);
     private fieldSig = signal<string>('');
@@ -71,7 +91,17 @@ export class TtsPlayButton implements OnChanges {
         return this.tts.isLoading(this.tts.requirementFieldKey(id, this.fieldSig()));
     });
 
+    progress = computed(() => {
+        const id = this.reqIdSig();
+        if (id == null) return 0;
+        return this.tts.getProgress(this.tts.requirementFieldKey(id, this.fieldSig()))();
+    });
+
     tooltip = computed(() => {
+        if (this.isLoading()) {
+            const p = this.progress();
+            return p > 0 ? `Generating audio: ${p}%` : 'Generating audio…';
+        }
         if (this.isPlaying()) return 'Stop';
         if (this.isCached()) return 'Read aloud';
         return 'Generate audio (read aloud)';
@@ -92,15 +122,54 @@ export class TtsPlayButton implements OnChanges {
             if (this.isPlaying()) {
                 this.tts.stop();
             } else if (this.isCached()) {
-                this.tts.playRequirementAll(id).catch(() => {/* swallow */});
+                this.tts.playRequirementAll(id).catch(err => this.reportError(err));
             } else {
                 // Not yet cached — queue generation for every field. After
                 // the batch resolves, the icon flips to the speaker and a
-                // second click starts playback.
-                this.tts.queueRequirementAll(id).catch(() => {/* swallow */});
+                // second click starts playback. Errors are surfaced one at a
+                // time as each fetch resolves rather than batched at the end.
+                this.tts.queueRequirementAll(id, {
+                    onError: failure => this.reportFailure(failure),
+                }).catch(err => this.reportError(err));
             }
         } else {
-            this.tts.toggleRequirementField(id, field).catch(() => {/* swallow */});
+            this.tts.toggleRequirementField(id, field).catch(err => this.reportError(err));
         }
+    }
+
+    private async reportError(err: unknown, fallback = 'Generate audio failed') {
+        const message = (await this.extractMessage(err)) || fallback;
+        this.openSnackbar(message);
+    }
+
+    private async reportFailure(failure: { field: string; error: unknown }) {
+        const detail = (await this.extractMessage(failure.error)) || 'failed';
+        this.openSnackbar(`${failure.field}: ${detail}`);
+    }
+
+    private async extractMessage(err: unknown): Promise<string | null> {
+        // HttpErrorResponse with a Blob body — read it as JSON to extract the
+        // backend's error message (the controller returns `{ error: '...' }`).
+        const errRecord = err as { error?: unknown; message?: string };
+        const errBody = errRecord?.error;
+        if (errBody instanceof Blob) {
+            try {
+                const text = await errBody.text();
+                const parsed = JSON.parse(text);
+                if (parsed?.error) return String(parsed.error);
+            } catch { /* fall through */ }
+        }
+        if (typeof errBody === 'object' && errBody !== null && 'error' in errBody) {
+            return String((errBody as { error: unknown }).error);
+        }
+        if (typeof errRecord?.message === 'string') return errRecord.message;
+        return null;
+    }
+
+    private openSnackbar(message: string) {
+        this.snackBar.open(message, 'Dismiss', {
+            duration: 8000,
+            panelClass: 'error-snackbar',
+        });
     }
 }
