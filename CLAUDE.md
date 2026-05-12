@@ -183,3 +183,25 @@ Past sessions appear in `git log`. Add a new section here only when a session de
 - **`docs/features/*.md` migration:** `scripts/migrate-feature-docs.js` reads each MD, derives slug/name, scans body for `REQ N` and `REQ N–M` ranges, links matching requirements, and submit→approve→releases the new feature so historical state reflects "shipped". Idempotent by slug. **The script must be run after the migration applies and before the MD files are deleted.**
 - **`/feature` slash command rewritten:** step 1 now calls `node scripts/feature.js create` instead of writing an MD file, and `req.js create '<json>' --feature <id>` auto-links each new requirement.
 - **Status:** REQ 300–313 created and `unapproved`. Implementation complete locally; migration not yet applied. Pending user actions: apply migration, run `node scripts/migrate-feature-docs.js --dry-run` to inspect plan, run for real, `git rm docs/features/*.md` once verified, then approve REQs.
+
+### 2026-05-12 — Part CAD Modeler (DesignFeature 35; REQ 512–557 under Design Controls)
+
+- **What it is:** browser-based parametric CAD module attached to each Part, mirroring WireHarness draft → review → released. `/design/cad` lists every part with CAD; `/parts/:id/cad/editor` is the editor with a Three.js viewer + SolidWorks-style action toolbar (Sketch / Extrude). Sketches nest under their extrude in the feature tree; Origin feature carries per-datum visibility.
+
+- **Pure-TS solver is the production solver.** PlaneGCS WASM is in `package.json` and the Angular build config has the `externalDependencies` + `assets` mapping wired, but `solver.ts` is pure-TS numerical iteration. It satisfies every constraint case in the spec (incl. fully-constrained rectangle, conflicting-constraint rejection). PlaneGCS swap is a follow-up when sketches outgrow the iterative solver.
+
+- **Pure-JS extrude is the default kernel.** Same story for `opencascade.js@2.0.0-beta.fdece36`: wired through `CadKernelService` with a lazy dynamic import, but not invoked at startup. Pure-JS extrude (ear-clipping caps + quad sides via `makePureJsKernel()`) handles every polygon profile. OCCT is required for curves, booleans, fillets — swap by calling `kernelService.load()` and reassigning `this.kernel` in `CadEditorComponent`.
+
+- **Datum visibility persists on the Origin feature.** `OriginFeature.visibility?: Record<string, boolean>` for the seven datum ids (`origin` / `x_axis` / … / `xz_plane`). Missing keys default to visible. Stored inside the JSONB `featureTree` blob — no separate column. Visibility eyes in the tree mutate this map.
+
+- **`tablesToClean` order in `backend/tests/setup.js`:** any model with a Part/User FK using `onDelete: RESTRICT` must be cleaned BEFORE Part/User. `DesignCADModelHistory` and `DesignCADModel` were added at the top of the list for this reason. Same pattern applies to future tables.
+
+- **Hardcoded permission count in `backend/tests/__tests__/admin/user-permission.test.js`** was 45 → updated to 49 to account for `cad.{read,write,delete,approve}`. Future devs adding new permission resources need to bump this number.
+
+- **Migration partial-state footgun.** Sequelize migrations in this repo aren't transactional; if a Docker hot-reload restarts mid-migration, partial state (created index, no `SequelizeMeta` row) traps re-runs with "relation already exists" errors. The CAD migration follows house style (non-transactional) but new migrations should wrap in `queryInterface.sequelize.transaction(...)` to roll back cleanly. The recovery is hand-written cleanup SQL — see the `DROP INDEX … DROP TABLE … DELETE FROM "Permissions" WHERE resource = 'cad'` pattern.
+
+- **Action-driven UX pivot mid-implementation.** Initial draft was selection-first ("click plane → New Sketch button appears"). User course-corrected to a top-toolbar "Sketch / Extrude" pair that *prompts* for inputs ("Click a datum plane in the viewer"). The `mode` signal in `CadEditorComponent` (`'idle' | 'pick-plane' | 'pick-extrude-target'`) is the single source of truth for what the editor is waiting for; Esc cancels.
+
+- **Three.js is now a project runtime dep** (`three@^0.165.0`, `@types/three`). First time. Datum picking uses a face-prefers-datum precedence rule (face hits win over datum hits at any distance) to avoid translucent datum planes intercepting clicks intended for solid faces.
+
+- **Status:** DesignFeature 35 in `in_review`. 46 requirements all `unapproved`. Branch `cad` pushed, commit `9758a11` linked on feature record; `prURL` left null for the user to fill. Pending: apply migration, optionally swap to OCCT/PlaneGCS for non-polygon profiles, approve the 46 reqs.
