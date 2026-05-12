@@ -65,8 +65,9 @@ export class NavComponent implements OnInit, OnDestroy {
     protected readonly hasAdminAccess = computed(() => this.authService.hasAnyPermission('admin'));
     protected readonly hasMfgPlanningAccess = computed(() => this.authService.hasAnyPermission('manufacturing_planning'));
     protected readonly hasMfgExecutionAccess = computed(() => this.authService.hasAnyPermission('manufacturing_execution'));
+    protected readonly hasCadAccess = computed(() => this.authService.hasAnyPermission('cad'));
     protected readonly hasInventoryGroupAccess = computed(() => this.hasPartsAccess() || this.hasInventoryAccess() || this.hasEquipmentAccess() || this.hasOrdersAccess());
-    protected readonly hasDesignGroupAccess = computed(() => this.hasDesignAccess() || this.hasHarnessAccess() || this.hasMfgPlanningAccess() || this.hasFeaturesAccess());
+    protected readonly hasDesignGroupAccess = computed(() => this.hasDesignAccess() || this.hasHarnessAccess() || this.hasMfgPlanningAccess() || this.hasFeaturesAccess() || this.hasCadAccess());
     protected readonly hasBuildGroupAccess = computed(() => this.hasInventoryAccess() || this.hasMfgExecutionAccess());
     protected readonly isImpersonating = this.authService.isImpersonating;
 

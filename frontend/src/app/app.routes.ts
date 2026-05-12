@@ -131,6 +131,30 @@ export const routes: Routes = [
         data: { resource: 'parts' },
     },
     {
+        path: 'design/cad',
+        title: 'CAD Models',
+        loadComponent: () =>
+            import('./components/cad/cad-landing/cad-landing.component').then((m) => m.CadLandingComponent),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'cad' },
+    },
+    {
+        path: 'parts/:id/cad',
+        title: 'Part CAD',
+        loadComponent: () =>
+            import('./components/cad/cad-revision-list/cad-revision-list.component').then((m) => m.CadRevisionListComponent),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'cad' },
+    },
+    {
+        path: 'parts/:id/cad/editor',
+        title: 'CAD Editor',
+        loadComponent: () =>
+            import('./components/cad/cad-editor/cad-editor.component').then((m) => m.CadEditorComponent),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'cad' },
+    },
+    {
         path: 'equipment',
         title: 'Equipment',
         loadComponent: () =>

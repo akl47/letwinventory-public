@@ -1,0 +1,21 @@
+const router = require('express').Router();
+const controller = require('./controller');
+const checkToken = require('../../../middleware/checkToken.js');
+const checkPermission = require('../../../middleware/checkPermission');
+
+router.get('/parts-with-cad', checkToken, checkPermission('cad', 'read'), controller.listPartsWithCad);
+router.get('/by-part/:partID', checkToken, checkPermission('cad', 'read'), controller.listByPart);
+router.get('/by-part/:partID/active', checkToken, checkPermission('cad', 'read'), controller.getActiveByPart);
+router.post('/by-part/:partID', checkToken, checkPermission('cad', 'write'), controller.createForPart);
+
+router.get('/:id', checkToken, checkPermission('cad', 'read'), controller.getById);
+router.put('/:id', checkToken, checkPermission('cad', 'write'), controller.update);
+router.delete('/:id', checkToken, checkPermission('cad', 'delete'), controller.delete);
+
+router.post('/:id/submit', checkToken, checkPermission('cad', 'write'), controller.submit);
+router.post('/:id/release', checkToken, checkPermission('cad', 'approve'), controller.release);
+router.post('/:id/new-revision', checkToken, checkPermission('cad', 'write'), controller.newRevision);
+
+router.get('/:id/history', checkToken, checkPermission('cad', 'read'), controller.getHistory);
+
+module.exports = router;

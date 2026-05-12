@@ -149,6 +149,12 @@
                         <span matListItemTitle>Engineering Masters</span>
                     </a>
                     }
+                    @if (hasCadAccess()) {
+                    <a mat-list-item routerLink="/design/cad" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>view_in_ar</mat-icon>
+                        <span matListItemTitle>CAD</span>
+                    </a>
+                    }
                     }
                     @if (openGroup() === 'tools') {
                     <a mat-list-item routerLink="/tools/outline" routerLinkActive="active-link" (click)="closePanel()">
