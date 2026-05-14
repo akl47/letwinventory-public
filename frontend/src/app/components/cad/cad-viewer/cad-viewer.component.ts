@@ -79,6 +79,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private orbitTarget = new THREE.Vector3(0, 0, 0);
   private orbitDistance = 180;
   private lastPointer = { x: 0, y: 0 };
+  // Tracks the last sketchId we oriented for so we re-orient on each *transition*
+  // into a sketch (and not on every input mutation while inside one).
+  private orientedSketchId: string | null = null;
 
   constructor() {
     effect(() => {
@@ -95,6 +98,31 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const active = this.activeSketchId();
       if (this.scene) this.syncSketches(doc, active);
     });
+    // REQ 616 follow-up: when the user enters a sketch, snap the camera to look
+    // straight down its plane normal. Re-orient only on transition, so the user
+    // can free-orbit inside an active sketch without being yanked back.
+    effect(() => {
+      const sid = this.activeSketchId();
+      if (sid === this.orientedSketchId) return;
+      if (!this.scene) return;  // initScene picks up the initial case if any
+      const sketch = sid ? this.sketchDoc()?.sketches[sid] : null;
+      if (sketch) this.orientToPlane(sketch.plane);
+      this.orientedSketchId = sid;
+    });
+  }
+
+  // Snaps the orbit camera to the plane normal: target = plane origin, camera
+  // sits at orbitDistance along +normal so the plane fills the view.
+  private orientToPlane(plane: import('../../../cad/lib/types').Plane3) {
+    const len = Math.hypot(plane.normal[0], plane.normal[1], plane.normal[2]) || 1;
+    const ux = plane.normal[0] / len;
+    const uy = plane.normal[1] / len;
+    const uz = plane.normal[2] / len;
+    this.orbitTarget.set(plane.origin[0], plane.origin[1], plane.origin[2]);
+    this.orbitPhi = Math.max(0.05, Math.min(Math.PI - 0.05, Math.acos(uy)));
+    const sinPhi = Math.sin(this.orbitPhi);
+    this.orbitTheta = sinPhi > 1e-6 ? Math.atan2(uz, ux) : 0;
+    this.updateCamera();
   }
 
   ngAfterViewInit() {
@@ -165,6 +193,16 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const g = this.geometry();
     if (g) this.syncGeometry(g);
     this.syncSketches(this.sketchDoc(), this.activeSketchId());
+    // If a sketch is already active at scene-init time, orient now — the
+    // constructor effect would have bailed out earlier (no scene yet).
+    const initialSid = this.activeSketchId();
+    if (initialSid) {
+      const sketch = this.sketchDoc()?.sketches[initialSid];
+      if (sketch) {
+        this.orientToPlane(sketch.plane);
+        this.orientedSketchId = initialSid;
+      }
+    }
 
     // Animate.
     const animate = () => {
