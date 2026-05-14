@@ -104,7 +104,15 @@ export type ConstraintType =
   | 'horizontal'
   | 'vertical'
   | 'distance'
-  | 'point-on-line';
+  | 'point-on-line'
+  | 'perpendicular'
+  | 'parallel'
+  | 'tangent'
+  | 'equal'
+  | 'symmetric'
+  | 'midpoint'
+  | 'concentric'
+  | 'collinear';
 
 export interface SketchConstraint {
   id: string;

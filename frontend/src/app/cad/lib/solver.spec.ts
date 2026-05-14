@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { solveSketch } from './solver';
-import type { SketchState, SketchEntity, SketchConstraint } from './types';
-import { pointsOf } from './types';
+import type { SketchState, SketchEntity, SketchConstraint, CircleEntity, ArcEntity } from './types';
+import { pointsOf, findEntity, findPoint } from './types';
 
 function pt(id: string, x: number, y: number, construction = false): SketchEntity {
   return construction
@@ -11,6 +11,16 @@ function pt(id: string, x: number, y: number, construction = false): SketchEntit
 
 function ln(id: string, startId: string, endId: string): SketchEntity {
   return { kind: 'line', id, startId, endId };
+}
+
+function circle(id: string, centerId: string, radius: number, construction = false): SketchEntity {
+  return construction
+    ? { kind: 'circle', id, centerId, radius, construction: true }
+    : { kind: 'circle', id, centerId, radius };
+}
+
+function arc(id: string, centerId: string, startId: string, endId: string, radius: number, ccw = true): SketchEntity {
+  return { kind: 'arc', id, centerId, startId, endId, radius, ccw };
 }
 
 function c(id: string, type: SketchConstraint['type'], targetIds: string[], value?: number): SketchConstraint {
@@ -146,5 +156,221 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
     const res = await solveSketch(state);
     expect(res.status).toBe('ok');
     expect(res.dof).toBe(0);
+  });
+});
+
+describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
+  it('perpendicular: makes two lines meet at 90° (REQ 582)', async () => {
+    // l1 along +x (pinned); l2 starts at origin at 45°. Apply perpendicular → l2 along +y.
+    const state: SketchState = {
+      entities: [
+        pt('a1', 0, 0), pt('a2', 10, 0),  // l1
+        pt('b1', 0, 0), pt('b2', 5, 5),    // l2
+        ln('l1', 'a1', 'a2'),
+        ln('l2', 'b1', 'b2'),
+      ],
+      constraints: [
+        c('cf1', 'fixed', ['a1']),
+        c('cf2', 'fixed', ['a2']),
+        c('cc', 'coincident', ['a1', 'b1']),
+        c('cp', 'perpendicular', ['l1', 'l2']),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    const b1 = pointsOf(res.state).find(p => p.id === 'b1')!;
+    const b2 = pointsOf(res.state).find(p => p.id === 'b2')!;
+    const dx = b2.x - b1.x, dy = b2.y - b1.y;
+    // l1 direction is (1,0); l2 direction should be perpendicular ⇒ dx ≈ 0.
+    expect(Math.abs(dx)).toBeLessThan(1e-6);
+    expect(Math.abs(dy)).toBeGreaterThan(0);
+  });
+
+  it('parallel: drives two lines to the same direction (REQ 583)', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('a1', 0, 0), pt('a2', 10, 0),  // l1 along +x
+        pt('b1', 0, 5), pt('b2', 5, 8),    // l2 at some angle
+        ln('l1', 'a1', 'a2'),
+        ln('l2', 'b1', 'b2'),
+      ],
+      constraints: [
+        c('cf1', 'fixed', ['a1']),
+        c('cf2', 'fixed', ['a2']),
+        c('cf3', 'fixed', ['b1']),
+        c('cp', 'parallel', ['l1', 'l2']),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    const b1 = pointsOf(res.state).find(p => p.id === 'b1')!;
+    const b2 = pointsOf(res.state).find(p => p.id === 'b2')!;
+    // Both lines along ±x ⇒ Δy of l2 ≈ 0.
+    expect(Math.abs(b2.y - b1.y)).toBeLessThan(1e-6);
+  });
+
+  it('tangent (line+circle): line is tangent to circle after solve (REQ 584)', async () => {
+    // Horizontal line at y=2; construction circle at origin radius 5 (radius pinned).
+    // Apply tangent ⇒ only the line can move ⇒ y → ±5.
+    const state: SketchState = {
+      entities: [
+        pt('p1', 0, 0, true),
+        circle('c1', 'p1', 5, true),  // construction → radius pinned
+        pt('l1s', -10, 2), pt('l1e', 10, 2),
+        ln('l1', 'l1s', 'l1e'),
+        pt('lock1', -10, 0, true), pt('lock2', 10, 0, true),
+        ln('lhoriz', 'lock1', 'lock2'),
+      ],
+      constraints: [
+        c('cph', 'parallel', ['l1', 'lhoriz']),
+        c('ct', 'tangent', ['l1', 'c1']),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    const l1s = pointsOf(res.state).find(p => p.id === 'l1s')!;
+    const l1e = pointsOf(res.state).find(p => p.id === 'l1e')!;
+    // After solve: l1 is horizontal, so l1s.y == l1e.y; both should be ±5.
+    expect(l1s.y).toBeCloseTo(l1e.y);
+    expect(Math.abs(l1s.y)).toBeCloseTo(5);
+  });
+
+  it('tangent (circle+circle): circles are externally or internally tangent (REQ 584)', async () => {
+    // Two construction (radius-pinned) circles, centers 7 apart, radii 5 and 3.
+    // Apply tangent ⇒ |centers| → 8 (external) or 2 (internal).
+    const state: SketchState = {
+      entities: [
+        pt('p1', 0, 0, true),
+        circle('c1', 'p1', 5, true),
+        pt('p2', 7, 0),
+        circle('c2', 'p2', 3, true),
+      ],
+      constraints: [
+        c('ct', 'tangent', ['c1', 'c2']),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
+    const d = Math.hypot(p2.x, p2.y);
+    // Either external (|centers|=8) or internal (|centers|=2) tangent.
+    expect([8, 2].some(t => Math.abs(d - t) < 1e-3)).toBe(true);
+  });
+
+  it('equal (two lines): equates lengths (REQ 585)', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('a1', 0, 0, true), pt('a2', 10, 0, true), // l1 = length 10 (pinned)
+        pt('b1', 0, 5, true), pt('b2', 3, 5),         // l2 = length 3, free at b2
+        ln('l1', 'a1', 'a2'),
+        ln('l2', 'b1', 'b2'),
+      ],
+      constraints: [
+        c('ce', 'equal', ['l1', 'l2']),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    const b1 = pointsOf(res.state).find(p => p.id === 'b1')!;
+    const b2 = pointsOf(res.state).find(p => p.id === 'b2')!;
+    expect(Math.hypot(b2.x - b1.x, b2.y - b1.y)).toBeCloseTo(10);
+  });
+
+  it('equal (two circles): equates radii (REQ 585)', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('p1', 0, 0, true),
+        circle('c1', 'p1', 5),
+        pt('p2', 20, 0, true),
+        circle('c2', 'p2', 2),
+      ],
+      constraints: [
+        c('ce', 'equal', ['c1', 'c2']),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    const c1Solved = findEntity<CircleEntity>(res.state, 'c1')!;
+    const c2Solved = findEntity<CircleEntity>(res.state, 'c2')!;
+    expect(c1Solved.radius).toBeCloseTo(c2Solved.radius);
+  });
+
+  it('midpoint: pins a point to the midpoint of a line segment (REQ 587)', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('a', 0, 0, true), pt('b', 10, 0, true),
+        ln('l1', 'a', 'b'),
+        pt('m', 0, 0),
+      ],
+      constraints: [
+        c('cm', 'midpoint', ['m', 'l1']),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    const m = pointsOf(res.state).find(p => p.id === 'm')!;
+    expect(m.x).toBeCloseTo(5);
+    expect(m.y).toBeCloseTo(0);
+  });
+
+  it('symmetric: two points become mirror images about a line (REQ 586)', async () => {
+    // Line along +x at y=0. Point p1 at (3, 4); p2 at (5, -1). After symmetric, p2 should be (3, -4).
+    const state: SketchState = {
+      entities: [
+        pt('la', 0, 0, true), pt('lb', 10, 0, true),
+        ln('axis', 'la', 'lb'),
+        pt('p1', 3, 4, true),
+        pt('p2', 5, -1),
+      ],
+      constraints: [
+        c('cs', 'symmetric', ['p1', 'p2', 'axis']),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
+    expect(p2.x).toBeCloseTo(3);
+    expect(p2.y).toBeCloseTo(-4);
+  });
+
+  it('concentric: two circles share a center after solve (REQ 588)', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('p1', 0, 0, true),
+        circle('c1', 'p1', 5),
+        pt('p2', 8, 3),
+        circle('c2', 'p2', 2),
+      ],
+      constraints: [
+        c('cc', 'concentric', ['c1', 'c2']),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
+    expect(p2.x).toBeCloseTo(0);
+    expect(p2.y).toBeCloseTo(0);
+  });
+
+  it('collinear: two lines lie on the same infinite line after solve (REQ 589)', async () => {
+    // l1 along +x at y=0 (pinned). l2 nearby but tilted. After collinear, l2 lies along +x at y=0.
+    const state: SketchState = {
+      entities: [
+        pt('a1', 0, 0, true), pt('a2', 10, 0, true),
+        ln('l1', 'a1', 'a2'),
+        pt('b1', 15, 1), pt('b2', 20, 3),
+        ln('l2', 'b1', 'b2'),
+      ],
+      constraints: [
+        c('ccol', 'collinear', ['l1', 'l2']),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    const b1 = pointsOf(res.state).find(p => p.id === 'b1')!;
+    const b2 = pointsOf(res.state).find(p => p.id === 'b2')!;
+    // After solve, both endpoints of l2 lie on y=0.
+    expect(Math.abs(b1.y)).toBeLessThan(1e-3);
+    expect(Math.abs(b2.y)).toBeLessThan(1e-3);
   });
 });

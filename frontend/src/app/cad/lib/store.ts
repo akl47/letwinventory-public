@@ -1,6 +1,6 @@
 import type {
   SketchState, SketchEntity, SketchConstraint, ConstraintType,
-  ConstraintTarget, PointEntity, LineEntity,
+  ConstraintTarget, PointEntity, LineEntity, CircleEntity, ArcEntity,
 } from './types';
 import { findEntity } from './types';
 
@@ -31,6 +31,46 @@ export function addLine(state: SketchState, startId: string, endId: string): { s
   const id = nextId('l');
   const e: LineEntity = { kind: 'line', id, startId, endId };
   return { state: { ...state, entities: [...state.entities, e] }, id };
+}
+
+export function addCircle(
+  state: SketchState, centerX: number, centerY: number, radius: number,
+): { state: SketchState; id: string } {
+  const id = nextId('cir');
+  const centerId = nextId('p');
+  const center: PointEntity = { kind: 'point', id: centerId, x: centerX, y: centerY };
+  const circ: CircleEntity = { kind: 'circle', id, centerId, radius };
+  return { state: { ...state, entities: [...state.entities, center, circ] }, id };
+}
+
+// Creates an arc from three click locations: center, raw-start, raw-end. The
+// radius is taken from |center→start|. The end point is snapped onto the
+// circle of that radius so |center→end| == radius (data invariant required by
+// renderer/picker/tessellator).
+export function addArc(
+  state: SketchState,
+  centerX: number, centerY: number,
+  startX: number, startY: number,
+  endX: number, endY: number,
+  ccw: boolean,
+): { state: SketchState; id: string } {
+  const radius = Math.hypot(startX - centerX, startY - centerY);
+  // Snap end onto the circle. If the raw end is at the center (zero vector),
+  // pick an arbitrary tangent direction so the data invariant still holds.
+  const ex = endX - centerX, ey = endY - centerY;
+  const elen = Math.hypot(ex, ey);
+  const snappedEnd = elen < 1e-9
+    ? { x: centerX + radius, y: centerY }
+    : { x: centerX + ex * radius / elen, y: centerY + ey * radius / elen };
+  const id = nextId('arc');
+  const centerId = nextId('p');
+  const startId = nextId('p');
+  const endId = nextId('p');
+  const cp: PointEntity = { kind: 'point', id: centerId, x: centerX, y: centerY };
+  const sp: PointEntity = { kind: 'point', id: startId, x: startX, y: startY };
+  const ep: PointEntity = { kind: 'point', id: endId, x: snappedEnd.x, y: snappedEnd.y };
+  const a: ArcEntity = { kind: 'arc', id, centerId, startId, endId, radius, ccw };
+  return { state: { ...state, entities: [...state.entities, cp, sp, ep, a] }, id };
 }
 
 export function movePoint(state: SketchState, id: string, x: number, y: number): SketchState {

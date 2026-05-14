@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
-  emptySketchState, addPoint, addLine, movePoint, deletePrimitive, addConstraint, setDistanceValue,
+  emptySketchState, addPoint, addLine, addCircle, addArc, movePoint, deletePrimitive,
+  addConstraint, setDistanceValue,
 } from './store';
-import type { SketchState } from './types';
-import { pointsOf, linesOf } from './types';
+import type { SketchState, CircleEntity, ArcEntity } from './types';
+import { pointsOf, linesOf, findEntity, findPoint } from './types';
 
 describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () => {
   describe('addPoint (CAD-010)', () => {
@@ -38,6 +39,51 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       const lines = linesOf(s2);
       expect(lines.length).toBe(1);
       expect(lines[0]).toMatchObject({ id, startId: p1.id, endId: p2.id, kind: 'line' });
+    });
+  });
+
+  describe('addCircle (REQ 566)', () => {
+    it('creates a center point and a circle entity', () => {
+      const { state, id } = addCircle(emptySketchState(), 5, 5, 10);
+      const circle = findEntity<CircleEntity>(state, id)!;
+      expect(circle.kind).toBe('circle');
+      expect(circle.radius).toBe(10);
+      const center = findPoint(state, circle.centerId);
+      expect(center).toBeDefined();
+      expect(center).toMatchObject({ x: 5, y: 5 });
+    });
+
+    it('is immutable', () => {
+      const s0 = emptySketchState();
+      addCircle(s0, 0, 0, 5);
+      expect(s0.entities.length).toBe(0);
+    });
+  });
+
+  describe('addArc (REQ 569)', () => {
+    it('creates 3 points and an arc entity with radius from |center→start|', () => {
+      const { state, id } = addArc(emptySketchState(), 0, 0, 10, 0, 0, 10, true);
+      const arc = findEntity<ArcEntity>(state, id)!;
+      expect(arc.kind).toBe('arc');
+      expect(arc.radius).toBe(10);
+      expect(arc.ccw).toBe(true);
+      const center = findPoint(state, arc.centerId)!;
+      const start = findPoint(state, arc.startId)!;
+      const end = findPoint(state, arc.endId)!;
+      expect(center).toMatchObject({ x: 0, y: 0 });
+      expect(start).toMatchObject({ x: 10, y: 0 });
+      expect(end).toMatchObject({ x: 0, y: 10 });
+    });
+
+    it('snaps the end-point to the circle of |center→start| when the raw click is off-radius', () => {
+      // Center (0,0), start (10,0) → radius=10. End click at (0,5) — off-radius — should snap to (0,10).
+      const { state, id } = addArc(emptySketchState(), 0, 0, 10, 0, 0, 5, true);
+      const arc = findEntity<ArcEntity>(state, id)!;
+      const end = findPoint(state, arc.endId)!;
+      expect(Math.hypot(end.x, end.y)).toBeCloseTo(10);
+      // Direction preserved (still up).
+      expect(end.x).toBeCloseTo(0);
+      expect(end.y).toBeCloseTo(10);
     });
   });
 
