@@ -87,45 +87,35 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
 
       <!-- REQ 616 — tabbed ribbon. Toolbar content swaps with the active tab.
            Active tab follows the editor context (auto-switches to Sketch when a
-           sketch is active) but the user can manually click tabs to override. -->
+           sketch is active) but the user can manually click tabs to override.
+           OnShape/SolidWorks layout: content row on top, tab labels at the bottom. -->
       <div class="ribbon">
-        <div class="tab-strip">
-          <button class="tab" data-testid="tab-features"
-                  [class.active]="activeTab() === 'features'"
-                  (click)="setActiveTab('features')">
-            Features
-          </button>
-          <button class="tab" data-testid="tab-sketch"
-                  [class.active]="activeTab() === 'sketch'"
-                  (click)="setActiveTab('sketch')">
-            Sketch
-          </button>
-        </div>
         <div class="ribbon-content">
           <div class="ribbon-pane" [hidden]="activeTab() !== 'features'">
-            <button mat-stroked-button
+            <button class="ribbon-button"
                     data-testid="action-sketch"
-                    class="tool-action"
                     [disabled]="readonly() || activeSketchId() !== null"
                     [class.active]="mode() === 'pick-plane'"
                     matTooltip="Start a new sketch on a datum plane"
                     (click)="onSketchAction()">
-              <mat-icon>draw</mat-icon> Sketch
+              <mat-icon>draw</mat-icon>
+              <span class="ribbon-label">Sketch</span>
             </button>
-            <button mat-stroked-button
+            <button class="ribbon-button"
                     data-testid="action-extrude"
-                    class="tool-action"
                     [disabled]="readonly() || activeSketchId() !== null"
                     [class.active]="mode() === 'pick-extrude-target'"
                     matTooltip="Extrude an existing sketch, or start a new one on a plane"
                     (click)="onExtrudeAction()">
-              <mat-icon>vertical_align_top</mat-icon> Extrude
+              <mat-icon>vertical_align_top</mat-icon>
+              <span class="ribbon-label">Extrude</span>
             </button>
-            <button mat-icon-button
+            <button class="ribbon-button"
                     *ngIf="mode() !== 'idle' && activeSketchId() === null"
                     matTooltip="Cancel (Esc)"
                     (click)="setMode('idle')">
               <mat-icon>close</mat-icon>
+              <span class="ribbon-label">Cancel</span>
             </button>
           </div>
           <div class="ribbon-pane" [hidden]="activeTab() !== 'sketch'">
@@ -144,6 +134,18 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
               Pick or create a sketch first — switch to Features → Sketch.
             </span>
           </div>
+        </div>
+        <div class="tab-strip">
+          <button class="tab" data-testid="tab-features"
+                  [class.active]="activeTab() === 'features'"
+                  (click)="setActiveTab('features')">
+            Features
+          </button>
+          <button class="tab" data-testid="tab-sketch"
+                  [class.active]="activeTab() === 'sketch'"
+                  (click)="setActiveTab('sketch')">
+            Sketch
+          </button>
         </div>
       </div>
 
@@ -225,15 +227,40 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
     .state-badge.released { background: #e8f5e9; color: #2e7d32; }
     .readonly-banner { padding: 4px 10px; background: #ffebee; color: #c62828; border-radius: 4px; font-size: 12px; font-weight: 600; }
     .tool-action.active { background: rgba(66, 165, 245, 0.22); border-color: #42a5f5; }
-    .ribbon { background: #25253a; border-bottom: 1px solid #444; }
-    .tab-strip { display: flex; gap: 0; padding: 0 16px; border-bottom: 1px solid #333; }
-    .tab { background: none; border: none; color: #aaa; padding: 6px 14px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500; }
-    .tab:hover { color: #fff; }
-    .tab.active { color: #fff; border-bottom-color: #42a5f5; }
-    .ribbon-content { padding: 6px 16px; min-height: 44px; display: flex; align-items: center; }
-    .ribbon-pane { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
+    .ribbon { background: #25253a; border-bottom: 1px solid #444; flex-shrink: 0; }
+    .ribbon-content { height: 76px; padding: 4px 12px; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid #333; }
+    .ribbon-content::-webkit-scrollbar { height: 6px; }
+    .ribbon-content::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+    .ribbon-pane { display: flex; align-items: center; gap: 4px; width: 100%; min-width: max-content; }
     .ribbon-pane[hidden] { display: none !important; }
-    .ribbon-hint { font-size: 12px; opacity: 0.7; margin-left: 8px; }
+    .ribbon-hint { font-size: 12px; opacity: 0.7; margin-left: 12px; align-self: center; }
+    .ribbon-button {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 56px;
+      height: 64px;
+      padding: 4px 2px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: #ddd;
+      cursor: pointer;
+      gap: 2px;
+      font-family: inherit;
+      flex-shrink: 0;
+    }
+    .ribbon-button mat-icon { font-size: 24px; width: 24px; height: 24px; }
+    .ribbon-button .ribbon-label { font-size: 10px; line-height: 1.1; text-align: center; opacity: 0.9; }
+    .ribbon-button:hover:not([disabled]) { background: rgba(255,255,255,0.08); }
+    .ribbon-button.active { background: rgba(66, 165, 245, 0.22); border-color: #42a5f5; }
+    .ribbon-button[disabled] { opacity: 0.35; cursor: not-allowed; }
+    .ribbon-divider { width: 1px; align-self: stretch; background: #444; margin: 8px 6px; flex-shrink: 0; }
+    .tab-strip { display: flex; gap: 0; padding: 0 16px; height: 28px; }
+    .tab { background: none; border: none; color: #aaa; padding: 0 14px; font-size: 12px; cursor: pointer; border-top: 2px solid transparent; font-weight: 500; height: 100%; text-transform: uppercase; letter-spacing: 0.4px; }
+    .tab:hover { color: #fff; }
+    .tab.active { color: #fff; border-top-color: #42a5f5; background: rgba(66,165,245,0.08); }
     .editor-body { display: flex; flex: 1; min-height: 0; }
     .feature-tree { width: 240px; background: #25253a; border-right: 1px solid #444; }
     .viewport-wrap { flex: 1; position: relative; overflow: hidden; }

@@ -98,55 +98,84 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
   standalone: true,
   imports: [CommonModule, MatButtonModule, MatIconModule, MatTooltipModule],
   template: `
-    <div class="sketch-editor">
-      <header class="sketch-toolbar" data-testid="sketch-toolbar">
-        <button mat-icon-button data-testid="tool-select" [class.active]="tool() === 'select'" (click)="setTool('select')" matTooltip="Select">
-          <mat-icon>arrow_selector_tool</mat-icon>
-        </button>
-        <button mat-icon-button data-testid="tool-point" [class.active]="tool() === 'point'" (click)="setTool('point')" matTooltip="Point" [disabled]="readonly()">
-          <mat-icon>radio_button_unchecked</mat-icon>
-        </button>
-        <button mat-icon-button data-testid="tool-line" [class.active]="tool() === 'line'" (click)="setTool('line')" matTooltip="Line" [disabled]="readonly()">
-          <mat-icon>show_chart</mat-icon>
-        </button>
-        <button mat-icon-button data-testid="tool-circle" [class.active]="tool() === 'circle'" (click)="setTool('circle')" matTooltip="Circle (center + radius)" [disabled]="readonly()">
-          <mat-icon>circle</mat-icon>
-        </button>
-        <button mat-icon-button data-testid="tool-arc" [class.active]="tool() === 'arc'" (click)="setTool('arc')" matTooltip="Arc (center + endpoints)" [disabled]="readonly()">
-          <mat-icon>roundabout_right</mat-icon>
-        </button>
-        <span class="divider"></span>
-        <button *ngFor="let spec of constraintSpecs"
-                mat-icon-button
-                [attr.data-testid]="'constraint-' + spec.type"
-                [disabled]="readonly() || !spec.predicate(selectedEntities())"
-                (click)="applyConstraint(spec)"
-                [matTooltip]="spec.label">
-          <mat-icon>{{ spec.icon }}</mat-icon>
-        </button>
-        <span class="divider"></span>
-        <span class="status">
-          {{ pointCount() }} points, {{ lineCount() }} lines · DOF {{ dof() }}
-        </span>
-        <span class="spacer"></span>
-        <button mat-stroked-button
-                data-testid="extrude-button"
-                *ngIf="canExtrude()"
-                [disabled]="readonly()"
-                (click)="extrudeRequested.emit()">
-          <mat-icon>vertical_align_top</mat-icon> Extrude…
-        </button>
-      </header>
-
+    <div class="sketch-toolbar" data-testid="sketch-toolbar">
+      <button class="ribbon-button" data-testid="tool-select" [class.active]="tool() === 'select'" (click)="setTool('select')" matTooltip="Select">
+        <mat-icon>arrow_selector_tool</mat-icon>
+        <span class="ribbon-label">Select</span>
+      </button>
+      <button class="ribbon-button" data-testid="tool-point" [class.active]="tool() === 'point'" (click)="setTool('point')" matTooltip="Point" [disabled]="readonly()">
+        <mat-icon>radio_button_unchecked</mat-icon>
+        <span class="ribbon-label">Point</span>
+      </button>
+      <button class="ribbon-button" data-testid="tool-line" [class.active]="tool() === 'line'" (click)="setTool('line')" matTooltip="Line" [disabled]="readonly()">
+        <mat-icon>show_chart</mat-icon>
+        <span class="ribbon-label">Line</span>
+      </button>
+      <button class="ribbon-button" data-testid="tool-circle" [class.active]="tool() === 'circle'" (click)="setTool('circle')" matTooltip="Circle (center + radius)" [disabled]="readonly()">
+        <mat-icon>circle</mat-icon>
+        <span class="ribbon-label">Circle</span>
+      </button>
+      <button class="ribbon-button" data-testid="tool-arc" [class.active]="tool() === 'arc'" (click)="setTool('arc')" matTooltip="Arc (center + endpoints)" [disabled]="readonly()">
+        <mat-icon>roundabout_right</mat-icon>
+        <span class="ribbon-label">Arc</span>
+      </button>
+      <span class="ribbon-divider"></span>
+      <button *ngFor="let spec of constraintSpecs"
+              class="ribbon-button compact"
+              [attr.data-testid]="'constraint-' + spec.type"
+              [disabled]="readonly() || !spec.predicate(selectedEntities())"
+              (click)="applyConstraint(spec)"
+              [matTooltip]="spec.label">
+        <mat-icon>{{ spec.icon }}</mat-icon>
+      </button>
+      <span class="ribbon-divider"></span>
+      <span class="status">
+        {{ pointCount() }} pts · {{ lineCount() }} lns · DOF {{ dof() }}
+      </span>
+      <span class="spacer"></span>
+      <button class="ribbon-button"
+              data-testid="extrude-button"
+              *ngIf="canExtrude()"
+              [disabled]="readonly()"
+              (click)="extrudeRequested.emit()">
+        <mat-icon>vertical_align_top</mat-icon>
+        <span class="ribbon-label">Extrude</span>
+      </button>
     </div>
   `,
   styles: [`
-    .sketch-editor { display: flex; flex-direction: column; }
-    .sketch-toolbar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: #2a2a3a; border-bottom: 1px solid #444; flex-wrap: wrap; }
-    .divider { width: 1px; height: 24px; background: #555; margin: 0 8px; }
-    .status { font-size: 12px; opacity: 0.7; font-family: monospace; }
+    /* Sketch toolbar lives inside the parent ribbon's ribbon-pane — the
+       parent supplies the 76px fixed height. Styles below mirror the parent's
+       ribbon-button class because component view encapsulation prevents shared
+       CSS from reaching this template. */
+    .sketch-toolbar { display: flex; align-items: stretch; gap: 4px; width: 100%; min-width: max-content; }
+    .ribbon-divider { width: 1px; align-self: stretch; background: #444; margin: 8px 6px; flex-shrink: 0; }
+    .status { font-size: 11px; opacity: 0.7; font-family: monospace; align-self: center; padding: 0 6px; white-space: nowrap; }
     .spacer { flex: 1; }
-    button.active { background: rgba(66, 165, 245, 0.2); }
+    .ribbon-button {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 56px;
+      height: 64px;
+      padding: 4px 2px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: #ddd;
+      cursor: pointer;
+      gap: 2px;
+      font-family: inherit;
+      flex-shrink: 0;
+    }
+    .ribbon-button.compact { width: 40px; }
+    .ribbon-button mat-icon { font-size: 24px; width: 24px; height: 24px; }
+    .ribbon-button.compact mat-icon { font-size: 20px; width: 20px; height: 20px; }
+    .ribbon-button .ribbon-label { font-size: 10px; line-height: 1.1; text-align: center; opacity: 0.9; }
+    .ribbon-button:hover:not([disabled]) { background: rgba(255,255,255,0.08); }
+    .ribbon-button.active { background: rgba(66, 165, 245, 0.22); border-color: #42a5f5; }
+    .ribbon-button[disabled] { opacity: 0.35; cursor: not-allowed; }
   `],
 })
 export class CadSketchEditorComponent implements OnDestroy {
