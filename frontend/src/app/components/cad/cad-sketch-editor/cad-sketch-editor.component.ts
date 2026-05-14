@@ -1,17 +1,97 @@
-import { Component, input, output, signal, computed, effect, OnDestroy } from '@angular/core';
+import { Component, input, output, signal, computed, effect, OnDestroy, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import type {
   SketchDocument, SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity, SketchEntity,
+  ConstraintType,
 } from '../../../cad/lib/types';
 import { pointsOf, linesOf, findPoint } from '../../../cad/lib/types';
-import { addPoint, addLine, emptySketchState } from '../../../cad/lib/store';
+import {
+  addPoint, addLine, addCircle, addArc, addConstraint, emptySketchState,
+} from '../../../cad/lib/store';
 import { solveSketch } from '../../../cad/lib/solver';
 import { extractClosedLoop } from '../../../cad/lib/profile';
+import { pickEntity } from '../../../cad/lib/picking';
 
-type Tool = 'select' | 'point' | 'line';
+type Tool = 'select' | 'point' | 'line' | 'circle' | 'arc';
+type PendingPoint = { x: number; y: number };
+
+interface ConstraintSpec {
+  type: ConstraintType;
+  label: string;
+  icon: string;
+  // Predicate over an ordered selection — must return true for the constraint
+  // button to enable. The order of selection is preserved into the targets array
+  // unless the constraint type explicitly re-orders in `apply`.
+  predicate: (entities: SketchEntity[]) => boolean;
+  requiresValue?: boolean;
+}
+
+const CURVE_KINDS = new Set<SketchEntity['kind']>(['circle', 'arc', 'ellipse', 'ellipticalArc']);
+const isLineEntity = (e: SketchEntity) => e.kind === 'line';
+const isPointEntity = (e: SketchEntity) => e.kind === 'point';
+const isCurveEntity = (e: SketchEntity) => CURVE_KINDS.has(e.kind);
+
+const CONSTRAINT_SPECS: ConstraintSpec[] = [
+  { type: 'fixed', label: 'Fix', icon: 'lock',
+    predicate: es => es.length === 1 && isPointEntity(es[0]) },
+  { type: 'coincident', label: 'Coincident', icon: 'merge_type',
+    predicate: es => es.length === 2 && es.every(isPointEntity) },
+  { type: 'horizontal', label: 'Horizontal', icon: 'horizontal_rule',
+    predicate: es => es.length === 1 && isLineEntity(es[0]) },
+  { type: 'vertical', label: 'Vertical', icon: 'unfold_more',
+    predicate: es => es.length === 1 && isLineEntity(es[0]) },
+  { type: 'distance', label: 'Distance', icon: 'straighten', requiresValue: true,
+    predicate: es => es.length === 2 && es.every(isPointEntity) },
+  { type: 'point-on-line', label: 'Point on line', icon: 'south_east',
+    predicate: es => es.length === 2 && es.some(isPointEntity) && es.some(isLineEntity) },
+  { type: 'perpendicular', label: 'Perpendicular', icon: 'turn_right',
+    predicate: es => es.length === 2 && es.every(isLineEntity) },
+  { type: 'parallel', label: 'Parallel', icon: 'drag_handle',
+    predicate: es => es.length === 2 && es.every(isLineEntity) },
+  { type: 'tangent', label: 'Tangent', icon: 'timeline',
+    predicate: es => {
+      if (es.length !== 2) return false;
+      const lines = es.filter(isLineEntity).length;
+      const curves = es.filter(isCurveEntity).length;
+      return (lines === 1 && curves === 1) || (lines === 0 && curves === 2);
+    } },
+  { type: 'equal', label: 'Equal', icon: 'compare_arrows',
+    predicate: es => {
+      if (es.length !== 2) return false;
+      const allLines = es.every(isLineEntity);
+      const allCurves = es.every(e => e.kind === 'circle' || e.kind === 'arc');
+      return allLines || allCurves;
+    } },
+  { type: 'midpoint', label: 'Midpoint', icon: 'vertical_align_center',
+    predicate: es => es.length === 2 && es.some(isPointEntity) && es.some(isLineEntity) },
+  { type: 'symmetric', label: 'Symmetric', icon: 'flip',
+    predicate: es => es.length === 3 &&
+      es.filter(isPointEntity).length === 2 && es.filter(isLineEntity).length === 1 },
+  { type: 'concentric', label: 'Concentric', icon: 'adjust',
+    predicate: es => es.length === 2 && es.every(e => e.kind === 'circle' || e.kind === 'arc') },
+  { type: 'collinear', label: 'Collinear', icon: 'linear_scale',
+    predicate: es => es.length === 2 && es.every(isLineEntity) },
+];
+
+// Some constraints need a specific target order regardless of click order.
+function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[]): string[] {
+  switch (type) {
+    case 'point-on-line':
+    case 'midpoint':
+      // [point, line]
+      return [...entities].sort((a, b) => (isPointEntity(a) ? -1 : 1) - (isPointEntity(b) ? -1 : 1))
+        .map(e => e.id);
+    case 'symmetric':
+      // [point, point, line]
+      return [...entities].sort((a, b) => (isPointEntity(a) ? -1 : 1) - (isPointEntity(b) ? -1 : 1))
+        .map(e => e.id);
+    default:
+      return entities.map(e => e.id);
+  }
+}
 
 @Component({
   selector: 'app-cad-sketch-editor',
@@ -28,6 +108,21 @@ type Tool = 'select' | 'point' | 'line';
         </button>
         <button mat-icon-button data-testid="tool-line" [class.active]="tool() === 'line'" (click)="setTool('line')" matTooltip="Line" [disabled]="readonly()">
           <mat-icon>show_chart</mat-icon>
+        </button>
+        <button mat-icon-button data-testid="tool-circle" [class.active]="tool() === 'circle'" (click)="setTool('circle')" matTooltip="Circle (center + radius)" [disabled]="readonly()">
+          <mat-icon>circle</mat-icon>
+        </button>
+        <button mat-icon-button data-testid="tool-arc" [class.active]="tool() === 'arc'" (click)="setTool('arc')" matTooltip="Arc (center + endpoints)" [disabled]="readonly()">
+          <mat-icon>roundabout_right</mat-icon>
+        </button>
+        <span class="divider"></span>
+        <button *ngFor="let spec of constraintSpecs"
+                mat-icon-button
+                [attr.data-testid]="'constraint-' + spec.type"
+                [disabled]="readonly() || !spec.predicate(selectedEntities())"
+                (click)="applyConstraint(spec)"
+                [matTooltip]="spec.label">
+          <mat-icon>{{ spec.icon }}</mat-icon>
         </button>
         <span class="divider"></span>
         <span class="status">
@@ -69,8 +164,8 @@ type Tool = 'select' | 'point' | 'line';
             [attr.y1]="-ptY(l.startId)"
             [attr.x2]="ptX(l.endId)"
             [attr.y2]="-ptY(l.endId)"
-            [attr.stroke]="l.construction ? '#888' : '#42a5f5'"
-            stroke-width="1.2"
+            [attr.stroke]="strokeFor(l)"
+            [attr.stroke-width]="selected().has(l.id) ? 2 : 1.2"
             [attr.stroke-dasharray]="l.construction ? '3 2' : null"
           />
         </g>
@@ -82,8 +177,8 @@ type Tool = 'select' | 'point' | 'line';
             [attr.cy]="-ptY(c.centerId)"
             [attr.r]="c.radius"
             fill="none"
-            [attr.stroke]="c.construction ? '#888' : '#42a5f5'"
-            stroke-width="1.2"
+            [attr.stroke]="strokeFor(c)"
+            [attr.stroke-width]="selected().has(c.id) ? 2 : 1.2"
             [attr.stroke-dasharray]="c.construction ? '3 2' : null"
           />
         </g>
@@ -93,8 +188,8 @@ type Tool = 'select' | 'point' | 'line';
           <path
             [attr.d]="arcPath(a)"
             fill="none"
-            [attr.stroke]="a.construction ? '#888' : '#42a5f5'"
-            stroke-width="1.2"
+            [attr.stroke]="strokeFor(a)"
+            [attr.stroke-width]="selected().has(a.id) ? 2 : 1.2"
             [attr.stroke-dasharray]="a.construction ? '3 2' : null"
           />
         </g>
@@ -104,9 +199,9 @@ type Tool = 'select' | 'point' | 'line';
           <circle
             [attr.cx]="p.x"
             [attr.cy]="-p.y"
-            r="1.5"
-            [attr.fill]="p.construction ? '#888' : '#fff'"
-            [attr.stroke]="p.construction ? '#888' : '#42a5f5'"
+            [attr.r]="selected().has(p.id) ? 2.5 : 1.5"
+            [attr.fill]="p.construction ? '#888' : (selected().has(p.id) ? '#ffb74d' : '#fff')"
+            [attr.stroke]="strokeFor(p)"
             stroke-width="0.5"
           />
         </g>
@@ -118,6 +213,23 @@ type Tool = 'select' | 'point' | 'line';
               [attr.x2]="cursor().x"
               [attr.y2]="-cursor().y"
               stroke="#42a5f5" stroke-dasharray="2 2" stroke-width="0.8"/>
+
+        <!-- draft circle center marker -->
+        <circle *ngIf="draftCircleCenter() as cc"
+                [attr.cx]="cc.x" [attr.cy]="-cc.y" r="2"
+                fill="none" stroke="#ffb74d" stroke-width="0.6"/>
+
+        <!-- draft arc markers -->
+        <g *ngIf="draftArcCenter() as ac">
+          <circle [attr.cx]="ac.x" [attr.cy]="-ac.y" r="2"
+                  fill="none" stroke="#ffb74d" stroke-width="0.6"/>
+          <circle *ngIf="draftArcStart() as arcStart"
+                  [attr.cx]="arcStart.x" [attr.cy]="-arcStart.y" r="2"
+                  fill="#ffb74d"/>
+          <circle *ngIf="draftArcRadius() as ar"
+                  [attr.cx]="ac.x" [attr.cy]="-ac.y" [attr.r]="ar"
+                  fill="none" stroke="#ffb74d" stroke-dasharray="1 1" stroke-width="0.5"/>
+        </g>
       </svg>
     </div>
   `,
@@ -139,9 +251,15 @@ export class CadSketchEditorComponent implements OnDestroy {
   exitSketch = output<void>();
   extrudeRequested = output<void>();
 
+  readonly constraintSpecs = CONSTRAINT_SPECS;
+
   tool = signal<Tool>('select');
   cursor = signal<{ x: number; y: number }>({ x: 0, y: 0 });
   draftLineStart = signal<string | null>(null);
+  draftCircleCenter = signal<PendingPoint | null>(null);
+  draftArcCenter = signal<PendingPoint | null>(null);
+  draftArcStart = signal<PendingPoint | null>(null);
+  selected = signal<Set<string>>(new Set());
 
   state = computed<SketchState>(() => this.doc().sketches[this.sketchId()]?.state ?? emptySketchState());
 
@@ -157,23 +275,65 @@ export class CadSketchEditorComponent implements OnDestroy {
   lineCount = computed(() => this.lines().filter(l => !l.construction).length);
   dof = computed(() => Math.max(0, this.pointCount() * 2 - this.state().constraints.length));
 
+  // Selected entities resolved in click order. Constraint predicates run on this.
+  selectedEntities = computed<SketchEntity[]>(() => {
+    const ids = Array.from(this.selected());
+    const map = new Map(this.state().entities.map(e => [e.id, e]));
+    return ids.map(id => map.get(id)).filter((e): e is SketchEntity => !!e);
+  });
+
+  draftArcRadius = computed<number | null>(() => {
+    const c = this.draftArcCenter(), s = this.draftArcStart();
+    return c && s ? Math.hypot(s.x - c.x, s.y - c.y) : null;
+  });
+
   canExtrude = computed(() => {
     const { loop } = extractClosedLoop(this.state());
     return loop !== null;
   });
 
   private latestCommitId = 0;
+  // Tracks insertion order for the selection Set (Sets preserve insertion order
+  // when entries aren't deleted-and-readded, which is what `setSelection` does).
+  private readonly clearDraftsForTool = new Map<Tool, () => void>([
+    ['select', () => { this.clearAllDrafts(); }],
+    ['point', () => { this.clearAllDrafts(); }],
+    ['line', () => { this.draftCircleCenter.set(null); this.draftArcCenter.set(null); this.draftArcStart.set(null); }],
+    ['circle', () => { this.draftLineStart.set(null); this.draftArcCenter.set(null); this.draftArcStart.set(null); }],
+    ['arc', () => { this.draftLineStart.set(null); this.draftCircleCenter.set(null); }],
+  ]);
 
   constructor() {
     effect(() => {
       const tool = this.tool();
-      if (tool !== 'line') this.draftLineStart.set(null);
+      this.clearDraftsForTool.get(tool)?.();
+      // Selection only makes sense in the select tool — clear it on tool change.
+      if (tool !== 'select') this.selected.set(new Set());
     });
   }
 
-  ngOnDestroy() { this.draftLineStart.set(null); }
+  ngOnDestroy() { this.clearAllDrafts(); this.selected.set(new Set()); }
 
   setTool(t: Tool) { this.tool.set(t); }
+
+  @HostListener('document:keydown.escape')
+  onEscape() {
+    this.clearAllDrafts();
+    this.selected.set(new Set());
+  }
+
+  private clearAllDrafts() {
+    this.draftLineStart.set(null);
+    this.draftCircleCenter.set(null);
+    this.draftArcCenter.set(null);
+    this.draftArcStart.set(null);
+  }
+
+  strokeFor(e: SketchEntity): string {
+    if (this.selected().has(e.id)) return '#ffb74d';
+    if (e.construction) return '#888';
+    return '#42a5f5';
+  }
 
   ptX(id: string): number { return findPoint(this.state(), id)?.x ?? 0; }
   ptY(id: string): number { return findPoint(this.state(), id)?.y ?? 0; }
@@ -217,32 +377,109 @@ export class CadSketchEditorComponent implements OnDestroy {
     const x = Math.round(local.x);
     const y = Math.round(-local.y);
 
-    if (this.tool() === 'point') {
+    const tool = this.tool();
+    if (tool === 'select') {
+      this.handleSelectClick(x, y, ev.shiftKey);
+    } else if (tool === 'point') {
       this.commit(addPoint(this.state(), x, y).state);
-    } else if (this.tool() === 'line') {
-      const start = this.draftLineStart();
-      if (!start) {
-        const r = addPoint(this.state(), x, y);
-        this.commit(r.state);
-        this.draftLineStart.set(r.id);
-      } else {
-        const existing = this.findNearbyPoint(x, y);
-        let s = this.state();
-        let endId: string;
-        if (existing) {
-          endId = existing.id;
-        } else {
-          const r = addPoint(s, x, y);
-          s = r.state;
-          endId = r.id;
-        }
-        const ln = addLine(s, start, endId);
-        this.commit(ln.state);
-        this.draftLineStart.set(existing ? null : endId);
-        // If we closed the loop (clicked the very first point), stop the chain.
-        if (existing && existing.id === start) this.draftLineStart.set(null);
-      }
+    } else if (tool === 'line') {
+      this.handleLineClick(x, y);
+    } else if (tool === 'circle') {
+      this.handleCircleClick(x, y);
+    } else if (tool === 'arc') {
+      this.handleArcClick(x, y);
     }
+  }
+
+  private handleSelectClick(x: number, y: number, additive: boolean) {
+    const picked = pickEntity(this.state(), { x, y }, 3);
+    if (!picked) {
+      if (!additive) this.selected.set(new Set());
+      return;
+    }
+    const next = new Set(additive ? this.selected() : []);
+    if (next.has(picked.id)) next.delete(picked.id);
+    else next.add(picked.id);
+    this.selected.set(next);
+  }
+
+  private handleLineClick(x: number, y: number) {
+    const start = this.draftLineStart();
+    if (!start) {
+      const r = addPoint(this.state(), x, y);
+      this.commit(r.state);
+      this.draftLineStart.set(r.id);
+      return;
+    }
+    const existing = this.findNearbyPoint(x, y);
+    let s = this.state();
+    let endId: string;
+    if (existing) {
+      endId = existing.id;
+    } else {
+      const r = addPoint(s, x, y);
+      s = r.state;
+      endId = r.id;
+    }
+    const ln = addLine(s, start, endId);
+    this.commit(ln.state);
+    this.draftLineStart.set(existing ? null : endId);
+    // If we closed the loop (clicked the very first point), stop the chain.
+    if (existing && existing.id === start) this.draftLineStart.set(null);
+  }
+
+  private handleCircleClick(x: number, y: number) {
+    const center = this.draftCircleCenter();
+    if (!center) {
+      this.draftCircleCenter.set({ x, y });
+      return;
+    }
+    const radius = Math.hypot(x - center.x, y - center.y);
+    if (radius < 0.5) return;  // ignore second click on top of first
+    this.commit(addCircle(this.state(), center.x, center.y, radius).state);
+    this.draftCircleCenter.set(null);
+  }
+
+  private handleArcClick(x: number, y: number) {
+    const center = this.draftArcCenter();
+    if (!center) {
+      this.draftArcCenter.set({ x, y });
+      return;
+    }
+    const start = this.draftArcStart();
+    if (!start) {
+      if (Math.hypot(x - center.x, y - center.y) < 0.5) return;
+      this.draftArcStart.set({ x, y });
+      return;
+    }
+    // Choose ccw=true when the (start → end) sweep around the center is positive.
+    const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
+    const endAngle = Math.atan2(y - center.y, x - center.x);
+    let delta = endAngle - startAngle;
+    while (delta <= -Math.PI) delta += 2 * Math.PI;
+    while (delta > Math.PI) delta -= 2 * Math.PI;
+    const ccw = delta >= 0;
+    this.commit(addArc(this.state(), center.x, center.y, start.x, start.y, x, y, ccw).state);
+    this.draftArcCenter.set(null);
+    this.draftArcStart.set(null);
+  }
+
+  applyConstraint(spec: ConstraintSpec) {
+    if (this.readonly()) return;
+    const entities = this.selectedEntities();
+    if (!spec.predicate(entities)) return;
+    let value: number | undefined;
+    if (spec.requiresValue) {
+      const raw = window.prompt(`Enter value for ${spec.label}:`, '10');
+      if (raw === null) return;
+      const parsed = parseFloat(raw);
+      if (!isFinite(parsed)) return;
+      value = parsed;
+    }
+    const ordered = orderTargetsForConstraint(spec.type, entities);
+    const { state: next } = addConstraint(this.state(), spec.type, ordered, value);
+    this.commit(next);
+    this.selected.set(new Set());
   }
 
   private findNearbyPoint(x: number, y: number): PointEntity | undefined {
