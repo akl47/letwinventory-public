@@ -1,80 +1,103 @@
-import type { SketchState, SketchConstraint, ConstraintType, SketchPoint, SketchLine } from './types';
+import type {
+  SketchState, SketchEntity, SketchConstraint, ConstraintType,
+  ConstraintTarget, PointEntity, LineEntity,
+} from './types';
+import { findEntity } from './types';
 
 let _seq = 0;
 function nextId(prefix: string): string {
   return `${prefix}${++_seq}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
 }
 
-function findPoint(state: SketchState, id: string): SketchPoint | undefined {
-  return state.points.find(p => p.id === id);
+function isConstructionEntity(state: SketchState, id: string): boolean {
+  return !!findEntity(state, id)?.construction;
 }
-function findLine(state: SketchState, id: string): SketchLine | undefined {
-  return state.lines.find(l => l.id === id);
-}
-function isReference(state: SketchState, id: string): boolean {
-  const p = findPoint(state, id); if (p?.reference) return true;
-  const l = findLine(state, id); if (l?.reference) return true;
-  return false;
+
+function toTargets(input: Array<string | ConstraintTarget>): ConstraintTarget[] {
+  return input.map(t => typeof t === 'string' ? { entityId: t } : t);
 }
 
 export function emptySketchState(): SketchState {
-  return { points: [], lines: [], constraints: [] };
+  return { entities: [], constraints: [] };
 }
 
 export function addPoint(state: SketchState, x: number, y: number): { state: SketchState; id: string } {
   const id = nextId('p');
-  return {
-    state: { ...state, points: [...state.points, { id, x, y }] },
-    id,
-  };
+  const e: PointEntity = { kind: 'point', id, x, y };
+  return { state: { ...state, entities: [...state.entities, e] }, id };
 }
 
 export function addLine(state: SketchState, startId: string, endId: string): { state: SketchState; id: string } {
   const id = nextId('l');
-  return {
-    state: { ...state, lines: [...state.lines, { id, startId, endId }] },
-    id,
-  };
+  const e: LineEntity = { kind: 'line', id, startId, endId };
+  return { state: { ...state, entities: [...state.entities, e] }, id };
 }
 
 export function movePoint(state: SketchState, id: string, x: number, y: number): SketchState {
-  const p = findPoint(state, id);
-  if (!p || p.reference) return state;
+  const e = findEntity(state, id);
+  if (!e || e.kind !== 'point' || e.construction) return state;
   return {
     ...state,
-    points: state.points.map(pt => pt.id === id ? { ...pt, x, y } : pt),
+    entities: state.entities.map(ent =>
+      ent.id === id && ent.kind === 'point' ? { ...ent, x, y } : ent,
+    ),
   };
 }
 
 export function deletePrimitive(state: SketchState, id: string): SketchState {
-  if (isReference(state, id)) return state;
-  // Iteratively cascade. A line depends on its endpoints; a constraint depends on any target.
+  if (isConstructionEntity(state, id)) return state;
   const toDelete = new Set<string>([id]);
+  // Iteratively cascade: any entity referencing a deleted id by structural field
+  // (line endpoints, circle/arc center, spline control points, etc.) is also deleted.
   let changed = true;
   while (changed) {
     changed = false;
-    for (const l of state.lines) {
-      if (toDelete.has(l.id)) continue;
-      if (toDelete.has(l.startId) || toDelete.has(l.endId)) {
-        toDelete.add(l.id);
+    for (const e of state.entities) {
+      if (toDelete.has(e.id)) continue;
+      let depends = false;
+      switch (e.kind) {
+        case 'line':
+          depends = toDelete.has(e.startId) || toDelete.has(e.endId);
+          break;
+        case 'circle':
+          depends = toDelete.has(e.centerId);
+          break;
+        case 'arc':
+          depends = toDelete.has(e.centerId) || toDelete.has(e.startId) || toDelete.has(e.endId);
+          break;
+        case 'ellipse':
+          depends = toDelete.has(e.centerId) || toDelete.has(e.majorAxisEndId);
+          break;
+        case 'ellipticalArc':
+          depends = toDelete.has(e.centerId) || toDelete.has(e.majorAxisEndId);
+          break;
+        case 'spline':
+          depends = e.controlPointIds.some(cp => toDelete.has(cp));
+          break;
+      }
+      if (depends) {
+        toDelete.add(e.id);
         changed = true;
       }
     }
   }
   return {
-    points: state.points.filter(p => !toDelete.has(p.id)),
-    lines: state.lines.filter(l => !toDelete.has(l.id)),
-    constraints: state.constraints.filter(c => !c.targets.some(t => toDelete.has(t))),
+    entities: state.entities.filter(e => !toDelete.has(e.id)),
+    constraints: state.constraints.filter(c => !c.targets.some(t => toDelete.has(t.entityId))),
   };
 }
 
 export function addConstraint(
   state: SketchState,
   type: ConstraintType,
-  targets: string[],
+  targets: Array<string | ConstraintTarget>,
   value?: number,
 ): { state: SketchState; constraint: SketchConstraint } {
-  const constraint: SketchConstraint = { id: nextId('c'), type, targets };
+  const constraint: SketchConstraint = {
+    id: nextId('c'),
+    type,
+    targets: toTargets(targets),
+  };
   if (value !== undefined) constraint.value = value;
   return {
     state: { ...state, constraints: [...state.constraints, constraint] },
@@ -92,3 +115,4 @@ export function setDistanceValue(state: SketchState, constraintId: string, value
     }),
   };
 }
+

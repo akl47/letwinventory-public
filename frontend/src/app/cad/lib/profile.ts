@@ -1,4 +1,5 @@
-import type { SketchState, SketchLine } from './types';
+import type { SketchState, LineEntity } from './types';
+import { findPoint, linesOf } from './types';
 
 export type ProfileLoop = Array<{ x: number; y: number }>;
 
@@ -7,8 +8,7 @@ export interface ProfileResult {
   error?: string;
 }
 
-// Build adjacency map: point id → list of line ids touching it.
-function buildAdjacency(lines: SketchLine[]): Map<string, string[]> {
+function buildAdjacency(lines: LineEntity[]): Map<string, string[]> {
   const adj = new Map<string, string[]>();
   for (const l of lines) {
     if (!adj.has(l.startId)) adj.set(l.startId, []);
@@ -20,7 +20,9 @@ function buildAdjacency(lines: SketchLine[]): Map<string, string[]> {
 }
 
 export function extractClosedLoop(state: SketchState): ProfileResult {
-  const lines = state.lines.filter(l => !l.reference);
+  // REQ 560: construction entities are excluded from profile extraction.
+  // For Phase A we still only consume Line entities; curve tessellation lands in A.2.
+  const lines = linesOf(state).filter(l => !l.construction);
   if (lines.length === 0) {
     return { loop: null, error: 'sketch has no lines (empty profile)' };
   }
@@ -29,7 +31,6 @@ export function extractClosedLoop(state: SketchState): ProfileResult {
   }
 
   const adj = buildAdjacency(lines);
-  // Each vertex in a closed loop has exactly 2 incident edges.
   for (const [pointId, incident] of adj) {
     if (incident.length === 1) {
       return { loop: null, error: `open chain detected at point ${pointId}` };
@@ -39,11 +40,9 @@ export function extractClosedLoop(state: SketchState): ProfileResult {
     }
   }
 
-  // Walk one loop starting from any line; if we don't traverse all lines, there
-  // are multiple disjoint loops.
   const startLine = lines[0];
   const visitedLines = new Set<string>();
-  const walk: string[] = []; // ordered list of point ids forming the loop
+  const walk: string[] = [];
   let prevPoint = startLine.startId;
   walk.push(prevPoint);
   let currentLine: string | undefined = startLine.id;
@@ -53,11 +52,9 @@ export function extractClosedLoop(state: SketchState): ProfileResult {
     const nextPoint = line.startId === prevPoint ? line.endId : line.startId;
     walk.push(nextPoint);
     prevPoint = nextPoint;
-    // Find next line at this point (the other one not equal to currentLine).
     const incident = adj.get(prevPoint) || [];
     currentLine = incident.find(id => id !== currentLine);
   }
-  // Loop closed if walk returns to start.
   if (walk[0] !== walk[walk.length - 1]) {
     return { loop: null, error: 'profile is not a closed loop' };
   }
@@ -65,9 +62,8 @@ export function extractClosedLoop(state: SketchState): ProfileResult {
     return { loop: null, error: 'sketch contains multiple disjoint loops' };
   }
 
-  // Materialize 2D coords (drop the trailing duplicate point that closes the loop).
   const points = walk.slice(0, -1).map(pid => {
-    const p = state.points.find(pt => pt.id === pid);
+    const p = findPoint(state, pid);
     return { x: p?.x ?? 0, y: p?.y ?? 0 };
   });
   return { loop: points };

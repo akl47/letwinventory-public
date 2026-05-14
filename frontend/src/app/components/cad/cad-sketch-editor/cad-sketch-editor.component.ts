@@ -3,8 +3,11 @@ import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import type { SketchDocument, SketchState, SketchPoint } from '../../../cad/lib/types';
-import { addPoint, addLine, deletePrimitive, movePoint, emptySketchState } from '../../../cad/lib/store';
+import type {
+  SketchDocument, SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity, SketchEntity,
+} from '../../../cad/lib/types';
+import { pointsOf, linesOf, findPoint } from '../../../cad/lib/types';
+import { addPoint, addLine, emptySketchState } from '../../../cad/lib/store';
 import { solveSketch } from '../../../cad/lib/solver';
 import { extractClosedLoop } from '../../../cad/lib/profile';
 
@@ -60,26 +63,50 @@ type Tool = 'select' | 'point' | 'line';
         <line x1="0" y1="-100" x2="0" y2="100" stroke="#666" stroke-width="0.5" stroke-dasharray="2 2"/>
 
         <!-- lines -->
-        <g *ngFor="let l of state().lines">
+        <g *ngFor="let l of lines()">
           <line
             [attr.x1]="ptX(l.startId)"
             [attr.y1]="-ptY(l.startId)"
             [attr.x2]="ptX(l.endId)"
             [attr.y2]="-ptY(l.endId)"
-            [attr.stroke]="l.reference ? '#888' : '#42a5f5'"
+            [attr.stroke]="l.construction ? '#888' : '#42a5f5'"
             stroke-width="1.2"
-            [attr.stroke-dasharray]="l.reference ? '3 2' : null"
+            [attr.stroke-dasharray]="l.construction ? '3 2' : null"
+          />
+        </g>
+
+        <!-- circles (REQ 563) — native SVG primitive for analytic fidelity -->
+        <g *ngFor="let c of circles()">
+          <circle
+            [attr.cx]="ptX(c.centerId)"
+            [attr.cy]="-ptY(c.centerId)"
+            [attr.r]="c.radius"
+            fill="none"
+            [attr.stroke]="c.construction ? '#888' : '#42a5f5'"
+            stroke-width="1.2"
+            [attr.stroke-dasharray]="c.construction ? '3 2' : null"
+          />
+        </g>
+
+        <!-- arcs (REQ 563) — SVG path with arc command, sweep mirrored for inverted Y -->
+        <g *ngFor="let a of arcs()">
+          <path
+            [attr.d]="arcPath(a)"
+            fill="none"
+            [attr.stroke]="a.construction ? '#888' : '#42a5f5'"
+            stroke-width="1.2"
+            [attr.stroke-dasharray]="a.construction ? '3 2' : null"
           />
         </g>
 
         <!-- points -->
-        <g *ngFor="let p of state().points">
+        <g *ngFor="let p of points()">
           <circle
             [attr.cx]="p.x"
             [attr.cy]="-p.y"
             r="1.5"
-            [attr.fill]="p.reference ? '#888' : '#fff'"
-            [attr.stroke]="p.reference ? '#888' : '#42a5f5'"
+            [attr.fill]="p.construction ? '#888' : '#fff'"
+            [attr.stroke]="p.construction ? '#888' : '#42a5f5'"
             stroke-width="0.5"
           />
         </g>
@@ -118,8 +145,16 @@ export class CadSketchEditorComponent implements OnDestroy {
 
   state = computed<SketchState>(() => this.doc().sketches[this.sketchId()]?.state ?? emptySketchState());
 
-  pointCount = computed(() => this.state().points.filter(p => !p.reference).length);
-  lineCount = computed(() => this.state().lines.filter(l => !l.reference).length);
+  points = computed<PointEntity[]>(() => pointsOf(this.state()));
+  lines = computed<LineEntity[]>(() => linesOf(this.state()));
+  circles = computed<CircleEntity[]>(() =>
+    this.state().entities.filter((e): e is CircleEntity => e.kind === 'circle'),
+  );
+  arcs = computed<ArcEntity[]>(() =>
+    this.state().entities.filter((e): e is ArcEntity => e.kind === 'arc'),
+  );
+  pointCount = computed(() => this.points().filter(p => !p.construction).length);
+  lineCount = computed(() => this.lines().filter(l => !l.construction).length);
   dof = computed(() => Math.max(0, this.pointCount() * 2 - this.state().constraints.length));
 
   canExtrude = computed(() => {
@@ -140,8 +175,35 @@ export class CadSketchEditorComponent implements OnDestroy {
 
   setTool(t: Tool) { this.tool.set(t); }
 
-  ptX(id: string): number { return this.state().points.find(p => p.id === id)?.x ?? 0; }
-  ptY(id: string): number { return this.state().points.find(p => p.id === id)?.y ?? 0; }
+  ptX(id: string): number { return findPoint(this.state(), id)?.x ?? 0; }
+  ptY(id: string): number { return findPoint(this.state(), id)?.y ?? 0; }
+
+  arcPath(a: ArcEntity): string {
+    const s = findPoint(this.state(), a.startId);
+    const e = findPoint(this.state(), a.endId);
+    if (!s || !e) return '';
+    // SVG sweep flag is in *screen* coords. Our display flips Y, so a CCW arc in
+    // sketch space (ccw=true) draws with sweep-flag=0 in screen space.
+    const sweepFlag = a.ccw ? 0 : 1;
+    const largeArc = this.isLargeArc(a) ? 1 : 0;
+    return `M ${s.x} ${-s.y} A ${a.radius} ${a.radius} 0 ${largeArc} ${sweepFlag} ${e.x} ${-e.y}`;
+  }
+
+  private isLargeArc(a: ArcEntity): boolean {
+    const c = findPoint(this.state(), a.centerId);
+    const s = findPoint(this.state(), a.startId);
+    const e = findPoint(this.state(), a.endId);
+    if (!c || !s || !e) return false;
+    const startAngle = Math.atan2(s.y - c.y, s.x - c.x);
+    const endAngle = Math.atan2(e.y - c.y, e.x - c.x);
+    let sweep = endAngle - startAngle;
+    if (a.ccw) {
+      while (sweep <= 0) sweep += Math.PI * 2;
+    } else {
+      while (sweep >= 0) sweep -= Math.PI * 2;
+    }
+    return Math.abs(sweep) > Math.PI;
+  }
 
   onCanvasClick(ev: MouseEvent) {
     if (this.readonly()) return;
@@ -183,8 +245,8 @@ export class CadSketchEditorComponent implements OnDestroy {
     }
   }
 
-  private findNearbyPoint(x: number, y: number): SketchPoint | undefined {
-    return this.state().points.find(p => Math.hypot(p.x - x, p.y - y) < 4);
+  private findNearbyPoint(x: number, y: number): PointEntity | undefined {
+    return this.points().find(p => Math.hypot(p.x - x, p.y - y) < 4);
   }
 
   private async commit(next: SketchState) {

@@ -1,222 +1,148 @@
-import type { SketchState, SketchPoint, SketchLine } from './types';
+import { make_gcs_wrapper, SolveStatus, Algorithm, type GcsWrapper } from '../vendor/planegcs';
+import type { SketchPrimitive, SketchParam } from '../vendor/planegcs';
+import type { SketchState, SketchConstraint } from './types';
+import { pointsOf, linesOf } from './types';
 
-export type SolveStatus = 'ok' | 'inconsistent';
+export type SolveStatus_ = 'ok' | 'inconsistent';
 
 export interface SolveResult {
-  status: SolveStatus;
+  status: SolveStatus_;
   state: SketchState;
   dof: number;
 }
 
-export type GcsModule = unknown;
+export type GcsModule = unknown; // retained for backward-compat call sites
 
 // ────────────────────────────────────────────────────────────────────────────
-// Numerical sketch solver.
-// ────────────────────────────────────────────────────────────────────────────
-// This is a pure-TypeScript replacement for PlaneGCS. It uses iterative
-// projection: for each constraint, compute the residual and apply small
-// corrections to the points it touches. Reference points and fixed points are
-// pinned and never updated.
+// PlaneGCS-backed sketch solver (REQ 558).
 //
-// Trade-offs: not as fast or robust as PlaneGCS for arbitrarily large/coupled
-// systems, but sufficient for the sketches our test suite exercises (up to ~10
-// primitives, 6 constraint types). The interactive performance requirement
-// (REQ CAD-013, 50 ms / 100 primitives) is met for sketches in this range.
+// PlaneGCS is a Newton-Raphson 2D geometric constraint solver with analytical
+// Jacobians — the same solver shipped by FreeCAD. We feed it a translation of
+// our SketchState (entities → SketchPoint/SketchLine/SketchCircle/…; constraints
+// → matching PlaneGCS constraint types) and read solved coordinates back.
+//
+// The wrapper is cached for the module lifetime: WASM init is ~50 ms and the
+// wrapper exposes `clear_data()` to reset state between solves.
 // ────────────────────────────────────────────────────────────────────────────
 
-const MAX_ITERATIONS = 200;
-const CONVERGENCE_THRESHOLD = 1e-7;
-const STEP_SIZE = 0.5;
+let wrapperPromise: Promise<GcsWrapper> | null = null;
 
-interface Working {
-  points: Map<string, { x: number; y: number; pinned: boolean }>;
-  lines: Map<string, SketchLine>;
+// In Node (vitest, SSR), Emscripten resolves the WASM file alongside the JS
+// module — leave wasm_path undefined so the default locator runs. In a real
+// browser the JS lives in a bundled chunk and the WASM is asset-mapped to
+// /assets/planegcs/planegcs.wasm in angular.json.
+function wasmPathForRuntime(): string | undefined {
+  const proc = (globalThis as { process?: { versions?: { node?: string } } }).process;
+  if (proc?.versions?.node) return undefined;
+  return '/assets/planegcs/planegcs.wasm';
 }
 
-function clone(state: SketchState): Working {
-  const points = new Map<string, { x: number; y: number; pinned: boolean }>();
-  for (const p of state.points) {
-    points.set(p.id, { x: p.x, y: p.y, pinned: !!p.reference });
+function getWrapper(): Promise<GcsWrapper> {
+  if (!wrapperPromise) wrapperPromise = make_gcs_wrapper(wasmPathForRuntime());
+  return wrapperPromise;
+}
+
+// Test-only hook: drop the cached wrapper so a fresh one is initialized.
+// Useful when WASM-side state needs to be reset between unrelated test suites.
+export function _resetSolverForTests(): void {
+  wrapperPromise = null;
+}
+
+function translateConstraint(c: SketchConstraint): SketchPrimitive | null {
+  const tid = (i: number) => c.targets[i].entityId;
+  switch (c.type) {
+    case 'fixed':
+      // Handled at the point level (push as { fixed: true }). No PlaneGCS constraint.
+      return null;
+    case 'coincident':
+      return { id: c.id, type: 'p2p_coincident', p1_id: tid(0), p2_id: tid(1) };
+    case 'horizontal':
+      return { id: c.id, type: 'horizontal_l', l_id: tid(0) };
+    case 'vertical':
+      return { id: c.id, type: 'vertical_l', l_id: tid(0) };
+    case 'distance':
+      return { id: c.id, type: 'p2p_distance', p1_id: tid(0), p2_id: tid(1), distance: c.value ?? 0 };
+    case 'point-on-line':
+      return { id: c.id, type: 'point_on_line_pl', p_id: tid(0), l_id: tid(1) };
   }
-  const lines = new Map<string, SketchLine>();
-  for (const l of state.lines) lines.set(l.id, l);
-  return { points, lines };
 }
 
-function emit(state: SketchState, w: Working): SketchState {
+function buildPrimitives(state: SketchState): { primitives: (SketchPrimitive | SketchParam)[]; fixedIds: Set<string> } {
+  const primitives: (SketchPrimitive | SketchParam)[] = [];
+  const fixedIds = new Set<string>();
+
+  // Construction entities are pinned (REQ 560) — same semantics as PlaneGCS `fixed`.
+  // Also collect any point referenced by a `fixed` constraint.
+  for (const c of state.constraints) {
+    if (c.type === 'fixed') fixedIds.add(c.targets[0].entityId);
+  }
+  for (const p of pointsOf(state)) {
+    if (p.construction) fixedIds.add(p.id);
+  }
+
+  for (const p of pointsOf(state)) {
+    primitives.push({
+      id: p.id,
+      type: 'point',
+      x: p.x,
+      y: p.y,
+      fixed: fixedIds.has(p.id),
+    });
+  }
+  for (const l of linesOf(state)) {
+    primitives.push({
+      id: l.id,
+      type: 'line',
+      p1_id: l.startId,
+      p2_id: l.endId,
+    });
+  }
+  for (const c of state.constraints) {
+    const t = translateConstraint(c);
+    if (t) primitives.push(t);
+  }
+  return { primitives, fixedIds };
+}
+
+function readBack(state: SketchState, wrapper: GcsWrapper): SketchState {
   return {
     ...state,
-    points: state.points.map(p => {
-      const updated = w.points.get(p.id)!;
-      return { ...p, x: updated.x, y: updated.y };
+    entities: state.entities.map(e => {
+      if (e.kind !== 'point') return e;
+      const solved = wrapper.sketch_index.get_primitive(e.id);
+      if (!solved || solved.type !== 'point') return e;
+      return { ...e, x: solved.x, y: solved.y };
     }),
   };
 }
 
-function applyDelta(w: Working, id: string, dx: number, dy: number) {
-  const pt = w.points.get(id);
-  if (!pt || pt.pinned) return;
-  pt.x += dx;
-  pt.y += dy;
-}
-
-// Returns a single residual scalar (≈ 0 when satisfied).
-function constraintResidual(w: Working, c: { type: string; targets: string[]; value?: number }): number {
-  const P = (id: string) => w.points.get(id)!;
-  switch (c.type) {
-    case 'fixed': return 0; // residual is zero by construction (we pin instead)
-    case 'coincident': {
-      const a = P(c.targets[0]), b = P(c.targets[1]);
-      return Math.hypot(a.x - b.x, a.y - b.y);
-    }
-    case 'horizontal': {
-      const l = w.lines.get(c.targets[0])!;
-      const a = P(l.startId), b = P(l.endId);
-      return Math.abs(a.y - b.y);
-    }
-    case 'vertical': {
-      const l = w.lines.get(c.targets[0])!;
-      const a = P(l.startId), b = P(l.endId);
-      return Math.abs(a.x - b.x);
-    }
-    case 'distance': {
-      const a = P(c.targets[0]), b = P(c.targets[1]);
-      const target = c.value ?? 0;
-      return Math.abs(Math.hypot(a.x - b.x, a.y - b.y) - target);
-    }
-    case 'point-on-line': {
-      const a = P(c.targets[0]);
-      const l = w.lines.get(c.targets[1])!;
-      const p1 = P(l.startId), p2 = P(l.endId);
-      // Distance from point a to the line through p1-p2.
-      const dx = p2.x - p1.x, dy = p2.y - p1.y;
-      const len = Math.hypot(dx, dy);
-      if (len < 1e-12) return 0;
-      // |cross product| / len
-      const cross = (a.x - p1.x) * dy - (a.y - p1.y) * dx;
-      return Math.abs(cross) / len;
-    }
-    default: return 0;
-  }
-}
-
-function totalResidual(w: Working, constraints: { type: string; targets: string[]; value?: number }[]): number {
-  let sum = 0;
-  for (const c of constraints) sum += constraintResidual(w, c);
-  return sum;
-}
-
-// Apply a corrective step for a single constraint.
-function applyCorrection(w: Working, c: { type: string; targets: string[]; value?: number }) {
-  const P = (id: string) => w.points.get(id)!;
-  switch (c.type) {
-    case 'fixed': {
-      const id = c.targets[0];
-      // Pin only the first time we see this constraint. The pinning is set up
-      // in solveSketch before iterations begin.
-      void id;
-      return;
-    }
-    case 'coincident': {
-      const a = P(c.targets[0]), b = P(c.targets[1]);
-      const dx = (b.x - a.x) * STEP_SIZE;
-      const dy = (b.y - a.y) * STEP_SIZE;
-      applyDelta(w, c.targets[0], dx, dy);
-      applyDelta(w, c.targets[1], -dx, -dy);
-      return;
-    }
-    case 'horizontal': {
-      const l = w.lines.get(c.targets[0])!;
-      const a = P(l.startId), b = P(l.endId);
-      const dy = (b.y - a.y) * 0.5 * STEP_SIZE;
-      applyDelta(w, l.startId, 0, dy);
-      applyDelta(w, l.endId, 0, -dy);
-      return;
-    }
-    case 'vertical': {
-      const l = w.lines.get(c.targets[0])!;
-      const a = P(l.startId), b = P(l.endId);
-      const dx = (b.x - a.x) * 0.5 * STEP_SIZE;
-      applyDelta(w, l.startId, dx, 0);
-      applyDelta(w, l.endId, -dx, 0);
-      return;
-    }
-    case 'distance': {
-      const a = P(c.targets[0]), b = P(c.targets[1]);
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const len = Math.hypot(dx, dy);
-      const target = c.value ?? 0;
-      if (len < 1e-12) return;
-      const err = (target - len) / len * 0.5 * STEP_SIZE;
-      applyDelta(w, c.targets[0], -dx * err, -dy * err);
-      applyDelta(w, c.targets[1], dx * err, dy * err);
-      return;
-    }
-    case 'point-on-line': {
-      const a = P(c.targets[0]);
-      const l = w.lines.get(c.targets[1])!;
-      const p1 = P(l.startId), p2 = P(l.endId);
-      const dx = p2.x - p1.x, dy = p2.y - p1.y;
-      const len2 = dx * dx + dy * dy;
-      if (len2 < 1e-12) return;
-      // Project a onto the line; the correction nudges a toward the projection.
-      const t = ((a.x - p1.x) * dx + (a.y - p1.y) * dy) / len2;
-      const projX = p1.x + dx * t;
-      const projY = p1.y + dy * t;
-      applyDelta(w, c.targets[0], (projX - a.x) * STEP_SIZE, (projY - a.y) * STEP_SIZE);
-      return;
-    }
-  }
-}
-
-// Approximate remaining degrees of freedom: 2 per non-pinned point minus
-// effective constraint count (saturated to non-negative).
-function approximateDof(w: Working, constraints: { type: string }[]): number {
-  let free = 0;
-  for (const p of w.points.values()) if (!p.pinned) free += 2;
-  let consumed = 0;
-  for (const c of constraints) {
-    switch (c.type) {
-      case 'coincident': consumed += 2; break;
-      case 'horizontal':
-      case 'vertical':
-      case 'distance':
-      case 'point-on-line': consumed += 1; break;
-    }
-  }
-  return Math.max(0, free - consumed);
-}
-
 export async function solveSketch(state: SketchState, _gcs?: GcsModule): Promise<SolveResult> {
   void _gcs;
-  const w = clone(state);
-
-  // Pin all fixed-constraint targets up front.
-  for (const c of state.constraints) {
-    if (c.type === 'fixed') {
-      const pt = w.points.get(c.targets[0]);
-      if (pt) pt.pinned = true;
-    }
+  if (state.entities.length === 0) {
+    return { status: 'ok', state, dof: 0 };
   }
 
-  let prev = totalResidual(w, state.constraints);
-  for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-    for (const c of state.constraints) applyCorrection(w, c);
-    const curr = totalResidual(w, state.constraints);
-    if (curr < CONVERGENCE_THRESHOLD) {
-      return { status: 'ok', state: emit(state, w), dof: approximateDof(w, state.constraints) };
-    }
-    // Inconsistency detector: residual stops decreasing.
-    if (iter > 20 && Math.abs(prev - curr) < 1e-12 && curr > 1e-3) {
-      return { status: 'inconsistent', state, dof: approximateDof(w, state.constraints) };
-    }
-    prev = curr;
+  const wrapper = await getWrapper();
+  wrapper.clear_data();
+
+  const { primitives } = buildPrimitives(state);
+  try {
+    wrapper.push_primitives_and_params(primitives);
+  } catch (e) {
+    wrapper.clear_data();
+    throw e;
   }
 
-  // Hit iteration limit. If residual is still large, mark inconsistent.
-  const finalResidual = totalResidual(w, state.constraints);
-  if (finalResidual > 1e-3) {
-    return { status: 'inconsistent', state, dof: approximateDof(w, state.constraints) };
+  const status = wrapper.solve(Algorithm.DogLeg);
+  const dof = wrapper.gcs.dof();
+
+  if (status === SolveStatus.Success || status === SolveStatus.Converged) {
+    wrapper.apply_solution();
+    const newState = readBack(state, wrapper);
+    wrapper.clear_data();
+    return { status: 'ok', state: newState, dof };
   }
-  return { status: 'ok', state: emit(state, w), dof: approximateDof(w, state.constraints) };
+
+  wrapper.clear_data();
+  return { status: 'inconsistent', state, dof };
 }

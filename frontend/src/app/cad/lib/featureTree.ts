@@ -1,5 +1,6 @@
 import type { Feature, FeatureTree, OriginFeature, ExtrudeFeature, RegenerateResult, SketchDocument, Plane3, FaceMesh, ModelTopology } from './types';
 import { buildOriginDatums } from './datum';
+import { extractClosedLoop } from './profile';
 
 // Distributive Omit so each branch of the Feature union retains its own
 // discriminator: { type: 'origin' } | { type: 'extrude'; sketchId; distance }.
@@ -72,17 +73,12 @@ export async function regenerateModel(
         continue;
       }
       try {
-        // Profile extraction is the caller's responsibility (regenerator focuses on building).
-        // For now: derive a profile from the sketch's line endpoints in their stored order.
-        const profile2D = sketch.state.lines.map(l => {
-          const p = sketch.state.points.find(pt => pt.id === l.startId);
-          return p ? { x: p.x, y: p.y } : { x: 0, y: 0 };
-        });
-        if (profile2D.length < 3) {
-          acc.errors.push(`Extrude feature ${feature.id}: profile has fewer than 3 segments`);
+        const profileResult = extractClosedLoop(sketch.state);
+        if (!profileResult.loop) {
+          acc.errors.push(`Extrude feature ${feature.id}: ${profileResult.error ?? 'no profile'}`);
           continue;
         }
-        const out = kernel.buildExtrude(profile2D, sketch.plane, feature.distance);
+        const out = kernel.buildExtrude(profileResult.loop, sketch.plane, feature.distance);
         acc.geometry.faces.push(...out.faces);
         acc.geometry.topology.vertices.push(...out.topology.vertices);
         acc.geometry.topology.edges.push(...out.topology.edges);

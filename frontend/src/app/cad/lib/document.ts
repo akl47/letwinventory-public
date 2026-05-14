@@ -1,4 +1,7 @@
-import type { SketchDocument, Sketch, SketchState, ModelTopology, Plane3, HostId, ReferenceCandidate } from './types';
+import type {
+  SketchDocument, Sketch, SketchState, ModelTopology, Plane3, HostId, ReferenceCandidate,
+  PointEntity, LineEntity,
+} from './types';
 import { emptySketchState } from './store';
 import { projectFrom3D } from './plane';
 
@@ -73,10 +76,8 @@ export function findSketchByHost(doc: SketchDocument, hostId: HostId): Sketch | 
 export function promoteVertex(state: SketchState, candidateId: string, x: number, y: number)
   : { state: SketchState; id: string } {
   const id = `ref-${candidateId}`;
-  return {
-    state: { ...state, points: [...state.points, { id, x, y, reference: true }] },
-    id,
-  };
+  const e: PointEntity = { kind: 'point', id, x, y, construction: true };
+  return { state: { ...state, entities: [...state.entities, e] }, id };
 }
 
 export function promoteEdge(
@@ -86,14 +87,12 @@ export function promoteEdge(
   const startId = `ref-${candidateId}-s`;
   const endId = `ref-${candidateId}-e`;
   const id = `ref-${candidateId}`;
+  const sp: PointEntity = { kind: 'point', id: startId, x: start.x, y: start.y, construction: true };
+  const ep: PointEntity = { kind: 'point', id: endId, x: end.x, y: end.y, construction: true };
+  const ln: LineEntity = { kind: 'line', id, startId, endId, construction: true };
   return {
     state: {
-      points: [
-        ...state.points,
-        { id: startId, x: start.x, y: start.y, reference: true },
-        { id: endId, x: end.x, y: end.y, reference: true },
-      ],
-      lines: [...state.lines, { id, startId, endId, reference: true }],
+      entities: [...state.entities, sp, ep, ln],
       constraints: state.constraints,
     },
     id,

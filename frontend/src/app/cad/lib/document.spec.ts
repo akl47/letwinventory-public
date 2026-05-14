@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { emptyDocument, createSketch, updateSketchState, findSketchByHost, promoteVertex, promoteEdge } from './document';
 import { emptySketchState } from './store';
-import type { ModelTopology, Plane3 } from './types';
+import type { ModelTopology, Plane3, SketchState } from './types';
+import { pointsOf, findPoint, findLine } from './types';
 
 const XY_PLANE: Plane3 = {
   origin: [0, 0, 0],
@@ -96,7 +97,10 @@ describe('Sketch document (CAD-022, CAD-023, CAD-026, CAD-028, CAD-030)', () => 
   describe('updateSketchState (CAD-026)', () => {
     it('replaces the state of the named sketch', () => {
       const { doc, sketchId } = createSketch(emptyDocument(), 'datum:xy_plane', XY_PLANE, null);
-      const newState = { points: [{ id: 'p1', x: 1, y: 2 }], lines: [], constraints: [] };
+      const newState: SketchState = {
+        entities: [{ kind: 'point', id: 'p1', x: 1, y: 2 }],
+        constraints: [],
+      };
       const doc2 = updateSketchState(doc, sketchId, newState);
       expect(doc2.sketches[sketchId].state).toEqual(newState);
     });
@@ -104,24 +108,27 @@ describe('Sketch document (CAD-022, CAD-023, CAD-026, CAD-028, CAD-030)', () => 
     it('does not mutate the original document', () => {
       const { doc, sketchId } = createSketch(emptyDocument(), 'datum:xy_plane', XY_PLANE, null);
       const original = doc.sketches[sketchId].state;
-      updateSketchState(doc, sketchId, { points: [{ id: 'p1', x: 1, y: 2 }], lines: [], constraints: [] });
+      updateSketchState(doc, sketchId, {
+        entities: [{ kind: 'point', id: 'p1', x: 1, y: 2 }],
+        constraints: [],
+      });
       expect(doc.sketches[sketchId].state).toBe(original);
     });
   });
 
   describe('promoteVertex / promoteEdge', () => {
-    it('promoteVertex returns a reference point with reference=true', () => {
+    it('promoteVertex returns a construction point (REQ 560)', () => {
       const { state, id } = promoteVertex(emptySketchState(), 'v1', 3, 4);
-      const pt = state.points.find(p => p.id === id);
-      expect(pt?.reference).toBe(true);
+      const pt = findPoint(state, id);
+      expect(pt?.construction).toBe(true);
       expect(pt?.x).toBe(3);
       expect(pt?.y).toBe(4);
     });
 
-    it('promoteEdge returns a reference line with two reference endpoints', () => {
+    it('promoteEdge returns a construction line with two construction endpoints (REQ 560)', () => {
       const { state, id } = promoteEdge(emptySketchState(), 'e1', { x: 0, y: 0 }, { x: 10, y: 0 });
-      expect(state.lines.find(l => l.id === id)?.reference).toBe(true);
-      expect(state.points.filter(p => p.reference === true).length).toBe(2);
+      expect(findLine(state, id)?.construction).toBe(true);
+      expect(pointsOf(state).filter(p => p.construction === true).length).toBe(2);
     });
   });
 });

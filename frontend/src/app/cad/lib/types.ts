@@ -1,21 +1,101 @@
 // Pure-data types for the CAD module. No framework dependencies.
 
 // ──────────────────────────────────────────────────────────────────────────
-// Sketch types
+// Sketch entities — tagged union
 // ──────────────────────────────────────────────────────────────────────────
+// Every primitive carries a `kind` discriminator and an optional `construction`
+// flag. Construction entities participate in constraint solving but are excluded
+// from profile extraction (REQ 560).
 
-export interface SketchPoint {
+export interface SketchEntityBase {
   id: string;
-  x: number;
-  y: number;
-  reference?: boolean;
+  construction?: boolean;
 }
 
-export interface SketchLine {
-  id: string;
+export interface PointEntity extends SketchEntityBase {
+  kind: 'point';
+  x: number;
+  y: number;
+}
+
+export interface LineEntity extends SketchEntityBase {
+  kind: 'line';
   startId: string;
   endId: string;
-  reference?: boolean;
+}
+
+export interface CircleEntity extends SketchEntityBase {
+  kind: 'circle';
+  centerId: string;
+  radius: number;
+}
+
+export interface ArcEntity extends SketchEntityBase {
+  kind: 'arc';
+  centerId: string;
+  startId: string;
+  endId: string;
+  radius: number;
+  ccw: boolean;
+}
+
+export interface EllipseEntity extends SketchEntityBase {
+  kind: 'ellipse';
+  centerId: string;
+  majorAxisEndId: string;
+  minorRadius: number;
+}
+
+export interface EllipticalArcEntity extends SketchEntityBase {
+  kind: 'ellipticalArc';
+  centerId: string;
+  majorAxisEndId: string;
+  minorRadius: number;
+  startAngle: number;
+  endAngle: number;
+  ccw: boolean;
+}
+
+export interface SplineEntity extends SketchEntityBase {
+  kind: 'spline';
+  controlPointIds: string[];
+  degree: number;
+  // Uniform clamped knot vector derived from controlPointIds.length and degree.
+}
+
+export interface ConicEntity extends SketchEntityBase {
+  kind: 'conic';
+  conicType: 'parabola' | 'hyperbola';
+  // Concrete parameter set deferred to Phase C.
+  params: Record<string, number | string>;
+}
+
+export type SketchEntity =
+  | PointEntity
+  | LineEntity
+  | CircleEntity
+  | ArcEntity
+  | EllipseEntity
+  | EllipticalArcEntity
+  | SplineEntity
+  | ConicEntity;
+
+// Backwards-compat type aliases for consumer convenience.
+export type SketchPoint = PointEntity;
+export type SketchLine = LineEntity;
+
+// ──────────────────────────────────────────────────────────────────────────
+// Constraints
+// ──────────────────────────────────────────────────────────────────────────
+// Per REQ 561, constraint targets are entity references — an entity id plus an
+// optional subelement selector. Subelements name a meaningful point or curve on
+// the entity (start, end, center, edge) without requiring a separate primitive.
+
+export type ConstraintSubElement = 'start' | 'end' | 'center' | 'edge';
+
+export interface ConstraintTarget {
+  entityId: string;
+  sub?: ConstraintSubElement;
 }
 
 export type ConstraintType =
@@ -29,20 +109,41 @@ export type ConstraintType =
 export interface SketchConstraint {
   id: string;
   type: ConstraintType;
-  // Targets are primitive IDs. Shape varies per constraint:
-  //   coincident: [pointId, pointId]
-  //   fixed: [pointId]
-  //   horizontal / vertical: [lineId]
-  //   distance: [pointId, pointId]  with value
-  //   point-on-line: [pointId, lineId]
-  targets: string[];
+  targets: ConstraintTarget[];
   value?: number;
 }
 
 export interface SketchState {
-  points: SketchPoint[];
-  lines: SketchLine[];
+  entities: SketchEntity[];
   constraints: SketchConstraint[];
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Entity helpers
+// ──────────────────────────────────────────────────────────────────────────
+
+export function pointsOf(state: SketchState): PointEntity[] {
+  return state.entities.filter((e): e is PointEntity => e.kind === 'point');
+}
+
+export function linesOf(state: SketchState): LineEntity[] {
+  return state.entities.filter((e): e is LineEntity => e.kind === 'line');
+}
+
+export function findEntity<E extends SketchEntity = SketchEntity>(
+  state: SketchState, id: string,
+): E | undefined {
+  return state.entities.find(e => e.id === id) as E | undefined;
+}
+
+export function findPoint(state: SketchState, id: string): PointEntity | undefined {
+  const e = findEntity(state, id);
+  return e?.kind === 'point' ? e as PointEntity : undefined;
+}
+
+export function findLine(state: SketchState, id: string): LineEntity | undefined {
+  const e = findEntity(state, id);
+  return e?.kind === 'line' ? e as LineEntity : undefined;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
