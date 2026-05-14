@@ -245,3 +245,21 @@ Past sessions appear in `git log`. Add a new section here only when a session de
 - **REQs 566/569 cover Circle (center+radius) and Arc (center+endpoints) only.** The other Phase B circle/arc variants (3-point, tangent, etc. — REQs 567/568/570/571) and rectangles/polygons/slots (REQs 572–581) are still unimplemented. The user-facing tool buttons are only for the two implemented variants.
 
 - **Status:** REQs 566, 569, 582–589 (10 reqs) `unapproved`. Tests: 114/114 passing (14 new). Two commits: `8d3cf21` (data layer), `b1d9314` (UI). UI verified by tests at the data layer + needs manual smoke test in the browser (Docker dev server with hot reload — user owns this verification per project rules).
+
+### 2026-05-14 (cont.) — Feature tree edit/delete/visibility + sketch delete (REQs 607–611)
+
+- **Sketch deletion is a three-way choice, not yes/no.** When a sketch is referenced by Extrude features, the warning dialog offers Cascade / Break references / Cancel. "Break references" deliberately leaves the dependent Extrudes with a now-invalid sketchId — `regenerateModel` already emits an error for missing sketches, so the user sees the consequences in the feature tree without needing a new "broken feature" state. No type changes required.
+
+- **`visible` flag lives only on ExtrudeFeature (and future non-Origin kinds).** Origin is exempt — datum visibility is already per-datum on `OriginFeature.visibility`. Hiding the Origin would be redundant with the existing per-datum controls. The flag is optional (missing == visible); `regenerateModel` short-circuits with `if (feature.visible === false) continue` before the kernel call.
+
+- **Sketches don't get a visibility toggle.** They're 2D and only visible when actively being edited. Adding a Hide/Show on sketches would be UX noise. Sketches get only Edit and Delete in their context menu.
+
+- **Origin row has no context menu at all.** The `onRowContextMenu` handler early-returns for `feature.type === 'origin'` and datum rows, falling through to the native browser menu. Avoids exposing a single-action menu (e.g., just Edit) that adds friction.
+
+- **MatMenu positioning uses a floating anchor.** `<div class="menu-anchor" [style.left.px]="menuX()" [style.top.px]="menuY()" [matMenuTriggerFor]="menu">` is a zero-size element positioned `fixed` at the cursor. MatMenu reads the anchor's `getBoundingClientRect()` to place itself, so we `queueMicrotask(() => trigger.openMenu())` after setting position — opening synchronously would read stale coords. Same pattern is reusable for any other "context menu at cursor" need.
+
+- **Editing the active sketch while in sketch mode auto-exits sketch mode if that sketch is being deleted.** `applySketchDelete` checks `activeSketchId() === sketchId` and clears the signal before applying the deletion — otherwise the editor would render against a missing sketch.
+
+- **`FeatureTreeAction` is a tagged union on the action name**, not a method call. The tree panel emits `{action, featureId | sketchId}` so the cad-editor stays the single source of truth for dialog/state side effects; the tree stays pure UI.
+
+- **Status:** REQs 607–611 created and `unapproved`. Tests: 124/124 passing (10 new — 4 deleteSketch, 4 removeFeaturesReferencingSketch, 2 regenerateModel visibility). Two commits: `0ed6d00` (data layer), `b665fd4` (UI). UI needs manual smoke test in the browser.
