@@ -201,6 +201,7 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
               </ol>
               <p class="muted">Orbit: left-drag · Pan: shift-drag · Zoom: wheel · In sketch mode: left-click sketches, right-drag orbits</p>
             </div>
+          </ng-container>
 
           <ng-template #loadingTpl>
             <div class="loading">
