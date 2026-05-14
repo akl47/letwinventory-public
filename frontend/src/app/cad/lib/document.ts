@@ -66,6 +66,15 @@ export function updateSketchState(
   };
 }
 
+export function deleteSketch(doc: SketchDocument, sketchId: string): SketchDocument {
+  if (!(sketchId in doc.sketches)) return doc;
+  const next: Record<string, Sketch> = {};
+  for (const [id, sk] of Object.entries(doc.sketches)) {
+    if (id !== sketchId) next[id] = sk;
+  }
+  return { ...doc, sketches: next };
+}
+
 export function findSketchByHost(doc: SketchDocument, hostId: HostId): Sketch | null {
   for (const sketch of Object.values(doc.sketches)) {
     if (sketch.hostId === hostId) return sketch;

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { emptyDocument, createSketch, updateSketchState, findSketchByHost, promoteVertex, promoteEdge } from './document';
+import {
+  emptyDocument, createSketch, updateSketchState, findSketchByHost, promoteVertex, promoteEdge,
+  deleteSketch,
+} from './document';
 import { emptySketchState } from './store';
 import type { ModelTopology, Plane3, SketchState } from './types';
 import { pointsOf, findPoint, findLine } from './types';
@@ -129,6 +132,39 @@ describe('Sketch document (CAD-022, CAD-023, CAD-026, CAD-028, CAD-030)', () => 
       const { state, id } = promoteEdge(emptySketchState(), 'e1', { x: 0, y: 0 }, { x: 10, y: 0 });
       expect(findLine(state, id)?.construction).toBe(true);
       expect(pointsOf(state).filter(p => p.construction === true).length).toBe(2);
+    });
+  });
+
+  describe('deleteSketch (REQ 608)', () => {
+    it('removes the named sketch from the document', () => {
+      const { doc: d1, sketchId } = createSketch(emptyDocument(), 'datum:xy_plane', XY_PLANE, null);
+      const d2 = deleteSketch(d1, sketchId);
+      expect(d2.sketches[sketchId]).toBeUndefined();
+      expect(Object.keys(d2.sketches)).toHaveLength(0);
+    });
+
+    it('is a no-op when the sketch is not in the document', () => {
+      const d0 = emptyDocument();
+      const d1 = deleteSketch(d0, 'not-a-real-id');
+      expect(d1).toEqual(d0);
+    });
+
+    it('does not mutate the original document', () => {
+      const { doc: d1, sketchId } = createSketch(emptyDocument(), 'datum:xy_plane', XY_PLANE, null);
+      const beforeKeys = Object.keys(d1.sketches);
+      deleteSketch(d1, sketchId);
+      expect(Object.keys(d1.sketches)).toEqual(beforeKeys);
+    });
+
+    it('preserves other sketches', () => {
+      let doc = emptyDocument();
+      const r1 = createSketch(doc, 'datum:xy_plane', XY_PLANE, null);
+      doc = r1.doc;
+      const r2 = createSketch(doc, 'datum:xz_plane', XY_PLANE, null);
+      doc = r2.doc;
+      const d3 = deleteSketch(doc, r1.sketchId);
+      expect(d3.sketches[r1.sketchId]).toBeUndefined();
+      expect(d3.sketches[r2.sketchId]).toBeDefined();
     });
   });
 });

@@ -45,6 +45,15 @@ export function updateFeatureParam<T extends Feature>(
   };
 }
 
+// REQ 608 cascade: drops every Extrude feature whose sketchId matches.
+// Origin features (and any future features without a sketchId) are unaffected.
+export function removeFeaturesReferencingSketch(tree: FeatureTree, sketchId: string): FeatureTree {
+  return {
+    features: tree.features.filter(f => !(f.type === 'extrude' && f.sketchId === sketchId)),
+    nextFeatureSeq: tree.nextFeatureSeq,
+  };
+}
+
 export type KernelAdapter = {
   buildOriginGeometry(): RegenerateResult['geometry'];
   buildExtrude(profile2D: Array<{ x: number; y: number }>, plane: Plane3, distance: number): {
@@ -66,6 +75,8 @@ export async function regenerateModel(
 
   for (const feature of tree.features) {
     if (feature.type === 'origin') continue;
+    // REQ 610: features with visible === false are silently skipped (not an error).
+    if (feature.visible === false) continue;
     if (feature.type === 'extrude') {
       const sketch = doc.sketches[feature.sketchId];
       if (!sketch) {

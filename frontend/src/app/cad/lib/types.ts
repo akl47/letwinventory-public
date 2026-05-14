@@ -209,6 +209,8 @@ export interface ExtrudeFeature {
   type: 'extrude';
   sketchId: SketchId;
   distance: number;
+  /** Missing == true. When false, feature is skipped during regenerateModel. */
+  visible?: boolean;
 }
 
 export type Feature = OriginFeature | ExtrudeFeature;
