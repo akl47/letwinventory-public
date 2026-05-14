@@ -1,0 +1,115 @@
+import { describe, it, expect } from 'vitest';
+import { distanceToEntity, pickEntity } from './picking';
+import type {
+  SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity,
+} from './types';
+
+// REQ 564 — parametric closest-point-on-entity. Pick accuracy must not depend on
+// tessellation density of the renderer.
+
+function state(...entities: Array<PointEntity | LineEntity | CircleEntity | ArcEntity>): SketchState {
+  return { entities, constraints: [] };
+}
+
+describe('picking: parametric closest-point-on-entity (REQ 564)', () => {
+  describe('distanceToEntity', () => {
+    it('point: returns Euclidean distance to the point', () => {
+      const p: PointEntity = { kind: 'point', id: 'p1', x: 3, y: 4 };
+      expect(distanceToEntity(state(p), p, { x: 0, y: 0 })).toBeCloseTo(5);
+    });
+
+    it('line: closest-point-on-segment, clamped at endpoints', () => {
+      const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 0 };
+      const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: 0 };
+      const l: LineEntity = { kind: 'line', id: 'l', startId: 'a', endId: 'b' };
+      const s = state(a, b, l);
+      // perpendicular projection lands inside segment
+      expect(distanceToEntity(s, l, { x: 5, y: 3 })).toBeCloseTo(3);
+      // projection past endpoint clamps to nearest end
+      expect(distanceToEntity(s, l, { x: 15, y: 0 })).toBeCloseTo(5);
+      expect(distanceToEntity(s, l, { x: -3, y: 4 })).toBeCloseTo(5);
+    });
+
+    it('circle: |distance(point, center) − radius|, independent of tessellation', () => {
+      const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+      const k: CircleEntity = { kind: 'circle', id: 'k', centerId: 'c', radius: 10 };
+      const s = state(c, k);
+      // on circle
+      expect(distanceToEntity(s, k, { x: 10, y: 0 })).toBeCloseTo(0);
+      // outside
+      expect(distanceToEntity(s, k, { x: 15, y: 0 })).toBeCloseTo(5);
+      // inside
+      expect(distanceToEntity(s, k, { x: 4, y: 0 })).toBeCloseTo(6);
+      // diagonal (still parametric, not tessellation-dependent)
+      expect(distanceToEntity(s, k, { x: 14, y: 0 })).toBeCloseTo(4);
+    });
+
+    it('circle: pick accuracy holds at coarse tessellation densities', () => {
+      // Pick a point just barely outside the analytic circle but well inside any
+      // polyline tessellation gap. A tessellated picker would falsely report a
+      // larger distance; the parametric picker is exact.
+      const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+      const k: CircleEntity = { kind: 'circle', id: 'k', centerId: 'c', radius: 1 };
+      const s = state(c, k);
+      // at angle 22.5° the chord midpoint of a 4-segment tessellation is at
+      // distance r·cos(π/4) ≈ 0.7071; a pick at distance 0.95 should resolve to
+      // ≈ 0.05 from the analytic circle, NOT to whatever the polyline gap is.
+      const theta = Math.PI / 8;
+      const probe = { x: 0.95 * Math.cos(theta), y: 0.95 * Math.sin(theta) };
+      expect(distanceToEntity(s, k, probe)).toBeCloseTo(0.05);
+    });
+
+    it('arc: returns circle distance only when angle lies within sweep', () => {
+      const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+      const s0: PointEntity = { kind: 'point', id: 's', x: 10, y: 0 };
+      const e0: PointEntity = { kind: 'point', id: 'e', x: 0, y: 10 };
+      const a: ArcEntity = {
+        kind: 'arc', id: 'a', centerId: 'c', startId: 's', endId: 'e', radius: 10, ccw: true,
+      };
+      const st = state(c, s0, e0, a);
+      // point on arc (45°)
+      const onArc = { x: 10 * Math.cos(Math.PI / 4), y: 10 * Math.sin(Math.PI / 4) };
+      expect(distanceToEntity(st, a, onArc)).toBeCloseTo(0);
+      // point off the sweep (angle = -π/2): closest is nearest endpoint
+      const offSweep = { x: 0, y: -10 };
+      const distToStart = Math.hypot(offSweep.x - 10, offSweep.y);
+      const distToEnd = Math.hypot(offSweep.x, offSweep.y - 10);
+      const expected = Math.min(distToStart, distToEnd);
+      expect(distanceToEntity(st, a, offSweep)).toBeCloseTo(expected);
+    });
+  });
+
+  describe('pickEntity', () => {
+    it('returns the closest entity within the pick tolerance', () => {
+      const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 0 };
+      const b: PointEntity = { kind: 'point', id: 'b', x: 100, y: 100 };
+      const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+      const k: CircleEntity = { kind: 'circle', id: 'k', centerId: 'c', radius: 10 };
+      const s = state(a, b, c, k);
+      // Probe right on the circle's edge — circle wins over the far points.
+      const picked = pickEntity(s, { x: 10, y: 0 }, 1);
+      expect(picked?.id).toBe('k');
+    });
+
+    it('returns null when no entity is within tolerance', () => {
+      const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+      const k: CircleEntity = { kind: 'circle', id: 'k', centerId: 'c', radius: 10 };
+      const s = state(c, k);
+      // 50 units from the circle edge, tolerance 1
+      expect(pickEntity(s, { x: 60, y: 0 }, 1)).toBeNull();
+    });
+
+    it('prefers a point over a line at the same distance', () => {
+      // Two entities equidistant from the probe — point should win because
+      // higher-dimensional ambiguity favours the lower-dimensional pick.
+      const p: PointEntity = { kind: 'point', id: 'p', x: 5, y: 0 };
+      const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: -3 };
+      const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: -3 };
+      const l: LineEntity = { kind: 'line', id: 'l', startId: 'a', endId: 'b' };
+      const s = state(p, a, b, l);
+      // probe sits 3 units above point p and 3 units above line l simultaneously
+      const picked = pickEntity(s, { x: 5, y: 3 }, 5);
+      expect(picked?.id).toBe('p');
+    });
+  });
+});
