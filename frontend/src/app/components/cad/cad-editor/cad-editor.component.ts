@@ -21,6 +21,7 @@ import { ExtrudeDialogComponent } from '../extrude-dialog/extrude-dialog.compone
 import type { FeatureTree, SketchDocument, SketchId, ModelGeometry, SketchState } from '../../../cad/lib/types';
 import { emptyFeatureTree, addFeature, regenerateModel, defaultDatumVisibility, type KernelAdapter } from '../../../cad/lib/featureTree';
 import { emptyDocument, createSketch, updateSketchState } from '../../../cad/lib/document';
+import { migrateSketchDocument } from '../../../cad/lib/migration';
 import { planeForDatum, buildOriginDatums } from '../../../cad/lib/datum';
 import { extractClosedLoop } from '../../../cad/lib/profile';
 import { makePureJsKernel } from '../../../cad/lib/kernel';
@@ -475,7 +476,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private bootstrap(m: CadModel) {
     this.model.set(m);
     this.featureTree.set(m.featureTree as FeatureTree);
-    this.doc.set(m.sketchDoc as SketchDocument);
+    // REQ 565: legacy SketchDocument blobs are auto-upgraded to the entity model on load.
+    this.doc.set(migrateSketchDocument(m.sketchDoc as SketchDocument));
     this.activeSketchId.set(null);
     this.setMode('idle');
     this.loading.set(false);
