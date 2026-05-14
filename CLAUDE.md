@@ -225,3 +225,23 @@ Past sessions appear in `git log`. Add a new section here only when a session de
 - **Three commits this session:** `b647e16` (entity model + PlaneGCS + curve UI), `72161bd` (schema migration), `48f9b7a` (tessellator + picker). All in branch `cad`.
 
 - **Status:** REQs 558–565 created and `unapproved`; user gates approval. DesignFeature 35 still `in_review`. Tests: 100/100 passing across 10 CAD spec files (vitest). DesignCADModels migration from May 12 still not applied.
+
+### 2026-05-14 (cont.) — Phase B.1+B.2: circle/arc tools + 14 constraints with selection UI (REQs 566, 569, 582–589)
+
+- **Construction flag now also pins curve dimensions, not just point positions.** Phase A established `construction: true` pins points (PlaneGCS `fixed`). Phase B extends this to circles (emits `circle_radius` driving constraint) and arcs (emits `arc_radius`). Rationale: under-constrained tangent solves were splitting constraint error between line movement and radius shrinkage — pinning radius makes "construction = locked reference geometry" semantically complete. REQ 560's wording allows this extension; the renderer-only "dashed style" reading was incomplete.
+
+- **`translateConstraint` is now multi-return.** Some constraints emit a single PlaneGCS primitive (perpendicular, parallel), some dispatch by entity kind (tangent: 6 PlaneGCS variants by (line/circle/arc/ellipse) pairs; equal: 4 variants), some synthesize two primitives from one user-facing constraint (midpoint = point-on-line + point-on-perp-bisector; symmetric = midpoint-on-line + perpendicular; concentric = coincident on centers; collinear = parallel + point-on-line). Synthesized primitive IDs use `${constraint.id}-suffix` to avoid clashing with entity IDs.
+
+- **arc_rules is required for every arc primitive.** PlaneGCS does NOT auto-emit it. Without arc_rules, the arc's center/start/end/angles/radius drift independently during solve. Emitted automatically in `buildPrimitives` as `arcrules-${arc.id}`.
+
+- **`addArc` snaps the end click onto the radius.** The arc data model carries a scalar `radius`; renderer/picker/tessellator all assume `|center→start| == |center→end| == radius`. The store helper enforces this on creation by projecting the raw end click onto the circle of `|center→start|`. A user-facing implication: clicking three random points produces a *valid* arc, not the literal three points.
+
+- **Constraint UI lives entirely in the sketch editor template.** `CONSTRAINT_SPECS` is a module-level array of `{type, label, icon, predicate, requiresValue}` records. The toolbar renders one icon button per spec; buttons are disabled when the current selection (in click order) doesn't satisfy the predicate. `orderTargetsForConstraint` re-orders selection into the canonical target shape for type-asymmetric constraints (point-on-line, midpoint, symmetric). Future refactor: extract to `cad/lib/constraintSpecs.ts` for unit testing.
+
+- **Selection model is `Set<string>` in a signal.** Sets in signals require *replacement* (`set(new Set(...))`) not mutation — Angular signals use reference equality. Click in select mode pickEntity-dispatches (tolerance 3 SVG units, parametric from picking.ts so curves are pickable at the analytic boundary), then either toggle (shift-click) or set-to-one. Click on empty canvas clears selection (unless shift-held).
+
+- **Distance constraint uses `window.prompt` for the value.** Quick and dirty; future replacement is a MatDialog. The user can cancel by pressing Esc or clicking cancel, which aborts the constraint application cleanly.
+
+- **REQs 566/569 cover Circle (center+radius) and Arc (center+endpoints) only.** The other Phase B circle/arc variants (3-point, tangent, etc. — REQs 567/568/570/571) and rectangles/polygons/slots (REQs 572–581) are still unimplemented. The user-facing tool buttons are only for the two implemented variants.
+
+- **Status:** REQs 566, 569, 582–589 (10 reqs) `unapproved`. Tests: 114/114 passing (14 new). Two commits: `8d3cf21` (data layer), `b1d9314` (UI). UI verified by tests at the data layer + needs manual smoke test in the browser (Docker dev server with hot reload — user owns this verification per project rules).
