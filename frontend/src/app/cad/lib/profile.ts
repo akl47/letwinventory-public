@@ -1,5 +1,6 @@
-import type { SketchState, LineEntity } from './types';
+import type { SketchState, LineEntity, CircleEntity, ArcEntity } from './types';
 import { findPoint, linesOf } from './types';
+import { tessellateCircle, DEFAULT_CHORD_TOLERANCE } from './tessellator';
 
 export type ProfileLoop = Array<{ x: number; y: number }>;
 
@@ -21,8 +22,26 @@ function buildAdjacency(lines: LineEntity[]): Map<string, string[]> {
 
 export function extractClosedLoop(state: SketchState): ProfileResult {
   // REQ 560: construction entities are excluded from profile extraction.
-  // For Phase A we still only consume Line entities; curve tessellation lands in A.2.
   const lines = linesOf(state).filter(l => !l.construction);
+  const circles = state.entities.filter(
+    (e): e is CircleEntity => e.kind === 'circle' && !e.construction,
+  );
+  const arcs = state.entities.filter(
+    (e): e is ArcEntity => e.kind === 'arc' && !e.construction,
+  );
+
+  // REQ 612: single-circle profile — sketch contains exactly one non-construction
+  // circle and no non-construction lines or arcs. Tessellate and return the
+  // resulting polyline as the closed loop.
+  if (lines.length === 0 && arcs.length === 0 && circles.length === 1) {
+    const c = circles[0];
+    const center = findPoint(state, c.centerId);
+    if (!center) return { loop: null, error: `circle ${c.id}: center point not found` };
+    const pts = tessellateCircle({ x: center.x, y: center.y }, c.radius, DEFAULT_CHORD_TOLERANCE);
+    // tessellateCircle returns n+1 vertices (first == last). Drop the closing duplicate.
+    return { loop: pts.slice(0, -1) };
+  }
+
   if (lines.length === 0) {
     return { loop: null, error: 'sketch has no lines (empty profile)' };
   }

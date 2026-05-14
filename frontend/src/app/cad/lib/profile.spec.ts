@@ -76,4 +76,52 @@ describe('Profile extraction (CAD-038, REQ 560)', () => {
     expect(error).toBeFalsy();
     expect(loop!.length).toBe(4);
   });
+
+  describe('single-circle profile (REQ 612)', () => {
+    it('extracts a tessellated circle as the profile when the sketch has one circle and no lines', () => {
+      const state: SketchState = {
+        entities: [
+          { kind: 'point', id: 'c', x: 5, y: 5 },
+          { kind: 'circle', id: 'cir1', centerId: 'c', radius: 10 },
+        ],
+        constraints: [],
+      };
+      const { loop, error } = extractClosedLoop(state);
+      expect(error).toBeFalsy();
+      expect(loop).not.toBeNull();
+      expect(loop!.length).toBeGreaterThanOrEqual(8);
+      for (const p of loop!) {
+        const r = Math.hypot(p.x - 5, p.y - 5);
+        expect(Math.abs(r - 10)).toBeLessThan(0.1);
+      }
+    });
+
+    it('excludes a construction circle (no profile)', () => {
+      const state: SketchState = {
+        entities: [
+          { kind: 'point', id: 'c', x: 0, y: 0 },
+          { kind: 'circle', id: 'cir1', centerId: 'c', radius: 5, construction: true },
+        ],
+        constraints: [],
+      };
+      const { loop, error } = extractClosedLoop(state);
+      expect(loop).toBeNull();
+      expect(error).toBeTruthy();
+    });
+
+    it('rejects multiple circles (out of single-circle-profile scope)', () => {
+      const state: SketchState = {
+        entities: [
+          { kind: 'point', id: 'c1', x: 0, y: 0 },
+          { kind: 'point', id: 'c2', x: 20, y: 0 },
+          { kind: 'circle', id: 'cir1', centerId: 'c1', radius: 5 },
+          { kind: 'circle', id: 'cir2', centerId: 'c2', radius: 3 },
+        ],
+        constraints: [],
+      };
+      const { loop, error } = extractClosedLoop(state);
+      expect(loop).toBeNull();
+      expect(error).toBeTruthy();
+    });
+  });
 });

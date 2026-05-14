@@ -9,7 +9,7 @@ import type {
 } from '../../../cad/lib/types';
 import { pointsOf, linesOf, findPoint } from '../../../cad/lib/types';
 import {
-  addPoint, addLine, addCircle, addArc, addConstraint, emptySketchState,
+  addPoint, addLine, addCircle, addArc, addConstraint, movePoint, emptySketchState,
 } from '../../../cad/lib/store';
 import { solveSketch } from '../../../cad/lib/solver';
 import { extractClosedLoop } from '../../../cad/lib/profile';
@@ -146,7 +146,8 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
         data-testid="sketch-canvas"
         class="sketch-canvas"
         viewBox="-100 -100 200 200"
-        (click)="onCanvasClick($event)">
+        (click)="onCanvasClick($event)"
+        (mousedown)="onCanvasMouseDown($event)">
 
         <defs>
           <pattern id="sketch-grid" width="10" height="10" patternUnits="userSpaceOnUse">
@@ -261,6 +262,18 @@ export class CadSketchEditorComponent implements OnDestroy {
   draftArcStart = signal<PendingPoint | null>(null);
   selected = signal<Set<string>>(new Set());
 
+  // Drag-to-move state (REQ 613). Set on mousedown over a draggable point. The
+  // `isDragging` flag stays false until the cursor moves more than DRAG_THRESHOLD
+  // sketch units, so a stationary click still resolves as a selection.
+  private dragState = signal<{
+    pointId: string;
+    startCursor: { x: number; y: number };
+    startPoint: { x: number; y: number };
+    isDragging: boolean;
+  } | null>(null);
+  // Set true on mouseup at the end of a drag so the subsequent (click) event is suppressed.
+  private didDrag = false;
+
   state = computed<SketchState>(() => this.doc().sketches[this.sketchId()]?.state ?? emptySketchState());
 
   points = computed<PointEntity[]>(() => pointsOf(this.state()));
@@ -320,6 +333,7 @@ export class CadSketchEditorComponent implements OnDestroy {
   onEscape() {
     this.clearAllDrafts();
     this.selected.set(new Set());
+    this.dragState.set(null);
   }
 
   private clearAllDrafts() {
@@ -365,17 +379,27 @@ export class CadSketchEditorComponent implements OnDestroy {
     return Math.abs(sweep) > Math.PI;
   }
 
-  onCanvasClick(ev: MouseEvent) {
-    if (this.readonly()) return;
-    const target = ev.target as SVGElement;
-    const svg = (target.ownerSVGElement || target as unknown as SVGSVGElement);
+  // Returns the SVG element under the cursor, or null if the event was not on
+  // the canvas. Used by gesture handlers to compute sketch coords.
+  private toSketchCoords(ev: MouseEvent): { x: number; y: number } | null {
+    const target = ev.target as SVGElement | null;
+    const svg = target?.ownerSVGElement ?? (target as unknown as SVGSVGElement | null);
+    if (!svg || typeof (svg as SVGSVGElement).createSVGPoint !== 'function') return null;
     const pt = (svg as SVGSVGElement).createSVGPoint();
     pt.x = ev.clientX; pt.y = ev.clientY;
     const m = (svg as SVGGraphicsElement).getScreenCTM();
-    if (!m) return;
+    if (!m) return null;
     const local = pt.matrixTransform(m.inverse());
+    return { x: local.x, y: -local.y };
+  }
+
+  onCanvasClick(ev: MouseEvent) {
+    if (this.readonly()) return;
+    if (this.didDrag) { this.didDrag = false; return; }
+    const local = this.toSketchCoords(ev);
+    if (!local) return;
     const x = Math.round(local.x);
-    const y = Math.round(-local.y);
+    const y = Math.round(local.y);
 
     const tool = this.tool();
     if (tool === 'select') {
@@ -389,6 +413,64 @@ export class CadSketchEditorComponent implements OnDestroy {
     } else if (tool === 'arc') {
       this.handleArcClick(x, y);
     }
+  }
+
+  // REQ 613: drag-to-move for non-construction points in the Select tool.
+  // mousedown picks the underlying entity; drag starts once the cursor moves
+  // > DRAG_THRESHOLD sketch units, so a small jitter still resolves as a click.
+  onCanvasMouseDown(ev: MouseEvent) {
+    if (this.readonly()) return;
+    if (this.tool() !== 'select') return;
+    if (ev.button !== 0) return;  // primary button only
+    const local = this.toSketchCoords(ev);
+    if (!local) return;
+    const picked = pickEntity(this.state(), local, 3);
+    if (!picked || picked.kind !== 'point' || picked.construction) return;
+    const point = findPoint(this.state(), picked.id);
+    if (!point) return;
+    this.dragState.set({
+      pointId: picked.id,
+      startCursor: local,
+      startPoint: { x: point.x, y: point.y },
+      isDragging: false,
+    });
+  }
+
+  @HostListener('document:mousemove', ['$event'])
+  onDocumentMouseMove(ev: MouseEvent) {
+    const drag = this.dragState();
+    if (!drag) return;
+    const local = this.toSketchCoords(ev);
+    if (!local) return;
+    const dx = local.x - drag.startCursor.x;
+    const dy = local.y - drag.startCursor.y;
+    const DRAG_THRESHOLD = 1;
+    if (!drag.isDragging) {
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      this.dragState.set({ ...drag, isDragging: true });
+    }
+    const newX = Math.round(drag.startPoint.x + dx);
+    const newY = Math.round(drag.startPoint.y + dy);
+    // Preview update: emit the moved state immediately, defer the solver to
+    // mouseup so each frame is cheap.
+    const next = movePoint(this.state(), drag.pointId, newX, newY);
+    this.sketchChanged.emit(next);
+  }
+
+  @HostListener('document:mouseup', ['$event'])
+  onDocumentMouseUp(ev: MouseEvent) {
+    const drag = this.dragState();
+    this.dragState.set(null);
+    if (!drag || !drag.isDragging) return;
+    this.didDrag = true;
+    const local = this.toSketchCoords(ev) ?? drag.startCursor;
+    const dx = local.x - drag.startCursor.x;
+    const dy = local.y - drag.startCursor.y;
+    const newX = Math.round(drag.startPoint.x + dx);
+    const newY = Math.round(drag.startPoint.y + dy);
+    // commit() emits the state then runs the solver so constraint-pinned points
+    // snap back to their solved positions.
+    this.commit(movePoint(this.state(), drag.pointId, newX, newY));
   }
 
   private handleSelectClick(x: number, y: number, additive: boolean) {
