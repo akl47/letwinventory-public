@@ -188,7 +188,7 @@ Past sessions appear in `git log`. Add a new section here only when a session de
 
 - **What it is:** browser-based parametric CAD module attached to each Part, mirroring WireHarness draft → review → released. `/design/cad` lists every part with CAD; `/parts/:id/cad/editor` is the editor with a Three.js viewer + SolidWorks-style action toolbar (Sketch / Extrude). Sketches nest under their extrude in the feature tree; Origin feature carries per-datum visibility.
 
-- **Pure-TS solver is the production solver.** PlaneGCS WASM is in `package.json` and the Angular build config has the `externalDependencies` + `assets` mapping wired, but `solver.ts` is pure-TS numerical iteration. It satisfies every constraint case in the spec (incl. fully-constrained rectangle, conflicting-constraint rejection). PlaneGCS swap is a follow-up when sketches outgrow the iterative solver.
+- **Pure-TS solver was the initial production solver** (superseded 2026-05-14 — see entry below). At session close, PlaneGCS WASM was in `package.json` and the Angular build config had the `externalDependencies` + `assets` mapping wired, but `solver.ts` was pure-TS numerical iteration. It satisfied every constraint case in the spec (incl. fully-constrained rectangle, conflicting-constraint rejection). PlaneGCS swap was noted as a follow-up when sketches outgrew the iterative solver.
 
 - **Pure-JS extrude is the default kernel.** Same story for `opencascade.js@2.0.0-beta.fdece36`: wired through `CadKernelService` with a lazy dynamic import, but not invoked at startup. Pure-JS extrude (ear-clipping caps + quad sides via `makePureJsKernel()`) handles every polygon profile. OCCT is required for curves, booleans, fillets — swap by calling `kernelService.load()` and reassigning `this.kernel` in `CadEditorComponent`.
 
@@ -205,3 +205,23 @@ Past sessions appear in `git log`. Add a new section here only when a session de
 - **Three.js is now a project runtime dep** (`three@^0.165.0`, `@types/three`). First time. Datum picking uses a face-prefers-datum precedence rule (face hits win over datum hits at any distance) to avoid translucent datum planes intercepting clicks intended for solid faces.
 
 - **Status:** DesignFeature 35 in `in_review`. 46 requirements all `unapproved`. Branch `cad` pushed, commit `9758a11` linked on feature record; `prURL` left null for the user to fill. Pending: apply migration, optionally swap to OCCT/PlaneGCS for non-polygon profiles, approve the 46 reqs.
+
+### 2026-05-14 — Phase A foundation: PlaneGCS swap + entity-model refactor (REQs 558–565)
+
+- **PlaneGCS swap landed sooner than May 12 predicted.** Trigger was adding Phase B reqs (566–606: perpendicular/parallel/tangent/equal/symmetric/concentric/collinear, dimension constraints, splines, conics, slots, polygons). The pure-TS iterative solver had no convergence guarantee for mixed systems involving these. Newton-Raphson + analytical Jacobians is what FreeCAD ships; that's the bar.
+
+- **PlaneGCS is vendored under `frontend/src/app/cad/vendor/planegcs/`, not an npm dep.** Slow upstream cadence + single-maintainer footprint = vendoring insulates against takedown/unpublish/drift. LGPL-2.0-or-later honoured via the WASM substitution surface (users can drop in their own `planegcs.wasm`). See `PROVENANCE.md` in that dir for update procedure.
+
+- **Sketch schema flipped to tagged-union `SketchEntity`** (kinds: point/line/circle/arc/ellipse/ellipticalArc/spline/conic). `reference` flag renamed to `construction`. Constraint targets become `{ entityId, sub? }` references. Legacy persisted JSONB docs auto-upgrade in memory via `migration.ts` wired into the editor bootstrap — no DB migration step.
+
+- **Curve rendering ≠ tessellation.** Sketch editor draws circles/arcs as analytic SVG (`<circle>`, `<path d="…A…"/>`), zoom-independent at the render layer with no re-tessellation. The chord-tolerance tessellator (`tessellator.ts`) is for a different consumer: profile extraction feeds polylines to the extrude kernel.
+
+- **Picker is parametric, not tessellation-based** (`picking.ts`). Coarse render tessellation doesn't degrade pick accuracy — `distanceToEntity` hit-tests against each entity's analytic definition.
+
+- **`sub` on ConstraintTarget is declared but not consumed yet** — Phase B work. Solver translator currently reads `entityId` only; wires up when subelement-targeting constraints (e.g., tangent-at-endpoint) are added.
+
+- **Phase B reqs 566–606 exist but unimplemented.** Data model supports them: entity kinds declared in `types.ts`, store cascading delete handles all kinds, tessellator/picker fall through to `Infinity` for the unsupported kinds. Outstanding: UI tools (circle/arc/rect/poly/ellipse/slot/spline/conic/text/image/equation), additional constraint solver mappings (perpendicular/parallel/tangent/equal/symmetric/midpoint/concentric/collinear + dimensions: radius/diameter/angle/distance), and per-kind tessellation/picking handlers.
+
+- **Three commits this session:** `b647e16` (entity model + PlaneGCS + curve UI), `72161bd` (schema migration), `48f9b7a` (tessellator + picker). All in branch `cad`.
+
+- **Status:** REQs 558–565 created and `unapproved`; user gates approval. DesignFeature 35 still `in_review`. Tests: 100/100 passing across 10 CAD spec files (vitest). DesignCADModels migration from May 12 still not applied.
