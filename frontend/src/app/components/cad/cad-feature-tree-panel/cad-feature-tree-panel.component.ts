@@ -1,9 +1,17 @@
-import { Component, input, output, signal, computed } from '@angular/core';
+import { Component, input, output, signal, computed, viewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import type { Feature, SketchDocument, OriginFeature, ExtrudeFeature } from '../../../cad/lib/types';
 import { defaultDatumVisibility } from '../../../cad/lib/featureTree';
+
+export type FeatureTreeAction =
+  | { action: 'edit-feature'; featureId: string }
+  | { action: 'delete-feature'; featureId: string }
+  | { action: 'toggle-feature-visibility'; featureId: string }
+  | { action: 'edit-sketch'; sketchId: string }
+  | { action: 'delete-sketch'; sketchId: string };
 
 interface TreeNode {
   /** Unique within the tree; used for expansion tracking. */
@@ -15,7 +23,8 @@ interface TreeNode {
   depth: number;
   expandable: boolean;
   expanded: boolean;
-  visible?: boolean;            // datums only
+  /** For datums: rendered as eye/eye-off button. For features: shows a small indicator when hidden. */
+  visible?: boolean;
   visibilityToggleable?: boolean;
   selectable: boolean;          // highlighted as clickable in current mode
   /** Stable id payload passed back through events. */
@@ -27,7 +36,7 @@ interface TreeNode {
 @Component({
   selector: 'app-cad-feature-tree-panel',
   standalone: true,
-  imports: [CommonModule, MatIconModule, MatTooltipModule],
+  imports: [CommonModule, MatIconModule, MatTooltipModule, MatMenuModule],
   template: `
     <div class="panel">
       <header class="panel-header">
@@ -42,23 +51,58 @@ interface TreeNode {
             [class.depth-1]="n.depth === 1"
             [class.selectable]="n.selectable"
             [class.hidden-datum]="n.kind === 'datum' && n.visible === false"
-            (click)="onRowClick(n, $event)">
+            [class.hidden-feature]="n.kind === 'feature' && n.visible === false"
+            (click)="onRowClick(n, $event)"
+            (contextmenu)="onRowContextMenu($event, n)">
           <span class="chevron" *ngIf="n.expandable" (click)="toggleExpand(n, $event)">
             <mat-icon>{{ n.expanded ? 'expand_more' : 'chevron_right' }}</mat-icon>
           </span>
           <span class="chevron-spacer" *ngIf="!n.expandable && n.depth > 0"></span>
           <mat-icon class="kind-icon" [ngClass]="n.iconClass">{{ n.iconName }}</mat-icon>
           <span class="label">{{ n.label }}</span>
+          <mat-icon *ngIf="n.kind === 'feature' && n.visible === false" class="hidden-indicator" matTooltip="Hidden">visibility_off</mat-icon>
           <button class="visibility-toggle"
                   *ngIf="n.visibilityToggleable"
                   [attr.data-testid]="'visibility-' + n.datumId"
                   [matTooltip]="n.visible ? 'Hide' : 'Show'"
-                  (click)="onVisibilityToggle(n, $event)">
+                  (click)="onDatumVisibilityToggle(n, $event)">
             <mat-icon>{{ n.visible ? 'visibility' : 'visibility_off' }}</mat-icon>
           </button>
           <mat-icon *ngIf="n.selectable && n.kind === 'sketch'" class="pick-hint">arrow_forward</mat-icon>
         </li>
       </ul>
+
+      <!-- Floating trigger for the context menu, positioned at the cursor on right-click. -->
+      <div #menuTriggerEl
+           class="menu-anchor"
+           [style.left.px]="menuX()"
+           [style.top.px]="menuY()"
+           [matMenuTriggerFor]="ctxMenu"></div>
+
+      <mat-menu #ctxMenu="matMenu">
+        <ng-container *ngIf="contextNode() as n">
+          <ng-container *ngIf="n.kind === 'feature' && n.feature?.type === 'extrude'">
+            <button mat-menu-item data-testid="ctx-edit-feature" (click)="emitAction({ action: 'edit-feature', featureId: n.feature!.id })">
+              <mat-icon>edit</mat-icon> Edit…
+            </button>
+            <button mat-menu-item data-testid="ctx-toggle-feature-visibility" (click)="emitAction({ action: 'toggle-feature-visibility', featureId: n.feature!.id })">
+              <mat-icon>{{ n.visible === false ? 'visibility' : 'visibility_off' }}</mat-icon>
+              {{ n.visible === false ? 'Show' : 'Hide' }}
+            </button>
+            <button mat-menu-item data-testid="ctx-delete-feature" (click)="emitAction({ action: 'delete-feature', featureId: n.feature!.id })">
+              <mat-icon>delete</mat-icon> Delete
+            </button>
+          </ng-container>
+          <ng-container *ngIf="n.kind === 'sketch' && n.sketchId">
+            <button mat-menu-item data-testid="ctx-edit-sketch" (click)="emitAction({ action: 'edit-sketch', sketchId: n.sketchId! })">
+              <mat-icon>edit</mat-icon> Edit sketch
+            </button>
+            <button mat-menu-item data-testid="ctx-delete-sketch" (click)="emitAction({ action: 'delete-sketch', sketchId: n.sketchId! })">
+              <mat-icon>delete</mat-icon> Delete sketch
+            </button>
+          </ng-container>
+        </ng-container>
+      </mat-menu>
     </div>
   `,
   styles: [`
@@ -70,6 +114,9 @@ interface TreeNode {
     .row.selectable { cursor: pointer; }
     .row.selectable:hover { background: rgba(255,255,255,0.06); }
     .row.hidden-datum .label { opacity: 0.4; text-decoration: line-through; }
+    .row.hidden-feature .label { opacity: 0.5; font-style: italic; }
+    .hidden-indicator { font-size: 14px; width: 14px; height: 14px; opacity: 0.55; }
+    .menu-anchor { position: fixed; width: 0; height: 0; }
     .chevron { display: inline-flex; align-items: center; width: 18px; cursor: pointer; opacity: 0.7; }
     .chevron mat-icon { font-size: 18px; width: 18px; height: 18px; }
     .chevron:hover { opacity: 1; }
@@ -99,9 +146,17 @@ export class CadFeatureTreePanelComponent {
 
   sketchSelected = output<string>();
   visibilityToggled = output<string>(); // datum id
+  actionRequested = output<FeatureTreeAction>();
 
   // Expansion state: keys for expanded nodes (origin is expanded by default).
   expanded = signal<Set<string>>(new Set<string>(['origin-children']));
+
+  // Context menu state: position the floating trigger at the cursor and remember
+  // which node the menu is operating on.
+  menuX = signal(0);
+  menuY = signal(0);
+  contextNode = signal<TreeNode | null>(null);
+  private menuTrigger = viewChild(MatMenuTrigger);
 
   nodes = computed<TreeNode[]>(() => {
     const out: TreeNode[] = [];
@@ -150,6 +205,7 @@ export class CadFeatureTreePanelComponent {
           expandable: hasChild,
           expanded: isOpen,
           selectable: false,
+          visible: ef.visible !== false,
           feature: f,
         });
         if (sketch) {
@@ -244,8 +300,27 @@ export class CadFeatureTreePanelComponent {
     }
   }
 
-  onVisibilityToggle(n: TreeNode, ev: MouseEvent) {
+  onDatumVisibilityToggle(n: TreeNode, ev: MouseEvent) {
     ev.stopPropagation();
     if (n.datumId) this.visibilityToggled.emit(n.datumId);
+  }
+
+  onRowContextMenu(ev: MouseEvent, n: TreeNode) {
+    // Origin features and datum rows have no context menu — fall through to the
+    // browser's native menu so power users can copy/inspect.
+    if (n.kind === 'datum') return;
+    if (n.kind === 'feature' && n.feature?.type === 'origin') return;
+    ev.preventDefault();
+    this.menuX.set(ev.clientX);
+    this.menuY.set(ev.clientY);
+    this.contextNode.set(n);
+    // openMenu is async w.r.t. anchor position because the menu reads the
+    // trigger element's bounding rect — set position first, then open.
+    queueMicrotask(() => this.menuTrigger()?.openMenu());
+  }
+
+  emitAction(action: FeatureTreeAction) {
+    this.menuTrigger()?.closeMenu();
+    this.actionRequested.emit(action);
   }
 }

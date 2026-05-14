@@ -15,12 +15,16 @@ import { CadModel } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { CadViewerComponent } from '../cad-viewer/cad-viewer.component';
-import { CadFeatureTreePanelComponent } from '../cad-feature-tree-panel/cad-feature-tree-panel.component';
+import { CadFeatureTreePanelComponent, type FeatureTreeAction } from '../cad-feature-tree-panel/cad-feature-tree-panel.component';
 import { CadSketchEditorComponent } from '../cad-sketch-editor/cad-sketch-editor.component';
 import { ExtrudeDialogComponent } from '../extrude-dialog/extrude-dialog.component';
-import type { FeatureTree, SketchDocument, SketchId, ModelGeometry, SketchState } from '../../../cad/lib/types';
-import { emptyFeatureTree, addFeature, regenerateModel, defaultDatumVisibility, type KernelAdapter } from '../../../cad/lib/featureTree';
-import { emptyDocument, createSketch, updateSketchState } from '../../../cad/lib/document';
+import { SketchDeleteWarningDialogComponent, type SketchDeleteAction } from '../sketch-delete-warning-dialog/sketch-delete-warning-dialog.component';
+import type { FeatureTree, SketchDocument, SketchId, ModelGeometry, SketchState, ExtrudeFeature } from '../../../cad/lib/types';
+import {
+  emptyFeatureTree, addFeature, regenerateModel, defaultDatumVisibility, type KernelAdapter,
+  removeFeature, updateFeatureParam, removeFeaturesReferencingSketch,
+} from '../../../cad/lib/featureTree';
+import { emptyDocument, createSketch, updateSketchState, deleteSketch } from '../../../cad/lib/document';
 import { migrateSketchDocument } from '../../../cad/lib/migration';
 import { planeForDatum, buildOriginDatums } from '../../../cad/lib/datum';
 import { extractClosedLoop } from '../../../cad/lib/profile';
@@ -115,6 +119,7 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
           [selectableSketches]="mode() === 'pick-extrude-target'"
           (sketchSelected)="onTreeSketchSelected($event)"
           (visibilityToggled)="onDatumVisibilityToggled($event)"
+          (actionRequested)="onTreeAction($event)"
           class="feature-tree">
         </app-cad-feature-tree-panel>
 
@@ -446,6 +451,82 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         this.save();
       }
     });
+  }
+
+  // Tree context-menu actions (REQs 607, 609, 610, 611) and sketch deletion (REQ 608).
+  onTreeAction(action: FeatureTreeAction) {
+    if (this.readonly()) return;
+    switch (action.action) {
+      case 'edit-feature': return this.editFeature(action.featureId);
+      case 'delete-feature': return this.deleteFeature(action.featureId);
+      case 'toggle-feature-visibility': return this.toggleFeatureVisibility(action.featureId);
+      case 'edit-sketch': return this.editSketch(action.sketchId);
+      case 'delete-sketch': return this.requestDeleteSketch(action.sketchId);
+    }
+  }
+
+  private editFeature(featureId: string) {
+    const feature = this.featureTree().features.find(f => f.id === featureId);
+    if (!feature || feature.type !== 'extrude') return;
+    const ref = this.dialog.open(ExtrudeDialogComponent, {
+      data: { defaultDistance: feature.distance },
+      width: '320px',
+    });
+    ref.afterClosed().subscribe((distance: number | null) => {
+      if (typeof distance !== 'number' || distance <= 0) return;
+      this.featureTree.set(updateFeatureParam<ExtrudeFeature>(this.featureTree(), featureId, { distance }));
+      this.save();
+    });
+  }
+
+  private deleteFeature(featureId: string) {
+    const feature = this.featureTree().features.find(f => f.id === featureId);
+    if (!feature || feature.type === 'origin') return;  // REQ 607: origin not deletable
+    this.featureTree.set(removeFeature(this.featureTree(), featureId));
+    this.save();
+  }
+
+  private toggleFeatureVisibility(featureId: string) {
+    const feature = this.featureTree().features.find(f => f.id === featureId);
+    if (!feature || feature.type === 'origin') return;
+    const nextVisible = feature.visible === false;  // currently hidden ⇒ show
+    this.featureTree.set(updateFeatureParam<ExtrudeFeature>(this.featureTree(), featureId, { visible: nextVisible }));
+    this.save();
+  }
+
+  private editSketch(sketchId: string) {
+    if (!this.doc().sketches[sketchId]) return;
+    this.activeSketchId.set(sketchId);
+    this.setMode('idle');
+  }
+
+  private requestDeleteSketch(sketchId: string) {
+    const dependents = this.featureTree().features
+      .filter((f): f is ExtrudeFeature => f.type === 'extrude' && f.sketchId === sketchId)
+      .map(f => f.id);
+    if (dependents.length === 0) {
+      // No references — just delete.
+      this.applySketchDelete(sketchId, 'break');
+      return;
+    }
+    const ref = this.dialog.open(SketchDeleteWarningDialogComponent, {
+      data: { sketchId, dependentFeatureIds: dependents },
+      width: '420px',
+    });
+    ref.afterClosed().subscribe((choice: SketchDeleteAction | null) => {
+      if (!choice || choice === 'cancel') return;
+      this.applySketchDelete(sketchId, choice);
+    });
+  }
+
+  private applySketchDelete(sketchId: string, action: 'cascade' | 'break') {
+    // If we're currently editing the sketch we're about to delete, exit sketch mode.
+    if (this.activeSketchId() === sketchId) this.activeSketchId.set(null);
+    this.doc.set(deleteSketch(this.doc(), sketchId));
+    if (action === 'cascade') {
+      this.featureTree.set(removeFeaturesReferencingSketch(this.featureTree(), sketchId));
+    }
+    this.save();
   }
 
   private loadModel(id: number) {
