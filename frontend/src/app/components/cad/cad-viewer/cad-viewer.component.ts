@@ -39,11 +39,17 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   selectionChange = output<string | null>();
   loading = input<boolean>(false);
   loadProgress = input<string>('');
-  // REQ 615: sketch overlays in the 3D scene. The viewer renders every sketch
-  // whose visible flag is not false, except the one currently being edited
-  // (the sketch-editor owns its own canvas for that case until REQ 616 lands).
+  // REQ 615: sketch overlays in the 3D scene.
   sketchDoc = input<SketchDocument | null>(null);
   activeSketchId = input<string | null>(null);
+
+  // REQ 616: sketch pointer events dispatched when an active sketch exists.
+  // Coordinates are in the active sketch's 2D plane space (post ray-plane
+  // intersection). The parent component wires these into the sketch tool logic.
+  sketchClick = output<{ x: number; y: number; shiftKey: boolean }>();
+  sketchPointerDown = output<{ x: number; y: number }>();
+  sketchPointerMove = output<{ x: number; y: number }>();
+  sketchPointerUp = output<{ x: number; y: number }>();
 
   private zone = inject(NgZone);
 
@@ -148,6 +154,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     canvas.addEventListener('pointerleave', this.onPointerUp);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
     canvas.addEventListener('click', this.onClick);
+    // Suppress the native context menu so right-drag can orbit in sketch mode.
+    canvas.addEventListener('contextmenu', ev => ev.preventDefault());
 
     // Resize.
     this.resizeObserver = new ResizeObserver(() => this.onResize());
@@ -198,8 +206,22 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
 
   private onPointerDown = (ev: PointerEvent) => {
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
-    if (ev.button === 0 && !ev.shiftKey) this.orbiting = true;
-    else this.panning = true;
+    const inSketch = this.activeSketchId() !== null;
+    // REQ 616 input map. In sketch mode: left = sketch, right = orbit, middle = pan.
+    // In non-sketch mode (existing behaviour): left = orbit, shift+left = pan.
+    if (inSketch) {
+      if (ev.button === 0) {
+        const p = this.toSketchCoords(ev);
+        if (p) this.zone.run(() => this.sketchPointerDown.emit(p));
+      } else if (ev.button === 2) {
+        this.orbiting = true;
+      } else if (ev.button === 1) {
+        this.panning = true;
+      }
+    } else {
+      if (ev.button === 0 && !ev.shiftKey) this.orbiting = true;
+      else this.panning = true;
+    }
     (ev.target as Element).setPointerCapture?.(ev.pointerId);
   };
 
@@ -219,6 +241,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       this.orbitTarget.addScaledVector(right, -dx * k);
       this.orbitTarget.addScaledVector(up, dy * k);
       this.updateCamera();
+    } else if (this.activeSketchId() !== null) {
+      const p = this.toSketchCoords(ev);
+      if (p) this.zone.run(() => this.sketchPointerMove.emit(p));
     } else {
       this.updatePointer(ev);
       this.updateHover();
@@ -226,10 +251,35 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   };
 
   private onPointerUp = (ev: PointerEvent) => {
+    if (this.activeSketchId() !== null && ev.button === 0) {
+      const p = this.toSketchCoords(ev);
+      if (p) this.zone.run(() => this.sketchPointerUp.emit(p));
+    }
     this.orbiting = false;
     this.panning = false;
     (ev.target as Element).releasePointerCapture?.(ev.pointerId);
   };
+
+  // REQ 616 — convert a screen-space mouse event to 2D coords on the active
+  // sketch's host plane. Returns null if the pointer ray misses the plane (e.g.
+  // sketch plane is edge-on to the camera).
+  private toSketchCoords(ev: MouseEvent): { x: number; y: number } | null {
+    const sketchId = this.activeSketchId();
+    if (!sketchId) return null;
+    const sketch = this.sketchDoc()?.sketches[sketchId];
+    if (!sketch) return null;
+    this.updatePointer(ev);
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const normal = new THREE.Vector3(...sketch.plane.normal).normalize();
+    const origin = new THREE.Vector3(...sketch.plane.origin);
+    const plane = new THREE.Plane(normal, -normal.dot(origin));
+    const target = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(plane, target)) return null;
+    const offset = target.sub(origin);
+    const xAxis = new THREE.Vector3(...sketch.plane.xAxis);
+    const yAxis = new THREE.Vector3(...sketch.plane.yAxis);
+    return { x: offset.dot(xAxis), y: offset.dot(yAxis) };
+  }
 
   private onWheel = (ev: WheelEvent) => {
     ev.preventDefault();
@@ -239,6 +289,13 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   };
 
   private onClick = (ev: MouseEvent) => {
+    // REQ 616: in sketch mode the click dispatches to the sketch toolbar's click
+    // handler with 2D plane coords; selection of 3D faces/datums is paused.
+    if (this.activeSketchId() !== null) {
+      const p = this.toSketchCoords(ev);
+      if (p) this.zone.run(() => this.sketchClick.emit({ x: p.x, y: p.y, shiftKey: ev.shiftKey }));
+      return;
+    }
     this.updatePointer(ev);
     const id = this.pickEntity();
     this.zone.run(() => this.selectionChange.emit(id));
@@ -372,8 +429,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.sketchOverlays.clear();
     if (!doc) return;
     for (const sketch of Object.values(doc.sketches)) {
+      // REQ 616: active sketch ALSO renders (no filter on activeSketchId). The
+      // visibility flag still applies. activeSketchId is consumed elsewhere for
+      // pointer dispatch.
+      void activeSketchId;
       if (sketch.visible === false) continue;
-      if (sketch.id === activeSketchId) continue;
       const group = this.buildSketchOverlay(sketch);
       if (group.children.length === 0) continue;
       this.sketchGroup.add(group);

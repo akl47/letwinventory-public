@@ -1,4 +1,4 @@
-import { Component, inject, signal, computed, effect, OnInit, OnDestroy, HostListener } from '@angular/core';
+import { Component, inject, signal, computed, effect, OnInit, OnDestroy, HostListener, viewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
@@ -57,33 +57,6 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
               *ngIf="model()">{{ model()!.releaseState }}</span>
         <span class="readonly-banner" data-testid="readonly-banner" *ngIf="readonly()">View only</span>
 
-        <mat-divider vertical *ngIf="!readonly() && activeSketchId() === null"></mat-divider>
-
-        <ng-container *ngIf="!readonly() && activeSketchId() === null">
-          <button mat-stroked-button
-                  data-testid="action-sketch"
-                  class="tool-action"
-                  [class.active]="mode() === 'pick-plane'"
-                  matTooltip="Start a new sketch on a datum plane"
-                  (click)="onSketchAction()">
-            <mat-icon>draw</mat-icon> Sketch
-          </button>
-          <button mat-stroked-button
-                  data-testid="action-extrude"
-                  class="tool-action"
-                  [class.active]="mode() === 'pick-extrude-target'"
-                  matTooltip="Extrude an existing sketch, or start a new one on a plane"
-                  (click)="onExtrudeAction()">
-            <mat-icon>vertical_align_top</mat-icon> Extrude
-          </button>
-          <button mat-icon-button
-                  *ngIf="mode() !== 'idle'"
-                  matTooltip="Cancel (Esc)"
-                  (click)="setMode('idle')">
-            <mat-icon>close</mat-icon>
-          </button>
-        </ng-container>
-
         <span class="spacer"></span>
 
         <button mat-stroked-button
@@ -112,6 +85,68 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
         </button>
       </div>
 
+      <!-- REQ 616 — tabbed ribbon. Toolbar content swaps with the active tab.
+           Active tab follows the editor context (auto-switches to Sketch when a
+           sketch is active) but the user can manually click tabs to override. -->
+      <div class="ribbon">
+        <div class="tab-strip">
+          <button class="tab" data-testid="tab-features"
+                  [class.active]="activeTab() === 'features'"
+                  (click)="setActiveTab('features')">
+            Features
+          </button>
+          <button class="tab" data-testid="tab-sketch"
+                  [class.active]="activeTab() === 'sketch'"
+                  (click)="setActiveTab('sketch')">
+            Sketch
+          </button>
+        </div>
+        <div class="ribbon-content">
+          <div class="ribbon-pane" [hidden]="activeTab() !== 'features'">
+            <button mat-stroked-button
+                    data-testid="action-sketch"
+                    class="tool-action"
+                    [disabled]="readonly() || activeSketchId() !== null"
+                    [class.active]="mode() === 'pick-plane'"
+                    matTooltip="Start a new sketch on a datum plane"
+                    (click)="onSketchAction()">
+              <mat-icon>draw</mat-icon> Sketch
+            </button>
+            <button mat-stroked-button
+                    data-testid="action-extrude"
+                    class="tool-action"
+                    [disabled]="readonly() || activeSketchId() !== null"
+                    [class.active]="mode() === 'pick-extrude-target'"
+                    matTooltip="Extrude an existing sketch, or start a new one on a plane"
+                    (click)="onExtrudeAction()">
+              <mat-icon>vertical_align_top</mat-icon> Extrude
+            </button>
+            <button mat-icon-button
+                    *ngIf="mode() !== 'idle' && activeSketchId() === null"
+                    matTooltip="Cancel (Esc)"
+                    (click)="setMode('idle')">
+              <mat-icon>close</mat-icon>
+            </button>
+          </div>
+          <div class="ribbon-pane" [hidden]="activeTab() !== 'sketch'">
+            <!-- Sketch-editor renders the sketch toolbar (tools + constraints
+                 + DOF readout). Pointer events come from the 3D viewer via
+                 onViewerSketchX() handlers below. -->
+            <app-cad-sketch-editor #sketchEditor
+              [sketchId]="activeSketchId() ?? ''"
+              [doc]="doc()"
+              [readonly]="readonly() || activeSketchId() === null"
+              (sketchChanged)="onSketchChanged($event)"
+              (exitSketch)="onExitSketch()"
+              (extrudeRequested)="onExtrudeRequested()">
+            </app-cad-sketch-editor>
+            <span class="ribbon-hint" *ngIf="activeSketchId() === null">
+              Pick or create a sketch first — switch to Features → Sketch.
+            </span>
+          </div>
+        </div>
+      </div>
+
       <div class="editor-body">
         <app-cad-feature-tree-panel
           [features]="featureTree().features"
@@ -125,50 +160,47 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
 
         <div class="viewport-wrap">
           <ng-container *ngIf="!loading(); else loadingTpl">
-            <ng-container *ngIf="activeSketchId() === null">
-              <app-cad-viewer
-                [geometry]="geometry()"
-                [selected]="selected()"
-                [loading]="kernelLoading()"
-                [loadProgress]="kernelLoadStatus()"
-                [sketchDoc]="doc()"
-                [activeSketchId]="activeSketchId()"
-                (selectionChange)="onSelectionChange($event)">
-              </app-cad-viewer>
+            <app-cad-viewer
+              [geometry]="geometry()"
+              [selected]="selected()"
+              [loading]="kernelLoading()"
+              [loadProgress]="kernelLoadStatus()"
+              [sketchDoc]="doc()"
+              [activeSketchId]="activeSketchId()"
+              (selectionChange)="onSelectionChange($event)"
+              (sketchClick)="onViewerSketchClick($event)"
+              (sketchPointerDown)="onViewerSketchPointerDown($event)"
+              (sketchPointerMove)="onViewerSketchPointerMove($event)"
+              (sketchPointerUp)="onViewerSketchPointerUp($event)">
+            </app-cad-viewer>
 
-              <!-- Mode prompt at the top of the viewport -->
-              <div class="mode-prompt" *ngIf="mode() !== 'idle'" data-testid="mode-prompt">
-                <mat-icon>{{ promptIcon() }}</mat-icon>
-                <span class="prompt-text">{{ promptText() }}</span>
-                <button mat-button (click)="setMode('idle')">Cancel</button>
-              </div>
+            <!-- Mode prompt at the top of the viewport -->
+            <div class="mode-prompt" *ngIf="mode() !== 'idle' && activeSketchId() === null" data-testid="mode-prompt">
+              <mat-icon>{{ promptIcon() }}</mat-icon>
+              <span class="prompt-text">{{ promptText() }}</span>
+              <button mat-button (click)="setMode('idle')">Cancel</button>
+            </div>
 
-              <div class="hud" data-testid="cad-hud-ready">
-                mode: {{ mode() }} · selected: {{ selected() || '(none)' }} · features: {{ featureTree().features.length }}
-              </div>
+            <!-- Active-sketch banner with quick exit -->
+            <div class="mode-prompt" *ngIf="activeSketchId() !== null" data-testid="sketch-mode-banner">
+              <mat-icon>draw</mat-icon>
+              <span class="prompt-text">Sketch mode · plane: {{ activeSketchPlaneLabel() }}</span>
+              <button mat-stroked-button data-testid="exit-sketch" (click)="onExitSketch()">Exit sketch</button>
+            </div>
 
-              <div class="quick-start" *ngIf="mode() === 'idle' && featureTree().features.length === 1 && sketchCount() === 0">
-                <h3>To get started</h3>
-                <ol>
-                  <li>Click <strong>Sketch</strong> in the top toolbar, then click a datum plane</li>
-                  <li>Draw a closed shape with the Line tool</li>
-                  <li>Click <strong>Extrude</strong> in the top toolbar and pick that sketch</li>
-                </ol>
-                <p class="muted">Orbit: left-drag · Pan: shift-drag · Zoom: wheel</p>
-              </div>
-            </ng-container>
+            <div class="hud" data-testid="cad-hud-ready" *ngIf="activeSketchId() === null">
+              mode: {{ mode() }} · selected: {{ selected() || '(none)' }} · features: {{ featureTree().features.length }}
+            </div>
 
-            <ng-container *ngIf="activeSketchId() !== null">
-              <app-cad-sketch-editor
-                [sketchId]="activeSketchId()!"
-                [doc]="doc()"
-                [readonly]="readonly()"
-                (sketchChanged)="onSketchChanged($event)"
-                (exitSketch)="onExitSketch()"
-                (extrudeRequested)="onExtrudeRequested()">
-              </app-cad-sketch-editor>
-            </ng-container>
-          </ng-container>
+            <div class="quick-start" *ngIf="mode() === 'idle' && activeSketchId() === null && featureTree().features.length === 1 && sketchCount() === 0">
+              <h3>To get started</h3>
+              <ol>
+                <li>Click <strong>Sketch</strong> on the Features ribbon, then click a datum plane</li>
+                <li>Switch to the <strong>Sketch</strong> ribbon and draw a closed shape</li>
+                <li>Back on Features, click <strong>Extrude</strong> and pick that sketch</li>
+              </ol>
+              <p class="muted">Orbit: left-drag · Pan: shift-drag · Zoom: wheel · In sketch mode: left-click sketches, right-drag orbits</p>
+            </div>
 
           <ng-template #loadingTpl>
             <div class="loading">
@@ -192,6 +224,15 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
     .state-badge.released { background: #e8f5e9; color: #2e7d32; }
     .readonly-banner { padding: 4px 10px; background: #ffebee; color: #c62828; border-radius: 4px; font-size: 12px; font-weight: 600; }
     .tool-action.active { background: rgba(66, 165, 245, 0.22); border-color: #42a5f5; }
+    .ribbon { background: #25253a; border-bottom: 1px solid #444; }
+    .tab-strip { display: flex; gap: 0; padding: 0 16px; border-bottom: 1px solid #333; }
+    .tab { background: none; border: none; color: #aaa; padding: 6px 14px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500; }
+    .tab:hover { color: #fff; }
+    .tab.active { color: #fff; border-bottom-color: #42a5f5; }
+    .ribbon-content { padding: 6px 16px; min-height: 44px; display: flex; align-items: center; }
+    .ribbon-pane { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
+    .ribbon-pane[hidden] { display: none !important; }
+    .ribbon-hint { font-size: 12px; opacity: 0.7; margin-left: 8px; }
     .editor-body { display: flex; flex: 1; min-height: 0; }
     .feature-tree { width: 240px; background: #25253a; border-right: 1px solid #444; }
     .viewport-wrap { flex: 1; position: relative; overflow: hidden; }
@@ -228,7 +269,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   kernelLoadStatus = signal<string>('');
   mode = signal<EditorMode>('idle');
   pendingExtrude = signal<boolean>(false);
+  // REQ 616 — ribbon tab. Auto-switches to 'sketch' when activeSketchId becomes
+  // non-null and back to 'features' when it clears; user can manually override.
+  activeTab = signal<'features' | 'sketch'>('features');
+  private prevActiveSketchId: SketchId | null = null;
+  private sketchEditorRef = viewChild<CadSketchEditorComponent>('sketchEditor');
   private kernel: KernelAdapter = makePureJsKernel();
+
+  activeSketchPlaneLabel = computed(() => {
+    const sid = this.activeSketchId();
+    const sk = sid ? this.doc().sketches[sid] : null;
+    if (!sk) return '';
+    return sk.hostId.startsWith('datum:') ? sk.hostId.substring('datum:'.length).replace('_', ' ') : sk.hostId;
+  });
 
   readonly = computed(() => {
     const m = this.model();
@@ -268,6 +321,17 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private regenGeneration = 0;
 
   constructor() {
+    // REQ 616: auto-switch the ribbon tab when activeSketchId transitions.
+    // Steady-state changes (e.g., editing the sketch's contents) don't override
+    // a user-initiated tab choice.
+    effect(() => {
+      const next = this.activeSketchId();
+      if (next !== this.prevActiveSketchId) {
+        this.activeTab.set(next ? 'sketch' : 'features');
+        this.prevActiveSketchId = next;
+      }
+    });
+
     effect(() => {
       const tree = this.featureTree();
       const doc = this.doc();
@@ -342,6 +406,24 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (m === 'idle') {
       this.pendingExtrude.set(false);
     }
+  }
+
+  // REQ 616 — manual tab switch from the ribbon. Independent of activeSketchId.
+  setActiveTab(t: 'features' | 'sketch') { this.activeTab.set(t); }
+
+  // REQ 616 — sketch pointer events forwarded from the 3D viewer (after
+  // ray-plane projection into the active sketch's 2D coords).
+  onViewerSketchClick(p: { x: number; y: number; shiftKey: boolean }) {
+    this.sketchEditorRef()?.handleSketchClick(p);
+  }
+  onViewerSketchPointerDown(p: { x: number; y: number }) {
+    this.sketchEditorRef()?.handleSketchPointerDown(p);
+  }
+  onViewerSketchPointerMove(p: { x: number; y: number }) {
+    this.sketchEditorRef()?.handleSketchPointerMove(p);
+  }
+  onViewerSketchPointerUp(p: { x: number; y: number }) {
+    this.sketchEditorRef()?.handleSketchPointerUp(p);
   }
 
   onSketchAction() {

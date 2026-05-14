@@ -136,112 +136,17 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
                 (click)="extrudeRequested.emit()">
           <mat-icon>vertical_align_top</mat-icon> Extrude…
         </button>
-        <button mat-stroked-button data-testid="exit-sketch" (click)="exitSketch.emit()">
-          Exit sketch → 3D View
-        </button>
       </header>
 
-      <svg
-        #canvas
-        data-testid="sketch-canvas"
-        class="sketch-canvas"
-        viewBox="-100 -100 200 200"
-        (click)="onCanvasClick($event)"
-        (mousedown)="onCanvasMouseDown($event)">
-
-        <defs>
-          <pattern id="sketch-grid" width="10" height="10" patternUnits="userSpaceOnUse">
-            <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#2a2a3a" stroke-width="0.3"/>
-          </pattern>
-        </defs>
-        <rect x="-100" y="-100" width="200" height="200" fill="url(#sketch-grid)"/>
-        <line x1="-100" y1="0" x2="100" y2="0" stroke="#666" stroke-width="0.5" stroke-dasharray="2 2"/>
-        <line x1="0" y1="-100" x2="0" y2="100" stroke="#666" stroke-width="0.5" stroke-dasharray="2 2"/>
-
-        <!-- lines -->
-        <g *ngFor="let l of lines()">
-          <line
-            [attr.x1]="ptX(l.startId)"
-            [attr.y1]="-ptY(l.startId)"
-            [attr.x2]="ptX(l.endId)"
-            [attr.y2]="-ptY(l.endId)"
-            [attr.stroke]="strokeFor(l)"
-            [attr.stroke-width]="selected().has(l.id) ? 2 : 1.2"
-            [attr.stroke-dasharray]="l.construction ? '3 2' : null"
-          />
-        </g>
-
-        <!-- circles (REQ 563) — native SVG primitive for analytic fidelity -->
-        <g *ngFor="let c of circles()">
-          <circle
-            [attr.cx]="ptX(c.centerId)"
-            [attr.cy]="-ptY(c.centerId)"
-            [attr.r]="c.radius"
-            fill="none"
-            [attr.stroke]="strokeFor(c)"
-            [attr.stroke-width]="selected().has(c.id) ? 2 : 1.2"
-            [attr.stroke-dasharray]="c.construction ? '3 2' : null"
-          />
-        </g>
-
-        <!-- arcs (REQ 563) — SVG path with arc command, sweep mirrored for inverted Y -->
-        <g *ngFor="let a of arcs()">
-          <path
-            [attr.d]="arcPath(a)"
-            fill="none"
-            [attr.stroke]="strokeFor(a)"
-            [attr.stroke-width]="selected().has(a.id) ? 2 : 1.2"
-            [attr.stroke-dasharray]="a.construction ? '3 2' : null"
-          />
-        </g>
-
-        <!-- points -->
-        <g *ngFor="let p of points()">
-          <circle
-            [attr.cx]="p.x"
-            [attr.cy]="-p.y"
-            [attr.r]="selected().has(p.id) ? 2.5 : 1.5"
-            [attr.fill]="p.construction ? '#888' : (selected().has(p.id) ? '#ffb74d' : '#fff')"
-            [attr.stroke]="strokeFor(p)"
-            stroke-width="0.5"
-          />
-        </g>
-
-        <!-- draft line preview -->
-        <line *ngIf="draftLineStart()"
-              [attr.x1]="ptX(draftLineStart()!)"
-              [attr.y1]="-ptY(draftLineStart()!)"
-              [attr.x2]="cursor().x"
-              [attr.y2]="-cursor().y"
-              stroke="#42a5f5" stroke-dasharray="2 2" stroke-width="0.8"/>
-
-        <!-- draft circle center marker -->
-        <circle *ngIf="draftCircleCenter() as cc"
-                [attr.cx]="cc.x" [attr.cy]="-cc.y" r="2"
-                fill="none" stroke="#ffb74d" stroke-width="0.6"/>
-
-        <!-- draft arc markers -->
-        <g *ngIf="draftArcCenter() as ac">
-          <circle [attr.cx]="ac.x" [attr.cy]="-ac.y" r="2"
-                  fill="none" stroke="#ffb74d" stroke-width="0.6"/>
-          <circle *ngIf="draftArcStart() as arcStart"
-                  [attr.cx]="arcStart.x" [attr.cy]="-arcStart.y" r="2"
-                  fill="#ffb74d"/>
-          <circle *ngIf="draftArcRadius() as ar"
-                  [attr.cx]="ac.x" [attr.cy]="-ac.y" [attr.r]="ar"
-                  fill="none" stroke="#ffb74d" stroke-dasharray="1 1" stroke-width="0.5"/>
-        </g>
-      </svg>
     </div>
   `,
   styles: [`
-    .sketch-editor { display: flex; flex-direction: column; height: 100%; }
-    .sketch-toolbar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: #2a2a3a; border-bottom: 1px solid #444; }
+    .sketch-editor { display: flex; flex-direction: column; }
+    .sketch-toolbar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; background: #2a2a3a; border-bottom: 1px solid #444; flex-wrap: wrap; }
     .divider { width: 1px; height: 24px; background: #555; margin: 0 8px; }
     .status { font-size: 12px; opacity: 0.7; font-family: monospace; }
     .spacer { flex: 1; }
     button.active { background: rgba(66, 165, 245, 0.2); }
-    .sketch-canvas { flex: 1; width: 100%; background: #14141e; cursor: crosshair; }
   `],
 })
 export class CadSketchEditorComponent implements OnDestroy {
@@ -379,31 +284,19 @@ export class CadSketchEditorComponent implements OnDestroy {
     return Math.abs(sweep) > Math.PI;
   }
 
-  // Returns the SVG element under the cursor, or null if the event was not on
-  // the canvas. Used by gesture handlers to compute sketch coords.
-  private toSketchCoords(ev: MouseEvent): { x: number; y: number } | null {
-    const target = ev.target as SVGElement | null;
-    const svg = target?.ownerSVGElement ?? (target as unknown as SVGSVGElement | null);
-    if (!svg || typeof (svg as SVGSVGElement).createSVGPoint !== 'function') return null;
-    const pt = (svg as SVGSVGElement).createSVGPoint();
-    pt.x = ev.clientX; pt.y = ev.clientY;
-    const m = (svg as SVGGraphicsElement).getScreenCTM();
-    if (!m) return null;
-    const local = pt.matrixTransform(m.inverse());
-    return { x: local.x, y: -local.y };
-  }
+  // REQ 616 — pointer events now arrive from the 3D viewer with pre-projected
+  // 2D plane coords. The parent component (cad-editor) wires the viewer's
+  // sketchClick / sketchPointerDown / sketchPointerMove / sketchPointerUp
+  // outputs into these public methods.
 
-  onCanvasClick(ev: MouseEvent) {
+  handleSketchClick(p: { x: number; y: number; shiftKey: boolean }) {
     if (this.readonly()) return;
     if (this.didDrag) { this.didDrag = false; return; }
-    const local = this.toSketchCoords(ev);
-    if (!local) return;
-    const x = Math.round(local.x);
-    const y = Math.round(local.y);
-
+    const x = Math.round(p.x);
+    const y = Math.round(p.y);
     const tool = this.tool();
     if (tool === 'select') {
-      this.handleSelectClick(x, y, ev.shiftKey);
+      this.handleSelectClick(x, y, p.shiftKey);
     } else if (tool === 'point') {
       this.commit(addPoint(this.state(), x, y).state);
     } else if (tool === 'line') {
@@ -416,34 +309,28 @@ export class CadSketchEditorComponent implements OnDestroy {
   }
 
   // REQ 613: drag-to-move for non-construction points in the Select tool.
-  // mousedown picks the underlying entity; drag starts once the cursor moves
-  // > DRAG_THRESHOLD sketch units, so a small jitter still resolves as a click.
-  onCanvasMouseDown(ev: MouseEvent) {
+  // pointerDown picks the entity; drag engages after the cursor moves more
+  // than DRAG_THRESHOLD sketch units.
+  handleSketchPointerDown(p: { x: number; y: number }) {
     if (this.readonly()) return;
     if (this.tool() !== 'select') return;
-    if (ev.button !== 0) return;  // primary button only
-    const local = this.toSketchCoords(ev);
-    if (!local) return;
-    const picked = pickEntity(this.state(), local, 3);
+    const picked = pickEntity(this.state(), p, 3);
     if (!picked || picked.kind !== 'point' || picked.construction) return;
     const point = findPoint(this.state(), picked.id);
     if (!point) return;
     this.dragState.set({
       pointId: picked.id,
-      startCursor: local,
+      startCursor: p,
       startPoint: { x: point.x, y: point.y },
       isDragging: false,
     });
   }
 
-  @HostListener('document:mousemove', ['$event'])
-  onDocumentMouseMove(ev: MouseEvent) {
+  handleSketchPointerMove(p: { x: number; y: number }) {
     const drag = this.dragState();
     if (!drag) return;
-    const local = this.toSketchCoords(ev);
-    if (!local) return;
-    const dx = local.x - drag.startCursor.x;
-    const dy = local.y - drag.startCursor.y;
+    const dx = p.x - drag.startCursor.x;
+    const dy = p.y - drag.startCursor.y;
     const DRAG_THRESHOLD = 1;
     if (!drag.isDragging) {
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
@@ -451,25 +338,20 @@ export class CadSketchEditorComponent implements OnDestroy {
     }
     const newX = Math.round(drag.startPoint.x + dx);
     const newY = Math.round(drag.startPoint.y + dy);
-    // Preview update: emit the moved state immediately, defer the solver to
-    // mouseup so each frame is cheap.
+    // Preview update: emit moved state immediately, defer the solver to pointerUp.
     const next = movePoint(this.state(), drag.pointId, newX, newY);
     this.sketchChanged.emit(next);
   }
 
-  @HostListener('document:mouseup', ['$event'])
-  onDocumentMouseUp(ev: MouseEvent) {
+  handleSketchPointerUp(p: { x: number; y: number }) {
     const drag = this.dragState();
     this.dragState.set(null);
     if (!drag || !drag.isDragging) return;
     this.didDrag = true;
-    const local = this.toSketchCoords(ev) ?? drag.startCursor;
-    const dx = local.x - drag.startCursor.x;
-    const dy = local.y - drag.startCursor.y;
+    const dx = p.x - drag.startCursor.x;
+    const dy = p.y - drag.startCursor.y;
     const newX = Math.round(drag.startPoint.x + dx);
     const newY = Math.round(drag.startPoint.y + dy);
-    // commit() emits the state then runs the solver so constraint-pinned points
-    // snap back to their solved positions.
     this.commit(movePoint(this.state(), drag.pointId, newX, newY));
   }
 
