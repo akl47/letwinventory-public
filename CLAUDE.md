@@ -263,3 +263,23 @@ Past sessions appear in `git log`. Add a new section here only when a session de
 - **`FeatureTreeAction` is a tagged union on the action name**, not a method call. The tree panel emits `{action, featureId | sketchId}` so the cad-editor stays the single source of truth for dialog/state side effects; the tree stays pure UI.
 
 - **Status:** REQs 607–611 created and `unapproved`. Tests: 124/124 passing (10 new — 4 deleteSketch, 4 removeFeaturesReferencingSketch, 2 regenerateModel visibility). Two commits: `0ed6d00` (data layer), `b665fd4` (UI). UI needs manual smoke test in the browser.
+
+### 2026-05-14 (cont.) — UX refinements: circle extrude + point drag + sketch visibility + 3D-always sketching (REQs 612–616)
+
+- **Single-circle extrude profile is a special-cased shortcut, not a general curve-loop extractor.** REQ 612: `extractClosedLoop` recognises the "exactly one non-construction circle and zero non-construction lines" case before the line-walking algorithm and returns the tessellated circle. Mixed line+arc loops (and multi-circle profiles) still error. The clean way to fix that is a general curve-aware loop walker — out of scope here.
+
+- **Drag-to-move uses a "drag candidate" pattern, not "drag immediately on mousedown".** REQ 613: mousedown over a non-construction point stores a candidate; drag mode engages only after the cursor moves > 1 sketch unit. Under threshold, mouseup falls through to the existing click handler for selection toggling. `didDrag` flag suppresses the synthetic click event that fires after a drag completes. mousemove emits preview state without solving (fast); mouseup runs the solver via `commit()` so constraint-pinned points snap back.
+
+- **`construction` continues to expand in meaning, deliberately.** Phase A pinned points; Phase B.1 added curve-radius pinning; in this session, REQ 614 added `Sketch.visible`. The TreeNode/feature-tree code unified its visibility-toggle button across datums, features, and sketches by dispatching at the click site (datum → `visibilityToggled` event, sketch → `actionRequested` with `toggle-sketch-visibility`, feature → context-menu-only). No grand abstraction; each kind owns its own state slot (`OriginFeature.visibility` map / `ExtrudeFeature.visible` / `Sketch.visible`).
+
+- **The full SolidWorks-style restructure (REQ 616) replaces the entire 2D SVG sketch canvas with 3D overlay rendering + ray-plane projection.** `cad-sketch-editor` is now a toolbar-only component (SVG gone). `cad-viewer.toSketchCoords()` is the central piece: screen pixels → `Raycaster.setFromCamera()` → `Plane.intersectPlane()` → 2D coords via dot product against the sketch's xAxis/yAxis basis. Returns null when the camera is edge-on to the sketch plane. All sketch picking, dragging, and tool clicks go through this single conversion.
+
+- **Mouse input map is conditional on `activeSketchId`.** Outside sketch mode: left=orbit, shift+left=pan, wheel=zoom (existing). In sketch mode: left=sketch, right=orbit, middle=pan, wheel=zoom. The viewer suppresses the native context menu so right-drag can orbit. Standard CAD convention; users coming from SolidWorks/OnShape will feel at home.
+
+- **Tabbed ribbon uses `[hidden]`, not `*ngIf`.** State preservation: switching tabs doesn't recreate the sketch-editor component, so half-finished tool gestures (e.g., placed center for an arc, awaiting the second click) survive a tab switch. Effect on `activeSketchId` transitions auto-switches the tab on first change but a user-initiated `setActiveTab` stays sticky for the rest of that state.
+
+- **The active sketch renders as a 3D overlay even during edits — but tool drafts (half-finished line/arc/circle) do not yet have 3D previews.** The overlay shows committed entities only. Live drafts of the in-progress shape would require rendering signal-state into Three.js objects per-frame; the SVG canvas got that for free. Worth a follow-up REQ if users notice. For now, click-by-click placement still works (the user just doesn't see the rubber-band preview until the click commits).
+
+- **REQ 612 is `unapproved` but the bug-fix value is independent of the REQ approval workflow.** Same story for REQs 613, 614, 615, 616 — they describe shipping behaviour. User gates approval.
+
+- **Status:** REQs 612–616 (5 reqs) `unapproved`. Tests: 131/131 passing (7 new — 3 circle profile, 4 setSketchVisibility). Five commits: `40c43eb` (circle extrude + drag), `952c0e5` (sketch visibility + 3D overlay), `e308150` (tabs + 3D-always sketching). All UI changes need manual smoke test in the browser.
