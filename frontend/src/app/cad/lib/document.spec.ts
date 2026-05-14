@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   emptyDocument, createSketch, updateSketchState, findSketchByHost, promoteVertex, promoteEdge,
-  deleteSketch,
+  deleteSketch, setSketchVisibility,
 } from './document';
 import { emptySketchState } from './store';
 import type { ModelTopology, Plane3, SketchState } from './types';
@@ -165,6 +165,33 @@ describe('Sketch document (CAD-022, CAD-023, CAD-026, CAD-028, CAD-030)', () => 
       const d3 = deleteSketch(doc, r1.sketchId);
       expect(d3.sketches[r1.sketchId]).toBeUndefined();
       expect(d3.sketches[r2.sketchId]).toBeDefined();
+    });
+  });
+
+  describe('setSketchVisibility (REQ 614)', () => {
+    it('sets visible=false on the named sketch', () => {
+      const { doc: d1, sketchId } = createSketch(emptyDocument(), 'datum:xy_plane', XY_PLANE, null);
+      const d2 = setSketchVisibility(d1, sketchId, false);
+      expect(d2.sketches[sketchId].visible).toBe(false);
+    });
+
+    it('sets visible=true on the named sketch (restoring after hide)', () => {
+      const { doc: d1, sketchId } = createSketch(emptyDocument(), 'datum:xy_plane', XY_PLANE, null);
+      const d2 = setSketchVisibility(d1, sketchId, false);
+      const d3 = setSketchVisibility(d2, sketchId, true);
+      expect(d3.sketches[sketchId].visible).toBe(true);
+    });
+
+    it('is a no-op when the sketch is not in the document', () => {
+      const d0 = emptyDocument();
+      const d1 = setSketchVisibility(d0, 'not-a-real-id', false);
+      expect(d1).toEqual(d0);
+    });
+
+    it('does not mutate the original document', () => {
+      const { doc: d1, sketchId } = createSketch(emptyDocument(), 'datum:xy_plane', XY_PLANE, null);
+      setSketchVisibility(d1, sketchId, false);
+      expect(d1.sketches[sketchId].visible).toBeUndefined();
     });
   });
 });

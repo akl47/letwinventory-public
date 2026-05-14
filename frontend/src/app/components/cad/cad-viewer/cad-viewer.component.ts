@@ -4,7 +4,12 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import * as THREE from 'three';
-import type { ModelGeometry, DatumElement } from '../../../cad/lib/types';
+import type {
+  ModelGeometry, DatumElement, SketchDocument, Sketch, SketchEntity,
+  CircleEntity, ArcEntity,
+} from '../../../cad/lib/types';
+import { findPoint } from '../../../cad/lib/types';
+import { tessellateCircle, tessellateArc, DEFAULT_CHORD_TOLERANCE } from '../../../cad/lib/tessellator';
 
 @Component({
   selector: 'app-cad-viewer',
@@ -34,6 +39,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   selectionChange = output<string | null>();
   loading = input<boolean>(false);
   loadProgress = input<string>('');
+  // REQ 615: sketch overlays in the 3D scene. The viewer renders every sketch
+  // whose visible flag is not false, except the one currently being edited
+  // (the sketch-editor owns its own canvas for that case until REQ 616 lands).
+  sketchDoc = input<SketchDocument | null>(null);
+  activeSketchId = input<string | null>(null);
 
   private zone = inject(NgZone);
 
@@ -45,8 +55,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
 
   private faceGroup!: THREE.Group;
   private datumGroup!: THREE.Group;
+  private sketchGroup!: THREE.Group;
   private faceMeshes = new Map<string, THREE.Mesh>();
   private datumMeshes = new Map<string, THREE.Object3D>();
+  // Keyed by sketchId; each entry is one container Group holding the projected
+  // line segments and point markers for that sketch.
+  private sketchOverlays = new Map<string, THREE.Group>();
 
   private rafHandle = 0;
   private resizeObserver?: ResizeObserver;
@@ -69,6 +83,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const sel = this.selected();
       const hov = this.hovered();
       if (this.scene) this.recolor(sel, hov);
+    });
+    effect(() => {
+      const doc = this.sketchDoc();
+      const active = this.activeSketchId();
+      if (this.scene) this.syncSketches(doc, active);
     });
   }
 
@@ -117,6 +136,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.scene.add(this.datumGroup);
     this.faceGroup = new THREE.Group();
     this.scene.add(this.faceGroup);
+    this.sketchGroup = new THREE.Group();
+    this.scene.add(this.sketchGroup);
 
     // Input handlers.
     const canvas = this.renderer.domElement;
@@ -135,6 +156,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // Initial geometry.
     const g = this.geometry();
     if (g) this.syncGeometry(g);
+    this.syncSketches(this.sketchDoc(), this.activeSketchId());
 
     // Animate.
     const animate = () => {
@@ -332,6 +354,108 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     }
 
     this.recolor(this.selected(), this.hovered());
+  }
+
+  // REQ 615: project each visible non-active sketch's entities into the 3D
+  // scene as line geometry on the sketch's host plane.
+  private syncSketches(doc: SketchDocument | null, activeSketchId: string | null) {
+    // Tear down stale overlays.
+    for (const [, group] of this.sketchOverlays) {
+      this.sketchGroup.remove(group);
+      group.traverse(child => {
+        const m = (child as THREE.Mesh).material as THREE.Material | undefined;
+        if (m) Array.isArray(m) ? m.forEach(x => x.dispose()) : m.dispose();
+        const g = (child as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+        if (g) g.dispose();
+      });
+    }
+    this.sketchOverlays.clear();
+    if (!doc) return;
+    for (const sketch of Object.values(doc.sketches)) {
+      if (sketch.visible === false) continue;
+      if (sketch.id === activeSketchId) continue;
+      const group = this.buildSketchOverlay(sketch);
+      if (group.children.length === 0) continue;
+      this.sketchGroup.add(group);
+      this.sketchOverlays.set(sketch.id, group);
+    }
+  }
+
+  private project2DTo3D(sketch: Sketch, p: { x: number; y: number }): THREE.Vector3 {
+    const o = new THREE.Vector3(...sketch.plane.origin);
+    const x = new THREE.Vector3(...sketch.plane.xAxis);
+    const y = new THREE.Vector3(...sketch.plane.yAxis);
+    return o.clone().addScaledVector(x, p.x).addScaledVector(y, p.y);
+  }
+
+  private buildSketchOverlay(sketch: Sketch): THREE.Group {
+    const group = new THREE.Group();
+    group.userData = { sketchId: sketch.id };
+    const project = (p: { x: number; y: number }) => this.project2DTo3D(sketch, p);
+    for (const e of sketch.state.entities) {
+      const obj = this.buildSketchEntity(sketch, e, project);
+      if (obj) group.add(obj);
+    }
+    return group;
+  }
+
+  private buildSketchEntity(
+    sketch: Sketch, e: SketchEntity,
+    project: (p: { x: number; y: number }) => THREE.Vector3,
+  ): THREE.Object3D | null {
+    const color = e.construction ? 0x666666 : 0x42a5f5;
+    const dashed = !!e.construction;
+    switch (e.kind) {
+      case 'point': {
+        const geom = new THREE.SphereGeometry(0.6, 8, 6);
+        const mat = new THREE.MeshBasicMaterial({ color: e.construction ? 0x888888 : 0xffffff });
+        const mesh = new THREE.Mesh(geom, mat);
+        mesh.position.copy(project(e));
+        return mesh;
+      }
+      case 'line': {
+        const a = findPoint(sketch.state, e.startId);
+        const b = findPoint(sketch.state, e.endId);
+        if (!a || !b) return null;
+        return this.makeLineSegments([project(a), project(b)], color, dashed);
+      }
+      case 'circle': {
+        const c = findPoint(sketch.state, e.centerId);
+        if (!c) return null;
+        const pts2D = tessellateCircle({ x: c.x, y: c.y }, (e as CircleEntity).radius, DEFAULT_CHORD_TOLERANCE);
+        return this.makeLineSegments(pts2D.map(project), color, dashed);
+      }
+      case 'arc': {
+        const arc = e as ArcEntity;
+        const c = findPoint(sketch.state, arc.centerId);
+        const s = findPoint(sketch.state, arc.startId);
+        const f = findPoint(sketch.state, arc.endId);
+        if (!c || !s || !f) return null;
+        const startAngle = Math.atan2(s.y - c.y, s.x - c.x);
+        const endAngle = Math.atan2(f.y - c.y, f.x - c.x);
+        const pts2D = tessellateArc(
+          { x: c.x, y: c.y }, arc.radius, startAngle, endAngle, arc.ccw,
+          DEFAULT_CHORD_TOLERANCE,
+        );
+        return this.makeLineSegments(pts2D.map(project), color, dashed);
+      }
+      default:
+        // Phase B/C entity kinds (ellipse, ellipticalArc, spline, conic) — not yet rendered.
+        return null;
+    }
+  }
+
+  // Build a continuous polyline as Three.js Line. For construction (dashed)
+  // style we use LineDashedMaterial which requires computeLineDistances().
+  private makeLineSegments(points: THREE.Vector3[], color: number, dashed: boolean): THREE.Line {
+    const geom = new THREE.BufferGeometry().setFromPoints(points);
+    const mat = dashed
+      ? new THREE.LineDashedMaterial({ color, dashSize: 1.5, gapSize: 1, depthTest: false })
+      : new THREE.LineBasicMaterial({ color, depthTest: false });
+    const line = new THREE.Line(geom, mat);
+    if (dashed) line.computeLineDistances();
+    line.renderOrder = 2;  // draw on top of faces so the overlay reads clearly
+    return line;
   }
 
   private recolor(selected: string | null, hovered: string | null) {

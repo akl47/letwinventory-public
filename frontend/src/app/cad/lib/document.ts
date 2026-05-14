@@ -75,6 +75,15 @@ export function deleteSketch(doc: SketchDocument, sketchId: string): SketchDocum
   return { ...doc, sketches: next };
 }
 
+export function setSketchVisibility(doc: SketchDocument, sketchId: string, visible: boolean): SketchDocument {
+  const existing = doc.sketches[sketchId];
+  if (!existing) return doc;
+  return {
+    ...doc,
+    sketches: { ...doc.sketches, [sketchId]: { ...existing, visible } },
+  };
+}
+
 export function findSketchByHost(doc: SketchDocument, hostId: HostId): Sketch | null {
   for (const sketch of Object.values(doc.sketches)) {
     if (sketch.hostId === hostId) return sketch;

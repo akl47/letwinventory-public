@@ -11,7 +11,8 @@ export type FeatureTreeAction =
   | { action: 'delete-feature'; featureId: string }
   | { action: 'toggle-feature-visibility'; featureId: string }
   | { action: 'edit-sketch'; sketchId: string }
-  | { action: 'delete-sketch'; sketchId: string };
+  | { action: 'delete-sketch'; sketchId: string }
+  | { action: 'toggle-sketch-visibility'; sketchId: string };
 
 interface TreeNode {
   /** Unique within the tree; used for expansion tracking. */
@@ -52,6 +53,7 @@ interface TreeNode {
             [class.selectable]="n.selectable"
             [class.hidden-datum]="n.kind === 'datum' && n.visible === false"
             [class.hidden-feature]="n.kind === 'feature' && n.visible === false"
+            [class.hidden-sketch]="n.kind === 'sketch' && n.visible === false"
             (click)="onRowClick(n, $event)"
             (contextmenu)="onRowContextMenu($event, n)">
           <span class="chevron" *ngIf="n.expandable" (click)="toggleExpand(n, $event)">
@@ -63,9 +65,9 @@ interface TreeNode {
           <mat-icon *ngIf="n.kind === 'feature' && n.visible === false" class="hidden-indicator" matTooltip="Hidden">visibility_off</mat-icon>
           <button class="visibility-toggle"
                   *ngIf="n.visibilityToggleable"
-                  [attr.data-testid]="'visibility-' + n.datumId"
+                  [attr.data-testid]="visibilityTestId(n)"
                   [matTooltip]="n.visible ? 'Hide' : 'Show'"
-                  (click)="onDatumVisibilityToggle(n, $event)">
+                  (click)="onVisibilityToggleClick(n, $event)">
             <mat-icon>{{ n.visible ? 'visibility' : 'visibility_off' }}</mat-icon>
           </button>
           <mat-icon *ngIf="n.selectable && n.kind === 'sketch'" class="pick-hint">arrow_forward</mat-icon>
@@ -97,6 +99,10 @@ interface TreeNode {
             <button mat-menu-item data-testid="ctx-edit-sketch" (click)="emitAction({ action: 'edit-sketch', sketchId: n.sketchId! })">
               <mat-icon>edit</mat-icon> Edit sketch
             </button>
+            <button mat-menu-item data-testid="ctx-toggle-sketch-visibility" (click)="emitAction({ action: 'toggle-sketch-visibility', sketchId: n.sketchId! })">
+              <mat-icon>{{ n.visible === false ? 'visibility' : 'visibility_off' }}</mat-icon>
+              {{ n.visible === false ? 'Show' : 'Hide' }}
+            </button>
             <button mat-menu-item data-testid="ctx-delete-sketch" (click)="emitAction({ action: 'delete-sketch', sketchId: n.sketchId! })">
               <mat-icon>delete</mat-icon> Delete sketch
             </button>
@@ -115,6 +121,7 @@ interface TreeNode {
     .row.selectable:hover { background: rgba(255,255,255,0.06); }
     .row.hidden-datum .label { opacity: 0.4; text-decoration: line-through; }
     .row.hidden-feature .label { opacity: 0.5; font-style: italic; }
+    .row.hidden-sketch .label { opacity: 0.5; font-style: italic; }
     .hidden-indicator { font-size: 14px; width: 14px; height: 14px; opacity: 0.55; }
     .menu-anchor { position: fixed; width: 0; height: 0; }
     .chevron { display: inline-flex; align-items: center; width: 18px; cursor: pointer; opacity: 0.7; }
@@ -221,6 +228,8 @@ export class CadFeatureTreePanelComponent {
               expandable: false,
               expanded: false,
               selectable: this.selectableSketches(),
+              visible: sketch.visible !== false,
+              visibilityToggleable: true,
               sketchId: sketch.id,
             });
           }
@@ -242,6 +251,8 @@ export class CadFeatureTreePanelComponent {
           expandable: false,
           expanded: false,
           selectable: this.selectableSketches(),
+          visible: s.visible !== false,
+          visibilityToggleable: true,
           sketchId: s.id,
         });
       }
@@ -300,9 +311,19 @@ export class CadFeatureTreePanelComponent {
     }
   }
 
-  onDatumVisibilityToggle(n: TreeNode, ev: MouseEvent) {
+  visibilityTestId(n: TreeNode): string {
+    if (n.datumId) return `visibility-${n.datumId}`;
+    if (n.sketchId) return `visibility-sketch-${n.sketchId}`;
+    return 'visibility-toggle';
+  }
+
+  onVisibilityToggleClick(n: TreeNode, ev: MouseEvent) {
     ev.stopPropagation();
-    if (n.datumId) this.visibilityToggled.emit(n.datumId);
+    if (n.kind === 'datum' && n.datumId) {
+      this.visibilityToggled.emit(n.datumId);
+    } else if (n.kind === 'sketch' && n.sketchId) {
+      this.actionRequested.emit({ action: 'toggle-sketch-visibility', sketchId: n.sketchId });
+    }
   }
 
   onRowContextMenu(ev: MouseEvent, n: TreeNode) {

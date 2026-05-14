@@ -24,7 +24,7 @@ import {
   emptyFeatureTree, addFeature, regenerateModel, defaultDatumVisibility, type KernelAdapter,
   removeFeature, updateFeatureParam, removeFeaturesReferencingSketch,
 } from '../../../cad/lib/featureTree';
-import { emptyDocument, createSketch, updateSketchState, deleteSketch } from '../../../cad/lib/document';
+import { emptyDocument, createSketch, updateSketchState, deleteSketch, setSketchVisibility } from '../../../cad/lib/document';
 import { migrateSketchDocument } from '../../../cad/lib/migration';
 import { planeForDatum, buildOriginDatums } from '../../../cad/lib/datum';
 import { extractClosedLoop } from '../../../cad/lib/profile';
@@ -131,6 +131,8 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
                 [selected]="selected()"
                 [loading]="kernelLoading()"
                 [loadProgress]="kernelLoadStatus()"
+                [sketchDoc]="doc()"
+                [activeSketchId]="activeSketchId()"
                 (selectionChange)="onSelectionChange($event)">
               </app-cad-viewer>
 
@@ -462,7 +464,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       case 'toggle-feature-visibility': return this.toggleFeatureVisibility(action.featureId);
       case 'edit-sketch': return this.editSketch(action.sketchId);
       case 'delete-sketch': return this.requestDeleteSketch(action.sketchId);
+      case 'toggle-sketch-visibility': return this.toggleSketchVisibility(action.sketchId);
     }
+  }
+
+  private toggleSketchVisibility(sketchId: string) {
+    const sketch = this.doc().sketches[sketchId];
+    if (!sketch) return;
+    const nextVisible = sketch.visible === false;  // currently hidden ⇒ show
+    this.doc.set(setSketchVisibility(this.doc(), sketchId, nextVisible));
+    this.save();
   }
 
   private editFeature(featureId: string) {

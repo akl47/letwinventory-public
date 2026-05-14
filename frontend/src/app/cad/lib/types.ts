@@ -181,6 +181,8 @@ export interface Sketch {
   plane: Plane3;
   state: SketchState;
   candidates: ReferenceCandidate[];
+  /** Missing == true. When false, the 3D viewer omits this sketch's overlay. */
+  visible?: boolean;
 }
 
 export interface SketchDocument {
