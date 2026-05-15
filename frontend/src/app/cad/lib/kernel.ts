@@ -12,6 +12,8 @@
  */
 import type { KernelAdapter } from './featureTree';
 import type { FaceMesh, ModelTopology, Plane3 } from './types';
+import { type ProfileLoop, tessellateProfileLoop } from './profile';
+import { tessellateArc, tessellateCircle, DEFAULT_CHORD_TOLERANCE } from './tessellator';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type OC = any;
@@ -200,11 +202,15 @@ export function makeOccKernel(oc: OC): KernelAdapter {
         topology: { vertices: [], edges: [] },
       };
     },
-    buildExtrude(profile2D, plane, distance) {
+    buildExtrude(loop, plane, distance) {
+      // OCCT path still tessellates the typed loop down to a polygon wire. A
+      // future REQ will swap in proper curve handling (gp_Circ +
+      // BRepBuilderAPI_MakeEdge_8) so the OCCT BRep has analytic faces; for
+      // now the OCCT result matches the pure-JS shape but uses OCCT's mesher.
+      const profile2D = tessellateProfileLoop(loop);
       const wire = buildProfileWire(oc, profile2D, plane);
       const face = makeFaceFromWire(oc, wire);
       const solid = extrudeShape(oc, face, plane, distance);
-      // Tag the prefix with a counter so face IDs stay unique within a regen.
       const prefix = `f${Math.floor(Math.random() * 100000)}`;
       return tessellateShape(oc, solid, prefix);
     },
@@ -222,9 +228,9 @@ export function makePureJsKernel(): KernelAdapter {
     buildOriginGeometry() {
       return { datums: [], faces: [], topology: { vertices: [], edges: [] } };
     },
-    buildExtrude(profile2D, plane, distance) {
+    buildExtrude(loop, plane, distance) {
       const prefix = `pj${Math.floor(Math.random() * 100000)}`;
-      return extrudePureJs(profile2D, plane, distance, prefix);
+      return extrudePureJs(loop, plane, distance, prefix);
     },
   };
 }
@@ -264,8 +270,12 @@ function earClip2D(pts: Array<{ x: number; y: number }>): Array<[number, number,
     return !(hasNeg && hasPos);
   }
 
+  // Guard limit pinned to the INITIAL polygon size — the cap "chord cut out"
+  // bug was caused by computing this inline against the shrinking list.length,
+  // which terminated the loop with vertices left unprocessed for n ≳ 30.
+  const maxGuard = pts.length * pts.length;
   let guard = 0;
-  while (list.length > 3 && guard++ < list.length * list.length) {
+  while (list.length > 3 && guard++ < maxGuard) {
     let earFound = false;
     for (let i = 0; i < list.length; i++) {
       const prev = list[(i - 1 + list.length) % list.length];
@@ -290,21 +300,56 @@ function earClip2D(pts: Array<{ x: number; y: number }>): Array<[number, number,
   return indices;
 }
 
+// Tessellate a single profile edge into 2D points. Returns the points the edge
+// contributes to the *closed* polyline (i.e., it omits its trailing point —
+// the next edge's starting point is the same vertex, and a circle closes back
+// onto its own start). The count of returned points equals the number of
+// straight sub-segments the edge generates.
+function tessellateEdge(edge: ProfileLoop[number]): Array<{ x: number; y: number }> {
+  if (edge.kind === 'line') {
+    return [{ x: edge.start.x, y: edge.start.y }];
+  }
+  if (edge.kind === 'arc') {
+    const pts = tessellateArc(
+      edge.center, edge.radius, edge.startAngle, edge.endAngle, edge.ccw,
+      DEFAULT_CHORD_TOLERANCE,
+    );
+    return pts.slice(0, -1);
+  }
+  // circle
+  const pts = tessellateCircle(edge.center, edge.radius, DEFAULT_CHORD_TOLERANCE);
+  return pts.slice(0, -1);
+}
+
 function extrudePureJs(
-  profile2D: Array<{ x: number; y: number }>,
+  loop: ProfileLoop,
   plane: Plane3,
   distance: number,
   prefix: string,
 ): { faces: FaceMesh[]; topology: ModelTopology } {
-  const n = profile2D.length;
   const faces: FaceMesh[] = [];
   const topology: ModelTopology = { vertices: [], edges: [] };
 
-  // Build vertex grid: 2*n positions (bottom + top).
-  const bottom = profile2D.map(p => project3(plane, p.x, p.y, 0));
-  const top = profile2D.map(p => project3(plane, p.x, p.y, distance));
+  // 1) Walk the typed loop. For each ProfileEdge, materialise its tessellated
+  //    sub-segments and record the slice it owns in the global polyline.
+  //    edgeSegmentCounts[i] is the number of sub-segments edge i contributes
+  //    (so edge i's lateral face renders edgeSegmentCounts[i] quad strips).
+  const polyline2D: Array<{ x: number; y: number }> = [];
+  const edgeSegmentCounts: number[] = [];
+  for (const edge of loop) {
+    const before = polyline2D.length;
+    for (const p of tessellateEdge(edge)) polyline2D.push(p);
+    edgeSegmentCounts.push(polyline2D.length - before);
+  }
+  const n = polyline2D.length;
+  if (n < 3) return { faces, topology };
 
-  // Topology: vertices + edges (bottom ring, top ring, vertical connectors).
+  // 2) Project to 3D.
+  const bottom = polyline2D.map(p => project3(plane, p.x, p.y, 0));
+  const top = polyline2D.map(p => project3(plane, p.x, p.y, distance));
+
+  // 3) Topology: vertices + tessellated ring/vertical edges. (A future REQ
+  //    will collapse adjacent collinear topology edges per ProfileEdge.)
   for (let i = 0; i < n; i++) {
     topology.vertices.push({ id: `${prefix}:vb${i}`, position: bottom[i] });
     topology.vertices.push({ id: `${prefix}:vt${i}`, position: top[i] });
@@ -316,10 +361,8 @@ function extrudePureJs(
     topology.edges.push({ id: `${prefix}:ev${i}`, isStraight: true, endpoints: [bottom[i], top[i]] });
   }
 
-  // Caps via ear-clipping.
-  const tris = earClip2D(profile2D);
-
-  // Bottom cap (reverse winding so normal points -normal).
+  // 4) Caps — ear-clip the full polyline, one face per cap.
+  const tris = earClip2D(polyline2D);
   {
     const positions = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
@@ -329,16 +372,14 @@ function extrudePureJs(
     }
     const indices = new Uint32Array(tris.length * 3);
     for (let i = 0; i < tris.length; i++) {
-      // Reverse for bottom face.
+      // Reverse winding so the bottom face normal points -plane.normal.
       indices[i * 3] = tris[i][0];
       indices[i * 3 + 1] = tris[i][2];
       indices[i * 3 + 2] = tris[i][1];
     }
-    const normals = computeNormals(positions, indices);
-    faces.push({ faceId: `${prefix}:0`, positions, normals, indices });
+    // REQ 625: caps are planar by construction.
+    faces.push({ faceId: `${prefix}:bottom`, positions, normals: computeNormals(positions, indices), indices, isFlat: true });
   }
-
-  // Top cap.
   {
     const positions = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
@@ -352,23 +393,57 @@ function extrudePureJs(
       indices[i * 3 + 1] = tris[i][1];
       indices[i * 3 + 2] = tris[i][2];
     }
-    const normals = computeNormals(positions, indices);
-    faces.push({ faceId: `${prefix}:1`, positions, normals, indices });
+    faces.push({ faceId: `${prefix}:top`, positions, normals: computeNormals(positions, indices), indices, isFlat: true });
   }
 
-  // Side faces — one quad per profile edge, as its own face.
-  for (let i = 0; i < n; i++) {
-    const j = (i + 1) % n;
-    const positions = new Float32Array(12);
-    const verts = [bottom[i], bottom[j], top[j], top[i]];
-    for (let k = 0; k < 4; k++) {
-      positions[k * 3] = verts[k][0];
-      positions[k * 3 + 1] = verts[k][1];
-      positions[k * 3 + 2] = verts[k][2];
+  // 5) Lateral faces — one face per ProfileEdge. Vertices are shared between
+  //    adjacent quads inside the same face so computeNormals averages across
+  //    them and a curved lateral surface renders smooth-shaded.
+  //
+  //    A 'circle' edge closes back on itself: ringLen = segCount with wrap-
+  //    around indexing, so the seam vertex is a single slot that participates
+  //    in BOTH the first and last quad — no shading discontinuity at the wrap.
+  //    Non-wrapping edges (line, arc) use ringLen = segCount + 1 with linear
+  //    indexing because their endpoints are distinct vertices.
+  let startIdx = 0;
+  for (let edgeIdx = 0; edgeIdx < loop.length; edgeIdx++) {
+    const edge = loop[edgeIdx];
+    const segCount = edgeSegmentCounts[edgeIdx];
+    if (segCount <= 0) continue;
+    const wraps = edge.kind === 'circle';
+    const ringLen = wraps ? segCount : segCount + 1;
+    const positions = new Float32Array(ringLen * 2 * 3);
+    for (let i = 0; i < ringLen; i++) {
+      const polyIdx = (startIdx + i) % n;
+      const off = i * 3;
+      positions[off] = bottom[polyIdx][0];
+      positions[off + 1] = bottom[polyIdx][1];
+      positions[off + 2] = bottom[polyIdx][2];
     }
-    const indices = new Uint32Array([0, 1, 2, 0, 2, 3]);
-    const normals = computeNormals(positions, indices);
-    faces.push({ faceId: `${prefix}:${2 + i}`, positions, normals, indices });
+    for (let i = 0; i < ringLen; i++) {
+      const polyIdx = (startIdx + i) % n;
+      const off = (ringLen + i) * 3;
+      positions[off] = top[polyIdx][0];
+      positions[off + 1] = top[polyIdx][1];
+      positions[off + 2] = top[polyIdx][2];
+    }
+    const indices = new Uint32Array(segCount * 6);
+    for (let i = 0; i < segCount; i++) {
+      const b0 = i;
+      const b1 = wraps ? ((i + 1) % ringLen) : (i + 1);
+      const t0 = ringLen + i;
+      const t1 = ringLen + (wraps ? ((i + 1) % ringLen) : (i + 1));
+      indices[i * 6] = b0;
+      indices[i * 6 + 1] = b1;
+      indices[i * 6 + 2] = t1;
+      indices[i * 6 + 3] = b0;
+      indices[i * 6 + 4] = t1;
+      indices[i * 6 + 5] = t0;
+    }
+    // REQ 625: line sides extrude to a planar quad; curved sides (circle, arc) do not.
+    const isFlat = edge.kind === 'line';
+    faces.push({ faceId: `${prefix}:side${edgeIdx}`, positions, normals: computeNormals(positions, indices), indices, isFlat });
+    startIdx += segCount;
   }
 
   return { faces, topology };

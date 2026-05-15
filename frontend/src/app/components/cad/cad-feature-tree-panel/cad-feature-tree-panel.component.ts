@@ -10,9 +10,19 @@ export type FeatureTreeAction =
   | { action: 'edit-feature'; featureId: string }
   | { action: 'delete-feature'; featureId: string }
   | { action: 'toggle-feature-visibility'; featureId: string }
+  | { action: 'rename-feature'; featureId: string }
   | { action: 'edit-sketch'; sketchId: string }
   | { action: 'delete-sketch'; sketchId: string }
-  | { action: 'toggle-sketch-visibility'; sketchId: string };
+  | { action: 'toggle-sketch-visibility'; sketchId: string }
+  | { action: 'rename-sketch'; sketchId: string };
+
+// REQ 626 — feature selection event from a left-click on a feature row.
+// Carries the modifier keys so the parent decides multi-select policy.
+export interface FeatureSelectEvent {
+  featureId: string;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+}
 
 interface TreeNode {
   /** Unique within the tree; used for expansion tracking. */
@@ -54,6 +64,7 @@ interface TreeNode {
             [class.hidden-datum]="n.kind === 'datum' && n.visible === false"
             [class.hidden-feature]="n.kind === 'feature' && n.visible === false"
             [class.hidden-sketch]="n.kind === 'sketch' && n.visible === false"
+            [class.selected]="isRowSelected(n)"
             (click)="onRowClick(n, $event)"
             (contextmenu)="onRowContextMenu($event, n)">
           <span class="chevron" *ngIf="n.expandable" (click)="toggleExpand(n, $event)">
@@ -87,6 +98,9 @@ interface TreeNode {
             <button mat-menu-item data-testid="ctx-edit-feature" (click)="emitAction({ action: 'edit-feature', featureId: n.feature!.id })">
               <mat-icon>edit</mat-icon> Edit…
             </button>
+            <button mat-menu-item data-testid="ctx-rename-feature" (click)="emitAction({ action: 'rename-feature', featureId: n.feature!.id })">
+              <mat-icon>drive_file_rename_outline</mat-icon> Rename
+            </button>
             <button mat-menu-item data-testid="ctx-toggle-feature-visibility" (click)="emitAction({ action: 'toggle-feature-visibility', featureId: n.feature!.id })">
               <mat-icon>{{ n.visible === false ? 'visibility' : 'visibility_off' }}</mat-icon>
               {{ n.visible === false ? 'Show' : 'Hide' }}
@@ -98,6 +112,9 @@ interface TreeNode {
           <ng-container *ngIf="n.kind === 'sketch' && n.sketchId">
             <button mat-menu-item data-testid="ctx-edit-sketch" (click)="emitAction({ action: 'edit-sketch', sketchId: n.sketchId! })">
               <mat-icon>edit</mat-icon> Edit sketch
+            </button>
+            <button mat-menu-item data-testid="ctx-rename-sketch" (click)="emitAction({ action: 'rename-sketch', sketchId: n.sketchId! })">
+              <mat-icon>drive_file_rename_outline</mat-icon> Rename
             </button>
             <button mat-menu-item data-testid="ctx-toggle-sketch-visibility" (click)="emitAction({ action: 'toggle-sketch-visibility', sketchId: n.sketchId! })">
               <mat-icon>{{ n.visible === false ? 'visibility' : 'visibility_off' }}</mat-icon>
@@ -122,6 +139,8 @@ interface TreeNode {
     .row.hidden-datum .label { opacity: 0.4; text-decoration: line-through; }
     .row.hidden-feature .label { opacity: 0.5; font-style: italic; }
     .row.hidden-sketch .label { opacity: 0.5; font-style: italic; }
+    .row.selected { background: rgba(255, 183, 77, 0.18); }
+    .row.selected.depth-1 { background: rgba(255, 183, 77, 0.12); }
     .hidden-indicator { font-size: 14px; width: 14px; height: 14px; opacity: 0.55; }
     .menu-anchor { position: fixed; width: 0; height: 0; }
     .chevron { display: inline-flex; align-items: center; width: 18px; cursor: pointer; opacity: 0.7; }
@@ -154,9 +173,15 @@ export class CadFeatureTreePanelComponent {
   sketchSelected = output<string>();
   visibilityToggled = output<string>(); // datum id
   actionRequested = output<FeatureTreeAction>();
+  // REQ 626 — selected feature ids drive row highlighting; the click event
+  // lets the parent apply set/toggle policy based on modifier keys.
+  selectedFeatures = input<Set<string>>(new Set());
+  featureSelect = output<FeatureSelectEvent>();
 
   // Expansion state: keys for expanded nodes (origin is expanded by default).
-  expanded = signal<Set<string>>(new Set<string>(['origin-children']));
+  // REQ 622 — Origin collapsed by default. Per-session state; user can expand
+  // and the expansion is preserved while the editor is open.
+  expanded = signal<Set<string>>(new Set<string>());
 
   // Context menu state: position the floating trigger at the cursor and remember
   // which node the menu is operating on.
@@ -202,10 +227,12 @@ export class CadFeatureTreePanelComponent {
         const sketch = doc?.sketches[ef.sketchId] ?? null;
         const hasChild = !!sketch;
         const isOpen = expanded.has(f.id);
+        // REQ 624: user-supplied name if present, else the default summary.
+        const defaultExtrudeLabel = `Extrude · ${ef.distance}${ef.flipped ? ' (flipped)' : ''}`;
         out.push({
           key: f.id,
           kind: 'feature',
-          label: `Extrude · ${ef.distance}`,
+          label: ef.name && ef.name.trim() ? ef.name : defaultExtrudeLabel,
           iconName: 'vertical_align_top',
           iconClass: 'extrude',
           depth: 0,
@@ -218,10 +245,11 @@ export class CadFeatureTreePanelComponent {
         if (sketch) {
           sketchesUsed.add(sketch.id);
           if (isOpen) {
+            const defaultSketchLabel = `${sketch.id} — ${this.hostLabel(sketch.hostId)}`;
             out.push({
               key: `child:${sketch.id}`,
               kind: 'sketch',
-              label: `${sketch.id} — ${this.hostLabel(sketch.hostId)}`,
+              label: sketch.name && sketch.name.trim() ? sketch.name : defaultSketchLabel,
               iconName: 'draw',
               iconClass: 'sketch',
               depth: 1,
@@ -241,10 +269,11 @@ export class CadFeatureTreePanelComponent {
     if (doc) {
       const orphans = Object.values(doc.sketches).filter(s => !sketchesUsed.has(s.id));
       for (const s of orphans) {
+        const defaultSketchLabel = `${s.id} — ${this.hostLabel(s.hostId)}`;
         out.push({
           key: s.id,
           kind: 'sketch',
-          label: `${s.id} — ${this.hostLabel(s.hostId)}`,
+          label: s.name && s.name.trim() ? s.name : defaultSketchLabel,
           iconName: 'draw',
           iconClass: 'sketch',
           depth: 0,
@@ -301,14 +330,34 @@ export class CadFeatureTreePanelComponent {
   }
 
   onRowClick(n: TreeNode, ev: MouseEvent) {
-    // If the row is expandable, clicking the body toggles expand.
-    if (n.expandable) {
-      this.toggleExpand(n, ev);
-      return;
-    }
+    // Sketch row in pick-extrude-target mode: emit sketchSelected. Takes
+    // precedence over expand/select so the extrude flow keeps working.
     if (n.kind === 'sketch' && n.selectable && n.sketchId) {
       this.sketchSelected.emit(n.sketchId);
+      return;
     }
+    // REQ 626 — feature row click emits selection with modifier keys. Origin
+    // rows are non-selectable. Click does NOT toggle expand here — the
+    // chevron has its own click handler for that.
+    if (n.kind === 'feature' && n.feature && n.feature.type !== 'origin') {
+      this.featureSelect.emit({
+        featureId: n.feature.id,
+        shiftKey: ev.shiftKey,
+        ctrlKey: ev.ctrlKey || ev.metaKey,
+      });
+      return;
+    }
+    // Non-feature, non-selectable-sketch row: clicking toggles expand.
+    if (n.expandable) {
+      this.toggleExpand(n, ev);
+    }
+  }
+
+  isRowSelected(n: TreeNode): boolean {
+    if (n.kind === 'feature' && n.feature) {
+      return this.selectedFeatures().has(n.feature.id);
+    }
+    return false;
   }
 
   visibilityTestId(n: TreeNode): string {

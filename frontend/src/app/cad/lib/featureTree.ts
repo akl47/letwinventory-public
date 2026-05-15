@@ -1,6 +1,6 @@
 import type { Feature, FeatureTree, OriginFeature, ExtrudeFeature, RegenerateResult, SketchDocument, Plane3, FaceMesh, ModelTopology } from './types';
 import { buildOriginDatums } from './datum';
-import { extractClosedLoop } from './profile';
+import { extractClosedLoops, type ProfileLoop } from './profile';
 
 // Distributive Omit so each branch of the Feature union retains its own
 // discriminator: { type: 'origin' } | { type: 'extrude'; sketchId; distance }.
@@ -56,7 +56,10 @@ export function removeFeaturesReferencingSketch(tree: FeatureTree, sketchId: str
 
 export type KernelAdapter = {
   buildOriginGeometry(): RegenerateResult['geometry'];
-  buildExtrude(profile2D: Array<{ x: number; y: number }>, plane: Plane3, distance: number): {
+  // REQ 617: the loop is a list of typed profile edges (line/arc/circle), not
+  // a flat tessellated polyline. Pure-JS kernel produces one face per edge so
+  // a single-circle profile yields three faces (top cap, bottom cap, lateral).
+  buildExtrude(loop: ProfileLoop, plane: Plane3, distance: number): {
     faces: FaceMesh[];
     topology: ModelTopology;
   };
@@ -84,15 +87,29 @@ export async function regenerateModel(
         continue;
       }
       try {
-        const profileResult = extractClosedLoop(sketch.state);
-        if (!profileResult.loop) {
-          acc.errors.push(`Extrude feature ${feature.id}: ${profileResult.error ?? 'no profile'}`);
+        // REQ 620 — sketch can contain multiple disjoint closed loops; the
+        // feature picks which (default: first loop only for backwards compat).
+        const { loops, errors: extractErrors } = extractClosedLoops(sketch.state);
+        for (const err of extractErrors) acc.errors.push(`Extrude feature ${feature.id}: ${err}`);
+        if (loops.length === 0) {
+          acc.errors.push(`Extrude feature ${feature.id}: no closed loops in sketch`);
           continue;
         }
-        const out = kernel.buildExtrude(profileResult.loop, sketch.plane, feature.distance);
-        acc.geometry.faces.push(...out.faces);
-        acc.geometry.topology.vertices.push(...out.topology.vertices);
-        acc.geometry.topology.edges.push(...out.topology.edges);
+        const indices = feature.loopIndices ?? [0];
+        const signedDistance = feature.flipped ? -feature.distance : feature.distance;
+        for (const li of indices) {
+          if (li < 0 || li >= loops.length) {
+            acc.errors.push(`Extrude feature ${feature.id}: loop index ${li} out of range (have ${loops.length})`);
+            continue;
+          }
+          const out = kernel.buildExtrude(loops[li], sketch.plane, signedDistance);
+          // REQ 623: tag each face with its owning feature so 3D pick can
+          // resolve clicks to features.
+          for (const face of out.faces) face.featureId = feature.id;
+          acc.geometry.faces.push(...out.faces);
+          acc.geometry.topology.vertices.push(...out.topology.vertices);
+          acc.geometry.topology.edges.push(...out.topology.edges);
+        }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         acc.errors.push(`Extrude feature ${feature.id}: ${msg}`);

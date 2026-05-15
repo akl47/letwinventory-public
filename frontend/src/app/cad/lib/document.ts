@@ -84,6 +84,15 @@ export function setSketchVisibility(doc: SketchDocument, sketchId: string, visib
   };
 }
 
+export function setSketchName(doc: SketchDocument, sketchId: string, name: string): SketchDocument {
+  const existing = doc.sketches[sketchId];
+  if (!existing) return doc;
+  return {
+    ...doc,
+    sketches: { ...doc.sketches, [sketchId]: { ...existing, name } },
+  };
+}
+
 export function findSketchByHost(doc: SketchDocument, hostId: HostId): Sketch | null {
   for (const sketch of Object.values(doc.sketches)) {
     if (sketch.hostId === hostId) return sketch;

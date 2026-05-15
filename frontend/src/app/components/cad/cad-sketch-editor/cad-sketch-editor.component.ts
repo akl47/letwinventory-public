@@ -9,10 +9,10 @@ import type {
 } from '../../../cad/lib/types';
 import { pointsOf, linesOf, findPoint } from '../../../cad/lib/types';
 import {
-  addPoint, addLine, addCircle, addArc, addConstraint, movePoint, emptySketchState,
+  addPoint, addLine, addCircle, addArc, addConstraint, movePoint, deletePrimitive, emptySketchState,
 } from '../../../cad/lib/store';
 import { solveSketch } from '../../../cad/lib/solver';
-import { extractClosedLoop } from '../../../cad/lib/profile';
+import { extractClosedLoops } from '../../../cad/lib/profile';
 import { pickEntity } from '../../../cad/lib/picking';
 
 type Tool = 'select' | 'point' | 'line' | 'circle' | 'arc';
@@ -208,6 +208,13 @@ export class CadSketchEditorComponent implements OnDestroy {
   // Set true on mouseup at the end of a drag so the subsequent (click) event is suppressed.
   private didDrag = false;
 
+  // REQ 629 — parent inspects this to decide whether to apply snap to incoming
+  // pointer-move events. Snap during drag would yank the dragged point onto
+  // every nearby vertex, which is more noise than help.
+  isDragging(): boolean {
+    return !!this.dragState()?.isDragging;
+  }
+
   state = computed<SketchState>(() => this.doc().sketches[this.sketchId()]?.state ?? emptySketchState());
 
   points = computed<PointEntity[]>(() => pointsOf(this.state()));
@@ -235,8 +242,7 @@ export class CadSketchEditorComponent implements OnDestroy {
   });
 
   canExtrude = computed(() => {
-    const { loop } = extractClosedLoop(this.state());
-    return loop !== null;
+    return extractClosedLoops(this.state()).loops.length > 0;
   });
 
   private latestCommitId = 0;
@@ -263,11 +269,41 @@ export class CadSketchEditorComponent implements OnDestroy {
 
   setTool(t: Tool) { this.tool.set(t); }
 
-  @HostListener('document:keydown.escape')
-  onEscape() {
-    this.clearAllDrafts();
+  // REQ 632 / 633 — single document-level keydown listener so we can both
+  // (a) ignore the keystroke when the user is typing in a text input and
+  // (b) suppress the browser's Backspace-back navigation when the sketcher
+  // consumes the key.
+  @HostListener('document:keydown', ['$event'])
+  onDocumentKeydown(ev: KeyboardEvent) {
+    const target = ev.target as HTMLElement | null;
+    if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable) return;
+
+    if (ev.key === 'Escape') {
+      // REQ 633 — Esc cancels any in-flight tool gesture, clears the
+      // selection, and returns to the Select tool.
+      this.clearAllDrafts();
+      this.selected.set(new Set());
+      this.dragState.set(null);
+      this.tool.set('select');
+      return;
+    }
+
+    if ((ev.key === 'Delete' || ev.key === 'Backspace') && this.selected().size > 0) {
+      // REQ 632 — Delete / Backspace removes every selected sketch entity.
+      if (this.readonly()) return;
+      ev.preventDefault();  // also stops Backspace from triggering browser-back
+      this.deleteSelected();
+    }
+  }
+
+  private deleteSelected() {
+    let state = this.state();
+    for (const id of this.selected()) {
+      state = deletePrimitive(state, id);
+    }
     this.selected.set(new Set());
     this.dragState.set(null);
+    this.commit(state);
   }
 
   private clearAllDrafts() {

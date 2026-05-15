@@ -183,6 +183,8 @@ export interface Sketch {
   candidates: ReferenceCandidate[];
   /** Missing == true. When false, the 3D viewer omits this sketch's overlay. */
   visible?: boolean;
+  /** REQ 624 — user-supplied label shown in the feature tree. */
+  name?: string;
 }
 
 export interface SketchDocument {
@@ -213,6 +215,16 @@ export interface ExtrudeFeature {
   distance: number;
   /** Missing == true. When false, feature is skipped during regenerateModel. */
   visible?: boolean;
+  /** Missing == false. When true, the extrude grows along -plane.normal. */
+  flipped?: boolean;
+  /**
+   * REQ 620 — which closed loops of the sketch this feature extrudes. Indices
+   * into extractClosedLoops(sketch.state).loops in stable order. Missing == [0]
+   * for backwards compat with single-loop features.
+   */
+  loopIndices?: number[];
+  /** REQ 624 — user-supplied label shown in the feature tree. */
+  name?: string;
 }
 
 export type Feature = OriginFeature | ExtrudeFeature;
@@ -245,6 +257,12 @@ export interface FaceMesh {
   positions: Float32Array;
   normals: Float32Array;
   indices: Uint32Array;
+  /** REQ 623 — feature this face belongs to. Set by featureTree.regenerateModel
+   * after the kernel returns; absent on origin-derived geometry. */
+  featureId?: string;
+  /** REQ 625 — true when every triangle in this face shares one normal. Set by
+   * the kernel adapter (cap = true, polygon side = true, curved side = false). */
+  isFlat?: boolean;
 }
 
 export interface ModelTopology {
