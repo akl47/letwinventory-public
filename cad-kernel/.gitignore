@@ -1,0 +1,3 @@
+/target
+Cargo.lock.* # only-pretty rust-analyzer scratch; the real Cargo.lock IS checked in
+**/*.rs.bk

@@ -1,0 +1,40 @@
+[package]
+name = "cad-kernel"
+version = "0.1.0"
+edition = "2021"
+description = "Server-side CAD kernel for Letwinventory (OCCT-backed)"
+license = "Proprietary"
+publish = false
+
+[dependencies]
+# Pin OCCT exactly; BREP serialization is version-sensitive — treat upgrades
+# as data migrations (recompute cached BRep from feature definitions).
+opencascade = "0.4"
+
+# Async runtime + Unix-domain socket server.
+tokio = { version = "1.40", features = [
+    "rt-multi-thread", "net", "io-util", "macros", "signal", "sync",
+] }
+
+# JSON-RPC payloads.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling + logging.
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Base64-encoding the BREP payload for JSON transport (Phase 1 will swap to
+# binary WebSocket frames; for Phase 0 base64-over-JSON keeps everything in
+# a single string-typed envelope).
+base64 = "0.22"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1  # OCCT debug builds are painfully slow without this
