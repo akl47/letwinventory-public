@@ -7,9 +7,16 @@ license = "Proprietary"
 publish = false
 
 [dependencies]
-# Pin OCCT exactly; BREP serialization is version-sensitive — treat upgrades
+# opencascade-rs's crates.io release (0.2) is stale — the Workplane fluent
+# builder + per-face mesh methods we use only exist on the main branch.
+# Pull from git for now; revisit once a newer point release lands. The
+# Cargo.lock generated on first build pins to a specific commit so the
+# build stays reproducible until we run `cargo update`.
+#
+# BREP serialization is OCCT-version-sensitive — treat upstream upgrades
 # as data migrations (recompute cached BRep from feature definitions).
-opencascade = "0.4"
+opencascade = { git = "https://github.com/bschwind/opencascade-rs.git", branch = "main" }
+glam = "0.27"  # peer dep for Workplane direction vectors
 
 # Async runtime + Unix-domain socket server.
 tokio = { version = "1.40", features = [

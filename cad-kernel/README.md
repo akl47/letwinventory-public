@@ -20,6 +20,11 @@ architecture this fits into.
 BREP serialization is OCCT-version-sensitive — pin OCCT exactly and treat
 upgrades as data migrations (recompute cache from feature definitions).
 
+> **Note:** `opencascade-rs`'s crates.io release (0.2) is stale; we pull from
+> the `main` branch on github until a newer release lands. `Cargo.lock`
+> records the exact commit on first build so subsequent builds stay
+> reproducible.
+
 ## Build
 
 ```bash
