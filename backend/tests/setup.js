@@ -212,7 +212,10 @@ beforeAll(async () => {
 afterEach(async () => {
   const tablesToClean = [
     'UserPermission', 'GroupPermission', 'UserGroupMember', 'UserGroup',
-    'DesignCADModelHistory', 'DesignCADModel',
+    // DesignBRepCache cascades from DesignCADModel, but listing it first
+    // keeps the cleanup explicit + insulates against accidental ordering
+    // flips in future edits.
+    'DesignBRepCache', 'DesignCADModelHistory', 'DesignCADModel',
     'DesignFeatureHistory', 'DesignFeature',
     'RequirementHistory', 'DesignRequirement', 'RequirementCategory',
     'HarnessRevisionHistory', 'WireHarness', 'WireEnd',

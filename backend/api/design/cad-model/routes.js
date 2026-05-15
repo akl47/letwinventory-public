@@ -18,4 +18,9 @@ router.post('/:id/new-revision', checkToken, checkPermission('cad', 'write'), co
 
 router.get('/:id/history', checkToken, checkPermission('cad', 'read'), controller.getHistory);
 
+// Phase 1 — server-side regeneration. Walks the feature tree, hits the
+// Postgres-backed BRep cache, falls through to the Rust kernel on miss.
+// Returns tessellated face meshes for the viewer to render.
+router.post('/:id/regenerate', checkToken, checkPermission('cad', 'read'), controller.regenerate);
+
 module.exports = router;

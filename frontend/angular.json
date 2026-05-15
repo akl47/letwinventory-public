@@ -30,18 +30,11 @@
               },
               {
                 "glob": "**/*.wasm",
-                "input": "node_modules/opencascade.js/dist/",
-                "output": "/assets/opencascade/"
-              },
-              {
-                "glob": "**/*.wasm",
                 "input": "src/app/cad/vendor/planegcs/planegcs_dist/",
                 "output": "/assets/planegcs/"
               }
             ],
-            "externalDependencies": [
-              "opencascade.js"
-            ],
+            "externalDependencies": [],
             "styles": [
               "src/custom-theme.scss",
               "src/styles.css"

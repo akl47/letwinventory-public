@@ -1,53 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   emptyFeatureTree, addFeature, removeFeature, updateFeatureParam,
-  removeFeaturesReferencingSketch, regenerateModel, isOriginFeature, isExtrudeFeature,
-  type KernelAdapter,
+  removeFeaturesReferencingSketch, isOriginFeature, isExtrudeFeature,
 } from './featureTree';
-import type { SketchDocument, Plane3, FaceMesh, ModelTopology } from './types';
 
-const XY: Plane3 = { origin: [0, 0, 0], xAxis: [1, 0, 0], yAxis: [0, 1, 0], normal: [0, 0, 1] };
-
-function mockKernel(): KernelAdapter & { extrudeCalls: number } {
-  let extrudeCalls = 0;
-  return {
-    get extrudeCalls() { return extrudeCalls; },
-    buildOriginGeometry() {
-      return { datums: [], faces: [], topology: { vertices: [], edges: [] } };
-    },
-    buildExtrude(_profile, _plane, _distance): { faces: FaceMesh[]; topology: ModelTopology } {
-      extrudeCalls++;
-      return { faces: [], topology: { vertices: [], edges: [] } };
-    },
-  };
-}
-
-function makeDoc(sketchId: string): SketchDocument {
-  return {
-    sketches: {
-      [sketchId]: {
-        id: sketchId,
-        hostId: 'datum:xy_plane',
-        plane: XY,
-        state: {
-          entities: [
-            { kind: 'point', id: 'p1', x: 0, y: 0 },
-            { kind: 'point', id: 'p2', x: 10, y: 0 },
-            { kind: 'point', id: 'p3', x: 10, y: 10 },
-            { kind: 'point', id: 'p4', x: 0, y: 10 },
-            { kind: 'line', id: 'l1', startId: 'p1', endId: 'p2' },
-            { kind: 'line', id: 'l2', startId: 'p2', endId: 'p3' },
-            { kind: 'line', id: 'l3', startId: 'p3', endId: 'p4' },
-            { kind: 'line', id: 'l4', startId: 'p4', endId: 'p1' },
-          ],
-          constraints: [],
-        },
-        candidates: [],
-      },
-    },
-    nextSketchSeq: 2,
-  };
-}
+// Phase 1: regenerateModel + KernelAdapter mock have moved server-side.
+// Visibility-aware regeneration is now covered by
+// `backend/tests/__tests__/design/cad-regenerate.test.js`.
 
 describe('Feature tree (CAD-034, CAD-035, CAD-037)', () => {
   describe('emptyFeatureTree', () => {
@@ -186,23 +145,4 @@ describe('Feature tree (CAD-034, CAD-035, CAD-037)', () => {
     });
   });
 
-  describe('regenerateModel visibility (REQ 610)', () => {
-    it('skips Extrude features where visible === false', async () => {
-      let tree = emptyFeatureTree();
-      tree = addFeature(tree, { type: 'extrude', sketchId: 'sA', distance: 5, visible: false });
-      const kernel = mockKernel();
-      const result = await regenerateModel(kernel, tree, makeDoc('sA'));
-      expect(kernel.extrudeCalls).toBe(0);
-      expect(result.errors.length).toBe(0);
-    });
-
-    it('builds Extrude features where visible is true or undefined (default)', async () => {
-      let tree = emptyFeatureTree();
-      tree = addFeature(tree, { type: 'extrude', sketchId: 'sA', distance: 5 });
-      tree = addFeature(tree, { type: 'extrude', sketchId: 'sA', distance: 7, visible: true });
-      const kernel = mockKernel();
-      await regenerateModel(kernel, tree, makeDoc('sA'));
-      expect(kernel.extrudeCalls).toBe(2);
-    });
-  });
 });

@@ -23,15 +23,13 @@ import { ExtrudeDialogComponent, type ExtrudeDialogResult } from '../extrude-dia
 import { SketchDeleteWarningDialogComponent, type SketchDeleteAction } from '../sketch-delete-warning-dialog/sketch-delete-warning-dialog.component';
 import type { FeatureTree, SketchDocument, SketchId, ModelGeometry, SketchState, ExtrudeFeature } from '../../../cad/lib/types';
 import {
-  emptyFeatureTree, addFeature, regenerateModel, defaultDatumVisibility, type KernelAdapter,
+  emptyFeatureTree, addFeature, defaultDatumVisibility,
   removeFeature, updateFeatureParam, removeFeaturesReferencingSketch,
 } from '../../../cad/lib/featureTree';
 import { emptyDocument, createSketch, updateSketchState, deleteSketch, setSketchVisibility, setSketchName } from '../../../cad/lib/document';
 import { migrateSketchDocument } from '../../../cad/lib/migration';
 import { planeForDatum, buildOriginDatums } from '../../../cad/lib/datum';
 import { extractClosedLoops } from '../../../cad/lib/profile';
-import { makePureJsKernel } from '../../../cad/lib/kernel';
-import { CadKernelService } from '../../../services/cad-kernel.service';
 import { environment } from '../../../../environments/environment';
 
 type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
@@ -188,8 +186,8 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
               [geometry]="geometry()"
               [selected]="selected()"
               [selectedFeatures]="selectedFeatures()"
-              [loading]="kernelLoading()"
-              [loadProgress]="kernelLoadStatus()"
+              [loading]="regenLoading()"
+              [loadProgress]="regenError() || ''"
               [sketchDoc]="doc()"
               [activeSketchId]="activeSketchId()"
               [sketchPreview]="sketchPreview()"
@@ -336,7 +334,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private auth = inject(AuthService);
   private errors = inject(ErrorNotificationService);
   private dialog = inject(MatDialog);
-  private kernelService = inject(CadKernelService);
 
   model = signal<CadModel | null>(null);
   loading = signal<boolean>(true);
@@ -347,8 +344,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   fullscreen = signal<boolean>(false);
   partID = signal<number | null>(null);
   geometry = signal<ModelGeometry | null>(null);
-  kernelLoading = signal<boolean>(false);
-  kernelLoadStatus = signal<string>('');
+  // Phase 1: server-side regen is in flight. The viewer's loading overlay
+  // reads this. Old kernelLoading + kernelLoadStatus signals were tied to
+  // the deleted client-side OCCT loader.
+  regenLoading = signal<boolean>(false);
+  regenError = signal<string | null>(null);
   mode = signal<EditorMode>('idle');
   pendingExtrude = signal<boolean>(false);
   // REQ 616 — ribbon tab. Auto-switches to 'sketch' when activeSketchId becomes
@@ -383,7 +383,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private prevActiveSketchId: SketchId | null = null;
   private sketchEditorRef = viewChild<CadSketchEditorComponent>('sketchEditor');
   private ctxMenuTrigger = viewChild(MatMenuTrigger);
-  private kernel: KernelAdapter = makePureJsKernel();
 
   activeSketchPlaneLabel = computed(() => {
     const sid = this.activeSketchId();
@@ -441,30 +440,24 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       }
     });
 
+    // REQ 700 — datum-only fast path. The 3D viewer still needs the datum
+    // overlay derived from the OriginFeature's visibility map; recompute it
+    // whenever featureTree changes. Feature geometry is fetched via the
+    // server regenerate call (see `regenerate()` below) so it doesn't go
+    // through an effect.
     effect(() => {
       const tree = this.featureTree();
-      const doc = this.doc();
-      const genId = ++this.regenGeneration;
-      (async () => {
-        try {
-          const result = await regenerateModel(this.kernel, tree, doc);
-          if (genId !== this.regenGeneration) return;
-          // Filter datums by the Origin feature's visibility map.
-          const origin = tree.features.find(f => f.type === 'origin') as
-            | (typeof tree.features[number] & { visibility?: Record<string, boolean> })
-            | undefined;
-          const vis = { ...defaultDatumVisibility(), ...(origin?.visibility ?? {}) };
-          const datums = buildOriginDatums().filter(d => vis[d.id] !== false);
-          this.geometry.set({ ...result.geometry, datums });
-          for (const err of result.errors) {
-            // eslint-disable-next-line no-console
-            console.warn('Regenerate:', err);
-          }
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.error('regenerateModel failed', e);
-        }
-      })();
+      const origin = tree.features.find(f => f.type === 'origin') as
+        | (typeof tree.features[number] & { visibility?: Record<string, boolean> })
+        | undefined;
+      const vis = { ...defaultDatumVisibility(), ...(origin?.visibility ?? {}) };
+      const datums = buildOriginDatums().filter(d => vis[d.id] !== false);
+      const prev = this.geometry();
+      this.geometry.set({
+        datums,
+        faces: prev?.faces ?? [],
+        topology: prev?.topology ?? { vertices: [], edges: [] },
+      });
     });
 
     effect(() => {
@@ -1042,6 +1035,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.activeSketchId.set(null);
     this.setMode('idle');
     this.loading.set(false);
+    // Kick the initial regeneration so the cached/freshly-built faces render.
+    this.regenerate();
   }
 
   private debouncedSave: number | null = null;
@@ -1051,10 +1046,61 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (this.debouncedSave) clearTimeout(this.debouncedSave);
     this.debouncedSave = window.setTimeout(() => {
       this.cadApi.update(m.id, { featureTree: this.featureTree(), sketchDoc: this.doc() }).subscribe({
-        next: updated => this.model.set(updated),
+        next: updated => {
+          this.model.set(updated);
+          // After every successful save, regen the geometry from the server.
+          // Server reads the just-saved featureTree + sketchDoc; cache hits
+          // on unchanged features keep the round-trip cheap.
+          this.regenerate();
+        },
         error: err => this.errors.showError(err?.error?.error || 'Save failed'),
       });
     }, 500);
+  }
+
+  // Phase 1 — call the server-side regenerate endpoint and merge the
+  // returned per-feature face meshes into the geometry signal. Older
+  // in-flight regens are dropped by `regenGeneration` so a stale response
+  // can't overwrite a newer one.
+  private regenerate() {
+    const m = this.model();
+    if (!m) return;
+    const genId = ++this.regenGeneration;
+    this.regenLoading.set(true);
+    this.regenError.set(null);
+    this.cadApi.regenerate(m.id).subscribe({
+      next: (resp) => {
+        if (genId !== this.regenGeneration) return;
+        this.regenLoading.set(false);
+        const faces = resp.features.flatMap(f =>
+          (f.faces || []).map(face => ({
+            faceId: face.faceId,
+            positions: new Float32Array(face.positions),
+            normals: new Float32Array(face.normals),
+            indices: new Uint32Array(face.indices),
+            featureId: f.featureId,
+            isFlat: face.isFlat,
+          })),
+        );
+        const prev = this.geometry();
+        this.geometry.set({
+          datums: prev?.datums ?? [],
+          faces,
+          topology: { vertices: [], edges: [] },  // server topology arrives in Phase 1.5
+        });
+        for (const err of resp.errors || []) {
+          // eslint-disable-next-line no-console
+          console.warn('[regen]', err);
+        }
+      },
+      error: (err) => {
+        if (genId !== this.regenGeneration) return;
+        this.regenLoading.set(false);
+        const msg = err?.error?.error || err?.message || 'Regenerate failed';
+        this.regenError.set(msg);
+        this.errors.showError(msg);
+      },
+    });
   }
 
   onBack() { this.router.navigate(['../'], { relativeTo: this.route }); }

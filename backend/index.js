@@ -75,10 +75,16 @@ if (require.main === module) {
     const printAgentService = require("./services/printAgentService");
     const scheduledTaskService = require("./services/scheduledTaskService");
     const notificationService = require("./services/notificationService");
+    const cadStreamService = require("./services/cadStreamService");
     const port = process.env.BACKEND_PORT;
 
     const server = http.createServer(app);
     printAgentService.initialize(server);
+    // REQ 700 (Phase 1) — CAD WebSocket session manager for regenerate
+    // progress events and (Phase 1.5) incremental mesh deltas. The Rust
+    // kernel sidecar at /tmp/letwinventory-cad-kernel.sock is consumed by
+    // cadKernelClient on-demand — no eager handshake here.
+    cadStreamService.initialize(server);
 
     server.listen(port, () => {
         db.sequelize.sync().then(() => {

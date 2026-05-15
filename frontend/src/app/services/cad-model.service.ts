@@ -4,6 +4,26 @@ import { Observable } from 'rxjs';
 import { CadModel, CadModelHistoryEntry, PartWithCadSummary } from '../models/cad-model.model';
 import { environment } from '../../environments/environment';
 
+/** Server-side regeneration response (Phase 1 — see backend cadRegenService.js). */
+export interface RegenerateResponse {
+  modelId: number;
+  revision: string;
+  features: Array<{
+    featureId: string;
+    faces: Array<{
+      faceId: string;
+      persistentName: string;
+      isFlat: boolean;
+      positions: number[];
+      normals: number[];
+      indices: number[];
+    }>;
+    error?: string;
+    cached: boolean;
+  }>;
+  errors: string[];
+}
+
 @Injectable({ providedIn: 'root' })
 export class CadModelService {
   private http = inject(HttpClient);
@@ -51,5 +71,14 @@ export class CadModelService {
 
   getHistory(id: number): Observable<CadModelHistoryEntry[]> {
     return this.http.get<CadModelHistoryEntry[]>(`${this.apiUrl}/${id}/history`);
+  }
+
+  // Phase 1 — server-side regen. POSTs the current model id; the server walks
+  // the featureTree, hits the Postgres BRep cache, falls through to the Rust
+  // kernel on miss, and streams the merged geometry back as JSON. Phase 1.5
+  // will replace this with the cadStreamService WebSocket for incremental
+  // updates during live editing.
+  regenerate(id: number): Observable<RegenerateResponse> {
+    return this.http.post<RegenerateResponse>(`${this.apiUrl}/${id}/regenerate`, {});
   }
 }

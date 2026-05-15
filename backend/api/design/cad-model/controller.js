@@ -1,4 +1,6 @@
 const db = require('../../../models');
+const cadRegenService = require('../../../services/cadRegenService');
+const { KernelDisconnected, KernelRpcError } = require('../../../services/cadKernelClient');
 
 const INITIAL_FEATURE_TREE = { features: [{ id: 'f1', type: 'origin' }], nextFeatureSeq: 2 };
 const INITIAL_SKETCH_DOC = { sketches: {}, nextSketchSeq: 1 };
@@ -312,6 +314,33 @@ module.exports = {
       return res.json(rows);
     } catch (err) {
       return res.status(500).json({ error: `Failed to fetch CAD model history: ${err.message}` });
+    }
+  },
+
+  // Phase 1 — server-side regen. Walks the feature tree, looks up each
+  // feature's tessellated faces in DesignBRepCache, falls through to the
+  // Rust kernel via Unix-socket JSON-RPC on cache miss. Returns the merged
+  // face geometry for the viewer.
+  async regenerate(req, res) {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'invalid model id' });
+    const model = await fetchActiveModel(id);
+    if (!model) return res.status(404).json({ error: 'CAD model not found' });
+    try {
+      const result = await cadRegenService.regenerateModel(model);
+      return res.json({
+        modelId: id,
+        revision: model.revision,
+        ...result,
+      });
+    } catch (err) {
+      if (err instanceof KernelDisconnected) {
+        return res.status(503).json({ error: `CAD kernel unavailable: ${err.message}` });
+      }
+      if (err instanceof KernelRpcError) {
+        return res.status(500).json({ error: `CAD kernel error (${err.code}): ${err.message}` });
+      }
+      return res.status(500).json({ error: `Regenerate failed: ${err.message}` });
     }
   },
 
