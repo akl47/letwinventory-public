@@ -99,12 +99,16 @@ export interface ConstraintTarget {
 }
 
 export type ConstraintType =
+  // `coincident` is the unified "this is on that" constraint and dispatches
+  // on target entity kinds at solve time: (point, point), (point, line),
+  // and (point, circle/arc/ellipse) are all valid. Earlier schemas split
+  // this into 'point-on-line' / 'point-on-curve' — migration rewrites them
+  // to `coincident` on load.
   | 'coincident'
   | 'fixed'
   | 'horizontal'
   | 'vertical'
   | 'distance'
-  | 'point-on-line'
   | 'perpendicular'
   | 'parallel'
   | 'tangent'
@@ -112,12 +116,33 @@ export type ConstraintType =
   | 'symmetric'
   | 'midpoint'
   | 'concentric'
-  | 'collinear';
+  | 'coradial'           // geometric — two circles/arcs share both center AND radius
+  | 'collinear'
+  | 'radius'
+  | 'diameter'
+  | 'angle'
+  | 'horizontal-distance'    // dimensional — driven Δx between two points
+  | 'vertical-distance'      // dimensional — driven Δy between two points
+  | 'point-line-distance'    // dimensional — driven perpendicular distance from point to line
+  | 'arc-length';            // dimensional — driven arc length
 
 export interface SketchConstraint {
   id: string;
   type: ConstraintType;
   targets: ConstraintTarget[];
+  /** Optional 2D placement (in sketch-local coords) for dimensional
+   * constraints. Set when the user clicks where the dimension line should
+   * go (the third click in the SolidWorks-style Smart Dim flow). Used by
+   * the renderer to draw the dimension line + extension lines at the
+   * chosen offset from the measured geometry. Geometric constraints
+   * (coincident, perpendicular, etc.) never set this. */
+  placement?: { x: number; y: number };
+  /** Optional per-dimension unit override (mm / um / in). When unset, the
+   * dimension displays in the model's defaultUnit and bare numeric input
+   * is interpreted in defaultUnit. When set, the dim shows the unit
+   * suffix and its display uses this unit. `value` is ALWAYS stored in
+   * mm regardless. */
+  unit?: 'mm' | 'um' | 'in';
   value?: number;
 }
 
@@ -232,6 +257,11 @@ export type Feature = OriginFeature | ExtrudeFeature;
 export interface FeatureTree {
   features: Feature[];
   nextFeatureSeq: number;
+  /** Default display unit for dimensions in this CAD model. Bare numeric
+   * input from the user is interpreted in this unit. Per-dimension overrides
+   * are stored on the individual constraint. Defaults to 'mm' when unset
+   * (legacy models). */
+  defaultUnit?: 'mm' | 'um' | 'in';
 }
 
 // ──────────────────────────────────────────────────────────────────────────

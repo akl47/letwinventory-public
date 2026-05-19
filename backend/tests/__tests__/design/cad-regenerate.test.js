@@ -8,6 +8,7 @@
 const { authenticatedRequest, createTestPart } = require('../../helpers');
 const cadRegenService = require('../../../services/cadRegenService');
 const cadKernelClient = require('../../../services/cadKernelClient');
+const db = require('../../../models');
 
 const ORIGIN_TREE = { features: [{ id: 'f1', type: 'origin' }], nextFeatureSeq: 2 };
 const EMPTY_DOC = { sketches: {}, nextSketchSeq: 1 };
@@ -46,7 +47,10 @@ function fakeKernelResponse(featureId, faceCount = 3) {
       normals: [0, 0, 1,  0, 0, 1,  0, 0, 1],
       indices: [0, 1, 2],
     })),
-    topology: { vertices: [], edges: [] },
+    topology: {
+      vertices: [{ id: 'v0', position: [0, 0, 0] }],
+      edges: [{ id: 'e0', isStraight: true, endpoints: [[0, 0, 0], [1, 0, 0]] }],
+    },
   };
 }
 
@@ -160,6 +164,78 @@ describe('POST /api/design/cad-model/:id/regenerate (REQ 700)', () => {
     expect(r1.body.features[0].cached).toBe(false);
     expect(r2.body.features[0].cached).toBe(false);  // distance changed → new paramHash → cache miss
     expect(kernelStub.calls).toHaveLength(2);
+  });
+
+  it('invokes onFeatureResult per feature for WS streaming', async () => {
+    const auth = await authenticatedRequest();
+    const part = await createTestPart();
+    const create = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({ name: 'Stream test' });
+    const modelId = create.body.id;
+    const doc = { sketches: { s1: fakeCircleSketch('s1') }, nextSketchSeq: 2 };
+    const tree = {
+      features: [
+        { id: 'f1', type: 'origin' },
+        { id: 'f2', type: 'extrude', sketchId: 's1', distance: 20 },
+        { id: 'f3', type: 'extrude', sketchId: 's1', distance: 30 },
+      ],
+      nextFeatureSeq: 4,
+    };
+    await auth.put(`/api/design/cad-model/${modelId}`).send({ featureTree: tree, sketchDoc: doc });
+    const model = await db.DesignCADModel.findByPk(modelId);
+
+    const events = [];
+    await cadRegenService.regenerateModel(model, {
+      onFeatureResult: (result) => events.push(result.featureId),
+    });
+    // Origin is skipped, both extrudes emit — in declaration order.
+    expect(events).toEqual(['f2', 'f3']);
+  });
+
+  it('isolates a throwing onFeatureResult callback', async () => {
+    const auth = await authenticatedRequest();
+    const part = await createTestPart();
+    const create = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({ name: 'Throw test' });
+    const modelId = create.body.id;
+    const doc = { sketches: { s1: fakeCircleSketch('s1') }, nextSketchSeq: 2 };
+    const tree = {
+      features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 20 }],
+      nextFeatureSeq: 3,
+    };
+    await auth.put(`/api/design/cad-model/${modelId}`).send({ featureTree: tree, sketchDoc: doc });
+    const model = await db.DesignCADModel.findByPk(modelId);
+
+    const result = await cadRegenService.regenerateModel(model, {
+      onFeatureResult: () => { throw new Error('subscriber blew up'); },
+    });
+    // Callback failures must not surface to the HTTP path.
+    expect(result.features).toHaveLength(1);
+    expect(result.features[0].featureId).toBe('f2');
+  });
+
+  it('forwards per-feature topology with scoped vertex/edge IDs', async () => {
+    const auth = await authenticatedRequest();
+    const part = await createTestPart();
+    const create = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({ name: 'Topo test' });
+    const modelId = create.body.id;
+    const tree = {
+      features: [
+        { id: 'f1', type: 'origin' },
+        { id: 'f2', type: 'extrude', sketchId: 's1', distance: 20 },
+      ],
+      nextFeatureSeq: 3,
+    };
+    const doc = { sketches: { s1: fakeCircleSketch('s1') }, nextSketchSeq: 2 };
+    await auth.put(`/api/design/cad-model/${modelId}`).send({ featureTree: tree, sketchDoc: doc });
+
+    const res = await auth.post(`/api/design/cad-model/${modelId}/regenerate`);
+    expect(res.status).toBe(200);
+    const f2 = res.body.features[0];
+    expect(f2.topology).toBeDefined();
+    // Kernel-local 'v0'/'e0' get prefixed by the regen service so the IDs
+    // stay globally unique once meshes from multiple features are merged.
+    expect(f2.topology.vertices[0].id).toBe('f2#0/v0');
+    expect(f2.topology.edges[0].id).toBe('f2#0/e0');
+    expect(f2.topology.edges[0].endpoints).toEqual([[0, 0, 0], [1, 0, 0]]);
   });
 
   it('returns 503 when the kernel is unavailable', async () => {

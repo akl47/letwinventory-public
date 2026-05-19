@@ -1,7 +1,9 @@
 import type {
   SketchState, SketchEntity, PointEntity, LineEntity, CircleEntity, ArcEntity,
+  EllipseEntity, SplineEntity,
 } from './types';
 import { findPoint } from './types';
+import { tessellateEllipse, tessellateSpline, DEFAULT_CHORD_TOLERANCE } from './tessellator';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Parametric closest-point picker (REQ 564).
@@ -91,23 +93,83 @@ function distanceToArc(state: SketchState, e: ArcEntity, p: Point2): number {
   return Math.min(dist(s, p), dist(f, p));
 }
 
+function distanceToEllipse(state: SketchState, e: EllipseEntity, p: Point2): number {
+  const c = findPoint(state, e.centerId);
+  const m = findPoint(state, e.majorAxisEndId);
+  if (!c || !m) return Infinity;
+  // Approximate via tessellation — sufficient for clicks at screen tolerance.
+  // True closest-point on an ellipse requires iterative root-finding (no
+  // closed form); not worth the complexity for pick hit-testing.
+  const samples = tessellateEllipse({ x: c.x, y: c.y }, { x: m.x, y: m.y }, e.minorRadius, DEFAULT_CHORD_TOLERANCE);
+  return distanceToPolyline(samples, p);
+}
+
+function distanceToSpline(state: SketchState, e: SplineEntity, p: Point2): number {
+  const pts = e.controlPointIds.map(id => findPoint(state, id)).filter((q): q is PointEntity => !!q);
+  if (pts.length < e.degree + 1) return Infinity;
+  const samples = tessellateSpline(pts.map(q => ({ x: q.x, y: q.y })), e.degree, DEFAULT_CHORD_TOLERANCE);
+  return distanceToPolyline(samples, p);
+}
+
+function distanceToPolyline(samples: Array<{ x: number; y: number }>, p: Point2): number {
+  if (samples.length === 0) return Infinity;
+  let min = Infinity;
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1], b = samples[i];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 < 1e-12 ? 0 : ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const proj = { x: a.x + dx * t, y: a.y + dy * t };
+    const d = Math.hypot(proj.x - p.x, proj.y - p.y);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
 export function distanceToEntity(state: SketchState, entity: SketchEntity, p: Point2): number {
   switch (entity.kind) {
     case 'point': return distanceToPoint(state, entity, p);
     case 'line': return distanceToLine(state, entity, p);
     case 'circle': return distanceToCircle(state, entity, p);
     case 'arc': return distanceToArc(state, entity, p);
-    case 'ellipse':
+    case 'ellipse': return distanceToEllipse(state, entity, p);
+    case 'spline': return distanceToSpline(state, entity, p);
     case 'ellipticalArc':
-    case 'spline':
     case 'conic':
-      // Phase B/C — exact closest-point per kind. For now, hit-test against the
-      // entity's center if it has one, otherwise unpickable.
+      // Phase C — exact closest-point per kind.
       return Infinity;
   }
 }
 
-export function pickEntity(state: SketchState, p: Point2, tolerance: number): SketchEntity | null {
+/**
+ * Pick the entity nearest to `p`, with two tweaks vs. plain nearest-search:
+ *
+ * 1. **Points strongly preferred.** If ANY point lies within `pointTolerance`
+ *    (defaulting to `tolerance`), the closest such point wins outright —
+ *    even if a line happens to be closer. Otherwise clicking near a corner
+ *    sometimes grabs the line passing through that corner, which never
+ *    matches the user's intent.
+ *
+ * 2. **Pick rank as the tiebreaker.** When two non-point entities are
+ *    equidistant, the lower-rank one wins (points > lines/curves > rest).
+ */
+export function pickEntity(
+  state: SketchState, p: Point2, tolerance: number,
+  pointTolerance: number = tolerance,
+): SketchEntity | null {
+  // Pass 1 — point preference within pointTolerance.
+  let bestPoint: SketchEntity | null = null;
+  let bestPointDist = Infinity;
+  for (const e of state.entities) {
+    if (e.kind !== 'point') continue;
+    const d = distanceToEntity(state, e, p);
+    if (d > pointTolerance) continue;
+    if (d < bestPointDist) { bestPoint = e; bestPointDist = d; }
+  }
+  if (bestPoint) return bestPoint;
+
+  // Pass 2 — fall back to the regular nearest-by-distance among all kinds.
   let best: SketchEntity | null = null;
   let bestDist = Infinity;
   let bestRank = Infinity;

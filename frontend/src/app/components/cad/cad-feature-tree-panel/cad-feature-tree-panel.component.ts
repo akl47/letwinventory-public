@@ -24,6 +24,15 @@ export interface FeatureSelectEvent {
   ctrlKey: boolean;
 }
 
+/** Sketch selection event from a left-click on a sketch row outside
+ * pick-extrude-target mode. Mirrors `FeatureSelectEvent` so the parent can
+ * apply the same shift/ctrl multi-select policy. */
+export interface SketchSelectEvent {
+  sketchId: string;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+}
+
 interface TreeNode {
   /** Unique within the tree; used for expansion tracking. */
   key: string;
@@ -73,6 +82,11 @@ interface TreeNode {
           <span class="chevron-spacer" *ngIf="!n.expandable && n.depth > 0"></span>
           <mat-icon class="kind-icon" [ngClass]="n.iconClass">{{ n.iconName }}</mat-icon>
           <span class="label">{{ n.label }}</span>
+          <ng-container *ngIf="n.kind === 'feature' && n.feature && featureErrors().has(n.feature.id)">
+            <mat-icon class="error-indicator"
+                      [matTooltip]="featureErrors().get(n.feature.id) || ''"
+                      [attr.data-testid]="featureErrorTestId(n)">error</mat-icon>
+          </ng-container>
           <mat-icon *ngIf="n.kind === 'feature' && n.visible === false" class="hidden-indicator" matTooltip="Hidden">visibility_off</mat-icon>
           <button class="visibility-toggle"
                   *ngIf="n.visibilityToggleable"
@@ -94,35 +108,51 @@ interface TreeNode {
 
       <mat-menu #ctxMenu="matMenu">
         <ng-container *ngIf="contextNode() as n">
-          <ng-container *ngIf="n.kind === 'feature' && n.feature?.type === 'extrude'">
-            <button mat-menu-item data-testid="ctx-edit-feature" (click)="emitAction({ action: 'edit-feature', featureId: n.feature!.id })">
-              <mat-icon>edit</mat-icon> Edit…
-            </button>
-            <button mat-menu-item data-testid="ctx-rename-feature" (click)="emitAction({ action: 'rename-feature', featureId: n.feature!.id })">
-              <mat-icon>drive_file_rename_outline</mat-icon> Rename
-            </button>
-            <button mat-menu-item data-testid="ctx-toggle-feature-visibility" (click)="emitAction({ action: 'toggle-feature-visibility', featureId: n.feature!.id })">
-              <mat-icon>{{ n.visible === false ? 'visibility' : 'visibility_off' }}</mat-icon>
-              {{ n.visible === false ? 'Show' : 'Hide' }}
-            </button>
-            <button mat-menu-item data-testid="ctx-delete-feature" (click)="emitAction({ action: 'delete-feature', featureId: n.feature!.id })">
-              <mat-icon>delete</mat-icon> Delete
-            </button>
-          </ng-container>
-          <ng-container *ngIf="n.kind === 'sketch' && n.sketchId">
-            <button mat-menu-item data-testid="ctx-edit-sketch" (click)="emitAction({ action: 'edit-sketch', sketchId: n.sketchId! })">
-              <mat-icon>edit</mat-icon> Edit sketch
-            </button>
-            <button mat-menu-item data-testid="ctx-rename-sketch" (click)="emitAction({ action: 'rename-sketch', sketchId: n.sketchId! })">
-              <mat-icon>drive_file_rename_outline</mat-icon> Rename
-            </button>
-            <button mat-menu-item data-testid="ctx-toggle-sketch-visibility" (click)="emitAction({ action: 'toggle-sketch-visibility', sketchId: n.sketchId! })">
-              <mat-icon>{{ n.visible === false ? 'visibility' : 'visibility_off' }}</mat-icon>
-              {{ n.visible === false ? 'Show' : 'Hide' }}
-            </button>
-            <button mat-menu-item data-testid="ctx-delete-sketch" (click)="emitAction({ action: 'delete-sketch', sketchId: n.sketchId! })">
-              <mat-icon>delete</mat-icon> Delete sketch
-            </button>
+          <ng-container *ngIf="ctxScope() as scope">
+            <!-- Feature menu — hide Edit/Rename when targeting multiple features. -->
+            <ng-container *ngIf="scope.kind === 'feature' && n.feature">
+              <button *ngIf="scope.count === 1"
+                      mat-menu-item data-testid="ctx-edit-feature"
+                      (click)="emitAction({ action: 'edit-feature', featureId: n.feature.id })">
+                <mat-icon>edit</mat-icon> Edit…
+              </button>
+              <button *ngIf="scope.count === 1"
+                      mat-menu-item data-testid="ctx-rename-feature"
+                      (click)="emitAction({ action: 'rename-feature', featureId: n.feature.id })">
+                <mat-icon>drive_file_rename_outline</mat-icon> Rename
+              </button>
+              <button mat-menu-item data-testid="ctx-toggle-feature-visibility"
+                      (click)="emitAction({ action: 'toggle-feature-visibility', featureId: n.feature.id })">
+                <mat-icon>{{ scope.anyVisible ? 'visibility_off' : 'visibility' }}</mat-icon>
+                {{ scope.anyVisible ? 'Hide' : 'Show' }}{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
+              </button>
+              <button mat-menu-item data-testid="ctx-delete-feature"
+                      (click)="emitAction({ action: 'delete-feature', featureId: n.feature.id })">
+                <mat-icon>delete</mat-icon> Delete{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
+              </button>
+            </ng-container>
+            <!-- Sketch menu — same pattern. -->
+            <ng-container *ngIf="scope.kind === 'sketch' && n.sketchId">
+              <button *ngIf="scope.count === 1"
+                      mat-menu-item data-testid="ctx-edit-sketch"
+                      (click)="emitAction({ action: 'edit-sketch', sketchId: n.sketchId })">
+                <mat-icon>edit</mat-icon> Edit sketch
+              </button>
+              <button *ngIf="scope.count === 1"
+                      mat-menu-item data-testid="ctx-rename-sketch"
+                      (click)="emitAction({ action: 'rename-sketch', sketchId: n.sketchId })">
+                <mat-icon>drive_file_rename_outline</mat-icon> Rename
+              </button>
+              <button mat-menu-item data-testid="ctx-toggle-sketch-visibility"
+                      (click)="emitAction({ action: 'toggle-sketch-visibility', sketchId: n.sketchId })">
+                <mat-icon>{{ scope.anyVisible ? 'visibility_off' : 'visibility' }}</mat-icon>
+                {{ scope.anyVisible ? 'Hide' : 'Show' }}{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
+              </button>
+              <button mat-menu-item data-testid="ctx-delete-sketch"
+                      (click)="emitAction({ action: 'delete-sketch', sketchId: n.sketchId })">
+                <mat-icon>delete</mat-icon> Delete sketch{{ scope.count > 1 ? 'es (' + scope.count + ')' : '' }}
+              </button>
+            </ng-container>
           </ng-container>
         </ng-container>
       </mat-menu>
@@ -142,6 +172,7 @@ interface TreeNode {
     .row.selected { background: rgba(255, 183, 77, 0.18); }
     .row.selected.depth-1 { background: rgba(255, 183, 77, 0.12); }
     .hidden-indicator { font-size: 14px; width: 14px; height: 14px; opacity: 0.55; }
+    .error-indicator { font-size: 16px; width: 16px; height: 16px; color: #ef5350; flex-shrink: 0; }
     .menu-anchor { position: fixed; width: 0; height: 0; }
     .chevron { display: inline-flex; align-items: center; width: 18px; cursor: pointer; opacity: 0.7; }
     .chevron mat-icon { font-size: 18px; width: 18px; height: 18px; }
@@ -169,14 +200,24 @@ export class CadFeatureTreePanelComponent {
   features = input<Feature[]>([]);
   doc = input<SketchDocument | null>(null);
   selectableSketches = input<boolean>(false);
+  // Map of featureId → friendly error message. Features in this map render
+  // with a red error icon + tooltip so the user can identify which feature
+  // failed during the last regenerate. Empty map = no errors.
+  featureErrors = input<Map<string, string>>(new Map());
 
   sketchSelected = output<string>();
+  /** Fired on a left-click of a sketch row outside pick-extrude-target mode.
+   * Click selects (highlights) the sketch; right-click context menu still
+   * handles Edit / Delete / Hide. The parent decides multi-select policy. */
+  sketchSelect = output<SketchSelectEvent>();
   visibilityToggled = output<string>(); // datum id
   actionRequested = output<FeatureTreeAction>();
   // REQ 626 — selected feature ids drive row highlighting; the click event
   // lets the parent apply set/toggle policy based on modifier keys.
   selectedFeatures = input<Set<string>>(new Set());
   featureSelect = output<FeatureSelectEvent>();
+  /** Set of selected sketch ids — parallel to `selectedFeatures`. */
+  selectedSketches = input<Set<string>>(new Set());
 
   // Expansion state: keys for expanded nodes (origin is expanded by default).
   // REQ 622 — Origin collapsed by default. Per-session state; user can expand
@@ -189,6 +230,38 @@ export class CadFeatureTreePanelComponent {
   menuY = signal(0);
   contextNode = signal<TreeNode | null>(null);
   private menuTrigger = viewChild(MatMenuTrigger);
+
+  // What the context menu will act on, given the right-clicked node and the
+  // current selection. Mirrors the OS-file-manager rule: if the right-clicked
+  // item is part of the current selection, the action targets the whole
+  // selection; otherwise it targets only the right-clicked item. The menu
+  // template hides edit/rename when count > 1 (those actions don't make
+  // sense in bulk) and appends a "(N)" suffix to bulk toggle/delete.
+  ctxScope = computed<{ kind: 'feature' | 'sketch' | null; count: number; anyVisible: boolean }>(() => {
+    const n = this.contextNode();
+    if (!n) return { kind: null, count: 0, anyVisible: false };
+    if (n.kind === 'feature' && n.feature && n.feature.type !== 'origin') {
+      const sel = this.selectedFeatures();
+      const ids = sel.has(n.feature.id) && sel.size > 1 ? Array.from(sel) : [n.feature.id];
+      const feats = this.features();
+      const anyVisible = ids.some(id => {
+        const f = feats.find(x => x.id === id) as ExtrudeFeature | undefined;
+        return !!f && f.visible !== false;
+      });
+      return { kind: 'feature', count: ids.length, anyVisible };
+    }
+    if (n.kind === 'sketch' && n.sketchId) {
+      const sel = this.selectedSketches();
+      const ids = sel.has(n.sketchId) && sel.size > 1 ? Array.from(sel) : [n.sketchId];
+      const doc = this.doc();
+      const anyVisible = ids.some(id => {
+        const s = doc?.sketches[id];
+        return !!s && s.visible !== false;
+      });
+      return { kind: 'sketch', count: ids.length, anyVisible };
+    }
+    return { kind: null, count: 0, anyVisible: false };
+  });
 
   nodes = computed<TreeNode[]>(() => {
     const out: TreeNode[] = [];
@@ -307,6 +380,10 @@ export class CadFeatureTreePanelComponent {
     };
   }
 
+  featureErrorTestId(n: TreeNode): string {
+    return n.feature ? `feature-error-${n.feature.id}` : 'feature-error';
+  }
+
   hostLabel(hostId: string): string {
     if (hostId.startsWith('datum:')) return hostId.substring('datum:'.length).replace('_', ' ');
     return hostId;
@@ -330,10 +407,26 @@ export class CadFeatureTreePanelComponent {
   }
 
   onRowClick(n: TreeNode, ev: MouseEvent) {
-    // Sketch row in pick-extrude-target mode: emit sketchSelected. Takes
-    // precedence over expand/select so the extrude flow keeps working.
-    if (n.kind === 'sketch' && n.selectable && n.sketchId) {
-      this.sketchSelected.emit(n.sketchId);
+    // Sketch row:
+    //   - in pick-extrude-target mode (`selectable=true`), emit sketchSelected
+    //     so the editor knows which sketch to use as the extrude target
+    //   - otherwise, open it for editing (same effect as the right-click
+    //     "Edit sketch" menu item) — this is the natural single-click action
+    if (n.kind === 'sketch' && n.sketchId) {
+      if (n.selectable) {
+        // pick-extrude-target mode: clicking commits the sketch as the
+        // extrude source, no selection happens here.
+        this.sketchSelected.emit(n.sketchId);
+      } else {
+        // Normal mode: click selects (highlights). Edit/Delete/Hide live
+        // on the right-click context menu so a single click never opens
+        // the sketch unexpectedly.
+        this.sketchSelect.emit({
+          sketchId: n.sketchId,
+          shiftKey: ev.shiftKey,
+          ctrlKey: ev.ctrlKey || ev.metaKey,
+        });
+      }
       return;
     }
     // REQ 626 — feature row click emits selection with modifier keys. Origin
@@ -347,7 +440,7 @@ export class CadFeatureTreePanelComponent {
       });
       return;
     }
-    // Non-feature, non-selectable-sketch row: clicking toggles expand.
+    // Non-feature, non-sketch row: clicking toggles expand.
     if (n.expandable) {
       this.toggleExpand(n, ev);
     }
@@ -356,6 +449,9 @@ export class CadFeatureTreePanelComponent {
   isRowSelected(n: TreeNode): boolean {
     if (n.kind === 'feature' && n.feature) {
       return this.selectedFeatures().has(n.feature.id);
+    }
+    if (n.kind === 'sketch' && n.sketchId) {
+      return this.selectedSketches().has(n.sketchId);
     }
     return false;
   }

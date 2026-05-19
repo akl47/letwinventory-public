@@ -72,6 +72,8 @@ describe('migration: legacy SketchState → entity model (REQ 565)', () => {
     expect(distance.value).toBe(10);
     const pol = next.constraints.find(c => c.id === 'c3')!;
     expect(pol.targets).toEqual([{ entityId: 'ref1' }, { entityId: 'l1' }]);
+    // Legacy 'point-on-line' was merged into the unified 'coincident'.
+    expect(pol.type).toBe('coincident');
   });
 
   it('round-trips a state that is already in the new schema unchanged', () => {

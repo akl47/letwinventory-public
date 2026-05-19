@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   segmentsForCircle, segmentsForArc, tessellateCircle, tessellateArc, tessellateEntity,
+  tessellateEllipse, tessellateSpline,
 } from './tessellator';
 import type {
-  SketchState, PointEntity, CircleEntity, ArcEntity, EllipseEntity,
+  SketchState, PointEntity, CircleEntity, ArcEntity, EllipseEntity, SplineEntity,
 } from './types';
 
 // REQ 562 — chord-height tessellator. Tests assert chord-error bound and vertex counts.
@@ -123,6 +124,66 @@ describe('tessellator: chord-tolerance polyline approximation (REQ 562)', () => 
     it('returns an empty array for entities that need no tessellation (point, line)', () => {
       const p: PointEntity = { kind: 'point', id: 'p1', x: 1, y: 2 };
       expect(tessellateEntity(state(p), p, 0.1)).toEqual([]);
+    });
+  });
+
+  describe('tessellateEllipse', () => {
+    it('samples points on the parametric ellipse curve', () => {
+      const pts = tessellateEllipse({ x: 0, y: 0 }, { x: 10, y: 0 }, 5, 0.1);
+      // Sample at t=0 should be at the major-axis end.
+      expect(pts[0].x).toBeCloseTo(10);
+      expect(pts[0].y).toBeCloseTo(0);
+      // Curve must close back to start.
+      expect(pts[pts.length - 1].x).toBeCloseTo(pts[0].x, 5);
+      expect(pts[pts.length - 1].y).toBeCloseTo(pts[0].y, 5);
+      // All points satisfy x²/a² + y²/b² == 1.
+      for (const p of pts) {
+        const err = (p.x * p.x) / 100 + (p.y * p.y) / 25 - 1;
+        expect(Math.abs(err)).toBeLessThan(1e-6);
+      }
+    });
+
+    it('handles a rotated major axis', () => {
+      // Major axis points along (cos45°, sin45°). Major radius == sqrt(50) ≈ 7.07.
+      const pts = tessellateEllipse({ x: 0, y: 0 }, { x: 5, y: 5 }, 1, 0.05);
+      // Sample at t=0 hits the major-axis end exactly.
+      expect(pts[0].x).toBeCloseTo(5);
+      expect(pts[0].y).toBeCloseTo(5);
+    });
+  });
+
+  describe('tessellateSpline', () => {
+    it('passes through first and last control points (clamped knot vector)', () => {
+      const ctrls = [{ x: 0, y: 0 }, { x: 5, y: 10 }, { x: 10, y: 0 }, { x: 15, y: 5 }];
+      const pts = tessellateSpline(ctrls, 3, 0.5);
+      expect(pts[0].x).toBeCloseTo(0);
+      expect(pts[0].y).toBeCloseTo(0);
+      expect(pts[pts.length - 1].x).toBeCloseTo(15);
+      expect(pts[pts.length - 1].y).toBeCloseTo(5);
+    });
+
+    it('returns an empty array when there are too few control points for the degree', () => {
+      expect(tessellateSpline([{ x: 0, y: 0 }, { x: 1, y: 1 }], 3, 0.1)).toEqual([]);
+    });
+  });
+
+  describe('tessellateEntity (new kinds)', () => {
+    it('dispatches to ellipse tessellation', () => {
+      const center: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+      const major: PointEntity = { kind: 'point', id: 'm', x: 10, y: 0 };
+      const ell: EllipseEntity = { kind: 'ellipse', id: 'e1', centerId: 'c', majorAxisEndId: 'm', minorRadius: 5 };
+      const result = tessellateEntity(state(center, major, ell), ell, 0.1);
+      expect(result.length).toBeGreaterThan(8);
+    });
+    it('dispatches to spline tessellation', () => {
+      const p0: PointEntity = { kind: 'point', id: 'p0', x: 0, y: 0 };
+      const p1: PointEntity = { kind: 'point', id: 'p1', x: 5, y: 10 };
+      const p2: PointEntity = { kind: 'point', id: 'p2', x: 10, y: 0 };
+      const p3: PointEntity = { kind: 'point', id: 'p3', x: 15, y: 5 };
+      const spl: SplineEntity = { kind: 'spline', id: 's1', controlPointIds: ['p0', 'p1', 'p2', 'p3'], degree: 3 };
+      const result = tessellateEntity(state(p0, p1, p2, p3, spl), spl, 0.5);
+      expect(result[0].x).toBeCloseTo(0);
+      expect(result[result.length - 1].x).toBeCloseTo(15);
     });
   });
 });

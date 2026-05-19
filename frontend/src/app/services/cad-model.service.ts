@@ -18,6 +18,11 @@ export interface RegenerateResponse {
       normals: number[];
       indices: number[];
     }>;
+    /** Per-feature topology — vertex/edge IDs are scoped `<featureId>#<loop>/<localId>`. */
+    topology: {
+      vertices: Array<{ id: string; position: [number, number, number] }>;
+      edges: Array<{ id: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]] }>;
+    };
     error?: string;
     cached: boolean;
   }>;

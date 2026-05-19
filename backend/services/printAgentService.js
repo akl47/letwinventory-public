@@ -16,14 +16,21 @@ class PrintAgentService {
    * @param {http.Server} server - HTTP server instance
    */
   initialize(server) {
-    this.wss = new WebSocket.Server({
-      server,
-      path: '/ws/print-agent'
-    });
-
+    // noServer mode — each ws.Server({server, path}) installs its own upgrade
+    // listener that aborts (400) on path mismatch, which destroys sockets
+    // intended for OTHER WS services attached to the same HTTP server. We
+    // own the upgrade dispatch ourselves.
+    this.wss = new WebSocket.Server({ noServer: true });
     this.wss.on('connection', (ws, req) => {
       console.log('[PrintAgent] New connection from:', req.socket.remoteAddress);
       this.handleConnection(ws, req);
+    });
+    server.on('upgrade', (req, socket, head) => {
+      const pathname = (req.url || '').split('?')[0];
+      if (pathname !== '/ws/print-agent') return;
+      this.wss.handleUpgrade(req, socket, head, (ws) => {
+        this.wss.emit('connection', ws, req);
+      });
     });
 
     // Start heartbeat checker

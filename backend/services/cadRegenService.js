@@ -29,17 +29,24 @@ const NAMING_VERSION = 1;  // matches NAMING_SCHEMA_VERSION in cad-kernel/src/ma
 
 /**
  * @param {object} model    a DesignCADModel Sequelize instance (with featureTree+sketchDoc)
- * @param {object} options  { kernelClient?, db? } (overrides for tests)
+ * @param {object} options  { kernelClient?, db?, onFeatureResult? }
+ *   onFeatureResult(result): optional callback invoked synchronously as each
+ *   feature completes (cache hit OR kernel response). Used by the streaming
+ *   controller to broadcast per-feature WebSocket events so the editor can
+ *   render incrementally instead of waiting for the full HTTP response.
+ *   Errors thrown from the callback are caught + logged so a bad
+ *   broadcaster can't fail the regen.
  * @returns {Promise<{
- *   features: Array<{ featureId, faces, error?, cached: boolean }>,
+ *   features: Array<{ featureId, faces, topology, error?, cached: boolean }>,
  *   errors: string[],
  * }>}
  */
-async function regenerateModel(model, { kernelClient, db } = {}) {
+async function regenerateModel(model, { kernelClient, db, onFeatureResult } = {}) {
   const client = kernelClient || getDefaultClient();
   const dbClient = db || global.db;
   const featureTree = model.featureTree || { features: [] };
   const sketchDoc = model.sketchDoc || { sketches: {} };
+  const emit = _safeCallback(onFeatureResult);
 
   const results = [];
   const errors = [];
@@ -53,16 +60,38 @@ async function regenerateModel(model, { kernelClient, db } = {}) {
       continue;
     }
 
+    let result;
     try {
-      const faces = await _regenerateExtrude(feature, sketchDoc, model, client, dbClient);
-      results.push({ featureId: feature.id, faces: faces.merged, cached: faces.cached });
+      const out = await _regenerateExtrude(feature, sketchDoc, model, client, dbClient);
+      result = {
+        featureId: feature.id,
+        faces: out.merged,
+        topology: out.topology,
+        cached: out.cached,
+      };
     } catch (err) {
-      results.push({ featureId: feature.id, faces: [], error: err.message, cached: false });
+      result = {
+        featureId: feature.id,
+        faces: [],
+        topology: { vertices: [], edges: [] },
+        error: err.message,
+        cached: false,
+      };
       errors.push(`feature ${feature.id}: ${err.message}`);
     }
+    results.push(result);
+    emit(result);
   }
 
   return { features: results, errors };
+}
+
+function _safeCallback(fn) {
+  if (typeof fn !== 'function') return () => {};
+  return (arg) => {
+    try { fn(arg); }
+    catch (e) { console.error('[cadRegenService] onFeatureResult callback threw:', e); }
+  };
 }
 
 async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient) {
@@ -76,9 +105,13 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient) {
   const loopIndices = Array.isArray(feature.loopIndices) ? feature.loopIndices : [0];
 
   // The kernel takes a single profile per call — orchestrate one call per
-  // selected loop and merge the resulting faces. Each loop has its own
-  // paramHash so independent loop edits don't invalidate each other.
+  // selected loop and merge the resulting faces + topology. Each loop has
+  // its own paramHash so independent loop edits don't invalidate each
+  // other. Vertex/edge IDs from the kernel are per-call (`v0`, `e0`, …) so
+  // we prefix them with the feature+loop scope to keep them globally
+  // unique across features.
   const mergedFaces = [];
+  const mergedTopology = { vertices: [], edges: [] };
   let allCached = true;
 
   for (const li of loopIndices) {
@@ -105,18 +138,21 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient) {
       },
     });
 
+    const scope = `${feature.id}#${li}`;
+
     if (cached) {
       // Touch the access timestamp so the idle eviction job ignores us.
       cached.lastAccessedAt = new Date();
       await cached.save();
       mergedFaces.push(...(cached.tessellatedFaces.faces || []));
+      _mergeTopology(mergedTopology, cached.tessellatedFaces.topology, scope);
       continue;
     }
 
     allCached = false;
     const signedDistance = feature.flipped ? -feature.distance : feature.distance;
     const rpc = await client.call('buildExtrude', {
-      featureId: `${feature.id}#${li}`,
+      featureId: scope,
       profile,
       plane: sketch.plane,
       distance: Math.abs(signedDistance),
@@ -125,7 +161,7 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient) {
 
     await dbClient.DesignBRepCache.upsert({
       cadModelID: model.id,
-      featureID: `${feature.id}#${li}`,
+      featureID: scope,
       paramHash,
       upstreamHash,
       brepBytes: Buffer.from(rpc.brepBytes || '', 'base64'),
@@ -134,9 +170,26 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient) {
       lastAccessedAt: new Date(),
     });
     mergedFaces.push(...(rpc.faces || []));
+    _mergeTopology(mergedTopology, rpc.topology, scope);
   }
 
-  return { merged: mergedFaces, cached: allCached };
+  return { merged: mergedFaces, topology: mergedTopology, cached: allCached };
+}
+
+// Concat per-call topology into the feature-wide topology with namespaced
+// IDs so vertex/edge IDs don't collide across loops or features.
+function _mergeTopology(acc, topo, scope) {
+  if (!topo) return;
+  for (const v of topo.vertices || []) {
+    acc.vertices.push({ id: `${scope}/${v.id}`, position: v.position });
+  }
+  for (const e of topo.edges || []) {
+    acc.edges.push({
+      id: `${scope}/${e.id}`,
+      isStraight: !!e.isStraight,
+      endpoints: e.endpoints,
+    });
+  }
 }
 
 /**

@@ -1,9 +1,12 @@
 //! `cad-kernel` — server-side CAD kernel service.
 //!
-//! Listens on a Unix-domain socket and speaks line-delimited JSON-RPC 2.0.
+//! Listens on a TCP socket and speaks line-delimited JSON-RPC 2.0.
 //! See `README.md` for the wire protocol and architecture notes.
+//!
+//! Bind address comes from `CAD_KERNEL_ADDR` (default `127.0.0.1:9876`). Use
+//! `0.0.0.0:9876` if the kernel needs to be reachable from inside a Docker
+//! container running on the same host (the typical dev setup).
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
@@ -21,8 +24,13 @@ mod server;
 /// `NAMING.md`.
 pub const NAMING_SCHEMA_VERSION: u32 = 1;
 
-/// Default Unix-socket path. Override with `CAD_KERNEL_SOCKET`.
-const DEFAULT_SOCKET_PATH: &str = "/tmp/letwinventory-cad-kernel.sock";
+/// Default bind address. Override with `CAD_KERNEL_ADDR`. We default to
+/// `0.0.0.0` because the standard dev setup runs the Node backend in Docker,
+/// and a containerized backend reaches the host kernel via the bridge
+/// gateway IP (not loopback) — `127.0.0.1` would refuse those connections.
+/// Threat model: dev box behind LAN firewall, prod box behind pfSense; an
+/// unauthenticated kernel exposed to those networks is acceptable.
+const DEFAULT_BIND_ADDR: &str = "0.0.0.0:9876";
 
 /// Global request counter — informational, surfaced via logs.
 pub(crate) static REQUEST_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -31,23 +39,14 @@ pub(crate) static REQUEST_COUNT: AtomicU64 = AtomicU64::new(0);
 async fn main() -> Result<()> {
     init_tracing();
 
-    let socket_path: PathBuf = std::env::var("CAD_KERNEL_SOCKET")
-        .unwrap_or_else(|_| DEFAULT_SOCKET_PATH.to_string())
-        .into();
-
-    info!(socket = %socket_path.display(), "starting cad-kernel");
-
-    // Clean up stale socket from a previous crashed instance.
-    if socket_path.exists() {
-        std::fs::remove_file(&socket_path)
-            .with_context(|| format!("removing stale socket at {}", socket_path.display()))?;
-    }
+    let bind_addr = std::env::var("CAD_KERNEL_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
+    info!(addr = %bind_addr, "starting cad-kernel");
 
     // Spawn the listener in the background so we can wait on SIGTERM/SIGINT
     // in parallel and shut down cleanly.
-    let listener_path = socket_path.clone();
+    let listener_addr = bind_addr.clone();
     let handle = tokio::spawn(async move {
-        if let Err(e) = server::serve(&listener_path).await {
+        if let Err(e) = server::serve(&listener_addr).await {
             error!(error = %e, "server task exited with error");
         }
     });
@@ -62,7 +61,6 @@ async fn main() -> Result<()> {
 
     handle.abort();
     let _ = handle.await;
-    let _ = std::fs::remove_file(&socket_path);
     let total = REQUEST_COUNT.load(Ordering::Relaxed);
     info!(total_requests = total, "cad-kernel stopped");
     Ok(())

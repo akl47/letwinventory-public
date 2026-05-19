@@ -76,21 +76,36 @@ if (require.main === module) {
     const scheduledTaskService = require("./services/scheduledTaskService");
     const notificationService = require("./services/notificationService");
     const cadStreamService = require("./services/cadStreamService");
+    const cadKernelSupervisor = require("./services/cadKernelSupervisor");
     const port = process.env.BACKEND_PORT;
 
     const server = http.createServer(app);
     printAgentService.initialize(server);
     // REQ 700 (Phase 1) — CAD WebSocket session manager for regenerate
     // progress events and (Phase 1.5) incremental mesh deltas. The Rust
-    // kernel sidecar at /tmp/letwinventory-cad-kernel.sock is consumed by
-    // cadKernelClient on-demand — no eager handshake here.
+    // kernel sidecar on TCP (default 127.0.0.1:9876; override with
+    // CAD_KERNEL_ADDR) is consumed by cadKernelClient on-demand — no eager
+    // handshake here.
     cadStreamService.initialize(server);
+    // Opt-in: when CAD_KERNEL_AUTOSPAWN=1 the supervisor owns the kernel's
+    // lifecycle (spawn + log piping + crash-restart). Defaults off so the
+    // current `cargo run` dev workflow keeps working.
+    cadKernelSupervisor.initialize();
 
     server.listen(port, () => {
-        db.sequelize.sync().then(() => {
-            console.log(`Server listening on the port:${port}`);
-            scheduledTaskService.initialize();
-            notificationService.initialize();
-        });
+        // Migrations are the sole source of truth for schema. We previously
+        // called `sequelize.sync()` here, which races the migration system —
+        // sync() auto-creates tables (and named indexes) from any model that
+        // doesn't have a corresponding table yet, leaving `SequelizeMeta`
+        // with no record. The next `db:migrate` run then collides on the
+        // already-existing relations. New models MUST ship with a paired
+        // migration; the backend will fail loudly at first query against an
+        // unmigrated table, which is the correct behaviour.
+        console.log(`Server listening on the port:${port}`);
+        scheduledTaskService.initialize();
+        notificationService.initialize();
+        // Background eviction of stale DesignBRepCache rows. Hourly sweep,
+        // 14-day TTL by default — override via CAD_BREP_CACHE_TTL_DAYS.
+        require('./services/cadCacheEvictionService').initialize();
     });
 }

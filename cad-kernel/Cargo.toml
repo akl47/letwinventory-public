@@ -16,7 +16,10 @@ publish = false
 # BREP serialization is OCCT-version-sensitive — treat upstream upgrades
 # as data migrations (recompute cached BRep from feature definitions).
 opencascade = { git = "https://github.com/bschwind/opencascade-rs.git", branch = "main" }
-glam = "0.27"  # peer dep for Workplane direction vectors
+# Must match the version opencascade-rs pulls in (currently 0.24). Any other
+# version in our direct deps produces "expected DVec3 found DVec3" type-id
+# conflicts at compile time.
+glam = "0.24"
 
 # Async runtime + Unix-domain socket server.
 tokio = { version = "1.40", features = [

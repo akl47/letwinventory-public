@@ -2,8 +2,8 @@
 
 Rust sidecar process that holds the canonical BRep state for the CAD product.
 Wraps OCCT via the [`opencascade`](https://crates.io/crates/opencascade) crate.
-Communicates with the Node API server over a Unix-domain socket using
-line-delimited JSON-RPC 2.0.
+Communicates with the Node API server over TCP using line-delimited JSON-RPC
+2.0 (default `127.0.0.1:9876`).
 
 See `docs/cad-architecture-pivot-plan.md` (in the repo root) for the broader
 architecture this fits into.
@@ -38,11 +38,12 @@ against OCCT. Subsequent builds are incremental.
 ## Run
 
 ```bash
-# default socket path: /tmp/letwinventory-cad-kernel.sock
+# default bind: 0.0.0.0:9876 (open on all interfaces — needed so a Docker-
+# hosted backend can reach the kernel via host.docker.internal).
 cargo run --release
 
-# override the socket path
-CAD_KERNEL_SOCKET=/var/run/cad-kernel.sock cargo run --release
+# Restrict to loopback if the backend is on the same host outside Docker.
+CAD_KERNEL_ADDR=127.0.0.1:9876 cargo run --release
 ```
 
 The Node API server spawns this as a child process via `child_process.spawn`
@@ -67,8 +68,12 @@ with positions/normals/indices for each face, plus the BRep bytes.
 
 ## Protocol
 
-Line-delimited JSON-RPC 2.0 over the Unix socket. Each request and response
-is exactly one line of UTF-8 JSON, terminated by `\n`.
+Line-delimited JSON-RPC 2.0 over TCP. Each request and response is exactly
+one line of UTF-8 JSON, terminated by `\n`. Quick smoke test:
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"ping"}' | nc 127.0.0.1 9876
+```
 
 Request:
 ```json

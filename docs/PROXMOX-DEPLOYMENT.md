@@ -98,9 +98,69 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
 apt update
 apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
+# Enable Docker to start on boot (required — without this, no container
+# `restart` policy can save you after a host reboot)
+systemctl enable --now docker
+
 # Verify installation
 docker --version
 docker compose version
+systemctl is-enabled docker  # should print "enabled"
+```
+
+### Step 6.5: Install and Enable PostgreSQL on the Host
+
+The current `docker-compose.prod.yml` in this repo runs **only the backend
+container**. PostgreSQL runs on the host, and the backend container reaches it
+through `extra_hosts: host.docker.internal:host-gateway`. That means PostgreSQL
+must be installed on the host and enabled at boot.
+
+```bash
+apt install -y postgresql postgresql-contrib
+
+# Enable so it starts on every boot (required — Docker `restart: unless-stopped`
+# alone is not enough; the backend will crash-loop if PG is not up)
+systemctl enable --now postgresql
+
+# Verify
+systemctl is-enabled postgresql   # should print "enabled"
+systemctl status postgresql --no-pager
+```
+
+Create the database role and database (passwords go in `.env.production` later):
+
+```bash
+sudo -u postgres psql <<SQL
+CREATE ROLE letwinventory_user WITH LOGIN PASSWORD 'strong-password-here';
+CREATE DATABASE letwinventory OWNER letwinventory_user;
+SQL
+```
+
+Allow connections from the Docker bridge network. Find your PG version with
+`pg_lsclusters`, then edit `/etc/postgresql/<ver>/main/postgresql.conf`:
+
+```
+listen_addresses = '*'
+```
+
+…and append to `/etc/postgresql/<ver>/main/pg_hba.conf`:
+
+```
+# Docker bridge → host PostgreSQL
+host    all    all    172.16.0.0/12    scram-sha-256
+```
+
+Reload:
+
+```bash
+systemctl reload postgresql
+```
+
+When you fill in `.env.production` (Step 9), point the backend at the host:
+
+```
+DB_HOST=host.docker.internal
+DB_PORT=5432
 ```
 
 ### Step 7: Install Additional Tools
@@ -229,6 +289,143 @@ docker compose -f docker-compose.prod.yml up -d
 # Check status
 docker compose -f docker-compose.prod.yml ps
 ```
+
+### Step 11.5: Auto-Start the Stack at Boot (systemd)
+
+Docker's per-container `restart: unless-stopped` is **not enough on its own**.
+It does not restart a container that was in `Exited` state when the host went
+down, it does not run `docker compose up` if the stack was never started after
+a fresh boot, and it has no way to wait for host-side PostgreSQL before the
+backend tries to connect. We add a small systemd unit to close those gaps.
+
+```bash
+sudo nano /etc/systemd/system/letwinventory.service
+```
+
+```ini
+[Unit]
+Description=LetwinInventory production stack
+Requires=docker.service
+After=docker.service postgresql@18-main.service network-online.target
+Wants=postgresql@18-main.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/letwinventory/src/letwinventory-private
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do pg_isready -h 127.0.0.1 -p 5432 -q && exit 0; sleep 1; done; echo "PostgreSQL not ready after 60s" >&2; exit 1'
+ExecStart=/home/letwinventory/src/letwinventory-private/scripts/deploy-update.sh
+ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml down
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Boot now runs the same `deploy-update.sh` that the GitHub deploy action calls,
+so boot-time and deploy-time behavior are identical (pull latest image, backup
+DB, force-recreate the container, run migrations, health-check). The script
+requires `.env.production` (SMTP creds for email notifications, DB creds,
+`BACKEND_PORT`) to be present in `WorkingDirectory`. Every boot will produce
+a `[OK] Deploy Update` email — that's expected.
+
+Enable so it runs on every boot:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable letwinventory
+sudo systemctl status letwinventory
+```
+
+Verify the backend container is up:
+
+```bash
+docker ps | grep letwinventory-backend-prod
+```
+
+After a host reboot, the stack should come up in this order automatically:
+`docker.service` → `postgresql@18-main.service` → `letwinventory.service`
+(waits for PG, runs `deploy-update.sh`). To test without a real reboot:
+
+```bash
+systemctl stop letwinventory     # docker compose down — backend container stopped
+docker ps                        # backend should be gone
+systemctl start letwinventory    # runs deploy-update.sh — pulls, recreates, migrates
+docker ps                        # backend should be back
+```
+
+#### Order PostgreSQL after Docker (required for host PG setups)
+
+Step 6.5 sets `listen_addresses` to include `172.17.0.1` (the `docker0` bridge
+gateway) so the backend container can reach host PG via
+`host.docker.internal`. But `docker0` only exists once `docker.service` has
+started — and by default `postgresql.service` starts earlier in boot, so PG
+tries to bind `172.17.0.1` before that interface exists, silently drops it
+from its listen list, and only binds the remaining addresses. After boot, the
+container hits `172.17.0.1:5432` and gets `ECONNREFUSED` because nothing is
+listening there. `letwinventory.service` itself comes up fine; the failure
+mode is the backend connecting to the DB after the container is already
+running.
+
+Symptom: backend container is `Up` but requests time out or return 502, and
+
+```bash
+docker exec letwinventory-backend-prod sh -c '</dev/tcp/host.docker.internal/5432' \
+  && echo OK || echo FAIL
+```
+
+prints `FAIL`. On the host, `sudo ss -tlnp | grep 5432` shows PG bound to
+`127.0.0.1` and the LAN IP but **not** `172.17.0.1`, even though
+`postgresql.conf` lists it. Backend logs show
+`ERROR: connect ECONNREFUSED 172.17.0.1:5432`.
+
+Fix: order the PG cluster unit after Docker so `docker0` exists when PG starts.
+
+```bash
+# Find the actual cluster unit — NOT the postgresql.service wrapper, which is
+# a oneshot that always shows "active (exited)" regardless of cluster state.
+pg_lsclusters   # e.g. "18  main  5432  online" → unit is postgresql@18-main
+
+sudo systemctl edit postgresql@18-main
+```
+
+In the drop-in editor, add:
+
+```ini
+[Unit]
+After=docker.service
+Wants=docker.service
+```
+
+`Wants=` (not `Requires=`) so PG is not held hostage by a Docker failure.
+The drop-in is saved to
+`/etc/systemd/system/postgresql@18-main.service.d/override.conf` automatically.
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart postgresql@18-main
+sudo ss -tlnp | grep 5432   # should now include 172.17.0.1:5432
+```
+
+After this, the boot order is
+`docker.service` → `postgresql@18-main.service` → `letwinventory.service`,
+and PG binds `172.17.0.1` on every boot.
+
+#### Common failure: `status=200/CHDIR`
+
+```
+letwinventory.service: Main process exited, code=exited, status=200/CHDIR
+letwinventory.service: Failed with result 'exit-code'.
+```
+
+`200/CHDIR` means systemd could not `cd` into the `WorkingDirectory=` path. Two
+usual causes:
+
+1. The path doesn't exist on this host — find the real clone with
+   `find / -name docker-compose.prod.yml 2>/dev/null` and update the unit.
+2. `WorkingDirectory=~/src/...` — systemd does not expand `~`. The path must be
+   absolute (e.g. `/home/letwinventory/src/letwinventory-public`).
+
+After fixing, `systemctl daemon-reload && systemctl start letwinventory`.
 
 ### Step 12: Initialize Database
 

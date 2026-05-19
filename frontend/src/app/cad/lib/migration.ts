@@ -2,6 +2,20 @@ import type {
   SketchState, SketchEntity, SketchConstraint, ConstraintType,
   SketchDocument, Sketch,
 } from './types';
+import { ensureOriginPoint } from './store';
+
+// Legacy constraint types that have been folded into `coincident`. They
+// remain in old persisted documents but can't be expressed in the live
+// `ConstraintType` union, so we keep them as string literals for the
+// migrator and rewrite each occurrence on load.
+const LEGACY_ON_TYPES = new Set<string>(['point-on-line', 'point-on-curve']);
+
+/** Rewrite an in-memory constraint's type so any stored legacy "on"
+ * variants surface as `coincident`. Idempotent. */
+function rewriteLegacyType(type: string): ConstraintType {
+  if (LEGACY_ON_TYPES.has(type)) return 'coincident';
+  return type as ConstraintType;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Legacy schema (pre-entity-model). Kept here as a self-contained type so the
@@ -24,8 +38,13 @@ export interface LegacyLine {
 }
 
 export interface LegacyConstraint {
+  // Legacy data may carry constraint type strings that have since been
+  // removed from the live `ConstraintType` union (e.g. `point-on-line`,
+  // `point-on-curve` were merged into `coincident`). Typed as `string`
+  // so the migrator can read them; `rewriteLegacyType` normalizes each
+  // value before it enters the live state.
   id: string;
-  type: ConstraintType;
+  type: string;
   targets: string[];
   value?: number;
 }
@@ -43,7 +62,17 @@ export function isLegacySketchState(state: unknown): state is LegacySketchState 
 }
 
 export function migrateSketchState(state: LegacySketchState | SketchState): SketchState {
-  if (!isLegacySketchState(state)) return state as SketchState;
+  if (!isLegacySketchState(state)) {
+    // Modern schema — still backfill the origin point so sketches saved
+    // before the origin became a real entity get it on load, and rewrite
+    // any persisted `point-on-line` / `point-on-curve` constraints into
+    // `coincident` since the unified type replaced them. Idempotent.
+    const modern = state as SketchState;
+    const constraints = modern.constraints.map(c =>
+      LEGACY_ON_TYPES.has(c.type) ? { ...c, type: rewriteLegacyType(c.type) } : c,
+    );
+    return ensureOriginPoint({ ...modern, constraints });
+  }
 
   const entities: SketchEntity[] = [];
   for (const p of state.points) {
@@ -60,14 +89,14 @@ export function migrateSketchState(state: LegacySketchState | SketchState): Sket
   const constraints: SketchConstraint[] = state.constraints.map(c => {
     const next: SketchConstraint = {
       id: c.id,
-      type: c.type,
+      type: rewriteLegacyType(c.type),
       targets: c.targets.map(t => ({ entityId: t })),
     };
     if (c.value !== undefined) next.value = c.value;
     return next;
   });
 
-  return { entities, constraints };
+  return ensureOriginPoint({ entities, constraints });
 }
 
 export function migrateSketchDocument(doc: SketchDocument): SketchDocument {

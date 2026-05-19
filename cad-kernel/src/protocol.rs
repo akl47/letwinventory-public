@@ -69,16 +69,25 @@ pub struct Plane3 {
     /// In-plane basis vector 1 (unit-length, perpendicular to `normal`).
     #[serde(rename = "xAxis")]
     pub x_axis: [f64; 3],
-    /// In-plane basis vector 2 (unit-length, normal × x_axis).
+    /// In-plane basis vector 2 (unit-length, normal × x_axis). Implicit in
+    /// the OCCT workplane (derived from normal × x_axis) — kept in the wire
+    /// payload so the frontend can transmit a fully-specified frame without
+    /// the server needing to recompute and risk sign disagreements.
     #[serde(rename = "yAxis")]
+    #[allow(dead_code)]
     pub y_axis: [f64; 3],
     /// Outward unit normal.
     pub normal: [f64; 3],
 }
 
 /// Typed profile loop matching `frontend/src/app/cad/lib/profile.ts:ProfileEdge`.
+///
+/// Phase 0 only reads the polygon vertices (Line.start) and the analytic
+/// circle (Circle.center + radius). Arc fields are accepted but fall back to
+/// chord approximation — Phase 1 wires them to OCCT's `Edge::arc`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
+#[allow(dead_code)]
 pub enum ProfileEdge {
     Line {
         start: Point2,

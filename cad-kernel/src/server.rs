@@ -1,17 +1,19 @@
-//! Unix-domain-socket JSON-RPC 2.0 server.
+//! TCP JSON-RPC 2.0 server.
 //!
 //! Wire format is line-delimited UTF-8 JSON: one JSON object per `\n`. We
 //! avoid length-prefixing because Node's `readline` is the natural client
-//! and the protocol stays trivially debuggable with `socat` / `nc -U`.
+//! and the protocol stays trivially debuggable with `nc localhost 9876`.
+//!
+//! Bind address is host:port (e.g. `127.0.0.1:9876` or `0.0.0.0:9876`) —
+//! TCP rather than Unix socket so the kernel can be reached across Docker
+//! container boundaries on the same host without socket-file bind mounts.
 
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, error, info, warn};
 
 use crate::ops;
@@ -21,20 +23,19 @@ use crate::protocol::{
 };
 use crate::REQUEST_COUNT;
 
-pub async fn serve(socket_path: &Path) -> Result<()> {
+pub async fn serve(bind_addr: &str) -> Result<()> {
     let listener =
-        UnixListener::bind(socket_path).with_context(|| format!("bind {}", socket_path.display()))?;
-
-    // Restrict the socket to the user running the process. Node API server
-    // runs as the same Unix user in the Proxmox deploy.
-    let mut perms = std::fs::metadata(socket_path)?.permissions();
-    perms.set_mode(0o600);
-    std::fs::set_permissions(socket_path, perms)?;
-    info!(socket = %socket_path.display(), "listening");
+        TcpListener::bind(bind_addr).await.with_context(|| format!("bind {bind_addr}"))?;
+    info!(addr = bind_addr, "listening");
 
     loop {
-        let (stream, _addr) = listener.accept().await.context("accept")?;
+        let (stream, peer) = listener.accept().await.context("accept")?;
+        // TCP_NODELAY: regen replies are small JSON blobs — disabling Nagle's
+        // algorithm keeps latency predictable at the cost of marginal extra
+        // packets. Worth it for an interactive CAD editor's expected payloads.
+        let _ = stream.set_nodelay(true);
         tokio::spawn(async move {
+            info!(peer = %peer, "client connected");
             if let Err(e) = handle_connection(stream).await {
                 warn!(error = %e, "connection error");
             }
@@ -42,10 +43,9 @@ pub async fn serve(socket_path: &Path) -> Result<()> {
     }
 }
 
-async fn handle_connection(stream: UnixStream) -> Result<()> {
+async fn handle_connection(stream: TcpStream) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
-    info!("client connected");
     while let Some(line) = lines.next_line().await.transpose() {
         let line = match line {
             Ok(l) => l,
@@ -142,21 +142,38 @@ async fn run_handler(method: &str, params: Value) -> Result<Value, HandlerError>
                     message: e.to_string(),
                     data: None,
                 })?;
-            match ops::extrude::build(&params) {
-                Ok(result) => serde_json::to_value(result).map_err(|e| HandlerError {
-                    code: INTERNAL_ERROR,
-                    message: format!("serialize result: {e}"),
-                    data: None,
-                }),
-                Err(e) => {
+            // Rust-side panic guard. Doesn't catch C++ exceptions from OCCT
+            // (those still abort the process — supervisor restarts), but
+            // contains any panic from our own Rust code so one bad request
+            // can't crash the kernel.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::extrude::build(&params)
+            }));
+            let result = match outcome {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
                     error!(error = %e, "buildExtrude failed");
-                    Err(HandlerError {
+                    return Err(HandlerError {
                         code: INTERNAL_ERROR,
                         message: e.to_string(),
                         data: None,
-                    })
+                    });
                 }
-            }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "buildExtrude panicked");
+                    return Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    });
+                }
+            };
+            serde_json::to_value(result).map_err(|e| HandlerError {
+                code: INTERNAL_ERROR,
+                message: format!("serialize result: {e}"),
+                data: None,
+            })
         }
         _ => Err(HandlerError {
             code: METHOD_NOT_FOUND,
@@ -164,6 +181,12 @@ async fn run_handler(method: &str, params: Value) -> Result<Value, HandlerError>
             data: None,
         }),
     }
+}
+
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() { return (*s).to_string(); }
+    if let Some(s) = payload.downcast_ref::<String>() { return s.clone(); }
+    "<non-string panic payload>".to_string()
 }
 
 fn error_response(id: Value, code: i32, message: &str) -> RpcResponse {

@@ -1,26 +1,28 @@
 #!/usr/bin/env node
 // CAD kernel Phase 0 spike — proves the end-to-end path:
 //
-//   1. Connect to the cad-kernel over the Unix-domain socket
+//   1. Connect to the cad-kernel over TCP (default 127.0.0.1:9876)
 //   2. Send a `buildExtrude` JSON-RPC request for a simple cylinder
 //   3. Print the face count + bounding box of the result
 //
 // Run:
 //   # Terminal 1
-//   cd cad-kernel && python -m cad_kernel
+//   cd cad-kernel && cargo run --release
 //
 //   # Terminal 2
 //   node backend/scripts/cad-spike.js
 //
 // You can also pass `--rectangle` to test a 4-line profile, or `--flipped`
-// to verify the direction flag.
+// to verify the direction flag. Override the bind with `CAD_KERNEL_ADDR=...`.
 
 'use strict';
 
 const net = require('net');
 const readline = require('readline');
 
-const SOCKET_PATH = process.env.CAD_KERNEL_SOCKET || '/tmp/letwinventory-cad-kernel.sock';
+const ADDR_RAW = process.env.CAD_KERNEL_ADDR || '127.0.0.1:9876';
+const [HOST, PORT_STR] = ADDR_RAW.includes(':') ? ADDR_RAW.split(':') : ['127.0.0.1', ADDR_RAW];
+const PORT = Number(PORT_STR);
 
 const args = new Set(process.argv.slice(2));
 const useRectangle = args.has('--rectangle');
@@ -53,8 +55,8 @@ const request = {
   },
 };
 
-const client = net.createConnection(SOCKET_PATH, () => {
-  console.log(`[spike] connected to ${SOCKET_PATH}`);
+const client = net.createConnection({ host: HOST, port: PORT }, () => {
+  console.log(`[spike] connected to ${HOST}:${PORT}`);
   client.write(JSON.stringify(request) + '\n');
 });
 

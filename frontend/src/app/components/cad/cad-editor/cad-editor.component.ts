@@ -1,4 +1,4 @@
-import { Component, inject, signal, computed, effect, OnInit, OnDestroy, HostListener, viewChild } from '@angular/core';
+import { Component, inject, signal, computed, effect, untracked, OnInit, OnDestroy, HostListener, viewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
@@ -16,23 +16,44 @@ import { CadModelService } from '../../../services/cad-model.service';
 import { CadModel } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
+import { CadStreamService, type CadStreamEvent } from '../../../services/cad-stream.service';
 import { CadViewerComponent, type DisplayMode, type SketchPreview } from '../cad-viewer/cad-viewer.component';
-import { CadFeatureTreePanelComponent, type FeatureTreeAction, type FeatureSelectEvent } from '../cad-feature-tree-panel/cad-feature-tree-panel.component';
+import { CadFeatureTreePanelComponent, type FeatureTreeAction, type FeatureSelectEvent, type SketchSelectEvent } from '../cad-feature-tree-panel/cad-feature-tree-panel.component';
 import { CadSketchEditorComponent } from '../cad-sketch-editor/cad-sketch-editor.component';
+import { CadConstraintListComponent } from '../cad-constraint-list/cad-constraint-list.component';
 import { ExtrudeDialogComponent, type ExtrudeDialogResult } from '../extrude-dialog/extrude-dialog.component';
 import { SketchDeleteWarningDialogComponent, type SketchDeleteAction } from '../sketch-delete-warning-dialog/sketch-delete-warning-dialog.component';
-import type { FeatureTree, SketchDocument, SketchId, ModelGeometry, SketchState, ExtrudeFeature } from '../../../cad/lib/types';
+import type { FeatureTree, SketchDocument, SketchId, ModelGeometry, ModelTopology, SketchState, ExtrudeFeature } from '../../../cad/lib/types';
 import {
   emptyFeatureTree, addFeature, defaultDatumVisibility,
   removeFeature, updateFeatureParam, removeFeaturesReferencingSketch,
 } from '../../../cad/lib/featureTree';
 import { emptyDocument, createSketch, updateSketchState, deleteSketch, setSketchVisibility, setSketchName } from '../../../cad/lib/document';
+import { removeConstraint, setConstraintValue } from '../../../cad/lib/store';
+import { solveSketchAfterAdd } from '../../../cad/lib/solver';
+import { parseUserValue, type Unit } from '../../../cad/lib/units';
 import { migrateSketchDocument } from '../../../cad/lib/migration';
+import { friendlyError } from '../../../cad/lib/errorMessages';
 import { planeForDatum, buildOriginDatums } from '../../../cad/lib/datum';
+import { inferLineEnd } from '../../../cad/lib/inference';
+import { allCurveIntersections, angleInArcSweep } from '../../../cad/lib/geometry';
+import { findPoint as findPt } from '../../../cad/lib/types';
+import { computeFilletGeometry, computeChamferGeometry } from '../../../cad/lib/sketchEditOps';
+import { chooseTwoPointDimType, twoPointDimValue } from '../../../cad/lib/dimensions';
+
+/** Snap kinds. Drives the viewer's snap-indicator glyph: square for
+ * endpoint (existing point), triangle for midpoint, X for intersection,
+ * diamond for quadrant. */
+type SnapKind = 'endpoint' | 'midpoint' | 'intersection' | 'quadrant';
 import { extractClosedLoops } from '../../../cad/lib/profile';
 import { environment } from '../../../../environments/environment';
 
 type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
+
+interface HistorySnapshot {
+  featureTree: FeatureTree;
+  doc: SketchDocument;
+}
 
 @Component({
   selector: 'app-cad-editor',
@@ -41,7 +62,7 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
     CommonModule, FormsModule, MatButtonModule, MatIconModule, MatTooltipModule,
     MatProgressSpinnerModule, MatDialogModule, MatInputModule, MatFormFieldModule, MatDividerModule,
     MatSelectModule, MatMenuModule,
-    CadViewerComponent, CadFeatureTreePanelComponent, CadSketchEditorComponent,
+    CadViewerComponent, CadFeatureTreePanelComponent, CadSketchEditorComponent, CadConstraintListComponent,
   ],
   template: `
     <div class="cad-editor" [class.fullscreen]="fullscreen()" [attr.data-testid]="'cad-editor'">
@@ -57,6 +78,33 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
               [class.released]="model()?.releaseState==='released'"
               *ngIf="model()">{{ model()!.releaseState }}</span>
         <span class="readonly-banner" data-testid="readonly-banner" *ngIf="readonly()">View only</span>
+
+        <button mat-icon-button data-testid="action-undo"
+                [disabled]="!canUndo() || readonly()"
+                (click)="undo()"
+                matTooltip="Undo (Ctrl+Z)">
+          <mat-icon>undo</mat-icon>
+        </button>
+        <button mat-icon-button data-testid="action-redo"
+                [disabled]="!canRedo() || readonly()"
+                (click)="redo()"
+                matTooltip="Redo (Ctrl+Y / Ctrl+Shift+Z)">
+          <mat-icon>redo</mat-icon>
+        </button>
+
+        <!-- Kernel connection badge. Hidden when fully idle + connected so it
+             doesn't clutter the header; surfaces only when something
+             interesting is happening (streaming, disconnected, or actively
+             regenerating). -->
+        <span class="kernel-badge"
+              data-testid="kernel-badge"
+              *ngIf="regenLoading() || !stream.connected()"
+              [class.streaming]="regenLoading() && stream.connected()"
+              [class.disconnected]="!stream.connected()"
+              [matTooltip]="kernelBadgeTooltip()">
+          <span class="kernel-dot"></span>
+          {{ kernelBadgeLabel() }}
+        </span>
 
         <span class="spacer"></span>
 
@@ -74,6 +122,22 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
             <mat-option value="wireframe-no-hidden">Wireframe (no hidden)</mat-option>
             <mat-option value="wireframe-hidden-dashed">Wireframe, hidden dashed</mat-option>
             <mat-option value="wireframe">Wireframe (all edges)</mat-option>
+          </mat-select>
+        </mat-form-field>
+
+        <!-- Default unit for this model. Per-dim overrides via the input
+             parser (e.g. typing "10in" on a single dim). Stored on the
+             featureTree blob so it persists with the model save. -->
+        <mat-form-field appearance="outline" class="unit-field">
+          <mat-select
+              data-testid="unit-select"
+              [value]="defaultUnit()"
+              (selectionChange)="setDefaultUnit($event.value)"
+              [disabled]="readonly()"
+              matTooltip="Default unit (type a unit suffix on any value to override per-dim)">
+            <mat-option value="mm">mm</mat-option>
+            <mat-option value="um">µm</mat-option>
+            <mat-option value="in">in</mat-option>
           </mat-select>
         </mat-form-field>
 
@@ -146,7 +210,8 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
               [readonly]="readonly() || activeSketchId() === null"
               (sketchChanged)="onSketchChanged($event)"
               (exitSketch)="onExitSketch()"
-              (extrudeRequested)="onExtrudeRequested()">
+              (extrudeRequested)="onExtrudeRequested()"
+              (dimensionCreated)="onDimensionCreated($event)">
             </app-cad-sketch-editor>
             <span class="ribbon-hint" *ngIf="activeSketchId() === null">
               Pick or create a sketch first — switch to Features → Sketch.
@@ -173,12 +238,317 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
           [doc]="doc()"
           [selectableSketches]="mode() === 'pick-extrude-target'"
           [selectedFeatures]="selectedFeatures()"
+          [featureErrors]="featureErrors()"
+          [selectedSketches]="selectedSketches()"
           (sketchSelected)="onTreeSketchSelected($event)"
+          (sketchSelect)="onTreeSketchSelect($event)"
           (visibilityToggled)="onDatumVisibilityToggled($event)"
           (actionRequested)="onTreeAction($event)"
           (featureSelect)="onFeatureTreeSelect($event)"
           class="feature-tree">
         </app-cad-feature-tree-panel>
+
+        <!-- Constraint list panel — only shown while editing a sketch and
+             when no PropertyManager-style tool panel (Mirror, etc.) is
+             active. Tool panels swap into this column so the user has one
+             place to look for context. -->
+        <app-cad-constraint-list
+          *ngIf="activeSketchId() as sid; else nothing"
+          [constraints]="activeSketchConstraints()"
+          [entities]="activeSketchEntities()"
+          [defaultUnit]="defaultUnit()"
+          [selectedId]="selectedConstraintId()"
+          (remove)="onRemoveConstraint(sid, $event)"
+          (edit)="onEditConstraint(sid, $event)"
+          (select)="onConstraintListSelect($event)"
+          class="constraint-list"
+          [hidden]="sketchEditor.tool() === 'mirror' || sketchEditor.tool() === 'fillet' || sketchEditor.tool() === 'chamfer'">
+        </app-cad-constraint-list>
+        <ng-template #nothing></ng-template>
+
+        <!-- Mirror PropertyManager — same column as the constraint list,
+             rendered only while the Mirror tool is active. State + commit/
+             cancel methods live on the sketch-editor, wired in via the
+             #sketchEditor template ref. -->
+        <ng-container *ngIf="activeSketchId() && sketchEditor.tool() === 'mirror'">
+          <div class="tool-panel" data-testid="mirror-sidebar">
+            <h3 class="panel-title">
+              <mat-icon>flip</mat-icon> Mirror Entities
+            </h3>
+            <p class="panel-hint">
+              {{ sketchEditor.mirrorStage() === 'pick-entities'
+                 ? 'Click each entity in the canvas to add it. Then click the Axis field below and pick a line.'
+                 : 'Click any line in the canvas to set the mirror axis.' }}
+            </p>
+
+            <div class="panel-field"
+                 [class.active]="sketchEditor.mirrorStage() === 'pick-entities'"
+                 data-testid="mirror-field-entities"
+                 (click)="sketchEditor.mirrorStage.set('pick-entities')">
+              <div class="field-header">
+                <mat-icon class="field-icon">layers</mat-icon>
+                <span class="field-label">Entities to mirror</span>
+                <span class="field-count">{{ sketchEditor.mirrorEntitiesToShow().length }}</span>
+              </div>
+              <div class="field-empty"
+                   *ngIf="sketchEditor.mirrorEntitiesToShow().length === 0">
+                Click entities in the canvas
+              </div>
+              <ul class="entity-list" *ngIf="sketchEditor.mirrorEntitiesToShow().length > 0">
+                <li class="entity-row"
+                    *ngFor="let e of sketchEditor.mirrorEntitiesToShow(); trackBy: trackEntityById"
+                    [attr.data-testid]="'mirror-entity-' + e.id">
+                  <mat-icon class="entity-icon">{{ sketchEditor.entityIcon(e) }}</mat-icon>
+                  <div class="entity-info">
+                    <div class="entity-label">{{ sketchEditor.entityShortLabel(e) }}</div>
+                    <div class="entity-detail">{{ sketchEditor.entityShortDescription(e) }}</div>
+                  </div>
+                  <button mat-icon-button class="entity-remove"
+                          matTooltip="Remove from selection"
+                          (click)="sketchEditor.deselectEntity(e.id); $event.stopPropagation()">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                </li>
+              </ul>
+            </div>
+
+            <div class="panel-field"
+                 [class.active]="sketchEditor.mirrorStage() === 'pick-axis'"
+                 data-testid="mirror-field-axis"
+                 (click)="sketchEditor.mirrorStage.set('pick-axis')">
+              <div class="field-header">
+                <mat-icon class="field-icon">straighten</mat-icon>
+                <span class="field-label">Mirror axis</span>
+              </div>
+              <ng-container *ngIf="sketchEditor.mirrorAxisEntity() as axis; else noAxis">
+                <div class="entity-row single">
+                  <mat-icon class="entity-icon">{{ sketchEditor.entityIcon(axis) }}</mat-icon>
+                  <div class="entity-info">
+                    <div class="entity-label">{{ sketchEditor.entityShortLabel(axis) }}</div>
+                    <div class="entity-detail">{{ sketchEditor.entityShortDescription(axis) }}</div>
+                  </div>
+                  <button mat-icon-button class="entity-remove"
+                          matTooltip="Clear axis"
+                          (click)="sketchEditor.clearMirrorAxis(); $event.stopPropagation()">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                </div>
+              </ng-container>
+              <ng-template #noAxis>
+                <div class="field-empty">Click a line in the canvas</div>
+              </ng-template>
+            </div>
+
+            <div class="panel-actions">
+              <button mat-flat-button color="primary"
+                      [disabled]="sketchEditor.selected().size === 0 || !sketchEditor.mirrorAxisId()"
+                      (click)="sketchEditor.commitMirror()"
+                      data-testid="mirror-ok">
+                <mat-icon>check</mat-icon> OK
+              </button>
+              <button mat-stroked-button
+                      (click)="sketchEditor.cancelMirror()"
+                      data-testid="mirror-cancel">
+                <mat-icon>close</mat-icon> Cancel
+              </button>
+            </div>
+          </div>
+        </ng-container>
+
+        <!-- Fillet PropertyManager — radius input + corner list. Each click
+             on a corner toggles it in the list; OK runs filletLines on every
+             corner with the current radius. -->
+        <ng-container *ngIf="activeSketchId() && sketchEditor.tool() === 'fillet'">
+          <div class="tool-panel" data-testid="fillet-sidebar">
+            <h3 class="panel-title">
+              <mat-icon>rounded_corner</mat-icon> Fillet
+            </h3>
+            <p class="panel-hint">
+              Set the radius below, then click each corner in the canvas to add it. Click X to remove. OK applies the fillet to every corner with the same radius.
+            </p>
+
+            <div class="panel-field active">
+              <div class="field-header">
+                <mat-icon class="field-icon">straighten</mat-icon>
+                <span class="field-label">Radius</span>
+              </div>
+              <input class="panel-input"
+                     type="number" min="0.01" step="0.5"
+                     data-testid="fillet-radius-input"
+                     [value]="sketchEditor.filletRadius() ?? 5"
+                     (input)="sketchEditor.filletRadius.set(+($any($event.target).value))" />
+            </div>
+
+            <div class="panel-field active">
+              <div class="field-header">
+                <mat-icon class="field-icon">layers</mat-icon>
+                <span class="field-label">Corners to fillet</span>
+                <span class="field-count">{{ filletCornersArray().length }}</span>
+              </div>
+              <div class="field-empty" *ngIf="filletCornersArray().length === 0">
+                Click corner points in the canvas
+              </div>
+              <ul class="entity-list" *ngIf="filletCornersArray().length > 0">
+                <li class="entity-row"
+                    *ngFor="let id of filletCornersArray(); trackBy: trackString"
+                    [attr.data-testid]="'fillet-corner-' + id">
+                  <mat-icon class="entity-icon">radio_button_checked</mat-icon>
+                  <div class="entity-info">
+                    <div class="entity-label">Corner</div>
+                    <div class="entity-detail">{{ cornerCoordsLabel(id) }}</div>
+                  </div>
+                  <button mat-icon-button class="entity-remove"
+                          matTooltip="Remove from selection"
+                          (click)="sketchEditor.removeFilletCorner(id); $event.stopPropagation()">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                </li>
+              </ul>
+            </div>
+
+            <label class="panel-toggle" data-testid="fillet-keep-construction">
+              <input type="checkbox"
+                     [checked]="sketchEditor.filletKeepConstruction()"
+                     (change)="sketchEditor.filletKeepConstruction.set($any($event.target).checked)" />
+              <span>Keep removed segments as construction</span>
+            </label>
+
+            <div class="panel-actions">
+              <button mat-flat-button color="primary"
+                      [disabled]="filletCornersArray().length === 0"
+                      (click)="sketchEditor.commitFillet()"
+                      data-testid="fillet-ok">
+                <mat-icon>check</mat-icon> OK
+              </button>
+              <button mat-stroked-button
+                      (click)="sketchEditor.cancelFillet()"
+                      data-testid="fillet-cancel">
+                <mat-icon>close</mat-icon> Cancel
+              </button>
+            </div>
+          </div>
+        </ng-container>
+
+        <!-- Chamfer PropertyManager — same shape as Fillet but with a
+             distance input. OK runs chamferLines on every queued corner. -->
+        <ng-container *ngIf="activeSketchId() && sketchEditor.tool() === 'chamfer'">
+          <div class="tool-panel" data-testid="chamfer-sidebar">
+            <h3 class="panel-title">
+              <mat-icon>crop_din</mat-icon> Chamfer
+            </h3>
+            <p class="panel-hint">
+              Set the distance below, then click each corner to add it. OK applies the chamfer to every corner.
+            </p>
+
+            <div class="panel-field active">
+              <div class="field-header">
+                <mat-icon class="field-icon">tune</mat-icon>
+                <span class="field-label">Mode</span>
+              </div>
+              <select class="panel-input"
+                      data-testid="chamfer-mode"
+                      [value]="sketchEditor.chamferModeKind()"
+                      (change)="sketchEditor.chamferModeKind.set($any($event.target).value)">
+                <option value="equal">Equal distance</option>
+                <option value="dist-dist">Distance / Distance</option>
+                <option value="dist-angle">Distance / Angle</option>
+              </select>
+            </div>
+
+            <div class="panel-field active">
+              <div class="field-header">
+                <mat-icon class="field-icon">
+                  {{ sketchEditor.chamferModeKind() === 'dist-dist' ? 'swap_vert' : 'straighten' }}
+                </mat-icon>
+                <span class="field-label">
+                  {{ sketchEditor.chamferModeKind() === 'dist-dist' ? 'Vertical' : 'Distance' }}
+                </span>
+              </div>
+              <input class="panel-input"
+                     type="number" min="0.01" step="0.5"
+                     data-testid="chamfer-distance-input"
+                     [value]="sketchEditor.chamferDistance() ?? 5"
+                     (input)="sketchEditor.chamferDistance.set(+($any($event.target).value))" />
+            </div>
+
+            <div class="panel-field active" *ngIf="sketchEditor.chamferModeKind() === 'dist-dist'">
+              <div class="field-header">
+                <mat-icon class="field-icon">swap_horiz</mat-icon>
+                <span class="field-label">Horizontal</span>
+              </div>
+              <input class="panel-input"
+                     type="number" min="0.01" step="0.5"
+                     data-testid="chamfer-distance2-input"
+                     [value]="sketchEditor.chamferDistance2() ?? 5"
+                     (input)="sketchEditor.chamferDistance2.set(+($any($event.target).value))" />
+            </div>
+
+            <div class="panel-field active" *ngIf="sketchEditor.chamferModeKind() === 'dist-angle'">
+              <div class="field-header">
+                <mat-icon class="field-icon">rotate_right</mat-icon>
+                <span class="field-label">Angle (°)</span>
+              </div>
+              <input class="panel-input"
+                     type="number" min="1" max="179" step="1"
+                     data-testid="chamfer-angle-input"
+                     [value]="sketchEditor.chamferAngleDeg() ?? 45"
+                     (input)="sketchEditor.chamferAngleDeg.set(+($any($event.target).value))" />
+              <button mat-stroked-button class="panel-flip"
+                      data-testid="chamfer-flip"
+                      (click)="sketchEditor.chamferPrimaryLine.set(sketchEditor.chamferPrimaryLine() === 1 ? 2 : 1)">
+                <mat-icon>swap_horiz</mat-icon>
+                Flip reference (currently line {{ sketchEditor.chamferPrimaryLine() }})
+              </button>
+            </div>
+
+            <div class="panel-field active">
+              <div class="field-header">
+                <mat-icon class="field-icon">layers</mat-icon>
+                <span class="field-label">Corners to chamfer</span>
+                <span class="field-count">{{ chamferCornersArray().length }}</span>
+              </div>
+              <div class="field-empty" *ngIf="chamferCornersArray().length === 0">
+                Click corner points in the canvas
+              </div>
+              <ul class="entity-list" *ngIf="chamferCornersArray().length > 0">
+                <li class="entity-row"
+                    *ngFor="let id of chamferCornersArray(); trackBy: trackString"
+                    [attr.data-testid]="'chamfer-corner-' + id">
+                  <mat-icon class="entity-icon">radio_button_checked</mat-icon>
+                  <div class="entity-info">
+                    <div class="entity-label">Corner</div>
+                    <div class="entity-detail">{{ cornerCoordsLabel(id) }}</div>
+                  </div>
+                  <button mat-icon-button class="entity-remove"
+                          (click)="sketchEditor.removeChamferCorner(id); $event.stopPropagation()">
+                    <mat-icon>close</mat-icon>
+                  </button>
+                </li>
+              </ul>
+            </div>
+
+            <label class="panel-toggle" data-testid="chamfer-keep-construction">
+              <input type="checkbox"
+                     [checked]="sketchEditor.chamferKeepConstruction()"
+                     (change)="sketchEditor.chamferKeepConstruction.set($any($event.target).checked)" />
+              <span>Keep removed segments as construction</span>
+            </label>
+
+            <div class="panel-actions">
+              <button mat-flat-button color="primary"
+                      [disabled]="chamferCornersArray().length === 0"
+                      (click)="sketchEditor.commitChamfer()"
+                      data-testid="chamfer-ok">
+                <mat-icon>check</mat-icon> OK
+              </button>
+              <button mat-stroked-button
+                      (click)="sketchEditor.cancelChamfer()"
+                      data-testid="chamfer-cancel">
+                <mat-icon>close</mat-icon> Cancel
+              </button>
+            </div>
+          </div>
+        </ng-container>
 
         <div class="viewport-wrap">
           <ng-container *ngIf="!loading(); else loadingTpl">
@@ -187,11 +557,18 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
               [selected]="selected()"
               [selectedFeatures]="selectedFeatures()"
               [loading]="regenLoading()"
-              [loadProgress]="regenError() || ''"
+              [loadProgress]="regenError() || regenProgressText()"
               [sketchDoc]="doc()"
               [activeSketchId]="activeSketchId()"
               [sketchPreview]="sketchPreview()"
               [selectedSketchEntities]="sketchEditorSelection()"
+              [mirrorAxisId]="sketchEditor.mirrorAxisId()"
+              [activeSketchDof]="activeSketchDof()"
+              [determinedEntities]="determinedEntities()"
+              [editingDimensionId]="editingDimensionId()"
+              [selectedConstraintId]="selectedConstraintId()"
+              [defaultUnit]="defaultUnit()"
+              [smartDimPreview]="smartDimPreview()"
               [displayMode]="displayMode()"
               (selectionChange)="onSelectionChange($event)"
               (featureClick)="onViewerFeatureClick($event)"
@@ -199,7 +576,14 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
               (sketchClick)="onViewerSketchClick($event)"
               (sketchPointerDown)="onViewerSketchPointerDown($event)"
               (sketchPointerMove)="onViewerSketchPointerMove($event)"
-              (sketchPointerUp)="onViewerSketchPointerUp($event)">
+              (sketchPointerUp)="onViewerSketchPointerUp($event)"
+              (dimensionLabelClicked)="onDimensionLabelClicked($event)"
+              (dimensionCommitted)="onDimensionCommitted($event)"
+              (dimensionCanceled)="onDimensionCanceled()"
+              (dimensionDragged)="onDimensionDragged($event)"
+              (dimensionDeleteRequested)="onDimensionDeleteRequested($event)"
+              (dimensionDoubleClicked)="onDimensionDoubleClicked($event)"
+              (constraintIconClicked)="onConstraintIconClicked($event)">
             </app-cad-viewer>
 
             <!-- REQ 623 — feature context menu, anchored at the cursor. -->
@@ -274,10 +658,18 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
     .state-badge.review { background: #e3f2fd; color: #1565c0; }
     .state-badge.released { background: #e8f5e9; color: #2e7d32; }
     .readonly-banner { padding: 4px 10px; background: #ffebee; color: #c62828; border-radius: 4px; font-size: 12px; font-weight: 600; }
+    .kernel-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: #1b3a1b; color: #b5e0b5; border-radius: 4px; font-size: 12px; font-weight: 500; }
+    .kernel-badge.streaming { background: #1b2e3a; color: #9cc7e0; }
+    .kernel-badge.disconnected { background: #3a1b1b; color: #ef9a9a; }
+    .kernel-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; animation: kernel-pulse 1.6s ease-in-out infinite; }
+    .kernel-badge.disconnected .kernel-dot { animation: none; }
+    @keyframes kernel-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
     .tool-action.active { background: rgba(66, 165, 245, 0.22); border-color: #42a5f5; }
     .ctx-anchor { position: fixed; width: 0; height: 0; }
     .display-mode-field { width: 220px; font-size: 12px; }
     .display-mode-field .mat-mdc-form-field-subscript-wrapper { display: none; }
+    .unit-field { width: 80px; font-size: 12px; }
+    .unit-field .mat-mdc-form-field-subscript-wrapper { display: none; }
     .display-mode-field ::ng-deep .mat-mdc-form-field-infix { padding-top: 6px !important; padding-bottom: 6px !important; min-height: 0; }
     .ribbon { background: #25253a; border-bottom: 1px solid #444; flex-shrink: 0; }
     .ribbon-content { height: 76px; padding: 4px 12px; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid #333; }
@@ -315,7 +707,152 @@ type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
     .tab.active { color: #fff; border-top-color: #42a5f5; background: rgba(66,165,245,0.08); }
     .editor-body { display: flex; flex: 1; min-height: 0; }
     .feature-tree { width: 240px; background: #25253a; border-right: 1px solid #444; }
+    .constraint-list { width: 220px; border-right: 1px solid #444; }
     .viewport-wrap { flex: 1; position: relative; overflow: hidden; }
+
+    /* Tool panel — same column dimensions as .constraint-list so swapping
+       between them doesn't reflow the viewer. Used by the Mirror tool
+       today; same shell will accept Pattern, Linear/Circular pattern, etc. */
+    .tool-panel {
+      width: 220px;
+      border-right: 1px solid #444;
+      background: #25253a;
+      padding: 12px;
+      box-sizing: border-box;
+      overflow-y: auto;
+      font-size: 13px;
+    }
+    .panel-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0 0 8px 0;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #444;
+      color: #ddd;
+    }
+    .panel-title mat-icon { font-size: 18px; width: 18px; height: 18px; }
+    .panel-hint {
+      font-size: 11px;
+      color: #aaa;
+      line-height: 1.4;
+      margin: 0 0 12px 0;
+    }
+    .panel-field {
+      padding: 8px;
+      margin-bottom: 8px;
+      border: 1px solid #444;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: border-color 0.1s, background 0.1s;
+    }
+    .panel-field:hover { background: rgba(255,255,255,0.04); }
+    .panel-field.active {
+      border-color: #42a5f5;
+      background: rgba(66, 165, 245, 0.12);
+    }
+    .field-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .field-icon { font-size: 16px; width: 16px; height: 16px; opacity: 0.7; }
+    .field-label { font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; flex: 1; }
+    .field-count {
+      font-size: 11px;
+      color: #ddd;
+      background: rgba(66, 165, 245, 0.18);
+      border: 1px solid #42a5f5;
+      padding: 1px 8px;
+      border-radius: 8px;
+      min-width: 18px;
+      text-align: center;
+    }
+    .field-value { font-size: 13px; padding-left: 22px; color: #ddd; }
+    .panel-input {
+      width: calc(100% - 24px);
+      margin-left: 22px;
+      padding: 4px 6px;
+      font-size: 13px;
+      font-family: monospace;
+      background: #1f1f30;
+      border: 1px solid #444;
+      border-radius: 3px;
+      color: #ddd;
+    }
+    .panel-input:focus { outline: none; border-color: #42a5f5; }
+    .panel-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 4px;
+      margin: 8px 0 4px 0;
+      font-size: 12px;
+      color: #ccc;
+      cursor: pointer;
+      user-select: none;
+    }
+    .panel-toggle input[type="checkbox"] {
+      accent-color: #42a5f5;
+      cursor: pointer;
+    }
+    .panel-flip {
+      width: calc(100% - 24px);
+      margin-left: 22px;
+      margin-top: 6px;
+      font-size: 12px !important;
+    }
+    select.panel-input { appearance: auto; }
+    .field-empty { font-size: 12px; color: #888; font-style: italic; padding-left: 22px; }
+
+    /* List of selected entities (Mirror "Entities to mirror" field) and
+       the single-row axis. Each row shows kind + coord hint + X button. */
+    .entity-list { list-style: none; margin: 6px 0 0 0; padding: 0; }
+    .entity-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 4px 4px 6px;
+      margin-top: 4px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid #3a3a52;
+      border-radius: 3px;
+    }
+    .entity-row.single { margin-top: 6px; }
+    .entity-icon { font-size: 16px; width: 16px; height: 16px; opacity: 0.85; flex-shrink: 0; }
+    .entity-info { flex: 1; min-width: 0; }
+    .entity-label { font-size: 12px; color: #ddd; line-height: 1.2; }
+    .entity-detail {
+      font-size: 10px;
+      color: #888;
+      line-height: 1.2;
+      font-family: ui-monospace, monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* Remove button — small enough not to dominate the row. mat-icon-button
+       defaults to 40×40 which is way too big inside a 220px column. */
+    .entity-remove {
+      width: 24px !important;
+      height: 24px !important;
+      line-height: 24px !important;
+      padding: 0 !important;
+      min-width: 0 !important;
+      color: #aaa;
+      flex-shrink: 0;
+    }
+    .entity-remove mat-icon { font-size: 16px; width: 16px; height: 16px; line-height: 16px; }
+    .entity-remove:hover { color: #ff5252; }
+    .panel-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .panel-actions button { flex: 1; }
     .mode-prompt { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: rgba(66, 165, 245, 0.92); color: #0a0a14; border-radius: 8px; font-weight: 500; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
     .mode-prompt .prompt-text { font-size: 13px; }
     .hud { position: absolute; bottom: 8px; left: 8px; font-family: monospace; font-size: 12px; opacity: 0.7; background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 4px; }
@@ -334,6 +871,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private auth = inject(AuthService);
   private errors = inject(ErrorNotificationService);
   private dialog = inject(MatDialog);
+  // Public so the template can read the connection state for the kernel-
+  // status badge. The stream is otherwise an internal concern.
+  stream = inject(CadStreamService);
+  private streamSub: { unsubscribe: () => void } | null = null;
 
   model = signal<CadModel | null>(null);
   loading = signal<boolean>(true);
@@ -349,6 +890,49 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // the deleted client-side OCCT loader.
   regenLoading = signal<boolean>(false);
   regenError = signal<string | null>(null);
+  // Per-feature failures from the last regenerate pass. Cleared on regen
+  // start, updated as feature-result events arrive (or the HTTP response
+  // finalizes for clients without an active WS).
+  featureErrors = signal<Map<string, string>>(new Map());
+  // Per-feature streaming progress: how many features the WS has confirmed
+  // since the last regenerate-started event, vs how many we expect from the
+  // current featureTree. Resets to 0/0 between regen passes.
+  regenStreamedCount = signal<number>(0);
+  regenExpectedCount = signal<number>(0);
+  regenProgressText = computed<string>(() => {
+    if (!this.regenLoading()) return '';
+    const total = this.regenExpectedCount();
+    const done = this.regenStreamedCount();
+    if (total === 0) return '';
+    return `feature ${Math.min(done + 1, total)} of ${total}`;
+  });
+  // Active-sketch projections for the constraint list panel. Returning the
+  // empty arrays when no sketch is active keeps consumers from re-binding
+  // on every doc() change.
+  activeSketchConstraints = computed(() => {
+    const sid = this.activeSketchId();
+    if (!sid) return [];
+    return this.doc().sketches[sid]?.state.constraints ?? [];
+  });
+  activeSketchEntities = computed(() => {
+    const sid = this.activeSketchId();
+    if (!sid) return [];
+    return this.doc().sketches[sid]?.state.entities ?? [];
+  });
+  kernelBadgeLabel = computed<string>(() => {
+    if (!this.stream.connected()) return 'Kernel offline';
+    if (this.regenLoading()) {
+      const txt = this.regenProgressText();
+      return txt ? `Regenerating · ${txt}` : 'Regenerating';
+    }
+    return 'Idle';
+  });
+  kernelBadgeTooltip = computed<string>(() => {
+    if (!this.stream.connected()) {
+      return 'Stream disconnected — the editor still works via HTTP but won’t see per-feature progress.';
+    }
+    return this.regenLoading() ? 'Kernel is regenerating geometry' : 'Kernel idle, stream connected';
+  });
   mode = signal<EditorMode>('idle');
   pendingExtrude = signal<boolean>(false);
   // REQ 616 — ribbon tab. Auto-switches to 'sketch' when activeSketchId becomes
@@ -358,18 +942,79 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   displayMode = signal<DisplayMode>('visible-edges');
   // REQ 623 — feature multi-select. Updated by viewer's featureClick event.
   selectedFeatures = signal<Set<string>>(new Set());
+  selectedSketches = signal<Set<string>>(new Set());
+  /** Constraint id currently in inline-edit mode. Smart Dim's placement
+   * click sets this (so the value popup opens right after creation), and
+   * double-clicking an existing label also sets it. The viewer renders an
+   * <input> in place of the label for this id. */
+  editingDimensionId = signal<string | null>(null);
+  /** Constraint id currently SELECTED (single-clicked). Distinct from
+   * editing — selected means "highlighted, ready for Delete-key removal".
+   * Single-click switches selection between dimensions; click elsewhere /
+   * Esc clears it. Double-click promotes to editing. */
+  selectedConstraintId = signal<string | null>(null);
+
+  // ── Undo / redo ───────────────────────────────────────────────────────
+  // Each entry is a snapshot of (featureTree, doc) — the two signals that
+  // own the editable model state. Captures are debounced so rapid changes
+  // (drag previews, solver re-runs) collapse into one undo step.
+  private history = signal<{ snapshots: HistorySnapshot[]; index: number }>({ snapshots: [], index: -1 });
+  private historyTimer: number | null = null;
+  /** True while undo/redo is restoring a snapshot. Tells the capture
+   * effect that the next featureTree/doc change is a replay, not a new
+   * user edit, so we don't snapshot it. */
+  private replayingHistory = false;
+  canUndo = computed(() => this.history().index > 0);
+  canRedo = computed(() => {
+    const h = this.history();
+    return h.index < h.snapshots.length - 1;
+  });
+  /** Default unit for THIS model. Read off featureTree.defaultUnit so it
+   * persists with the save blob. Setter writes back to featureTree and
+   * triggers a save. Defaults to mm for legacy models without the field. */
+  defaultUnit = computed<Unit>(() => (this.featureTree().defaultUnit as Unit) ?? 'mm');
+  setDefaultUnit(u: Unit) {
+    if (this.readonly()) return;
+    const tree = this.featureTree();
+    if (tree.defaultUnit === u) return;
+    this.featureTree.set({ ...tree, defaultUnit: u });
+    this.save();
+  }
   // REQ 629 — sketch cursor + snap target. Updated on every viewer
   // sketchPointerMove. Cursor is in active sketch 2D coords (snapped if a
   // snap target was within range). snapTargetPoint is the un-snapped world
   // location of the snap target — used to render the snap-ring indicator.
   sketchCursor = signal<{ x: number; y: number } | null>(null);
-  snapTargetPoint = signal<{ x: number; y: number } | null>(null);
+  snapTargetPoint = signal<{ x: number; y: number; kind: SnapKind } | null>(null);
   // REQ 631 — mirror the sketch-editor's selection set into a computed so the
   // 3D viewer can react to changes (sketch-editor.selected is a signal accessed
   // via viewChild; this layer keeps Angular's reactivity tidy).
   sketchEditorSelection = computed<Set<string>>(() => {
     const editor = this.sketchEditorRef();
     return editor?.selected() ?? new Set<string>();
+  });
+  /** Mirror of the sketch editor's `dofState` so the 3D viewer can recolor
+   * the active sketch — blue (under-constrained), green (fully constrained),
+   * or red (over-constrained / solver failed). Falls back to 'under'. */
+  activeSketchDof = computed<'under' | 'fixed' | 'over'>(() => {
+    const editor = this.sketchEditorRef();
+    return editor?.dofState() ?? 'under';
+  });
+  /** Per-entity determinacy. Forwarded to the viewer so each sketch entity
+   * colors based on its own constraint state (SW-style), not a single
+   * global flag for the whole sketch. */
+  determinedEntities = computed<Set<string>>(() => {
+    const editor = this.sketchEditorRef();
+    return editor?.determinedEntities() ?? new Set();
+  });
+  /** Live Smart Dim preview render derived from the sketch editor's
+   * current picks + the cursor position. Passed to the viewer so the
+   * dashed dimension lines + value pill follow the cursor before the
+   * placement click. */
+  smartDimPreview = computed(() => {
+    const editor = this.sketchEditorRef();
+    const cursor = this.sketchCursor();
+    return editor?.smartDimPreview(cursor) ?? null;
   });
   // REQ 625 — last clicked face id + its flatness, captured separately from the
   // feature set so "click face → Sketch action" can pick the right plane.
@@ -381,6 +1026,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   ctxMenuY = signal(0);
   ctxMenuFeatureId = signal<string | null>(null);
   private prevActiveSketchId: SketchId | null = null;
+  // Tracks the previous over-constrained state so we only toast on the
+  // ok→over edge, not every time the dof signal re-emits.
+  private lastSketchWasOver = false;
   private sketchEditorRef = viewChild<CadSketchEditorComponent>('sketchEditor');
   private ctxMenuTrigger = viewChild(MatMenuTrigger);
 
@@ -429,6 +1077,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private regenGeneration = 0;
 
   constructor() {
+    // History capture — debounced 500ms. Watches the two mutable model
+    // signals (featureTree + doc) and records a snapshot once they settle.
+    // Skipped when replayingHistory is true (i.e. an undo/redo just set
+    // the signals — that change isn't a new edit).
+    effect(() => {
+      const ft = this.featureTree();
+      const dc = this.doc();
+      if (this.replayingHistory) return;
+      if (this.historyTimer !== null) clearTimeout(this.historyTimer);
+      this.historyTimer = window.setTimeout(() => {
+        this.historyTimer = null;
+        this.pushSnapshot({ featureTree: ft, doc: dc });
+      }, 500);
+    });
+
     // REQ 616: auto-switch the ribbon tab when activeSketchId transitions.
     // Steady-state changes (e.g., editing the sketch's contents) don't override
     // a user-initiated tab choice.
@@ -445,6 +1108,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // whenever featureTree changes. Feature geometry is fetched via the
     // server regenerate call (see `regenerate()` below) so it doesn't go
     // through an effect.
+    //
+    // `untracked()` is load-bearing: this effect both reads and writes
+    // `geometry()` (read to preserve faces/topology while only swapping
+    // datums). Without untracked, the write retriggers the effect via the
+    // tracked read → infinite loop that locks the main thread.
     effect(() => {
       const tree = this.featureTree();
       const origin = tree.features.find(f => f.type === 'origin') as
@@ -452,12 +1120,27 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         | undefined;
       const vis = { ...defaultDatumVisibility(), ...(origin?.visibility ?? {}) };
       const datums = buildOriginDatums().filter(d => vis[d.id] !== false);
-      const prev = this.geometry();
+      const prev = untracked(() => this.geometry());
       this.geometry.set({
         datums,
         faces: prev?.faces ?? [],
         topology: prev?.topology ?? { vertices: [], edges: [] },
       });
+    });
+
+    // Surface over-constrained sketch state as a toast. Effect tracks the
+    // active sketch's solver status (via the dofState computed) and fires a
+    // single error toast on each ok→over transition. untracked() avoids a
+    // feedback loop with the editor's own state reads.
+    effect(() => {
+      const dof = this.activeSketchDof();
+      const wasOver = untracked(() => this.lastSketchWasOver);
+      if (dof === 'over' && !wasOver) {
+        this.errors.showError('Sketch is over-constrained — the last constraint conflicts with existing ones.');
+        this.lastSketchWasOver = true;
+      } else if (dof !== 'over' && wasOver) {
+        this.lastSketchWasOver = false;
+      }
     });
 
     effect(() => {
@@ -482,6 +1165,82 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (this.mode() !== 'idle' && this.activeSketchId() === null) {
       this.setMode('idle');
     }
+    // Esc also clears any dimension selection in the active sketch.
+    this.selectedConstraintId.set(null);
+  }
+
+  /** Delete or Backspace with a dimension SELECTED (single-clicked) →
+   * remove it. Bails when the user is typing in any input (sketch editor's
+   * inline value editor has its own Delete handling for the "all-selected
+   * text" case). Sketch-entity deletion is handled separately inside the
+   * sketch editor component. Also handles Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z
+   * for undo / redo.
+   */
+  @HostListener('document:keydown', ['$event'])
+  onDocumentKeydown(ev: KeyboardEvent) {
+    const target = ev.target as HTMLElement | null;
+    if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable) return;
+    const ctrl = ev.ctrlKey || ev.metaKey;
+    if (ctrl && (ev.key === 'z' || ev.key === 'Z')) {
+      ev.preventDefault();
+      if (ev.shiftKey) this.redo(); else this.undo();
+      return;
+    }
+    if (ctrl && (ev.key === 'y' || ev.key === 'Y')) {
+      ev.preventDefault();
+      this.redo();
+      return;
+    }
+    if (ev.key !== 'Delete' && ev.key !== 'Backspace') return;
+    const cid = this.selectedConstraintId();
+    if (!cid) return;
+    ev.preventDefault();
+    this.onDimensionDeleteRequested(cid);
+    this.selectedConstraintId.set(null);
+  }
+
+  // ── Undo / redo handlers ──────────────────────────────────────────────
+
+  /** Add a snapshot at the current head; drop any redo branch past it. */
+  private pushSnapshot(snap: HistorySnapshot) {
+    this.history.update(h => {
+      const truncated = h.snapshots.slice(0, h.index + 1);
+      const last = truncated[truncated.length - 1];
+      // Skip if nothing actually changed since the previous snapshot
+      // (signal write that didn't mutate values, etc).
+      if (last && last.featureTree === snap.featureTree && last.doc === snap.doc) return h;
+      const next = [...truncated, snap];
+      // Cap memory at ~100 entries.
+      const trimmed = next.length > 100 ? next.slice(next.length - 100) : next;
+      return { snapshots: trimmed, index: trimmed.length - 1 };
+    });
+  }
+
+  undo() {
+    if (!this.canUndo()) return;
+    this.history.update(h => ({ ...h, index: h.index - 1 }));
+    this.applySnapshot(this.history().snapshots[this.history().index]);
+  }
+
+  redo() {
+    if (!this.canRedo()) return;
+    this.history.update(h => ({ ...h, index: h.index + 1 }));
+    this.applySnapshot(this.history().snapshots[this.history().index]);
+  }
+
+  /** Restore featureTree + doc to a stored snapshot. Flips
+   * `replayingHistory` so the capture effect doesn't re-snapshot the
+   * restore as a new edit, then saves + regenerates so server state +
+   * geometry catch up. */
+  private applySnapshot(s: HistorySnapshot) {
+    this.replayingHistory = true;
+    this.featureTree.set(s.featureTree);
+    this.doc.set(s.doc);
+    // Effect runs synchronously after signal writes; reset on microtask
+    // so the post-write effect sees the flag still true.
+    queueMicrotask(() => { this.replayingHistory = false; });
+    this.save();
+    this.regenerate();
   }
 
   ngOnInit() {
@@ -501,6 +1260,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   ngOnDestroy() {
     const w = window as any;
     delete w.__cadApp; delete w.__cadSketch; delete w.__cadSetSelected;
+    if (this.streamSub) { this.streamSub.unsubscribe(); this.streamSub = null; }
+    this.stream.disconnect();
   }
 
   setMode(m: EditorMode) {
@@ -545,6 +1306,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       next.add(featureId);
     }
     this.selectedFeatures.set(next);
+    if (!shift && !ctrl) this.selectedSketches.set(new Set());
   }
 
   // REQ 623 — right-click in the viewer opens the feature context menu.
@@ -565,11 +1327,17 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // snaps incoming positions to nearby existing points (when not dragging) so
   // clicks and the preview overlay both lock onto vertices, then forwards
   // the result to the sketch-editor's tool dispatch.
-  onViewerSketchClick(p: { x: number; y: number; shiftKey: boolean }) {
+  onViewerSketchClick(p: { x: number; y: number; shiftKey: boolean; tolerance: number; pointTolerance: number }) {
+    // Click on the sketch (not on a dim label — those stop propagation)
+    // clears any dimension selection so Delete-key intent stays coherent.
+    this.selectedConstraintId.set(null);
     const { snapped } = this.snapToPoint({ x: p.x, y: p.y });
-    this.sketchEditorRef()?.handleSketchClick({ x: snapped.x, y: snapped.y, shiftKey: p.shiftKey });
+    this.sketchEditorRef()?.handleSketchClick({
+      x: snapped.x, y: snapped.y, shiftKey: p.shiftKey,
+      tolerance: p.tolerance, pointTolerance: p.pointTolerance,
+    });
   }
-  onViewerSketchPointerDown(p: { x: number; y: number }) {
+  onViewerSketchPointerDown(p: { x: number; y: number; tolerance: number; pointTolerance: number }) {
     this.sketchEditorRef()?.handleSketchPointerDown(p);
   }
   onViewerSketchPointerMove(p: { x: number; y: number }) {
@@ -591,29 +1359,90 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   // REQ 629 / 630 — find the nearest snappable point within SNAP_RADIUS and
-  // return its location plus a marker for the indicator. Candidates are all
-  // existing sketch point entities AND the sketch origin (0, 0) — the origin
-  // is rendered as a visible marker per REQ 616 but isn't a point entity, so
-  // we add it explicitly to the candidate set.
+  // return its location plus a marker for the indicator.
+  //
+  // Candidate set:
+  //   - the synthetic sketch origin (0, 0)
+  //   - every existing sketch point entity (line endpoints, circle centers…)
+  //   - midpoint of every non-construction line
+  //   - intersections between every pair of non-construction curves
+  //   - top/bottom/left/right quadrant points on every non-construction
+  //     circle and arc (quadrants outside an arc's sweep are filtered out)
+  //
+  // Real points (existing entities + origin) get a slightly tighter
+  // selection radius than virtual ones (midpoint / intersection / quadrant)
+  // so a real corner wins over a virtual point near the same screen pixel.
   private snapToPoint(p: { x: number; y: number }): {
     snapped: { x: number; y: number };
-    target: { x: number; y: number } | null;
+    target: { x: number; y: number; kind: SnapKind } | null;
   } {
     const sid = this.activeSketchId();
     if (!sid) return { snapped: p, target: null };
     const sketch = this.doc().sketches[sid];
     if (!sketch) return { snapped: p, target: null };
-    const SNAP_RADIUS = 3;
-    let best: { x: number; y: number } | null = null;
-    let bestDist = SNAP_RADIUS;
-    const dOrigin = Math.hypot(p.x, p.y);
-    if (dOrigin < bestDist) { bestDist = dOrigin; best = { x: 0, y: 0 }; }
+    const REAL_RADIUS = 3;
+    const VIRTUAL_RADIUS = 2;  // a touch tighter so real points win ties
+    let best: { x: number; y: number; kind: SnapKind } | null = null;
+    let bestRank = 0;  // 1 = virtual hit, 2 = real hit (real beats virtual)
+    let bestDist = Infinity;
+
+    const consider = (q: { x: number; y: number }, kind: SnapKind, real: boolean) => {
+      const radius = real ? REAL_RADIUS : VIRTUAL_RADIUS;
+      const d = Math.hypot(q.x - p.x, q.y - p.y);
+      if (d > radius) return;
+      const rank = real ? 2 : 1;
+      if (rank < bestRank) return;                   // never overtake a real with a virtual
+      if (rank === bestRank && d >= bestDist) return;
+      best = { x: q.x, y: q.y, kind };
+      bestRank = rank;
+      bestDist = d;
+    };
+
+    consider({ x: 0, y: 0 }, 'endpoint', true);
     for (const e of sketch.state.entities) {
-      if (e.kind !== 'point') continue;
-      const d = Math.hypot(e.x - p.x, e.y - p.y);
-      if (d < bestDist) { bestDist = d; best = { x: e.x, y: e.y }; }
+      if (e.kind === 'point') consider({ x: e.x, y: e.y }, 'endpoint', true);
     }
-    return best ? { snapped: best, target: best } : { snapped: p, target: null };
+    // Midpoints of every non-construction line.
+    for (const e of sketch.state.entities) {
+      if (e.kind !== 'line' || e.construction) continue;
+      const a = findPt(sketch.state, e.startId);
+      const b = findPt(sketch.state, e.endId);
+      if (!a || !b) continue;
+      consider({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, 'midpoint', false);
+    }
+    // Curve quadrants — for arcs, drop quadrants outside the sweep.
+    for (const e of sketch.state.entities) {
+      if (e.construction) continue;
+      if (e.kind === 'circle' || e.kind === 'arc') {
+        const c = findPt(sketch.state, e.centerId);
+        if (!c) continue;
+        const quads = [
+          { x: c.x + e.radius, y: c.y },
+          { x: c.x - e.radius, y: c.y },
+          { x: c.x, y: c.y + e.radius },
+          { x: c.x, y: c.y - e.radius },
+        ];
+        if (e.kind === 'arc') {
+          const sp = findPt(sketch.state, e.startId);
+          const ep = findPt(sketch.state, e.endId);
+          if (!sp || !ep) continue;
+          const sa = Math.atan2(sp.y - c.y, sp.x - c.x);
+          const ea = Math.atan2(ep.y - c.y, ep.x - c.x);
+          for (const q of quads) {
+            const ang = Math.atan2(q.y - c.y, q.x - c.x);
+            if (angleInArcSweep(ang, sa, ea, e.ccw)) consider(q, 'quadrant', false);
+          }
+        } else {
+          for (const q of quads) consider(q, 'quadrant', false);
+        }
+      }
+    }
+    // Curve-curve intersections (line-line / line-circle / line-arc / circle-circle …).
+    for (const xi of allCurveIntersections(sketch.state)) consider(xi, 'intersection', false);
+
+    if (!best) return { snapped: p, target: null };
+    const b = best as { x: number; y: number; kind: SnapKind };
+    return { snapped: { x: b.x, y: b.y }, target: b };
   }
 
   // REQ 629 — rubber-band drawing preview. Reads the live tool + draft state
@@ -628,16 +1457,166 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!sketch) return [];
 
     const items: SketchPreview[] = [];
+    // Rubber-band rectangle (Select tool, dragging from empty space).
+    // Rendered as 4 dashed lines so the existing 'line' preview kind covers
+    // it without adding a new SketchPreview variant.
+    const rb = editor.rubberBand();
+    if (rb) {
+      const corners = [
+        { x: rb.start.x, y: rb.start.y },
+        { x: rb.current.x, y: rb.start.y },
+        { x: rb.current.x, y: rb.current.y },
+        { x: rb.start.x, y: rb.current.y },
+      ];
+      for (let i = 0; i < 4; i++) {
+        items.push({ kind: 'line', start: corners[i], end: corners[(i + 1) % 4] });
+      }
+    }
     const snap = this.snapTargetPoint();
-    if (snap) items.push({ kind: 'snap-indicator', x: snap.x, y: snap.y });
+    if (snap) items.push({ kind: 'snap-indicator', x: snap.x, y: snap.y, snapKind: snap.kind });
 
     const tool = editor.tool();
+    // ── Composite-shape previews ───────────────────────────────────────
+    // Each multi-click gesture shows point-markers for committed clicks +
+    // a live outline that follows the cursor for the next click.
+    if (tool === 'rect-corner') {
+      const c = editor.draftRectCorner();
+      if (c) {
+        items.push({ kind: 'point-marker', x: c.x, y: c.y, style: 'pending' });
+        const corners = [
+          { x: c.x, y: c.y }, { x: cursor.x, y: c.y },
+          { x: cursor.x, y: cursor.y }, { x: c.x, y: cursor.y },
+        ];
+        for (let i = 0; i < 4; i++) {
+          items.push({ kind: 'line', start: corners[i], end: corners[(i + 1) % 4] });
+        }
+      }
+      return items;
+    }
+    if (tool === 'rect-center') {
+      const c = editor.draftRectCenter();
+      if (c) {
+        items.push({ kind: 'point-marker', x: c.x, y: c.y, style: 'pending' });
+        const hw = Math.abs(cursor.x - c.x), hh = Math.abs(cursor.y - c.y);
+        const corners = [
+          { x: c.x - hw, y: c.y - hh }, { x: c.x + hw, y: c.y - hh },
+          { x: c.x + hw, y: c.y + hh }, { x: c.x - hw, y: c.y + hh },
+        ];
+        for (let i = 0; i < 4; i++) {
+          items.push({ kind: 'line', start: corners[i], end: corners[(i + 1) % 4] });
+        }
+      }
+      return items;
+    }
+    if (tool === 'polygon') {
+      const c = editor.draftPolygonCenter();
+      if (c) {
+        items.push({ kind: 'point-marker', x: c.x, y: c.y, style: 'pending' });
+        const n = editor.polygonSides();
+        const radius = Math.hypot(cursor.x - c.x, cursor.y - c.y);
+        if (radius > 0.1 && n >= 3) {
+          const base = Math.atan2(cursor.y - c.y, cursor.x - c.x);
+          const verts: Array<{ x: number; y: number }> = [];
+          for (let i = 0; i < n; i++) {
+            const t = base + (2 * Math.PI * i) / n;
+            verts.push({ x: c.x + radius * Math.cos(t), y: c.y + radius * Math.sin(t) });
+          }
+          for (let i = 0; i < n; i++) {
+            items.push({ kind: 'line', start: verts[i], end: verts[(i + 1) % n] });
+          }
+        }
+      }
+      return items;
+    }
+    if (tool === 'slot') {
+      const path = editor.draftSlotPath();
+      if (path.p1) items.push({ kind: 'point-marker', x: path.p1.x, y: path.p1.y, style: 'pending' });
+      if (path.p2) items.push({ kind: 'point-marker', x: path.p2.x, y: path.p2.y, style: 'pending' });
+      if (path.p1 && !path.p2) {
+        // First-click → cursor preview: centerline only.
+        items.push({ kind: 'line', start: path.p1, end: cursor });
+      }
+      if (path.p1 && path.p2) {
+        // Both endpoints set; preview the full slot shape using the cursor as
+        // the width control point.
+        const dx = path.p2.x - path.p1.x, dy = path.p2.y - path.p1.y;
+        const len = Math.hypot(dx, dy);
+        if (len > 1e-6) {
+          const px = -dy / len, py = dx / len;
+          const hw = Math.max(0.5, Math.abs(px * (cursor.x - path.p1.x) + py * (cursor.y - path.p1.y)));
+          const ox = px * hw, oy = py * hw;
+          const a1 = { x: path.p1.x + ox, y: path.p1.y + oy };
+          const a2 = { x: path.p1.x - ox, y: path.p1.y - oy };
+          const b1 = { x: path.p2.x + ox, y: path.p2.y + oy };
+          const b2 = { x: path.p2.x - ox, y: path.p2.y - oy };
+          items.push({ kind: 'line', start: a1, end: b1 });
+          items.push({ kind: 'line', start: b2, end: a2 });
+          items.push({ kind: 'arc', center: path.p2, start: b1, end: b2, radius: hw, ccw: true });
+          items.push({ kind: 'arc', center: path.p1, start: a2, end: a1, radius: hw, ccw: true });
+        }
+      }
+      return items;
+    }
+    if (tool === 'circle-3pt' || tool === 'arc-3pt') {
+      const pts = tool === 'circle-3pt' ? editor.draftCircle3() : editor.draftArc3();
+      for (const p of pts) items.push({ kind: 'point-marker', x: p.x, y: p.y, style: 'pending' });
+      return items;
+    }
+    if (tool === 'ellipse') {
+      const draft = editor.draftEllipse();
+      if (draft.center) items.push({ kind: 'point-marker', x: draft.center.x, y: draft.center.y, style: 'pending' });
+      if (draft.majorEnd) items.push({ kind: 'point-marker', x: draft.majorEnd.x, y: draft.majorEnd.y, style: 'pending' });
+      if (draft.center && !draft.majorEnd) {
+        // Cursor preview during 2nd click: a circle of the candidate major
+        // radius, since the minor axis isn't defined yet.
+        const radius = Math.hypot(cursor.x - draft.center.x, cursor.y - draft.center.y);
+        if (radius > 0.1) items.push({ kind: 'circle', center: draft.center, radius });
+      }
+      return items;
+    }
+    if (tool === 'spline') {
+      const pts = editor.draftSpline();
+      for (const p of pts) items.push({ kind: 'point-marker', x: p.x, y: p.y, style: 'pending' });
+      // Connect committed control points with construction lines so the user
+      // can see the order. Cursor segment shows where the next click will go.
+      for (let i = 1; i < pts.length; i++) {
+        items.push({ kind: 'line', start: pts[i - 1], end: pts[i] });
+      }
+      if (pts.length > 0) {
+        items.push({ kind: 'line', start: pts[pts.length - 1], end: cursor });
+      }
+      return items;
+    }
+
     if (tool === 'line') {
       const startId = editor.draftLineStart();
       if (startId) {
         const startEntity = sketch.state.entities.find(e => e.id === startId);
         if (startEntity?.kind === 'point') {
-          items.push({ kind: 'line', start: { x: startEntity.x, y: startEntity.y }, end: cursor });
+          // Apply inference so the live preview shows the same horizontal/
+          // vertical/on-line snap the user will get on click commit. Adds an
+          // extension indicator (snap-indicator ring) at the snapped point
+          // when an inference fired so the user can see why the line locked.
+          const inf = inferLineEnd(
+            sketch.state,
+            { x: startEntity.x, y: startEntity.y },
+            cursor,
+          );
+          items.push({ kind: 'line', start: { x: startEntity.x, y: startEntity.y }, end: inf.snapped });
+          if (inf.hint) {
+            items.push({ kind: 'snap-indicator', x: inf.snapped.x, y: inf.snapped.y });
+            // Small auto-relations badge near the snap point — tells the
+            // user WHICH inference fired (horizontal / vertical / polar
+            // angle / aligned with another point / on line).
+            items.push({ kind: 'inference-badge', x: inf.snapped.x + 3, y: inf.snapped.y + 3, label: inf.hint });
+          }
+          // Polar / alignment guides: dashed rays the inference engine
+          // emits so the user can see what their cursor lined up with.
+          if (inf.guides) {
+            for (const g of inf.guides) {
+              items.push({ kind: 'alignment-guide', start: g.from, end: g.to });
+            }
+          }
         }
       }
     } else if (tool === 'circle') {
@@ -673,8 +1652,77 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         }
       }
     }
+    // Trim / Extend hover: red preview of the segment that the click would
+    // affect. Computed by the editor (it owns the pick tolerance + state).
+    const editHover = editor.editHoverPreview(cursor);
+    if (editHover) items.push(editHover);
+
+    // Fillet preview — one arc per queued corner showing what OK will
+    // produce with the current radius.
+    if (tool === 'fillet') {
+      const r = editor.filletRadius() ?? 5;
+      for (const cornerId of editor.filletCorners()) {
+        const lines = editor.linesIncidentTo(sketch.state, cornerId);
+        if (lines.length !== 2) continue;
+        const geom = computeFilletGeometry(sketch.state, lines[0].id, lines[1].id, r);
+        if (!geom) continue;
+        items.push({
+          kind: 'arc',
+          center: geom.C, start: geom.T1, end: geom.T2,
+          radius: geom.radius, ccw: geom.ccw,
+        });
+        items.push({ kind: 'point-marker', x: geom.T1.x, y: geom.T1.y, style: 'pending' });
+        items.push({ kind: 'point-marker', x: geom.T2.x, y: geom.T2.y, style: 'pending' });
+      }
+    }
+    // Chamfer preview — one cut line per queued corner.
+    if (tool === 'chamfer') {
+      const mode = editor.currentChamferMode();
+      for (const cornerId of editor.chamferCorners()) {
+        const lines = editor.linesIncidentTo(sketch.state, cornerId);
+        if (lines.length !== 2) continue;
+        const geom = computeChamferGeometry(sketch.state, lines[0].id, lines[1].id, mode);
+        if (!geom) continue;
+        items.push({ kind: 'line', start: geom.T1, end: geom.T2 });
+        items.push({ kind: 'point-marker', x: geom.T1.x, y: geom.T1.y, style: 'pending' });
+        items.push({ kind: 'point-marker', x: geom.T2.x, y: geom.T2.y, style: 'pending' });
+      }
+    }
     return items;
   });
+
+  /** trackBy for entity rows in the Mirror panel. Keeps the DOM elements
+   * stable across selection changes so the X buttons stay clickable
+   * without re-render flicker. */
+  trackEntityById(_idx: number, e: { id: string }): string { return e.id; }
+  trackString(_idx: number, id: string): string { return id; }
+
+  /** Fillet sidebar reads the corner set as a sorted array so the *ngFor
+   * has stable ordering across signal updates. */
+  filletCornersArray = computed<string[]>(() => {
+    const editor = this.sketchEditorRef();
+    if (!editor) return [];
+    return [...editor.filletCorners()].sort();
+  });
+  chamferCornersArray = computed<string[]>(() => {
+    const editor = this.sketchEditorRef();
+    if (!editor) return [];
+    return [...editor.chamferCorners()].sort();
+  });
+
+  /** Render "(x, y)" for a corner point id, looking up the current sketch
+   * state. One-decimal precision matches the cursor readout in the
+   * sketch-editor's status bar. */
+  cornerCoordsLabel(pointId: string): string {
+    const sid = this.activeSketchId();
+    if (!sid) return '';
+    const sketch = this.doc().sketches[sid];
+    if (!sketch) return '';
+    const pt = findPt(sketch.state, pointId);
+    if (!pt) return pointId.slice(0, 8);
+    const round = (n: number) => Math.round(n * 10) / 10;
+    return `(${round(pt.x)}, ${round(pt.y)})`;
+  }
 
   onSketchAction() {
     if (this.readonly()) return;
@@ -773,6 +1821,23 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.openExtrudeDialog(sketchId);
   }
 
+  // Single-click on a sketch row in normal mode selects (highlights) it.
+  // Edit / Delete / Hide live on the right-click context menu. Selecting
+  // a sketch clears any feature selection so the two selection modes don't
+  // conflict; shift/ctrl extend the selection within sketches.
+  onTreeSketchSelect(ev: SketchSelectEvent) {
+    const next = new Set(this.selectedSketches());
+    if (ev.shiftKey || ev.ctrlKey) {
+      if (next.has(ev.sketchId)) next.delete(ev.sketchId);
+      else next.add(ev.sketchId);
+    } else {
+      next.clear();
+      next.add(ev.sketchId);
+    }
+    this.selectedSketches.set(next);
+    if (!ev.shiftKey && !ev.ctrlKey) this.selectedFeatures.set(new Set());
+  }
+
   onDatumVisibilityToggled(datumId: string) {
     if (this.readonly()) return;
     const tree = this.featureTree();
@@ -834,7 +1899,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     const { loops, errors } = extractClosedLoops(sketch.state);
     if (loops.length === 0) {
-      this.errors.showError(errors[0] || 'Sketch has no closed profile — extrude requires a closed shape');
+      this.errors.showError(friendlyError(errors[0] || 'no closed loops in sketch'));
       this.setMode('idle');
       return;
     }
@@ -899,11 +1964,25 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   private toggleSketchVisibility(sketchId: string) {
-    const sketch = this.doc().sketches[sketchId];
-    if (!sketch) return;
-    const nextVisible = sketch.visible === false;  // currently hidden ⇒ show
-    this.doc.set(setSketchVisibility(this.doc(), sketchId, nextVisible));
+    const ids = this.batchSketchTargets(sketchId);
+    const anchor = this.doc().sketches[sketchId];
+    if (!anchor) return;
+    // Anchor the next visibility off the right-clicked sketch so every batch
+    // member lands in the same visible/hidden state (predictable bulk toggle).
+    const nextVisible = anchor.visible === false;
+    let doc = this.doc();
+    for (const id of ids) {
+      if (!doc.sketches[id]) continue;
+      doc = setSketchVisibility(doc, id, nextVisible);
+    }
+    this.doc.set(doc);
     this.save();
+  }
+
+  // Same rule as batchTargets but for the selectedSketches signal.
+  private batchSketchTargets(sketchId: string): string[] {
+    const sel = this.selectedSketches();
+    return sel.has(sketchId) && sel.size > 1 ? Array.from(sel) : [sketchId];
   }
 
   private editFeature(featureId: string) {
@@ -967,19 +2046,25 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.save();
   }
 
-  private editSketch(sketchId: string) {
+  editSketch(sketchId: string) {
     if (!this.doc().sketches[sketchId]) return;
     this.activeSketchId.set(sketchId);
     this.setMode('idle');
   }
 
   private requestDeleteSketch(sketchId: string) {
-    const dependents = this.featureTree().features
-      .filter((f): f is ExtrudeFeature => f.type === 'extrude' && f.sketchId === sketchId)
+    const ids = this.batchSketchTargets(sketchId);
+    // Collect every dependent feature across the whole delete batch — one
+    // warning dialog for the lot, not N dialogs that the user has to dismiss
+    // one by one.
+    const features = this.featureTree().features;
+    const dependents = features
+      .filter((f): f is ExtrudeFeature => f.type === 'extrude' && ids.includes(f.sketchId))
       .map(f => f.id);
     if (dependents.length === 0) {
-      // No references — just delete.
-      this.applySketchDelete(sketchId, 'break');
+      // No references — just delete all selected.
+      for (const id of ids) this.applySketchDelete(id, 'break');
+      this.selectedSketches.set(new Set());
       return;
     }
     const ref = this.dialog.open(SketchDeleteWarningDialogComponent, {
@@ -988,7 +2073,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     });
     ref.afterClosed().subscribe((choice: SketchDeleteAction | null) => {
       if (!choice || choice === 'cancel') return;
-      this.applySketchDelete(sketchId, choice);
+      for (const id of ids) this.applySketchDelete(id, choice);
+      this.selectedSketches.set(new Set());
     });
   }
 
@@ -1035,8 +2121,71 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.activeSketchId.set(null);
     this.setMode('idle');
     this.loading.set(false);
+    // Seed history with the loaded state so undo can return to "as
+    // opened" without going past it. Reset to a fresh stack so models
+    // loaded into the same component instance don't inherit each other's
+    // history.
+    this.history.set({
+      snapshots: [{ featureTree: this.featureTree(), doc: this.doc() }],
+      index: 0,
+    });
+    // Phase 1.5 — subscribe to the streaming session for per-feature events.
+    // The HTTP regenerate stays the authoritative trigger + fallback; the
+    // stream just paints each feature as soon as the kernel finishes it.
+    if (!this.streamSub) {
+      this.streamSub = this.stream.events$.subscribe((ev) => this.onStreamEvent(ev));
+    }
+    this.stream.subscribeToModel(m.id);
     // Kick the initial regeneration so the cached/freshly-built faces render.
     this.regenerate();
+  }
+
+  // Per-feature streaming handler. Replaces the feature's faces in the
+  // geometry signal as the kernel completes each one. `regenerate-started`
+  // wipes prior faces for *this* regen pass; `regenerate-complete` is
+  // informational (HTTP response is the canonical end-of-regen confirmation).
+  private onStreamEvent(ev: CadStreamEvent) {
+    if (ev.type === 'regenerate-started') {
+      this.regenStreamedCount.set(0);
+      return;
+    }
+    if (ev.type === 'feature-result') {
+      this.regenStreamedCount.update(n => n + 1);
+      // Sync per-feature error state as it streams in so the tree's red
+      // icon updates feature-by-feature rather than waiting for HTTP.
+      if (ev.error) {
+        const m = new Map(this.featureErrors());
+        m.set(ev.featureId, friendlyError(ev.error));
+        this.featureErrors.set(m);
+      } else if (this.featureErrors().has(ev.featureId)) {
+        // Previously errored, now succeeded — clear it.
+        const m = new Map(this.featureErrors());
+        m.delete(ev.featureId);
+        this.featureErrors.set(m);
+      }
+      const newFaces = (ev.faces || []).map(face => ({
+        faceId: face.faceId,
+        positions: new Float32Array(face.positions),
+        normals: new Float32Array(face.normals),
+        indices: new Uint32Array(face.indices),
+        featureId: ev.featureId,
+        isFlat: face.isFlat,
+      }));
+      const prev = this.geometry();
+      const keptFaces = (prev?.faces ?? []).filter(f => f.featureId !== ev.featureId);
+      const keptVertices = (prev?.topology?.vertices ?? []).filter(v => !v.id.startsWith(`${ev.featureId}#`));
+      const keptEdges = (prev?.topology?.edges ?? []).filter(e => !e.id.startsWith(`${ev.featureId}#`));
+      const incomingTopo = ev.topology || { vertices: [], edges: [] };
+      this.geometry.set({
+        datums: prev?.datums ?? [],
+        faces: [...keptFaces, ...newFaces],
+        topology: {
+          vertices: [...keptVertices, ...incomingTopo.vertices],
+          edges: [...keptEdges, ...incomingTopo.edges],
+        },
+      });
+      if (ev.error) console.warn('[stream] feature', ev.featureId, ev.error);
+    }
   }
 
   private debouncedSave: number | null = null;
@@ -1068,6 +2217,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const genId = ++this.regenGeneration;
     this.regenLoading.set(true);
     this.regenError.set(null);
+    // Seed the progress counters from the current featureTree so the HUD
+    // shows accurate "feature X of N" right away. Origin and hidden
+    // features are excluded — they're skipped by the regen service.
+    const expectedFeatures = this.featureTree().features.filter(
+      f => f.type !== 'origin' && f.visible !== false,
+    ).length;
+    this.regenExpectedCount.set(expectedFeatures);
+    this.regenStreamedCount.set(0);
+    this.featureErrors.set(new Map());
     this.cadApi.regenerate(m.id).subscribe({
       next: (resp) => {
         if (genId !== this.regenGeneration) return;
@@ -1082,25 +2240,224 @@ export class CadEditorComponent implements OnInit, OnDestroy {
             isFlat: face.isFlat,
           })),
         );
+        const topology: ModelTopology = {
+          vertices: resp.features.flatMap(f => f.topology?.vertices ?? []),
+          edges: resp.features.flatMap(f => f.topology?.edges ?? []),
+        };
         const prev = this.geometry();
         this.geometry.set({
           datums: prev?.datums ?? [],
           faces,
-          topology: { vertices: [], edges: [] },  // server topology arrives in Phase 1.5
+          topology,
         });
+        // Per-feature errors are nested in the merged response. Surface them
+        // as warning toasts so the user sees what failed and why — silent
+        // console.warns don't reach the user. De-dupe identical messages so
+        // one bad sketch doesn't spam the toaster.
+        const seen = new Set<string>();
         for (const err of resp.errors || []) {
-          // eslint-disable-next-line no-console
-          console.warn('[regen]', err);
+          const friendly = friendlyError(err);
+          if (seen.has(friendly)) continue;
+          seen.add(friendly);
+          this.errors.showWarning(friendly);
         }
+        // Build the per-feature error map from the response so the tree can
+        // show a red icon on each broken feature. WS may have already
+        // populated this incrementally — overwrite with the HTTP truth for
+        // consistency.
+        const errMap = new Map<string, string>();
+        for (const f of resp.features) {
+          if (f.error) errMap.set(f.featureId, friendlyError(f.error));
+        }
+        this.featureErrors.set(errMap);
       },
       error: (err) => {
         if (genId !== this.regenGeneration) return;
         this.regenLoading.set(false);
         const msg = err?.error?.error || err?.message || 'Regenerate failed';
-        this.regenError.set(msg);
-        this.errors.showError(msg);
+        const friendly = friendlyError(msg);
+        this.regenError.set(friendly);
+        this.errors.showError(friendly);
       },
     });
+  }
+
+  // ── dimension inline-edit handlers ────────────────────────────────────
+  /** Smart Dim just placed a dimension — open the inline editor on it. */
+  onDimensionCreated(constraintId: string) {
+    this.editingDimensionId.set(constraintId);
+  }
+
+  /** Single-click on a dimension label — select it (don't open editor).
+   * Selected state is visible (orange + bold) and enables Delete-key
+   * removal. To edit the value, the user double-clicks. */
+  onDimensionLabelClicked(constraintId: string) {
+    this.selectedConstraintId.set(constraintId);
+    this.editingDimensionId.set(null);
+    // Selecting a dimension drops other selections so Delete-key intent
+    // is unambiguous (only the dim is up for deletion).
+    this.selectedFeatures.set(new Set());
+    this.selectedSketches.set(new Set());
+  }
+
+  /** Double-click on a dimension label — open the inline value editor. */
+  onDimensionDoubleClicked(constraintId: string) {
+    this.selectedConstraintId.set(null);
+    this.editingDimensionId.set(constraintId);
+  }
+
+  /** Inline editor committed a string the user typed (raw text). Parses
+   * the value + optional unit suffix, normalizes to mm for storage, then
+   * runs the minimum-change solver and saves.
+   *
+   * Length constraints: bare number → defaultUnit; "10in" / "10\"" /
+   * "0.5 in" → inches; "200um" / "200 µm" → micrometers; "10mm" → mm. If
+   * the user typed a unit other than defaultUnit, the dim remembers it as
+   * its per-dim override so future renders show the suffix.
+   *
+   * Angle: always degrees → radians for storage. Unit doesn't apply. */
+  async onDimensionCommitted(ev: { id: string; raw: string }) {
+    const sid = this.activeSketchId();
+    if (!sid) return;
+    const sketch = this.doc().sketches[sid];
+    if (!sketch) return;
+    const c = sketch.state.constraints.find(c => c.id === ev.id);
+    if (!c) return;
+
+    let valueStored: number;
+    let nextConstraintUnit: Unit | undefined = c.unit;
+    if (c.type === 'angle') {
+      const n = parseFloat(ev.raw);
+      if (!isFinite(n)) return;
+      valueStored = n * Math.PI / 180;
+    } else {
+      const parsed = parseUserValue(ev.raw, this.defaultUnit());
+      if (!parsed) return;
+      valueStored = parsed.valueMm;
+      // If the user typed an explicit unit (even matching defaultUnit),
+      // remember it on the dim. If they typed a bare number, drop any
+      // existing per-dim unit override (revert to default).
+      nextConstraintUnit = parsed.unit ?? undefined;
+    }
+
+    let updated = setConstraintValue(sketch.state, ev.id, valueStored);
+    updated = {
+      ...updated,
+      constraints: updated.constraints.map(cc => cc.id === ev.id
+        ? { ...cc, unit: nextConstraintUnit }
+        : cc),
+    };
+    const result = await solveSketchAfterAdd(updated, ev.id);
+    const final = result.status === 'ok' ? result.state : updated;
+    this.doc.set(updateSketchState(this.doc(), sid, final));
+    this.editingDimensionId.set(null);
+    this.save();
+  }
+
+  /** Esc or click-outside in the inline editor — just clear the editing
+   * state, the constraint keeps its prior value. */
+  onDimensionCanceled() {
+    this.editingDimensionId.set(null);
+  }
+
+  /** Click on a mini constraint badge → SELECT the constraint (don't
+   * delete). The selection highlights the matching row in the constraint
+   * list and lights up the badge itself; pressing Delete on a selected
+   * constraint removes it. To remove via mouse the user clicks the X
+   * button in the constraint-list panel. */
+  onConstraintIconClicked(constraintId: string) {
+    this.selectedConstraintId.set(constraintId);
+    // Make selection intent unambiguous — clear other selections so the
+    // Delete key targets only the picked constraint.
+    this.selectedFeatures.set(new Set());
+    this.selectedSketches.set(new Set());
+  }
+
+  /** Constraint-list row click — same selection semantics as a badge
+   * click, but originating from the panel. */
+  onConstraintListSelect(constraintId: string) {
+    this.selectedConstraintId.set(constraintId);
+  }
+
+  /** Right-click on a dimension label — remove the constraint from the
+   * active sketch and re-solve (without that constraint there may be
+   * extra DOF, but the geometry is left as-is). */
+  onDimensionDeleteRequested(constraintId: string) {
+    if (this.readonly()) return;
+    const sid = this.activeSketchId();
+    if (!sid) return;
+    const sketch = this.doc().sketches[sid];
+    if (!sketch) return;
+    const next = removeConstraint(sketch.state, constraintId);
+    this.doc.set(updateSketchState(this.doc(), sid, next));
+    // If the user was mid-edit on this dimension, clear that state too.
+    if (this.editingDimensionId() === constraintId) this.editingDimensionId.set(null);
+    this.save();
+  }
+
+  /** Dim label drag — update the constraint's placement so the dimension
+   * line + extension lines follow the cursor. For 2-point LINEAR dims
+   * (distance / horizontal-distance / vertical-distance), the dim TYPE
+   * also follows the label: SW-style, dragging the label into the
+   * "above/below" zone of the bbox switches to horizontal-distance, into
+   * "left/right" switches to vertical-distance, and into the diagonal
+   * zone switches back to minimum distance. The value is re-derived for
+   * each type so the dim stays consistent with the geometry. Live
+   * previews fire per pointermove without saving; `commit: true` fires
+   * once on pointerup. */
+  onDimensionDragged(ev: { id: string; placement: { x: number; y: number }; commit: boolean }) {
+    const sid = this.activeSketchId();
+    if (!sid) return;
+    const sketch = this.doc().sketches[sid];
+    if (!sketch) return;
+    const next: SketchState = {
+      ...sketch.state,
+      constraints: sketch.state.constraints.map(c => {
+        if (c.id !== ev.id) return c;
+        // For 2-point linear dims, recompute the type from the label
+        // placement and update the value to match the new type.
+        const linear = c.type === 'distance' || c.type === 'horizontal-distance' || c.type === 'vertical-distance';
+        if (linear && c.targets.length === 2) {
+          const e0 = sketch.state.entities.find(en => en.id === c.targets[0].entityId);
+          const e1 = sketch.state.entities.find(en => en.id === c.targets[1].entityId);
+          if (e0?.kind === 'point' && e1?.kind === 'point') {
+            const newType = chooseTwoPointDimType(e0, e1, ev.placement);
+            const newValue = twoPointDimValue(e0, e1, newType);
+            return { ...c, type: newType, value: newValue, placement: ev.placement };
+          }
+        }
+        return { ...c, placement: ev.placement };
+      }),
+    };
+    this.doc.set(updateSketchState(this.doc(), sid, next));
+    if (ev.commit) this.save();
+  }
+
+  // ── constraint list panel handlers ────────────────────────────────────
+  onRemoveConstraint(sketchId: string, constraintId: string) {
+    if (this.readonly()) return;
+    const sketch = this.doc().sketches[sketchId];
+    if (!sketch) return;
+    const next = removeConstraint(sketch.state, constraintId);
+    this.doc.set(updateSketchState(this.doc(), sketchId, next));
+    this.save();
+  }
+
+  onEditConstraint(sketchId: string, ev: { id: string; value: number; unit?: Unit | null }) {
+    if (this.readonly()) return;
+    const sketch = this.doc().sketches[sketchId];
+    if (!sketch) return;
+    let next = setConstraintValue(sketch.state, ev.id, ev.value);
+    // Persist the unit override (null = clear) when the panel passed one.
+    if ('unit' in ev) {
+      const newUnit = ev.unit ?? undefined;
+      next = {
+        ...next,
+        constraints: next.constraints.map(c => c.id === ev.id ? { ...c, unit: newUnit } : c),
+      };
+    }
+    this.doc.set(updateSketchState(this.doc(), sketchId, next));
+    this.save();
   }
 
   onBack() { this.router.navigate(['../'], { relativeTo: this.route }); }

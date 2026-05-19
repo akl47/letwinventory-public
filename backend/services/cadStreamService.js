@@ -34,10 +34,23 @@ class CadStreamService {
   }
 
   initialize(server) {
-    this.wss = new WebSocket.Server({ server, path: '/ws/cad' });
+    // noServer mode — backend/index.js owns the single upgrade listener and
+    // dispatches by path. Multiple `new WebSocket.Server({server, path})`
+    // instances on the same HTTP server interfere: the `ws` library installs
+    // an upgrade listener per instance and each one calls abortHandshake(400)
+    // on path mismatch, destroying the socket before the other handler runs.
+    this.wss = new WebSocket.Server({ noServer: true });
     this.wss.on('connection', (ws, req) => {
       console.log('[CadStream] new connection from:', req.socket.remoteAddress);
       this._handleConnection(ws);
+    });
+    // Tell index.js to route /ws/cad upgrade events to this WSS.
+    server.on('upgrade', (req, socket, head) => {
+      const pathname = (req.url || '').split('?')[0];
+      if (pathname !== '/ws/cad') return;
+      this.wss.handleUpgrade(req, socket, head, (ws) => {
+        this.wss.emit('connection', ws, req);
+      });
     });
     this.heartbeatInterval = setInterval(() => this._sweepHeartbeats(), 60_000);
     console.log('[CadStream] WebSocket server initialized on /ws/cad');

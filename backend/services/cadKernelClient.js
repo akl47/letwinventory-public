@@ -1,14 +1,19 @@
 'use strict';
 
 // Thin JSON-RPC 2.0 client to the Rust CAD kernel running as a sidecar
-// process. Communicates over a Unix-domain socket using line-delimited UTF-8
-// JSON — exactly what `cad-kernel/src/server.rs` accepts.
+// process. Communicates over a TCP socket using line-delimited UTF-8 JSON —
+// exactly what `cad-kernel/src/server.rs` accepts.
+//
+// Transport rationale: TCP over Unix domain socket because the typical dev
+// setup has the Node backend in a Docker container while the kernel runs on
+// the host (Rust + OCCT system deps are heavy for a container image). Unix
+// sockets don't cross that boundary; TCP does. The localhost-loopback perf
+// hit vs. Unix sockets is negligible for our payload size (per-feature mesh
+// JSON, low-kHz call rate).
 //
 // One long-lived connection is shared across all callers; requests are
 // multiplexed by their `id` and matched up via a pending-jobs map. The
-// pattern mirrors `printAgentService.js`'s `pendingJobs` Map and the
-// approach holds up for our throughput target (typical CAD model has
-// dozens of features regenerated per edit).
+// pattern mirrors `printAgentService.js`'s `pendingJobs` Map.
 //
 // Lifecycle:
 //   const client = new CadKernelClient();
@@ -19,10 +24,23 @@
 // the connection. In-flight calls reject with KernelDisconnected.
 
 const net = require('net');
-const path = require('path');
 
-const DEFAULT_SOCKET_PATH = process.env.CAD_KERNEL_SOCKET
-  || '/tmp/letwinventory-cad-kernel.sock';
+// CAD_KERNEL_ADDR is the canonical env var. Accept "host:port" or just
+// "port" (assumes host = 127.0.0.1). Default `127.0.0.1:9876` is correct
+// for non-Docker dev; Docker setups MUST set CAD_KERNEL_ADDR to
+// `host.docker.internal:9876` in .env.development so the container can
+// reach the kernel running on the host (the host-side kernel listens on
+// 0.0.0.0 by default; see cad-kernel/src/main.rs).
+const DEFAULT_HOST = '127.0.0.1';
+const DEFAULT_PORT = 9876;
+function parseAddr(raw) {
+  if (!raw) return { host: DEFAULT_HOST, port: DEFAULT_PORT };
+  if (/^\d+$/.test(raw)) return { host: DEFAULT_HOST, port: Number(raw) };
+  const idx = raw.lastIndexOf(':');
+  if (idx === -1) return { host: raw, port: DEFAULT_PORT };
+  return { host: raw.slice(0, idx) || DEFAULT_HOST, port: Number(raw.slice(idx + 1)) };
+}
+const DEFAULT_ADDR = parseAddr(process.env.CAD_KERNEL_ADDR);
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 class KernelDisconnected extends Error {
@@ -40,8 +58,9 @@ class KernelRpcError extends Error {
 }
 
 class CadKernelClient {
-  constructor({ socketPath = DEFAULT_SOCKET_PATH, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-    this.socketPath = socketPath;
+  constructor({ host = DEFAULT_ADDR.host, port = DEFAULT_ADDR.port, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+    this.host = host;
+    this.port = port;
     this.timeoutMs = timeoutMs;
     this.socket = null;
     this.lineBuffer = '';
@@ -94,11 +113,14 @@ class CadKernelClient {
     if (this.socket && !this.socket.destroyed) return;
     if (this.connecting) return this.connecting;
     this.connecting = new Promise((resolve, reject) => {
-      const sock = net.createConnection(this.socketPath, () => {
+      const sock = net.createConnection({ host: this.host, port: this.port }, () => {
         this.socket = sock;
         this.connecting = null;
         resolve();
       });
+      // setNoDelay matches the kernel's TCP_NODELAY — JSON-RPC requests are
+      // small so Nagle batching would add latency without benefit.
+      sock.setNoDelay(true);
       sock.setEncoding('utf8');
       sock.on('data', (chunk) => this._onData(chunk));
       sock.on('error', (err) => {
@@ -181,5 +203,5 @@ module.exports = {
   KernelDisconnected,
   KernelRpcError,
   getDefaultClient,
-  DEFAULT_SOCKET_PATH,
+  DEFAULT_ADDR,
 };

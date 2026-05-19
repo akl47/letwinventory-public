@@ -31,13 +31,31 @@ function c(id: string, type: SketchConstraint['type'], targetIds: string[], valu
   return base;
 }
 
+/**
+ * Test convenience: turn the construction flag on points into explicit
+ * `fixed` constraints. Production no longer pins construction (per user
+ * request — SW-equivalent semantics: dashed reference but draggable).
+ * These tests were written with the `pt('p', 0, 0, true)` shortcut to
+ * mean "anchor this point", so we preserve that intent at the test layer.
+ */
+function pinned(state: SketchState): SketchState {
+  const extras: SketchConstraint[] = [];
+  for (const e of state.entities) {
+    if (e.kind === 'point' && e.construction) {
+      extras.push({ id: `_autofix_${e.id}`, type: 'fixed', targets: [{ entityId: e.id }] });
+    }
+  }
+  if (extras.length === 0) return state;
+  return { ...state, constraints: [...extras, ...state.constraints] };
+}
+
 describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
   it('honors a fixed constraint by keeping the point at its initial location', async () => {
     const state: SketchState = {
       entities: [pt('p1', 3, 4)],
       constraints: [c('c1', 'fixed', ['p1'])],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     expect(pointsOf(res.state)[0].x).toBeCloseTo(3);
     expect(pointsOf(res.state)[0].y).toBeCloseTo(4);
@@ -48,7 +66,7 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
       entities: [pt('p1', 0, 0), pt('p2', 5, 5)],
       constraints: [c('c1', 'coincident', ['p1', 'p2'])],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const p1 = pointsOf(res.state).find(p => p.id === 'p1')!;
     const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
@@ -61,7 +79,7 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
       entities: [pt('p1', 0, 0), pt('p2', 5, 5), ln('l1', 'p1', 'p2')],
       constraints: [c('c1', 'horizontal', ['l1'])],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const p1 = pointsOf(res.state).find(p => p.id === 'p1')!;
     const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
@@ -73,7 +91,7 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
       entities: [pt('p1', 0, 0), pt('p2', 5, 5), ln('l1', 'p1', 'p2')],
       constraints: [c('c1', 'vertical', ['l1'])],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const p1 = pointsOf(res.state).find(p => p.id === 'p1')!;
     const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
@@ -88,7 +106,7 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
         c('c1', 'distance', ['p1', 'p2'], 10),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const p1 = pointsOf(res.state).find(p => p.id === 'p1')!;
     const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
@@ -102,10 +120,10 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
       constraints: [
         c('c0', 'fixed', ['p1']),
         c('c1', 'fixed', ['p2']),
-        c('c2', 'point-on-line', ['p3', 'l1']),
+        c('c2', 'coincident', ['p3', 'l1']),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const p3 = pointsOf(res.state).find(p => p.id === 'p3')!;
     expect(p3.y).toBeCloseTo(0);
@@ -120,7 +138,7 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
         c('c2', 'distance', ['p1', 'p2'], 10),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('inconsistent');
   });
 
@@ -129,7 +147,7 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
       entities: [pt('ref1', 3, 4, true), pt('p2', 0, 0)],
       constraints: [c('c1', 'coincident', ['ref1', 'p2'])],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const ref = pointsOf(res.state).find(p => p.id === 'ref1')!;
     expect(ref.x).toBeCloseTo(3);
@@ -153,7 +171,7 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
         c('c6', 'distance', ['p2', 'p3'], 10),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     expect(res.dof).toBe(0);
   });
@@ -176,7 +194,7 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('cp', 'perpendicular', ['l1', 'l2']),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const b1 = pointsOf(res.state).find(p => p.id === 'b1')!;
     const b2 = pointsOf(res.state).find(p => p.id === 'b2')!;
@@ -201,7 +219,7 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('cp', 'parallel', ['l1', 'l2']),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const b1 = pointsOf(res.state).find(p => p.id === 'b1')!;
     const b2 = pointsOf(res.state).find(p => p.id === 'b2')!;
@@ -226,7 +244,7 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('ct', 'tangent', ['l1', 'c1']),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const l1s = pointsOf(res.state).find(p => p.id === 'l1s')!;
     const l1e = pointsOf(res.state).find(p => p.id === 'l1e')!;
@@ -249,7 +267,7 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('ct', 'tangent', ['c1', 'c2']),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
     const d = Math.hypot(p2.x, p2.y);
@@ -269,7 +287,7 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('ce', 'equal', ['l1', 'l2']),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const b1 = pointsOf(res.state).find(p => p.id === 'b1')!;
     const b2 = pointsOf(res.state).find(p => p.id === 'b2')!;
@@ -288,7 +306,7 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('ce', 'equal', ['c1', 'c2']),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const c1Solved = findEntity<CircleEntity>(res.state, 'c1')!;
     const c2Solved = findEntity<CircleEntity>(res.state, 'c2')!;
@@ -306,7 +324,7 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('cm', 'midpoint', ['m', 'l1']),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const m = pointsOf(res.state).find(p => p.id === 'm')!;
     expect(m.x).toBeCloseTo(5);
@@ -326,7 +344,7 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('cs', 'symmetric', ['p1', 'p2', 'axis']),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
     expect(p2.x).toBeCloseTo(3);
@@ -345,11 +363,32 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('cc', 'concentric', ['c1', 'c2']),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
     expect(p2.x).toBeCloseTo(0);
     expect(p2.y).toBeCloseTo(0);
+  });
+
+  it('coradial: two circles share both center AND radius after solve', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('p1', 0, 0, true),
+        circle('c1', 'p1', 5),
+        pt('p2', 8, 3),
+        circle('c2', 'p2', 2),
+      ],
+      constraints: [
+        c('cr', 'coradial', ['c1', 'c2']),
+      ],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
+    expect(p2.x).toBeCloseTo(0);
+    expect(p2.y).toBeCloseTo(0);
+    const c2After = findEntity(res.state, 'c2') as CircleEntity;
+    expect(c2After.radius).toBeCloseTo(5);
   });
 
   it('collinear: two lines lie on the same infinite line after solve (REQ 589)', async () => {
@@ -365,12 +404,150 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('ccol', 'collinear', ['l1', 'l2']),
       ],
     };
-    const res = await solveSketch(state);
+    const res = await solveSketch(pinned(state));
     expect(res.status).toBe('ok');
     const b1 = pointsOf(res.state).find(p => p.id === 'b1')!;
     const b2 = pointsOf(res.state).find(p => p.id === 'b2')!;
     // After solve, both endpoints of l2 lie on y=0.
     expect(Math.abs(b1.y)).toBeLessThan(1e-3);
     expect(Math.abs(b2.y)).toBeLessThan(1e-3);
+  });
+
+  // ── Dimensional constraints: radius / diameter / angle ────────────────
+
+  it('radius constraint drives a circle to the target radius', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('c1', 0, 0),
+        circle('k1', 'c1', 3.7),
+      ],
+      constraints: [
+        c('cr', 'radius', ['k1'], 12),
+      ],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const k1 = findEntity(res.state, 'k1') as CircleEntity;
+    expect(k1.radius).toBeCloseTo(12, 3);
+  });
+
+  it('diameter constraint drives a circle to the target diameter', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('c1', 0, 0),
+        circle('k1', 'c1', 3.7),
+      ],
+      constraints: [
+        c('cd', 'diameter', ['k1'], 20),
+      ],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const k1 = findEntity(res.state, 'k1') as CircleEntity;
+    expect(k1.radius).toBeCloseTo(10, 3);
+  });
+
+  it('angle constraint enforces the angle between two lines', async () => {
+    // Fix the origin and one anchor of each line so the solver has a unique
+    // configuration to drive toward.
+    const state: SketchState = {
+      entities: [
+        pt('o', 0, 0, true),
+        pt('a', 10, 0, true),
+        ln('la', 'o', 'a'),
+        pt('b', 7, 1),
+        ln('lb', 'o', 'b'),
+      ],
+      constraints: [
+        // 90° in radians.
+        c('cang', 'angle', ['la', 'lb'], Math.PI / 2),
+      ],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    // After solve lb should be perpendicular to la (the +x axis).
+    const b = pointsOf(res.state).find(p => p.id === 'b')!;
+    expect(Math.abs(b.x)).toBeLessThan(1e-2);
+  });
+
+  // ── Curve / axis-specific constraints ─────────────────────────────────
+
+  it('point-on-curve pulls a point onto a circle', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('cc', 0, 0, true), circle('k1', 'cc', 10, true),
+        pt('p', 5, 5),  // starts off the circle
+      ],
+      constraints: [c('cpc', 'coincident', ['p', 'k1'])],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const p = pointsOf(res.state).find(pt => pt.id === 'p')!;
+    expect(Math.hypot(p.x, p.y)).toBeCloseTo(10, 3);
+  });
+
+  it('horizontal-distance drives Δx with no constraint on Δy', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('a', 0, 0, true),
+        pt('b', 3, 7),
+      ],
+      constraints: [c('chd', 'horizontal-distance', ['a', 'b'], 25)],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const b = pointsOf(res.state).find(pt => pt.id === 'b')!;
+    expect(Math.abs(b.x - 25)).toBeLessThan(1e-2);
+    // Δy stays free — initial y=7 should be preserved (a is pinned).
+    expect(Math.abs(b.y - 7)).toBeLessThan(1e-2);
+  });
+
+  it('vertical-distance drives Δy with no constraint on Δx', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('a', 0, 0, true),
+        pt('b', 5, 1),
+      ],
+      constraints: [c('cvd', 'vertical-distance', ['a', 'b'], 12)],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const b = pointsOf(res.state).find(pt => pt.id === 'b')!;
+    expect(Math.abs(b.x - 5)).toBeLessThan(1e-2);
+    expect(Math.abs(b.y - 12)).toBeLessThan(1e-2);
+  });
+
+  it('horizontal-distance + vertical-distance fully pin Δx and Δy (chamfer use case)', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('a', 0, 0, true),
+        pt('b', 2, 3),
+      ],
+      constraints: [
+        c('chd', 'horizontal-distance', ['a', 'b'], 10),
+        c('cvd', 'vertical-distance', ['a', 'b'], 5),
+      ],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const b = pointsOf(res.state).find(pt => pt.id === 'b')!;
+    expect(Math.abs(b.x - 10)).toBeLessThan(1e-2);
+    expect(Math.abs(b.y - 5)).toBeLessThan(1e-2);
+  });
+
+  it('point-line-distance drives perpendicular distance to a line', async () => {
+    const state: SketchState = {
+      entities: [
+        pt('a', 0, 0, true), pt('b', 10, 0, true),
+        ln('l', 'a', 'b'),
+        pt('p', 5, 1),
+      ],
+      constraints: [c('cpld', 'point-line-distance', ['p', 'l'], 7)],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const p = pointsOf(res.state).find(pt => pt.id === 'p')!;
+    // Line lies on y=0 → perpendicular distance == |p.y|.
+    expect(Math.abs(Math.abs(p.y) - 7)).toBeLessThan(1e-2);
   });
 });

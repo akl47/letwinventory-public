@@ -12,9 +12,31 @@ services:
       - ./data/files:/data/files
     ports:
       - ${BACKEND_PORT}:${BACKEND_PORT}
+    # `host.docker.internal` stays mapped for the host-side dev workflow
+    # (run `cargo run --release` from cad-kernel/ on the host with
+    # CAD_KERNEL_ADDR=host.docker.internal:9876). The default in
+    # .env.development now points at the kernel service below, so the
+    # container path is the no-extra-steps option.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - letwinventory-postgres
+      - letwinventory-cad-kernel
     container_name: letwinventory-backend
+  letwinventory-cad-kernel:
+    build:
+      context: ./cad-kernel
+    environment:
+      # Listen on all interfaces inside the container so backend can dial
+      # us via the compose-network service name.
+      CAD_KERNEL_ADDR: 0.0.0.0:9876
+      RUST_LOG: info
+    # Internal-only: no host port published. Only the backend service
+    # talks to the kernel, and it reaches us by service name.
+    expose:
+      - "9876"
+    restart: unless-stopped
+    container_name: letwinventory-cad-kernel
   letwinventory-frontend:
     build:
       context: ./frontend

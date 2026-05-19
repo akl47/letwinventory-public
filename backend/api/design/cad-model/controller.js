@@ -1,5 +1,6 @@
 const db = require('../../../models');
 const cadRegenService = require('../../../services/cadRegenService');
+const cadStreamService = require('../../../services/cadStreamService');
 const { KernelDisconnected, KernelRpcError } = require('../../../services/cadKernelClient');
 
 const INITIAL_FEATURE_TREE = { features: [{ id: 'f1', type: 'origin' }], nextFeatureSeq: 2 };
@@ -319,21 +320,50 @@ module.exports = {
 
   // Phase 1 — server-side regen. Walks the feature tree, looks up each
   // feature's tessellated faces in DesignBRepCache, falls through to the
-  // Rust kernel via Unix-socket JSON-RPC on cache miss. Returns the merged
-  // face geometry for the viewer.
+  // Rust kernel via TCP JSON-RPC on cache miss. Returns the merged face
+  // geometry for the viewer.
+  //
+  // Phase 1.5 — additionally broadcasts per-feature progress over the
+  // cadStreamService WebSocket so subscribed editor sessions render each
+  // feature as it completes (don't wait for the full HTTP response). The
+  // HTTP response stays canonical for clients that never subscribe (tests,
+  // future CLI tools, fallback path on WS-down).
   async regenerate(req, res) {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: 'invalid model id' });
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: 'CAD model not found' });
+    cadStreamService.broadcastToModel(id, { type: 'regenerate-started', modelId: id });
     try {
-      const result = await cadRegenService.regenerateModel(model);
+      const result = await cadRegenService.regenerateModel(model, {
+        onFeatureResult: (featureResult) => {
+          cadStreamService.broadcastToModel(id, {
+            type: 'feature-result',
+            modelId: id,
+            featureId: featureResult.featureId,
+            faces: featureResult.faces,
+            topology: featureResult.topology,
+            cached: featureResult.cached,
+            error: featureResult.error,
+          });
+        },
+      });
+      cadStreamService.broadcastToModel(id, {
+        type: 'regenerate-complete',
+        modelId: id,
+        errors: result.errors,
+      });
       return res.json({
         modelId: id,
         revision: model.revision,
         ...result,
       });
     } catch (err) {
+      cadStreamService.broadcastToModel(id, {
+        type: 'regenerate-complete',
+        modelId: id,
+        errors: [err.message],
+      });
       if (err instanceof KernelDisconnected) {
         return res.status(503).json({ error: `CAD kernel unavailable: ${err.message}` });
       }

@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { distanceToEntity, pickEntity } from './picking';
 import type {
-  SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity,
+  SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity, EllipseEntity, SplineEntity,
 } from './types';
 
 // REQ 564 — parametric closest-point-on-entity. Pick accuracy must not depend on
 // tessellation density of the renderer.
 
-function state(...entities: Array<PointEntity | LineEntity | CircleEntity | ArcEntity>): SketchState {
+function state(
+  ...entities: Array<PointEntity | LineEntity | CircleEntity | ArcEntity | EllipseEntity | SplineEntity>
+): SketchState {
   return { entities, constraints: [] };
 }
 
@@ -110,6 +112,28 @@ describe('picking: parametric closest-point-on-entity (REQ 564)', () => {
       // probe sits 3 units above point p and 3 units above line l simultaneously
       const picked = pickEntity(s, { x: 5, y: 3 }, 5);
       expect(picked?.id).toBe('p');
+    });
+
+    it('picks ellipses near their boundary', () => {
+      const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+      const m: PointEntity = { kind: 'point', id: 'm', x: 10, y: 0 };
+      const ell: EllipseEntity = { kind: 'ellipse', id: 'e', centerId: 'c', majorAxisEndId: 'm', minorRadius: 5 };
+      const s = state(c, m, ell);
+      // Probe sits right on the major-axis end — distance should be near 0.
+      expect(distanceToEntity(s, ell, { x: 10, y: 0 })).toBeLessThan(0.1);
+      // Probe far away should not be picked within a tight tolerance.
+      expect(distanceToEntity(s, ell, { x: 100, y: 100 })).toBeGreaterThan(50);
+    });
+
+    it('picks splines near their tessellated curve', () => {
+      const p0: PointEntity = { kind: 'point', id: 'p0', x: 0, y: 0 };
+      const p1: PointEntity = { kind: 'point', id: 'p1', x: 5, y: 10 };
+      const p2: PointEntity = { kind: 'point', id: 'p2', x: 10, y: 0 };
+      const p3: PointEntity = { kind: 'point', id: 'p3', x: 15, y: 5 };
+      const spl: SplineEntity = { kind: 'spline', id: 's', controlPointIds: ['p0', 'p1', 'p2', 'p3'], degree: 3 };
+      const s = state(p0, p1, p2, p3, spl);
+      // First control point lies on the curve (clamped knot vector).
+      expect(distanceToEntity(s, spl, { x: 0, y: 0 })).toBeLessThan(0.5);
     });
   });
 });

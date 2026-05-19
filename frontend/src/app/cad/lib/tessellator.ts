@@ -91,6 +91,108 @@ function arcFromEntity(state: SketchState, arc: ArcEntity): {
   };
 }
 
+export function tessellateEllipse(
+  center: { x: number; y: number },
+  majorAxisEnd: { x: number; y: number },
+  minorRadius: number,
+  chordTolerance: number,
+): Array<{ x: number; y: number }> {
+  const majorRadius = Math.hypot(majorAxisEnd.x - center.x, majorAxisEnd.y - center.y);
+  if (majorRadius < 1e-9) return [];
+  // Number of segments — use the larger of the two radii to satisfy chord
+  // tolerance everywhere on the curve. An ellipse has higher curvature near
+  // its major-axis endpoints, so under-segmenting using the minor radius
+  // would produce visible kinks at the ends.
+  const n = segmentsForCircle(Math.max(majorRadius, minorRadius), chordTolerance);
+  // Major-axis direction in world frame; perpendicular direction is rotate-90.
+  const ux = (majorAxisEnd.x - center.x) / majorRadius;
+  const uy = (majorAxisEnd.y - center.y) / majorRadius;
+  const vx = -uy, vy = ux;
+  const out: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i <= n; i++) {
+    const t = (i / n) * Math.PI * 2;
+    const a = majorRadius * Math.cos(t);
+    const b = minorRadius * Math.sin(t);
+    out.push({ x: center.x + ux * a + vx * b, y: center.y + uy * a + vy * b });
+  }
+  return out;
+}
+
+/**
+ * Open uniform clamped B-spline sampler via De Boor's algorithm.
+ *
+ * Knot vector is uniform-clamped: degree+1 zeros, then 1..(n-degree) for
+ * the interior, then degree+1 of the final value. This is the canonical
+ * "passes through the first and last control points" form used by every
+ * sketch CAD package.
+ *
+ * Sampling: walk the parametric domain [degree, controlPoints-1] in equal
+ * steps. Number of steps scales with the bounding-box diagonal of the
+ * control polygon — coarse and conservative but adequate for chord
+ * tolerance, since the spline lies within the convex hull of its controls.
+ */
+export function tessellateSpline(
+  controlPoints: Array<{ x: number; y: number }>,
+  degree: number,
+  chordTolerance: number,
+): Array<{ x: number; y: number }> {
+  const m = controlPoints.length;
+  if (m < degree + 1) return [];
+  const knots: number[] = [];
+  // Clamped knot vector.
+  for (let i = 0; i <= degree; i++) knots.push(0);
+  for (let i = 1; i <= m - degree - 1; i++) knots.push(i);
+  for (let i = 0; i <= degree; i++) knots.push(m - degree);
+
+  // Rough estimate of sample density: chord-polygon length / tolerance,
+  // clamped to [n, 200·n] so we don't allocate insanely for huge sketches.
+  let polyLen = 0;
+  for (let i = 1; i < m; i++) {
+    polyLen += Math.hypot(controlPoints[i].x - controlPoints[i - 1].x, controlPoints[i].y - controlPoints[i - 1].y);
+  }
+  const targetSamples = Math.max(m * 4, Math.ceil(polyLen / Math.max(chordTolerance, 1e-3)));
+  const samples = Math.min(targetSamples, m * 200);
+
+  const out: Array<{ x: number; y: number }> = [];
+  const uMin = knots[degree];
+  const uMax = knots[knots.length - degree - 1];
+  for (let i = 0; i <= samples; i++) {
+    const u = uMin + ((uMax - uMin) * i) / samples;
+    out.push(deBoor(controlPoints, knots, degree, u));
+  }
+  return out;
+}
+
+function deBoor(
+  pts: Array<{ x: number; y: number }>,
+  knots: number[],
+  p: number,
+  u: number,
+): { x: number; y: number } {
+  // Find the knot span k such that knots[k] <= u < knots[k+1].
+  let k = p;
+  for (; k < knots.length - p - 1; k++) {
+    if (u < knots[k + 1]) break;
+  }
+  // Working coefficients d[j] = pts[k - p + j] for j in 0..p.
+  const d: Array<{ x: number; y: number }> = [];
+  for (let j = 0; j <= p; j++) {
+    const idx = Math.min(Math.max(k - p + j, 0), pts.length - 1);
+    d.push({ x: pts[idx].x, y: pts[idx].y });
+  }
+  for (let r = 1; r <= p; r++) {
+    for (let j = p; j >= r; j--) {
+      const denom = knots[j + 1 + k - r] - knots[j + k - p];
+      const alpha = denom < 1e-12 ? 0 : (u - knots[j + k - p]) / denom;
+      d[j] = {
+        x: (1 - alpha) * d[j - 1].x + alpha * d[j].x,
+        y: (1 - alpha) * d[j - 1].y + alpha * d[j].y,
+      };
+    }
+  }
+  return d[p];
+}
+
 export function tessellateEntity(
   state: SketchState, entity: SketchEntity, chordTolerance: number = DEFAULT_CHORD_TOLERANCE,
 ): Array<{ x: number; y: number }> {
@@ -108,11 +210,20 @@ export function tessellateEntity(
       if (!arc) return [];
       return tessellateArc(arc.center, entity.radius, arc.startAngle, arc.endAngle, entity.ccw, chordTolerance);
     }
-    case 'ellipse':
+    case 'ellipse': {
+      const c = findPoint(state, entity.centerId);
+      const m = findPoint(state, entity.majorAxisEndId);
+      if (!c || !m) return [];
+      return tessellateEllipse({ x: c.x, y: c.y }, { x: m.x, y: m.y }, entity.minorRadius, chordTolerance);
+    }
+    case 'spline': {
+      const pts = entity.controlPointIds.map(id => findPoint(state, id)).filter((p): p is PointEntity => !!p);
+      if (pts.length < entity.degree + 1) return [];
+      return tessellateSpline(pts.map(p => ({ x: p.x, y: p.y })), entity.degree, chordTolerance);
+    }
     case 'ellipticalArc':
-    case 'spline':
     case 'conic':
-      // Phase B/C: per-entity tessellators land alongside the entity tools.
+      // Phase C: per-entity tessellators land alongside the entity tools.
       return [];
   }
 }
