@@ -375,13 +375,10 @@ exports.refreshToken = async (req, res) => {
 
     // Reuse existing refresh token (no rotation) — avoids stale-cookie issues
     // when Set-Cookie doesn't land (Cloudflare edge, race conditions, etc.)
-    res.cookie('auth_token', accessToken, {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 15 * 60 * 1000 // 15 minutes
-    }).json({
+    // Don't set auth_token as a cookie here — the frontend reads accessToken
+    // from the JSON body and stores it in localStorage. Setting a cookie makes
+    // the OAuth-callback path think the user just logged in on every refresh.
+    res.json({
       accessToken,
       sessionId: storedToken.id,
       user: {
