@@ -141,7 +141,11 @@ export class PdfImportComponent {
 
     private async extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<string> {
         const pdfjsLib = await import('pdfjs-dist');
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'assets/pdf.worker.min.mjs';
+        // Resolve through the bundler so the worker always matches the API version.
+        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+            'pdfjs-dist/build/pdf.worker.min.mjs',
+            import.meta.url,
+        ).toString();
 
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
         const lines: string[] = [];
