@@ -109,12 +109,16 @@ export class AuthService {
                 localStorage.setItem(this.SESSION_ID_KEY, sessionId);
                 this.deleteCookie(this.SESSION_ID_KEY);
             }
-            // Redirect to tasks page with default view if available
-            const defaultParams = this.taskViewPreferences.getDefaultViewQueryParams();
-            if (defaultParams) {
-                this.router.navigate(['/tasks'], { queryParams: defaultParams });
-            } else {
-                this.router.navigate(['/tasks']);
+            // Only redirect to /tasks when actually landing from an OAuth callback
+            // (root or /home). Refreshing a deep URL must not clobber that URL.
+            const path = this.document.location.pathname;
+            if (path === '/' || path === '/home') {
+                const defaultParams = this.taskViewPreferences.getDefaultViewQueryParams();
+                if (defaultParams) {
+                    this.router.navigate(['/tasks'], { queryParams: defaultParams });
+                } else {
+                    this.router.navigate(['/tasks']);
+                }
             }
         }
     }
