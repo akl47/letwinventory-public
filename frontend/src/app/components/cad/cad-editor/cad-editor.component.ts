@@ -578,18 +578,17 @@ interface HistorySnapshot {
                 <mat-icon class="field-icon">stop</mat-icon>
                 <span class="field-label">End condition</span>
               </div>
-              <mat-form-field appearance="outline" class="panel-select">
-                <mat-select [value]="extrudeEndKind()"
-                            data-testid="extrude-end-condition"
-                            (selectionChange)="setExtrudeEndKind($event.value)">
-                  <mat-option value="blind">Blind</mat-option>
-                  <mat-option value="midPlane">Mid Plane</mat-option>
-                  <mat-option value="throughAll">Through All</mat-option>
-                  <mat-option value="upToVertex">Up to Vertex</mat-option>
-                  <mat-option value="upToSurface">Up to Surface</mat-option>
-                  <mat-option value="upToBody" disabled>Up to Body (coming soon)</mat-option>
-                </mat-select>
-              </mat-form-field>
+              <select class="panel-input"
+                      data-testid="extrude-end-condition"
+                      [value]="extrudeEndKind()"
+                      (change)="setExtrudeEndKind($any($event.target).value)">
+                <option value="blind">Blind</option>
+                <option value="midPlane">Mid Plane</option>
+                <option value="throughAll">Through All</option>
+                <option value="upToVertex">Up to Vertex</option>
+                <option value="upToSurface">Up to Surface</option>
+                <option value="upToBody" disabled>Up to Body (coming soon)</option>
+              </select>
             </div>
 
             <div class="panel-field active"
@@ -1021,19 +1020,35 @@ interface HistorySnapshot {
       min-width: 18px;
       text-align: center;
     }
-    .field-value { font-size: 13px; padding-left: 22px; color: #ddd; }
+    .field-value { font-size: 13px; color: #ddd; }
+    /* Inputs / selects / buttons all span the field's inner width with
+       consistent height and padding so the sidebar reads as a vertical
+       stack of equally-shaped controls — no left-indent quirks. */
     .panel-input {
-      width: calc(100% - 24px);
-      margin-left: 22px;
-      padding: 4px 6px;
+      box-sizing: border-box;
+      width: 100%;
+      height: 30px;
+      padding: 4px 8px;
       font-size: 13px;
-      font-family: monospace;
+      font-family: ui-monospace, monospace;
       background: #1f1f30;
       border: 1px solid #444;
       border-radius: 3px;
       color: #ddd;
     }
     .panel-input:focus { outline: none; border-color: #42a5f5; }
+    /* Native <select> renders with the OS chrome by default; keep it
+       but make sure the box geometry matches .panel-input. */
+    select.panel-input {
+      appearance: none;
+      -webkit-appearance: none;
+      padding-right: 28px;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23aaa'><path d='M7 10l5 5 5-5z'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 6px center;
+      background-size: 16px;
+    }
+    select.panel-input option { background: #1f1f30; color: #ddd; }
     .panel-toggle {
       display: flex;
       align-items: center;
@@ -1049,14 +1064,42 @@ interface HistorySnapshot {
       accent-color: #42a5f5;
       cursor: pointer;
     }
+    /* Wide button used by Direction (Reverse / Along normal) + Up to
+       Vertex/Surface pickers + Cut Extrude affordances. Matches
+       .panel-input box geometry so the sidebar's controls line up. */
     .panel-flip {
-      width: calc(100% - 24px);
-      margin-left: 22px;
-      margin-top: 6px;
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 30px;
+      line-height: 28px !important;
+      padding: 0 8px !important;
       font-size: 12px !important;
+      display: flex !important;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
     }
-    select.panel-input { appearance: auto; }
-    .field-empty { font-size: 12px; color: #888; font-style: italic; padding-left: 22px; }
+    .panel-flip mat-icon { font-size: 16px; width: 16px; height: 16px; }
+    .field-empty { font-size: 12px; color: #888; font-style: italic; }
+    /* Inline checkbox label used by Merge result + Profile regions. */
+    .loop-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      font-size: 13px;
+      color: #ddd;
+      cursor: pointer;
+      user-select: none;
+    }
+    .loop-toggle input[type="checkbox"] {
+      accent-color: #42a5f5;
+      cursor: pointer;
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      flex-shrink: 0;
+    }
 
     /* List of selected entities (Mirror "Entities to mirror" field) and
        the single-row axis. Each row shows kind + coord hint + X button. */
@@ -1072,6 +1115,10 @@ interface HistorySnapshot {
       border-radius: 3px;
     }
     .entity-row.single { margin-top: 6px; }
+    /* Clickable axis-picker rows in the Revolve sidebar. */
+    .entity-row[class*="selected"] { border-color: #42a5f5; background: rgba(66, 165, 245, 0.18); }
+    li.entity-row { cursor: pointer; }
+    li.entity-row:hover { background: rgba(255,255,255,0.08); }
     .entity-icon { font-size: 16px; width: 16px; height: 16px; opacity: 0.85; flex-shrink: 0; }
     .entity-info { flex: 1; min-width: 0; }
     .entity-label { font-size: 12px; color: #ddd; line-height: 1.2; }
