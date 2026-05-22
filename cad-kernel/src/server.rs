@@ -175,6 +175,68 @@ async fn run_handler(method: &str, params: Value) -> Result<Value, HandlerError>
                 data: None,
             })
         }
+        "buildRevolve" => {
+            let params: crate::protocol::BuildRevolveParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::revolve::build(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "buildRevolve failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "buildRevolve panicked");
+                    Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    })
+                }
+            }
+        }
+        "buildBoolean" => {
+            let params: crate::protocol::BuildBooleanParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::boolean::build(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "buildBoolean failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "buildBoolean panicked");
+                    Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    })
+                }
+            }
+        }
         _ => Err(HandlerError {
             code: METHOD_NOT_FOUND,
             message: format!("unknown method {method:?}"),

@@ -295,18 +295,22 @@ export class CadFeatureTreePanelComponent {
           out.push(this.datumNode('yz_plane', 'YZ plane', 'rectangle', 'datum-plane-yz', vis));
           out.push(this.datumNode('xz_plane', 'XZ plane', 'rectangle', 'datum-plane-xz', vis));
         }
-      } else if (f.type === 'extrude') {
-        const ef = f as ExtrudeFeature;
+      } else if (f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve') {
+        const ef = f as ExtrudeFeature;  // structural overlap covers all three for tree-display purposes
         const sketch = doc?.sketches[ef.sketchId] ?? null;
         const hasChild = !!sketch;
         const isOpen = expanded.has(f.id);
+        const isCut = f.type === 'cutExtrude';
+        const isRevolve = f.type === 'revolve';
         // REQ 624: user-supplied name if present, else the default summary.
-        const defaultExtrudeLabel = `Extrude · ${ef.distance}${ef.flipped ? ' (flipped)' : ''}`;
+        const defaultLabel = isRevolve
+          ? `Revolve · ${(f as any).angle}°${(f as any).flipped ? ' (flipped)' : ''}`
+          : `${isCut ? 'Cut' : 'Extrude'} · ${ef.distance}${ef.flipped ? ' (flipped)' : ''}`;
         out.push({
           key: f.id,
           kind: 'feature',
-          label: ef.name && ef.name.trim() ? ef.name : defaultExtrudeLabel,
-          iconName: 'vertical_align_top',
+          label: ef.name && ef.name.trim() ? ef.name : defaultLabel,
+          iconName: isRevolve ? '360' : isCut ? 'vertical_align_bottom' : 'vertical_align_top',
           iconClass: 'extrude',
           depth: 0,
           expandable: hasChild,

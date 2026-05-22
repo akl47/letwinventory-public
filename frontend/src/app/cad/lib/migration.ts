@@ -116,7 +116,7 @@ export function migrateSketchDocument(doc: SketchDocument): SketchDocument {
  */
 export function migrateFeatureTree(tree: FeatureTree): FeatureTree {
   const features = tree.features.map((f): Feature => {
-    if (f.type !== 'extrude') return f;
+    if (f.type !== 'extrude' && f.type !== 'cutExtrude') return f;
     const legacy = f as Feature & {
       loopIndices?: number[]; regionIndices?: number[];
       endCondition?: { kind: string };

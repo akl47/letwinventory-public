@@ -35,7 +35,15 @@ const { extractRegions } = require('./cadProfile');
 //    to { kind: 'blind' } and produce byte-identical output; Mid Plane
 //    and Through All resolve into a shifted-origin / sentinel-distance
 //    Blind call in the backend without a kernel change.
-const NAMING_VERSION = 4;  // matches NAMING_SCHEMA_VERSION in cad-kernel/src/main.rs
+// 5: cumulative-body pipeline. Every feature emits the running cumulative
+//    shape (its prism fused / cut into the body) so the frontend renders
+//    only the latest. Face IDs in cumulative results come from the
+//    kernel's centroid-sort tessellator (different namespace than the
+//    pre-cumulative extrude tessellator).
+// 6: RevolveFeature lands. Kernel gains buildRevolve. Backend dispatches
+//    on feature.type so revolves flow through the same cumulative pipeline
+//    (additive — fused into the running body).
+const NAMING_VERSION = 6;  // matches NAMING_SCHEMA_VERSION in cad-kernel/src/main.rs
 
 // Sentinel distance for Through All. Picked to comfortably exceed any
 // reasonable model dimension without overflowing OCCT's tolerance
@@ -81,27 +89,54 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult } = {}
   /** @type {Map<string, { centroid: [number, number, number], normal: [number, number, number] }>} */
   const faceMap = new Map();
 
+  // Running cumulative body across the feature stream. Starts as null;
+  // first additive feature seeds it; each subsequent feature mutates it
+  // via buildBoolean (fuse for Extrude, cut for CutExtrude). Each
+  // feature's emit IS the cumulative shape after that feature, so the
+  // frontend renders only the LATEST cumulative result.
+  let cumulativeBrep = null;  // base64 string or null
+  let cumulativeParamHash = '';
+
   for (const feature of featureTree.features) {
     if (feature.type === 'origin') continue;
     if (feature.visible === false) continue;
-    if (feature.type !== 'extrude') {
+    if (feature.type !== 'extrude' && feature.type !== 'cutExtrude' && feature.type !== 'revolve') {
       errors.push(`feature ${feature.id}: unsupported type '${feature.type}'`);
       continue;
     }
 
     let result;
     try {
-      const out = await _regenerateExtrude(feature, sketchDoc, model, client, dbClient, vertexMap, faceMap);
+      // Stage 1: build the per-feature shape (a prism for Extrude / Cut,
+      // a body of revolution for Revolve). Both return the same
+      // { prismBrep, featureParamHash, merged, topology } shape so
+      // Stage 2 doesn't care which dispatch ran.
+      const prism = feature.type === 'revolve'
+        ? await _regenerateRevolve(feature, sketchDoc, model, client, dbClient)
+        : await _regenerateExtrude(feature, sketchDoc, model, client, dbClient, vertexMap, faceMap);
+      // Stage 2: compose into the cumulative body.
+      const composed = await _composeIntoCumulative({
+        feature,
+        prism,
+        cumulativeBrep,
+        cumulativeParamHash,
+        model,
+        client,
+        dbClient,
+      });
+      cumulativeBrep = composed.cumulativeBrep;
+      cumulativeParamHash = composed.cumulativeParamHash;
       result = {
         featureId: feature.id,
-        faces: out.merged,
-        topology: out.topology,
-        cached: out.cached,
+        faces: composed.faces,
+        topology: composed.topology,
+        cached: prism.cached && composed.cached,
       };
-      // Index this feature's vertices + faces for any downstream
-      // Up-to-Vertex / Up-to-Surface consumer.
-      for (const v of out.topology.vertices || []) vertexMap.set(v.id, v.position);
-      for (const f of out.merged || []) {
+      // Index THIS feature's emitted vertices + faces so downstream Up
+      // to Vertex / Up to Surface picks resolve to the same id the
+      // viewer rendered.
+      for (const v of composed.topology.vertices || []) vertexMap.set(v.id, v.position);
+      for (const f of composed.faces || []) {
         const plane = _faceRepresentativePlane(f);
         if (plane) faceMap.set(f.faceId, plane);
       }
@@ -153,6 +188,8 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
   // re-triggers the kernel even when the outer loop hash matches.
   const mergedFaces = [];
   const mergedTopology = { vertices: [], edges: [] };
+  const regionBreps = [];          // base64 BRep payloads per region
+  const regionParamHashes = [];    // for the cumulative feature-level hash
   let allCached = true;
 
   const endCondition = feature.endCondition || { kind: 'blind' };
@@ -175,7 +212,7 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
       endKind: endCondition.kind,
       regionIndex: ri,
     });
-    const upstreamHash = '';  // Phase 1 — no upstream BRep dependency yet
+    const upstreamHash = '';  // per-region prism has no upstream dependency
 
     const cached = await dbClient.DesignBRepCache.findOne({
       where: {
@@ -188,12 +225,18 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
     });
 
     const scope = `${feature.id}#${ri}`;
+    regionParamHashes.push(paramHash);
 
     if (cached) {
       cached.lastAccessedAt = new Date();
       await cached.save();
       mergedFaces.push(...(cached.tessellatedFaces.faces || []));
       _mergeTopology(mergedTopology, cached.tessellatedFaces.topology, scope);
+      // Cached brepBytes is a Buffer (Postgres BYTEA round-trip) — re-encode
+      // to base64 for the boolean RPC.
+      regionBreps.push(Buffer.isBuffer(cached.brepBytes)
+        ? cached.brepBytes.toString('base64')
+        : Buffer.from(cached.brepBytes || '').toString('base64'));
       continue;
     }
 
@@ -219,9 +262,295 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
     });
     mergedFaces.push(...(rpc.faces || []));
     _mergeTopology(mergedTopology, rpc.topology, scope);
+    regionBreps.push(rpc.brepBytes || '');
   }
 
-  return { merged: mergedFaces, topology: mergedTopology, cached: allCached };
+  // Multi-region features need a single BRep at the feature level so the
+  // cumulative compose has something to fuse / cut against. For N > 1
+  // we sequentially fuse the region BReps into one via buildBoolean.
+  let prismBrep = regionBreps[0] || '';
+  for (let i = 1; i < regionBreps.length; i++) {
+    const fused = await client.call('buildBoolean', {
+      featureId: `${feature.id}#fuse${i}`,
+      op: 'fuse',
+      aBrep: prismBrep,
+      bBrep: regionBreps[i],
+    });
+    prismBrep = fused.brepBytes;
+  }
+  const featureParamHash = _hashParams({ regions: regionParamHashes });
+
+  return {
+    merged: mergedFaces,
+    topology: mergedTopology,
+    cached: allCached,
+    prismBrep,
+    featureParamHash,
+  };
+}
+
+/** Build a body of revolution from a sketched profile + sketched axis
+ * line. Returns the same shape as `_regenerateExtrude` so the outer
+ * composer is indifferent to which one produced the prism. Caching
+ * mirrors the extrude path — keyed by `${feature.id}#revolve` plus the
+ * resolved (axis, angle) params.
+ *
+ * Limitations of the MVP:
+ * - The axis must be a sketched line entity in the SAME sketch (id
+ *   match required). Future: reference an external edge / datum axis.
+ * - Multi-region revolves are supported (fused per region via
+ *   buildBoolean), same pattern as multi-region extrudes.
+ * - End conditions (Up to Surface, etc.) are not applicable to revolves
+ *   — only the angle field controls sweep extent.
+ */
+async function _regenerateRevolve(feature, sketchDoc, model, client, dbClient) {
+  const sketch = sketchDoc.sketches[feature.sketchId];
+  if (!sketch) throw new Error(`sketch ${feature.sketchId} not found in sketchDoc`);
+
+  const { regions, errors: regionErrors } = extractRegions(sketch.state || { entities: [], constraints: [] });
+  if (regions.length === 0) {
+    throw new Error(regionErrors[0] || 'no closed loops in sketch');
+  }
+  const regionIndices = Array.isArray(feature.regionIndices)
+    ? feature.regionIndices
+    : Array.isArray(feature.loopIndices)
+      ? feature.loopIndices
+      : [0];
+
+  // Resolve the axis: find the sketched line by id, look up its two
+  // endpoints, project to 3D via the sketch plane, derive origin +
+  // direction. The endpoints are referenced by id (entity 'point'), so
+  // the lookup goes through the sketch state's entity array.
+  const axis = _resolveSketchAxis(sketch, feature.axisLineId);
+
+  // Direction can be flipped by the user's "Reverse" toggle — invert
+  // axis_dir; equivalent to negating the angle for symmetric profiles.
+  const axisDir = feature.flipped
+    ? [-axis.dir[0], -axis.dir[1], -axis.dir[2]]
+    : axis.dir;
+  const angleDeg = Math.abs(Number(feature.angle) || 360);
+
+  const mergedFaces = [];
+  const mergedTopology = { vertices: [], edges: [] };
+  const regionBreps = [];
+  const regionParamHashes = [];
+  let allCached = true;
+
+  for (const ri of regionIndices) {
+    if (ri < 0 || ri >= regions.length) {
+      throw new Error(`region index ${ri} out of range (have ${regions.length})`);
+    }
+    const region = regions[ri];
+    const paramHash = _hashParams({
+      profile: region.outer,
+      holes: region.holes,
+      plane: sketch.plane,
+      axisOrigin: axis.origin,
+      axisDir,
+      angleDeg,
+      regionIndex: ri,
+      revolve: true,
+    });
+    const upstreamHash = '';
+
+    const cached = await dbClient.DesignBRepCache.findOne({
+      where: {
+        cadModelID: model.id,
+        featureID: `${feature.id}#revolve${ri}`,
+        paramHash,
+        upstreamHash,
+        namingVersion: NAMING_VERSION,
+      },
+    });
+    const scope = `${feature.id}#revolve${ri}`;
+    regionParamHashes.push(paramHash);
+
+    if (cached) {
+      cached.lastAccessedAt = new Date();
+      await cached.save();
+      mergedFaces.push(...(cached.tessellatedFaces.faces || []));
+      _mergeTopology(mergedTopology, cached.tessellatedFaces.topology, scope);
+      regionBreps.push(Buffer.isBuffer(cached.brepBytes)
+        ? cached.brepBytes.toString('base64')
+        : Buffer.from(cached.brepBytes || '').toString('base64'));
+      continue;
+    }
+
+    allCached = false;
+    const rpc = await client.call('buildRevolve', {
+      featureId: scope,
+      profile: region.outer,
+      holes: region.holes,
+      plane: sketch.plane,
+      axisOrigin: axis.origin,
+      axisDir,
+      angleDeg,
+    });
+
+    await dbClient.DesignBRepCache.upsert({
+      cadModelID: model.id,
+      featureID: scope,
+      paramHash,
+      upstreamHash,
+      brepBytes: Buffer.from(rpc.brepBytes || '', 'base64'),
+      tessellatedFaces: { faces: rpc.faces, topology: rpc.topology },
+      namingVersion: NAMING_VERSION,
+      lastAccessedAt: new Date(),
+    });
+    mergedFaces.push(...(rpc.faces || []));
+    _mergeTopology(mergedTopology, rpc.topology, scope);
+    regionBreps.push(rpc.brepBytes || '');
+  }
+
+  let prismBrep = regionBreps[0] || '';
+  for (let i = 1; i < regionBreps.length; i++) {
+    const fused = await client.call('buildBoolean', {
+      featureId: `${feature.id}#revolveFuse${i}`,
+      op: 'fuse',
+      aBrep: prismBrep,
+      bBrep: regionBreps[i],
+    });
+    prismBrep = fused.brepBytes;
+  }
+  const featureParamHash = _hashParams({ revolve: true, regions: regionParamHashes });
+
+  return {
+    merged: mergedFaces,
+    topology: mergedTopology,
+    cached: allCached,
+    prismBrep,
+    featureParamHash,
+  };
+}
+
+/** Look up a sketched line by id and project its 2D endpoints to 3D
+ * world space, returning the line's origin (start endpoint) + a
+ * normalized direction vector. Used by revolve to convert a sketched
+ * axis into the world-space form the kernel RPC wants. */
+function _resolveSketchAxis(sketch, axisLineId) {
+  const state = sketch.state || { entities: [] };
+  const line = state.entities.find(e => e.id === axisLineId && e.kind === 'line');
+  if (!line) {
+    throw new Error(`Revolve: axis line '${axisLineId}' not found in sketch.`);
+  }
+  const findPt = (id) => state.entities.find(e => e.id === id && e.kind === 'point');
+  const a = findPt(line.startId);
+  const b = findPt(line.endId);
+  if (!a || !b) {
+    throw new Error(`Revolve: axis line '${axisLineId}' is missing endpoint(s).`);
+  }
+  const project = (p) => [
+    sketch.plane.origin[0] + p.x * sketch.plane.xAxis[0] + p.y * sketch.plane.yAxis[0],
+    sketch.plane.origin[1] + p.x * sketch.plane.xAxis[1] + p.y * sketch.plane.yAxis[1],
+    sketch.plane.origin[2] + p.x * sketch.plane.xAxis[2] + p.y * sketch.plane.yAxis[2],
+  ];
+  const aw = project(a);
+  const bw = project(b);
+  const dx = bw[0] - aw[0], dy = bw[1] - aw[1], dz = bw[2] - aw[2];
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (len < 1e-9) {
+    throw new Error('Revolve: axis line has zero length.');
+  }
+  return { origin: aw, dir: [dx / len, dy / len, dz / len] };
+}
+
+/** Compose this feature's prism into the running cumulative body.
+ *
+ * - First additive feature: cumulative := prism. No boolean call needed.
+ *   The frontend renders this feature's emit as-is.
+ * - Subsequent additive Extrude: cumulative := fuse(cumulative, prism).
+ * - CutExtrude: cumulative := cut(cumulative, prism). Errors if no
+ *   cumulative exists (nothing to cut FROM).
+ *
+ * The cumulative cache row is keyed by featureID `${id}#cumulative` and
+ * carries upstreamHash = previous feature's cumulative paramHash. That
+ * gives cascade invalidation: edit feature N → its paramHash changes →
+ * features N+1, N+2, ... see a changed upstreamHash and recompute.
+ *
+ * @returns {Promise<{
+ *   cumulativeBrep: string,
+ *   cumulativeParamHash: string,
+ *   faces: Array,
+ *   topology: object,
+ *   cached: boolean,
+ * }>}
+ */
+async function _composeIntoCumulative({
+  feature, prism, cumulativeBrep, cumulativeParamHash, model, client, dbClient,
+}) {
+  const isCut = feature.type === 'cutExtrude';
+  if (!cumulativeBrep) {
+    if (isCut) {
+      throw new Error(
+        'Cut Extrude requires existing geometry to cut from. ' +
+        'Add an additive Extrude before this feature.'
+      );
+    }
+    // Seed cumulative with this prism. No boolean call.
+    return {
+      cumulativeBrep: prism.prismBrep,
+      cumulativeParamHash: prism.featureParamHash,
+      faces: prism.merged,
+      topology: prism.topology,
+      cached: prism.cached,
+    };
+  }
+
+  const op = isCut ? 'cut' : 'fuse';
+  const paramHash = _hashParams({
+    op,
+    featureParamHash: prism.featureParamHash,
+  });
+  const cacheKey = `${feature.id}#cumulative`;
+
+  const cached = await dbClient.DesignBRepCache.findOne({
+    where: {
+      cadModelID: model.id,
+      featureID: cacheKey,
+      paramHash,
+      upstreamHash: cumulativeParamHash,
+      namingVersion: NAMING_VERSION,
+    },
+  });
+  if (cached) {
+    cached.lastAccessedAt = new Date();
+    await cached.save();
+    return {
+      cumulativeBrep: Buffer.isBuffer(cached.brepBytes)
+        ? cached.brepBytes.toString('base64')
+        : Buffer.from(cached.brepBytes || '').toString('base64'),
+      cumulativeParamHash: paramHash,
+      faces: cached.tessellatedFaces.faces || [],
+      topology: cached.tessellatedFaces.topology || { vertices: [], edges: [] },
+      cached: true,
+    };
+  }
+
+  const rpc = await client.call('buildBoolean', {
+    featureId: `${feature.id}#cumulative`,
+    op,
+    aBrep: cumulativeBrep,
+    bBrep: prism.prismBrep,
+  });
+
+  await dbClient.DesignBRepCache.upsert({
+    cadModelID: model.id,
+    featureID: cacheKey,
+    paramHash,
+    upstreamHash: cumulativeParamHash,
+    brepBytes: Buffer.from(rpc.brepBytes || '', 'base64'),
+    tessellatedFaces: { faces: rpc.faces, topology: rpc.topology },
+    namingVersion: NAMING_VERSION,
+    lastAccessedAt: new Date(),
+  });
+
+  return {
+    cumulativeBrep: rpc.brepBytes,
+    cumulativeParamHash: paramHash,
+    faces: rpc.faces || [],
+    topology: rpc.topology || { vertices: [], edges: [] },
+    cached: false,
+  };
 }
 
 /** Reduce a tessellated face mesh to a representative plane: average

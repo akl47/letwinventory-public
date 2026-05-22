@@ -436,6 +436,24 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
         <mat-icon>vertical_align_top</mat-icon>
         <span class="ribbon-label">Extrude</span>
       </button>
+      <button class="ribbon-button"
+              data-testid="cut-extrude-button"
+              *ngIf="canExtrude()"
+              [disabled]="readonly()"
+              (click)="cutExtrudeRequested.emit()"
+              matTooltip="Cut Extrude — subtract the sketched profile from the existing body">
+        <mat-icon>vertical_align_bottom</mat-icon>
+        <span class="ribbon-label">Cut</span>
+      </button>
+      <button class="ribbon-button"
+              data-testid="revolve-button"
+              *ngIf="canExtrude()"
+              [disabled]="readonly()"
+              (click)="revolveRequested.emit()"
+              matTooltip="Revolve — rotate the profile around a sketched line">
+        <mat-icon>360</mat-icon>
+        <span class="ribbon-label">Revolve</span>
+      </button>
     </div>
     <!-- Mirror PropertyManager-style sidebar lives in cad-editor.component
          (it occupies the same column as the constraint list and swaps with
@@ -525,6 +543,11 @@ export class CadSketchEditorComponent implements OnDestroy {
   sketchChanged = output<SketchState>();
   exitSketch = output<void>();
   extrudeRequested = output<void>();
+  /** Cut Extrude shortcut — same gesture as Extrude but the resulting
+   * feature is a CutExtrudeFeature. Editor handles via onCutExtrudeRequested. */
+  cutExtrudeRequested = output<void>();
+  /** Revolve shortcut — opens the Revolve sidebar in cad-editor. */
+  revolveRequested = output<void>();
   /** Emitted right after Smart Dim adds a dimensional constraint, carrying
    * the new constraint's id. The parent (cad-editor) sets it as the active
    * dimension to edit so the user can immediately type a different value

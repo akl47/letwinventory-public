@@ -71,7 +71,7 @@ pub fn build(params: &BuildExtrudeParams) -> Result<BuildExtrudeResult> {
 // Workplane + profile construction
 // ────────────────────────────────────────────────────────────────────────────
 
-fn build_workplane(plane: &Plane3) -> Workplane {
+pub fn build_workplane(plane: &Plane3) -> Workplane {
     // Workplane::new(x_dir, normal_dir) — y_dir is implied as normal × x_dir
     // (right-handed). `set_translation` takes a world-space origin verbatim;
     // `translated()` (immutable variant) re-projects the offset through the
@@ -85,7 +85,7 @@ fn build_workplane(plane: &Plane3) -> Workplane {
     wp
 }
 
-fn build_profile_face(workplane: &Workplane, profile: &[ProfileEdge]) -> Result<Face> {
+pub fn build_profile_face(workplane: &Workplane, profile: &[ProfileEdge]) -> Result<Face> {
     if profile.is_empty() {
         return Err(anyhow!("profile is empty"));
     }
@@ -229,7 +229,7 @@ fn build_profile_face(workplane: &Workplane, profile: &[ProfileEdge]) -> Result<
 /// the running CompoundFace ⊖ the next hole (promoted Face → CompoundFace
 /// via `From<Face>`). Used for donut-style regions from
 /// `extractRegions` where the outer loop has one or more inner loops.
-fn build_compound_face_with_holes(
+pub fn build_compound_face_with_holes(
     workplane: &Workplane,
     outer: &[ProfileEdge],
     holes: &[Vec<ProfileEdge>],

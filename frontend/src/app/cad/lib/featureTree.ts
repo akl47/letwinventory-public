@@ -1,4 +1,4 @@
-import type { Feature, FeatureTree, OriginFeature, ExtrudeFeature } from './types';
+import type { Feature, FeatureTree, OriginFeature, ExtrudeFeature, CutExtrudeFeature, RevolveFeature } from './types';
 // Phase 1: regenerateModel + the KernelAdapter interface used to live here
 // and ran in the browser. Both moved server-side. The server handles regen
 // via `backend/services/cadRegenService.js`; this module is now just the
@@ -47,14 +47,28 @@ export function updateFeatureParam<T extends Feature>(
   };
 }
 
-// REQ 608 cascade: drops every Extrude feature whose sketchId matches.
-// Origin features (and any future features without a sketchId) are unaffected.
+// REQ 608 cascade: drops every Extrude / CutExtrude / Revolve feature whose
+// sketchId matches. Origin features (and any future features without a
+// sketchId) are unaffected.
 export function removeFeaturesReferencingSketch(tree: FeatureTree, sketchId: string): FeatureTree {
   return {
-    features: tree.features.filter(f => !(f.type === 'extrude' && f.sketchId === sketchId)),
+    features: tree.features.filter(f => {
+      if (f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve') {
+        return f.sketchId !== sketchId;
+      }
+      return true;
+    }),
     nextFeatureSeq: tree.nextFeatureSeq,
   };
 }
 
 export function isOriginFeature(f: Feature): f is OriginFeature { return f.type === 'origin'; }
 export function isExtrudeFeature(f: Feature): f is ExtrudeFeature { return f.type === 'extrude'; }
+export function isCutExtrudeFeature(f: Feature): f is CutExtrudeFeature { return f.type === 'cutExtrude'; }
+export function isRevolveFeature(f: Feature): f is RevolveFeature { return f.type === 'revolve'; }
+/** Any sketch-hosted feature — useful for code paths that treat them
+ * the same (e.g. sketch-deletion cascade, "is this feature sketch-
+ * based?" checks). */
+export function isAnyExtrudeFeature(f: Feature): f is ExtrudeFeature | CutExtrudeFeature | RevolveFeature {
+  return f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve';
+}

@@ -33,7 +33,11 @@ mod server;
 /// 4: ExtrudeFeature gained endCondition. Mid Plane / Through All
 ///    resolve in the backend (kernel-shape unchanged) — version bumped
 ///    so existing cache rows re-run through the new translator path.
-pub const NAMING_SCHEMA_VERSION: u32 = 4;
+/// 5: cumulative-body pipeline. Every feature's output is the union /
+///    cut of its prism with the running body. Adds buildBoolean RPC.
+/// 6: buildRevolve RPC lands. New feature kind in the cumulative
+///    pipeline; existing extrudes produce byte-identical output.
+pub const NAMING_SCHEMA_VERSION: u32 = 6;
 
 /// Default bind address. Override with `CAD_KERNEL_ADDR`. We default to
 /// `0.0.0.0` because the standard dev setup runs the Node backend in Docker,

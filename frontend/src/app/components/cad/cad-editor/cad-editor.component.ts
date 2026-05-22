@@ -211,6 +211,8 @@ interface HistorySnapshot {
               (sketchChanged)="onSketchChanged($event)"
               (exitSketch)="onExitSketch()"
               (extrudeRequested)="onExtrudeRequested()"
+              (cutExtrudeRequested)="onCutExtrudeRequested()"
+              (revolveRequested)="onRevolveRequested()"
               (dimensionCreated)="onDimensionCreated($event)">
             </app-cad-sketch-editor>
             <span class="ribbon-hint" *ngIf="activeSketchId() === null">
@@ -557,8 +559,10 @@ interface HistorySnapshot {
         <ng-container *ngIf="extrudeSidebar() as ctx">
           <div class="tool-panel" data-testid="extrude-sidebar">
             <h3 class="panel-title">
-              <mat-icon>arrow_upward</mat-icon>
-              {{ ctx.editingFeatureId ? 'Edit Extrude' : 'Extrude' }}
+              <mat-icon>{{ ctx.mode === 'cutExtrude' ? 'vertical_align_bottom' : 'arrow_upward' }}</mat-icon>
+              {{ ctx.editingFeatureId
+                  ? (ctx.mode === 'cutExtrude' ? 'Edit Cut' : 'Edit Extrude')
+                  : (ctx.mode === 'cutExtrude' ? 'Cut Extrude' : 'Extrude') }}
             </h3>
             <p class="panel-hint">
               Pick the end condition. {{ ctx.regionCount > 1 ? 'Choose which closed regions in the sketch to extrude.' : '' }}
@@ -665,6 +669,97 @@ interface HistorySnapshot {
               <button mat-stroked-button
                       (click)="cancelExtrudeSidebar()"
                       data-testid="extrude-cancel">
+                <mat-icon>close</mat-icon> Cancel
+              </button>
+            </div>
+          </div>
+        </ng-container>
+
+        <!-- Revolve sidebar (parallel to extrude). Lists every line in
+             the host sketch as a candidate axis, construction lines on
+             top because they're the natural pick. -->
+        <ng-container *ngIf="revolveSidebar() as ctx">
+          <div class="tool-panel" data-testid="revolve-sidebar">
+            <h3 class="panel-title">
+              <mat-icon>360</mat-icon>
+              {{ ctx.editingFeatureId ? 'Edit Revolve' : 'Revolve' }}
+            </h3>
+            <p class="panel-hint">
+              Pick a sketched line as the rotation axis and set the sweep angle.
+            </p>
+
+            <div class="panel-field active">
+              <div class="field-header">
+                <mat-icon class="field-icon">timeline</mat-icon>
+                <span class="field-label">Axis</span>
+              </div>
+              <ul class="entity-list">
+                <li class="entity-row"
+                    *ngFor="let line of revolveAxisCandidates(); trackBy: trackLineId"
+                    [class.selected]="revolveAxisLineId() === line.id"
+                    [attr.data-testid]="'revolve-axis-' + line.id"
+                    (click)="revolveAxisLineId.set(line.id)">
+                  <mat-icon class="field-icon" *ngIf="line.construction">build_circle</mat-icon>
+                  <mat-icon class="field-icon" *ngIf="!line.construction">show_chart</mat-icon>
+                  <span>{{ line.label }}</span>
+                </li>
+              </ul>
+            </div>
+
+            <div class="panel-field active">
+              <div class="field-header">
+                <mat-icon class="field-icon">rotate_right</mat-icon>
+                <span class="field-label">Angle (deg)</span>
+              </div>
+              <input class="panel-input"
+                     type="number" min="0.1" max="360" step="1"
+                     data-testid="revolve-angle"
+                     [value]="revolveAngle()"
+                     (input)="revolveAngle.set(+($any($event.target).value))" />
+            </div>
+
+            <div class="panel-field active">
+              <div class="field-header">
+                <mat-icon class="field-icon">swap_vert</mat-icon>
+                <span class="field-label">Direction</span>
+              </div>
+              <button mat-stroked-button class="panel-flip"
+                      data-testid="revolve-flip"
+                      (click)="revolveFlipped.set(!revolveFlipped())">
+                <mat-icon>{{ revolveFlipped() ? 'south' : 'north' }}</mat-icon>
+                {{ revolveFlipped() ? 'Reverse' : 'Along axis' }}
+              </button>
+            </div>
+
+            <div class="panel-field active" *ngIf="ctx.regionCount > 1">
+              <div class="field-header">
+                <mat-icon class="field-icon">layers</mat-icon>
+                <span class="field-label">Profile regions</span>
+                <span class="field-count">{{ ctx.regionCount }}</span>
+              </div>
+              <ul class="entity-list">
+                <li class="entity-row"
+                    *ngFor="let i of extrudeRegionIndices(); trackBy: trackIndex">
+                  <label class="loop-toggle">
+                    <input type="checkbox"
+                           [checked]="isExtrudeRegionSelected(i)"
+                           (change)="toggleExtrudeRegion(i)" />
+                    <span>Region {{ i + 1 }}</span>
+                  </label>
+                </li>
+              </ul>
+            </div>
+
+            <div class="panel-actions">
+              <button mat-flat-button color="primary"
+                      [disabled]="!canCommitRevolve()"
+                      (click)="commitRevolveSidebar()"
+                      data-testid="revolve-apply">
+                <mat-icon>check</mat-icon> OK
+              </button>
+              <button mat-stroked-button
+                      (click)="cancelRevolveSidebar()"
+                      data-testid="revolve-cancel">
                 <mat-icon>close</mat-icon> Cancel
               </button>
             </div>
@@ -1085,6 +1180,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   extrudeSidebar = signal<{
     sketchId: string;
     regionCount: number;
+    /** Which feature kind to emit on commit — 'extrude' (additive) or
+     * 'cutExtrude' (subtractive). Drives the sidebar title/icon + which
+     * factory call _applyExtrude routes to. */
+    mode: 'extrude' | 'cutExtrude';
     /** When set, OK updates that existing feature instead of creating a
      * new one. The "Edit feature" tree action opens this mode. */
     editingFeatureId?: string;
@@ -1109,6 +1208,22 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   extrudeUpToFaceId = signal<string | null>(null);
   /** Face-pick mode flag (mutually exclusive with vertexPickMode). */
   facePickMode = signal<boolean>(false);
+
+  // ── Revolve sidebar ───────────────────────────────────────────────────
+  // Parallel to extrudeSidebar but for RevolveFeature. Carries the host
+  // sketch and edit-mode flag; angle / axis / flipped live in their own
+  // signals so commit reads them at OK time. profileFills computed
+  // listens to both sidebars so the canvas region overlay works for
+  // either flow.
+  revolveSidebar = signal<{
+    sketchId: string;
+    regionCount: number;
+    editingFeatureId?: string;
+  } | null>(null);
+  revolveAngle = signal<number>(360);
+  revolveFlipped = signal<boolean>(false);
+  /** Sketched line id picked as the rotation axis. */
+  revolveAxisLineId = signal<string | null>(null);
   /** Sketch points exposed as pickable vertices (in addition to BRep
    * vertices coming from the kernel). Includes every point in every
    * VISIBLE sketch — construction points count, since users explicitly
@@ -1139,7 +1254,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * region+holes via extractRegions). Clicking a fill toggles the region
    * in `extrudeSelectedRegions`. */
   profileFills = computed<ProfileFill[]>(() => {
-    const ctx = this.extrudeSidebar();
+    const ctx = this.extrudeSidebar() ?? this.revolveSidebar();
     if (!ctx) return [];
     const sketch = this.doc().sketches[ctx.sketchId];
     if (!sketch) return [];
@@ -2144,10 +2259,121 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const sid = this.activeSketchId();
     if (!sid) return;
     this.activeSketchId.set(null);
-    this.openExtrudeDialog(sid);
+    this.openExtrudeDialog(sid, 'extrude');
   }
 
-  private openExtrudeDialog(sketchId: string) {
+  /** Sketch toolbar "Revolve" shortcut. Builds the sidebar state from
+   * the sketch's lines + default 360°, then opens the panel. The user
+   * picks an axis (or accepts the auto-pick if exactly one construction
+   * line exists) and confirms. */
+  onRevolveRequested() {
+    const sid = this.activeSketchId();
+    if (!sid) return;
+    const sketch = this.doc().sketches[sid];
+    if (!sketch) return;
+    const lines = sketch.state.entities.filter((e): e is import('../../../cad/lib/types').LineEntity => e.kind === 'line');
+    if (lines.length === 0) {
+      this.errors.showError('Revolve needs a sketched line as the axis. Add a line (preferably a construction line) and try again.');
+      return;
+    }
+    const { regions, errors: regionErrors } = extractRegions(sketch.state);
+    if (regions.length === 0) {
+      this.errors.showError(friendlyError(regionErrors[0] || 'no closed loops in sketch'));
+      return;
+    }
+    this.activeSketchId.set(null);
+    this.setMode('idle');
+    // Auto-pick the single construction line if there's exactly one;
+    // otherwise leave null so the user must pick. (Matches SolidWorks
+    // which auto-picks the unique centerline.)
+    const constructionLines = lines.filter(l => l.construction);
+    const autoPick = constructionLines.length === 1 ? constructionLines[0].id : null;
+    this.revolveAxisLineId.set(autoPick);
+    this.revolveAngle.set(360);
+    this.revolveFlipped.set(false);
+    this.extrudeSelectedRegions.set(new Set([0]));
+    this.extrudeHoveredRegion.set(null);
+    this.revolveSidebar.set({ sketchId: sid, regionCount: regions.length });
+  }
+
+  /** Candidates the axis picker lists, construction lines first. Read
+   * by the sidebar template via revolveAxisCandidates(). */
+  revolveAxisCandidates(): Array<{ id: string; label: string; construction: boolean }> {
+    const ctx = this.revolveSidebar();
+    if (!ctx) return [];
+    const sketch = this.doc().sketches[ctx.sketchId];
+    if (!sketch) return [];
+    const lines = sketch.state.entities.filter(e => e.kind === 'line');
+    const out = lines.map(l => ({
+      id: l.id,
+      label: l.id,
+      construction: !!(l as any).construction,
+    }));
+    // Construction lines first, then by id for stable ordering.
+    out.sort((a, b) => Number(b.construction) - Number(a.construction) || a.id.localeCompare(b.id));
+    return out;
+  }
+  trackLineId = (_: number, l: { id: string }) => l.id;
+
+  canCommitRevolve(): boolean {
+    if (!this.revolveSidebar()) return false;
+    if (this.revolveAxisLineId() === null) return false;
+    if (this.extrudeSelectedRegions().size === 0) return false;
+    const a = this.revolveAngle();
+    return isFinite(a) && a > 0 && a <= 360;
+  }
+
+  commitRevolveSidebar() {
+    const ctx = this.revolveSidebar();
+    if (!ctx || !this.canCommitRevolve()) return;
+    const axisLineId = this.revolveAxisLineId()!;
+    const angle = this.revolveAngle();
+    const flipped = this.revolveFlipped();
+    const regionIndices = [...this.extrudeSelectedRegions()].sort((a, b) => a - b);
+    this.revolveSidebar.set(null);
+    this.extrudeHoveredRegion.set(null);
+    this.setMode('idle');
+    if (ctx.editingFeatureId) {
+      this.featureTree.set(updateFeatureParam<import('../../../cad/lib/types').RevolveFeature>(
+        this.featureTree(), ctx.editingFeatureId,
+        { axisLineId, angle, flipped, regionIndices },
+      ));
+      this.save();
+    } else {
+      this.featureTree.set(addFeature(this.featureTree(), {
+        type: 'revolve', sketchId: ctx.sketchId,
+        axisLineId, angle, flipped, regionIndices,
+      }));
+      // Auto-hide the source sketch after the revolve commits, same as
+      // Extrude / Cut. Users can re-show via the tree visibility toggle.
+      this.doc.set(setSketchVisibility(this.doc(), ctx.sketchId, false));
+      this.save();
+    }
+  }
+
+  cancelRevolveSidebar() {
+    this.revolveSidebar.set(null);
+    this.revolveAxisLineId.set(null);
+    this.extrudeHoveredRegion.set(null);
+    this.setMode('idle');
+  }
+
+  /** Cut-extrude shortcut. Same flow as Extrude but the resulting
+   * feature is a CutExtrudeFeature. Errors early if there's no body
+   * to cut FROM (no prior additive features). */
+  onCutExtrudeRequested() {
+    const sid = this.activeSketchId();
+    if (!sid) return;
+    const hasAdditive = this.featureTree().features.some(f => f.type === 'extrude');
+    if (!hasAdditive) {
+      this.errors.showError('Cut Extrude needs an existing body to cut from. Add an Extrude first.');
+      return;
+    }
+    this.activeSketchId.set(null);
+    this.openExtrudeDialog(sid, 'cutExtrude');
+  }
+
+  private openExtrudeDialog(sketchId: string, mode: 'extrude' | 'cutExtrude' = 'extrude') {
     const sketch = this.doc().sketches[sketchId];
     if (!sketch) {
       this.errors.showError(`Sketch ${sketchId} not found`);
@@ -2171,7 +2397,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.facePickMode.set(false);
     this.extrudeSelectedRegions.set(new Set([0]));
     this.extrudeHoveredRegion.set(null);
-    this.extrudeSidebar.set({ sketchId, regionCount: regions.length });
+    this.extrudeSidebar.set({ sketchId, regionCount: regions.length, mode });
   }
 
   /** End-condition dropdown handler. Switching kinds resets the
@@ -2274,7 +2500,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       ));
       this.save();
     } else {
-      this._applyExtrude(ctx.sketchId, { distance, flipped, regionIndices, endCondition });
+      this._applyExtrude(ctx.sketchId, { distance, flipped, regionIndices, endCondition, mode: ctx.mode });
     }
   }
 
@@ -2309,10 +2535,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     result: {
       distance: number; flipped: boolean; regionIndices: number[];
       endCondition?: ExtrudeEndCondition;
+      mode?: 'extrude' | 'cutExtrude';
     },
   ) {
+    const type = result.mode === 'cutExtrude' ? 'cutExtrude' : 'extrude';
     this.featureTree.set(addFeature(this.featureTree(), {
-      type: 'extrude', sketchId,
+      type, sketchId,
       distance: result.distance,
       flipped: result.flipped,
       regionIndices: result.regionIndices,
@@ -2388,7 +2616,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   private editFeature(featureId: string) {
     const feature = this.featureTree().features.find(f => f.id === featureId);
-    if (!feature || feature.type !== 'extrude') return;
+    if (!feature) return;
+    if (feature.type === 'revolve') {
+      this._editRevolve(feature);
+      return;
+    }
+    if (feature.type !== 'extrude' && feature.type !== 'cutExtrude') return;
     const sketch = this.doc().sketches[feature.sketchId];
     const regionCount = sketch ? extractRegions(sketch.state).regions.length : 1;
     // Reuse the same Extrude sidebar in "editing" mode: commit updates the
@@ -2403,7 +2636,23 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.extrudeSidebar.set({
       sketchId: feature.sketchId,
       regionCount,
+      mode: feature.type === 'cutExtrude' ? 'cutExtrude' : 'extrude',
       editingFeatureId: featureId,
+    });
+  }
+
+  /** Rehydrate the Revolve sidebar from an existing RevolveFeature. */
+  private _editRevolve(feature: import('../../../cad/lib/types').RevolveFeature) {
+    const sketch = this.doc().sketches[feature.sketchId];
+    const regionCount = sketch ? extractRegions(sketch.state).regions.length : 1;
+    this.revolveAxisLineId.set(feature.axisLineId);
+    this.revolveAngle.set(feature.angle);
+    this.revolveFlipped.set(feature.flipped === true);
+    this.extrudeSelectedRegions.set(new Set(feature.regionIndices ?? [0]));
+    this.revolveSidebar.set({
+      sketchId: feature.sketchId,
+      regionCount,
+      editingFeatureId: feature.id,
     });
   }
 
@@ -2458,7 +2707,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // one by one.
     const features = this.featureTree().features;
     const dependents = features
-      .filter((f): f is ExtrudeFeature => f.type === 'extrude' && ids.includes(f.sketchId))
+      .filter((f): f is ExtrudeFeature => (f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve') && ids.includes((f as ExtrudeFeature).sketchId))
       .map(f => f.id);
     if (dependents.length === 0) {
       // No references — just delete all selected.
@@ -2572,19 +2821,23 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         isFlat: face.isFlat,
       }));
       const prev = this.geometry();
-      const keptFaces = (prev?.faces ?? []).filter(f => f.featureId !== ev.featureId);
-      const keptVertices = (prev?.topology?.vertices ?? []).filter(v => !v.id.startsWith(`${ev.featureId}#`));
-      const keptEdges = (prev?.topology?.edges ?? []).filter(e => !e.id.startsWith(`${ev.featureId}#`));
+      // Cumulative-body pipeline: this event IS the running body after
+      // this feature — it subsumes everything emitted before it. Replace
+      // faces / topology rather than appending. If this feature errored,
+      // hold the previous geometry (last-good cumulative) instead.
+      if (ev.error || newFaces.length === 0) {
+        if (ev.error) console.warn('[stream] feature', ev.featureId, ev.error);
+        return;
+      }
       const incomingTopo = ev.topology || { vertices: [], edges: [] };
       this.geometry.set({
         datums: prev?.datums ?? [],
-        faces: [...keptFaces, ...newFaces],
+        faces: newFaces,
         topology: {
-          vertices: [...keptVertices, ...incomingTopo.vertices],
-          edges: [...keptEdges, ...incomingTopo.edges],
+          vertices: incomingTopo.vertices ?? [],
+          edges: incomingTopo.edges ?? [],
         },
       });
-      if (ev.error) console.warn('[stream] feature', ev.featureId, ev.error);
     }
   }
 
@@ -2630,20 +2883,26 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       next: (resp) => {
         if (genId !== this.regenGeneration) return;
         this.regenLoading.set(false);
-        const faces = resp.features.flatMap(f =>
-          (f.faces || []).map(face => ({
-            faceId: face.faceId,
-            positions: new Float32Array(face.positions),
-            normals: new Float32Array(face.normals),
-            indices: new Uint32Array(face.indices),
-            featureId: f.featureId,
-            isFlat: face.isFlat,
-          })),
-        );
-        const topology: ModelTopology = {
-          vertices: resp.features.flatMap(f => f.topology?.vertices ?? []),
-          edges: resp.features.flatMap(f => f.topology?.edges ?? []),
-        };
+        // Cumulative-body pipeline: each feature's emit IS the running body
+        // after that feature. Render only the LAST non-errored feature so
+        // we don't stack N copies on top of each other.
+        const lastGood = [...resp.features].reverse().find(f => !f.error && (f.faces || []).length > 0);
+        const faces = lastGood
+          ? lastGood.faces.map(face => ({
+              faceId: face.faceId,
+              positions: new Float32Array(face.positions),
+              normals: new Float32Array(face.normals),
+              indices: new Uint32Array(face.indices),
+              featureId: lastGood.featureId,
+              isFlat: face.isFlat,
+            }))
+          : [];
+        const topology: ModelTopology = lastGood
+          ? {
+              vertices: lastGood.topology?.vertices ?? [],
+              edges: lastGood.topology?.edges ?? [],
+            }
+          : { vertices: [], edges: [] };
         const prev = this.geometry();
         this.geometry.set({
           datums: prev?.datums ?? [],

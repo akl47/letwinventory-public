@@ -178,3 +178,74 @@ pub struct TopologyEdge {
     pub endpoints: [[f64; 3]; 2],
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// buildBoolean
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildBooleanOp {
+    /// A ∪ B — union. Backend uses this to compose successive additive
+    /// extrudes into one cumulative body.
+    Fuse,
+    /// A − B — subtract. Backend uses this for CutExtrude (the prism is B).
+    Cut,
+    /// A ∩ B — intersection. Reserved for Up to Body (clip the extrude
+    /// prism against the target body's half-space).
+    Common,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BuildBooleanParams {
+    #[serde(rename = "featureId", default = "default_feature_id")]
+    pub feature_id: String,
+    pub op: BuildBooleanOp,
+    /// First operand BREP (the cumulative body for fuse/cut).
+    #[serde(rename = "aBrep")]
+    pub a_brep: String,
+    /// Second operand BREP (the new prism for fuse/cut).
+    #[serde(rename = "bBrep")]
+    pub b_brep: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BuildBooleanResult {
+    #[serde(rename = "brepBytes")]
+    pub brep_bytes: String,
+    pub faces: Vec<FaceMesh>,
+    pub topology: Topology,
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildRevolve
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Inputs for a revolve operation. The sketch profile is built on
+/// `plane` (same machinery as buildExtrude), then revolved about the
+/// world-space axis defined by `axis_origin` + `axis_dir` through
+/// `angle_deg`. Angle of 360 produces a full body of revolution.
+#[derive(Debug, Deserialize)]
+pub struct BuildRevolveParams {
+    #[serde(rename = "featureId", default = "default_feature_id")]
+    pub feature_id: String,
+    pub profile: Vec<ProfileEdge>,
+    #[serde(default)]
+    pub holes: Vec<Vec<ProfileEdge>>,
+    pub plane: Plane3,
+    #[serde(rename = "axisOrigin")]
+    pub axis_origin: [f64; 3],
+    #[serde(rename = "axisDir")]
+    pub axis_dir: [f64; 3],
+    /// Sweep angle in degrees. 360 → full revolve. Sign of the angle
+    /// flips the rotational sense (CCW vs CW around axis_dir).
+    #[serde(rename = "angleDeg")]
+    pub angle_deg: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BuildRevolveResult {
+    #[serde(rename = "brepBytes")]
+    pub brep_bytes: String,
+    pub faces: Vec<FaceMesh>,
+    pub topology: Topology,
+}

@@ -290,7 +290,48 @@ export interface ExtrudeFeature {
   name?: string;
 }
 
-export type Feature = OriginFeature | ExtrudeFeature;
+/** Subtractive extrude — sketched profile is extruded into a prism and
+ * cut from the cumulative body. Shares every field with ExtrudeFeature
+ * (sketch / regions / distance / flipped / endCondition); only the
+ * 'type' tag and the backend dispatch differ. Requires at least one
+ * additive feature upstream — there's nothing to cut FROM otherwise. */
+export interface CutExtrudeFeature {
+  id: FeatureId;
+  type: 'cutExtrude';
+  sketchId: SketchId;
+  distance: number;
+  visible?: boolean;
+  flipped?: boolean;
+  endCondition?: ExtrudeEndCondition;
+  regionIndices?: number[];
+  name?: string;
+}
+
+/** Rotate a sketched profile around a sketched-line axis. Same
+ * cumulative-body composition as Extrude (additive): the produced
+ * solid of revolution fuses into the running body. Cut-revolves are a
+ * future extension. */
+export interface RevolveFeature {
+  id: FeatureId;
+  type: 'revolve';
+  sketchId: SketchId;
+  /** Sketched line entity id inside the same sketch — its two endpoints
+   * define the rotation axis in 2D (which the backend projects to 3D
+   * via the sketch plane). Construction lines are explicit reference
+   * geometry and are the natural axis choice, but any non-construction
+   * line works too. */
+  axisLineId: string;
+  /** Revolution angle in degrees. 360 = full revolve. */
+  angle: number;
+  /** Reverse rotation direction. Missing == false. Flips the sign of
+   * the axis vector before dispatch. */
+  flipped?: boolean;
+  visible?: boolean;
+  regionIndices?: number[];
+  name?: string;
+}
+
+export type Feature = OriginFeature | ExtrudeFeature | CutExtrudeFeature | RevolveFeature;
 
 export interface FeatureTree {
   features: Feature[];
