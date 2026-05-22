@@ -242,11 +242,16 @@ interface HistorySnapshot {
           [selectedFeatures]="selectedFeatures()"
           [featureErrors]="featureErrors()"
           [selectedSketches]="selectedSketches()"
+          [bodyList]="bodies()"
+          [hiddenBodyIds]="hiddenBodies()"
           (sketchSelected)="onTreeSketchSelected($event)"
           (sketchSelect)="onTreeSketchSelect($event)"
           (visibilityToggled)="onDatumVisibilityToggled($event)"
           (actionRequested)="onTreeAction($event)"
           (featureSelect)="onFeatureTreeSelect($event)"
+          (bodyVisibilityToggled)="toggleBodyVisibility($event)"
+          (bodyIsolated)="onIsolateBody($event)"
+          (bodyDeleted)="onDeleteBody($event)"
           class="feature-tree">
         </app-cad-feature-tree-panel>
 
@@ -611,6 +616,24 @@ interface HistorySnapshot {
                 <mat-icon>{{ extrudeFlipped() ? 'south' : 'north' }}</mat-icon>
                 {{ extrudeFlipped() ? 'Reverse' : 'Along normal' }}
               </button>
+            </div>
+
+            <!-- "Merge result" — hidden for Cut Extrude (cuts always
+                 target an existing body, can't seed a new one). When
+                 unchecked, the additive extrude creates a NEW body
+                 instead of fusing into the most-recent existing one. -->
+            <div class="panel-field active" *ngIf="ctx.mode !== 'cutExtrude'">
+              <div class="field-header">
+                <mat-icon class="field-icon">merge_type</mat-icon>
+                <span class="field-label">Merge result</span>
+              </div>
+              <label class="loop-toggle">
+                <input type="checkbox"
+                       data-testid="extrude-merge"
+                       [checked]="extrudeMerge()"
+                       (change)="extrudeMerge.set($any($event.target).checked)" />
+                <span>{{ extrudeMerge() ? 'Fuse into existing body' : 'Create a new body' }}</span>
+              </label>
             </div>
 
             <div class="panel-field active" *ngIf="extrudeEndKind() === 'upToVertex'">
@@ -1112,6 +1135,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   fullscreen = signal<boolean>(false);
   partID = signal<number | null>(null);
   geometry = signal<ModelGeometry | null>(null);
+  // Multi-body state. Each entry is one body in the part; faces are kept
+  // per-body so a hidden body just drops out of the union. The body
+  // roster (id + name) is what the Bodies panel renders. Visibility is
+  // transient — a hidden body's faces are excluded from the rendered
+  // geometry but the body itself stays in the roster.
+  bodies = signal<Array<{ id: string; name: string | null }>>([]);
+  hiddenBodies = signal<Set<string>>(new Set());
+  /** Per-body { faces, topology } populated as regen events arrive.
+   * geometry() is derived by merging visible bodies' contents. */
+  private perBodyGeometry = signal<Map<string, { faces: any[]; topology: ModelTopology }>>(new Map());
   // Phase 1: server-side regen is in flight. The viewer's loading overlay
   // reads this. Old kernelLoading + kernelLoadStatus signals were tied to
   // the deleted client-side OCCT loader.
@@ -1190,6 +1223,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   } | null>(null);
   extrudeDistance = signal<number>(10);
   extrudeFlipped = signal<boolean>(false);
+  /** "Merge result" checkbox in the Extrude sidebar. Default true: the
+   * new prism fuses into the most-recent existing body. False creates
+   * a new disjoint body. Cut Extrude ignores this field. */
+  extrudeMerge = signal<boolean>(true);
   /** SolidWorks-style end condition. Drives the sidebar UI (which fields
    * to show + which picker affordance to surface) and translates into a
    * resolved kernel call in the backend. */
@@ -2390,6 +2427,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // to defaults; the OK button reads them back on commit.
     this.extrudeDistance.set(10);
     this.extrudeFlipped.set(false);
+    this.extrudeMerge.set(true);
     this.extrudeEndKind.set('blind');
     this.extrudeUpToVertexId.set(null);
     this.extrudeUpToFaceId.set(null);
@@ -2487,6 +2525,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!endCondition) return;
     const distance = this.extrudeDistance();
     const flipped = this.extrudeFlipped();
+    const merge = this.extrudeMerge();
     const regionIndices = [...this.extrudeSelectedRegions()].sort((a, b) => a - b);
     this.extrudeSidebar.set(null);
     this.extrudeHoveredRegion.set(null);
@@ -2494,13 +2533,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.facePickMode.set(false);
     this.setMode('idle');
     if (ctx.editingFeatureId) {
+      // merge only applies to additive Extrude; updateFeatureParam ignores
+      // it for cutExtrude (the field doesn't exist there).
+      const patch: Partial<ExtrudeFeature> = { distance, flipped, regionIndices, endCondition };
+      if (ctx.mode !== 'cutExtrude') patch.merge = merge;
       this.featureTree.set(updateFeatureParam<ExtrudeFeature>(
-        this.featureTree(), ctx.editingFeatureId,
-        { distance, flipped, regionIndices, endCondition },
+        this.featureTree(), ctx.editingFeatureId, patch,
       ));
       this.save();
     } else {
-      this._applyExtrude(ctx.sketchId, { distance, flipped, regionIndices, endCondition, mode: ctx.mode });
+      this._applyExtrude(ctx.sketchId, { distance, flipped, regionIndices, endCondition, mode: ctx.mode, merge });
     }
   }
 
@@ -2536,16 +2578,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       distance: number; flipped: boolean; regionIndices: number[];
       endCondition?: ExtrudeEndCondition;
       mode?: 'extrude' | 'cutExtrude';
+      merge?: boolean;
     },
   ) {
     const type = result.mode === 'cutExtrude' ? 'cutExtrude' : 'extrude';
-    this.featureTree.set(addFeature(this.featureTree(), {
+    const featurePayload: any = {
       type, sketchId,
       distance: result.distance,
       flipped: result.flipped,
       regionIndices: result.regionIndices,
       endCondition: result.endCondition ?? { kind: 'blind' },
-    }));
+    };
+    if (type === 'extrude' && result.merge === false) featurePayload.merge = false;
+    this.featureTree.set(addFeature(this.featureTree(), featurePayload));
     // REQ 618 — extruded sketches auto-hide their 2D overlay. The user can
     // re-show via the feature-tree eye toggle if they need to inspect the
     // source profile.
@@ -2628,6 +2673,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // existing feature rather than appending a new one.
     this.extrudeDistance.set(feature.distance);
     this.extrudeFlipped.set(feature.flipped === true);
+    // merge only on additive extrude — cut features don't carry the flag.
+    this.extrudeMerge.set(feature.type === 'extrude' ? (feature as ExtrudeFeature).merge !== false : true);
     this.extrudeSelectedRegions.set(new Set(feature.regionIndices ?? [0]));
     const ec = feature.endCondition ?? { kind: 'blind' };
     this.extrudeEndKind.set(ec.kind);
@@ -2812,6 +2859,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         m.delete(ev.featureId);
         this.featureErrors.set(m);
       }
+      // Multi-body pipeline: each event reports the latest state of the
+      // body this feature contributed to. Update that body's slot in
+      // perBodyGeometry and rebuild the merged geometry.
+      if (ev.error) {
+        console.warn('[stream] feature', ev.featureId, ev.error);
+        return;
+      }
+      const bodyId = (ev as any).bodyId as string | null;
+      if (!bodyId || (ev.faces || []).length === 0) return;
       const newFaces = (ev.faces || []).map(face => ({
         faceId: face.faceId,
         positions: new Float32Array(face.positions),
@@ -2820,25 +2876,96 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         featureId: ev.featureId,
         isFlat: face.isFlat,
       }));
-      const prev = this.geometry();
-      // Cumulative-body pipeline: this event IS the running body after
-      // this feature — it subsumes everything emitted before it. Replace
-      // faces / topology rather than appending. If this feature errored,
-      // hold the previous geometry (last-good cumulative) instead.
-      if (ev.error || newFaces.length === 0) {
-        if (ev.error) console.warn('[stream] feature', ev.featureId, ev.error);
-        return;
-      }
       const incomingTopo = ev.topology || { vertices: [], edges: [] };
-      this.geometry.set({
-        datums: prev?.datums ?? [],
+      const nextMap = new Map(this.perBodyGeometry());
+      nextMap.set(bodyId, {
         faces: newFaces,
-        topology: {
-          vertices: incomingTopo.vertices ?? [],
-          edges: incomingTopo.edges ?? [],
-        },
+        topology: { vertices: incomingTopo.vertices ?? [], edges: incomingTopo.edges ?? [] },
       });
+      this.perBodyGeometry.set(nextMap);
+      // Make sure the body roster has this id even if the WS arrives
+      // before the HTTP body list does. Name stays null until HTTP fills.
+      if (!this.bodies().some(b => b.id === bodyId)) {
+        this.bodies.set([...this.bodies(), { id: bodyId, name: null }]);
+      }
+      this.rebuildGeometryFromBodies();
     }
+  }
+
+  /** Rebuild the flat geometry signal from per-body state + visibility.
+   * Called whenever perBodyGeometry or hiddenBodies changes (streaming
+   * event, HTTP regen completion, user toggling body visibility). */
+  private rebuildGeometryFromBodies(): void {
+    const perBody = this.perBodyGeometry();
+    const hidden = this.hiddenBodies();
+    const faces: any[] = [];
+    const vertices: ModelTopology['vertices'] = [];
+    const edges: ModelTopology['edges'] = [];
+    // Iterate bodies in roster order so face render order is stable.
+    for (const body of this.bodies()) {
+      if (hidden.has(body.id)) continue;
+      const slot = perBody.get(body.id);
+      if (!slot) continue;
+      faces.push(...slot.faces);
+      vertices.push(...slot.topology.vertices);
+      edges.push(...slot.topology.edges);
+    }
+    const prev = this.geometry();
+    this.geometry.set({
+      datums: prev?.datums ?? [],
+      faces,
+      topology: { vertices, edges },
+    });
+  }
+
+  /** Toggle the visibility of a body in the Bodies panel. Transient
+   * (lost on reload) — body visibility isn't persisted yet. */
+  toggleBodyVisibility(bodyId: string): void {
+    const next = new Set(this.hiddenBodies());
+    if (next.has(bodyId)) next.delete(bodyId); else next.add(bodyId);
+    this.hiddenBodies.set(next);
+    this.rebuildGeometryFromBodies();
+  }
+
+  /** Hide every body except this one. Transient. Re-isolating shows all. */
+  onIsolateBody(bodyId: string): void {
+    const allIds = this.bodies().map(b => b.id);
+    const current = this.hiddenBodies();
+    const isolated = new Set(allIds.filter(id => id !== bodyId));
+    // If we're already isolated to this body, restore all visible.
+    const restoringAll = current.size === isolated.size &&
+      [...current].every(id => isolated.has(id));
+    this.hiddenBodies.set(restoringAll ? new Set() : isolated);
+    this.rebuildGeometryFromBodies();
+  }
+
+  /** Delete every feature that contributed to this body. Body id == the
+   * root additive feature's id; we drop that one PLUS every subsequent
+   * feature whose target body resolves to the same id (i.e. merge=true
+   * additive + any cut feature, until a merge=false feature splits the
+   * chain). For now we use the simpler rule: drop the root feature AND
+   * all features after it in the tree — that mirrors how the backend
+   * builds bodies in regen order. Drastic; survives undo. */
+  onDeleteBody(bodyId: string): void {
+    const ok = window.confirm(
+      'Delete this body? This removes the root feature and every feature ' +
+      'after it that contributed to it. Cannot be undone without redo.',
+    );
+    if (!ok) return;
+    const tree = this.featureTree();
+    const rootIdx = tree.features.findIndex(f => f.id === bodyId);
+    if (rootIdx < 0) return;
+    // Drop the root + everything after it. Conservative but matches the
+    // backend's "subsequent merge=true features extend the latest body"
+    // semantic — there's no clean way to tell which features after the
+    // root targeted THIS body vs. a later one without re-running the
+    // regen, so the safe move is "everything from root onward".
+    const next = {
+      ...tree,
+      features: tree.features.slice(0, rootIdx),
+    };
+    this.featureTree.set(next);
+    this.save();
   }
 
   private debouncedSave: number | null = null;
@@ -2883,32 +3010,32 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       next: (resp) => {
         if (genId !== this.regenGeneration) return;
         this.regenLoading.set(false);
-        // Cumulative-body pipeline: each feature's emit IS the running body
-        // after that feature. Render only the LAST non-errored feature so
-        // we don't stack N copies on top of each other.
-        const lastGood = [...resp.features].reverse().find(f => !f.error && (f.faces || []).length > 0);
-        const faces = lastGood
-          ? lastGood.faces.map(face => ({
+        // Multi-body pipeline: each feature reports its target body's
+        // latest state. For each body, take the LAST non-errored feature
+        // emit and use that as the body's current geometry.
+        const perBody = new Map<string, { faces: any[]; topology: ModelTopology }>();
+        for (const f of resp.features) {
+          if (f.error) continue;
+          const bid = (f as any).bodyId as string | null;
+          if (!bid) continue;
+          perBody.set(bid, {
+            faces: (f.faces || []).map(face => ({
               faceId: face.faceId,
               positions: new Float32Array(face.positions),
               normals: new Float32Array(face.normals),
               indices: new Uint32Array(face.indices),
-              featureId: lastGood.featureId,
+              featureId: f.featureId,
               isFlat: face.isFlat,
-            }))
-          : [];
-        const topology: ModelTopology = lastGood
-          ? {
-              vertices: lastGood.topology?.vertices ?? [],
-              edges: lastGood.topology?.edges ?? [],
-            }
-          : { vertices: [], edges: [] };
-        const prev = this.geometry();
-        this.geometry.set({
-          datums: prev?.datums ?? [],
-          faces,
-          topology,
-        });
+            })),
+            topology: {
+              vertices: f.topology?.vertices ?? [],
+              edges: f.topology?.edges ?? [],
+            },
+          });
+        }
+        this.perBodyGeometry.set(perBody);
+        this.bodies.set(resp.bodies ?? Array.from(perBody.keys()).map(id => ({ id, name: null })));
+        this.rebuildGeometryFromBodies();
         // Per-feature errors are nested in the merged response. Surface them
         // as warning toasts so the user sees what failed and why — silent
         // console.warns don't reach the user. De-dupe identical messages so

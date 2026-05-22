@@ -10,6 +10,8 @@ export interface RegenerateResponse {
   revision: string;
   features: Array<{
     featureId: string;
+    /** Which body this feature contributed to. New for multi-body. */
+    bodyId: string | null;
     faces: Array<{
       faceId: string;
       persistentName: string;
@@ -26,6 +28,8 @@ export interface RegenerateResponse {
     error?: string;
     cached: boolean;
   }>;
+  /** Body roster in creation order. New for multi-body. */
+  bodies?: Array<{ id: string; name: string | null }>;
   errors: string[];
 }
 

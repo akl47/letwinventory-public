@@ -286,6 +286,11 @@ export interface ExtrudeFeature {
    * (see migration.ts) — for non-nested sketches the indices line up.
    */
   regionIndices?: number[];
+  /** SolidWorks-style "Merge result" toggle. Missing == true. When false,
+   * the extrude produces a NEW body instead of fusing into the most-recent
+   * existing body — that's how you build multi-body parts. The new body's
+   * id is this feature's id. */
+  merge?: boolean;
   /** REQ 624 — user-supplied label shown in the feature tree. */
   name?: string;
 }
@@ -326,6 +331,9 @@ export interface RevolveFeature {
   /** Reverse rotation direction. Missing == false. Flips the sign of
    * the axis vector before dispatch. */
   flipped?: boolean;
+  /** SolidWorks-style "Merge result" toggle. Missing == true. See
+   * `ExtrudeFeature.merge` for semantics. */
+  merge?: boolean;
   visible?: boolean;
   regionIndices?: number[];
   name?: string;

@@ -37,7 +37,10 @@ mod server;
 ///    cut of its prism with the running body. Adds buildBoolean RPC.
 /// 6: buildRevolve RPC lands. New feature kind in the cumulative
 ///    pipeline; existing extrudes produce byte-identical output.
-pub const NAMING_SCHEMA_VERSION: u32 = 6;
+/// 7: multi-body. ExtrudeFeature.merge controls whether the new prism
+///    fuses into the most-recent body or creates a new one. Backend-
+///    only change; kernel ops are unchanged.
+pub const NAMING_SCHEMA_VERSION: u32 = 7;
 
 /// Default bind address. Override with `CAD_KERNEL_ADDR`. We default to
 /// `0.0.0.0` because the standard dev setup runs the Node backend in Docker,

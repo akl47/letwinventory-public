@@ -43,7 +43,10 @@ const { extractRegions } = require('./cadProfile');
 // 6: RevolveFeature lands. Kernel gains buildRevolve. Backend dispatches
 //    on feature.type so revolves flow through the same cumulative pipeline
 //    (additive — fused into the running body).
-const NAMING_VERSION = 6;  // matches NAMING_SCHEMA_VERSION in cad-kernel/src/main.rs
+// 7: multi-body. ExtrudeFeature.merge controls whether the new prism
+//    fuses into the most-recent body (default) or creates a new one.
+//    Regen tracks an array of bodies; per-feature emit carries bodyId.
+const NAMING_VERSION = 7;  // matches NAMING_SCHEMA_VERSION in cad-kernel/src/main.rs
 
 // Sentinel distance for Through All. Picked to comfortably exceed any
 // reasonable model dimension without overflowing OCCT's tolerance
@@ -89,13 +92,13 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult } = {}
   /** @type {Map<string, { centroid: [number, number, number], normal: [number, number, number] }>} */
   const faceMap = new Map();
 
-  // Running cumulative body across the feature stream. Starts as null;
-  // first additive feature seeds it; each subsequent feature mutates it
-  // via buildBoolean (fuse for Extrude, cut for CutExtrude). Each
-  // feature's emit IS the cumulative shape after that feature, so the
-  // frontend renders only the LATEST cumulative result.
-  let cumulativeBrep = null;  // base64 string or null
-  let cumulativeParamHash = '';
+  // Multi-body state: each entry is one body in the part. Additive
+  // features with merge=true fuse into the most-recent body; additive
+  // features with merge=false create a NEW body. Cut features apply to
+  // the most-recent body. Body id = the id of the FIRST feature that
+  // created it (the "root"), so it stays stable across regens.
+  /** @type {Array<{ id: string, brep: string, paramHash: string, faces: Array, topology: object }>} */
+  const bodies = [];
 
   for (const feature of featureTree.features) {
     if (feature.type === 'origin') continue;
@@ -108,41 +111,77 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult } = {}
     let result;
     try {
       // Stage 1: build the per-feature shape (a prism for Extrude / Cut,
-      // a body of revolution for Revolve). Both return the same
-      // { prismBrep, featureParamHash, merged, topology } shape so
-      // Stage 2 doesn't care which dispatch ran.
+      // a body of revolution for Revolve).
       const prism = feature.type === 'revolve'
         ? await _regenerateRevolve(feature, sketchDoc, model, client, dbClient)
         : await _regenerateExtrude(feature, sketchDoc, model, client, dbClient, vertexMap, faceMap);
-      // Stage 2: compose into the cumulative body.
-      const composed = await _composeIntoCumulative({
-        feature,
-        prism,
-        cumulativeBrep,
-        cumulativeParamHash,
-        model,
-        client,
-        dbClient,
-      });
-      cumulativeBrep = composed.cumulativeBrep;
-      cumulativeParamHash = composed.cumulativeParamHash;
+
+      // Stage 2: figure out which body this feature targets and compose.
+      const isAdditive = feature.type === 'extrude' || feature.type === 'revolve';
+      const isCut = feature.type === 'cutExtrude';
+      const wantsMerge = feature.merge !== false;  // default true
+
+      let targetBodyIndex;
+      if (isCut) {
+        if (bodies.length === 0) {
+          throw new Error('Cut Extrude needs an existing body to cut from. Add an additive Extrude or Revolve first.');
+        }
+        targetBodyIndex = bodies.length - 1;
+      } else if (isAdditive) {
+        if (bodies.length === 0 || !wantsMerge) {
+          // Seed a new body — id = this feature's id (the root).
+          targetBodyIndex = bodies.length;
+          bodies.push({ id: feature.id, brep: '', paramHash: '', faces: [], topology: { vertices: [], edges: [] } });
+        } else {
+          targetBodyIndex = bodies.length - 1;
+        }
+      }
+      const body = bodies[targetBodyIndex];
+
+      let allCached;
+      if (body.brep === '') {
+        // Seed: this is the FIRST feature contributing to this body.
+        // The prism IS the body so far — no boolean call needed.
+        body.brep = prism.prismBrep;
+        body.paramHash = prism.featureParamHash;
+        body.faces = prism.merged;
+        body.topology = prism.topology;
+        allCached = prism.cached;
+      } else {
+        // Compose this feature into the existing body.
+        const composed = await _composeIntoBody({
+          feature,
+          prism,
+          body,
+          model,
+          client,
+          dbClient,
+        });
+        body.brep = composed.brep;
+        body.paramHash = composed.paramHash;
+        body.faces = composed.faces;
+        body.topology = composed.topology;
+        allCached = prism.cached && composed.cached;
+      }
+
       result = {
         featureId: feature.id,
-        faces: composed.faces,
-        topology: composed.topology,
-        cached: prism.cached && composed.cached,
+        bodyId: body.id,
+        faces: body.faces,
+        topology: body.topology,
+        cached: allCached,
       };
-      // Index THIS feature's emitted vertices + faces so downstream Up
-      // to Vertex / Up to Surface picks resolve to the same id the
-      // viewer rendered.
-      for (const v of composed.topology.vertices || []) vertexMap.set(v.id, v.position);
-      for (const f of composed.faces || []) {
+      // Index this body's vertices + faces so downstream Up to Vertex /
+      // Up to Surface picks resolve to the same id the viewer rendered.
+      for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
+      for (const f of body.faces || []) {
         const plane = _faceRepresentativePlane(f);
         if (plane) faceMap.set(f.faceId, plane);
       }
     } catch (err) {
       result = {
         featureId: feature.id,
+        bodyId: null,
         faces: [],
         topology: { vertices: [], edges: [] },
         error: err.message,
@@ -154,7 +193,11 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult } = {}
     emit(result);
   }
 
-  return { features: results, errors };
+  // Emit the body roster so the frontend can list them in the Bodies
+  // panel. Order = creation order (= regen order of root features).
+  const bodyList = bodies.map(b => ({ id: b.id, name: null }));
+
+  return { features: results, errors, bodies: bodyList };
 }
 
 function _safeCallback(fn) {
@@ -454,61 +497,31 @@ function _resolveSketchAxis(sketch, axisLineId) {
   return { origin: aw, dir: [dx / len, dy / len, dz / len] };
 }
 
-/** Compose this feature's prism into the running cumulative body.
- *
- * - First additive feature: cumulative := prism. No boolean call needed.
- *   The frontend renders this feature's emit as-is.
- * - Subsequent additive Extrude: cumulative := fuse(cumulative, prism).
- * - CutExtrude: cumulative := cut(cumulative, prism). Errors if no
- *   cumulative exists (nothing to cut FROM).
- *
- * The cumulative cache row is keyed by featureID `${id}#cumulative` and
- * carries upstreamHash = previous feature's cumulative paramHash. That
- * gives cascade invalidation: edit feature N → its paramHash changes →
- * features N+1, N+2, ... see a changed upstreamHash and recompute.
+/** Compose this feature's prism into an existing body. Mutates the body
+ * via fuse (additive) or cut (subtractive) boolean op. Cache row keyed
+ * by `${feature.id}#body` + body.paramHash as upstreamHash so editing
+ * an upstream feature on the same body invalidates the chain.
  *
  * @returns {Promise<{
- *   cumulativeBrep: string,
- *   cumulativeParamHash: string,
- *   faces: Array,
- *   topology: object,
- *   cached: boolean,
+ *   brep: string, paramHash: string, faces: Array, topology: object, cached: boolean,
  * }>}
  */
-async function _composeIntoCumulative({
-  feature, prism, cumulativeBrep, cumulativeParamHash, model, client, dbClient,
-}) {
+async function _composeIntoBody({ feature, prism, body, model, client, dbClient }) {
   const isCut = feature.type === 'cutExtrude';
-  if (!cumulativeBrep) {
-    if (isCut) {
-      throw new Error(
-        'Cut Extrude requires existing geometry to cut from. ' +
-        'Add an additive Extrude before this feature.'
-      );
-    }
-    // Seed cumulative with this prism. No boolean call.
-    return {
-      cumulativeBrep: prism.prismBrep,
-      cumulativeParamHash: prism.featureParamHash,
-      faces: prism.merged,
-      topology: prism.topology,
-      cached: prism.cached,
-    };
-  }
-
   const op = isCut ? 'cut' : 'fuse';
   const paramHash = _hashParams({
     op,
     featureParamHash: prism.featureParamHash,
+    bodyId: body.id,
   });
-  const cacheKey = `${feature.id}#cumulative`;
+  const cacheKey = `${feature.id}#body`;
 
   const cached = await dbClient.DesignBRepCache.findOne({
     where: {
       cadModelID: model.id,
       featureID: cacheKey,
       paramHash,
-      upstreamHash: cumulativeParamHash,
+      upstreamHash: body.paramHash,
       namingVersion: NAMING_VERSION,
     },
   });
@@ -516,10 +529,10 @@ async function _composeIntoCumulative({
     cached.lastAccessedAt = new Date();
     await cached.save();
     return {
-      cumulativeBrep: Buffer.isBuffer(cached.brepBytes)
+      brep: Buffer.isBuffer(cached.brepBytes)
         ? cached.brepBytes.toString('base64')
         : Buffer.from(cached.brepBytes || '').toString('base64'),
-      cumulativeParamHash: paramHash,
+      paramHash,
       faces: cached.tessellatedFaces.faces || [],
       topology: cached.tessellatedFaces.topology || { vertices: [], edges: [] },
       cached: true,
@@ -527,9 +540,9 @@ async function _composeIntoCumulative({
   }
 
   const rpc = await client.call('buildBoolean', {
-    featureId: `${feature.id}#cumulative`,
+    featureId: `${feature.id}#body`,
     op,
-    aBrep: cumulativeBrep,
+    aBrep: body.brep,
     bBrep: prism.prismBrep,
   });
 
@@ -537,7 +550,7 @@ async function _composeIntoCumulative({
     cadModelID: model.id,
     featureID: cacheKey,
     paramHash,
-    upstreamHash: cumulativeParamHash,
+    upstreamHash: body.paramHash,
     brepBytes: Buffer.from(rpc.brepBytes || '', 'base64'),
     tessellatedFaces: { faces: rpc.faces, topology: rpc.topology },
     namingVersion: NAMING_VERSION,
@@ -545,8 +558,8 @@ async function _composeIntoCumulative({
   });
 
   return {
-    cumulativeBrep: rpc.brepBytes,
-    cumulativeParamHash: paramHash,
+    brep: rpc.brepBytes,
+    paramHash,
     faces: rpc.faces || [],
     topology: rpc.topology || { vertices: [], edges: [] },
     cached: false,

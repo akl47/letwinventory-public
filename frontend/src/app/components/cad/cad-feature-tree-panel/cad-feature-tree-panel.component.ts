@@ -59,11 +59,12 @@ interface TreeNode {
   imports: [CommonModule, MatIconModule, MatTooltipModule, MatMenuModule],
   template: `
     <div class="panel">
-      <header class="panel-header">
-        <mat-icon>account_tree</mat-icon>
-        <span>Feature Tree</span>
-      </header>
-      <ul class="tree">
+      <div class="section features-section">
+        <header class="panel-header">
+          <mat-icon>account_tree</mat-icon>
+          <span>Feature Tree</span>
+        </header>
+        <ul class="tree">
         <li *ngFor="let n of nodes()"
             [attr.data-testid]="rowTestId(n)"
             class="row"
@@ -97,7 +98,39 @@ interface TreeNode {
           </button>
           <mat-icon *ngIf="n.selectable && n.kind === 'sketch'" class="pick-hint">arrow_forward</mat-icon>
         </li>
-      </ul>
+        </ul>
+      </div>
+
+      <!-- Bodies section. Lists every body in the part (1 per additive
+           feature with merge=false, plus a default body for merge=true
+           additive chains). Each row has a visibility toggle. -->
+      <div class="section bodies-section">
+        <header class="panel-header">
+          <mat-icon>category</mat-icon>
+          <span>Bodies</span>
+          <span class="count" *ngIf="bodiesView().length > 0">({{ bodiesView().length }})</span>
+        </header>
+        <ul class="tree">
+          <li *ngIf="bodiesView().length === 0" class="row empty-row">
+            <span class="label muted">No body yet — add an Extrude or Revolve.</span>
+          </li>
+          <li *ngFor="let b of bodiesView(); let i = index"
+              class="row depth-0"
+              [class.hidden-feature]="!b.visible"
+              [attr.data-testid]="'body-' + b.id"
+              (contextmenu)="onBodyContextMenu($event, b)">
+            <span class="chevron-spacer"></span>
+            <mat-icon class="kind-icon extrude">deployed_code</mat-icon>
+            <span class="label">{{ b.label }}</span>
+            <button class="visibility-toggle"
+                    [attr.data-testid]="'body-visibility-' + b.id"
+                    [matTooltip]="b.visible ? 'Hide' : 'Show'"
+                    (click)="onBodyVisibilityClick(b, $event)">
+              <mat-icon>{{ b.visible ? 'visibility' : 'visibility_off' }}</mat-icon>
+            </button>
+          </li>
+        </ul>
+      </div>
 
       <!-- Floating trigger for the context menu, positioned at the cursor on right-click. -->
       <div #menuTriggerEl
@@ -105,6 +138,31 @@ interface TreeNode {
            [style.left.px]="menuX()"
            [style.top.px]="menuY()"
            [matMenuTriggerFor]="ctxMenu"></div>
+
+      <!-- Body context menu trigger — separate from the feature/sketch
+           one so its menu can list body-specific actions. -->
+      <div #bodyMenuTriggerEl
+           class="menu-anchor"
+           [style.left.px]="bodyMenuX()"
+           [style.top.px]="bodyMenuY()"
+           [matMenuTriggerFor]="bodyCtxMenu"></div>
+      <mat-menu #bodyCtxMenu="matMenu">
+        <ng-container *ngIf="contextBody() as b">
+          <button mat-menu-item data-testid="ctx-body-toggle-visibility"
+                  (click)="bodyVisibilityToggled.emit(b.id)">
+            <mat-icon>{{ b.visible ? 'visibility_off' : 'visibility' }}</mat-icon>
+            {{ b.visible ? 'Hide body' : 'Show body' }}
+          </button>
+          <button mat-menu-item data-testid="ctx-body-isolate"
+                  (click)="bodyIsolated.emit(b.id)">
+            <mat-icon>filter_center_focus</mat-icon> Isolate body
+          </button>
+          <button mat-menu-item data-testid="ctx-body-delete"
+                  (click)="bodyDeleted.emit(b.id)">
+            <mat-icon>delete</mat-icon> Delete body
+          </button>
+        </ng-container>
+      </mat-menu>
 
       <mat-menu #ctxMenu="matMenu">
         <ng-container *ngIf="contextNode() as n">
@@ -159,8 +217,17 @@ interface TreeNode {
     </div>
   `,
   styles: [`
-    .panel { display: flex; flex-direction: column; height: 100%; }
-    .panel-header { display: flex; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid #444; font-weight: 600; font-size: 13px; text-transform: uppercase; opacity: 0.75; }
+    .panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+    /* Two equal-height sections stacked vertically. Each section scrolls its
+       own list independently so a long feature tree doesn't push bodies
+       off-screen, and a long bodies list doesn't push features off-screen. */
+    .section { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+    .features-section { border-bottom: 1px solid #555; }
+    .section .tree { flex: 1 1 0; overflow-y: auto; }
+    .panel-header { display: flex; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid #444; font-weight: 600; font-size: 13px; text-transform: uppercase; opacity: 0.75; flex-shrink: 0; }
+    .panel-header .count { opacity: 0.55; font-weight: 400; text-transform: none; margin-left: 2px; }
+    .empty-row { font-style: italic; opacity: 0.55; }
+    .label.muted { opacity: 0.7; }
     .tree { list-style: none; padding: 0; margin: 0; user-select: none; }
     .row { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid #2a2a3a; font-size: 13px; line-height: 1.2; }
     .row.depth-1 { padding-left: 28px; background: #1f1f2e; }
@@ -219,6 +286,21 @@ export class CadFeatureTreePanelComponent {
   /** Set of selected sketch ids — parallel to `selectedFeatures`. */
   selectedSketches = input<Set<string>>(new Set());
 
+  // ── Bodies panel inputs / outputs ───────────────────────────────────
+  /** Body roster surfaced in the bottom half of the panel. Editor
+   * populates from the regen response. */
+  bodyList = input<Array<{ id: string; name: string | null }>>([]);
+  /** Body ids currently hidden — drawn faded with a closed-eye icon
+   * and excluded from rendered geometry. */
+  hiddenBodyIds = input<Set<string>>(new Set());
+  /** Body visibility toggled — emit the body id. Editor flips its
+   * hiddenBodies signal in response. */
+  bodyVisibilityToggled = output<string>();
+  /** Isolate body — hide everything but this one. */
+  bodyIsolated = output<string>();
+  /** Delete body — drops every feature whose target was this body. */
+  bodyDeleted = output<string>();
+
   // Expansion state: keys for expanded nodes (origin is expanded by default).
   // REQ 622 — Origin collapsed by default. Per-session state; user can expand
   // and the expansion is preserved while the editor is open.
@@ -229,7 +311,38 @@ export class CadFeatureTreePanelComponent {
   menuX = signal(0);
   menuY = signal(0);
   contextNode = signal<TreeNode | null>(null);
-  private menuTrigger = viewChild(MatMenuTrigger);
+  // Separate context-menu state for body rows — independent X/Y +
+  // contextBody so menu placement / contents don't collide with the
+  // feature/sketch one.
+  bodyMenuX = signal(0);
+  bodyMenuY = signal(0);
+  contextBody = signal<{ id: string; label: string; visible: boolean } | null>(null);
+  private menuTrigger = viewChild<MatMenuTrigger>('menuTriggerEl', { read: MatMenuTrigger });
+  private bodyMenuTrigger = viewChild<MatMenuTrigger>('bodyMenuTriggerEl', { read: MatMenuTrigger });
+
+  /** Body roster computed into the shape the template renders — adds
+   * a default "Body N" label + the visibility flag. */
+  bodiesView = computed<Array<{ id: string; label: string; visible: boolean }>>(() => {
+    const hidden = this.hiddenBodyIds();
+    return this.bodyList().map((b, i) => ({
+      id: b.id,
+      label: b.name && b.name.trim() ? b.name : `Body ${i + 1}`,
+      visible: !hidden.has(b.id),
+    }));
+  });
+
+  onBodyVisibilityClick(b: { id: string }, ev: MouseEvent): void {
+    ev.stopPropagation();
+    this.bodyVisibilityToggled.emit(b.id);
+  }
+
+  onBodyContextMenu(ev: MouseEvent, b: { id: string; label: string; visible: boolean }): void {
+    ev.preventDefault();
+    this.bodyMenuX.set(ev.clientX);
+    this.bodyMenuY.set(ev.clientY);
+    this.contextBody.set(b);
+    queueMicrotask(() => this.bodyMenuTrigger()?.openMenu());
+  }
 
   // What the context menu will act on, given the right-clicked node and the
   // current selection. Mirrors the OS-file-manager rule: if the right-clicked
