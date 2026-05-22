@@ -1,5 +1,5 @@
-import type { SketchState, LineEntity, CircleEntity, ArcEntity } from './types';
-import { findPoint, linesOf } from './types';
+import type { SketchState, CircleEntity, ArcEntity } from './types';
+import { findPoint, findEntity } from './types';
 import { tessellateCircle, tessellateArc, DEFAULT_CHORD_TOLERANCE } from './tessellator';
 
 // REQ 617 — typed profile edges. Each edge owns its analytic identity (line /
@@ -74,13 +74,37 @@ export function tessellateProfileLoop(
   return out;
 }
 
-function buildLineAdjacency(lines: LineEntity[]): Map<string, string[]> {
+/** Lines and arcs share an "edge with two endpoints" structure for profile
+ * loop walking. A unified Segment lets the loop extractor walk through
+ * filleted corners (line → arc → line → arc → …) where neither line is
+ * directly connected to another line. */
+interface ProfileSegment {
+  id: string;
+  kind: 'line' | 'arc';
+  startId: string;
+  endId: string;
+}
+
+function segmentsOf(state: SketchState): ProfileSegment[] {
+  const out: ProfileSegment[] = [];
+  for (const e of state.entities) {
+    if (e.construction) continue;
+    if (e.kind === 'line') {
+      out.push({ id: e.id, kind: 'line', startId: e.startId, endId: e.endId });
+    } else if (e.kind === 'arc') {
+      out.push({ id: e.id, kind: 'arc', startId: e.startId, endId: e.endId });
+    }
+  }
+  return out;
+}
+
+function buildSegmentAdjacency(segments: ProfileSegment[]): Map<string, string[]> {
   const adj = new Map<string, string[]>();
-  for (const l of lines) {
-    if (!adj.has(l.startId)) adj.set(l.startId, []);
-    if (!adj.has(l.endId)) adj.set(l.endId, []);
-    adj.get(l.startId)!.push(l.id);
-    adj.get(l.endId)!.push(l.id);
+  for (const s of segments) {
+    if (!adj.has(s.startId)) adj.set(s.startId, []);
+    if (!adj.has(s.endId))   adj.set(s.endId,   []);
+    adj.get(s.startId)!.push(s.id);
+    adj.get(s.endId)!.push(s.id);
   }
   return adj;
 }
@@ -89,7 +113,7 @@ function buildLineAdjacency(lines: LineEntity[]): Map<string, string[]> {
 // (connected components by shared endpoints). Each non-construction circle is
 // trivially its own loop; line clusters validate via extractClosedLoop on a
 // subset state. Returns every valid loop in stable order so an ExtrudeFeature's
-// loopIndices array maps to the same loop across regenerations.
+// regionIndices array maps to the same region across regenerations.
 export interface ProfilesResult {
   loops: ProfileLoop[];
   errors: string[];
@@ -107,36 +131,47 @@ export function extractClosedLoops(state: SketchState): ProfilesResult {
     loops.push([{ kind: 'circle', center: { x: center.x, y: center.y }, radius: e.radius }]);
   }
 
-  // Line components: BFS through shared endpoints.
-  const lines = linesOf(state).filter(l => !l.construction);
-  const adj = buildLineAdjacency(lines);
-  const visitedLines = new Set<string>();
-  for (const startLine of lines) {
-    if (visitedLines.has(startLine.id)) continue;
-    const componentLineIds = new Set<string>([startLine.id]);
-    const componentPointIds = new Set<string>([startLine.startId, startLine.endId]);
-    const queue: string[] = [startLine.id];
+  // Segment components (lines + arcs): BFS through shared endpoints so a
+  // chain like "line → arc → line → arc → …" lands in a single component.
+  // Without arcs in the adjacency, a filleted rectangle (4 lines + 4 arcs,
+  // no two lines sharing an endpoint) gets split into 4 single-line
+  // components that each fail the ≥3-segments check.
+  const segments = segmentsOf(state);
+  const adj = buildSegmentAdjacency(segments);
+  const segById = new Map(segments.map(s => [s.id, s] as const));
+  const visited = new Set<string>();
+  for (const startSeg of segments) {
+    if (visited.has(startSeg.id)) continue;
+    const componentIds = new Set<string>([startSeg.id]);
+    const componentPointIds = new Set<string>([startSeg.startId, startSeg.endId]);
+    const queue: string[] = [startSeg.id];
     while (queue.length > 0) {
-      const lid = queue.shift()!;
-      const line = lines.find(l => l.id === lid)!;
-      for (const pid of [line.startId, line.endId]) {
-        for (const adjLid of adj.get(pid) ?? []) {
-          if (componentLineIds.has(adjLid)) continue;
-          componentLineIds.add(adjLid);
-          queue.push(adjLid);
-          const adjLine = lines.find(l => l.id === adjLid)!;
-          componentPointIds.add(adjLine.startId);
-          componentPointIds.add(adjLine.endId);
+      const sid = queue.shift()!;
+      const seg = segById.get(sid)!;
+      for (const pid of [seg.startId, seg.endId]) {
+        for (const adjSid of adj.get(pid) ?? []) {
+          if (componentIds.has(adjSid)) continue;
+          componentIds.add(adjSid);
+          queue.push(adjSid);
+          const adjSeg = segById.get(adjSid)!;
+          componentPointIds.add(adjSeg.startId);
+          componentPointIds.add(adjSeg.endId);
         }
       }
     }
-    for (const lid of componentLineIds) visitedLines.add(lid);
-    const subLines = lines.filter(l => componentLineIds.has(l.id));
+    for (const sid of componentIds) visited.add(sid);
+    // Arcs also reference a center point — include it in the sub-state so
+    // extractClosedLoop can compute the arc's angles.
+    const componentEntityIds = new Set<string>(componentIds);
+    for (const id of componentIds) {
+      const e = findEntity(state, id);
+      if (e?.kind === 'arc') componentPointIds.add(e.centerId);
+    }
     const subState: SketchState = {
-      entities: [
-        ...state.entities.filter(e => e.kind === 'point' && componentPointIds.has(e.id)),
-        ...subLines,
-      ],
+      entities: state.entities.filter(e =>
+        (e.kind === 'point' && componentPointIds.has(e.id)) ||
+        componentEntityIds.has(e.id),
+      ),
       constraints: [],
     };
     const sub = extractClosedLoop(subState);
@@ -147,20 +182,117 @@ export function extractClosedLoops(state: SketchState): ProfilesResult {
   return { loops, errors };
 }
 
+/** A planar region in the sketch — one outer loop, optionally with one or
+ * more inner loops cut out (holes). For two concentric circles the
+ * detector emits two regions: the inner disk (outer=inner-loop, no holes)
+ * and the annulus (outer=outer-loop, holes=[inner-loop]). For three
+ * nested loops A⊃B⊃C, three regions: innermost disk (C, no holes), middle
+ * ring (B, holes=[C]), outer ring (A, holes=[B]). Holes are *direct*
+ * children only — grandchildren are already excluded by their own
+ * parent's hole. */
+export interface ProfileRegion {
+  outer: ProfileLoop;
+  holes: ProfileLoop[];
+}
+
+export interface RegionsResult {
+  regions: ProfileRegion[];
+  errors: string[];
+}
+
+export function extractRegions(state: SketchState): RegionsResult {
+  const { loops, errors } = extractClosedLoops(state);
+  // Pre-tessellate each loop once for the containment tests below. Use a
+  // coarse chord tolerance — point-in-polygon doesn't need fidelity.
+  const tessellated = loops.map(l => tessellateProfileLoop(l, 1.0));
+  // Containment matrix: contains[i][j] = "loop i is inside loop j".
+  // Use a representative point of loop i (its first vertex is fine — any
+  // non-degenerate loop has a vertex strictly on its own boundary; we test
+  // a sample point slightly interior by offsetting toward the polygon's
+  // centroid, so boundary-on-boundary ambiguity doesn't break the test).
+  const insideOf: Set<number>[] = loops.map(() => new Set<number>());
+  for (let i = 0; i < loops.length; i++) {
+    const sample = interiorSample(tessellated[i]);
+    if (!sample) continue;
+    for (let j = 0; j < loops.length; j++) {
+      if (i === j) continue;
+      if (pointInPolygon(sample, tessellated[j])) insideOf[i].add(j);
+    }
+  }
+  // Parent of i = the loop j∈insideOf[i] that itself has the most
+  // ancestors (i.e. deepest container = direct parent). If insideOf[i] is
+  // empty, i is a top-level loop with no parent.
+  const parent: (number | null)[] = loops.map((_, i) => {
+    let best: number | null = null;
+    let bestDepth = -1;
+    for (const j of insideOf[i]) {
+      const depth = insideOf[j].size;
+      if (depth > bestDepth) { best = j; bestDepth = depth; }
+    }
+    return best;
+  });
+  // Region for loop i = i's loop as the outer, plus every direct child of
+  // i as a hole. Region indices line up with loop indices so an existing
+  // ExtrudeFeature.loopIndices array continues to point at the right
+  // entries in the non-nested case (where the two are identical).
+  const regions: ProfileRegion[] = loops.map((loop, i) => {
+    const holes: ProfileLoop[] = [];
+    for (let c = 0; c < loops.length; c++) {
+      if (parent[c] === i) holes.push(loops[c]);
+    }
+    return { outer: loop, holes };
+  });
+  return { regions, errors };
+}
+
+// Point-in-polygon via the standard ray-cast crossings test. Works on the
+// tessellated polyline produced by tessellateProfileLoop (vertex list,
+// last vertex does NOT repeat the first).
+function pointInPolygon(p: Point2, poly: Point2[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y;
+    const xj = poly[j].x, yj = poly[j].y;
+    const intersect = ((yi > p.y) !== (yj > p.y)) &&
+      (p.x < ((xj - xi) * (p.y - yi)) / (yj - yi + 1e-12) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// Pick a sample point strictly inside the polygon. We use the centroid —
+// for any non-self-intersecting polygon (which a valid profile loop must
+// be) the centroid is in the interior. This avoids the "first vertex sits
+// on the boundary" ambiguity of a naive ray-cast self-test.
+function interiorSample(poly: Point2[]): Point2 | null {
+  if (poly.length < 3) return null;
+  let sx = 0, sy = 0;
+  for (const p of poly) { sx += p.x; sy += p.y; }
+  const centroid = { x: sx / poly.length, y: sy / poly.length };
+  if (pointInPolygon(centroid, poly)) return centroid;
+  // Centroid fell outside (concave polygon, rare for sketch loops). Fall
+  // back to nudging the first vertex toward the centroid by a small
+  // fraction — far enough off the boundary to escape the ambiguity.
+  const v0 = poly[0];
+  return {
+    x: v0.x + (centroid.x - v0.x) * 0.01,
+    y: v0.y + (centroid.y - v0.y) * 0.01,
+  };
+}
+
 export function extractClosedLoop(state: SketchState): ProfileResult {
   // REQ 560: construction entities are excluded from profile extraction.
-  const lines = linesOf(state).filter(l => !l.construction);
+  const segments = segmentsOf(state);
+  const lines = segments.filter(s => s.kind === 'line');
+  const arcs  = segments.filter(s => s.kind === 'arc');
   const circles = state.entities.filter(
     (e): e is CircleEntity => e.kind === 'circle' && !e.construction,
-  );
-  const arcs = state.entities.filter(
-    (e): e is ArcEntity => e.kind === 'arc' && !e.construction,
   );
 
   // REQ 612 / 617: single-circle profile — sketch contains exactly one
   // non-construction circle and no non-construction lines or arcs. Return as a
   // single CircleProfileEdge so the kernel produces a true cylindrical face.
-  if (lines.length === 0 && arcs.length === 0 && circles.length === 1) {
+  if (segments.length === 0 && circles.length === 1) {
     const c = circles[0];
     const center = findPoint(state, c.centerId);
     if (!center) return { loop: null, error: `circle ${c.id}: center point not found` };
@@ -169,14 +301,17 @@ export function extractClosedLoop(state: SketchState): ProfileResult {
     };
   }
 
-  if (lines.length === 0) {
-    return { loop: null, error: 'sketch has no lines (empty profile)' };
+  if (segments.length === 0) {
+    return { loop: null, error: 'sketch has no lines or arcs (empty profile)' };
   }
-  if (lines.length < 3) {
-    return { loop: null, error: 'closed profile requires at least 3 line segments' };
+  if (segments.length < 3) {
+    return { loop: null, error: 'closed profile requires at least 3 segments' };
   }
+  // Statistics in the error messages stay focused on lines vs arcs so
+  // user-facing errors still read naturally for the common rectangle case.
+  void lines; void arcs;
 
-  const adj = buildLineAdjacency(lines);
+  const adj = buildSegmentAdjacency(segments);
   for (const [pointId, incident] of adj) {
     if (incident.length === 1) {
       return { loop: null, error: `open chain detected at point ${pointId}` };
@@ -186,40 +321,67 @@ export function extractClosedLoop(state: SketchState): ProfileResult {
     }
   }
 
-  const startLine = lines[0];
-  const visitedLines = new Set<string>();
-  const walk: string[] = [];
-  let prevPoint = startLine.startId;
-  walk.push(prevPoint);
-  let currentLine: string | undefined = startLine.id;
-  while (currentLine && !visitedLines.has(currentLine)) {
-    visitedLines.add(currentLine);
-    const line = lines.find(l => l.id === currentLine)!;
-    const nextPoint = line.startId === prevPoint ? line.endId : line.startId;
-    walk.push(nextPoint);
+  const start = segments[0];
+  const visited = new Set<string>();
+  const pointWalk: string[]   = [start.startId];
+  const segmentWalk: string[] = [];
+  let prevPoint = start.startId;
+  let currentId: string | undefined = start.id;
+  const segmentById = new Map(segments.map(s => [s.id, s] as const));
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    segmentWalk.push(currentId);
+    const seg = segmentById.get(currentId)!;
+    const nextPoint = seg.startId === prevPoint ? seg.endId : seg.startId;
+    pointWalk.push(nextPoint);
     prevPoint = nextPoint;
     const incident = adj.get(prevPoint) || [];
-    currentLine = incident.find(id => id !== currentLine);
+    currentId = incident.find(id => id !== currentId);
   }
-  if (walk[0] !== walk[walk.length - 1]) {
+  if (pointWalk[0] !== pointWalk[pointWalk.length - 1]) {
     return { loop: null, error: 'profile is not a closed loop' };
   }
-  if (visitedLines.size !== lines.length) {
+  if (visited.size !== segments.length) {
     return { loop: null, error: 'sketch contains multiple disjoint loops' };
   }
 
-  // Materialise as line edges in walked order. walk has length lines.length + 1
-  // with walk[0] == walk[last]; emit N edges joining consecutive vertices.
+  // Materialise each walked segment as the matching ProfileEdge kind. Arcs
+  // walked in reverse direction (endId → startId) get their CCW flag
+  // inverted so the kernel still sees the arc going from `start` to `end`
+  // in the same rotational sense.
   const edges: ProfileEdge[] = [];
-  for (let i = 0; i < walk.length - 1; i++) {
-    const a = findPoint(state, walk[i]);
-    const b = findPoint(state, walk[i + 1]);
-    if (!a || !b) return { loop: null, error: `profile walk hit missing point ${walk[i]} or ${walk[i + 1]}` };
-    edges.push({
-      kind: 'line',
-      start: { x: a.x, y: a.y },
-      end: { x: b.x, y: b.y },
-    });
+  for (let i = 0; i < segmentWalk.length; i++) {
+    const seg = segmentById.get(segmentWalk[i])!;
+    const aId = pointWalk[i];
+    const bId = pointWalk[i + 1];
+    const a = findPoint(state, aId);
+    const b = findPoint(state, bId);
+    if (!a || !b) return { loop: null, error: `profile walk hit missing point ${aId} or ${bId}` };
+    if (seg.kind === 'line') {
+      edges.push({ kind: 'line', start: { x: a.x, y: a.y }, end: { x: b.x, y: b.y } });
+    } else {
+      const arc = findEntity<ArcEntity>(state, seg.id);
+      if (!arc || arc.kind !== 'arc') {
+        return { loop: null, error: `arc ${seg.id}: entity not found` };
+      }
+      const center = findPoint(state, arc.centerId);
+      if (!center) return { loop: null, error: `arc ${seg.id}: center point not found` };
+      const startAngle = Math.atan2(a.y - center.y, a.x - center.x);
+      const endAngle   = Math.atan2(b.y - center.y, b.x - center.x);
+      // arc.ccw is the rotational sense from arc.startId → arc.endId. When
+      // the walker traverses the arc in that same direction the CCW flag
+      // applies as-is; when it walks the reverse direction the sense flips.
+      const walkedNatural = aId === arc.startId;
+      const ccw = walkedNatural ? arc.ccw : !arc.ccw;
+      edges.push({
+        kind: 'arc',
+        center: { x: center.x, y: center.y },
+        radius: arc.radius,
+        startAngle, endAngle, ccw,
+        start: { x: a.x, y: a.y },
+        end:   { x: b.x, y: b.y },
+      });
+    }
   }
   return { loop: edges };
 }

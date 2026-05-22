@@ -28,6 +28,55 @@ describe('cadProfile.extractClosedLoop (server port)', () => {
     expect(loop.every(e => e.kind === 'line')).toBe(true);
   });
 
+  it('extracts a 4-corner-filleted rectangle as an 8-edge closed loop (4 lines + 4 arcs)', () => {
+    // Same shape as the frontend test: rectangle 0..10 with radius-2 fillet
+    // on every corner. Without arc support the walker treats the 4 lines as
+    // disjoint single-segment components and fails with the
+    // "≥3 segments" error.
+    const points = [
+      [2, 0], [8, 0],          // p1, p2: bottom edge tangents
+      [10, 2], [10, 8],        // p3, p4: right edge tangents
+      [8, 10], [2, 10],        // p5, p6: top edge tangents
+      [0, 8], [0, 2],          // p7, p8: left edge tangents
+      [8, 2], [8, 8],          // p9, p10: BR, TR fillet centres
+      [2, 8], [2, 2],          // p11, p12: TL, BL fillet centres
+    ];
+    const arcs = [
+      // [startIdx, endIdx, centerIdx, ccw]
+      [2, 3, 9, true],
+      [4, 5, 10, true],
+      [6, 7, 11, true],
+      [8, 1, 12, true],
+    ];
+    const state = {
+      entities: [
+        ...points.map(([x, y], i) => ({ kind: 'point', id: `p${i + 1}`, x, y })),
+        // line edges between adjacent tangent pairs
+        { kind: 'line', id: 'l1', startId: 'p1', endId: 'p2' },
+        { kind: 'line', id: 'l2', startId: 'p3', endId: 'p4' },
+        { kind: 'line', id: 'l3', startId: 'p5', endId: 'p6' },
+        { kind: 'line', id: 'l4', startId: 'p7', endId: 'p8' },
+        ...arcs.map(([s, e, c, ccw], i) => {
+          const start = points[s - 1];
+          const center = points[c - 1];
+          return {
+            kind: 'arc', id: `arc${i + 1}`,
+            startId: `p${s}`, endId: `p${e}`, centerId: `p${c}`,
+            radius: Math.hypot(start[0] - center[0], start[1] - center[1]),
+            ccw,
+          };
+        }),
+      ],
+      constraints: [],
+    };
+    const { loops, errors } = extractClosedLoops(state);
+    expect(errors).toEqual([]);
+    expect(loops.length).toBe(1);
+    expect(loops[0].length).toBe(8);
+    expect(loops[0].filter(e => e.kind === 'line').length).toBe(4);
+    expect(loops[0].filter(e => e.kind === 'arc').length).toBe(4);
+  });
+
   it('returns a single typed circle edge for the single-circle profile', () => {
     const state = {
       entities: [

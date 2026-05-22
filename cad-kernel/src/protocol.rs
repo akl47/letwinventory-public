@@ -82,12 +82,11 @@ pub struct Plane3 {
 
 /// Typed profile loop matching `frontend/src/app/cad/lib/profile.ts:ProfileEdge`.
 ///
-/// Phase 0 only reads the polygon vertices (Line.start) and the analytic
-/// circle (Circle.center + radius). Arc fields are accepted but fall back to
-/// chord approximation — Phase 1 wires them to OCCT's `Edge::arc`.
+/// All three edge kinds (line, arc, circle) produce analytic OCCT edges —
+/// `Edge::segment` for lines, `Edge::arc` (3-point) for arcs, and
+/// `Workplane::circle` for the single-circle profile fast path.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-#[allow(dead_code)]
 pub enum ProfileEdge {
     Line {
         start: Point2,
@@ -118,7 +117,13 @@ pub enum ProfileEdge {
 pub struct BuildExtrudeParams {
     #[serde(rename = "featureId", default = "default_feature_id")]
     pub feature_id: String,
+    /// Outer loop of the planar region being extruded.
     pub profile: Vec<ProfileEdge>,
+    /// Inner loops cut out of the outer loop (holes). Empty for solid
+    /// profiles; one or more entries produces a donut/annular extrude
+    /// via Face::subtract → CompoundFace::extrude.
+    #[serde(default)]
+    pub holes: Vec<Vec<ProfileEdge>>,
     pub plane: Plane3,
     pub distance: f64,
     #[serde(default)]
@@ -172,3 +177,4 @@ pub struct TopologyEdge {
     pub is_straight: bool,
     pub endpoints: [[f64; 3]; 2],
 }
+

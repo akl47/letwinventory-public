@@ -1,6 +1,6 @@
 import {
   Component, ElementRef, ViewChild, AfterViewInit, OnDestroy,
-  effect, input, output, signal, NgZone, inject,
+  effect, input, output, signal, NgZone, inject, HostListener,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import * as THREE from 'three';
@@ -77,6 +77,30 @@ export type SketchPreview =
   // inference ("horizontal", "30°", "aligned", "on line", …).
   | { kind: 'inference-badge'; x: number; y: number; label: string };
 
+// Click-to-select profile region overlay used during the Extrude sidebar
+// flow. The cad-editor computes one entry per closed loop in the host
+// sketch (tessellated polygon already projected into world coords on the
+// sketch plane). The viewer renders each as a translucent mesh, hit-tests
+// clicks against the fill group, and reports back the loop index for the
+// editor to toggle in extrudeSelectedLoops.
+export interface ProfileFill {
+  /** Region index in the extracted RegionsResult.regions array — matches
+   * the index the editor stores in ExtrudeFeature.regionIndices. */
+  index: number;
+  /** Outer polygon vertices in world coordinates, already projected onto
+   * the host sketch's plane. Last vertex does NOT repeat the first. */
+  polygon3d: Array<[number, number, number]>;
+  /** Inner-loop polygons (holes) for this region. Each hole is rendered
+   * as a cutout in the triangulated fill — concentric circles produce
+   * one donut-shaped fill via the outer region's `holePolygons3d`.
+   * Empty for hole-less regions. */
+  holePolygons3d?: Array<Array<[number, number, number]>>;
+  /** Plane normal — used so the mesh can be lifted a hair off the sketch
+   * plane to avoid Z-fighting against any other geometry sharing the
+   * plane (e.g. sketch overlay lines, a face hosting the sketch). */
+  normal: [number, number, number];
+}
+
 @Component({
   selector: 'app-cad-viewer',
   standalone: true,
@@ -84,6 +108,12 @@ export type SketchPreview =
   template: `
     <div class="viewer" data-testid="cad-viewer">
       <div #mount class="canvas-mount"></div>
+      <div #cubeMount class="nav-cube" data-testid="nav-cube"
+           (pointerdown)="onCubePointerDown($event)"
+           (pointermove)="onCubePointerMove($event)"
+           (pointerup)="onCubePointerUp($event)"
+           (pointerleave)="onCubePointerUp($event)"
+           (click)="onCubeClick($event)"></div>
       <div class="hud" *ngIf="loading()">
         <span class="spinner"></span>
         Regenerating geometry{{ loadProgress() ? ' — ' + loadProgress() : '…' }}
@@ -94,6 +124,8 @@ export type SketchPreview =
     .viewer { position: relative; width: 100%; height: 100%; background: #1e1e2e; }
     .canvas-mount { width: 100%; height: 100%; }
     .canvas-mount canvas { display: block; }
+    .nav-cube { position: absolute; top: 12px; right: 62px; width: 103px; height: 103px; cursor: pointer; user-select: none; }
+    .nav-cube canvas { display: block; }
     .hud { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); padding: 8px 16px; background: rgba(0,0,0,0.7); border-radius: 4px; font-size: 12px; color: #fff; display: flex; align-items: center; gap: 10px; }
     .hud .spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.25); border-top-color: #66bb6a; border-radius: 50%; animation: hud-spin 0.9s linear infinite; }
     @keyframes hud-spin { to { transform: rotate(360deg); } }
@@ -101,6 +133,32 @@ export type SketchPreview =
 })
 export class CadViewerComponent implements AfterViewInit, OnDestroy {
   @ViewChild('mount', { static: true }) mountRef!: ElementRef<HTMLDivElement>;
+  @ViewChild('cubeMount', { static: true }) cubeMountRef!: ElementRef<HTMLDivElement>;
+
+  // Navigation cube — small Onshape-style widget rendered in its own WebGL
+  // context in the top-right corner. Each face is sub-divided into a 3x3
+  // grid: the centre cell jumps to the canonical orthographic view, the 4
+  // edge cells jump to a 45° "edge" view (camera averaging two adjacent
+  // faces), and the 4 corner cells jump to an isometric "corner" view
+  // (camera averaging three faces). Faces-only is the common case but the
+  // edges/corners are how Onshape users get to ISO views without
+  // memorising angles. LMB-drag on the cube body acts as a free-orbit
+  // shortcut, mirroring SolidWorks's "click and drag the view cube".
+  private cubeRenderer: THREE.WebGLRenderer | null = null;
+  private cubeScene: THREE.Scene | null = null;
+  private cubeCamera: THREE.OrthographicCamera | null = null;
+  private cubeMesh: THREE.Mesh | null = null;
+  private cubeAnimHandle = 0;
+  // Drag-to-orbit state for the nav cube.
+  private cubeDragStart: { x: number; y: number } | null = null;
+  private cubeDidDrag = false;
+  private readonly CUBE_DRAG_THRESHOLD_PX = 3;
+  // Hover-debug state — one material slot per region (26 total), with the
+  // region's display name so we can console.log it on hover and visually
+  // highlight just that region by tinting its material.
+  private cubeMaterials: THREE.MeshBasicMaterial[] = [];
+  private cubeBaseColors: THREE.Color[] = [];
+  private hoveredCubeSlot: number | null = null;
 
   geometry = input<ModelGeometry | null>(null);
   selected = input<string | null>(null);
@@ -193,10 +251,46 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * wants to remove that constraint. */
   constraintIconClicked = output<string>();
 
+  // Vertex picker (Up to Vertex end condition + future "pick a vertex"
+  // flows). When true, the viewer renders a small clickable sphere at
+  // every ModelTopology vertex and restricts click hit-testing to those
+  // spheres — face / datum / region clicks are suppressed. Mirrors the
+  // existing profile-fill picker's exclusivity model.
+  vertexPickMode = input<boolean>(false);
+  /** Extra pickable vertices beyond the BRep topology — typically sketch
+   * points projected to 3D. Each id is opaque to the viewer; consumers
+   * use their own namespace (e.g. `sketch:<sketchId>/<pointId>`) so
+   * vertexPicked emits the same string the backend expects. */
+  extraPickableVertices = input<Array<{ id: string; position: [number, number, number] }>>([]);
+  /** Vertex id picked — emitted on click of a vertex marker. */
+  vertexPicked = output<string>();
+  /** Face pick mode (Up to Surface end condition). When on, clicks ONLY
+   * fire facePicked with a BRep face id. Hover gates to faces. Mutually
+   * exclusive with vertexPickMode at the editor layer. */
+  facePickMode = input<boolean>(false);
+  /** Face id picked — emitted on click of a face in pick mode. */
+  facePicked = output<string>();
+
+  // Profile-region picker (Extrude sidebar). Populated by cad-editor when
+  // the sidebar is open; the viewer renders one translucent mesh per loop
+  // and emits profileFillClick on hit-test. Empty array disables the
+  // overlay entirely.
+  profileFills = input<ProfileFill[]>([]);
+  /** Loop indices the user has currently selected for extrusion. Drives
+   * the fill colour: selected = bright orange, unselected = grey. */
+  profileFillsSelected = input<Set<number>>(new Set());
+  /** Index of the loop the pointer is hovering, or null. */
+  profileFillsHovered = input<number | null>(null);
+  /** User clicked a profile fill — emit its loop index so the editor can
+   * toggle it in extrudeSelectedLoops. */
+  profileFillClick = output<number>();
+  /** Pointer is over a profile fill — null means it left. */
+  profileFillHover = output<number | null>();
+
   private zone = inject(NgZone);
 
   private scene!: THREE.Scene;
-  private camera!: THREE.PerspectiveCamera;
+  private camera!: THREE.OrthographicCamera;
   private renderer!: THREE.WebGLRenderer;
   // CSS2DRenderer overlays HTML elements positioned by 3D coordinates. Used
   // for crisp text labels (dimension annotations) that scale and translate
@@ -249,6 +343,17 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // REQ 629 — separate group for the drawing preview overlay; rebuilt on every
   // sketchPreview input change.
   private sketchPreviewGroup!: THREE.Group;
+  // Translucent profile-region overlays for the Extrude sidebar. Rebuilt on
+  // every profileFills input change; material colour swapped when the
+  // selected/hovered inputs change so we don't pay full geometry rebuild
+  // cost just for a hover.
+  private profileFillGroup!: THREE.Group;
+  private profileFillMeshes = new Map<number, THREE.Mesh>();
+  // Vertex-pick overlay (Up to Vertex). Small spheres at each topology
+  // vertex; the group's visibility is toggled by the vertexPickMode input
+  // rather than swapped per build, so picker open/close is instant.
+  private vertexPickGroup!: THREE.Group;
+  private vertexPickMeshes = new Map<string, THREE.Mesh>();
 
   private rafHandle = 0;
   private resizeObserver?: ResizeObserver;
@@ -256,6 +361,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // Orbit / pan / zoom state.
   private orbiting = false;
   private panning = false;
+  private zoomDragging = false;
   private orbitTheta = Math.PI / 4;
   private orbitPhi = Math.PI / 4;
   private orbitTarget = new THREE.Vector3(0, 0, 0);
@@ -303,6 +409,36 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const preview = this.sketchPreview();
       const sid = this.activeSketchId();
       if (this.scene) this.rebuildPreview(preview, sid);
+    });
+    // Profile-region overlays: rebuild geometry when the fills input
+    // changes, and re-colour materials when selected/hovered inputs change
+    // (cheap — no geometry rebuild).
+    effect(() => {
+      const fills = this.profileFills();
+      if (this.scene) this.rebuildProfileFills(fills);
+    });
+    effect(() => {
+      const sel = this.profileFillsSelected();
+      const hov = this.profileFillsHovered();
+      if (this.scene) this.recolorProfileFills(sel, hov);
+    });
+    // Vertex picker overlay — rebuild markers when geometry topology
+    // OR the extra (sketch-point) list changes; toggle visibility when
+    // the mode flag flips so opening the picker doesn't pay a rebuild
+    // cost.
+    effect(() => {
+      const g = this.geometry();
+      const extra = this.extraPickableVertices();
+      if (this.scene) this.rebuildVertexMarkers([...(g?.topology?.vertices ?? []), ...extra]);
+    });
+    effect(() => {
+      const active = this.vertexPickMode();
+      if (this.vertexPickGroup) this.vertexPickGroup.visible = active;
+      // Clear any stale face/datum hover when entering pick mode so the
+      // user doesn't see an orange face highlight under a stationary
+      // cursor while the picker is the only valid target. Restoring on
+      // exit is unnecessary — the next pointermove repopulates it.
+      if (active && this.hovered() !== null) this.hovered.set(null);
     });
     // REQ 616 follow-up: when the user enters a sketch, snap the camera to look
     // straight down its plane normal. Re-orient only on transition, so the user
@@ -355,6 +491,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
 
   ngOnDestroy() {
     cancelAnimationFrame(this.rafHandle);
+    if (this.cubeAnimHandle) cancelAnimationFrame(this.cubeAnimHandle);
+    this.cubeRenderer?.dispose();
     this.resizeObserver?.disconnect();
     this.renderer?.dispose();
     // Tear down any remaining CSS2D label DOM nodes so they don't leak past
@@ -380,7 +518,22 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1e1e2e);
 
-    this.camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 5000);
+    // Orthographic projection so faces exactly edge-on to the camera
+    // (e.g. the lateral surface of a cylinder viewed down its axis)
+    // project to a zero-area sliver and disappear correctly. Perspective
+    // foreshortening would tilt rays at the screen edges and leak a
+    // visible band of those lateral faces, which reads as a "draft"
+    // halo. orbitDistance doubles as the half-height of the orthographic
+    // frustum so the existing wheel-zoom / pan code keeps its scale.
+    this.camera = new THREE.OrthographicCamera(
+      -this.orbitDistance * (width / height), this.orbitDistance * (width / height),
+      this.orbitDistance, -this.orbitDistance,
+      // Symmetric +/-5000 clip range so geometry stays visible even when
+      // a zoom-in places parts of the model behind the camera plane.
+      // (PerspectiveCamera couldn't have negative near; OrthographicCamera
+      // can, since parallel rays don't degenerate at depth 0.)
+      -5000, 5000,
+    );
     this.updateCamera();
     // REQ 631 — Line2 width is computed in screen-pixel space, so the material
     // needs the current canvas resolution.
@@ -420,6 +573,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.scene.add(this.sketchGroup);
     this.sketchPreviewGroup = new THREE.Group();
     this.scene.add(this.sketchPreviewGroup);
+    this.profileFillGroup = new THREE.Group();
+    this.scene.add(this.profileFillGroup);
+    this.vertexPickGroup = new THREE.Group();
+    this.vertexPickGroup.visible = false;
+    this.scene.add(this.vertexPickGroup);
     this.edgeGroup = new THREE.Group();
     this.scene.add(this.edgeGroup);
 
@@ -444,6 +602,13 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // Initial geometry.
     const g = this.geometry();
     if (g) this.syncGeometry(g);
+    // The vertex-pick effect runs at construction time when this.scene
+    // is still null and bails. Rebuild here once the scene exists so
+    // markers are ready the first time the user enters pick mode.
+    this.rebuildVertexMarkers([
+      ...(g?.topology?.vertices ?? []),
+      ...this.extraPickableVertices(),
+    ]);
     this.syncSketches(this.sketchDoc(), this.activeSketchId());
     // If a sketch is already active at scene-init time, orient now — the
     // constructor effect would have bailed out earlier (no scene yet).
@@ -456,11 +621,21 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       }
     }
 
+    // Navigation cube — separate WebGL context in the top-right overlay div.
+    this.setupNavCube();
+
     // Animate.
     const animate = () => {
       this.rafHandle = requestAnimationFrame(animate);
       this.renderer.render(this.scene, this.camera);
       this.labelRenderer.render(this.scene, this.camera);
+      if (this.cubeRenderer && this.cubeScene && this.cubeCamera && this.cubeMesh) {
+        // Cube rotation = inverse of main camera's rotation, so the face
+        // pointing toward the cube camera matches whichever side of the
+        // model the main camera is currently looking from.
+        this.cubeMesh.quaternion.copy(this.camera.quaternion).invert();
+        this.cubeRenderer.render(this.cubeScene, this.cubeCamera);
+      }
     };
     animate();
 
@@ -482,12 +657,27 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const width = mount.clientWidth;
     const height = mount.clientHeight;
     if (width === 0 || height === 0) return;
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
+    this.updateOrthoFrustum(width, height);
     this.renderer.setSize(width, height);
     this.labelRenderer.setSize(width, height);
     this.selectedSketchMaterial.resolution.set(width, height);
     this.mirrorAxisMaterial.resolution.set(width, height);
+  }
+
+  /** Recompute the orthographic frustum from the canvas aspect ratio +
+   * current `orbitDistance` (= half-height of the visible region in
+   * world units). Called by onResize and updateCamera. */
+  private updateOrthoFrustum(width?: number, height?: number) {
+    const w = width ?? this.renderer?.domElement.clientWidth ?? 800;
+    const h = height ?? this.renderer?.domElement.clientHeight ?? 600;
+    const aspect = w / Math.max(1, h);
+    const halfH = this.orbitDistance;
+    const halfW = halfH * aspect;
+    this.camera.left = -halfW;
+    this.camera.right = halfW;
+    this.camera.top = halfH;
+    this.camera.bottom = -halfH;
+    this.camera.updateProjectionMatrix();
   }
 
   private updateCamera() {
@@ -496,29 +686,418 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const z = this.orbitTarget.z + this.orbitDistance * Math.sin(this.orbitPhi) * Math.sin(this.orbitTheta);
     this.camera.position.set(x, y, z);
     this.camera.lookAt(this.orbitTarget);
+    // orbitDistance doubles as the ortho zoom level — every camera-state
+    // change rescales the frustum to match. Zoom wheel mutates orbitDistance
+    // then re-enters here, so this single hook keeps projection in sync.
+    if (this.camera.isOrthographicCamera) this.updateOrthoFrustum();
+  }
+
+  /** Current camera position as a [x, y, z] tuple in world space. Used by
+   * the parent editor when starting a new sketch — we flip the sketch
+   * plane's normal so the camera ends up on the "+normal" side, i.e., the
+   * user always looks AT the sketch plane from the side they're currently
+   * viewing the model from. */
+  cameraPosition(): [number, number, number] {
+    return [this.camera.position.x, this.camera.position.y, this.camera.position.z];
+  }
+
+  // ─── Navigation cube ─────────────────────────────────────────────────────
+  // Onshape-style cube widget rendered in its own WebGL context in the
+  // top-right overlay. Each face is a labeled shortcut to a canonical view
+  // (FRONT/BACK/LEFT/RIGHT/TOP/BOTTOM); clicks animate the main camera's
+  // orbitTheta/orbitPhi to the target over ~300ms. The cube itself mirrors
+  // the main camera's rotation each frame so it doubles as an orientation
+  // indicator.
+
+  private setupNavCube() {
+    const mount = this.cubeMountRef.nativeElement;
+    const w = mount.clientWidth  || 103;
+    const h = mount.clientHeight || 103;
+
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    // setPixelRatio FIRST so the subsequent setSize accounts for it when
+    // sizing the internal buffer. setSize with updateStyle=true (default)
+    // also sets the canvas's CSS width/height to match the div so the
+    // cursor → NDC mapping in cubeHitInfoFromEvent stays accurate. The
+    // previous `false` here let the canvas default to 300×150 in CSS,
+    // overflowing the 82×82 mount div and offsetting every raycast.
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(w, h);
+    renderer.setClearColor(0x000000, 0);  // transparent
+    mount.appendChild(renderer.domElement);
+    this.cubeRenderer = renderer;
+
+    const scene = new THREE.Scene();
+    this.cubeScene = scene;
+
+    // Orthographic camera looking at the cube from +Z. Frustum sized so the
+    // beveled cube fills the viewport with a small margin.
+    const r = 0.85;
+    const cam = new THREE.OrthographicCamera(-r, r, r, -r, 0.1, 10);
+    cam.position.set(0, 0, 3);
+    cam.lookAt(0, 0, 0);
+    this.cubeCamera = cam;
+
+    // 26 individual material slots so we can hover-highlight any single
+    // region. Slot order must match the group order produced by
+    // buildBeveledCubeGeometry: 6 faces (+X -X +Y -Y +Z -Z), then 12 edges,
+    // then 8 corners.
+    const labels = ['RIGHT', 'LEFT', 'TOP', 'BOTTOM', 'FRONT', 'BACK'];
+    const maxAniso = renderer.capabilities.getMaxAnisotropy?.() ?? 1;
+    const faceTexture   = labels.map(l => this.makePlainTexture(l, '#3c4055', '#4a5070', '#e6e6e6', maxAniso));
+    const edgeTexture   = this.makePlainTexture('', '#2f3245', '#2f3245', '#2f3245', maxAniso);
+    const cornerTexture = this.makePlainTexture('', '#262838', '#262838', '#262838', maxAniso);
+
+    this.cubeMaterials = [];
+    this.cubeBaseColors = [];
+    for (let i = 0; i < 6; i++) {
+      const m = new THREE.MeshBasicMaterial({ map: faceTexture[i] });
+      this.cubeMaterials.push(m);
+      this.cubeBaseColors.push(m.color.clone());
+    }
+    // Edges + corners share the same texture but each has its own material
+    // instance so hover can tint exactly one region at a time.
+    for (let i = 0; i < 12; i++) {
+      const m = new THREE.MeshBasicMaterial({ map: edgeTexture });
+      this.cubeMaterials.push(m);
+      this.cubeBaseColors.push(m.color.clone());
+    }
+    for (let i = 0; i < 8; i++) {
+      const m = new THREE.MeshBasicMaterial({ map: cornerTexture });
+      this.cubeMaterials.push(m);
+      this.cubeBaseColors.push(m.color.clone());
+    }
+
+    const geom = this.buildBeveledCubeGeometry(0.5, 0.15);
+    const mesh = new THREE.Mesh(geom, this.cubeMaterials);
+    scene.add(mesh);
+    this.cubeMesh = mesh;
+  }
+
+  /** Build the texture for a face label (or a plain coloured texture when
+   * label is empty). Resolution bumped to 256² so labels stay crisp at
+   * device pixel ratios up to ~2× the cube's CSS size. */
+  private makePlainTexture(label: string, fill: string, centerFill: string,
+                            textColor: string, maxAniso: number): THREE.Texture {
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = fill;
+    ctx.fillRect(0, 0, size, size);
+    if (label) {
+      // Subtle border + centre highlight so the cube's face reads as the
+      // "primary" target vs the surrounding bevel.
+      ctx.fillStyle = centerFill;
+      const m = size * 0.18;
+      ctx.fillRect(m, m, size - 2 * m, size - 2 * m);
+      ctx.strokeStyle = '#1e1e2e';
+      ctx.lineWidth = 8;
+      ctx.strokeRect(0, 0, size, size);
+      ctx.fillStyle = textColor;
+      ctx.font = 'bold 44px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, size / 2, size / 2);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = maxAniso;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  /** Build a beveled cube ("chamfered cube") geometry of half-extent `r`
+   * with bevel depth `d`. The cube has 26 outer regions:
+   *   - 6 central square faces (one per ±X/±Y/±Z direction).
+   *   - 12 rectangular edge bevels at 45° between adjacent faces.
+   *   - 8 triangular corner bevels at 45° between three adjacent faces.
+   *
+   * Geometry layout: material slot 0–5 = the six face materials in order
+   * +X, -X, +Y, -Y, +Z, -Z (matches the `labels` array in setupNavCube);
+   * slot 6 = shared edge material; slot 7 = shared corner material.
+   * One group per face + one group covering all edges + one group covering
+   * all corners. */
+  private buildBeveledCubeGeometry(r: number, d: number): THREE.BufferGeometry {
+    const positions: number[] = [];
+    const indices: number[] = [];
+    const uvs: number[] = [];
+    type Group = { start: number; count: number; mat: number };
+    const groups: Group[] = [];
+
+    const pushQuad = (v0: [number,number,number], v1: [number,number,number],
+                      v2: [number,number,number], v3: [number,number,number],
+                      mat: number) => {
+      const start = indices.length;
+      const base = positions.length / 3;
+      positions.push(...v0, ...v1, ...v2, ...v3);
+      uvs.push(0, 0,  1, 0,  1, 1,  0, 1);
+      indices.push(base, base + 1, base + 2,  base, base + 2, base + 3);
+      groups.push({ start, count: 6, mat });
+    };
+    const pushTri = (v0: [number,number,number], v1: [number,number,number],
+                     v2: [number,number,number], mat: number) => {
+      const start = indices.length;
+      const base = positions.length / 3;
+      positions.push(...v0, ...v1, ...v2);
+      uvs.push(0.5, 0,  1, 1,  0, 1);
+      indices.push(base, base + 1, base + 2);
+      groups.push({ start, count: 3, mat });
+    };
+
+    const inner = r - d;  // central-face inset
+
+    // ─── 6 central faces (material slots 0..5: +X -X +Y -Y +Z -Z) ───────
+    // +X: x = +r, y and z range over [-inner, +inner].
+    pushQuad([+r, -inner, -inner], [+r, +inner, -inner], [+r, +inner, +inner], [+r, -inner, +inner], 0);
+    // -X: x = -r, mirrored winding so the outward normal still points -X.
+    pushQuad([-r, -inner, +inner], [-r, +inner, +inner], [-r, +inner, -inner], [-r, -inner, -inner], 1);
+    // +Y
+    pushQuad([-inner, +r, +inner], [+inner, +r, +inner], [+inner, +r, -inner], [-inner, +r, -inner], 2);
+    // -Y
+    pushQuad([-inner, -r, -inner], [+inner, -r, -inner], [+inner, -r, +inner], [-inner, -r, +inner], 3);
+    // +Z
+    pushQuad([-inner, -inner, +r], [+inner, -inner, +r], [+inner, +inner, +r], [-inner, +inner, +r], 4);
+    // -Z
+    pushQuad([-inner, +inner, -r], [+inner, +inner, -r], [+inner, -inner, -r], [-inner, -inner, -r], 5);
+
+    // ─── 12 edge bevels (slots 6..17, one per edge) ──────────────────────
+    // Each edge bevel is a quad connecting one edge of central face A to
+    // one edge of central face B (perpendicular faces sharing the cube
+    // edge). Winding is CCW viewed from OUTSIDE (the bevel's outward
+    // normal direction) so backface culling doesn't hide the visible
+    // surface. Order must match edgeNames[] in setupNavCube.
+    // 4 edges sharing ±X with ±Y (vary on Z):
+    pushQuad([+r, +inner, -inner], [+inner, +r, -inner], [+inner, +r, +inner], [+r, +inner, +inner],  6); // +X +Y
+    pushQuad([+r, -inner, +inner], [+inner, -r, +inner], [+inner, -r, -inner], [+r, -inner, -inner],  7); // +X -Y
+    pushQuad([-r, +inner, +inner], [-inner, +r, +inner], [-inner, +r, -inner], [-r, +inner, -inner],  8); // -X +Y
+    pushQuad([-r, -inner, -inner], [-inner, -r, -inner], [-inner, -r, +inner], [-r, -inner, +inner],  9); // -X -Y
+    // 4 edges sharing ±X with ±Z (vary on Y):
+    pushQuad([+r, -inner, +inner], [+r, +inner, +inner], [+inner, +inner, +r], [+inner, -inner, +r], 10); // +X +Z
+    pushQuad([+r, +inner, -inner], [+r, -inner, -inner], [+inner, -inner, -r], [+inner, +inner, -r], 11); // +X -Z
+    pushQuad([-r, +inner, +inner], [-r, -inner, +inner], [-inner, -inner, +r], [-inner, +inner, +r], 12); // -X +Z
+    pushQuad([-r, -inner, -inner], [-r, +inner, -inner], [-inner, +inner, -r], [-inner, -inner, -r], 13); // -X -Z
+    // 4 edges sharing ±Y with ±Z (vary on X):
+    pushQuad([-inner, +r, +inner], [-inner, +inner, +r], [+inner, +inner, +r], [+inner, +r, +inner], 14); // +Y +Z
+    pushQuad([-inner, +r, -inner], [+inner, +r, -inner], [+inner, +inner, -r], [-inner, +inner, -r], 15); // +Y -Z
+    pushQuad([-inner, -r, +inner], [+inner, -r, +inner], [+inner, -inner, +r], [-inner, -inner, +r], 16); // -Y +Z
+    pushQuad([-inner, -r, -inner], [-inner, -inner, -r], [+inner, -inner, -r], [+inner, -r, -inner], 17); // -Y -Z
+
+    // ─── 8 corner bevels (slots 18..25, one per corner) ──────────────────
+    // Each corner triangle has 3 vertices, one displaced from the original
+    // cube corner along each of the 3 axes by d. Wound CCW viewed from
+    // outward direction (sign(x), sign(y), sign(z)). Order must match
+    // cornerNames[] in setupNavCube.
+    pushTri([+inner, +r, +inner], [+inner, +inner, +r], [+r, +inner, +inner], 18); // +X +Y +Z
+    pushTri([+inner, +r, -inner], [+r, +inner, -inner], [+inner, +inner, -r], 19); // +X +Y -Z
+    pushTri([+inner, -r, +inner], [+r, -inner, +inner], [+inner, -inner, +r], 20); // +X -Y +Z
+    pushTri([+inner, -r, -inner], [+inner, -inner, -r], [+r, -inner, -inner], 21); // +X -Y -Z
+    pushTri([-inner, +r, +inner], [-r, +inner, +inner], [-inner, +inner, +r], 22); // -X +Y +Z
+    pushTri([-inner, +r, -inner], [-inner, +inner, -r], [-r, +inner, -inner], 23); // -X +Y -Z
+    pushTri([-inner, -r, +inner], [-inner, -inner, +r], [-r, -inner, +inner], 24); // -X -Y +Z
+    pushTri([-inner, -r, -inner], [-r, -inner, -inner], [-inner, -inner, -r], 25); // -X -Y -Z
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geom.setAttribute('uv',       new THREE.Float32BufferAttribute(uvs, 2));
+    geom.setIndex(indices);
+    geom.computeVertexNormals();
+    // Coalesce all face groups individually + all edges + all corners. Order
+    // matters: groups must be added in order of `start`. Since we pushed
+    // 6 faces, then 12 edges, then 8 corners in that order, the array is
+    // already sorted.
+    for (const g of groups) geom.addGroup(g.start, g.count, g.mat);
+    return geom;
+  }
+
+  onCubePointerDown(ev: PointerEvent) {
+    // Start tracking a potential drag. Click handler runs on pointerup if
+    // we never crossed the drag threshold; otherwise treat it as an orbit
+    // gesture and suppress the click.
+    this.cubeDragStart = { x: ev.clientX, y: ev.clientY };
+    this.cubeDidDrag = false;
+    (ev.target as Element).setPointerCapture?.(ev.pointerId);
+    ev.stopPropagation();
+  }
+
+  onCubePointerMove(ev: PointerEvent) {
+    if (this.cubeDragStart) {
+      const dx = ev.clientX - this.cubeDragStart.x;
+      const dy = ev.clientY - this.cubeDragStart.y;
+      if (!this.cubeDidDrag && Math.hypot(dx, dy) > this.CUBE_DRAG_THRESHOLD_PX) {
+        this.cubeDidDrag = true;
+      }
+      if (this.cubeDidDrag) {
+        // Horizontal: opposite sign from MMB orbit — dragging the cube
+        // right rotates the cube right (face follows finger), which means
+        // camera moves left (orbitTheta increases).
+        // Vertical: SAME sign as MMB orbit — the canvas convention feels
+        // right here too, per user preference.
+        this.orbitTheta += dx * 0.005;
+        this.orbitPhi   = Math.max(0.05, Math.min(Math.PI - 0.05, this.orbitPhi - dy * 0.005));
+        this.updateCamera();
+        this.cubeDragStart = { x: ev.clientX, y: ev.clientY };
+      }
+      return;
+    }
+    // Not dragging — update hover highlight.
+    const slot = this.cubeMaterialSlotFromEvent(ev);
+    if (slot !== this.hoveredCubeSlot) this.setHoveredCubeSlot(slot);
+  }
+
+  onCubePointerUp(ev: PointerEvent) {
+    this.cubeDragStart = null;
+    (ev.target as Element).releasePointerCapture?.(ev.pointerId);
+    // pointerleave also routes here — clear hover so a stale highlight
+    // doesn't stick after the cursor exits.
+    if (ev.type === 'pointerleave') this.setHoveredCubeSlot(null);
+  }
+
+  /** Raycast against the cube under the cursor and return the material
+   * slot of the hit triangle (= the region index 0..25), or null if the
+   * pointer isn't over the cube. */
+  private cubeMaterialSlotFromEvent(ev: MouseEvent): number | null {
+    if (!this.cubeMesh || !this.cubeCamera || !this.cubeRenderer) return null;
+    // Use the renderer's canvas rect — the canvas is what the cube is
+    // actually drawn on; any size mismatch with the wrapper div would
+    // offset every cursor → NDC conversion.
+    const rect = this.cubeRenderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+       ((ev.clientX - rect.left) / rect.width)  * 2 - 1,
+      -((ev.clientY - rect.top)  / rect.height) * 2 + 1,
+    );
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.cubeCamera);
+    const hits = ray.intersectObject(this.cubeMesh, false);
+    if (hits.length === 0) return null;
+    const mi = hits[0].face?.materialIndex;
+    return typeof mi === 'number' ? mi : null;
+  }
+
+  /** Brighten the hovered slot's material by 30% (or clear if null).
+   * MeshBasicMaterial.color acts as an unclamped multiplier on the
+   * texture, so `base * 1.3` brightens the rendered region by 30% over
+   * its texture's native colour. Restores the previously-hovered slot's
+   * base colour first. */
+  private setHoveredCubeSlot(slot: number | null) {
+    if (this.hoveredCubeSlot !== null) {
+      const prev = this.cubeMaterials[this.hoveredCubeSlot];
+      const base = this.cubeBaseColors[this.hoveredCubeSlot];
+      if (prev && base) prev.color.copy(base);
+    }
+    this.hoveredCubeSlot = slot;
+    if (slot !== null) {
+      const mat = this.cubeMaterials[slot];
+      const base = this.cubeBaseColors[slot];
+      if (mat && base) mat.color.copy(base).multiplyScalar(1.3);
+    }
+  }
+
+  onCubeClick(ev: MouseEvent) {
+    // If the user just finished a drag-rotate, swallow the click so we
+    // don't also jump to a face view.
+    if (this.cubeDidDrag) { this.cubeDidDrag = false; return; }
+    if (!this.cubeRenderer || !this.cubeScene || !this.cubeCamera || !this.cubeMesh) return;
+    // Use the renderer canvas rect, not the wrapper div — same reason
+    // as cubeHitInfoFromEvent.
+    const rect = this.cubeRenderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+       ((ev.clientX - rect.left) / rect.width)  * 2 - 1,
+      -((ev.clientY - rect.top)  / rect.height) * 2 + 1,
+    );
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.cubeCamera);
+    const hits = ray.intersectObject(this.cubeMesh, false);
+    if (hits.length === 0) return;
+    // Convert the world hit point into the cube's local space so we can
+    // classify it into a 3×3 cell regardless of the cube's current
+    // rotation.
+    const local = this.cubeMesh.worldToLocal(hits[0].point.clone());
+    const target = this.cubeTargetFromHit(local);
+    this.animateOrbitTo(target.theta, target.phi, 300);
+  }
+
+  /** Convert a hit point on the beveled cube (in local cube space) to a
+   * target (theta, phi). Classification uses the central-face boundary as
+   * the threshold: hits inside the central face on a given axis don't
+   * contribute that axis to the target direction, hits on a bevel surface
+   * do. The axis with the largest |coord| is the "primary" face and
+   * always contributes its sign so face-centre hits still produce a
+   * canonical orthographic view. Must stay in sync with buildBeveledCube's
+   * inner = r - d. */
+  private cubeTargetFromHit(local: THREE.Vector3): { theta: number; phi: number } {
+    const T = 0.5 - 0.15 - 1e-3;  // central-face half-extent, minus epsilon for float slop
+    const absX = Math.abs(local.x), absY = Math.abs(local.y), absZ = Math.abs(local.z);
+    const maxAbs = Math.max(absX, absY, absZ);
+    // Face-normal axis: always contributes. Other axes contribute when
+    // outside the centre cell.
+    const axis = (a: number, abs: number) => abs === maxAbs ? Math.sign(a) : (abs > T ? Math.sign(a) : 0);
+    let tx = axis(local.x, absX);
+    let ty = axis(local.y, absY);
+    let tz = axis(local.z, absZ);
+    const len = Math.hypot(tx, ty, tz) || 1;
+    tx /= len; ty /= len; tz /= len;
+    // Spherical: phi from +Y axis, theta around Y.
+    let phi = Math.acos(Math.max(-1, Math.min(1, ty)));
+    if (phi < 0.001)           phi = 0.001;
+    if (phi > Math.PI - 0.001) phi = Math.PI - 0.001;
+    const sinPhi = Math.sin(phi);
+    const theta = sinPhi > 1e-6 ? Math.atan2(tz, tx) : 0;
+    return { theta, phi };
+  }
+
+  /** Smoothly tween orbitTheta/orbitPhi to the target over `durationMs`.
+   * Cancels any in-flight cube animation. Uses a simple cubic ease-in-out
+   * so face transitions feel intentional rather than mechanical. */
+  private animateOrbitTo(targetTheta: number, targetPhi: number, durationMs: number) {
+    if (this.cubeAnimHandle) cancelAnimationFrame(this.cubeAnimHandle);
+    const startTheta = this.orbitTheta;
+    const startPhi   = this.orbitPhi;
+    // Shortest-arc theta: pick whichever direction (±) is closer.
+    let deltaTheta = targetTheta - startTheta;
+    while (deltaTheta >  Math.PI) deltaTheta -= 2 * Math.PI;
+    while (deltaTheta < -Math.PI) deltaTheta += 2 * Math.PI;
+    const deltaPhi = targetPhi - startPhi;
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      // cubic ease-in-out
+      const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      this.orbitTheta = startTheta + deltaTheta * e;
+      this.orbitPhi   = startPhi   + deltaPhi   * e;
+      this.updateCamera();
+      if (t < 1) this.cubeAnimHandle = requestAnimationFrame(step);
+      else this.cubeAnimHandle = 0;
+    };
+    this.cubeAnimHandle = requestAnimationFrame(step);
   }
 
   private onPointerDown = (ev: PointerEvent) => {
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
     const inSketch = this.activeSketchId() !== null;
-    // REQ 616 input map. In sketch mode: left = sketch, right = orbit, middle = pan.
-    // In non-sketch mode (existing behaviour): left = orbit, shift+left = pan.
-    if (inSketch) {
-      if (ev.button === 0) {
-        const p = this.toSketchCoords(ev);
-        if (p) {
-          const tolerance = this.pixelsToSketchUnits(this.PICK_PX);
-          const pointTolerance = this.pixelsToSketchUnits(this.POINT_PICK_PX);
-          this.zone.run(() => this.sketchPointerDown.emit({ ...p, tolerance, pointTolerance }));
-        }
-      } else if (ev.button === 2) {
-        this.orbiting = true;
-      } else if (ev.button === 1) {
-        this.panning = true;
+    // SolidWorks-style input map. MMB is the navigation button in both
+    // 3D and sketch modes:
+    //   MMB              = orbit
+    //   Shift + MMB      = pan
+    //   Ctrl  + MMB drag = zoom (drag down zooms in, up zooms out)
+    //   Wheel            = zoom at cursor
+    //   LMB (3D)         = select (dispatched by onClick)
+    //   LMB (sketch)     = sketch tool action
+    //   RMB (3D)         = feature context menu (onContextMenu)
+    //   RMB (sketch)     = no-op (context menu suppressed in sketch mode)
+    if (ev.button === 1) {
+      if (ev.shiftKey) this.panning = true;
+      else if (ev.ctrlKey || ev.metaKey) this.zoomDragging = true;
+      else this.orbiting = true;
+    } else if (ev.button === 0 && inSketch) {
+      const p = this.toSketchCoords(ev);
+      if (p) {
+        const tolerance = this.pixelsToSketchUnits(this.PICK_PX);
+        const pointTolerance = this.pixelsToSketchUnits(this.POINT_PICK_PX);
+        this.zone.run(() => this.sketchPointerDown.emit({ ...p, tolerance, pointTolerance }));
       }
-    } else {
-      if (ev.button === 0 && !ev.shiftKey) this.orbiting = true;
-      else this.panning = true;
     }
     (ev.target as Element).setPointerCapture?.(ev.pointerId);
   };
@@ -539,6 +1118,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       this.orbitTarget.addScaledVector(right, -dx * k);
       this.orbitTarget.addScaledVector(up, dy * k);
       this.updateCamera();
+    } else if (this.zoomDragging) {
+      // Ctrl+MMB drag: dragging DOWN moves the camera CLOSER (zoom in),
+      // dragging UP moves it AWAY (zoom out). Same convention as SW.
+      const factor = Math.exp(-dy * 0.01);
+      this.orbitDistance = Math.max(5, Math.min(2000, this.orbitDistance * factor));
+      this.updateCamera();
     } else if (this.activeSketchId() !== null) {
       const p = this.toSketchCoords(ev);
       if (p) this.zone.run(() => this.sketchPointerMove.emit(p));
@@ -555,6 +1140,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     }
     this.orbiting = false;
     this.panning = false;
+    this.zoomDragging = false;
     (ev.target as Element).releasePointerCapture?.(ev.pointerId);
   };
 
@@ -571,10 +1157,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private pixelsToSketchUnits(pixels: number): number {
     if (!this.camera || !this.renderer) return pixels;
     const canvasH = this.renderer.domElement.clientHeight || 1;
-    const vfov = (this.camera.fov * Math.PI) / 180;
-    // Visible world height at the camera's distance from the orbit target.
-    // For perspective: 2 * d * tan(vfov / 2).
-    const visibleH = 2 * this.orbitDistance * Math.tan(vfov / 2);
+    // Orthographic: visible world height = top − bottom = 2 * orbitDistance.
+    // No camera-distance factor (parallel rays).
+    const visibleH = this.camera.top - this.camera.bottom;
     return (pixels / canvasH) * visibleH;
   }
 
@@ -610,6 +1195,31 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.updateCamera();
   };
 
+  /** SolidWorks-style arrow-key view rotation. Plain arrow = 15°, Shift +
+   * arrow = 90°. Directions match the cube-drag convention: Right spins
+   * theta forward (model rotates right under your view), Up tilts phi up
+   * (the same way the cube-widget drag does). Skipped when focus is in
+   * a text input so typed text doesn't also rotate the model. */
+  @HostListener('document:keydown', ['$event'])
+  onViewerKeydown(ev: KeyboardEvent) {
+    const t = ev.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+    const step = ev.shiftKey ? Math.PI / 2 : Math.PI / 12;
+    let dTheta = 0, dPhi = 0;
+    switch (ev.key) {
+      case 'ArrowLeft':  dTheta = -step; break;
+      case 'ArrowRight': dTheta = +step; break;
+      case 'ArrowUp':    dPhi   = +step; break;
+      case 'ArrowDown':  dPhi   = -step; break;
+      default: return;
+    }
+    ev.preventDefault();  // stop arrows from also scrolling the surrounding page
+    const targetTheta = this.orbitTheta + dTheta;
+    const targetPhi   = Math.max(0.05, Math.min(Math.PI - 0.05, this.orbitPhi + dPhi));
+    this.animateOrbitTo(targetTheta, targetPhi, 200);
+  }
+
   private onClick = (ev: MouseEvent) => {
     // REQ 616: in sketch mode the click dispatches to the sketch toolbar's click
     // handler with 2D plane coords; selection of 3D faces/datums is paused.
@@ -623,6 +1233,40 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       return;
     }
     this.updatePointer(ev);
+    // Vertex picker is the most exclusive mode — when active, the click
+    // ONLY hits vertex markers; nothing else is selectable. Missing a
+    // vertex is a no-op rather than a fall-through to face/datum picks.
+    if (this.vertexPickMode()) {
+      const vid = this.pickVertex();
+      if (vid !== null) {
+        this.zone.run(() => this.vertexPicked.emit(vid));
+      }
+      return;
+    }
+    // Face picker — same exclusivity, raycast against faceGroup only.
+    if (this.facePickMode()) {
+      this.raycaster.setFromCamera(this.pointer, this.camera);
+      const hits = this.raycaster.intersectObjects(this.faceGroup.children, false);
+      if (hits.length > 0) {
+        const fid = (hits[0].object.userData as { faceId?: string }).faceId;
+        if (fid) this.zone.run(() => this.facePicked.emit(fid));
+      }
+      return;
+    }
+    // Profile-region picker wins over face picks when the Extrude sidebar is
+    // open. Without this, a click on a fill that overlaps a face would
+    // select the underlying face and miss the region toggle.
+    const fillIndex = this.pickProfileFill();
+    if (fillIndex !== null) {
+      this.zone.run(() => this.profileFillClick.emit(fillIndex));
+      return;
+    }
+    // When region-picker overlays exist (Extrude sidebar open), the click
+    // is committed to that mode: missing a fill is a no-op, not a fall-
+    // through to selecting model faces or datums. Avoids the user
+    // accidentally selecting a face behind the canvas while trying to
+    // pick a region.
+    if (this.profileFills().length > 0) return;
     const id = this.pickEntity();
     // REQ 623 — emit both the legacy face-id selection (for datum + pick-plane
     // flows) and the new featureClick (for feature-level multi-select).
@@ -689,9 +1333,56 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   }
 
   private updateHover() {
+    // In vertex pick mode, nothing else is interactable — clear face/
+    // datum hover so the user doesn't see orange face highlights that
+    // they can't actually click. Also handle vertex-marker hover so
+    // the user gets feedback over the right targets.
+    if (this.vertexPickMode()) {
+      if (this.hovered() !== null) this.hovered.set(null);
+      this.updateVertexHover();
+      return;
+    }
+    // Face pick mode keeps the orange face-highlight (it IS the right
+    // signal — face under cursor is pickable). Just gate out the
+    // profile-fill side-effects.
+    if (this.facePickMode()) {
+      const prev = this.hovered();
+      const next = this.pickEntity();
+      if (prev !== next) this.hovered.set(next);
+      return;
+    }
     const prev = this.hovered();
     const next = this.pickEntity();
     if (prev !== next) this.hovered.set(next);
+    // Profile-fill hover dispatch. Compared against the last-emitted value
+    // so we only fire on transitions (the parent re-renders on each emit).
+    const fillIndex = this.pickProfileFill();
+    if (fillIndex !== this.lastProfileFillHover) {
+      this.lastProfileFillHover = fillIndex;
+      this.zone.run(() => this.profileFillHover.emit(fillIndex));
+    }
+  }
+
+  /** Last hover index emitted to the parent, for edge-triggered events. */
+  private lastProfileFillHover: number | null = null;
+  /** Last hovered vertex id, for edge-triggered marker recoloring. */
+  private lastHoveredVertexId: string | null = null;
+
+  private updateVertexHover(): void {
+    const id = this.pickVertex();
+    if (id === this.lastHoveredVertexId) return;
+    // Restore previous marker; tint the new one. Visual feedback only —
+    // no signal change needed since pick state isn't user-visible
+    // outside the viewer.
+    if (this.lastHoveredVertexId) {
+      const prev = this.vertexPickMeshes.get(this.lastHoveredVertexId);
+      if (prev) (prev.material as THREE.MeshBasicMaterial).color.setHex(0xffd54f);
+    }
+    if (id) {
+      const next = this.vertexPickMeshes.get(id);
+      if (next) (next.material as THREE.MeshBasicMaterial).color.setHex(0xff9800);
+    }
+    this.lastHoveredVertexId = id;
   }
 
   private syncDatums(datums: DatumElement[]) {
@@ -772,7 +1463,14 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       geom.setAttribute('normal', new THREE.BufferAttribute(f.normals, 3));
       geom.setIndex(new THREE.BufferAttribute(f.indices, 1));
       const mat = new THREE.MeshStandardMaterial({
-        color: 0x8aa0c4, metalness: 0.1, roughness: 0.6, side: THREE.DoubleSide,
+        color: 0x8aa0c4, metalness: 0.1, roughness: 0.6,
+        // FrontSide → back-face culling. OCCT's tessellation produces
+        // outward-facing normals for solids; rendering both sides made
+        // the interior walls of cylinders/holes bleed through and read
+        // as a translucent "draft" tint at silhouettes. With back faces
+        // culled, faces whose normals point away from the camera are
+        // hidden by the GPU pipeline instead of competing for pixels.
+        side: THREE.FrontSide,
         // polygonOffset pushes face fragments slightly back so coplanar edges
         // (depthFunc = LessEqualDepth) reliably win the depth test.
         polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
@@ -1007,6 +1705,166 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (!solid) line.computeLineDistances();
     line.renderOrder = 5;
     return line;
+  }
+
+  // ────────── Profile-region overlays (Extrude sidebar picker) ──────────
+
+  private rebuildProfileFills(fills: ProfileFill[]): void {
+    for (const mesh of this.profileFillMeshes.values()) {
+      this.profileFillGroup.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.profileFillMeshes.clear();
+    if (fills.length === 0) return;
+    const selected = this.profileFillsSelected();
+    const hovered = this.profileFillsHovered();
+    for (const fill of fills) {
+      const mesh = this.buildProfileFillMesh(fill);
+      if (!mesh) continue;
+      this.applyProfileFillStyle(mesh, fill.index, selected, hovered);
+      this.profileFillGroup.add(mesh);
+      this.profileFillMeshes.set(fill.index, mesh);
+    }
+  }
+
+  private buildProfileFillMesh(fill: ProfileFill): THREE.Mesh | null {
+    const poly = fill.polygon3d;
+    if (poly.length < 3) return null;
+    const holes3d = (fill.holePolygons3d ?? []).filter(h => h.length >= 3);
+    // Triangulate in 2D using a plane-local basis derived from the polygon's
+    // first edge + the supplied normal. Three.js's ShapeUtils.triangulateShape
+    // expects coplanar Vector2 input + a holes array (also Vector2[]); we
+    // project each vertex into the shared basis, triangulate, and use the
+    // resulting indices against a flattened [outer, ...holes] 3D vertex
+    // buffer (matching how triangulateShape returns indices into the
+    // combined contour-then-holes vertex list).
+    const n = new THREE.Vector3(fill.normal[0], fill.normal[1], fill.normal[2]).normalize();
+    const u = new THREE.Vector3(
+      poly[1][0] - poly[0][0],
+      poly[1][1] - poly[0][1],
+      poly[1][2] - poly[0][2],
+    );
+    // If the first edge is degenerate, fall back to an arbitrary in-plane axis.
+    if (u.lengthSq() < 1e-12) {
+      const helper = Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+      u.copy(helper).sub(n.clone().multiplyScalar(helper.dot(n)));
+    }
+    u.normalize();
+    const v = new THREE.Vector3().crossVectors(n, u).normalize();
+    const origin = new THREE.Vector3(poly[0][0], poly[0][1], poly[0][2]);
+    const toFlat = (p: [number, number, number]): THREE.Vector2 => {
+      const d = new THREE.Vector3(p[0], p[1], p[2]).sub(origin);
+      return new THREE.Vector2(d.dot(u), d.dot(v));
+    };
+    const outerFlat = poly.map(toFlat);
+    const holesFlat = holes3d.map(h => h.map(toFlat));
+    const triangles = THREE.ShapeUtils.triangulateShape(outerFlat, holesFlat);
+    if (triangles.length === 0) return null;
+    // Build the combined 3D vertex buffer in the same order
+    // triangulateShape's indices reference: outer first, then each hole.
+    const lift = 0.01;
+    const combined: Array<[number, number, number]> = [
+      ...poly,
+      ...holes3d.flat(),
+    ];
+    const positions = new Float32Array(combined.length * 3);
+    for (let i = 0; i < combined.length; i++) {
+      positions[i * 3 + 0] = combined[i][0] + n.x * lift;
+      positions[i * 3 + 1] = combined[i][1] + n.y * lift;
+      positions[i * 3 + 2] = combined[i][2] + n.z * lift;
+    }
+    const indices: number[] = [];
+    for (const tri of triangles) indices.push(tri[0], tri[1], tri[2]);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setIndex(indices);
+    geom.computeVertexNormals();
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0.35,
+      side: THREE.DoubleSide, depthWrite: false, depthTest: false,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.userData = { profileFillIndex: fill.index };
+    mesh.renderOrder = 10;  // above faces/sketch overlays/preview so the
+                            // user can always pick the region even when
+                            // the sketch sits inside another body.
+    return mesh;
+  }
+
+  private recolorProfileFills(selected: Set<number>, hovered: number | null): void {
+    for (const [index, mesh] of this.profileFillMeshes) {
+      this.applyProfileFillStyle(mesh, index, selected, hovered);
+    }
+  }
+
+  private applyProfileFillStyle(
+    mesh: THREE.Mesh, index: number, selected: Set<number>, hovered: number | null,
+  ): void {
+    const isSelected = selected.has(index);
+    const isHovered = hovered === index;
+    const mat = mesh.material as THREE.MeshBasicMaterial;
+    if (isSelected) {
+      mat.color.setHex(isHovered ? 0xffd54f : 0xffb74d);  // selected = orange, brighter on hover
+      mat.opacity = isHovered ? 0.55 : 0.45;
+    } else {
+      mat.color.setHex(isHovered ? 0xb0bec5 : 0x90a4ae);  // unselected = grey
+      mat.opacity = isHovered ? 0.35 : 0.22;
+    }
+  }
+
+  // ────────── Vertex-pick overlay (Up to Vertex end condition) ──────────
+
+  private rebuildVertexMarkers(vertices: Array<{ id: string; position: [number, number, number] }>): void {
+    for (const mesh of this.vertexPickMeshes.values()) {
+      this.vertexPickGroup.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.vertexPickMeshes.clear();
+    if (vertices.length === 0) return;
+    // Slightly oversize sphere + bright material; depthTest:false so it
+    // stays clickable even when the vertex is behind a face. Like the
+    // profile-fill overlay, render order is bumped so the markers paint
+    // last.
+    for (const v of vertices) {
+      const geom = new THREE.SphereGeometry(1.5, 12, 8);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xffd54f, depthTest: false, depthWrite: false, transparent: true, opacity: 0.95,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.set(v.position[0], v.position[1], v.position[2]);
+      mesh.userData = { vertexId: v.id };
+      mesh.renderOrder = 11;  // above profile fills (10) + everything else
+      this.vertexPickGroup.add(mesh);
+      this.vertexPickMeshes.set(v.id, mesh);
+    }
+  }
+
+  /** Raycast against the vertex-pick overlay. Returns the vertex id
+   * under the pointer or null. Only called when vertexPickMode() is on. */
+  private pickVertex(): string | null {
+    if (!this.vertexPickGroup.visible || this.vertexPickMeshes.size === 0) return null;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    // intersectObjects with a generous threshold — spheres are small in
+    // world units and a 5-pixel slop matches the rest of the picker
+    // tolerances.
+    const hits = this.raycaster.intersectObjects(this.vertexPickGroup.children, false);
+    if (hits.length === 0) return null;
+    const ud = hits[0].object.userData as { vertexId?: string };
+    return ud.vertexId ?? null;
+  }
+
+  /** Raycast against the profile-fill overlay. Returns the loop index
+   * under the pointer, or null. Called from the click + pointermove
+   * handlers before the regular face/datum pick path. */
+  private pickProfileFill(): number | null {
+    if (this.profileFillMeshes.size === 0) return null;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(this.profileFillGroup.children, false);
+    if (hits.length === 0) return null;
+    const ud = hits[0].object.userData as { profileFillIndex?: number };
+    return typeof ud.profileFillIndex === 'number' ? ud.profileFillIndex : null;
   }
 
   /** Attach press-and-drag handlers to the label DOM. Below the drag

@@ -17,13 +17,13 @@ import { CadModel } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { CadStreamService, type CadStreamEvent } from '../../../services/cad-stream.service';
-import { CadViewerComponent, type DisplayMode, type SketchPreview } from '../cad-viewer/cad-viewer.component';
+import { CadViewerComponent, type DisplayMode, type SketchPreview, type ProfileFill } from '../cad-viewer/cad-viewer.component';
 import { CadFeatureTreePanelComponent, type FeatureTreeAction, type FeatureSelectEvent, type SketchSelectEvent } from '../cad-feature-tree-panel/cad-feature-tree-panel.component';
 import { CadSketchEditorComponent } from '../cad-sketch-editor/cad-sketch-editor.component';
 import { CadConstraintListComponent } from '../cad-constraint-list/cad-constraint-list.component';
-import { ExtrudeDialogComponent, type ExtrudeDialogResult } from '../extrude-dialog/extrude-dialog.component';
 import { SketchDeleteWarningDialogComponent, type SketchDeleteAction } from '../sketch-delete-warning-dialog/sketch-delete-warning-dialog.component';
-import type { FeatureTree, SketchDocument, SketchId, ModelGeometry, ModelTopology, SketchState, ExtrudeFeature } from '../../../cad/lib/types';
+import { projectTo3D } from '../../../cad/lib/plane';
+import type { FeatureTree, SketchDocument, SketchId, ModelGeometry, ModelTopology, SketchState, ExtrudeFeature, ExtrudeEndCondition } from '../../../cad/lib/types';
 import {
   emptyFeatureTree, addFeature, defaultDatumVisibility,
   removeFeature, updateFeatureParam, removeFeaturesReferencingSketch,
@@ -32,7 +32,7 @@ import { emptyDocument, createSketch, updateSketchState, deleteSketch, setSketch
 import { removeConstraint, setConstraintValue } from '../../../cad/lib/store';
 import { solveSketchAfterAdd } from '../../../cad/lib/solver';
 import { parseUserValue, type Unit } from '../../../cad/lib/units';
-import { migrateSketchDocument } from '../../../cad/lib/migration';
+import { migrateSketchDocument, migrateFeatureTree } from '../../../cad/lib/migration';
 import { friendlyError } from '../../../cad/lib/errorMessages';
 import { planeForDatum, buildOriginDatums } from '../../../cad/lib/datum';
 import { inferLineEnd } from '../../../cad/lib/inference';
@@ -45,7 +45,7 @@ import { chooseTwoPointDimType, twoPointDimValue } from '../../../cad/lib/dimens
  * endpoint (existing point), triangle for midpoint, X for intersection,
  * diamond for quadrant. */
 type SnapKind = 'endpoint' | 'midpoint' | 'intersection' | 'quadrant';
-import { extractClosedLoops } from '../../../cad/lib/profile';
+import { extractRegions, tessellateProfileLoop } from '../../../cad/lib/profile';
 import { environment } from '../../../../environments/environment';
 
 type EditorMode = 'idle' | 'pick-plane' | 'pick-extrude-target';
@@ -550,9 +550,131 @@ interface HistorySnapshot {
           </div>
         </ng-container>
 
+        <!-- Extrude PropertyManager — opens when the Extrude ribbon button
+             is clicked with a sketch selected (or after the "pick-extrude-
+             target" mode lands on a sketch). Inputs mirror the previous
+             MatDialog: distance, direction flip, loop selection. -->
+        <ng-container *ngIf="extrudeSidebar() as ctx">
+          <div class="tool-panel" data-testid="extrude-sidebar">
+            <h3 class="panel-title">
+              <mat-icon>arrow_upward</mat-icon>
+              {{ ctx.editingFeatureId ? 'Edit Extrude' : 'Extrude' }}
+            </h3>
+            <p class="panel-hint">
+              Pick the end condition. {{ ctx.regionCount > 1 ? 'Choose which closed regions in the sketch to extrude.' : '' }}
+            </p>
+
+            <div class="panel-field active">
+              <div class="field-header">
+                <mat-icon class="field-icon">stop</mat-icon>
+                <span class="field-label">End condition</span>
+              </div>
+              <mat-form-field appearance="outline" class="panel-select">
+                <mat-select [value]="extrudeEndKind()"
+                            data-testid="extrude-end-condition"
+                            (selectionChange)="setExtrudeEndKind($event.value)">
+                  <mat-option value="blind">Blind</mat-option>
+                  <mat-option value="midPlane">Mid Plane</mat-option>
+                  <mat-option value="throughAll">Through All</mat-option>
+                  <mat-option value="upToVertex">Up to Vertex</mat-option>
+                  <mat-option value="upToSurface">Up to Surface</mat-option>
+                  <mat-option value="upToBody" disabled>Up to Body (coming soon)</mat-option>
+                </mat-select>
+              </mat-form-field>
+            </div>
+
+            <div class="panel-field active"
+                 *ngIf="extrudeEndKind() === 'blind' || extrudeEndKind() === 'midPlane'">
+              <div class="field-header">
+                <mat-icon class="field-icon">straighten</mat-icon>
+                <span class="field-label">{{ extrudeEndKind() === 'midPlane' ? 'Total thickness' : 'Distance' }}</span>
+              </div>
+              <input class="panel-input"
+                     type="number" min="0.01" step="1"
+                     data-testid="extrude-input"
+                     [value]="extrudeDistance()"
+                     (input)="extrudeDistance.set(+($any($event.target).value))" />
+            </div>
+
+            <div class="panel-field active" *ngIf="extrudeEndKind() !== 'midPlane'">
+              <div class="field-header">
+                <mat-icon class="field-icon">swap_vert</mat-icon>
+                <span class="field-label">Direction</span>
+              </div>
+              <button mat-stroked-button class="panel-flip"
+                      data-testid="extrude-flip"
+                      (click)="extrudeFlipped.set(!extrudeFlipped())">
+                <mat-icon>{{ extrudeFlipped() ? 'south' : 'north' }}</mat-icon>
+                {{ extrudeFlipped() ? 'Reverse' : 'Along normal' }}
+              </button>
+            </div>
+
+            <div class="panel-field active" *ngIf="extrudeEndKind() === 'upToVertex'">
+              <div class="field-header">
+                <mat-icon class="field-icon">place</mat-icon>
+                <span class="field-label">Target vertex</span>
+              </div>
+              <button mat-stroked-button class="panel-flip"
+                      data-testid="extrude-pick-vertex"
+                      (click)="beginVertexPick()">
+                <mat-icon>{{ extrudeUpToVertexId() ? 'check_circle' : 'touch_app' }}</mat-icon>
+                {{ extrudeUpToVertexId() ? 'Vertex picked — click to change' : 'Pick a vertex in the viewer' }}
+              </button>
+            </div>
+
+            <div class="panel-field active" *ngIf="extrudeEndKind() === 'upToSurface'">
+              <div class="field-header">
+                <mat-icon class="field-icon">crop_square</mat-icon>
+                <span class="field-label">Target face</span>
+              </div>
+              <button mat-stroked-button class="panel-flip"
+                      data-testid="extrude-pick-face"
+                      (click)="beginFacePick()">
+                <mat-icon>{{ extrudeUpToFaceId() ? 'check_circle' : 'touch_app' }}</mat-icon>
+                {{ extrudeUpToFaceId() ? 'Face picked — click to change' : 'Pick a face in the viewer' }}
+              </button>
+            </div>
+
+            <div class="panel-field active" *ngIf="ctx.regionCount > 1">
+              <div class="field-header">
+                <mat-icon class="field-icon">layers</mat-icon>
+                <span class="field-label">Profile regions</span>
+                <span class="field-count">{{ ctx.regionCount }}</span>
+              </div>
+              <ul class="entity-list">
+                <li class="entity-row"
+                    *ngFor="let i of extrudeRegionIndices(); trackBy: trackIndex"
+                    [attr.data-testid]="'extrude-region-' + i">
+                  <label class="loop-toggle">
+                    <input type="checkbox"
+                           [checked]="isExtrudeRegionSelected(i)"
+                           (change)="toggleExtrudeRegion(i)" />
+                    <span>Region {{ i + 1 }}</span>
+                  </label>
+                </li>
+              </ul>
+            </div>
+
+            <div class="panel-actions">
+              <button mat-flat-button color="primary"
+                      [disabled]="!canCommitExtrude()"
+                      (click)="commitExtrudeSidebar()"
+                      data-testid="extrude-apply">
+                <mat-icon>check</mat-icon> OK
+              </button>
+              <button mat-stroked-button
+                      (click)="cancelExtrudeSidebar()"
+                      data-testid="extrude-cancel">
+                <mat-icon>close</mat-icon> Cancel
+              </button>
+            </div>
+          </div>
+        </ng-container>
+
         <div class="viewport-wrap">
           <ng-container *ngIf="!loading(); else loadingTpl">
             <app-cad-viewer
+              #viewer
               [geometry]="geometry()"
               [selected]="selected()"
               [selectedFeatures]="selectedFeatures()"
@@ -570,6 +692,16 @@ interface HistorySnapshot {
               [defaultUnit]="defaultUnit()"
               [smartDimPreview]="smartDimPreview()"
               [displayMode]="displayMode()"
+              [profileFills]="profileFills()"
+              [profileFillsSelected]="extrudeSelectedRegions()"
+              [profileFillsHovered]="extrudeHoveredRegion()"
+              [vertexPickMode]="vertexPickMode()"
+              [extraPickableVertices]="sketchPickableVertices()"
+              [facePickMode]="facePickMode()"
+              (profileFillClick)="toggleExtrudeRegion($event)"
+              (profileFillHover)="extrudeHoveredRegion.set($event)"
+              (vertexPicked)="onVertexPicked($event)"
+              (facePicked)="onFacePicked($event)"
               (selectionChange)="onSelectionChange($event)"
               (featureClick)="onViewerFeatureClick($event)"
               (featureContextMenu)="onViewerFeatureContextMenu($event)"
@@ -943,6 +1075,89 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // REQ 623 — feature multi-select. Updated by viewer's featureClick event.
   selectedFeatures = signal<Set<string>>(new Set());
   selectedSketches = signal<Set<string>>(new Set());
+
+  // Extrude PropertyManager — replaces the previous MatDialog so the
+  // workflow matches the sketch-side tool sidebars (Fillet / Chamfer /
+  // Mirror). `extrudeSidebar` carries the sketch the user is extruding
+  // and how many closed loops are available; the distance / flipped /
+  // loop-selection inputs are separate signals so the OK button reads
+  // them directly on commit.
+  extrudeSidebar = signal<{
+    sketchId: string;
+    regionCount: number;
+    /** When set, OK updates that existing feature instead of creating a
+     * new one. The "Edit feature" tree action opens this mode. */
+    editingFeatureId?: string;
+  } | null>(null);
+  extrudeDistance = signal<number>(10);
+  extrudeFlipped = signal<boolean>(false);
+  /** SolidWorks-style end condition. Drives the sidebar UI (which fields
+   * to show + which picker affordance to surface) and translates into a
+   * resolved kernel call in the backend. */
+  extrudeEndKind = signal<ExtrudeEndCondition['kind']>('blind');
+  /** Vertex id picked for the Up to Vertex condition. Cleared when the
+   * user switches to a different end kind. Populated by the vertex
+   * picker overlay. */
+  extrudeUpToVertexId = signal<string | null>(null);
+  /** When true, the viewer renders vertex markers and restricts click
+   * hit-testing to those markers (face/datum/region picks are
+   * suppressed). Driven by the "Pick a vertex" button in the Extrude
+   * sidebar; cleared after a vertex is picked or the panel closes. */
+  vertexPickMode = signal<boolean>(false);
+  /** Face id picked for Up to Surface. Cleared when the user switches
+   * end-condition kind. Populated by the face picker overlay. */
+  extrudeUpToFaceId = signal<string | null>(null);
+  /** Face-pick mode flag (mutually exclusive with vertexPickMode). */
+  facePickMode = signal<boolean>(false);
+  /** Sketch points exposed as pickable vertices (in addition to BRep
+   * vertices coming from the kernel). Includes every point in every
+   * VISIBLE sketch — construction points count, since users explicitly
+   * place those as references. Ids are namespaced `sketch:<sketchId>/
+   * <pointId>` so the backend resolver can tell them apart from BRep
+   * topology vertices when computing the Up to Vertex distance. */
+  sketchPickableVertices = computed<Array<{ id: string; position: [number, number, number] }>>(() => {
+    const doc = this.doc();
+    const out: Array<{ id: string; position: [number, number, number] }> = [];
+    for (const [sid, sketch] of Object.entries(doc.sketches)) {
+      if (sketch.visible === false) continue;
+      for (const e of sketch.state.entities) {
+        if (e.kind !== 'point') continue;
+        out.push({ id: `sketch:${sid}/${e.id}`, position: projectTo3D(sketch.plane, e.x, e.y) });
+      }
+    }
+    return out;
+  });
+  /** Region indices the user has picked for extrusion. Each region is one
+   * planar zone (outer loop + 0..N inner holes); selecting the donut
+   * region of two concentric circles produces an annular extrude. */
+  extrudeSelectedRegions = signal<Set<number>>(new Set([0]));
+  /** Region index the pointer is hovering in the viewer; null when not on
+   * a fill. Updated by the viewer's profileFillHover output. */
+  extrudeHoveredRegion = signal<number | null>(null);
+  /** Translucent fills the viewer renders when the Extrude sidebar is open.
+   * One per planar region in the host sketch (nested loops collapse into
+   * region+holes via extractRegions). Clicking a fill toggles the region
+   * in `extrudeSelectedRegions`. */
+  profileFills = computed<ProfileFill[]>(() => {
+    const ctx = this.extrudeSidebar();
+    if (!ctx) return [];
+    const sketch = this.doc().sketches[ctx.sketchId];
+    if (!sketch) return [];
+    const { regions } = extractRegions(sketch.state);
+    const out: ProfileFill[] = [];
+    for (let i = 0; i < regions.length; i++) {
+      const region = regions[i];
+      const poly2d = tessellateProfileLoop(region.outer);
+      if (poly2d.length < 3) continue;
+      const polygon3d = poly2d.map(p => projectTo3D(sketch.plane, p.x, p.y));
+      const holePolygons3d = region.holes
+        .map(h => tessellateProfileLoop(h))
+        .filter(h => h.length >= 3)
+        .map(h => h.map(p => projectTo3D(sketch.plane, p.x, p.y)));
+      out.push({ index: i, polygon3d, holePolygons3d, normal: sketch.plane.normal });
+    }
+    return out;
+  });
   /** Constraint id currently in inline-edit mode. Smart Dim's placement
    * click sets this (so the value popup opens right after creation), and
    * double-clicking an existing label also sets it. The viewer renders an
@@ -1030,6 +1245,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // ok→over edge, not every time the dof signal re-emits.
   private lastSketchWasOver = false;
   private sketchEditorRef = viewChild<CadSketchEditorComponent>('sketchEditor');
+  private viewerRef = viewChild<CadViewerComponent>('viewer');
   private ctxMenuTrigger = viewChild(MatMenuTrigger);
 
   activeSketchPlaneLabel = computed(() => {
@@ -1696,6 +1912,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * without re-render flicker. */
   trackEntityById(_idx: number, e: { id: string }): string { return e.id; }
   trackString(_idx: number, id: string): string { return id; }
+  trackIndex(_idx: number, i: number): number { return i; }
 
   /** Fillet sidebar reads the corner set as a sorted array so the *ngFor
    * has stable ordering across signal updates. */
@@ -1781,7 +1998,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   private startSketchOnFace(faceId: string, plane: import('../../../cad/lib/types').Plane3) {
-    const { doc, sketchId } = createSketch(this.doc(), `face:${faceId}`, plane, null);
+    const oriented = this.flipPlaneTowardCamera(plane);
+    const { doc, sketchId } = createSketch(this.doc(), `face:${faceId}`, oriented, null);
     this.doc.set(doc);
     this.activeSketchId.set(sketchId);
     this.setMode('idle');
@@ -1790,8 +2008,46 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.save();
   }
 
+  /** If the plane's normal points AWAY from the current camera, return a
+   * flipped version whose normal points TOWARD the camera. We flip both
+   * `normal` and `yAxis` to keep the basis right-handed (xAxis × yAxis =
+   * normal); keeping xAxis stable means "sketch +x" is consistent across
+   * the flip. Safe to call on freshly-created sketches because the state
+   * is empty — no entities are mirrored. Without this flip, picking the
+   * back of a face would put the user behind their sketch with the
+   * camera looking through the model. */
+  private flipPlaneTowardCamera(
+    plane: import('../../../cad/lib/types').Plane3,
+  ): import('../../../cad/lib/types').Plane3 {
+    const viewer = this.viewerRef();
+    if (!viewer) return plane;
+    const cam = viewer.cameraPosition();
+    const toCam: [number, number, number] = [
+      cam[0] - plane.origin[0],
+      cam[1] - plane.origin[1],
+      cam[2] - plane.origin[2],
+    ];
+    const dot = plane.normal[0] * toCam[0] + plane.normal[1] * toCam[1] + plane.normal[2] * toCam[2];
+    if (dot >= 0) return plane;  // already facing the camera
+    return {
+      origin: plane.origin,
+      xAxis:  plane.xAxis,
+      yAxis:  [-plane.yAxis[0], -plane.yAxis[1], -plane.yAxis[2]],
+      normal: [-plane.normal[0], -plane.normal[1], -plane.normal[2]],
+    };
+  }
+
   onExtrudeAction() {
     if (this.readonly()) return;
+    // Shortcut: if the user has exactly one sketch already selected in the
+    // tree, jump straight into the Extrude sidebar for it. Skips the
+    // "click a sketch / datum" pick step entirely.
+    const selected = this.selectedSketches();
+    if (selected.size === 1) {
+      const sid = [...selected][0];
+      this.openExtrudeDialog(sid);
+      return;
+    }
     this.setMode('pick-extrude-target');
   }
 
@@ -1858,7 +2114,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.errors.showError('Selected host is not a planar surface');
       return;
     }
-    const { doc, sketchId } = createSketch(this.doc(), datumFullId, plane, null);
+    const oriented = this.flipPlaneTowardCamera(plane);
+    const { doc, sketchId } = createSketch(this.doc(), datumFullId, oriented, null);
     this.doc.set(doc);
     this.activeSketchId.set(sketchId);
     this.setMode('idle');
@@ -1897,31 +2154,175 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.setMode('idle');
       return;
     }
-    const { loops, errors } = extractClosedLoops(sketch.state);
-    if (loops.length === 0) {
+    const { regions, errors } = extractRegions(sketch.state);
+    if (regions.length === 0) {
       this.errors.showError(friendlyError(errors[0] || 'no closed loops in sketch'));
       this.setMode('idle');
       return;
     }
-    const ref = this.dialog.open(ExtrudeDialogComponent, {
-      data: { defaultDistance: 10, loopCount: loops.length, defaultLoopIndices: [0] },
-      width: '320px',
-    });
-    ref.afterClosed().subscribe((result: ExtrudeDialogResult | null) => {
-      this.setMode('idle');
-      if (!result || result.distance <= 0) return;
-      this.featureTree.set(addFeature(this.featureTree(), {
-        type: 'extrude', sketchId,
-        distance: result.distance,
-        flipped: result.flipped,
-        loopIndices: result.loopIndices,
-      }));
-      // REQ 618 — extruded sketches auto-hide their 2D overlay. The user can
-      // re-show via the feature-tree eye toggle if they need to inspect the
-      // source profile.
-      this.doc.set(setSketchVisibility(this.doc(), sketchId, false));
+    // Open the Extrude sidebar (replaces the old MatDialog). Reset inputs
+    // to defaults; the OK button reads them back on commit.
+    this.extrudeDistance.set(10);
+    this.extrudeFlipped.set(false);
+    this.extrudeEndKind.set('blind');
+    this.extrudeUpToVertexId.set(null);
+    this.extrudeUpToFaceId.set(null);
+    this.vertexPickMode.set(false);
+    this.facePickMode.set(false);
+    this.extrudeSelectedRegions.set(new Set([0]));
+    this.extrudeHoveredRegion.set(null);
+    this.extrudeSidebar.set({ sketchId, regionCount: regions.length });
+  }
+
+  /** End-condition dropdown handler. Switching kinds resets the
+   * target-picking state so an old vertex pick doesn't carry across
+   * (and so the disabled-OK button logic re-evaluates). */
+  setExtrudeEndKind(kind: ExtrudeEndCondition['kind']): void {
+    this.extrudeEndKind.set(kind);
+    if (kind !== 'upToVertex') this.extrudeUpToVertexId.set(null);
+    if (kind !== 'upToSurface') this.extrudeUpToFaceId.set(null);
+    // Exit any picker mode if it was active and the kind no longer needs it.
+    if (kind !== 'upToVertex') this.vertexPickMode.set(false);
+    if (kind !== 'upToSurface') this.facePickMode.set(false);
+  }
+
+  /** Build the ExtrudeEndCondition from the sidebar's current state. */
+  private resolveEndCondition(): ExtrudeEndCondition | null {
+    const kind = this.extrudeEndKind();
+    switch (kind) {
+      case 'blind':       return { kind: 'blind' };
+      case 'midPlane':    return { kind: 'midPlane' };
+      case 'throughAll':  return { kind: 'throughAll' };
+      case 'upToVertex': {
+        const vid = this.extrudeUpToVertexId();
+        if (!vid) return null;  // OK button is disabled until a vertex is picked
+        return { kind: 'upToVertex', vertexId: vid };
+      }
+      case 'upToSurface': {
+        const fid = this.extrudeUpToFaceId();
+        if (!fid) return null;
+        return { kind: 'upToSurface', faceId: fid };
+      }
+      // upToBody is still disabled in the dropdown until Pass 4.
+      default: return null;
+    }
+  }
+
+  /** Disabled-state for the OK button. Distance-based kinds need a
+   * positive distance; Up to Vertex/Surface need a pick; Through All
+   * needs neither. */
+  canCommitExtrude(): boolean {
+    if (this.extrudeSelectedRegions().size === 0) return false;
+    const kind = this.extrudeEndKind();
+    if (kind === 'blind' || kind === 'midPlane') {
+      return isFinite(this.extrudeDistance()) && this.extrudeDistance() > 0;
+    }
+    if (kind === 'upToVertex') return this.extrudeUpToVertexId() !== null;
+    if (kind === 'upToSurface') return this.extrudeUpToFaceId() !== null;
+    if (kind === 'throughAll') return true;
+    return false;
+  }
+
+  /** Enter vertex-pick mode. The viewer renders a sphere at each
+   * topology vertex and restricts click hit-testing to those spheres.
+   * On click, onVertexPicked stores the id and exits the mode. Pressing
+   * Esc or clicking Cancel exits without a pick. */
+  beginVertexPick(): void {
+    this.facePickMode.set(false);  // mutually exclusive with face pick
+    this.vertexPickMode.set(true);
+  }
+
+  /** Called by the viewer when the user clicks a vertex marker. Stores
+   * the id on the in-progress feature state and exits pick mode so the
+   * normal sidebar picker UI returns. */
+  onVertexPicked(vertexId: string): void {
+    this.extrudeUpToVertexId.set(vertexId);
+    this.vertexPickMode.set(false);
+  }
+
+  /** Enter face-pick mode — same exclusive pattern as vertex picking. */
+  beginFacePick(): void {
+    this.vertexPickMode.set(false);
+    this.facePickMode.set(true);
+  }
+
+  onFacePicked(faceId: string): void {
+    this.extrudeUpToFaceId.set(faceId);
+    this.facePickMode.set(false);
+  }
+
+  /** Apply the Extrude sidebar's current inputs. Branches on whether the
+   * sidebar was opened to create a new extrude or to edit an existing one. */
+  commitExtrudeSidebar() {
+    const ctx = this.extrudeSidebar();
+    if (!ctx) return;
+    if (!this.canCommitExtrude()) return;
+    const endCondition = this.resolveEndCondition();
+    if (!endCondition) return;
+    const distance = this.extrudeDistance();
+    const flipped = this.extrudeFlipped();
+    const regionIndices = [...this.extrudeSelectedRegions()].sort((a, b) => a - b);
+    this.extrudeSidebar.set(null);
+    this.extrudeHoveredRegion.set(null);
+    this.vertexPickMode.set(false);
+    this.facePickMode.set(false);
+    this.setMode('idle');
+    if (ctx.editingFeatureId) {
+      this.featureTree.set(updateFeatureParam<ExtrudeFeature>(
+        this.featureTree(), ctx.editingFeatureId,
+        { distance, flipped, regionIndices, endCondition },
+      ));
       this.save();
-    });
+    } else {
+      this._applyExtrude(ctx.sketchId, { distance, flipped, regionIndices, endCondition });
+    }
+  }
+
+  cancelExtrudeSidebar() {
+    this.extrudeSidebar.set(null);
+    this.extrudeHoveredRegion.set(null);
+    this.extrudeUpToVertexId.set(null);
+    this.extrudeUpToFaceId.set(null);
+    this.vertexPickMode.set(false);
+    this.facePickMode.set(false);
+    this.setMode('idle');
+  }
+
+  isExtrudeRegionSelected(i: number): boolean {
+    return this.extrudeSelectedRegions().has(i);
+  }
+  toggleExtrudeRegion(i: number) {
+    const next = new Set(this.extrudeSelectedRegions());
+    if (next.has(i)) next.delete(i); else next.add(i);
+    this.extrudeSelectedRegions.set(next);
+  }
+  extrudeRegionIndices(): number[] {
+    const ctx = this.extrudeSidebar();
+    return ctx ? Array.from({ length: ctx.regionCount }, (_, i) => i) : [];
+  }
+
+  /** Commit the extrude feature to the feature tree. Pulled out of the
+   * sidebar flow so both paths share the same finalisation logic
+   * (auto-extrude after sketch-on-datum, manual extrude via sidebar). */
+  private _applyExtrude(
+    sketchId: string,
+    result: {
+      distance: number; flipped: boolean; regionIndices: number[];
+      endCondition?: ExtrudeEndCondition;
+    },
+  ) {
+    this.featureTree.set(addFeature(this.featureTree(), {
+      type: 'extrude', sketchId,
+      distance: result.distance,
+      flipped: result.flipped,
+      regionIndices: result.regionIndices,
+      endCondition: result.endCondition ?? { kind: 'blind' },
+    }));
+    // REQ 618 — extruded sketches auto-hide their 2D overlay. The user can
+    // re-show via the feature-tree eye toggle if they need to inspect the
+    // source profile.
+    this.doc.set(setSketchVisibility(this.doc(), sketchId, false));
+    this.save();
   }
 
   // Tree context-menu actions (REQs 607, 609, 610, 611) and sketch deletion (REQ 608).
@@ -1989,22 +2390,20 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const feature = this.featureTree().features.find(f => f.id === featureId);
     if (!feature || feature.type !== 'extrude') return;
     const sketch = this.doc().sketches[feature.sketchId];
-    const loopCount = sketch ? extractClosedLoops(sketch.state).loops.length : 1;
-    const ref = this.dialog.open(ExtrudeDialogComponent, {
-      data: {
-        defaultDistance: feature.distance,
-        defaultFlipped: feature.flipped === true,
-        loopCount,
-        defaultLoopIndices: feature.loopIndices ?? [0],
-      },
-      width: '320px',
-    });
-    ref.afterClosed().subscribe((result: ExtrudeDialogResult | null) => {
-      if (!result || result.distance <= 0) return;
-      this.featureTree.set(updateFeatureParam<ExtrudeFeature>(this.featureTree(), featureId, {
-        distance: result.distance, flipped: result.flipped, loopIndices: result.loopIndices,
-      }));
-      this.save();
+    const regionCount = sketch ? extractRegions(sketch.state).regions.length : 1;
+    // Reuse the same Extrude sidebar in "editing" mode: commit updates the
+    // existing feature rather than appending a new one.
+    this.extrudeDistance.set(feature.distance);
+    this.extrudeFlipped.set(feature.flipped === true);
+    this.extrudeSelectedRegions.set(new Set(feature.regionIndices ?? [0]));
+    const ec = feature.endCondition ?? { kind: 'blind' };
+    this.extrudeEndKind.set(ec.kind);
+    this.extrudeUpToVertexId.set(ec.kind === 'upToVertex' ? ec.vertexId : null);
+    this.extrudeUpToFaceId.set(ec.kind === 'upToSurface' ? ec.faceId : null);
+    this.extrudeSidebar.set({
+      sketchId: feature.sketchId,
+      regionCount,
+      editingFeatureId: featureId,
     });
   }
 
@@ -2115,7 +2514,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   private bootstrap(m: CadModel) {
     this.model.set(m);
-    this.featureTree.set(m.featureTree as FeatureTree);
+    // Apply the loopIndices → regionIndices rename to any saved ExtrudeFeature.
+    this.featureTree.set(migrateFeatureTree(m.featureTree as FeatureTree));
     // REQ 565: legacy SketchDocument blobs are auto-upgraded to the entity model on load.
     this.doc.set(migrateSketchDocument(m.sketchDoc as SketchDocument));
     this.activeSketchId.set(null);

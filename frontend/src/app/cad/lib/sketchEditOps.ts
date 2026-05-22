@@ -1136,6 +1136,14 @@ export function filletLines(
     const r2 = addTrimConstruction(s, pt2.id, b_near_id, l2.id, V);
     s = r2.state;
     if (r2.lineId) constructionLineIds.push(r2.lineId);
+  } else {
+    // No construction lines means the original corner point(s) are now
+    // orphan — nothing references them. Drop them so the sketch isn't
+    // littered with unused points around every fillet. For shared-corner
+    // cases (rectangle) a_near_id === b_near_id; both calls hit the same
+    // id, and the second one no-ops because the point is already gone.
+    s = removeOrphanPoint(s, a_near_id);
+    if (b_near_id !== a_near_id) s = removeOrphanPoint(s, b_near_id);
   }
 
   const result: OpResult = { state: s, affectedIds: [l1.id, l2.id, arc.id] };
@@ -1214,11 +1222,54 @@ export function chamferLines(
     const r2 = addTrimConstruction(s, pt2.id, b_near_id, line2Id, V);
     s = r2.state;
     if (r2.lineId) constructionLineIds.push(r2.lineId);
+  } else {
+    // Without construction lines, the original corner point(s) are orphan.
+    // Drop them. See filletLines for the full rationale.
+    s = removeOrphanPoint(s, a_near_id);
+    if (b_near_id !== a_near_id) s = removeOrphanPoint(s, b_near_id);
   }
 
   const result: OpResult = { state: s, affectedIds: [line1Id, line2Id, cutLine.id] };
   if (constructionLineIds.length > 0) result.constructionLineIds = constructionLineIds;
   return result;
+}
+
+/** Drop `pointId` from state if no other entity OR constraint references
+ * it. Used by filletLines / chamferLines (without construction lines) to
+ * clean up the original corner point after rebinding the incident lines —
+ * leaving the point sitting orphan would clutter the sketch with a
+ * draggable handle that's not visually attached to anything.
+ *
+ * Safety: walks every entity's point-referencing fields (start/end/center/
+ * majorAxisEnd/controlPointIds) and every constraint's target list. If any
+ * reference remains we leave the point alone. */
+function removeOrphanPoint(state: SketchState, pointId: string): SketchState {
+  for (const e of state.entities) {
+    if (e.id === pointId) continue;
+    switch (e.kind) {
+      case 'line':
+        if (e.startId === pointId || e.endId === pointId) return state;
+        break;
+      case 'circle':
+        if (e.centerId === pointId) return state;
+        break;
+      case 'arc':
+        if (e.centerId === pointId || e.startId === pointId || e.endId === pointId) return state;
+        break;
+      case 'ellipse':
+      case 'ellipticalArc':
+        if (e.centerId === pointId || e.majorAxisEndId === pointId) return state;
+        break;
+      case 'spline':
+        if (e.controlPointIds.includes(pointId)) return state;
+        break;
+      default: break;
+    }
+  }
+  for (const c of state.constraints) {
+    if (c.targets.some(t => t.entityId === pointId)) return state;
+  }
+  return { ...state, entities: state.entities.filter(e => e.id !== pointId) };
 }
 
 /** Add a dashed construction line between `tangentId` and `nearId` IF the

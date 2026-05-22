@@ -1,6 +1,6 @@
 import type {
   SketchState, SketchEntity, SketchConstraint, ConstraintType,
-  SketchDocument, Sketch,
+  SketchDocument, Sketch, FeatureTree, Feature,
 } from './types';
 import { ensureOriginPoint } from './store';
 
@@ -105,4 +105,31 @@ export function migrateSketchDocument(doc: SketchDocument): SketchDocument {
     sketches[id] = { ...s, state: migrateSketchState(s.state as LegacySketchState | SketchState) };
   }
   return { ...doc, sketches };
+}
+
+/** Read-side compatibility shim for ExtrudeFeature:
+ *   - `regionIndices` missing + legacy `loopIndices` present → copy across.
+ *     Region indices line up with loop indices for non-nested sketches.
+ *   - `endCondition` missing → default to { kind: 'blind' }. Lets the new
+ *     end-condition dropdown branch consistently without sprinkling
+ *     ?? 'blind' defaults across the codebase.
+ */
+export function migrateFeatureTree(tree: FeatureTree): FeatureTree {
+  const features = tree.features.map((f): Feature => {
+    if (f.type !== 'extrude') return f;
+    const legacy = f as Feature & {
+      loopIndices?: number[]; regionIndices?: number[];
+      endCondition?: { kind: string };
+    };
+    let next = legacy;
+    if (next.regionIndices === undefined && next.loopIndices !== undefined) {
+      const { loopIndices, ...rest } = next;
+      next = { ...rest, regionIndices: loopIndices };
+    }
+    if (next.endCondition === undefined) {
+      next = { ...next, endCondition: { kind: 'blind' } };
+    }
+    return next as Feature;
+  });
+  return { ...tree, features };
 }

@@ -19,10 +19,21 @@ mod ops;
 mod protocol;
 mod server;
 
-/// Bump whenever the topological-naming algorithm in `naming.rs` changes.
-/// BRep cache entries tagged with an older version must be recomputed. See
+/// Bump whenever the topological-naming algorithm in `naming.rs` OR the
+/// shape of the kernel's BRep/mesh output changes. BRep cache entries
+/// tagged with an older version must be recomputed. Mirrored by
+/// `NAMING_VERSION` in `backend/services/cadRegenService.js`. See
 /// `NAMING.md`.
-pub const NAMING_SCHEMA_VERSION: u32 = 1;
+///
+/// 2: arcs in extruded profiles use real OCCT `three_point_arc` edges
+///    instead of the previous chord-segment approximation.
+/// 3: profiles became regions (outer loop + 0..N inner holes). Donut /
+///    annular extrudes are produced via Face::subtract → CompoundFace
+///    rather than only-outer-wire faces.
+/// 4: ExtrudeFeature gained endCondition. Mid Plane / Through All
+///    resolve in the backend (kernel-shape unchanged) — version bumped
+///    so existing cache rows re-run through the new translator path.
+pub const NAMING_SCHEMA_VERSION: u32 = 4;
 
 /// Default bind address. Override with `CAD_KERNEL_ADDR`. We default to
 /// `0.0.0.0` because the standard dev setup runs the Node backend in Docker,

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # Multi-stage build for the Rust + OCCT CAD kernel sidecar.
 #
 # Stage 1 ("builder") installs the full OCCT dev toolchain + cxx bridge
@@ -5,9 +6,10 @@
 # binary into a slim runtime image with OCCT shared libs only.
 #
 # First build is slow because opencascade-rs has to compile cxx bridge
-# code against OCCT — expect 10-15 minutes cold. Subsequent builds
-# benefit from cargo's incremental cache, but Docker layer caching
-# requires Cargo.toml/Cargo.lock to be unchanged.
+# code against OCCT — expect 25-40 minutes cold. Subsequent builds reuse
+# the BuildKit cache mounts below (registry/git/target) and finish in
+# seconds-to-minutes for small source changes. The syntax directive at
+# the top opts into BuildKit so the `--mount=type=cache` syntax works.
 
 # ---- builder ----
 # Rust 1.85+ required: opencascade-rs pulls a transitive hashbrown >= 0.17
@@ -30,7 +32,16 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY tests ./tests
 
-RUN cargo build --release
+# BuildKit cache mounts: persist Cargo's downloaded crates + git deps +
+# the `target/` incremental compilation directory across builds. After
+# `cargo build` finishes we copy the binary OUT of the cache (cache mounts
+# don't get baked into the resulting image layer) into /build/cad-kernel,
+# which IS in the builder layer for the runtime stage to COPY --from.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target,id=cad-kernel-target \
+    cargo build --release && \
+    cp /build/target/release/cad-kernel /build/cad-kernel
 
 # ---- runtime ----
 FROM debian:bookworm-slim
@@ -48,7 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libocct-data-exchange-dev \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/cad-kernel /usr/local/bin/cad-kernel
+COPY --from=builder /build/cad-kernel /usr/local/bin/cad-kernel
 
 # Listen on all interfaces inside the container so other compose services
 # (the Node backend) can reach the kernel over the compose network.

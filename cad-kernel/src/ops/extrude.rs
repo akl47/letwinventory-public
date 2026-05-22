@@ -1,20 +1,20 @@
 //! `buildExtrude` — turn a typed profile + host plane into a tessellated
 //! extruded solid via OCCT (through the `opencascade` crate).
 //!
-//! Phase 0 scope: handles `line` and `circle` profile edges. `arc` edges
-//! fall back to a chord-tessellated polyline approximation; Phase 1 wires
-//! arcs to `Edge::arc` (3-point) or `gp_Circ` + Edge::segment chains for
-//! analytic arc handling.
+//! Handles `line`, `arc`, and `circle` profile edges. Arcs use
+//! `Sketch::three_point_arc` with the midpoint computed from the protocol's
+//! (centre, radius, startAngle, endAngle, ccw) so the resulting face has a
+//! true analytic arc edge rather than a chord approximation.
 
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use glam::{dvec3, DVec3};
 use opencascade::{
-    primitives::{Face, Shape, Solid},
+    primitives::{CompoundFace, Face, Shape, Solid},
     workplane::Workplane,
 };
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::naming::PersistentName;
 use crate::protocol::{
@@ -31,7 +31,6 @@ pub fn build(params: &BuildExtrudeParams) -> Result<BuildExtrudeResult> {
     let signed_distance = if params.flipped { -params.distance } else { params.distance };
 
     let workplane = build_workplane(&params.plane);
-    let face = build_profile_face(&workplane, &params.profile)?;
 
     // Extrude along the host plane's normal × signed distance.
     let extrude_dir = dvec3(
@@ -39,8 +38,20 @@ pub fn build(params: &BuildExtrudeParams) -> Result<BuildExtrudeResult> {
         params.plane.normal[1] * signed_distance,
         params.plane.normal[2] * signed_distance,
     );
-    let solid: Solid = face.extrude(extrude_dir);
-    let shape: Shape = solid.into();
+
+    // Branch on holes. The fast path (no holes) keeps the existing
+    // Face::extrude pipeline so non-annular extrudes stay byte-identical
+    // to schema-version-2 output for the same input. The donut/annular
+    // path builds outer + hole faces and subtracts them into a
+    // CompoundFace, then extrudes that.
+    let shape: Shape = if params.holes.is_empty() {
+        let face = build_profile_face(&workplane, &params.profile)?;
+        let solid: Solid = face.extrude(extrude_dir);
+        solid.into()
+    } else {
+        let compound = build_compound_face_with_holes(&workplane, &params.profile, &params.holes)?;
+        compound.extrude(extrude_dir)
+    };
 
     let plane_origin = dvec3(params.plane.origin[0], params.plane.origin[1], params.plane.origin[2]);
     let plane_normal = dvec3(params.plane.normal[0], params.plane.normal[1], params.plane.normal[2]);
@@ -88,69 +99,164 @@ fn build_profile_face(workplane: &Workplane, profile: &[ProfileEdge]) -> Result<
         }
     }
 
-    // Polygon path — walk the edges and build a fluent Sketch.
-    // Arcs in Phase 0 fall back to chord approximation: their start point is
-    // included, the arc itself becomes a single chord. Phase 1 swaps to
-    // Sketch::three_point_arc once we round-trip arc geometry through the
-    // protocol.
-    let mut points = Vec::with_capacity(profile.len());
+    // Reject mixed circles early — a circle must be the sole edge.
     for edge in profile {
-        match edge {
-            ProfileEdge::Line { start, .. } => {
-                points.push((start.x, start.y));
-            }
-            ProfileEdge::Arc { start, .. } => {
-                warn!("arc profile edge falls back to chord in Phase 0");
-                points.push((start.x, start.y));
-            }
-            ProfileEdge::Circle { .. } => {
-                return Err(anyhow!(
-                    "'circle' edge mixed into a polygon profile is invalid; circles must be the sole edge"
-                ));
-            }
+        if let ProfileEdge::Circle { .. } = edge {
+            return Err(anyhow!(
+                "'circle' edge mixed into a polygon profile is invalid; circles must be the sole edge"
+            ));
         }
     }
-    if points.len() < 3 {
+
+    // Chord polygon — vertex per edge's start. Used for the orientation/area
+    // check and the validate_polygon defensive guards. With arcs in the loop
+    // this is an approximation, but a fine one for determining the loop's
+    // winding (the arcs deviate from the chord by O(radius - radius·cos(half-sweep)),
+    // never enough to flip the sign of the signed area).
+    let mut polygon: Vec<(f64, f64)> = profile.iter().map(|e| match e {
+        ProfileEdge::Line { start, .. } => (start.x, start.y),
+        ProfileEdge::Arc  { start, .. } => (start.x, start.y),
+        ProfileEdge::Circle { .. } => unreachable!("rejected above"),
+    }).collect();
+    if polygon.len() < 3 {
         return Err(anyhow!(
             "profile must have at least 3 edges to form a closed polygon, got {}",
-            points.len()
+            polygon.len()
         ));
     }
-
-    // Silently merge consecutive coincident vertices BEFORE validating. The
-    // walker can emit duplicates when two distinct point entities sit on top
-    // of each other (e.g. an unmerged coincident pair, or two manually-
-    // placed points that ended up at the same coordinates). OCCT would
-    // throw `StdFail_NotDone` on the resulting zero-length edge.
-    let mut points = dedup_consecutive(points);
-    if points.len() < 3 {
+    polygon = dedup_consecutive(polygon);
+    if polygon.len() < 3 {
         return Err(anyhow!(
             "profile collapses to fewer than 3 distinct vertices after merging \
              coincident points — the sketch likely has overlapping geometry",
         ));
     }
-
-    // Defensive validation BEFORE handing off to OCCT. Each check below
-    // covers a known way OCCT throws `StdFail_NotDone` from its C++ side,
-    // which would abort the process (opencascade-rs doesn't translate C++
-    // exceptions into Result, so we can't recover them in Rust).
-    validate_polygon(&points)?;
+    validate_polygon(&polygon)?;
 
     // OCCT wants a counter-clockwise wire for `face.extrude` to produce an
-    // outward-pointing solid. The frontend's profile walker doesn't guarantee
-    // orientation (it picks whichever direction the first line happens to
-    // start), so we orient here using the shoelace signed area.
-    if signed_polygon_area(&points) < 0.0 {
-        points.reverse();
+    // outward-pointing solid. The frontend's walker doesn't guarantee
+    // orientation, so we reverse here if needed. For arcs the reversal
+    // ALSO swaps start↔end and flips ccw so the arc is traversed in the
+    // opposite rotational sense.
+    let reverse = signed_polygon_area(&polygon) < 0.0;
+    let edges: Vec<&ProfileEdge> = if reverse {
+        profile.iter().rev().collect()
+    } else {
+        profile.iter().collect()
+    };
+
+    // Start point: first edge's start (or end if reversed).
+    let first = edges[0];
+    let (sx, sy) = traversal_start(first, reverse);
+    info!("profile walk start ({:.4}, {:.4}), reverse={}, edges={}",
+          sx, sy, reverse, edges.len());
+    let mut sketch = workplane.sketch().move_to(sx, sy);
+    // Track the running cursor in Rust so we can skip degenerate edges
+    // (zero-length lines, arcs with start ≈ end) before they reach OCCT.
+    // OCCT throws StdFail_NotDone from MakeEdge / MakeArcOfCircle for these
+    // and the C++ exception escapes Rust as a SIGABRT, killing the kernel.
+    // Upstream walkers can produce such edges when the sketch contains a
+    // degenerate entity (e.g. a Line with startId == endId left from a
+    // half-completed edit), and a defensive skip here is cheaper than
+    // hardening every upstream walker.
+    let mut cursor = (sx, sy);
+    const MIN_EDGE_LEN_SQ: f64 = 1.0e-10;
+
+    for (i, edge) in edges.iter().enumerate() {
+        match **edge {
+            ProfileEdge::Line { start, end } => {
+                let (ex, ey) = if reverse { (start.x, start.y) } else { (end.x, end.y) };
+                let dx = ex - cursor.0;
+                let dy = ey - cursor.1;
+                if dx * dx + dy * dy < MIN_EDGE_LEN_SQ {
+                    warn!("  edge {}: skipping zero-length line at ({:.4}, {:.4})", i, ex, ey);
+                    continue;
+                }
+                info!("  edge {}: line_to ({:.4}, {:.4})", i, ex, ey);
+                sketch = sketch.line_to(ex, ey);
+                cursor = (ex, ey);
+            }
+            ProfileEdge::Arc { center, radius, start_angle, end_angle, ccw, start, end } => {
+                // After reversal, swap start↔end and flip ccw. The arc's
+                // rotational sense is preserved by inverting both, which
+                // keeps the geometry identical but traverses it the other
+                // way around.
+                let (sa, ea, sweep_ccw, sx_a, sy_a, ex, ey) = if reverse {
+                    (end_angle, start_angle, !ccw, end.x, end.y, start.x, start.y)
+                } else {
+                    (start_angle, end_angle, ccw, start.x, start.y, end.x, end.y)
+                };
+                let dx = ex - cursor.0;
+                let dy = ey - cursor.1;
+                if dx * dx + dy * dy < MIN_EDGE_LEN_SQ {
+                    warn!("  edge {}: skipping zero-length arc (start ≈ end)", i);
+                    continue;
+                }
+                // Sweep angle in the traversal's rotational sense, normalised
+                // to (0, 2π] for CCW or [-2π, 0) for CW.
+                let mut sweep = ea - sa;
+                if sweep_ccw {
+                    while sweep <= 0.0 { sweep += std::f64::consts::TAU; }
+                } else {
+                    while sweep >= 0.0 { sweep -= std::f64::consts::TAU; }
+                }
+                let mid_angle = sa + sweep / 2.0;
+                let mid_x = center.x + radius * mid_angle.cos();
+                let mid_y = center.y + radius * mid_angle.sin();
+                info!(
+                    "  edge {}: three_point_arc start=({:.4}, {:.4}) mid=({:.4}, {:.4}) end=({:.4}, {:.4}) \
+                     center=({:.4}, {:.4}) r={:.4} sa={:.4} ea={:.4} ccw={} sweep={:.4}",
+                    i, sx_a, sy_a, mid_x, mid_y, ex, ey,
+                    center.x, center.y, radius, sa, ea, sweep_ccw, sweep,
+                );
+                sketch = sketch.three_point_arc((mid_x, mid_y), (ex, ey));
+                cursor = (ex, ey);
+            }
+            ProfileEdge::Circle { .. } => unreachable!("rejected above"),
+        }
     }
 
-    // Sketch::move_to + chained line_to + close() produces the closed Wire.
-    let mut sketch = workplane.sketch().move_to(points[0].0, points[0].1);
-    for (x, y) in points.iter().skip(1) {
-        sketch = sketch.line_to(*x, *y);
-    }
-    let wire = sketch.close();
+    // Each edge in the walk ends at the next edge's start, and the final
+    // edge ends at the loop's start point — so cursor == first_point and
+    // `wire()` collects the closed chain. `close()` would add a tautological
+    // zero-length segment that OCCT rejects.
+    let wire = sketch.wire();
     Ok(Face::from_wire(&wire))
+}
+
+/// Build a planar face with holes (CompoundFace) by subtracting each
+/// hole's face from the outer face one at a time. Each iteration takes
+/// the running CompoundFace ⊖ the next hole (promoted Face → CompoundFace
+/// via `From<Face>`). Used for donut-style regions from
+/// `extractRegions` where the outer loop has one or more inner loops.
+fn build_compound_face_with_holes(
+    workplane: &Workplane,
+    outer: &[ProfileEdge],
+    holes: &[Vec<ProfileEdge>],
+) -> Result<CompoundFace> {
+    let outer_face = build_profile_face(workplane, outer)
+        .context("building outer face of region")?;
+    let mut acc: CompoundFace = outer_face.into();
+    for (i, hole_edges) in holes.iter().enumerate() {
+        let hole_face = build_profile_face(workplane, hole_edges)
+            .with_context(|| format!("building hole face {}", i))?;
+        let hole_compound: CompoundFace = hole_face.into();
+        acc = acc.subtract(&hole_compound);
+    }
+    Ok(acc)
+}
+
+/// Start point for the loop walk, accounting for the reversal flag — the
+/// "start" of the first edge in the traversal is its `start` field normally,
+/// or its `end` field when the profile is being walked in reverse.
+fn traversal_start(edge: &ProfileEdge, reverse: bool) -> (f64, f64) {
+    match edge {
+        ProfileEdge::Line { start, end } |
+        ProfileEdge::Arc  { start, end, .. } => {
+            if reverse { (end.x, end.y) } else { (start.x, start.y) }
+        }
+        ProfileEdge::Circle { .. } => unreachable!(),
+    }
 }
 
 /// Reject profiles OCCT can't build a wire from. Each branch maps to a

@@ -932,7 +932,78 @@ export class CadSketchEditorComponent implements OnDestroy {
       if (this.readonly()) return;
       ev.preventDefault();  // also stops Backspace from triggering browser-back
       this.deleteSelected();
+      return;
     }
+
+    if (ev.key === 'Tab' && !ev.shiftKey && !ev.altKey && !ev.metaKey) {
+      // Cycle between variants of the current tool (corner ↔ center
+      // rectangle, center-end ↔ 3-point arc, etc.). Mirrors the
+      // SolidWorks "Sketch > Variants" muscle memory and matches the
+      // panel-tab key on the desktop.
+      const cycled = this.cycleToolVariant();
+      if (cycled) { ev.preventDefault(); return; }
+    }
+
+    if (this.readonly()) return;
+    if (this.applySketchShortcut(ev)) ev.preventDefault();
+  }
+
+  /** Maps single-key (and a few Shift+key) presses to sketch tools.
+   * Returns true when the key was handled — caller preventDefault()s.
+   * Keys roughly match the SolidWorks community convention; if a tool
+   * has no obvious letter it's omitted (use the toolbar). */
+  private applySketchShortcut(ev: KeyboardEvent): boolean {
+    if (ev.ctrlKey || ev.altKey || ev.metaKey) return false;
+    const k = ev.key.toLowerCase();
+    if (ev.shiftKey) {
+      // Shift+letter holds the modifier-bearing transforms so they don't
+      // collide with the more frequently used Copy/Rotate/Scale primaries.
+      switch (k) {
+        case 'c': this.tool.set('copy');   return true;
+        case 'r': this.tool.set('rotate'); return true;
+        case 's': this.tool.set('scale');  return true;
+        default:  return false;
+      }
+    }
+    switch (k) {
+      case 'l': this.tool.set('line');         return true;
+      case 'c': this.tool.set('circle');       return true;
+      case 'r': this.tool.set('rect-corner');  return true;
+      case 'a': this.tool.set('arc');          return true;
+      case 'p': this.tool.set('point');        return true;
+      case 'e': this.tool.set('ellipse');      return true;
+      case 's': this.tool.set('spline');       return true;
+      case 'y': this.tool.set('polygon');      return true;
+      case 't': this.tool.set('trim');         return true;
+      case 'x': this.tool.set('extend');       return true;
+      case 'f': this.tool.set('fillet');       return true;
+      case 'h': this.tool.set('chamfer');      return true;
+      case 'm': this.tool.set('mirror');       return true;
+      case 'o': this.tool.set('offset');       return true;
+      case 'd': this.tool.set('smart-dim');    return true;
+      case 'v': this.tool.set('move');         return true;
+      default:  return false;
+    }
+  }
+
+  /** Tab while a tool with multiple variants is active flips to the next
+   * one in the cycle. Returns true when something changed (so the caller
+   * can preventDefault the tab key from moving focus). */
+  private cycleToolVariant(): boolean {
+    const cycles: Record<string, Tool> = {
+      'rect-corner': 'rect-center',
+      'rect-center': 'rect-corner',
+      'arc':         'arc-3pt',
+      'arc-3pt':     'tangent-arc',
+      'tangent-arc': 'arc',
+      'circle':            'circle-3pt',
+      'circle-3pt':        'circle-perimeter',
+      'circle-perimeter':  'circle',
+    };
+    const next = cycles[this.tool()];
+    if (!next) return false;
+    this.tool.set(next);
+    return true;
   }
 
   private deleteSelected() {
@@ -1207,7 +1278,14 @@ export class CadSketchEditorComponent implements OnDestroy {
       result = await solveSketch(state);
     }
     if (id !== this.dragSolveGen) return;
-    this.sketchChanged.emit(result.status === 'ok' ? result.state : state);
+    // Only emit when the solver accepted the drag. When it fails (e.g.,
+    // the sketch is fully constrained and the cursor pulls a point against
+    // a rigid constraint), DON'T emit the requested state — the previous
+    // frame's accepted state already shows on screen, so the dragged
+    // points visually stick where the constraints allow them. Without
+    // this gate the dragged points would slide with the cursor regardless
+    // of constraint violations.
+    if (result.status === 'ok') this.sketchChanged.emit(result.state);
   }
 
   /** Apply a rubber-band rectangle as a selection. Standard "fully enclosed"

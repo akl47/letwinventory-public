@@ -233,21 +233,59 @@ export interface OriginFeature {
   visibility?: Record<string, boolean>;
 }
 
+/** SolidWorks-style extrude end conditions. The tag drives backend
+ * translation in cadRegenService — each kind resolves to a kernel call
+ * (or, for booleans-based variants, a sentinel + post-trim).
+ *
+ * - blind: extrude a fixed distance along the normal.
+ * - midPlane: extrude `distance` centred on the sketch plane (so each
+ *   side gets distance/2). Backend shifts plane.origin by -normal·d/2
+ *   before dispatch; no kernel change needed.
+ * - throughAll: extrude a sentinel-large distance (10000 units). When
+ *   subtractive booleans land it will be intersected with the body.
+ * - upToVertex: extrude until the perpendicular distance to a picked
+ *   vertex. Backend resolves the vertex's world position from the
+ *   topology cache, computes the distance, dispatches as Blind.
+ * - upToSurface / upToBody: requires kernel boolean ops; UI shows the
+ *   picker but commit is gated until Pass 3-4. */
+export type ExtrudeEndCondition =
+  | { kind: 'blind' }
+  | { kind: 'midPlane' }
+  | { kind: 'throughAll' }
+  | { kind: 'upToVertex'; vertexId: string }
+  | { kind: 'upToSurface'; faceId: string }
+  | { kind: 'upToBody'; featureId: string };
+
 export interface ExtrudeFeature {
   id: FeatureId;
   type: 'extrude';
   sketchId: SketchId;
+  /** Extrusion length in mm. For Mid Plane this is the FULL thickness
+   * (each side gets half). Ignored for Through All / Up to *
+   * conditions, but kept on the feature so toggling back to Blind
+   * doesn't lose the user's last value. */
   distance: number;
   /** Missing == true. When false, feature is skipped during regenerateModel. */
   visible?: boolean;
-  /** Missing == false. When true, the extrude grows along -plane.normal. */
+  /** Missing == false. When true, the extrude grows along -plane.normal.
+   * Applies to Blind, Through All, and Up to * conditions (it flips the
+   * extrusion direction). Mid Plane ignores it (symmetric). */
   flipped?: boolean;
+  /** End condition. Missing == { kind: 'blind' } for backwards compat
+   * with features persisted before the field existed. */
+  endCondition?: ExtrudeEndCondition;
   /**
-   * REQ 620 — which closed loops of the sketch this feature extrudes. Indices
-   * into extractClosedLoops(sketch.state).loops in stable order. Missing == [0]
-   * for backwards compat with single-loop features.
+   * Which planar regions of the sketch this feature extrudes. Indices into
+   * extractRegions(sketch.state).regions in stable order. Each region is
+   * one outer loop with 0..N inner holes (so a region picked off a sketch
+   * of two concentric circles can be the inner disk, the outer disk, or
+   * the donut between them). Missing == [0] for backwards compat.
+   *
+   * Legacy: this field was `loopIndices` before regions existed. Saved
+   * docs carrying the old field are remapped to `regionIndices` on load
+   * (see migration.ts) — for non-nested sketches the indices line up.
    */
-  loopIndices?: number[];
+  regionIndices?: number[];
   /** REQ 624 — user-supplied label shown in the feature tree. */
   name?: string;
 }
