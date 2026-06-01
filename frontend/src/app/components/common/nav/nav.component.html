@@ -1,5 +1,5 @@
 <mat-sidenav-container class="sidenav-container" autosize>
-    <mat-sidenav mode="side" [opened]="!isMobileRoute()" class="nav-rail" [class.collapsed]="isSidenavCollapsed()">
+    <mat-sidenav mode="side" [opened]="!isMobileRoute() && !isCadFullscreen()" class="nav-rail" [class.collapsed]="isSidenavCollapsed()">
         <div class="nav-rail-wrapper" (click)="$event.stopPropagation()">
             <!-- Rail -->
             <div class="rail">
@@ -200,7 +200,7 @@
 
     <mat-sidenav-content class="sidenav-content">
         <mat-toolbar class="nav-header" [class.dev]="isDev" [class.impersonating]="isImpersonating()"
-            [class.hidden]="isMobileRoute()">
+            [class.hidden]="isMobileRoute() || isCadFullscreen()">
             <button mat-icon-button (click)="toggleSidenav()" aria-label="Toggle sidenav">
                 <mat-icon>menu</mat-icon>
             </button>

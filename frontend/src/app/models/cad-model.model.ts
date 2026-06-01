@@ -1,4 +1,5 @@
 import type { FeatureTree, SketchDocument } from '../cad/lib/types';
+import type { EquationDoc } from '../cad/lib/equations';
 
 export type CadReleaseState = 'draft' | 'review' | 'released';
 
@@ -10,6 +11,7 @@ export interface CadModel {
   previousRevisionID: number | null;
   featureTree: FeatureTree;
   sketchDoc: SketchDocument;
+  equations?: EquationDoc;
   releaseState: CadReleaseState;
   submittedAt: string | null;
   releasedAt: string | null;

@@ -1,9 +1,11 @@
-import { Component, input, output, computed } from '@angular/core';
+import { Component, inject, input, output, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { MatIconModule } from '@angular/material/icon';
+import { MatIconModule, MatIconRegistry } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { DomSanitizer } from '@angular/platform-browser';
 import type { SketchConstraint, SketchEntity, ConstraintType } from '../../../cad/lib/types';
 import { formatNumber, parseUserValue, fromMm, unitSymbol, type Unit } from '../../../cad/lib/units';
+import { registerCadIcons } from '../cad-icons';
 
 // Sidebar listing every constraint in the active sketch. Each row shows:
 //   - icon for the constraint type
@@ -16,27 +18,29 @@ import { formatNumber, parseUserValue, fromMm, unitSymbol, type Unit } from '../
 // work: inline editing with proper keyboard handling instead of window.prompt.
 
 const ICON: Record<ConstraintType, string> = {
-  coincident: 'merge_type',
-  fixed: 'lock',
-  horizontal: 'horizontal_rule',
-  vertical: 'unfold_more',
-  distance: 'straighten',
-  perpendicular: 'turn_right',
-  parallel: 'drag_handle',
-  tangent: 'timeline',
-  equal: 'compare_arrows',
-  symmetric: 'flip',
-  midpoint: 'vertical_align_center',
-  concentric: 'adjust',
-  coradial: 'donut_large',
-  collinear: 'linear_scale',
-  radius: 'radio_button_unchecked',
-  diameter: 'all_out',
-  angle: 'rotate_right',
-  'horizontal-distance': 'swap_horiz',
-  'vertical-distance': 'swap_vert',
-  'point-line-distance': 'straighten',
-  'arc-length': 'timeline',
+  coincident: 'cad-coincident',
+  fixed: 'cad-fixed',
+  horizontal: 'cad-horizontal',
+  vertical: 'cad-vertical',
+  distance: 'cad-horizontal-distance',
+  perpendicular: 'cad-perpendicular',
+  parallel: 'cad-parallel',
+  tangent: 'cad-tangent',
+  equal: 'cad-equal',
+  symmetric: 'cad-symmetric',
+  midpoint: 'cad-midpoint',
+  concentric: 'cad-concentric',
+  coradial: 'cad-coradial',
+  collinear: 'cad-collinear',
+  radius: 'cad-radius',
+  diameter: 'cad-diameter',
+  angle: 'cad-angle',
+  'horizontal-distance': 'cad-horizontal-distance',
+  'vertical-distance': 'cad-vertical-distance',
+  'point-line-distance': 'cad-point-line-distance',
+  'arc-length': 'cad-arc-length',
+  'chord-distance': 'cad-chord-distance',
+  'on-edge': 'cad-convert',
 };
 
 const LABEL: Record<ConstraintType, string> = {
@@ -61,6 +65,8 @@ const LABEL: Record<ConstraintType, string> = {
   'vertical-distance': 'Δy',
   'point-line-distance': 'Pt-line dist',
   'arc-length': 'Arc length',
+  'chord-distance': 'Chord',
+  'on-edge': 'On Edge',
 };
 
 // Dimensional constraint types. The list panel formats their values for
@@ -68,6 +74,7 @@ const LABEL: Record<ConstraintType, string> = {
 const HAS_VALUE = new Set<ConstraintType>([
   'distance', 'radius', 'diameter', 'angle',
   'horizontal-distance', 'vertical-distance', 'point-line-distance', 'arc-length',
+  'chord-distance',
 ]);
 
 interface ConstraintRow {
@@ -97,7 +104,7 @@ interface ConstraintRow {
             [class.selected]="r.id === selectedId()"
             [attr.data-testid]="'constraint-row-' + r.id"
             (click)="onSelectRow(r)">
-          <mat-icon class="row-icon">{{ r.icon }}</mat-icon>
+          <mat-icon class="row-icon" [svgIcon]="r.icon"></mat-icon>
           <span class="row-body">
             <span class="row-label">{{ r.label }}</span>
             <span class="row-targets">{{ r.targets.join(' · ') }}</span>
@@ -154,16 +161,38 @@ export class CadConstraintListComponent {
   edit = output<{ id: string; value: number; unit: Unit | null }>();
   select = output<string>();
 
+  constructor() {
+    // Register custom CAD icons. Idempotent — already registered if
+    // the sketch editor has been opened in the same session.
+    registerCadIcons(inject(MatIconRegistry), inject(DomSanitizer));
+  }
+
   rows = computed<ConstraintRow[]>(() => {
     const entMap = new Map(this.entities().map(e => [e.id, e]));
     const defUnit = this.defaultUnit();
-    return this.constraints().map(c => {
+    // Hide chain-internal duplicates (offset chain emits redundant
+    // dims with shared chainId for solver completeness; the user
+    // only wants ONE row per chain). Show every constraint that's
+    // either non-chain or the chain's "primary" entry — primary =
+    // dimensional with `placement`, geometric without `placement`.
+    const seenChains = new Set<string>();
+    return this.constraints().filter(c => {
+      if (!c.chainId) return true;
+      // For dimensional constraints in a chain, only the one with
+      // placement renders. For geometric (parallel, concentric, etc.)
+      // in a chain, only the first per chainId renders.
+      if (c.placement) return true;
+      if (c.value !== undefined) return false;  // dim without placement → hidden
+      if (seenChains.has(c.chainId)) return false;
+      seenChains.add(c.chainId);
+      return true;
+    }).map(c => {
       const targetLabels = c.targets.map(t => labelForEntity(entMap.get(t.entityId), t.entityId));
       const value = formatValue(c, defUnit);
       return {
         id: c.id,
         type: c.type,
-        icon: ICON[c.type] || 'rule',
+        icon: ICON[c.type] || 'cad-fixed',
         label: LABEL[c.type] || c.type,
         targets: targetLabels,
         value,

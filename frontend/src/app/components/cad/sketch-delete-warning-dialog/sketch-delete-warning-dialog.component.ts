@@ -30,9 +30,9 @@ export interface SketchDeleteWarningData {
       </p>
     </mat-dialog-content>
     <mat-dialog-actions align="end">
-      <button mat-button data-testid="sketch-delete-cancel" (click)="choose('cancel')">Cancel</button>
-      <button mat-stroked-button data-testid="sketch-delete-break" (click)="choose('break')">Break references</button>
-      <button mat-raised-button color="warn" data-testid="sketch-delete-cascade" (click)="choose('cascade')">Cascade delete</button>
+      <button class="cad-btn btn-text" data-testid="sketch-delete-cancel" (click)="choose('cancel')">Cancel</button>
+      <button class="cad-btn" data-testid="sketch-delete-break" (click)="choose('break')">Break references</button>
+      <button class="cad-btn btn-danger" data-testid="sketch-delete-cascade" (click)="choose('cascade')">Cascade delete</button>
     </mat-dialog-actions>
   `,
   styles: [`

@@ -11,6 +11,7 @@ import { Subscription } from 'rxjs';
 import { filter } from 'rxjs/operators';
 import { AuthService } from '../../../services/auth.service';
 import { TaskViewPreferencesService } from '../../../services/task-view-preferences.service';
+import { CadUiStateService } from '../../../services/cad-ui-state.service';
 import { environment } from '../../../../environments/environment';
 import { APP_VERSION } from '../../../../environments/version';
 
@@ -38,6 +39,10 @@ export class NavComponent implements OnInit, OnDestroy {
     private readonly authService = inject(AuthService);
     private readonly router = inject(Router);
     private readonly taskViewPreferences = inject(TaskViewPreferencesService);
+    private readonly cadUiState = inject(CadUiStateService);
+    // Hide the nav rail + top toolbar whenever the CAD editor is in full-
+    // screen mode. Same hide pattern that isMobileRoute uses.
+    protected readonly isCadFullscreen = this.cadUiState.fullscreen;
     private readonly elementRef = inject(ElementRef);
     private routerSub?: Subscription;
     protected readonly isSidenavCollapsed = signal(false);

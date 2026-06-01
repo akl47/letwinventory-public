@@ -1,20 +1,23 @@
-import { Component, input, output, signal, computed, viewChild } from '@angular/core';
+import { Component, input, output, signal, computed, ViewChild, ElementRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
-import type { Feature, SketchDocument, OriginFeature, ExtrudeFeature } from '../../../cad/lib/types';
+import type { Feature, Sketch, SketchDocument, OriginFeature, ExtrudeFeature } from '../../../cad/lib/types';
 import { defaultDatumVisibility } from '../../../cad/lib/featureTree';
+import { holeSpec } from '../../../cad/lib/holeSpecs';
 
 export type FeatureTreeAction =
   | { action: 'edit-feature'; featureId: string }
   | { action: 'delete-feature'; featureId: string }
   | { action: 'toggle-feature-visibility'; featureId: string }
+  | { action: 'toggle-feature-suppression'; featureId: string }
   | { action: 'rename-feature'; featureId: string }
   | { action: 'edit-sketch'; sketchId: string }
   | { action: 'delete-sketch'; sketchId: string }
   | { action: 'toggle-sketch-visibility'; sketchId: string }
-  | { action: 'rename-sketch'; sketchId: string };
+  | { action: 'rename-sketch'; sketchId: string }
+  | { action: 'toggle-cosmetic-threads-visibility' };
 
 // REQ 626 — feature selection event from a left-click on a feature row.
 // Carries the modifier keys so the parent decides multi-select policy.
@@ -36,7 +39,7 @@ export interface SketchSelectEvent {
 interface TreeNode {
   /** Unique within the tree; used for expansion tracking. */
   key: string;
-  kind: 'feature' | 'sketch' | 'datum';
+  kind: 'feature' | 'sketch' | 'datum' | 'rollback-bar' | 'cosmetic-threads-group';
   label: string;
   iconName: string;
   iconClass: string;
@@ -47,6 +50,13 @@ interface TreeNode {
   visible?: boolean;
   visibilityToggleable?: boolean;
   selectable: boolean;          // highlighted as clickable in current mode
+  /** Position in the feature tree for features. Used by the rollback
+   * bar to grey out features past its cutoff. */
+  featureIndex?: number;
+  /** True when this feature is below the rollback bar. */
+  rolledBack?: boolean;
+  /** True when this feature has been explicitly suppressed (skipped in regen). */
+  suppressed?: boolean;
   /** Stable id payload passed back through events. */
   datumId?: string;
   sketchId?: string;
@@ -64,9 +74,10 @@ interface TreeNode {
           <mat-icon>account_tree</mat-icon>
           <span>Feature Tree</span>
         </header>
-        <ul class="tree">
+        <ul class="tree" #treeList>
         <li *ngFor="let n of nodes()"
             [attr.data-testid]="rowTestId(n)"
+            [attr.data-feature-index]="n.featureIndex"
             class="row"
             [class.depth-0]="n.depth === 0"
             [class.depth-1]="n.depth === 1"
@@ -74,13 +85,18 @@ interface TreeNode {
             [class.hidden-datum]="n.kind === 'datum' && n.visible === false"
             [class.hidden-feature]="n.kind === 'feature' && n.visible === false"
             [class.hidden-sketch]="n.kind === 'sketch' && n.visible === false"
+            [class.rolled-back]="n.rolledBack"
+            [class.suppressed]="n.suppressed"
+            [class.rollback-bar]="n.kind === 'rollback-bar'"
+            [class.drag-target-above]="dragTargetIndex() !== null && n.featureIndex === dragTargetIndex()"
             [class.selected]="isRowSelected(n)"
+            (mousedown)="n.kind === 'rollback-bar' ? onRollbackDragStart($event) : null"
             (click)="onRowClick(n, $event)"
             (contextmenu)="onRowContextMenu($event, n)">
           <span class="chevron" *ngIf="n.expandable" (click)="toggleExpand(n, $event)">
             <mat-icon>{{ n.expanded ? 'expand_more' : 'chevron_right' }}</mat-icon>
           </span>
-          <span class="chevron-spacer" *ngIf="!n.expandable && n.depth > 0"></span>
+          <span class="chevron-spacer" *ngIf="!n.expandable && n.kind !== 'rollback-bar'"></span>
           <mat-icon class="kind-icon" [ngClass]="n.iconClass">{{ n.iconName }}</mat-icon>
           <span class="label">{{ n.label }}</span>
           <ng-container *ngIf="n.kind === 'feature' && n.feature && featureErrors().has(n.feature.id)">
@@ -88,7 +104,6 @@ interface TreeNode {
                       [matTooltip]="featureErrors().get(n.feature.id) || ''"
                       [attr.data-testid]="featureErrorTestId(n)">error</mat-icon>
           </ng-container>
-          <mat-icon *ngIf="n.kind === 'feature' && n.visible === false" class="hidden-indicator" matTooltip="Hidden">visibility_off</mat-icon>
           <button class="visibility-toggle"
                   *ngIf="n.visibilityToggleable"
                   [attr.data-testid]="visibilityTestId(n)"
@@ -174,15 +189,35 @@ interface TreeNode {
                       (click)="emitAction({ action: 'edit-feature', featureId: n.feature.id })">
                 <mat-icon>edit</mat-icon> Edit…
               </button>
+              <button *ngIf="scope.count === 1 && featureSketchId(n.feature) as fSketchId"
+                      mat-menu-item data-testid="ctx-edit-feature-sketch"
+                      (click)="emitAction({ action: 'edit-sketch', sketchId: fSketchId })">
+                <mat-icon>draw</mat-icon> Edit sketch
+              </button>
               <button *ngIf="scope.count === 1"
                       mat-menu-item data-testid="ctx-rename-feature"
                       (click)="emitAction({ action: 'rename-feature', featureId: n.feature.id })">
                 <mat-icon>drive_file_rename_outline</mat-icon> Rename
               </button>
+              <button *ngIf="scope.count === 1 && n.featureIndex !== undefined"
+                      mat-menu-item data-testid="ctx-rollback-here"
+                      (click)="rollbackChanged.emit(n.featureIndex!)">
+                <mat-icon>arrow_drop_down</mat-icon> Roll back to here
+              </button>
+              <button *ngIf="scope.count === 1 && rollbackBeforeIndex() !== null"
+                      mat-menu-item data-testid="ctx-rollback-forward"
+                      (click)="rollbackChanged.emit(null)">
+                <mat-icon>arrow_drop_up</mat-icon> Roll forward to end
+              </button>
               <button mat-menu-item data-testid="ctx-toggle-feature-visibility"
                       (click)="emitAction({ action: 'toggle-feature-visibility', featureId: n.feature.id })">
                 <mat-icon>{{ scope.anyVisible ? 'visibility_off' : 'visibility' }}</mat-icon>
                 {{ scope.anyVisible ? 'Hide' : 'Show' }}{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
+              </button>
+              <button mat-menu-item data-testid="ctx-toggle-feature-suppression"
+                      (click)="emitAction({ action: 'toggle-feature-suppression', featureId: n.feature.id })">
+                <mat-icon>{{ scope.anySuppressed ? 'play_arrow' : 'block' }}</mat-icon>
+                {{ scope.anySuppressed ? 'Unsuppress' : 'Suppress' }}{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
               </button>
               <button mat-menu-item data-testid="ctx-delete-feature"
                       (click)="emitAction({ action: 'delete-feature', featureId: n.feature.id })">
@@ -217,7 +252,12 @@ interface TreeNode {
     </div>
   `,
   styles: [`
-    .panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+    /* Custom elements default to display: inline, so percentage heights
+       on .panel below don't resolve and the bottom section can clip its
+       last row (visibility-toggle button gets cut off). Pin the host to a
+       real flex column with its parent's full height. */
+    :host { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+    .panel { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
     /* Two equal-height sections stacked vertically. Each section scrolls its
        own list independently so a long feature tree doesn't push bodies
        off-screen, and a long bodies list doesn't push features off-screen. */
@@ -261,6 +301,47 @@ interface TreeNode {
     .visibility-toggle:hover { opacity: 1; }
     .visibility-toggle mat-icon { font-size: 16px; width: 16px; height: 16px; }
     .pick-hint { font-size: 14px; width: 14px; height: 14px; opacity: 0.7; color: #42a5f5; }
+
+    /* SolidWorks-style rollback bar — a thick yellow horizontal divider
+       between feature rows. Rows below it (.rolled-back class) render
+       muted + strike-through. The bar itself is a clickable row so the
+       user can right-click to roll forward. */
+    .row.rollback-bar {
+      cursor: grab;
+      padding: 2px 12px;
+      background: rgba(255, 235, 59, 0.16);
+      border-top: 2px solid #ffc107;
+      border-bottom: 2px solid #ffc107;
+      color: #ffc107;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      user-select: none;
+    }
+    .row.rollback-bar .kind-icon { color: #ffc107; }
+    .row.rollback-bar:hover { background: rgba(255, 235, 59, 0.24); }
+    .row.rollback-bar:active { cursor: grabbing; }
+    /* Drop-target preview during a rollback-bar drag. A 2px yellow
+       border-top on the row that the bar would land BEFORE, so the
+       user sees the prospective new position before releasing. Pairs
+       with the rollback bar's grabbing cursor. */
+    .row.drag-target-above {
+      box-shadow: inset 0 2px 0 0 #ffc107;
+    }
+    .row.rolled-back .label,
+    .row.rolled-back .kind-icon {
+      opacity: 0.4;
+      text-decoration: line-through;
+    }
+    /* Suppressed features render greyer + strike-through so the user
+       can tell at a glance which features are skipped during regen. */
+    .row.suppressed .label,
+    .row.suppressed .kind-icon {
+      opacity: 0.45;
+      text-decoration: line-through;
+      font-style: italic;
+    }
   `],
 })
 export class CadFeatureTreePanelComponent {
@@ -301,6 +382,17 @@ export class CadFeatureTreePanelComponent {
   /** Delete body — drops every feature whose target was this body. */
   bodyDeleted = output<string>();
 
+  // ── Rollback bar inputs / outputs ───────────────────────────────────
+  /** Index of the feature the rollback bar sits BEFORE. null = no
+   * rollback (bar at the end). Driven by the editor. */
+  rollbackBeforeIndex = input<number | null>(null);
+  /** User asked to roll back to before feature at this index. Editor
+   * sets its own rollbackBeforeIndex in response. */
+  rollbackChanged = output<number | null>();
+  // REQ 665 — Cosmetic threads group state.
+  cosmeticThreadsCount = input<number>(0);
+  cosmeticThreadsVisible = input<boolean>(true);
+
   // Expansion state: keys for expanded nodes (origin is expanded by default).
   // REQ 622 — Origin collapsed by default. Per-session state; user can expand
   // and the expansion is preserved while the editor is open.
@@ -317,8 +409,20 @@ export class CadFeatureTreePanelComponent {
   bodyMenuX = signal(0);
   bodyMenuY = signal(0);
   contextBody = signal<{ id: string; label: string; visible: boolean } | null>(null);
-  private menuTrigger = viewChild<MatMenuTrigger>('menuTriggerEl', { read: MatMenuTrigger });
-  private bodyMenuTrigger = viewChild<MatMenuTrigger>('bodyMenuTriggerEl', { read: MatMenuTrigger });
+  @ViewChild('menuTriggerEl', { read: MatMenuTrigger }) private menuTrigger?: MatMenuTrigger;
+  @ViewChild('bodyMenuTriggerEl', { read: MatMenuTrigger }) private bodyMenuTrigger?: MatMenuTrigger;
+  @ViewChild('treeList') private treeList?: ElementRef<HTMLUListElement>;
+
+  // ── Rollback bar drag ────────────────────────────────────────────────
+  // Drag the SolidWorks-style rollback bar between feature rows to move
+  // the rollback position. dragTargetIndex tracks the prospective new
+  // position during the drag (the feature index the bar would land BEFORE
+  // on mouseup); rendered rows highlight via the drag-target-above class
+  // so the user sees where the bar will drop. mouseup commits via the
+  // rollbackChanged output, exactly like the context-menu action.
+  dragTargetIndex = signal<number | null>(null);
+  private rollbackDragMove?: (ev: MouseEvent) => void;
+  private rollbackDragUp?: (ev: MouseEvent) => void;
 
   /** Body roster computed into the shape the template renders — adds
    * a default "Body N" label + the visibility flag. */
@@ -341,7 +445,7 @@ export class CadFeatureTreePanelComponent {
     this.bodyMenuX.set(ev.clientX);
     this.bodyMenuY.set(ev.clientY);
     this.contextBody.set(b);
-    queueMicrotask(() => this.bodyMenuTrigger()?.openMenu());
+    queueMicrotask(() => this.bodyMenuTrigger?.openMenu());
   }
 
   // What the context menu will act on, given the right-clicked node and the
@@ -350,9 +454,9 @@ export class CadFeatureTreePanelComponent {
   // selection; otherwise it targets only the right-clicked item. The menu
   // template hides edit/rename when count > 1 (those actions don't make
   // sense in bulk) and appends a "(N)" suffix to bulk toggle/delete.
-  ctxScope = computed<{ kind: 'feature' | 'sketch' | null; count: number; anyVisible: boolean }>(() => {
+  ctxScope = computed<{ kind: 'feature' | 'sketch' | null; count: number; anyVisible: boolean; anySuppressed: boolean }>(() => {
     const n = this.contextNode();
-    if (!n) return { kind: null, count: 0, anyVisible: false };
+    if (!n) return { kind: null, count: 0, anyVisible: false, anySuppressed: false };
     if (n.kind === 'feature' && n.feature && n.feature.type !== 'origin') {
       const sel = this.selectedFeatures();
       const ids = sel.has(n.feature.id) && sel.size > 1 ? Array.from(sel) : [n.feature.id];
@@ -361,7 +465,11 @@ export class CadFeatureTreePanelComponent {
         const f = feats.find(x => x.id === id) as ExtrudeFeature | undefined;
         return !!f && f.visible !== false;
       });
-      return { kind: 'feature', count: ids.length, anyVisible };
+      const anySuppressed = ids.some(id => {
+        const f = feats.find(x => x.id === id) as ExtrudeFeature | undefined;
+        return !!f && f.suppressed === true;
+      });
+      return { kind: 'feature', count: ids.length, anyVisible, anySuppressed };
     }
     if (n.kind === 'sketch' && n.sketchId) {
       const sel = this.selectedSketches();
@@ -371,9 +479,9 @@ export class CadFeatureTreePanelComponent {
         const s = doc?.sketches[id];
         return !!s && s.visible !== false;
       });
-      return { kind: 'sketch', count: ids.length, anyVisible };
+      return { kind: 'sketch', count: ids.length, anyVisible, anySuppressed: false };
     }
-    return { kind: null, count: 0, anyVisible: false };
+    return { kind: null, count: 0, anyVisible: false, anySuppressed: false };
   });
 
   nodes = computed<TreeNode[]>(() => {
@@ -382,83 +490,75 @@ export class CadFeatureTreePanelComponent {
     const doc = this.doc();
     const expanded = this.expanded();
     const sketchesUsed = new Set<string>();
+    const rollback = this.rollbackBeforeIndex();
 
+    // SolidWorks-style chronological tree. Top-level rows are features
+    // + orphan sketches sorted by createdAt; sketches consumed by a
+    // feature render as the feature's CHILD instead of as their own
+    // row. The feature's index in featureTree.features (NOT the display
+    // position) is what the rollback bar gates against.
+    //
+    // Exception: in pick-extrude-target mode (selectableSketches=true),
+    // surface every sketch — consumed or orphan — at the top level so
+    // the user can click any sketch as the new extrude's source
+    // without having to expand the parent feature first. A sketch may
+    // be re-extruded into a second feature with different region picks
+    // (common pattern: extrude one region, then create a new extrude
+    // from the same sketch with a different region selection).
+    const pickMode = this.selectableSketches();
+    const consumedSketchIds = new Set<string>();
     for (const f of features) {
-      if (f.type === 'origin') {
-        const isOpen = expanded.has('origin-children');
-        out.push({
-          key: f.id,
-          kind: 'feature',
-          label: 'Origin',
-          iconName: 'crop_free',
-          iconClass: 'origin',
-          depth: 0,
-          expandable: true,
-          expanded: isOpen,
-          selectable: false,
-          feature: f,
-        });
-        if (isOpen) {
-          const vis = { ...defaultDatumVisibility(), ...((f as OriginFeature).visibility ?? {}) };
-          out.push(this.datumNode('origin', 'Origin point', 'fiber_manual_record', 'datum-point', vis));
-          out.push(this.datumNode('x_axis', 'X axis', 'east', 'datum-axis-x', vis));
-          out.push(this.datumNode('y_axis', 'Y axis', 'north', 'datum-axis-y', vis));
-          out.push(this.datumNode('z_axis', 'Z axis', 'open_in_new', 'datum-axis-z', vis));
-          out.push(this.datumNode('xy_plane', 'XY plane', 'rectangle', 'datum-plane-xy', vis));
-          out.push(this.datumNode('yz_plane', 'YZ plane', 'rectangle', 'datum-plane-yz', vis));
-          out.push(this.datumNode('xz_plane', 'XZ plane', 'rectangle', 'datum-plane-xz', vis));
-        }
-      } else if (f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve') {
-        const ef = f as ExtrudeFeature;  // structural overlap covers all three for tree-display purposes
-        const sketch = doc?.sketches[ef.sketchId] ?? null;
-        const hasChild = !!sketch;
-        const isOpen = expanded.has(f.id);
-        const isCut = f.type === 'cutExtrude';
-        const isRevolve = f.type === 'revolve';
-        // REQ 624: user-supplied name if present, else the default summary.
-        const defaultLabel = isRevolve
-          ? `Revolve · ${(f as any).angle}°${(f as any).flipped ? ' (flipped)' : ''}`
-          : `${isCut ? 'Cut' : 'Extrude'} · ${ef.distance}${ef.flipped ? ' (flipped)' : ''}`;
-        out.push({
-          key: f.id,
-          kind: 'feature',
-          label: ef.name && ef.name.trim() ? ef.name : defaultLabel,
-          iconName: isRevolve ? '360' : isCut ? 'vertical_align_bottom' : 'vertical_align_top',
-          iconClass: 'extrude',
-          depth: 0,
-          expandable: hasChild,
-          expanded: isOpen,
-          selectable: false,
-          visible: ef.visible !== false,
-          feature: f,
-        });
-        if (sketch) {
-          sketchesUsed.add(sketch.id);
-          if (isOpen) {
-            const defaultSketchLabel = `${sketch.id} — ${this.hostLabel(sketch.hostId)}`;
-            out.push({
-              key: `child:${sketch.id}`,
-              kind: 'sketch',
-              label: sketch.name && sketch.name.trim() ? sketch.name : defaultSketchLabel,
-              iconName: 'draw',
-              iconClass: 'sketch',
-              depth: 1,
-              expandable: false,
-              expanded: false,
-              selectable: this.selectableSketches(),
-              visible: sketch.visible !== false,
-              visibilityToggleable: true,
-              sketchId: sketch.id,
-            });
-          }
-        }
+      if (f.type !== 'origin') {
+        const sid = (f as any).sketchId as string | undefined;
+        if (sid) consumedSketchIds.add(sid);
       }
     }
-
-    // Orphan sketches (created but not yet extruded).
+    type TopLevel =
+      | { kind: 'feature'; createdAt: number; feature: Feature; index: number }
+      | { kind: 'orphanSketch'; createdAt: number; sketch: Sketch };
+    const topLevel: TopLevel[] = [];
+    features.forEach((f, idx) => {
+      topLevel.push({
+        kind: 'feature',
+        createdAt: f.createdAt ?? (f.type === 'origin' ? 0 : idx + 1),
+        feature: f,
+        index: idx,
+      });
+    });
     if (doc) {
-      const orphans = Object.values(doc.sketches).filter(s => !sketchesUsed.has(s.id));
-      for (const s of orphans) {
+      for (const s of Object.values(doc.sketches)) {
+        if (!pickMode && consumedSketchIds.has(s.id)) continue;
+        // Fall back to the numeric tail of the sketch id when createdAt
+        // is missing (defensive — backfill should have populated it).
+        const fallback = parseInt(s.id.replace(/^\D+/, ''), 10) || 0;
+        topLevel.push({ kind: 'orphanSketch', createdAt: s.createdAt ?? fallback, sketch: s });
+      }
+    }
+    topLevel.sort((a, b) => a.createdAt - b.createdAt);
+
+    for (const item of topLevel) {
+      if (item.kind === 'feature') {
+        const idx = item.index;
+        // Rollback bar — sits BEFORE the feature at this index. Index
+        // is the feature's position in featureTree.features (not the
+        // display order), so the bar gates the regen pipeline the same
+        // way regardless of chronological reordering.
+        if (rollback !== null && idx === rollback) {
+          out.push({
+            key: '__rollback_bar__',
+            kind: 'rollback-bar',
+            label: 'Rolled back to here',
+            iconName: 'arrow_drop_down',
+            iconClass: 'rollback',
+            depth: 0,
+            expandable: false,
+            expanded: false,
+            selectable: false,
+          });
+        }
+        this._appendFeatureNodes(item.feature, idx, rollback, expanded, doc, sketchesUsed, out);
+      } else {
+        const s = item.sketch;
         const defaultSketchLabel = `${s.id} — ${this.hostLabel(s.hostId)}`;
         out.push({
           key: s.id,
@@ -477,10 +577,476 @@ export class CadFeatureTreePanelComponent {
       }
     }
 
+    // REQ 665 — Cosmetic Threads group row, appended at the bottom
+    // when at least one tapped Hole feature exists. Mirrors the
+    // Datums group pattern: single visibility toggle hides every
+    // thread shell across the model.
+    if (this.cosmeticThreadsCount() > 0) {
+      out.push({
+        key: 'cosmetic-threads-group',
+        kind: 'cosmetic-threads-group',
+        label: `Cosmetic Threads (${this.cosmeticThreadsCount()})`,
+        iconName: 'graphic_eq',
+        iconClass: 'origin',
+        depth: 0,
+        expandable: false,
+        expanded: false,
+        selectable: false,
+        visible: this.cosmeticThreadsVisible(),
+        visibilityToggleable: true,
+      });
+    }
+
     return out;
   });
 
+  /** Body of the per-feature emit, factored so the rollback-bar inject
+   * loop stays readable. The original logic lives unchanged below. */
+  private _appendFeatureNodes(
+    f: Feature, idx: number, rollback: number | null,
+    expanded: Set<string>,
+    doc: SketchDocument | null,
+    sketchesUsed: Set<string>,
+    out: TreeNode[],
+  ): void {
+    const isRolledBack = rollback !== null && idx >= rollback;
+    if (f.type === 'origin') {
+        const isOpen = expanded.has('origin-children');
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: 'Origin',
+          iconName: 'crop_free',
+          iconClass: 'origin',
+          depth: 0,
+          expandable: true,
+          expanded: isOpen,
+          selectable: false,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          feature: f,
+        });
+        if (isOpen) {
+          const vis = { ...defaultDatumVisibility(), ...((f as OriginFeature).visibility ?? {}) };
+          out.push(this.datumNode('origin', 'Origin point', 'fiber_manual_record', 'datum-point', vis));
+          out.push(this.datumNode('x_axis', 'X axis', 'east', 'datum-axis-x', vis));
+          out.push(this.datumNode('y_axis', 'Y axis', 'north', 'datum-axis-y', vis));
+          out.push(this.datumNode('z_axis', 'Z axis', 'open_in_new', 'datum-axis-z', vis));
+          out.push(this.datumNode('xy_plane', 'XY plane', 'rectangle', 'datum-plane-xy', vis));
+          out.push(this.datumNode('yz_plane', 'YZ plane', 'rectangle', 'datum-plane-yz', vis));
+          out.push(this.datumNode('xz_plane', 'XZ plane', 'rectangle', 'datum-plane-xz', vis));
+        }
+      } else if (f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve' || f.type === 'cutRevolve') {
+        const ef = f as ExtrudeFeature;  // structural overlap covers all four for tree-display purposes
+        const sketch = doc?.sketches[ef.sketchId] ?? null;
+        const hasChild = !!sketch;
+        const isOpen = expanded.has(f.id);
+        const isCut = f.type === 'cutExtrude' || f.type === 'cutRevolve';
+        const isRevolve = f.type === 'revolve' || f.type === 'cutRevolve';
+        // REQ 624: user-supplied name if present, else the default summary.
+        const defaultLabel = isRevolve
+          ? `${isCut ? 'Cut-Revolve' : 'Revolve'} · ${(f as any).angle}°${(f as any).flipped ? ' (flipped)' : ''}`
+          : `${isCut ? 'Cut' : 'Extrude'} · ${ef.distance}${ef.flipped ? ' (flipped)' : ''}`;
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: ef.name && ef.name.trim() ? ef.name : defaultLabel,
+          iconName: isRevolve ? (isCut ? 'remove_circle_outline' : '360') : isCut ? 'vertical_align_bottom' : 'vertical_align_top',
+          iconClass: 'extrude',
+          depth: 0,
+          expandable: hasChild,
+          expanded: isOpen,
+          selectable: false,
+          visible: ef.visible !== false,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: ef.suppressed === true,
+          feature: f,
+        });
+        if (sketch) {
+          sketchesUsed.add(sketch.id);
+          // Skip the nested child row in pick-extrude-target mode — the
+          // sketch is already rendered at the top level for one-click
+          // picking. Avoids the duplicate row.
+          if (isOpen && !this.selectableSketches()) {
+            const defaultSketchLabel = `${sketch.id} — ${this.hostLabel(sketch.hostId)}`;
+            out.push({
+              key: `child:${sketch.id}`,
+              kind: 'sketch',
+              label: sketch.name && sketch.name.trim() ? sketch.name : defaultSketchLabel,
+              iconName: 'draw',
+              iconClass: 'sketch',
+              depth: 1,
+              expandable: false,
+              expanded: false,
+              selectable: this.selectableSketches(),
+              visible: sketch.visible !== false,
+              visibilityToggleable: true,
+              sketchId: sketch.id,
+            });
+          }
+        }
+      } else if (f.type === 'sweep' || f.type === 'cutSweep') {
+        // Sweep variants reference two sketches (profile + path); render
+        // both as labelled children when expanded. Visually identical row
+        // shape to extrude/revolve so the tree feels consistent.
+        const sf = f;
+        const profile = doc?.sketches[sf.profileSketchId] ?? null;
+        const path = doc?.sketches[sf.pathSketchId] ?? null;
+        const hasChild = !!profile || !!path;
+        const isOpen = expanded.has(f.id);
+        const isCut = f.type === 'cutSweep';
+        const defaultLabel = isCut ? 'Cut-Sweep' : 'Sweep';
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: sf.name && sf.name.trim() ? sf.name : defaultLabel,
+          iconName: isCut ? 'turn_right' : 'route',
+          iconClass: 'extrude',
+          depth: 0,
+          expandable: hasChild,
+          expanded: isOpen,
+          selectable: false,
+          visible: sf.visible !== false,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: sf.suppressed === true,
+          feature: f,
+        });
+        if (isOpen && !this.selectableSketches()) {
+          for (const [role, sk] of [['Profile', profile], ['Path', path]] as const) {
+            if (!sk) continue;
+            sketchesUsed.add(sk.id);
+            const defaultSketchLabel = `${role}: ${sk.id} — ${this.hostLabel(sk.hostId)}`;
+            out.push({
+              key: `child:${sk.id}:${role}`,
+              kind: 'sketch',
+              label: sk.name && sk.name.trim() ? `${role}: ${sk.name}` : defaultSketchLabel,
+              iconName: 'draw',
+              iconClass: 'sketch',
+              depth: 1,
+              expandable: false,
+              expanded: false,
+              selectable: false,
+              visible: sk.visible !== false,
+              visibilityToggleable: true,
+              sketchId: sk.id,
+            });
+          }
+        } else if (profile) {
+          sketchesUsed.add(profile.id);
+        }
+        if (path) sketchesUsed.add(path.id);
+      } else if (f.type === 'hole') {
+        // REQ 663 — Hole Wizard. Direct face-pick placements; no
+        // sketch child. Label shows hole type + size + placement count.
+        const hf = f as any;
+        const kindLabel = ({
+          drill: 'Drill',
+          counterbore: 'CBORE',
+          countersink: 'CSK',
+          tapped: 'Tap',
+        } as Record<string, string>)[hf.holeType] ?? hf.holeType;
+        let displaySize = String(hf.size);
+        try { displaySize = holeSpec(hf.standard, hf.size).label; } catch { /* keep raw */ }
+        const endLabel = hf.endCondition?.kind === 'blind'
+          ? `blind ${hf.endCondition.depth}mm`
+          : 'through all';
+        const count = Array.isArray(hf.placements) ? hf.placements.length : 0;
+        const defaultLabel = `Hole · ${kindLabel} ${displaySize} × ${count} (${endLabel})`;
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: hf.name && hf.name.trim() ? hf.name : defaultLabel,
+          iconName: 'radio_button_unchecked',
+          iconClass: 'extrude',
+          depth: 0,
+          expandable: false,
+          expanded: false,
+          selectable: false,
+          visible: hf.visible !== false,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: hf.suppressed === true,
+          feature: f,
+        });
+      } else if (f.type === 'fillet' || f.type === 'chamfer') {
+        // 3D edge blends — no sketch child. Label shows the value
+        // (radius / distance) + edge count for at-a-glance reading.
+        const bf = f as any;
+        const value = f.type === 'fillet' ? bf.radius : bf.distance;
+        const count = Array.isArray(bf.edges) ? bf.edges.length : 0;
+        const defaultLabel = `${f.type === 'fillet' ? 'Fillet' : 'Chamfer'} · ${value}mm × ${count} edge${count === 1 ? '' : 's'}`;
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: bf.name && bf.name.trim() ? bf.name : defaultLabel,
+          iconName: f.type === 'fillet' ? 'rounded_corner' : 'format_shapes',
+          iconClass: 'extrude',
+          depth: 0,
+          expandable: false,
+          expanded: false,
+          selectable: false,
+          visible: bf.visible !== false,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: bf.suppressed === true,
+          feature: f,
+        });
+      } else if (f.type === 'shell') {
+        // Shell — label includes the thickness (with direction sign so
+        // the user can tell inward from outward at a glance). REQ 659.
+        // Shell has no visibility toggle: hiding it would leave the
+        // body in a weird half-hollowed state that doesn't match any
+        // real CAD semantics (suppress is the right tool for that).
+        const sf = f as any;
+        const sign = sf.direction === 'outward' ? '+' : '−';
+        const defaultLabel = `Shell · ${sign}${Number(sf.thickness ?? 0).toFixed(2)}mm × ${(sf.faces || []).length} face${(sf.faces || []).length === 1 ? '' : 's'}`;
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: sf.name && sf.name.trim() ? sf.name : defaultLabel,
+          iconName: 'view_in_ar',
+          iconClass: 'extrude',
+          depth: 0,
+          expandable: false,
+          expanded: false,
+          selectable: true,
+          visible: true,
+          visibilityToggleable: false,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: sf.suppressed === true,
+          feature: f,
+        });
+      } else if (f.type === 'mirror' || f.type === 'linearPattern' || f.type === 'circularPattern') {
+        // Pattern / Mirror features — no sketch child. Label includes
+        // copy count / mirror plane so the tree shows the shape at a
+        // glance. REQ 658.
+        const pf = f as any;
+        let defaultLabel = '';
+        let iconName = 'flip';
+        if (f.type === 'mirror') {
+          const ref = pf.planeRef;
+          const planeLabel = ref?.kind === 'datum'
+            ? String(ref.datumId).replace(/_/g, ' ')
+            : 'face';
+          defaultLabel = `Mirror · across ${planeLabel}`;
+          iconName = 'flip';
+        } else if (f.type === 'linearPattern') {
+          const c1 = pf.direction1?.count ?? 0;
+          const c2 = pf.direction2?.count;
+          const totalCopies = c2 ? c1 * c2 - 1 : Math.max(0, c1 - 1);
+          defaultLabel = `Linear Pattern · ${totalCopies} ${totalCopies === 1 ? 'copy' : 'copies'}`;
+          iconName = 'grid_on';
+        } else {
+          const cc = pf.count ?? 0;
+          const copies = Math.max(0, cc - 1);
+          defaultLabel = `Circular Pattern · ${copies} ${copies === 1 ? 'copy' : 'copies'}`;
+          iconName = 'rotate_right';
+        }
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: pf.name && pf.name.trim() ? pf.name : defaultLabel,
+          iconName,
+          iconClass: 'extrude',
+          depth: 0,
+          expandable: false,
+          expanded: false,
+          selectable: true,
+          visible: pf.visible !== false,
+          visibilityToggleable: true,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: pf.suppressed === true,
+          feature: f,
+        });
+      } else if (f.type === 'mirrorBody') {
+        // REQ 666 — Mirror Body.
+        const mf = f as any;
+        const planeLabel = mf.planeRef?.kind === 'datum'
+          ? String(mf.planeRef.datumId).replace(/_/g, ' ')
+          : 'face';
+        const count = Array.isArray(mf.bodyIds) ? mf.bodyIds.length : 0;
+        const verb = mf.keepOriginals === false ? 'in place' : 'keep originals';
+        const defaultLabel = `Mirror Body · ${count} ${count === 1 ? 'body' : 'bodies'} across ${planeLabel} (${verb})`;
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: mf.name && mf.name.trim() ? mf.name : defaultLabel,
+          iconName: 'flip',
+          iconClass: 'extrude',
+          depth: 0,
+          expandable: false,
+          expanded: false,
+          selectable: true,
+          visible: true,
+          visibilityToggleable: false,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: mf.suppressed === true,
+          feature: f,
+        });
+      } else if (f.type === 'moveCopyBody') {
+        // REQ 667 — Move/Copy Body.
+        const mcf = f as any;
+        const parts: string[] = [];
+        if (Array.isArray(mcf.translate) && mcf.translate.some((v: number) => v !== 0)) {
+          parts.push(`T(${mcf.translate.map((v: number) => v.toFixed(0)).join(',')})`);
+        }
+        if (mcf.rotate?.angleDeg) {
+          const axisLabel = mcf.rotate.axisRef?.kind === 'originAxis'
+            ? String(mcf.rotate.axisRef.axisId).replace('_axis', '')
+            : 'edge';
+          parts.push(`R ${mcf.rotate.angleDeg}° ${axisLabel}`);
+        }
+        const cnt = Array.isArray(mcf.bodyIds) ? mcf.bodyIds.length : 0;
+        const verb = mcf.copy === false ? 'in place' : 'copy';
+        const defaultLabel = `Move/Copy · ${cnt} ${cnt === 1 ? 'body' : 'bodies'} ${parts.join(' + ') || '(no-op)'} (${verb})`;
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: mcf.name && mcf.name.trim() ? mcf.name : defaultLabel,
+          iconName: 'open_with',
+          iconClass: 'extrude',
+          depth: 0,
+          expandable: false,
+          expanded: false,
+          selectable: true,
+          visible: true,
+          visibilityToggleable: false,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: mcf.suppressed === true,
+          feature: f,
+        });
+      } else if (f.type === 'combine') {
+        // Boolean body operation (REQ 662). Label encodes the operation
+        // so the tree shows add/subtract/common without expanding the
+        // sidebar.
+        const cf = f as any;
+        const opLabel = ({
+          add: 'Add',
+          subtract: 'Subtract',
+          common: 'Common',
+        } as Record<string, string>)[cf.operation] ?? cf.operation;
+        const toolCount = (cf.toolBodyIds || []).length;
+        const defaultLabel = `Combine · ${opLabel} (${toolCount} tool${toolCount === 1 ? '' : 's'})`;
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: cf.name && cf.name.trim() ? cf.name : defaultLabel,
+          iconName: 'merge_type',
+          iconClass: 'extrude',
+          depth: 0,
+          expandable: false,
+          expanded: false,
+          selectable: true,
+          visible: true,
+          visibilityToggleable: false,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: cf.suppressed === true,
+          feature: f,
+        });
+      } else if (f.type === 'datumAxis') {
+        // User-defined reference axis (REQ 660). Label includes the
+        // construction method.
+        const df = f as any;
+        const method = df.method?.kind ?? 'unknown';
+        const methodLabel = ({
+          twoPoints: 'Two points',
+          alongEdge: 'Along edge',
+          twoPlanesIntersection: 'Plane ∩ plane',
+          cylindricalFaceAxis: 'Cylindrical face',
+          pointAndPerpFace: 'Point ⊥ face',
+        } as Record<string, string>)[method] ?? method;
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: df.name && df.name.trim() ? df.name : `Axis · ${methodLabel}`,
+          iconName: 'show_chart',
+          iconClass: 'origin',
+          depth: 0,
+          expandable: false,
+          expanded: false,
+          selectable: false,
+          visible: df.visible !== false,
+          visibilityToggleable: true,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: false,
+          feature: f,
+        });
+      } else if (f.type === 'datumPoint') {
+        // User-defined reference point (REQ 661).
+        const df = f as any;
+        const method = df.method?.kind ?? 'unknown';
+        const methodLabel = ({
+          onVertex: 'On vertex',
+          centerOfFace: 'Center of face',
+          centerOfCircularEdge: 'Center of circular edge',
+          centerOfMass: 'Center of mass',
+          alongEdge: 'Along edge',
+        } as Record<string, string>)[method] ?? method;
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: df.name && df.name.trim() ? df.name : `Point · ${methodLabel}`,
+          iconName: 'place',
+          iconClass: 'origin',
+          depth: 0,
+          expandable: false,
+          expanded: false,
+          selectable: false,
+          visible: df.visible !== false,
+          visibilityToggleable: true,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: false,
+          feature: f,
+        });
+      } else if (f.type === 'datumPlane') {
+        // User-defined reference plane — no sketch child. Label shows
+        // the construction method so the user can tell offset planes
+        // apart from three-point / angle / mid-plane / etc. at a
+        // glance. REQ 657.
+        const df = f as any;
+        const method = df.method?.kind ?? 'unknown';
+        const methodLabel = ({
+          offset: 'Offset',
+          parallelThroughPoint: '∥ through point',
+          angleThroughEdge: 'Angle through edge',
+          threePoints: 'Through 3 points',
+          midPlane: 'Mid-plane',
+          lineAndPerpFace: 'Line ⊥ face',
+          pointAndPerpEdge: 'Point ⊥ edge',
+          tangentCylinder: 'Tangent to cylinder',
+        } as Record<string, string>)[method] ?? method;
+        const defaultLabel = `Plane · ${methodLabel}`;
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: df.name && df.name.trim() ? df.name : defaultLabel,
+          iconName: 'crop_din',  // material symbol — square frame, reads as "plane"
+          iconClass: 'origin',
+          depth: 0,
+          expandable: false,
+          expanded: false,
+          selectable: false,
+          visible: df.visible !== false,
+          visibilityToggleable: true,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: false,
+          feature: f,
+        });
+      }
+  }
+
   private datumNode(id: string, label: string, icon: string, iconClass: string, vis: Record<string, boolean>): TreeNode {
+
     return {
       key: `datum:${id}`,
       kind: 'datum',
@@ -585,7 +1151,76 @@ export class CadFeatureTreePanelComponent {
       this.visibilityToggled.emit(n.datumId);
     } else if (n.kind === 'sketch' && n.sketchId) {
       this.actionRequested.emit({ action: 'toggle-sketch-visibility', sketchId: n.sketchId });
+    } else if (n.kind === 'feature' && n.feature) {
+      // Feature rows — datums (axis / point / plane), patterns,
+      // mirrors, fillets, etc. All route through toggle-feature-
+      // visibility; the editor's `toggleFeatureVisibility` flips the
+      // feature's `visible` field and triggers a regen that
+      // re-derives geometry without the hidden datum / body.
+      this.actionRequested.emit({ action: 'toggle-feature-visibility', featureId: n.feature.id });
+    } else if (n.kind === 'cosmetic-threads-group') {
+      this.actionRequested.emit({ action: 'toggle-cosmetic-threads-visibility' });
     }
+  }
+
+  /** Begin dragging the rollback bar. Captures document-level mousemove
+   * + mouseup so the drag survives leaving the bar itself. The target
+   * row under the cursor highlights via dragTargetIndex; mouseup commits
+   * via rollbackChanged (same path the context-menu uses), or releases
+   * silently if the cursor never crossed onto a different row. */
+  onRollbackDragStart(ev: MouseEvent): void {
+    // Left-click only — right-click on the bar already maps to "roll
+    // forward to end" via onRowContextMenu.
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    const startIndex = this.rollbackBeforeIndex();
+    this.dragTargetIndex.set(startIndex);
+
+    this.rollbackDragMove = (mv: MouseEvent) => {
+      const target = this._hitTestRollbackTarget(mv.clientY);
+      this.dragTargetIndex.set(target);
+    };
+    this.rollbackDragUp = () => {
+      const target = this.dragTargetIndex();
+      this.dragTargetIndex.set(null);
+      if (this.rollbackDragMove) document.removeEventListener('mousemove', this.rollbackDragMove);
+      if (this.rollbackDragUp) document.removeEventListener('mouseup', this.rollbackDragUp);
+      this.rollbackDragMove = undefined;
+      this.rollbackDragUp = undefined;
+      if (target !== startIndex) {
+        this.rollbackChanged.emit(target);
+      }
+    };
+    document.addEventListener('mousemove', this.rollbackDragMove);
+    document.addEventListener('mouseup', this.rollbackDragUp);
+  }
+
+  /** Map a cursor Y to the prospective new rollback index. Walks every
+   * top-level feature row in the tree and finds the one whose vertical
+   * MIDPOINT sits below the cursor — that feature's index is where the
+   * bar would land (the bar sits BEFORE the target feature). Returns
+   * null when the cursor is past the last feature (i.e. "no rollback,
+   * full tree active"). */
+  private _hitTestRollbackTarget(cursorY: number): number | null {
+    const list = this.treeList?.nativeElement;
+    if (!list) return this.rollbackBeforeIndex();
+    const rows = Array.from(list.querySelectorAll<HTMLLIElement>('li.row'));
+    // Walk in document order, looking for the FIRST feature row whose
+    // midpoint is below the cursor. That row's featureIndex is the
+    // drop target. Only top-level feature rows (depth-0) participate —
+    // nested sketch rows and the bar itself don't count.
+    for (const row of rows) {
+      if (!row.classList.contains('depth-0')) continue;
+      const fi = row.dataset['featureIndex'];
+      if (fi === undefined || fi === '') continue;
+      const r = row.getBoundingClientRect();
+      const mid = r.top + r.height / 2;
+      if (cursorY < mid) {
+        return Number(fi);
+      }
+    }
+    // Past all features — clear the bar entirely.
+    return null;
   }
 
   onRowContextMenu(ev: MouseEvent, n: TreeNode) {
@@ -593,17 +1228,45 @@ export class CadFeatureTreePanelComponent {
     // browser's native menu so power users can copy/inspect.
     if (n.kind === 'datum') return;
     if (n.kind === 'feature' && n.feature?.type === 'origin') return;
+    // Rollback bar — right-click rolls forward to end (clears the bar).
+    if (n.kind === 'rollback-bar') {
+      ev.preventDefault();
+      this.rollbackChanged.emit(null);
+      return;
+    }
     ev.preventDefault();
     this.menuX.set(ev.clientX);
     this.menuY.set(ev.clientY);
     this.contextNode.set(n);
     // openMenu is async w.r.t. anchor position because the menu reads the
     // trigger element's bounding rect — set position first, then open.
-    queueMicrotask(() => this.menuTrigger()?.openMenu());
+    queueMicrotask(() => this.menuTrigger?.openMenu());
   }
 
   emitAction(action: FeatureTreeAction) {
-    this.menuTrigger()?.closeMenu();
+    this.menuTrigger?.closeMenu();
     this.actionRequested.emit(action);
+  }
+
+  /** Resolve the underlying sketch id for a feature, or null when the
+   * feature kind doesn't own a sketch (fillet, chamfer, origin) or
+   * carries multiple (sweep — picks the profile, which is the main
+   * one users want to edit). */
+  featureSketchId(feature: Feature | undefined): string | null {
+    if (!feature) return null;
+    switch (feature.type) {
+      case 'extrude':
+      case 'cutExtrude':
+      case 'revolve':
+      case 'cutRevolve':
+        return (feature as any).sketchId ?? null;
+      case 'sweep':
+      case 'cutSweep':
+        return (feature as any).profileSketchId ?? null;
+      case 'loft':
+        return (feature as any).sketchIds?.[0] ?? null;
+      default:
+        return null;
+    }
   }
 }

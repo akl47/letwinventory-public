@@ -135,3 +135,160 @@ tr.clickable-row button {
     min-height: 100px;
     border-radius: 0.75rem;
 }
+/* ─────────────────────────────────────────────────────────────────────
+ * CAD app — native button styling.
+ *
+ * The CAD editor + sidebar deliberately don't use Material button
+ * directives (mat-flat-button, mat-stroked-button, mat-icon-button)
+ * because Material's defaults (36px min-height, MDC ripples, opinionated
+ * typography) clash with the dense PropertyManager-style layout. These
+ * classes give us a flat dark-theme button language scoped to the .cad-*
+ * component trees.
+ * ───────────────────────────────────────────────────────────────────── */
+
+app-cad-editor .btn,
+app-cad-feature-tree-panel .btn,
+app-cad-sketch-editor .btn,
+app-cad-constraint-list .btn,
+app-cad-viewer .btn,
+.cad-btn {
+    /* generic dark-theme button */
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 30px;
+    padding: 4px 12px;
+    font-size: 13px;
+    font-family: inherit;
+    line-height: 1.2;
+    color: #ddd;
+    background: #2a2a3a;
+    border: 1px solid #555;
+    border-radius: 3px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+app-cad-editor .btn:hover:not(:disabled),
+app-cad-feature-tree-panel .btn:hover:not(:disabled),
+app-cad-sketch-editor .btn:hover:not(:disabled),
+app-cad-constraint-list .btn:hover:not(:disabled),
+.cad-btn:hover:not(:disabled) {
+    background: #353548;
+    border-color: #777;
+}
+app-cad-editor .btn:disabled,
+app-cad-feature-tree-panel .btn:disabled,
+app-cad-sketch-editor .btn:disabled,
+app-cad-constraint-list .btn:disabled,
+.cad-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+app-cad-editor .btn.btn-primary,
+app-cad-feature-tree-panel .btn.btn-primary,
+app-cad-sketch-editor .btn.btn-primary,
+app-cad-constraint-list .btn.btn-primary,
+.cad-btn.btn-primary {
+    background: #1976d2;
+    border-color: #1976d2;
+    color: #fff;
+}
+app-cad-editor .btn.btn-primary:hover:not(:disabled),
+app-cad-feature-tree-panel .btn.btn-primary:hover:not(:disabled),
+app-cad-sketch-editor .btn.btn-primary:hover:not(:disabled),
+app-cad-constraint-list .btn.btn-primary:hover:not(:disabled),
+.cad-btn.btn-primary:hover:not(:disabled) {
+    background: #1e88e5;
+    border-color: #1e88e5;
+}
+app-cad-editor .btn.btn-text,
+app-cad-feature-tree-panel .btn.btn-text,
+app-cad-sketch-editor .btn.btn-text,
+app-cad-constraint-list .btn.btn-text,
+.cad-btn.btn-text {
+    background: transparent;
+    border-color: transparent;
+}
+app-cad-editor .btn.btn-text:hover:not(:disabled),
+app-cad-feature-tree-panel .btn.btn-text:hover:not(:disabled),
+app-cad-sketch-editor .btn.btn-text:hover:not(:disabled),
+app-cad-constraint-list .btn.btn-text:hover:not(:disabled),
+.cad-btn.btn-text:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+}
+app-cad-editor .btn mat-icon,
+app-cad-feature-tree-panel .btn mat-icon,
+app-cad-sketch-editor .btn mat-icon,
+app-cad-constraint-list .btn mat-icon,
+.cad-btn mat-icon {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+    line-height: 16px;
+}
+
+/* Square icon-only button — matches the toolbar action buttons. */
+app-cad-editor .icon-btn,
+app-cad-feature-tree-panel .icon-btn,
+app-cad-sketch-editor .icon-btn,
+app-cad-constraint-list .icon-btn,
+.cad-icon-btn {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    color: #ddd;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+}
+app-cad-editor .icon-btn:hover:not(:disabled),
+app-cad-feature-tree-panel .icon-btn:hover:not(:disabled),
+app-cad-sketch-editor .icon-btn:hover:not(:disabled),
+app-cad-constraint-list .icon-btn:hover:not(:disabled),
+.cad-icon-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+}
+app-cad-editor .icon-btn:disabled,
+app-cad-feature-tree-panel .icon-btn:disabled,
+app-cad-sketch-editor .icon-btn:disabled,
+app-cad-constraint-list .icon-btn:disabled,
+.cad-icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+app-cad-editor .icon-btn mat-icon,
+app-cad-feature-tree-panel .icon-btn mat-icon,
+app-cad-sketch-editor .icon-btn mat-icon,
+app-cad-constraint-list .icon-btn mat-icon,
+.cad-icon-btn mat-icon {
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+    line-height: 20px;
+}
+app-cad-editor .btn.btn-danger,
+app-cad-feature-tree-panel .btn.btn-danger,
+app-cad-sketch-editor .btn.btn-danger,
+app-cad-constraint-list .btn.btn-danger,
+.cad-btn.btn-danger {
+    background: #c62828;
+    border-color: #c62828;
+    color: #fff;
+}
+app-cad-editor .btn.btn-danger:hover:not(:disabled),
+app-cad-feature-tree-panel .btn.btn-danger:hover:not(:disabled),
+app-cad-sketch-editor .btn.btn-danger:hover:not(:disabled),
+app-cad-constraint-list .btn.btn-danger:hover:not(:disabled),
+.cad-btn.btn-danger:hover:not(:disabled) {
+    background: #d32f2f;
+    border-color: #d32f2f;
+}

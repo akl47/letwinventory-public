@@ -19,11 +19,12 @@ export interface RegenerateResponse {
       positions: number[];
       normals: number[];
       indices: number[];
+      boundaryEdgeIds?: string[];
     }>;
     /** Per-feature topology — vertex/edge IDs are scoped `<featureId>#<loop>/<localId>`. */
     topology: {
       vertices: Array<{ id: string; position: [number, number, number] }>;
-      edges: Array<{ id: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]] }>;
+      edges: Array<{ id: string; isStraight: boolean; isTangent?: boolean; endpoints: [[number, number, number], [number, number, number]]; polyline?: Array<[number, number, number]> }>;
     };
     error?: string;
     cached: boolean;
@@ -58,7 +59,7 @@ export class CadModelService {
     return this.http.get<CadModel>(`${this.apiUrl}/${id}`);
   }
 
-  update(id: number, patch: Partial<Pick<CadModel, 'name' | 'featureTree' | 'sketchDoc'>>): Observable<CadModel> {
+  update(id: number, patch: Partial<Pick<CadModel, 'name' | 'featureTree' | 'sketchDoc' | 'equations'>>): Observable<CadModel> {
     return this.http.put<CadModel>(`${this.apiUrl}/${id}`, patch);
   }
 
@@ -87,7 +88,20 @@ export class CadModelService {
   // kernel on miss, and streams the merged geometry back as JSON. Phase 1.5
   // will replace this with the cadStreamService WebSocket for incremental
   // updates during live editing.
-  regenerate(id: number): Observable<RegenerateResponse> {
-    return this.http.post<RegenerateResponse>(`${this.apiUrl}/${id}/regenerate`, {});
+  /** Trigger a server-side regen.
+   * @param rollbackBeforeIndex when set, the backend skips features at
+   *   or past this index entirely (no kernel work, no cache lookups).
+   *   Mirrors the frontend's rollback-bar signal. */
+  regenerate(id: number, rollbackBeforeIndex: number | null = null): Observable<RegenerateResponse> {
+    const body = rollbackBeforeIndex !== null ? { rollbackBeforeIndex } : {};
+    return this.http.post<RegenerateResponse>(`${this.apiUrl}/${id}/regenerate`, body);
+  }
+
+  /** Download the model's bodies as a STEP file (returns the file text). The
+   * auth interceptor adds the token header, so this can't be a plain link.
+   * `bodyIds` optionally restricts to a subset of bodies. */
+  exportStep(id: number, bodyIds?: string[]): Observable<string> {
+    const q = bodyIds && bodyIds.length ? `?bodyIds=${encodeURIComponent(bodyIds.join(','))}` : '';
+    return this.http.get(`${this.apiUrl}/${id}/export/step${q}`, { responseType: 'text' });
   }
 }

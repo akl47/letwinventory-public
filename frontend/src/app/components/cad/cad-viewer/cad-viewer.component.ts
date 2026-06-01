@@ -1,6 +1,6 @@
 import {
   Component, ElementRef, ViewChild, AfterViewInit, OnDestroy,
-  effect, input, output, signal, NgZone, inject, HostListener,
+  effect, input, output, signal, untracked, NgZone, inject, HostListener,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import * as THREE from 'three';
@@ -45,14 +45,16 @@ const DISPLAY_MODES: Record<DisplayMode, DisplayModeSpec> = {
   'hidden-dashed':            { facesShaded: true,  facesDepth: true,  showFrontEdges: true,  showHiddenSolid: false, showHiddenDashed: true  },
 };
 import type {
-  ModelGeometry, DatumElement, SketchDocument, Sketch, SketchEntity, Plane3,
+  ModelGeometry, ModelTopology, DatumElement, SketchDocument, Sketch, SketchEntity, Plane3,
   CircleEntity, ArcEntity,
 } from '../../../cad/lib/types';
-import { findPoint } from '../../../cad/lib/types';
-import { tessellateCircle, tessellateArc, tessellateEllipse, tessellateSpline, DEFAULT_CHORD_TOLERANCE } from '../../../cad/lib/tessellator';
+import { findPoint, isProjectedEntity } from '../../../cad/lib/types';
+import { tessellateCircle, tessellateArc, tessellateEllipse, tessellateSpline, tessellateEntity, DEFAULT_CHORD_TOLERANCE } from '../../../cad/lib/tessellator';
 import { dimensionRenders, type DimensionRender } from '../../../cad/lib/dimensions';
 import { formatNumber, fromMm, unitSymbol, type Unit } from '../../../cad/lib/units';
 import { constraintIconsForEntity, type ConstraintIcon, type ConstraintIconGroup } from '../../../cad/lib/constraintIcons';
+import { tryGlyphLoopsForText, onFontReady, applyTextTransform } from '../../../cad/lib/textGlyphs';
+import { singleLineStrokesForText } from '../../../cad/lib/singleLineFont';
 
 // REQ 629 — drawing preview overlay. Each item is a transient shape rendered
 // on top of the active sketch while the user is mid-gesture. The cad-editor
@@ -67,7 +69,16 @@ export type SketchPreview =
   // cursor without mutating state. `mode: 'remove'` renders solid red
   // (segment that would be cut away); `mode: 'add'` renders dashed red
   // (segment that would be added by an extension).
-  | { kind: 'edit-hover'; start: { x: number; y: number }; end: { x: number; y: number }; mode: 'remove' | 'add' }
+  | {
+      kind: 'edit-hover';
+      start: { x: number; y: number };
+      end: { x: number; y: number };
+      mode: 'remove' | 'add';
+      /** When the segment is curved (arc / circle), supply a tessellated
+       * polyline. The renderer draws this directly; start/end are
+       * ignored. Straight-segment trims (lines) omit it. */
+      points?: { x: number; y: number }[];
+    }
   // Dashed alignment / polar guide — drawn in a muted yellow so it's
   // visibly different from the orange tool-draft previews. Used by the
   // inference engine to explain WHY the cursor snapped (polar ray from
@@ -99,6 +110,51 @@ export interface ProfileFill {
    * plane to avoid Z-fighting against any other geometry sharing the
    * plane (e.g. sketch overlay lines, a face hosting the sketch). */
   normal: [number, number, number];
+}
+
+/** REQ 665 — cosmetic thread display, OnShape-style. One record per
+ * tapped-hole placement. Drawn as a striped band pattern overlaid on
+ * the inside cylindrical surface of the tap-drill cut — gives the
+ * visual cue of threading without modeling the actual helix. The
+ * cylinder sits just inside the drilled cut (slightly smaller radius
+ * to avoid z-fighting) and the band frequency follows the thread
+ * pitch. `axis` points INTO the body from `position`. */
+export interface CosmeticThread {
+  position: [number, number, number];
+  axis: [number, number, number];
+  /** Tap-drill Ø — the actual carved hole's diameter. The shell
+   * sits at this diameter minus a tiny inset. */
+  drillDiameter: number;
+  /** Thread pitch (mm) — band spacing along the cylinder axis. */
+  pitch: number;
+  /** Requested length along `axis`. Treated as an UPPER bound when
+   * `fitToBody` is true — the renderer raycasts against the body
+   * and clips to the body's exit face if that's shorter. */
+  depth: number;
+  /** When true (through-all holes), the renderer probes the body
+   * geometry along `axis` and clips the shell at the exit face.
+   * False = use `depth` literally (blind holes). */
+  fitToBody?: boolean;
+}
+
+/** REQ 663 — one preview cylinder/cone per planned hole. Dimensions
+ * are already resolved (overrides applied); the viewer just draws
+ * what it's given. `axis` points INTO the body, so the preview
+ * extends from `position` in the +axis direction by the relevant
+ * depth. */
+export interface HolePreview {
+  /** Hole center in world coords. */
+  position: [number, number, number];
+  /** Unit vector along the hole axis (into the body). */
+  axis: [number, number, number];
+  /** Drill cylinder Ø. */
+  drillDiameter: number;
+  /** Drill length along `axis`. */
+  drillDepth: number;
+  /** Optional counterbore cylinder at the entry surface. */
+  counterbore?: { diameter: number; depth: number };
+  /** Optional countersink cone at the entry surface. */
+  countersink?: { diameter: number; depth: number };
 }
 
 @Component({
@@ -163,7 +219,48 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   geometry = input<ModelGeometry | null>(null);
   selected = input<string | null>(null);
   selectedFeatures = input<Set<string>>(new Set());
+  /** Currently-picked face ids in an active picker (Measure /
+   * Fillet / Chamfer). Renders these in a sticky picked-color so the
+   * user sees what's already in the selection set, separate from the
+   * single-face `selected` (which represents a committed selection)
+   * and `hovered` (the transient cursor state). */
+  pickedFaceIds = input<Set<string>>(new Set());
+  /** Currently-picked edge ids — same role as `pickedFaceIds` for
+   * edges. Rendered as a permanent bright overlay on each id, on top
+   * of any transient `hoveredEdgeId` highlight. */
+  pickedEdgeIds = input<Set<string>>(new Set());
+  /** Currently-picked vertex ids — same role for vertices. Vertex
+   * markers stay invisible normally; ids in this set get their dot
+   * raised to full opacity. */
+  pickedVertexIds = input<Set<string>>(new Set());
+  /** Live preview of a datum plane being constructed in the sidebar
+   * (REQ 657). Renders a translucent quad at the computed plane;
+   * null clears the overlay. */
+  datumPlanePreview = input<{ origin: [number, number, number]; xAxis: [number, number, number]; yAxis: [number, number, number]; normal: [number, number, number] } | null>(null);
+  /** Live preview of a Shell feature being constructed in the sidebar
+   * (REQ 659). Paints each picked face in a red translucent overlay
+   * so the user can see which faces are about to be cut away before
+   * clicking OK. Null clears the overlay. */
+  shellPreview = input<{ faceIds: string[]; thickness: number; direction: 'inward' | 'outward' } | null>(null);
+  /** Live preview of a Mirror / Linear Pattern / Circular Pattern
+   * being constructed in the sidebar (REQ 658). Each transform is
+   * applied to a CLONE of the current body's mesh to render a ghost
+   * copy at that position. Null clears the overlay. */
+  patternPreview = input<{
+    kind: 'mirror' | 'linearPattern' | 'circularPattern';
+    transforms: Array<
+      | { kind: 'translate'; dx: number; dy: number; dz: number }
+      | { kind: 'rotate'; origin: [number, number, number]; direction: [number, number, number]; angleRad: number }
+      | { kind: 'mirror'; origin: [number, number, number]; normal: [number, number, number] }
+    >;
+  } | null>(null);
   hovered = signal<string | null>(null);
+  /** Edge id under cursor while edgePickMode is active. Used by
+   * Convert Entities to highlight the candidate edge before the user
+   * commits with a click. Tracked separately from `hovered` (which
+   * carries face / datum ids) so the recolor pipeline doesn't get
+   * confused about what "hover" means in each mode. */
+  hoveredEdgeId = signal<string | null>(null);
   selectionChange = output<string | null>();
   // REQ 623 — feature-level click. The viewer reports which face was clicked,
   // its owning feature, whether the face is flat (REQ 625 / sketch-on-face),
@@ -213,6 +310,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * auto-focus after placing a dimension, and by click-to-edit on existing
    * labels. */
   editingDimensionId = input<string | null>(null);
+  /** Sketch dimensions whose `value` is currently driven by an equation
+   * expression. Keyed by constraint id → expression text (no leading
+   * `=`). Used to: (a) prefix labels with a Σ badge, (b) pre-fill the
+   * inline editor with `=expression` so the user sees and can edit the
+   * binding instead of just the resolved number. */
+  drivenDimensions = input<Record<string, string>>({});
   /** When set, the dimension label for this constraint id renders in the
    * "selected" style (orange + slight glow). Single-clicking a label
    * sets this in the parent; Delete-key with a dim selected removes it. */
@@ -264,12 +367,51 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   extraPickableVertices = input<Array<{ id: string; position: [number, number, number] }>>([]);
   /** Vertex id picked — emitted on click of a vertex marker. */
   vertexPicked = output<string>();
+  /** REQ 663 — Hole Wizard preview. One record per placement; each
+   * renders a translucent cylinder for the drill + (optional) cbore
+   * cylinder or csk cone. Axis points INTO the body. Empty array =
+   * no preview rendered. */
+  holePreviews = input<HolePreview[]>([]);
+  /** REQ 665 — translucent cosmetic-thread shells, one per tapped
+   * placement. Recomputed by the editor from the feature tree;
+   * empty array = group hidden (no render). */
+  cosmeticThreads = input<CosmeticThread[]>([]);
+  /** REQ Batch 6 — variable name → string value, used to substitute
+   * `#{varName}` tokens in sketch-text content at render time.
+   * Editor passes part identity (partName, partNumber, partRevision,
+   * manufacturerPN) plus formatted numeric equation values. */
+  textVariables = input<Record<string, string>>({});
+  /** Vertex pick + co-located face context. Fires alongside
+   * `vertexPicked` so existing consumers are unaffected. REQ 663
+   * (Hole Wizard) uses the face normal as the hole axis when a
+   * vertex is picked on a planar face. */
+  vertexPickedAt = output<{
+    vertexId: string;
+    position: [number, number, number];
+    faceNormal?: [number, number, number];
+  }>();
   /** Face pick mode (Up to Surface end condition). When on, clicks ONLY
    * fire facePicked with a BRep face id. Hover gates to faces. Mutually
    * exclusive with vertexPickMode at the editor layer. */
   facePickMode = input<boolean>(false);
+  /** Feature whose own faces should be EXCLUDED from face-pick hits.
+   * Used when an Up-to-Surface end condition is being chosen on a
+   * feature that has already produced faces (e.g. editing an existing
+   * extrude) — a feature can't extrude "up to" a face it produced
+   * itself, so we filter them out at pick time to prevent the error
+   * round-trip with the kernel. */
+  facePickExcludeFeatureId = input<string | null>(null);
   /** Face id picked — emitted on click of a face in pick mode. */
   facePicked = output<string>();
+  /** Same event with the raycast hit point + face-meshlet normal.
+   * Fires alongside `facePicked` so existing consumers don't change;
+   * REQ 663 (Hole Wizard) reads this for "click a face → drop a hole
+   * at the click point." */
+  facePickedAt = output<{
+    faceId: string;
+    point: [number, number, number];
+    normal: [number, number, number];
+  }>();
 
   // Profile-region picker (Extrude sidebar). Populated by cad-editor when
   // the sidebar is open; the viewer renders one translucent mesh per loop
@@ -286,6 +428,53 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   profileFillClick = output<number>();
   /** Pointer is over a profile fill — null means it left. */
   profileFillHover = output<number | null>();
+
+  // Axis-picker overlay (Revolve sidebar). Same pattern as profileFills /
+  // facePickMode: editor supplies a list of pickable line segments
+  // (already projected to 3D via the host sketch's plane), the viewer
+  // renders them as thick highlight lines and hit-tests them. Restricted
+  // to sketch lines for now; datum-axis support can be folded into the
+  // same channel once RevolveFeature.axisLineId accepts datum ids.
+  axisCandidates = input<Array<{
+    id: string; p1: [number, number, number]; p2: [number, number, number]; construction?: boolean;
+  }>>([]);
+  /** When true, clicking an axis candidate emits axisPicked instead of
+   * routing through the normal selection path. */
+  axisPickMode = input<boolean>(false);
+  /** Currently-selected axis id (highlighted brighter than candidates). */
+  selectedAxisId = input<string | null>(null);
+  /** User clicked an axis candidate — emit its id so the editor can store
+   * it in revolveAxisLineId. */
+  axisPicked = output<string>();
+
+  // Edge-pick mode — debug aid. When on, clicking a topology edge in
+  // the viewport emits edgePicked with the kernel-supplied edge record
+  // (id, isStraight flag, endpoints, polyline length) so the editor can
+  // surface "why is this edge there?" info without leaving the canvas.
+  edgePickMode = input<boolean>(false);
+  edgePicked = output<{ edgeId: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]]; polylineLength: number }>();
+
+  // Live "ghost" preview of an in-progress Extrude / Cut Extrude / Revolve
+  // before the user commits. `kind` controls the tint (additive = green,
+  // subtractive = red); mesh data comes pre-built from cad/lib/preview.ts.
+  // Null hides the overlay.
+  featurePreview = input<{
+    kind: 'add' | 'cut';
+    positions: Float32Array;
+    normals: Float32Array;
+    indices: Uint32Array;
+  } | null>(null);
+
+  /** Live preview of an in-progress 3D Fillet or Chamfer. Each entry is
+   * the EDGE ID (matched against `faceEdges` to recolor the actual edge
+   * line) + the picked endpoint pair (drawn as a tube of radius=value
+   * for fillet, or a pair of parallel offset lines for chamfer, to give
+   * the user a sense of the size). Null hides the overlay. */
+  edgeBlendPreview = input<{
+    kind: 'fillet' | 'chamfer';
+    value: number;
+    edges: Array<{ edgeId: string; start: [number, number, number]; end: [number, number, number] }>;
+  } | null>(null);
 
   private zone = inject(NgZone);
 
@@ -304,13 +493,17 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private sketchGroup!: THREE.Group;
   private faceMeshes = new Map<string, THREE.Mesh>();
   private datumMeshes = new Map<string, THREE.Object3D>();
-  // REQ 619 — edge overlays. Each face produces three LineSegments sharing one
-  // EdgesGeometry (threshold-detected feature edges + boundary edges). Mode-
-  // toggling flips `.visible` on each layer.
+  // REQ 619 — edge overlays. Two backends share this map:
+  //   - New kernel (topology has polyline data): one entry per BRep edge,
+  //     `THREE.Line` rendering the analytic curve sampling.
+  //   - Old kernel (no polyline): one entry per face, `THREE.LineSegments`
+  //     from THREE.EdgesGeometry.
+  // Both classes expose the same {visible, geometry, computeLineDistances}
+  // contract this map needs, so the consumer code doesn't have to branch.
   private faceEdges = new Map<string, {
-    front: THREE.LineSegments;
-    hiddenSolid: THREE.LineSegments;
-    hiddenDashed: THREE.LineSegments;
+    front: THREE.Line | THREE.LineSegments;
+    hiddenSolid: THREE.Line | THREE.LineSegments;
+    hiddenDashed: THREE.Line | THREE.LineSegments;
   }>();
   private edgeGroup!: THREE.Group;
   // REQ 631 — selected sketch lines use Line2 with a real pixel linewidth.
@@ -337,12 +530,23 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private frontEdgeMaterial = new THREE.LineBasicMaterial({ color: 0x111111, depthFunc: THREE.LessEqualDepth });
   private hiddenSolidMaterial = new THREE.LineBasicMaterial({ color: 0x111111, depthFunc: THREE.GreaterDepth, transparent: true, opacity: 0.5 });
   private hiddenDashedMaterial = new THREE.LineDashedMaterial({ color: 0x111111, depthFunc: THREE.GreaterDepth, dashSize: 1.5, gapSize: 1, transparent: true, opacity: 0.6 });
+  // Tangent edges (fillet/chamfer boundaries + parametric seams) get
+  // the same color as regular feature edges so the silhouette reads
+  // uniformly. Hidden-layer tangent stays dashed for hidden-line/
+  // wireframe display modes.
+  private frontTangentEdgeMaterial = new THREE.LineBasicMaterial({ color: 0x111111, depthFunc: THREE.LessEqualDepth });
+  private hiddenTangentMaterial = new THREE.LineDashedMaterial({ color: 0x111111, depthFunc: THREE.GreaterDepth, dashSize: 1.5, gapSize: 1, transparent: true, opacity: 0.5 });
   // Keyed by sketchId; each entry is one container Group holding the projected
   // line segments and point markers for that sketch.
   private sketchOverlays = new Map<string, THREE.Group>();
   // REQ 629 — separate group for the drawing preview overlay; rebuilt on every
   // sketchPreview input change.
   private sketchPreviewGroup!: THREE.Group;
+  // REQ 663 — Hole Wizard preview overlay. Rebuilt on every
+  // holePreviews input change.
+  private holePreviewGroup!: THREE.Group;
+  // REQ 665 — cosmetic thread shells for tapped holes.
+  private cosmeticThreadGroup!: THREE.Group;
   // Translucent profile-region overlays for the Extrude sidebar. Rebuilt on
   // every profileFills input change; material colour swapped when the
   // selected/hovered inputs change so we don't pay full geometry rebuild
@@ -354,6 +558,38 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // rather than swapped per build, so picker open/close is instant.
   private vertexPickGroup!: THREE.Group;
   private vertexPickMeshes = new Map<string, THREE.Mesh>();
+  // Axis-pick overlay (Revolve sidebar). One thick line per candidate,
+  // tagged with userData.axisLineId. Group visibility tracks axisPickMode.
+  private axisPickGroup!: THREE.Group;
+  // Persistent highlight for the picked axis (visible regardless of
+  // axisPickMode). Built from the same candidate data; one cylinder,
+  // bright orange, depthTest off so it reads over the body. See the
+  // rebuildSelectedAxisHighlight method.
+  private selectedAxisHighlightGroup!: THREE.Group;
+  /** Bright overlay drawn on top of the edge under the cursor while
+   * edgePickMode is active (Convert Entities). One Line per hover —
+   * rebuilt whenever hoveredEdgeId changes. */
+  private edgeHoverHighlightGroup!: THREE.Group;
+  // Feature-preview ghost mesh — translucent volume that shows where the
+  // in-progress Extrude / Cut / Revolve would put geometry. Rebuilt from
+  // the `featurePreview` input on each change; null clears the group.
+  private featurePreviewGroup!: THREE.Group;
+  /** Overlay for the in-progress fillet/chamfer: bright highlight on
+   * each picked edge plus a translucent tube (fillet) / parallel offset
+   * lines (chamfer) sized by the current radius/distance. */
+  private edgeBlendPreviewGroup!: THREE.Group;
+  /** Overlay for the in-progress datum plane (REQ 657). One translucent
+   * quad oriented to the computed plane; rebuilt on every preview input
+   * change. */
+  private datumPlanePreviewGroup!: THREE.Group;
+  /** Overlay for the in-progress pattern feature (REQ 658). Holds N
+   * ghost clones of the current body's meshes — one per pattern
+   * transform. Rebuilt on every preview input change. */
+  private patternPreviewGroup!: THREE.Group;
+  /** Overlay for the in-progress shell feature (REQ 659). Holds
+   * translucent red clones of every picked "face to remove" so the
+   * user can visually confirm what gets cut away. */
+  private shellPreviewGroup!: THREE.Group;
 
   private rafHandle = 0;
   private resizeObserver?: ResizeObserver;
@@ -366,6 +602,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private orbitPhi = Math.PI / 4;
   private orbitTarget = new THREE.Vector3(0, 0, 0);
   private orbitDistance = 180;
+  // When non-null, updateCamera positions along this vector instead of
+  // through orbitTheta/orbitPhi spherical coords. Set by orientToPlane
+  // when the user enters a sketch; cleared by restoreCameraUp on exit.
+  // Fixes two drift sources: (a) orientToPlane clamps orbitPhi to
+  // [0.05, π-0.05] so planes whose normal is world ±Y land ~2.86° off
+  // axis on the next updateCamera call (zoom/pan); (b) an accidental
+  // right-drag in sketch mode mutates the spherical coords without
+  // changing camera position visibly until the next zoom/pan.
+  private sketchPlaneNormal: [number, number, number] | null = null;
   private lastPointer = { x: 0, y: 0 };
   // Tracks the last sketchId we oriented for so we re-orient on each *transition*
   // into a sketch (and not on every input mutation while inside one).
@@ -380,7 +625,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const sel = this.selected();
       const hov = this.hovered();
       const features = this.selectedFeatures();
-      if (this.scene) this.recolor(sel, hov, features);
+      const picked = this.pickedFaceIds();
+      if (this.scene) this.recolor(sel, hov, features, picked);
     });
     effect(() => {
       const doc = this.sketchDoc();
@@ -394,6 +640,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       void this.activeSketchDof();
       void this.determinedEntities();
       void this.defaultUnit();
+      // drivenDimensions tracked so toggling an equation on/off
+      // immediately repaints the Σ badge + label color.
+      void this.drivenDimensions();
       // smartDimPreview tracked so the Smart Dim cursor preview re-renders
       // on every cursor move during the in-progress pick.
       void this.smartDimPreview();
@@ -417,6 +666,17 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const fills = this.profileFills();
       if (this.scene) this.rebuildProfileFills(fills);
     });
+    // REQ 663 — rebuild the Hole Wizard preview when its input
+    // changes (placements added / removed, dimensions edited).
+    effect(() => {
+      const previews = this.holePreviews();
+      if (this.scene) this.rebuildHolePreviews(previews);
+    });
+    // REQ 665 — cosmetic threads rebuild when the input changes.
+    effect(() => {
+      const threads = this.cosmeticThreads();
+      if (this.scene) this.rebuildCosmeticThreads(threads);
+    });
     effect(() => {
       const sel = this.profileFillsSelected();
       const hov = this.profileFillsHovered();
@@ -433,12 +693,113 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     });
     effect(() => {
       const active = this.vertexPickMode();
-      if (this.vertexPickGroup) this.vertexPickGroup.visible = active;
-      // Clear any stale face/datum hover when entering pick mode so the
-      // user doesn't see an orange face highlight under a stationary
-      // cursor while the picker is the only valid target. Restoring on
-      // exit is unnecessary — the next pointermove repopulates it.
+      const hasPicked = this.pickedVertexIds().size > 0;
+      // Group must be visible whenever either (a) vertex picker is
+      // active (so hover can raycast spheres) or (b) there are sticky
+      // picked vertex markers to render.
+      if (this.vertexPickGroup) this.vertexPickGroup.visible = active || hasPicked;
+      // Clear any stale face/datum hover ONLY when vertex-pick first
+      // becomes active AND it's the only pick mode armed (the original
+      // extrude Up-to-Vertex case). When measure-mode arms all three
+      // pick modes simultaneously, we want face/edge hover to persist
+      // so the user sees a highlight wherever the cursor goes. Use
+      // untracked() to read hovered/edge/face pick mode so this effect
+      // re-runs only on vertexPickMode transitions, not every time the
+      // user's hover state changes.
+      if (active) {
+        const exclusive = untracked(() => !this.edgePickMode() && !this.facePickMode());
+        if (exclusive) {
+          const cur = untracked(() => this.hovered());
+          if (cur !== null) this.hovered.set(null);
+        }
+      }
+    });
+    // Axis-pick overlay rebuild: rebuilds when the candidate set or the
+    // selected id changes (selected id only swaps materials, but the
+    // rebuild path is cheap enough not to optimise yet).
+    effect(() => {
+      const cands = this.axisCandidates();
+      const selected = this.selectedAxisId();
+      if (this.scene) this.rebuildAxisPickMarkers(cands, selected);
+    });
+    effect(() => {
+      const active = this.axisPickMode();
+      if (this.axisPickGroup) this.axisPickGroup.visible = active;
       if (active && this.hovered() !== null) this.hovered.set(null);
+    });
+    // Persistent highlight: rebuild a single cylinder for the currently
+    // selected axis. Tracks both the candidate set (positions change
+    // when sketch geometry edits) and the selected id (swap when user
+    // picks a different axis). Group is always visible — when nothing
+    // is selected, the group is empty so nothing renders.
+    effect(() => {
+      const cands = this.axisCandidates();
+      const selected = this.selectedAxisId();
+      if (this.scene) this.rebuildSelectedAxisHighlight(cands, selected);
+    });
+    // Hovered-edge highlight while edgePickMode is on (Convert
+    // Entities). Tracked separately so it updates with cursor moves
+    // without touching the rest of the geometry rebuild. ALSO tracks
+    // the sticky `pickedEdgeIds` set so every edge already in the
+    // active picker stays highlighted, and the cursor-tracking
+    // hovered edge stacks on top.
+    effect(() => {
+      const id = this.hoveredEdgeId();
+      const picked = this.pickedEdgeIds();
+      if (this.scene) this._rebuildEdgeHoverHighlight(id, picked);
+    });
+    // Sticky vertex highlights: any id in pickedVertexIds gets its
+    // marker raised to full opacity in a "picked" orange. Hover still
+    // overlays its own color on top via updateVertexHover.
+    effect(() => {
+      const picked = this.pickedVertexIds();
+      if (this.scene) this._applyPickedVertexMarkers(picked);
+    });
+    // Feature-preview ghost mesh — rebuilt whenever the editor passes
+    // new geometry in. Disposes the previous mesh's GPU resources before
+    // swapping; null clears the overlay entirely.
+    effect(() => {
+      const pv = this.featurePreview();
+      if (this.scene) this.rebuildFeaturePreview(pv);
+    });
+    // 3D fillet/chamfer preview — bright highlight on each picked edge
+    // plus a translucent tube (fillet) or offset lines (chamfer) sized
+    // by the current value. Null clears the overlay.
+    effect(() => {
+      const pv = this.edgeBlendPreview();
+      if (this.scene) this._rebuildEdgeBlendPreview(pv);
+    });
+    // REQ 657 — datum-plane preview overlay. Rebuilt on every input
+    // change so the user sees the resulting plane move as they pick
+    // references / change scalars in the sidebar.
+    effect(() => {
+      const pv = this.datumPlanePreview();
+      if (this.scene) this._rebuildDatumPlanePreview(pv);
+    });
+    // REQ 658 — pattern preview overlay. Clones the current body's
+    // face meshes and applies each transform in the preview's list to
+    // render ghost copies of where the pattern will land. Reads
+    // `geometry()` as well so the ghosts re-clone after edit-time
+    // rollback rebuilds faceGroup (otherwise the clones reflect the
+    // pre-rollback body, which for a pattern edit means ghosting the
+    // already-patterned geometry — the "pattern of a pattern" bug).
+    // queueMicrotask defers to AFTER the faceGroup rebuild effect has
+    // had a chance to land — there's no guaranteed effect order
+    // otherwise.
+    effect(() => {
+      const pv = this.patternPreview();
+      this.geometry();
+      if (this.scene) queueMicrotask(() => this._rebuildPatternPreview(pv));
+    });
+    // REQ 659 — shell preview overlay. Paints every picked face in a
+    // translucent red so the user sees which faces are about to be
+    // cut away. Same geometry() dep + microtask pattern as the
+    // pattern preview so the overlay sits on the current body even
+    // when an edit-time rollback rebuilds faceGroup.
+    effect(() => {
+      const pv = this.shellPreview();
+      this.geometry();
+      if (this.scene) queueMicrotask(() => this._rebuildShellPreview(pv));
     });
     // REQ 616 follow-up: when the user enters a sketch, snap the camera to look
     // straight down its plane normal. Re-orient only on transition, so the user
@@ -467,20 +828,39 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const ux = plane.normal[0] / len;
     const uy = plane.normal[1] / len;
     const uz = plane.normal[2] / len;
+    // Lock subsequent updateCamera calls (zoom, pan, accidental orbit
+    // drags) to this normalised vector so the camera stays exactly
+    // head-on to the sketch plane — no clamping drift, no orbit drift.
+    this.sketchPlaneNormal = [ux, uy, uz];
     this.orbitTarget.set(plane.origin[0], plane.origin[1], plane.origin[2]);
+    // Position the camera directly along the plane normal — don't go
+    // through orbit theta/phi spherical coords. Those assume world-Y
+    // up and round-trip slightly off-axis on tilted planes because we
+    // then override camera.up to plane.yAxis (which is independent of
+    // world-Y). Setting position + up explicitly + lookAt gives a
+    // pixel-perfect normal view on any plane orientation.
+    this.camera.position.set(
+      plane.origin[0] + ux * this.orbitDistance,
+      plane.origin[1] + uy * this.orbitDistance,
+      plane.origin[2] + uz * this.orbitDistance,
+    );
+    this.camera.up.set(plane.yAxis[0], plane.yAxis[1], plane.yAxis[2]).normalize();
+    this.camera.lookAt(this.orbitTarget);
+    // Keep orbit theta/phi consistent with the new position so the
+    // user's first drag rotates from this orientation rather than
+    // snapping back to whatever the old orbit state implied.
     this.orbitPhi = Math.max(0.05, Math.min(Math.PI - 0.05, Math.acos(uy)));
     const sinPhi = Math.sin(this.orbitPhi);
     this.orbitTheta = sinPhi > 1e-6 ? Math.atan2(uz, ux) : 0;
-    // Camera up = sketch yAxis → sketch's "horizontal" reads as horizontal
-    // on screen and "vertical" reads as vertical, regardless of which
-    // datum plane (or face) the sketch is hosted on.
-    this.camera.up.set(plane.yAxis[0], plane.yAxis[1], plane.yAxis[2]).normalize();
-    this.updateCamera();
+    if (this.camera.isOrthographicCamera) this.updateOrthoFrustum();
   }
 
   /** Restore the camera's up vector to world +Y when leaving sketch mode
-   * so the general 3D view orbits with the conventional vertical axis. */
+   * so the general 3D view orbits with the conventional vertical axis.
+   * Also drops the sketch-plane-normal lock so updateCamera goes back
+   * to the spherical-coord path the orbit handlers feed. */
   private restoreCameraUp() {
+    this.sketchPlaneNormal = null;
     this.camera?.up.set(0, 1, 0);
     this.updateCamera();
   }
@@ -575,9 +955,34 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.scene.add(this.sketchPreviewGroup);
     this.profileFillGroup = new THREE.Group();
     this.scene.add(this.profileFillGroup);
+    this.holePreviewGroup = new THREE.Group();
+    this.scene.add(this.holePreviewGroup);
+    this.cosmeticThreadGroup = new THREE.Group();
+    this.scene.add(this.cosmeticThreadGroup);
     this.vertexPickGroup = new THREE.Group();
     this.vertexPickGroup.visible = false;
     this.scene.add(this.vertexPickGroup);
+    this.axisPickGroup = new THREE.Group();
+    this.axisPickGroup.visible = false;
+    this.scene.add(this.axisPickGroup);
+    // Persistent highlight for the currently-picked axis. Independent
+    // of axisPickMode so the user can SEE which line is the rotation
+    // axis even after the picker overlay closes. One cylinder, bright
+    // orange, always on top.
+    this.selectedAxisHighlightGroup = new THREE.Group();
+    this.scene.add(this.selectedAxisHighlightGroup);
+    this.edgeHoverHighlightGroup = new THREE.Group();
+    this.scene.add(this.edgeHoverHighlightGroup);
+    this.edgeBlendPreviewGroup = new THREE.Group();
+    this.scene.add(this.edgeBlendPreviewGroup);
+    this.datumPlanePreviewGroup = new THREE.Group();
+    this.scene.add(this.datumPlanePreviewGroup);
+    this.patternPreviewGroup = new THREE.Group();
+    this.scene.add(this.patternPreviewGroup);
+    this.shellPreviewGroup = new THREE.Group();
+    this.scene.add(this.shellPreviewGroup);
+    this.featurePreviewGroup = new THREE.Group();
+    this.scene.add(this.featurePreviewGroup);
     this.edgeGroup = new THREE.Group();
     this.scene.add(this.edgeGroup);
 
@@ -681,9 +1086,21 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   }
 
   private updateCamera() {
-    const x = this.orbitTarget.x + this.orbitDistance * Math.sin(this.orbitPhi) * Math.cos(this.orbitTheta);
-    const y = this.orbitTarget.y + this.orbitDistance * Math.cos(this.orbitPhi);
-    const z = this.orbitTarget.z + this.orbitDistance * Math.sin(this.orbitPhi) * Math.sin(this.orbitTheta);
+    let x: number, y: number, z: number;
+    if (this.sketchPlaneNormal) {
+      // Sketch mode — use the stored plane normal directly. Pan still
+      // moves orbitTarget; zoom still moves orbitDistance; orbit drags
+      // mutate orbitTheta/orbitPhi but those are ignored here so the
+      // view stays pinned to the plane.
+      const [ux, uy, uz] = this.sketchPlaneNormal;
+      x = this.orbitTarget.x + this.orbitDistance * ux;
+      y = this.orbitTarget.y + this.orbitDistance * uy;
+      z = this.orbitTarget.z + this.orbitDistance * uz;
+    } else {
+      x = this.orbitTarget.x + this.orbitDistance * Math.sin(this.orbitPhi) * Math.cos(this.orbitTheta);
+      y = this.orbitTarget.y + this.orbitDistance * Math.cos(this.orbitPhi);
+      z = this.orbitTarget.z + this.orbitDistance * Math.sin(this.orbitPhi) * Math.sin(this.orbitTheta);
+    }
     this.camera.position.set(x, y, z);
     this.camera.lookAt(this.orbitTarget);
     // orbitDistance doubles as the ortho zoom level — every camera-state
@@ -1107,7 +1524,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const dy = ev.clientY - this.lastPointer.y;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
     if (this.orbiting) {
-      this.orbitTheta -= dx * 0.005;
+      // Horizontal drag rotates the model the SAME direction the cursor
+      // moves (drag right → model spins right). Vertical drag tilts up
+      // (drag up → top of model toward camera).
+      this.orbitTheta += dx * 0.005;
       this.orbitPhi = Math.max(0.05, Math.min(Math.PI - 0.05, this.orbitPhi - dy * 0.005));
       this.updateCamera();
     } else if (this.panning) {
@@ -1125,6 +1545,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       this.orbitDistance = Math.max(5, Math.min(2000, this.orbitDistance * factor));
       this.updateCamera();
     } else if (this.activeSketchId() !== null) {
+      // While Convert Entities (or any other edge/face pick mode) is
+      // armed inside a sketch, we still want the cursor to drive the
+      // 3D pick hover so the user sees which edge / face is the
+      // commit target. Update hover BEFORE emitting the sketch move
+      // so the sketch tool can co-exist with the 3D highlight.
+      if (this.edgePickMode() || this.facePickMode()) {
+        this.updatePointer(ev);
+        this.updateHover();
+      }
       const p = this.toSketchCoords(ev);
       if (p) this.zone.run(() => this.sketchPointerMove.emit(p));
     } else {
@@ -1222,8 +1651,55 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
 
   private onClick = (ev: MouseEvent) => {
     // REQ 616: in sketch mode the click dispatches to the sketch toolbar's click
-    // handler with 2D plane coords; selection of 3D faces/datums is paused.
+    // handler with 2D plane coords; selection of 3D faces/datums is paused…
+    // EXCEPT when a 3D edge/face picker is armed (Convert Entities, etc.) —
+    // those need to reach the 3D raycaster so the user can click on the
+    // body's geometry while the sketch is active.
     if (this.activeSketchId() !== null) {
+      this.updatePointer(ev);
+      // Edge-pick under sketch — used by Convert Entities to project a
+      // body edge onto the sketch plane.
+      if (this.edgePickMode()) {
+        const prevThreshold = this.raycaster.params.Line?.threshold ?? 1;
+        this.raycaster.setFromCamera(this.pointer, this.camera);
+        this.raycaster.params.Line = { threshold: 3 };
+        const candidates: THREE.Object3D[] = [];
+        for (const set of this.faceEdges.values()) {
+          if ((set.front.userData as { edgeId?: string }).edgeId) candidates.push(set.front);
+        }
+        const hits = this.raycaster.intersectObjects(candidates, false);
+        this.raycaster.params.Line = { threshold: prevThreshold };
+        if (hits.length > 0) {
+          const ud = hits[0].object.userData as { edgeRecord?: { edgeId: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]]; polylineLength: number } };
+          if (ud.edgeRecord) {
+            this.zone.run(() => this.edgePicked.emit(ud.edgeRecord!));
+            return;
+          }
+        }
+        // Edge picker armed but no hit — fall through to sketch click
+        // so the user can still draw / select on the sketch plane.
+      }
+      // Face-pick under sketch — likewise for Convert Entities on a
+      // face (projects all its boundary edges).
+      if (this.facePickMode()) {
+        this.raycaster.setFromCamera(this.pointer, this.camera);
+        const hits = this.raycaster.intersectObjects(this.faceGroup.children, false);
+        if (hits.length > 0) {
+          const hit = hits[0];
+          const fid = (hit.object.userData as { faceId?: string }).faceId;
+          if (fid) {
+            const p = hit.point;
+            const n = hit.face?.normal
+              ? hit.face.normal.clone().transformDirection((hit.object as THREE.Object3D).matrixWorld).normalize()
+              : new THREE.Vector3(0, 0, 1);
+            this.zone.run(() => {
+              this.facePicked.emit(fid);
+              this.facePickedAt.emit({ faceId: fid, point: [p.x, p.y, p.z], normal: [n.x, n.y, n.z] });
+            });
+            return;
+          }
+        }
+      }
       const p = this.toSketchCoords(ev);
       if (p) {
         const tolerance = this.pixelsToSketchUnits(this.PICK_PX);
@@ -1233,24 +1709,92 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       return;
     }
     this.updatePointer(ev);
-    // Vertex picker is the most exclusive mode — when active, the click
-    // ONLY hits vertex markers; nothing else is selectable. Missing a
-    // vertex is a no-op rather than a fall-through to face/datum picks.
+    // Vertex picker runs first when armed. Originally vertex-pick was
+    // exclusive (return on miss), but the Measure tool arms vertex +
+    // edge + face simultaneously and expects misses to fall through to
+    // the next picker. So we only `return` on hit OR when no other
+    // pick mode is also armed — matches the edge→face fall-through
+    // pattern below.
     if (this.vertexPickMode()) {
       const vid = this.pickVertex();
       if (vid !== null) {
-        this.zone.run(() => this.vertexPicked.emit(vid));
+        // Look up the vertex's world position from the pick mesh,
+        // and probe the face under the cursor for an axis hint.
+        const vMesh = this.vertexPickMeshes.get(vid);
+        const vPos: [number, number, number] = vMesh
+          ? [vMesh.position.x, vMesh.position.y, vMesh.position.z]
+          : [0, 0, 0];
+        let faceNormal: [number, number, number] | undefined;
+        this.raycaster.setFromCamera(this.pointer, this.camera);
+        const faceHits = this.raycaster.intersectObjects(this.faceGroup.children, false);
+        if (faceHits.length > 0 && faceHits[0].face?.normal) {
+          const n = faceHits[0].face.normal.clone()
+            .transformDirection((faceHits[0].object as THREE.Object3D).matrixWorld)
+            .normalize();
+          faceNormal = [n.x, n.y, n.z];
+        }
+        this.zone.run(() => {
+          this.vertexPicked.emit(vid);
+          this.vertexPickedAt.emit({ vertexId: vid, position: vPos, ...(faceNormal ? { faceNormal } : {}) });
+        });
+        return;
       }
-      return;
+      if (!this.edgePickMode() && !this.facePickMode() && !this.axisPickMode()) return;
     }
-    // Face picker — same exclusivity, raycast against faceGroup only.
+    // Edge picker runs BEFORE face picker so that with both modes active
+    // (blend sidebar that supports face → edges expansion), clicking
+    // directly on an edge wins, while clicking on empty face area falls
+    // through to the face picker below.
+    if (this.edgePickMode()) {
+      const prevThreshold = this.raycaster.params.Line?.threshold ?? 1;
+      this.raycaster.setFromCamera(this.pointer, this.camera);
+      this.raycaster.params.Line = { threshold: 3 };
+      const candidates: THREE.Object3D[] = [];
+      for (const set of this.faceEdges.values()) {
+        if ((set.front.userData as { edgeId?: string }).edgeId) candidates.push(set.front);
+      }
+      const hits = this.raycaster.intersectObjects(candidates, false);
+      this.raycaster.params.Line = { threshold: prevThreshold };
+      if (hits.length > 0) {
+        const ud = hits[0].object.userData as { edgeRecord?: { edgeId: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]]; polylineLength: number } };
+        if (ud.edgeRecord) this.zone.run(() => this.edgePicked.emit(ud.edgeRecord!));
+        return;
+      }
+      // Edge mode armed but no edge hit — fall through to face/axis
+      // picks below if those modes are also active (blend-sidebar case).
+      if (!this.facePickMode() && !this.axisPickMode()) return;
+    }
+    // Face picker — raycast against faceGroup only. Self-face filtering
+    // was here briefly but had to be removed: after a merging extrude
+    // fuses into an existing body, OCCT re-tags upstream faces with the
+    // merging feature's id, so the filter would block legitimate picks
+    // of pre-existing geometry. The editor now ships a fallback plane
+    // alongside the faceId so the backend can resolve the target by
+    // geometry when the upstream-faceMap lookup misses.
     if (this.facePickMode()) {
       this.raycaster.setFromCamera(this.pointer, this.camera);
       const hits = this.raycaster.intersectObjects(this.faceGroup.children, false);
       if (hits.length > 0) {
-        const fid = (hits[0].object.userData as { faceId?: string }).faceId;
-        if (fid) this.zone.run(() => this.facePicked.emit(fid));
+        const hit = hits[0];
+        const fid = (hit.object.userData as { faceId?: string }).faceId;
+        if (fid) {
+          const p = hit.point;
+          const n = hit.face?.normal
+            ? hit.face.normal.clone().transformDirection((hit.object as THREE.Object3D).matrixWorld).normalize()
+            : new THREE.Vector3(0, 0, 1);
+          this.zone.run(() => {
+            this.facePicked.emit(fid);
+            this.facePickedAt.emit({ faceId: fid, point: [p.x, p.y, p.z], normal: [n.x, n.y, n.z] });
+          });
+        }
       }
+      return;
+    }
+    // Axis picker — Revolve sidebar. Raycast against axis-pick overlay
+    // only; sketch/face/datum picks are suppressed while this mode is on.
+    if (this.axisPickMode()) {
+      const aid = this.pickAxis();
+      if (aid !== null) this.zone.run(() => this.axisPicked.emit(aid));
       return;
     }
     // Profile-region picker wins over face picks when the Extrude sidebar is
@@ -1314,6 +1858,39 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
   }
 
+  /** Raycast against the topology-edge lines and set `hoveredEdgeId`.
+   * Only the front-layer line per edge participates (the hidden-line
+   * layers share the same geometry but draw with depth conditions that
+   * make raycast results ambiguous). */
+  private _updateEdgeHover(): void {
+    const prevThreshold = this.raycaster.params.Line?.threshold ?? 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    this.raycaster.params.Line = { threshold: 3 };
+    const candidates: THREE.Object3D[] = [];
+    for (const set of this.faceEdges.values()) {
+      if ((set.front.userData as { edgeId?: string }).edgeId) candidates.push(set.front);
+    }
+    const hits = this.raycaster.intersectObjects(candidates, false);
+    this.raycaster.params.Line = { threshold: prevThreshold };
+    const next = hits.length > 0
+      ? ((hits[0].object.userData as { edgeId?: string }).edgeId ?? null)
+      : null;
+    if (this.hoveredEdgeId() !== next) this.hoveredEdgeId.set(next);
+  }
+
+  /** Datum-only raycast — used when the face raycast missed but the
+   * face hover code path still needs to detect a datum (plane / axis /
+   * point) under the cursor. Walks parent chain to find the userData
+   * carrying `datumId`. */
+  private _pickDatumOnly(): string | null {
+    const datumHits = this.raycaster.intersectObjects(this.datumGroup.children, true);
+    if (datumHits.length === 0) return null;
+    let obj: THREE.Object3D | null = datumHits[0].object;
+    while (obj && !(obj.userData as any).datumId) obj = obj.parent;
+    if (obj) return `datum:${(obj.userData as any).datumId}`;
+    return null;
+  }
+
   private pickEntity(): string | null {
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const faceHits = this.raycaster.intersectObjects(this.faceGroup.children, false);
@@ -1333,22 +1910,83 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   }
 
   private updateHover() {
-    // In vertex pick mode, nothing else is interactable — clear face/
-    // datum hover so the user doesn't see orange face highlights that
-    // they can't actually click. Also handle vertex-marker hover so
-    // the user gets feedback over the right targets.
-    if (this.vertexPickMode()) {
+    // Compute the nearest front-face hit distance ONCE per pointermove.
+    // Used as a depth cap for vertex / edge raycasts so picks on the
+    // back of the body (which line/sphere raycasts otherwise happily
+    // return) get rejected. Without this cap, hovering over the front
+    // of a cube would sometimes highlight an edge on the far side.
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const faceHits = this.raycaster.intersectObjects(this.faceGroup.children, false);
+    const frontFaceDist = faceHits.length > 0 ? faceHits[0].distance : Infinity;
+    // Small additive bias so picks visually AT the front edge still
+    // qualify as "in front" (line/sphere distance includes off-axis
+    // distance, so a line drawn right at the silhouette can score
+    // slightly larger than the face it sits on).
+    const depthCap = frontFaceDist === Infinity ? Infinity : frontFaceDist + Math.max(0.5, this.orbitDistance * 0.01);
+    const prevFar = this.raycaster.far;
+    this.raycaster.far = depthCap;
+    try {
+      // Vertex pick runs FIRST when armed. If a vertex marker is in
+      // front of (or on) the nearest face, it wins.
+      if (this.vertexPickMode()) {
+        this.updateVertexHover();
+        if (this.lastHoveredVertexId !== null) {
+          if (this.hovered() !== null) this.hovered.set(null);
+          if (this.hoveredEdgeId() !== null) this.hoveredEdgeId.set(null);
+          return;
+        }
+        if (!this.edgePickMode() && !this.facePickMode()) {
+          if (this.hovered() !== null) this.hovered.set(null);
+          return;
+        }
+      }
+      // Edge pick takes priority over face pick when both are armed
+      // (Convert Entities arms both — edges are thinner and more
+      // specific). Same order as the onClick handler.
+      if (this.edgePickMode()) {
+        this._updateEdgeHover();
+        if (this.hoveredEdgeId() !== null) {
+          if (this.hovered() !== null) this.hovered.set(null);
+          return;
+        }
+      } else if (this.hoveredEdgeId() !== null) {
+        this.hoveredEdgeId.set(null);
+      }
+      // Face hover — use the front-face hit we already computed above
+      // instead of redoing the raycast inside pickEntity().
+      if (this.facePickMode()) {
+        let next: string | null = null;
+        if (faceHits.length > 0) {
+          const id = (faceHits[0].object.userData as any).faceId as string | undefined;
+          if (id) next = id;
+        }
+        if (next === null) next = this._pickDatumOnly();
+        if (this.hovered() !== next) this.hovered.set(next);
+        return;
+      }
+    } finally {
+      this.raycaster.far = prevFar;
+    }
+    // Axis pick mode: the axis overlay IS the pickable target — clear
+    // any stale face/datum highlight so the user isn't distracted by
+    // dual signals.
+    if (this.axisPickMode()) {
       if (this.hovered() !== null) this.hovered.set(null);
-      this.updateVertexHover();
       return;
     }
-    // Face pick mode keeps the orange face-highlight (it IS the right
-    // signal — face under cursor is pickable). Just gate out the
-    // profile-fill side-effects.
-    if (this.facePickMode()) {
-      const prev = this.hovered();
-      const next = this.pickEntity();
-      if (prev !== next) this.hovered.set(next);
+    // Region-selection mode: the profile-fill overlay IS the user's
+    // target. Highlighting the 3D face underneath the cursor is
+    // distracting and ambiguous — the orange face-highlight would
+    // compete with the region tint for attention. Skip face hover
+    // entirely while any profile fills are active; only profile-fill
+    // hover dispatch runs.
+    if (this.profileFills().length > 0) {
+      if (this.hovered() !== null) this.hovered.set(null);
+      const fillIndex = this.pickProfileFill();
+      if (fillIndex !== this.lastProfileFillHover) {
+        this.lastProfileFillHover = fillIndex;
+        this.zone.run(() => this.profileFillHover.emit(fillIndex));
+      }
       return;
     }
     const prev = this.hovered();
@@ -1371,16 +2009,24 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private updateVertexHover(): void {
     const id = this.pickVertex();
     if (id === this.lastHoveredVertexId) return;
-    // Restore previous marker; tint the new one. Visual feedback only —
-    // no signal change needed since pick state isn't user-visible
-    // outside the viewer.
+    // Markers are invisible (opacity 0) by default. Restore the
+    // previously-hovered marker to invisible, then make the new one
+    // visible + orange so a single dot appears under the cursor.
     if (this.lastHoveredVertexId) {
       const prev = this.vertexPickMeshes.get(this.lastHoveredVertexId);
-      if (prev) (prev.material as THREE.MeshBasicMaterial).color.setHex(0xffd54f);
+      if (prev) {
+        const m = prev.material as THREE.MeshBasicMaterial;
+        m.color.setHex(0xffd54f);
+        m.opacity = 0;
+      }
     }
     if (id) {
       const next = this.vertexPickMeshes.get(id);
-      if (next) (next.material as THREE.MeshBasicMaterial).color.setHex(0xff9800);
+      if (next) {
+        const m = next.material as THREE.MeshBasicMaterial;
+        m.color.setHex(0xff9800);
+        m.opacity = 0.95;
+      }
     }
     this.lastHoveredVertexId = id;
   }
@@ -1402,17 +2048,35 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
 
   private addDatum(d: DatumElement) {
     if (d.kind === 'point') {
-      const geom = new THREE.SphereGeometry(1.2, 16, 16);
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      // User-defined Datum Point features (REQ 661) carry a sidecar
+      // `position` to place the sphere off-origin; the origin row's
+      // built-in 'origin' datum has no sidecar and draws at (0,0,0).
+      const sidecar = (d as { position?: [number, number, number] }).position;
+      const isUserPoint = !!sidecar;
+      const geom = new THREE.SphereGeometry(isUserPoint ? 2.2 : 1.2, 16, 16);
+      const mat = new THREE.MeshBasicMaterial({ color: isUserPoint ? 0xffb74d : 0xffffff });
       const mesh = new THREE.Mesh(geom, mat);
+      if (sidecar) mesh.position.set(sidecar[0], sidecar[1], sidecar[2]);
       mesh.userData = { datumId: d.id };
       this.datumGroup.add(mesh);
       this.datumMeshes.set(d.id, mesh);
     } else if (d.kind === 'axis' && d.direction) {
-      const color = d.id === 'x_axis' ? 0xe53935 : d.id === 'y_axis' ? 0x43a047 : 0x1e88e5;
-      const dir = new THREE.Vector3(...d.direction).normalize();
-      const end = dir.clone().multiplyScalar(60);
-      const start = dir.clone().multiplyScalar(-60);
+      // Built-in origin axes use canonical X/Y/Z colors and run
+      // through the world origin; user-defined Datum Axis features
+      // (REQ 660) draw in amber and use the sidecar `axis.origin`
+      // for their midpoint.
+      const sidecarAxis = (d as { axis?: { origin: [number, number, number]; direction: [number, number, number] } }).axis;
+      const isUserAxis = !!sidecarAxis;
+      const color = isUserAxis ? 0xffb74d
+        : d.id === 'x_axis' ? 0xe53935
+        : d.id === 'y_axis' ? 0x43a047
+        : 0x1e88e5;
+      const center = sidecarAxis
+        ? new THREE.Vector3(sidecarAxis.origin[0], sidecarAxis.origin[1], sidecarAxis.origin[2])
+        : new THREE.Vector3();
+      const dir = new THREE.Vector3(...(sidecarAxis?.direction ?? d.direction)).normalize();
+      const end = center.clone().add(dir.clone().multiplyScalar(60));
+      const start = center.clone().add(dir.clone().multiplyScalar(-60));
       const geom = new THREE.BufferGeometry().setFromPoints([start, end]);
       const mat = new THREE.LineBasicMaterial({ color });
       const line = new THREE.Line(geom, mat);
@@ -1422,17 +2086,39 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       this.datumGroup.add(group);
       this.datumMeshes.set(d.id, group);
     } else if (d.kind === 'plane' && d.direction) {
-      const color = d.id === 'xy_plane' ? 0x1e88e5 : d.id === 'yz_plane' ? 0xe53935 : 0x43a047;
+      // Origin datums get their canonical X/Y/Z colors; user-defined
+      // datum planes (REQ 657) get amber so they read as "added by
+      // me" vs the always-there origin set.
+      const isOrigin = d.id === 'xy_plane' || d.id === 'yz_plane' || d.id === 'xz_plane';
+      const color = d.id === 'xy_plane' ? 0x1e88e5
+                  : d.id === 'yz_plane' ? 0xe53935
+                  : d.id === 'xz_plane' ? 0x43a047
+                  : 0xffb74d;
       const geom = new THREE.PlaneGeometry(80, 80);
-      // Orient plane: PlaneGeometry default normal is +Z; rotate to match.
-      const normal = new THREE.Vector3(...d.direction).normalize();
-      const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
       const mat = new THREE.MeshBasicMaterial({
         color, transparent: true, opacity: 0.18, side: THREE.DoubleSide,
         depthWrite: false,
       });
       const mesh = new THREE.Mesh(geom, mat);
-      mesh.quaternion.copy(quat);
+      // User datums carry a full Plane3 sidecar (origin + xAxis +
+      // yAxis + normal); use the basis directly so the quad lands at
+      // the right position AND orientation. Origin datums skip the
+      // sidecar and use the normal-only orientation pinned at world 0.
+      const sidecar = (d as any).plane as { origin: [number, number, number]; xAxis: [number, number, number]; yAxis: [number, number, number]; normal: [number, number, number] } | undefined;
+      if (!isOrigin && sidecar) {
+        const m4 = new THREE.Matrix4();
+        m4.makeBasis(
+          new THREE.Vector3(sidecar.xAxis[0], sidecar.xAxis[1], sidecar.xAxis[2]),
+          new THREE.Vector3(sidecar.yAxis[0], sidecar.yAxis[1], sidecar.yAxis[2]),
+          new THREE.Vector3(sidecar.normal[0], sidecar.normal[1], sidecar.normal[2]),
+        );
+        m4.setPosition(sidecar.origin[0], sidecar.origin[1], sidecar.origin[2]);
+        mesh.applyMatrix4(m4);
+      } else {
+        const normal = new THREE.Vector3(...d.direction).normalize();
+        const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+        mesh.quaternion.copy(quat);
+      }
       mesh.userData = { datumId: d.id };
       this.datumGroup.add(mesh);
       this.datumMeshes.set(d.id, mesh);
@@ -1457,6 +2143,17 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     }
     this.faceEdges.clear();
 
+    // Edge rendering strategy is picked once per regen:
+    //   - NEW kernel (any topology edge ships a `polyline`): render each
+    //     BRep edge as a single Line from the kernel's analytic sampling.
+    //     Curves are smooth, every edge is drawn exactly once.
+    //   - OLD kernel (no polyline data, every edge marked is_straight):
+    //     fall back to per-face THREE.EdgesGeometry. Curved face boundaries
+    //     come out as chord polylines (the original behavior). This avoids
+    //     drawing a single straight chord across a curve when we can't tell
+    //     where the curve actually goes.
+    const hasPolylineData = !!g.topology?.edges?.some(e => e.polyline && e.polyline.length >= 2);
+
     for (const f of g.faces) {
       const geom = new THREE.BufferGeometry();
       geom.setAttribute('position', new THREE.BufferAttribute(f.positions, 3));
@@ -1480,21 +2177,122 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       this.faceGroup.add(mesh);
       this.faceMeshes.set(f.faceId, mesh);
 
-      // REQ 619 — feature-edge extraction. 15° threshold keeps cylinder
-      // lateral facets quiet but emits boundary rings + sharp corners.
-      const edgeGeom = new THREE.EdgesGeometry(geom, 15);
-      const front = new THREE.LineSegments(edgeGeom, this.frontEdgeMaterial);
-      const hiddenSolid = new THREE.LineSegments(edgeGeom, this.hiddenSolidMaterial);
-      const hiddenDashed = new THREE.LineSegments(edgeGeom, this.hiddenDashedMaterial);
+      // Old-kernel fallback path: feature-edge extraction. Threshold of
+      // 45° suppresses tessellation-facet seams on small curved faces
+      // (a 1mm-radius cylinder sampled at chord tolerance 0.05 has
+       // ~37° per-facet dihedral, which a 15° threshold would emit as
+      // visible vertical stripes on the cylinder side). Cost is that
+      // genuine geometric features with very shallow dihedrals (gentle
+      // chamfers, soft fillets) get suppressed too — once the kernel
+      // ships polyline data, the smooth-curve path takes over and this
+      // threshold no longer matters.
+      if (!hasPolylineData) {
+        const edgeGeom = new THREE.EdgesGeometry(geom, 45);
+        const front = new THREE.LineSegments(edgeGeom, this.frontEdgeMaterial);
+        const hiddenSolid = new THREE.LineSegments(edgeGeom, this.hiddenSolidMaterial);
+        const hiddenDashed = new THREE.LineSegments(edgeGeom, this.hiddenDashedMaterial);
+        hiddenDashed.computeLineDistances();
+        this.edgeGroup.add(front);
+        this.edgeGroup.add(hiddenSolid);
+        this.edgeGroup.add(hiddenDashed);
+        this.faceEdges.set(f.faceId, { front, hiddenSolid, hiddenDashed });
+      }
+    }
+
+    if (hasPolylineData) this.rebuildTopologyEdges(g.topology);
+
+    this.recolor(this.selected(), this.hovered(), this.selectedFeatures(), this.pickedFaceIds());
+    this.applyDisplayMode(this.displayMode());
+  }
+
+  /** Render every BRep edge once from topology. Straight edges become a
+   * single segment between their two endpoints; curved edges (cylinder
+   * top/bottom rings, revolve fuses with non-coplanar bodies, fillets,
+   * etc.) use the kernel-supplied polyline so they paint as smooth
+   * curves rather than stacked chord polylines from per-face mesh
+   * tessellation. Caller pre-clears `faceEdges`. */
+  private rebuildTopologyEdges(topology: ModelTopology | undefined): void {
+    if (!topology || topology.edges.length === 0) return;
+    for (const e of topology.edges) {
+      const points: THREE.Vector3[] = [];
+      if (!e.isStraight && e.polyline && e.polyline.length >= 2) {
+        for (const p of e.polyline) points.push(new THREE.Vector3(p[0], p[1], p[2]));
+      } else {
+        const [a, b] = e.endpoints;
+        points.push(new THREE.Vector3(a[0], a[1], a[2]));
+        points.push(new THREE.Vector3(b[0], b[1], b[2]));
+      }
+      if (points.length < 2) continue;
+      // Three.js Line draws as connected polyline (each consecutive pair
+      // becomes a segment), so a polyline approximation paints as a
+      // single continuous curve rather than a chord per pair.
+      const geom = new THREE.BufferGeometry().setFromPoints(points);
+      // Tangent edges (fillet/chamfer blend boundaries, parametric seams)
+      // get the lighter dashed style instead of the regular dark solid.
+      const isTangent = e.isTangent === true;
+      const front = new THREE.Line(geom, isTangent ? this.frontTangentEdgeMaterial : this.frontEdgeMaterial);
+      const hiddenSolid = new THREE.Line(geom, isTangent ? this.hiddenTangentMaterial : this.hiddenSolidMaterial);
+      const hiddenDashed = new THREE.Line(geom, isTangent ? this.hiddenTangentMaterial : this.hiddenDashedMaterial);
+      // Front-layer tangent edges need computeLineDistances() so the
+      // dashed material renders; matches what we already do for
+      // hiddenDashed below.
+      if (isTangent) front.computeLineDistances();
+      // Tag the front-layer line with this edge's topology id so the
+      // edge-pick mode can raycast it back to the original BRep edge.
+      // Carries the full record (id/isStraight/endpoints/polyline len)
+      // so the editor can display debug info without re-looking it up.
+      front.userData = {
+        edgeId: e.id,
+        edgeRecord: {
+          edgeId: e.id,
+          isStraight: e.isStraight,
+          endpoints: e.endpoints,
+          polylineLength: e.polyline?.length ?? 0,
+        },
+      };
       hiddenDashed.computeLineDistances();
       this.edgeGroup.add(front);
       this.edgeGroup.add(hiddenSolid);
       this.edgeGroup.add(hiddenDashed);
-      this.faceEdges.set(f.faceId, { front, hiddenSolid, hiddenDashed });
+      this.faceEdges.set(`edge:${e.id}`, { front, hiddenSolid, hiddenDashed });
     }
+  }
 
-    this.recolor(this.selected(), this.hovered());
-    this.applyDisplayMode(this.displayMode());
+  /** Tear down and rebuild the ghost-preview group from new mesh data.
+   * Material colour depends on `pv.kind`: green-blue for additive
+   * (extrude / revolve), red for subtractive (cut). Both render with
+   * `transparent: true` + opacity ~ 0.35 + DoubleSide so the volume
+   * reads through the existing committed body. */
+  private rebuildFeaturePreview(pv: {
+    kind: 'add' | 'cut';
+    positions: Float32Array;
+    normals: Float32Array;
+    indices: Uint32Array;
+  } | null): void {
+    while (this.featurePreviewGroup.children.length > 0) {
+      const child = this.featurePreviewGroup.children.pop()!;
+      const mesh = child as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const m = mesh.material as THREE.Material | undefined;
+      if (m) Array.isArray(m) ? m.forEach(x => x.dispose()) : m.dispose();
+    }
+    if (!pv) return;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(pv.positions, 3));
+    geom.setAttribute('normal', new THREE.BufferAttribute(pv.normals, 3));
+    geom.setIndex(new THREE.BufferAttribute(pv.indices, 1));
+    const mat = new THREE.MeshStandardMaterial({
+      color: pv.kind === 'cut' ? 0xef5350 : 0x66bb6a,
+      metalness: 0.0,
+      roughness: 0.55,
+      transparent: true,
+      opacity: 0.35,
+      side: THREE.DoubleSide,
+      depthWrite: false,  // don't occlude the committed body's edges
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.renderOrder = 8;
+    this.featurePreviewGroup.add(mesh);
   }
 
   // REQ 619 — toggle each face's color/depth write + edge-layer visibility
@@ -1559,6 +2357,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     while (this.sketchPreviewGroup.children.length > 0) {
       const child = this.sketchPreviewGroup.children.pop()!;
       child.traverse(c => {
+        // inference-badge labels are CSS2DObjects whose .element is a
+        // detached <div> in the labelRenderer's DOM overlay. Popping the
+        // Three.js parent doesn't remove the DOM node, so without this
+        // the labels accumulate forever — visible bug as "stuck"
+        // alignment/constraint hints when drawing.
+        if (c instanceof CSS2DObject) c.element.remove();
         const m = (c as THREE.Mesh).material as THREE.Material | undefined;
         if (m) Array.isArray(m) ? m.forEach(x => x.dispose()) : m.dispose();
         const g = (c as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
@@ -1663,7 +2467,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         // Trim hover: solid red segment that would be removed.
         // Extend hover: dashed red segment that would be added.
         const red = 0xff5252;
-        return this.makePreviewLine([project(item.start), project(item.end)], red, item.mode === 'remove');
+        const pts = item.points && item.points.length >= 2
+          ? item.points.map(project)
+          : [project(item.start), project(item.end)];
+        return this.makePreviewLine(pts, red, item.mode === 'remove');
       }
       case 'alignment-guide': {
         // Dashed yellow alignment guide — same hue as the snap indicators,
@@ -1708,6 +2515,183 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   }
 
   // ────────── Profile-region overlays (Extrude sidebar picker) ──────────
+
+  /** REQ 663 — rebuild the translucent hole previews. One drill
+   * cylinder per placement, plus an entry-side counterbore cylinder
+   * or countersink cone when those are selected. Cheap on every
+   * input change since the meshes are tiny. */
+  private rebuildHolePreviews(previews: HolePreview[]): void {
+    // Tear down whatever's there.
+    while (this.holePreviewGroup.children.length > 0) {
+      const child = this.holePreviewGroup.children[0] as THREE.Mesh;
+      this.holePreviewGroup.remove(child);
+      child.geometry?.dispose?.();
+      const mat = child.material as THREE.Material | THREE.Material[];
+      if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+      else mat?.dispose?.();
+    }
+    if (previews.length === 0) return;
+    const drillMat = new THREE.MeshBasicMaterial({
+      color: 0xff9800, transparent: true, opacity: 0.35,
+      depthTest: true, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const accentMat = new THREE.MeshBasicMaterial({
+      color: 0xffc107, transparent: true, opacity: 0.30,
+      depthTest: true, depthWrite: false, side: THREE.DoubleSide,
+    });
+    /** Place a cylinder whose central axis runs from `origin` along
+     * `dir` for `length` units, radius `radius`. THREE's
+     * CylinderGeometry is Y-aligned by default; we build an orientation
+     * matrix that rotates +Y onto `dir`. */
+    const cyl = (origin: THREE.Vector3, dir: THREE.Vector3, length: number, radius: number, mat: THREE.Material) => {
+      const geom = new THREE.CylinderGeometry(radius, radius, length, 32, 1, true);
+      // Translate so the base sits at the origin (CylinderGeometry centers on its midpoint by default).
+      geom.translate(0, length / 2, 0);
+      const mesh = new THREE.Mesh(geom, mat);
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      mesh.quaternion.copy(q);
+      mesh.position.copy(origin);
+      mesh.renderOrder = 12;  // above face fills + vertex pickers
+      return mesh;
+    };
+    /** Cone tapering from `radius` at base (at `origin`) to 0 at
+     * `origin + dir*length`. */
+    const cone = (origin: THREE.Vector3, dir: THREE.Vector3, length: number, radius: number, mat: THREE.Material) => {
+      const geom = new THREE.CylinderGeometry(0, radius, length, 32, 1, true);
+      // Base at y=0 (top of the default Y-up cone is radius=0).
+      geom.translate(0, length / 2, 0);
+      // Default geometry has the radius=0 tip at +y and the radius=`radius` base at -y.
+      // We want the BASE at the origin and the tip at +dir*length, so we flip the geometry.
+      geom.rotateX(Math.PI);
+      geom.translate(0, length, 0);
+      const mesh = new THREE.Mesh(geom, mat);
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      mesh.quaternion.copy(q);
+      mesh.position.copy(origin);
+      mesh.renderOrder = 12;
+      return mesh;
+    };
+    for (const p of previews) {
+      const origin = new THREE.Vector3(p.position[0], p.position[1], p.position[2]);
+      const dir = new THREE.Vector3(p.axis[0], p.axis[1], p.axis[2]);
+      if (dir.lengthSq() < 1e-9) continue;
+      // Drill barrel — always rendered. Clamp absurd through-all
+      // lengths to a sensible preview value so the cylinder doesn't
+      // shoot off to infinity when end condition is "through all".
+      const drillLen = Math.min(p.drillDepth, 200);
+      this.holePreviewGroup.add(cyl(origin, dir, drillLen, p.drillDiameter / 2, drillMat));
+      if (p.counterbore) {
+        this.holePreviewGroup.add(cyl(origin, dir, p.counterbore.depth, p.counterbore.diameter / 2, accentMat));
+      }
+      if (p.countersink) {
+        this.holePreviewGroup.add(cone(origin, dir, p.countersink.depth, p.countersink.diameter / 2, accentMat));
+      }
+    }
+  }
+
+  /** REQ 665 — OnShape-style cosmetic threads: stripe pattern band
+   * around the inside cylindrical face of each tap-drill cut. Each
+   * placement gets its own cylinder (radius = drillDia/2 − tiny
+   * inset to sit just inside the carved face) with a procedural
+   * canvas texture that repeats every `pitch` mm along the axis. */
+  private rebuildCosmeticThreads(threads: CosmeticThread[]): void {
+    while (this.cosmeticThreadGroup.children.length > 0) {
+      const child = this.cosmeticThreadGroup.children[0] as THREE.Mesh;
+      this.cosmeticThreadGroup.remove(child);
+      child.geometry?.dispose?.();
+      const mat = child.material as THREE.Material | THREE.Material[];
+      if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+      else mat?.dispose?.();
+    }
+    if (threads.length === 0) return;
+    // Reusable ray + temporary vectors for through-all length probes.
+    const probe = new THREE.Raycaster();
+    const probeOrigin = new THREE.Vector3();
+    for (const t of threads) {
+      const dir = new THREE.Vector3(t.axis[0], t.axis[1], t.axis[2]);
+      if (dir.lengthSq() < 1e-9) continue;
+      // Default length = the requested depth (or 200mm fallback for
+      // Infinity sentinels). For through-all holes, override by
+      // raycasting from inside the body along the hole axis to find
+      // the exit face — the shell stops at the part's far surface.
+      let len = Number.isFinite(t.depth) ? Math.min(t.depth, 200) : 200;
+      if (t.fitToBody) {
+        const norm = dir.clone().normalize();
+        // Start the ray a hair inside the body so the entry face
+        // doesn't itself get hit. 0.01mm offset is well below any
+        // face mesh resolution we care about.
+        probeOrigin.set(
+          t.position[0] + norm.x * 0.01,
+          t.position[1] + norm.y * 0.01,
+          t.position[2] + norm.z * 0.01,
+        );
+        probe.set(probeOrigin, norm);
+        const hits = probe.intersectObjects(this.faceGroup.children, false);
+        if (hits.length > 0) {
+          // Use the first exit hit + a small slop so the band ends
+          // flush with the far face rather than poking past it.
+          len = Math.max(0.1, hits[0].distance + 0.01);
+        }
+      }
+      // Sit essentially ON the tap-drill face. Tiny inset (0.1%)
+      // just to avoid z-fighting against the existing carved
+      // cylinder; combined with polygonOffset this reads as part
+      // of the face, not a separate cylinder.
+      const r = (t.drillDiameter / 2) * 0.999;
+      const geom = new THREE.CylinderGeometry(r, r, len, 48, 1, true);
+      geom.translate(0, len / 2, 0);
+      // Semi-transparent BLACK stripes: where the band falls, the
+      // drill face renders ~50% darker — looks like shading on the
+      // face. BackSide so the inward-facing wall is what's drawn
+      // (matches the orientation of the carved hole's inside).
+      const mat = new THREE.MeshBasicMaterial({
+        map: this._makeThreadStripeTexture(len, t.pitch),
+        color: 0xffffff, transparent: true,
+        side: THREE.BackSide,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      mesh.quaternion.copy(q);
+      mesh.position.set(t.position[0], t.position[1], t.position[2]);
+      mesh.renderOrder = 18;
+      this.cosmeticThreadGroup.add(mesh);
+    }
+  }
+  /** Build a tiny canvas texture for cosmetic threads: dark amber
+   * bands on a translucent background, repeated along the cylinder
+   * axis at the thread pitch. UV mapping on Three's CylinderGeometry
+   * runs U around the cylinder (0→1) and V along the axis (0→1), so
+   * the V-axis repeat count = length / pitch. */
+  private _makeThreadStripeTexture(length: number, pitch: number): THREE.Texture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 4;     // U direction — pattern is invariant around the cylinder
+    canvas.height = 16;   // V — one full pitch period spans this
+    const ctx = canvas.getContext('2d')!;
+    // Fully transparent base — the existing drill face shows
+    // through between bands so the user reads the pattern as
+    // shading ON the face rather than a separate cylinder.
+    ctx.clearRect(0, 0, 4, 16);
+    // One dark band per period: semi-transparent black, which
+    // darkens whatever's behind it (the body's face color) without
+    // tinting it. ~50% opacity gives a clear stripe without
+    // overwhelming the face material underneath.
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fillRect(0, 0, 4, 7);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    // Number of pitch periods that fit in the cylinder length.
+    const periods = Math.max(1, Math.round(length / Math.max(0.1, pitch)));
+    tex.repeat.set(1, periods);
+    tex.needsUpdate = true;
+    return tex;
+  }
 
   private rebuildProfileFills(fills: ProfileFill[]): void {
     for (const mesh of this.profileFillMeshes.values()) {
@@ -1829,8 +2813,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // last.
     for (const v of vertices) {
       const geom = new THREE.SphereGeometry(1.5, 12, 8);
+      // Invisible by default (opacity 0). The hover handler raises
+      // opacity on the marker under the cursor so the user sees a dot
+      // appear only on the active hover target. Raycaster still hits
+      // transparent materials so the click-pick path continues to work.
       const mat = new THREE.MeshBasicMaterial({
-        color: 0xffd54f, depthTest: false, depthWrite: false, transparent: true, opacity: 0.95,
+        color: 0xffd54f, depthTest: false, depthWrite: false, transparent: true, opacity: 0,
       });
       const mesh = new THREE.Mesh(geom, mat);
       mesh.position.set(v.position[0], v.position[1], v.position[2]);
@@ -1853,6 +2841,405 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (hits.length === 0) return null;
     const ud = hits[0].object.userData as { vertexId?: string };
     return ud.vertexId ?? null;
+  }
+
+  /** Rebuild the axis-pick overlay: one thin cylinder per candidate so the
+   * raycaster (which doesn't pixel-pick THREE.Lines without extra setup)
+   * can hit-test against a real volume. Cylinders are bright orange and
+   * sit on top of all faces (depthTest:false, renderOrder bumped). */
+  private rebuildAxisPickMarkers(
+    candidates: Array<{ id: string; p1: [number, number, number]; p2: [number, number, number]; construction?: boolean }>,
+    selectedId: string | null,
+  ): void {
+    while (this.axisPickGroup.children.length > 0) {
+      const child = this.axisPickGroup.children.pop()!;
+      const mesh = child as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const mat = mesh.material as THREE.Material | undefined;
+      if (mat) Array.isArray(mat) ? mat.forEach(m => m.dispose()) : mat.dispose();
+    }
+    if (candidates.length === 0) return;
+    const upY = new THREE.Vector3(0, 1, 0);
+    for (const c of candidates) {
+      const a = new THREE.Vector3(c.p1[0], c.p1[1], c.p1[2]);
+      const b = new THREE.Vector3(c.p2[0], c.p2[1], c.p2[2]);
+      const dir = new THREE.Vector3().subVectors(b, a);
+      const len = dir.length();
+      if (len < 1e-6) continue;
+      dir.normalize();
+      const geom = new THREE.CylinderGeometry(1.2, 1.2, len, 8, 1, false);
+      const isSelected = c.id === selectedId;
+      const mat = new THREE.MeshBasicMaterial({
+        color: isSelected ? 0xffb74d : 0x42a5f5,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: isSelected ? 0.95 : 0.6,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.copy(a).addScaledVector(dir, len / 2);
+      // CylinderGeometry is oriented along +Y; rotate to match `dir`.
+      mesh.quaternion.setFromUnitVectors(upY, dir);
+      mesh.userData = { axisLineId: c.id };
+      mesh.renderOrder = 12;
+      this.axisPickGroup.add(mesh);
+    }
+  }
+
+  /** Persistent highlight for the currently picked axis. Always visible
+   * (when something is selected) so the user can SEE which sketched line
+   * is the rotation axis without re-entering pick mode. One cylinder,
+   * brighter orange than the in-picker highlight, slightly thicker so it
+   * reads as the "committed" choice vs the "previewing options" state. */
+  private rebuildSelectedAxisHighlight(
+    candidates: Array<{ id: string; p1: [number, number, number]; p2: [number, number, number]; construction?: boolean }>,
+    selectedId: string | null,
+  ): void {
+    while (this.selectedAxisHighlightGroup.children.length > 0) {
+      const child = this.selectedAxisHighlightGroup.children.pop()!;
+      const mesh = child as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const mat = mesh.material as THREE.Material | undefined;
+      if (mat) Array.isArray(mat) ? mat.forEach(m => m.dispose()) : mat.dispose();
+    }
+    if (!selectedId) return;
+    const cand = candidates.find(c => c.id === selectedId);
+    if (!cand) return;
+    const a = new THREE.Vector3(cand.p1[0], cand.p1[1], cand.p1[2]);
+    const b = new THREE.Vector3(cand.p2[0], cand.p2[1], cand.p2[2]);
+    const dir = new THREE.Vector3().subVectors(b, a);
+    const len = dir.length();
+    if (len < 1e-6) return;
+    dir.normalize();
+    // Slightly thicker than the picker cylinders (1.2) and a more
+    // saturated orange so it reads as "committed" rather than a hover.
+    const geom = new THREE.CylinderGeometry(1.6, 1.6, len, 12, 1, false);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xff8a00,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.95,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.copy(a).addScaledVector(dir, len / 2);
+    const upY = new THREE.Vector3(0, 1, 0);
+    mesh.quaternion.setFromUnitVectors(upY, dir);
+    mesh.renderOrder = 13;  // above the axisPickGroup (12) so it stays visible during pick mode too
+    this.selectedAxisHighlightGroup.add(mesh);
+  }
+
+  /** Paint a thick bright line on top of the edge with the given id.
+   * Cheap: just one polyline per call. Used by Convert Entities to
+   * preview which edge will be projected on the next click. */
+  private _rebuildEdgeHoverHighlight(edgeId: string | null, pickedEdgeIds: Set<string> = new Set()): void {
+    while (this.edgeHoverHighlightGroup.children.length > 0) {
+      const child = this.edgeHoverHighlightGroup.children.pop()!;
+      const obj = child as THREE.Line;
+      obj.geometry?.dispose();
+      const mat = obj.material as THREE.Material | undefined;
+      if (mat) Array.isArray(mat) ? mat.forEach(m => m.dispose()) : mat.dispose();
+    }
+    // Helper: copy the stored line's positions into a fresh
+    // BufferGeometry and add a line to the highlight group with the
+    // given color/opacity. Returns silently if the edge id isn't in
+    // faceEdges (e.g. between regens).
+    const addOverlay = (id: string, color: number, opacity: number) => {
+      const stored = this.faceEdges.get(`edge:${id}`);
+      if (!stored) return;
+      const src = stored.front.geometry as THREE.BufferGeometry;
+      const positionAttr = src.getAttribute('position');
+      if (!positionAttr) return;
+      const positions = new Float32Array(positionAttr.array as ArrayLike<number>);
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const mat = new THREE.LineBasicMaterial({
+        color,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity,
+        linewidth: 3,
+      });
+      const line = new THREE.Line(geom, mat);
+      line.renderOrder = 14;  // above face hover, above selected-axis
+      this.edgeHoverHighlightGroup.add(line);
+    };
+    // Sticky picked edges first (medium-blue), then the transient
+    // hover edge on top (bright orange). If the hovered edge is also
+    // in the picked set, the hover color wins via paint order.
+    for (const id of pickedEdgeIds) {
+      if (id === edgeId) continue;  // skip — hover overlay covers it
+      addOverlay(id, 0x1976d2, 0.95);
+    }
+    if (edgeId) addOverlay(edgeId, 0xff8a00, 0.95);
+  }
+
+  /** Apply / clear sticky highlight on picked vertex markers. Markers
+   * are invisible (opacity 0) by default; ids in `pickedIds` get raised
+   * to full opacity in the picked color. Updates every regen + every
+   * pickedVertexIds change. */
+  private _applyPickedVertexMarkers(pickedIds: Set<string>): void {
+    for (const [id, mesh] of this.vertexPickMeshes) {
+      const m = mesh.material as THREE.MeshBasicMaterial;
+      // The hover handler (updateVertexHover) may have overridden
+      // opacity for the cursor target; resetting here is fine —
+      // updateVertexHover re-applies on the next pointermove.
+      if (pickedIds.has(id)) {
+        m.color.setHex(0x1976d2);
+        m.opacity = 0.95;
+      } else if (id !== this.lastHoveredVertexId) {
+        m.color.setHex(0xffd54f);
+        m.opacity = 0;
+      }
+    }
+  }
+
+  /** Rebuild the datum-plane preview overlay. One translucent square
+   * oriented to the computed plane, sized relative to the model. Null
+   * input clears the overlay. */
+  private _rebuildDatumPlanePreview(
+    pv: { origin: [number, number, number]; xAxis: [number, number, number]; yAxis: [number, number, number]; normal: [number, number, number] } | null,
+  ): void {
+    while (this.datumPlanePreviewGroup.children.length > 0) {
+      const child = this.datumPlanePreviewGroup.children.pop()!;
+      const m = (child as THREE.Mesh | THREE.Line).geometry;
+      if (m) m.dispose();
+      const mat = (child as any).material as THREE.Material | undefined;
+      if (mat) (Array.isArray(mat) ? mat.forEach(x => x.dispose()) : mat.dispose());
+    }
+    if (!pv) return;
+    // Size the quad relative to the model so it stays visually
+    // proportional regardless of part scale. Fall back to a fixed
+    // 80mm side when no model is loaded yet.
+    const box = new THREE.Box3().setFromObject(this.faceGroup);
+    const diag = box.isEmpty() ? 80 : box.getSize(new THREE.Vector3()).length();
+    const size = Math.max(40, diag * 0.6);
+    // Build a quad spanning [-s/2, +s/2] in the plane's basis, anchored
+    // at the plane origin. Two triangles via PlaneGeometry, then
+    // orient via the basis vectors.
+    const geom = new THREE.PlaneGeometry(size, size);
+    // Default PlaneGeometry lies in XY with normal +Z. We rotate so
+    // its normal aligns with the target plane's normal by constructing
+    // a basis matrix from xAxis/yAxis/normal directly.
+    const m4 = new THREE.Matrix4();
+    m4.makeBasis(
+      new THREE.Vector3(pv.xAxis[0], pv.xAxis[1], pv.xAxis[2]),
+      new THREE.Vector3(pv.yAxis[0], pv.yAxis[1], pv.yAxis[2]),
+      new THREE.Vector3(pv.normal[0], pv.normal[1], pv.normal[2]),
+    );
+    m4.setPosition(pv.origin[0], pv.origin[1], pv.origin[2]);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffb74d,
+      transparent: true,
+      opacity: 0.22,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.applyMatrix4(m4);
+    mesh.renderOrder = 11;
+    this.datumPlanePreviewGroup.add(mesh);
+    // Edge outline so the plane reads as bordered even when the fill
+    // is faint. Cheap: build a closed loop from the four corners.
+    const half = size / 2;
+    const corners: THREE.Vector3[] = [
+      new THREE.Vector3(-half, -half, 0),
+      new THREE.Vector3( half, -half, 0),
+      new THREE.Vector3( half,  half, 0),
+      new THREE.Vector3(-half,  half, 0),
+      new THREE.Vector3(-half, -half, 0),
+    ];
+    const lineGeom = new THREE.BufferGeometry().setFromPoints(corners);
+    const lineMat = new THREE.LineBasicMaterial({ color: 0xffb74d, transparent: true, opacity: 0.9 });
+    const outline = new THREE.Line(lineGeom, lineMat);
+    outline.applyMatrix4(m4);
+    outline.renderOrder = 12;
+    this.datumPlanePreviewGroup.add(outline);
+  }
+
+  /** Rebuild the pattern preview overlay. Clones every mesh in
+   * `faceGroup` (the live body geometry) once per transform in the
+   * preview's list, applies the transform's Matrix4, and renders the
+   * clone in a ghost material. Translates / rotates / mirrors are
+   * supported one-to-one with the kernel's PatternTransform enum.
+   * REQ 658. */
+  private _rebuildPatternPreview(
+    pv: {
+      kind: 'mirror' | 'linearPattern' | 'circularPattern';
+      transforms: Array<
+        | { kind: 'translate'; dx: number; dy: number; dz: number }
+        | { kind: 'rotate'; origin: [number, number, number]; direction: [number, number, number]; angleRad: number }
+        | { kind: 'mirror'; origin: [number, number, number]; normal: [number, number, number] }
+      >;
+    } | null,
+  ): void {
+    while (this.patternPreviewGroup.children.length > 0) {
+      const child = this.patternPreviewGroup.children.pop()!;
+      const m = (child as THREE.Mesh).geometry;
+      if (m) m.dispose();
+      const mat = (child as any).material as THREE.Material | undefined;
+      if (mat) (Array.isArray(mat) ? mat.forEach(x => x.dispose()) : mat.dispose());
+    }
+    if (!pv || pv.transforms.length === 0) return;
+    if (this.faceGroup.children.length === 0) return;
+    // One ghost material shared across every cloned mesh — cheap, and
+    // hover/selection don't interact with the preview group (it never
+    // ends up in the raycast list).
+    const ghostMat = new THREE.MeshBasicMaterial({
+      color: 0xffb74d,
+      transparent: true,
+      opacity: 0.35,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    // When the upstream body is multi-solid (e.g. user is creating a
+    // new pattern downstream of an existing pattern), `faceGroup`
+    // contains faces from every solid. Cloning the whole thing at each
+    // transform would show "pattern of a pattern" — N transforms × M
+    // solids ghosts — which the user reads as wrong. For linear /
+    // circular preview, restrict the source set to ONE solid so the
+    // preview is N ghosts (one per transform). Mirror keeps everything
+    // because reflecting a single solid hides what the actual mirror
+    // does to the rest of the body. Pick the lexically-smallest body
+    // suffix as "the source solid" — arbitrary but stable. Faces
+    // outside a multi-solid context (no body suffix) all pass through.
+    const sourceMeshes = pv.kind === 'mirror'
+      ? this.faceGroup.children
+      : filterToFirstBody(this.faceGroup.children);
+    for (const t of pv.transforms) {
+      const m4 = patternTransformToMatrix4(t);
+      for (const src of sourceMeshes) {
+        const srcMesh = src as THREE.Mesh;
+        if (!srcMesh.geometry) continue;
+        const clone = new THREE.Mesh(srcMesh.geometry, ghostMat);
+        clone.applyMatrix4(m4);
+        clone.matrixAutoUpdate = false;
+        clone.updateMatrix();
+        clone.renderOrder = 11;
+        this.patternPreviewGroup.add(clone);
+      }
+    }
+  }
+
+  /** Rebuild the shell preview overlay. For each picked face id,
+   * find the corresponding mesh in `faceGroup` and clone it with a
+   * translucent red material so the user sees what faces will be cut
+   * away. Faces that no longer exist in faceGroup (e.g. between
+   * regens) silently drop out — re-picking refreshes them. REQ 659. */
+  private _rebuildShellPreview(
+    pv: { faceIds: string[]; thickness: number; direction: 'inward' | 'outward' } | null,
+  ): void {
+    while (this.shellPreviewGroup.children.length > 0) {
+      const child = this.shellPreviewGroup.children.pop()!;
+      const g = (child as THREE.Mesh).geometry;
+      if (g) g.dispose();
+      const mat = (child as any).material as THREE.Material | undefined;
+      if (mat) (Array.isArray(mat) ? mat.forEach(x => x.dispose()) : mat.dispose());
+    }
+    if (!pv || pv.faceIds.length === 0) return;
+    // Distinct red overlay — different from the orange used for
+    // datum-plane / pattern previews so "this gets removed" reads as
+    // destructive at a glance, not just "selected".
+    const removeMat = new THREE.MeshBasicMaterial({
+      color: 0xe53935,
+      transparent: true,
+      opacity: 0.45,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      // Push the overlay slightly forward so it wins the depth test
+      // against the underlying body face it's mirroring (otherwise
+      // GPU z-fighting splotches red and base color).
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const wanted = new Set(pv.faceIds);
+    for (const src of this.faceGroup.children) {
+      const ud = (src as THREE.Object3D).userData as { faceId?: string };
+      if (!ud.faceId || !wanted.has(ud.faceId)) continue;
+      const srcMesh = src as THREE.Mesh;
+      if (!srcMesh.geometry) continue;
+      const clone = new THREE.Mesh(srcMesh.geometry, removeMat);
+      clone.renderOrder = 12;
+      this.shellPreviewGroup.add(clone);
+    }
+  }
+
+  /** Rebuild the 3D fillet/chamfer preview overlay. For each picked
+   * edge: copy its geometry into a bright highlight line, plus a
+   * translucent tube (fillet — radius = value) or two parallel offset
+   * lines (chamfer — distance = value) so the user sees the blend
+   * extent before committing. Edges that no longer exist in `faceEdges`
+   * (e.g. between regens) fall back to a straight line between the
+   * stored endpoints. */
+  private _rebuildEdgeBlendPreview(
+    pv: { kind: 'fillet' | 'chamfer'; value: number; edges: Array<{ edgeId: string; start: [number, number, number]; end: [number, number, number] }> } | null,
+  ): void {
+    while (this.edgeBlendPreviewGroup.children.length > 0) {
+      const child = this.edgeBlendPreviewGroup.children.pop()!;
+      const obj = child as THREE.Line | THREE.Mesh;
+      (obj as any).geometry?.dispose();
+      const mat = (obj as any).material as THREE.Material | undefined;
+      if (mat) Array.isArray(mat) ? mat.forEach(m => m.dispose()) : mat.dispose();
+    }
+    if (!pv || pv.edges.length === 0) return;
+    // Compute model-relative tube radius. WebGL's LineBasicMaterial.linewidth
+    // is fixed at 1px regardless of value, so for a visible highlight we
+    // sweep a thin tube along the edge instead. 0.4% of the model diagonal
+    // gives a fat colored line that reads well at any zoom.
+    const modelBox = new THREE.Box3().setFromObject(this.faceGroup);
+    const diag = modelBox.isEmpty() ? 1 : modelBox.getSize(new THREE.Vector3()).length();
+    const tubeRadius = Math.max(0.05, diag * 0.004);
+    const isFillet = pv.kind === 'fillet';
+    const highlightColor = isFillet ? 0x42a5f5 : 0xffb74d;
+    const highlightMat = new THREE.MeshBasicMaterial({
+      color: highlightColor,
+      // depthTest off so the highlight sits on top of the body without
+      // z-fighting with the actual edge lines or the face it lives on.
+      depthTest: false, depthWrite: false,
+      transparent: true, opacity: 0.95,
+    });
+
+    for (const e of pv.edges) {
+      // Prefer the analytic polyline from the topology-edge group (smooth
+      // curves); fall back to a straight segment between stored endpoints
+      // when the edge id no longer matches (post-regen renumbering).
+      let curvePoints: THREE.Vector3[] | null = null;
+      for (const obj of this.edgeGroup.children) {
+        const ud = (obj as any).userData as { edgeId?: string } | undefined;
+        if (ud?.edgeId === e.edgeId && (obj as any).geometry?.getAttribute?.('position')) {
+          const a = (obj as any).geometry.getAttribute('position').array as ArrayLike<number>;
+          const pts: THREE.Vector3[] = [];
+          for (let i = 0; i < a.length; i += 3) pts.push(new THREE.Vector3(a[i], a[i + 1], a[i + 2]));
+          if (pts.length >= 2) { curvePoints = pts; break; }
+        }
+      }
+      if (!curvePoints) {
+        curvePoints = [new THREE.Vector3(...e.start), new THREE.Vector3(...e.end)];
+      }
+      // Skip degenerate (zero-length) edges — TubeGeometry rejects them
+      // and a zero-length highlight reads as visual noise.
+      let span = 0;
+      for (let i = 0; i + 1 < curvePoints.length; i++) span += curvePoints[i].distanceTo(curvePoints[i + 1]);
+      if (span < 1e-6) continue;
+      const curve = new THREE.CatmullRomCurve3(curvePoints, false, 'catmullrom', 0.0);
+      const tubularSegments = Math.max(8, curvePoints.length * 2);
+      const tubeGeom = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, 8, false);
+      const mesh = new THREE.Mesh(tubeGeom, highlightMat);
+      mesh.renderOrder = 14;
+      this.edgeBlendPreviewGroup.add(mesh);
+    }
+  }
+
+  /** Raycast against axis-pick overlay. Only called when axisPickMode is on. */
+  private pickAxis(): string | null {
+    if (!this.axisPickGroup.visible || this.axisPickGroup.children.length === 0) return null;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(this.axisPickGroup.children, false);
+    if (hits.length === 0) return null;
+    const ud = hits[0].object.userData as { axisLineId?: string };
+    return ud.axisLineId ?? null;
   }
 
   /** Raycast against the profile-fill overlay. Returns the loop index
@@ -1994,18 +3381,29 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * The single-click vs drag disambiguation is in `attachDimensionDrag-
    * Handlers`; double-click is wired separately. Selected dimensions
    * render in orange so the user can see what Delete will remove. */
-  private buildDimensionLabelElement(constraintId: string, text: string): HTMLDivElement {
+  private buildDimensionLabelElement(constraintId: string, text: string, drivenExpr: string | null = null): HTMLDivElement {
     const isSelected = this.selectedConstraintId() === constraintId;
     const div = document.createElement('div');
-    div.textContent = text;
+    // Prefix a Σ glyph + style differently when the dim is driven by
+    // an equation — same color family as the equation panel's badge so
+    // they read as the same concept. Tooltip surfaces the expression
+    // text on hover.
+    if (drivenExpr !== null) {
+      div.textContent = `Σ ${text}`;
+      div.title = `= ${drivenExpr}`;
+    } else {
+      div.textContent = text;
+    }
     div.dataset['constraintId'] = constraintId;
+    const drivenColor = '#ffc107';
     Object.assign(div.style, {
       padding: '2px 4px',
-      color: isSelected ? '#ffb74d' : '#ffeb3b',
+      color: isSelected ? '#ffb74d' : (drivenExpr !== null ? drivenColor : '#ffeb3b'),
       textShadow:
         '0 0 2px #000, 0 0 2px #000, 1px 0 0 #000, -1px 0 0 #000,'
         + ' 0 1px 0 #000, 0 -1px 0 #000',
       font: (isSelected ? '700' : '500') + ' 12px monospace',
+      fontStyle: drivenExpr !== null ? 'italic' : 'normal',
       whiteSpace: 'nowrap',
       userSelect: 'none',
       cursor: 'move',
@@ -2032,15 +3430,18 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * type immediately. */
   private buildDimensionEditorElement(
     constraintId: string, value: number, isAngle: boolean,
-    dimUnit: Unit | undefined, defaultUnit: Unit,
+    dimUnit: Unit | undefined, defaultUnit: Unit, drivenExpr: string | null = null,
   ): HTMLInputElement {
     const input = document.createElement('input');
     input.type = 'text';
     input.inputMode = 'decimal';
-    // Pre-fill: angle → degrees; length → value in the dim's effective
-    // unit. When the dim has an explicit non-default unit, include the
-    // suffix so the user can see and re-type the unit easily.
-    if (isAngle) {
+    // Pre-fill: when driven by an equation, show `=expression` so the
+    // user edits the binding instead of overwriting it accidentally with
+    // a literal. Otherwise: angle → degrees; length → value in the dim's
+    // effective unit with a unit suffix.
+    if (drivenExpr !== null) {
+      input.value = `=${drivenExpr}`;
+    } else if (isAngle) {
       input.value = formatNumber(value * 180 / Math.PI);
     } else {
       // Always include the unit suffix so the user sees and can re-type
@@ -2109,13 +3510,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // are visible.
     if (isActive) {
       const editingId = this.editingDimensionId();
+      const driven = this.drivenDimensions();
       for (const dim of dimensionRenders(sketch.state, this.defaultUnit())) {
         this.addDimensionLines(group, sketch, dim, 0xffeb3b);
         const constraint = sketch.state.constraints.find(c => c.id === dim.constraintId);
         const isEditing = dim.constraintId === editingId;
+        const drivenExpr = driven[dim.constraintId] ?? null;
         const el = isEditing
-          ? this.buildDimensionEditorElement(dim.constraintId, constraint?.value ?? 0, constraint?.type === 'angle', constraint?.unit, this.defaultUnit())
-          : this.buildDimensionLabelElement(dim.constraintId, dim.text);
+          ? this.buildDimensionEditorElement(dim.constraintId, constraint?.value ?? 0, constraint?.type === 'angle', constraint?.unit, this.defaultUnit(), drivenExpr)
+          : this.buildDimensionLabelElement(dim.constraintId, dim.text, drivenExpr);
         const obj = new CSS2DObject(el);
         obj.position.copy(this.project2DTo3D(sketch, dim.labelAnchor));
         group.add(obj);
@@ -2290,7 +3693,17 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       // per-entity analyzer is conservative (false-blues, never false-greens).
       baseColor = determined.has(e.id) ? fixedColor : looseColor;
     }
-    const color = e.construction ? 0x666666 : baseColor;
+    // Convert Entities link — projected entities render in a distinct
+    // violet so the user can tell at a glance which sketch lines track
+    // body edges. Overrides the regular DOF coloring (those entities
+    // are inherently determined by the source). Construction style
+    // (dashed grey) still wins if both flags are set. Source is the
+    // on-edge constraint list (SolidWorks-style link).
+    const isProjected = isProjectedEntity(sketch.state, e.id);
+    let color: number;
+    if (e.construction) color = 0x666666;
+    else if (isProjected) color = 0xab47bc;
+    else color = baseColor;
     const dashed = !!e.construction;
     const selected = selectedSet.has(e.id);
     // Mirror-axis highlight takes precedence over the regular selection
@@ -2302,10 +3715,18 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         // REQ 628 / 631 — sketch endpoints render on top of all faces so
         // they're visible against shaded geometry. Selected points fill in
         // orange and grow slightly so the selection is unambiguous.
+        // Fully-determined points in the active sketch fill green to
+        // match the line/curve "fully constrained" coloring — gives an
+        // at-a-glance view of which corner points still carry free DOFs.
         const r = selected ? 1.6 : 1.1;
+        const isDeterminedNow = isActive && dof !== 'over' && determined.has(e.id);
         const fillColor = selected
           ? 0xffb74d
-          : (e.construction ? 0x888888 : 0xffffff);
+          : e.construction
+            ? 0x888888
+            : isDeterminedNow
+              ? 0x4caf50
+              : 0xffffff;
         const geom = new THREE.SphereGeometry(r, 12, 8);
         const fillMat = new THREE.MeshBasicMaterial({ color: fillColor, depthTest: false });
         const mesh = new THREE.Mesh(geom, fillMat);
@@ -2376,10 +3797,270 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
           ? this.makeThickSketchLine(pts3)
           : this.makeLineSegments(pts3, color, dashed);
       }
+      case 'conic':
+      case 'equation': {
+        // Batch 6 — use the shared tessellator (returns [] for
+        // unsupported conic types or invalid expressions).
+        const pts2D = tessellateEntity(sketch.state, e, DEFAULT_CHORD_TOLERANCE);
+        if (pts2D.length < 2) return null;
+        const pts3 = pts2D.map(project);
+        return selected ? this.makeThickSketchLine(pts3) : this.makeLineSegments(pts3, color, dashed);
+      }
+      case 'text': {
+        return this._buildSketchTextPlane(sketch, e, project, color);
+      }
+      case 'picture': {
+        return this._buildSketchPicturePlane(sketch, e, project);
+      }
       default:
-        // Phase C entity kinds (ellipticalArc, conic) — not yet rendered.
         return null;
     }
+  }
+
+  /** Batch 6 — render sketch text as outline strokes anchored at
+   * the typographic BASELINE-LEFT. The dashed construction-line
+   * bounding box hugs the glyphs: bottom = baseline, top = cap
+   * height (e.size), left = start of first character, right = end
+   * of last character. The canvas texture extends below the
+   * baseline to accommodate descenders (g, j, p, q, y) but the box
+   * stays at baseline → cap height so it reads as the actual text
+   * extents like in OnShape. */
+  /** Guards a single onFontReady → overlay-rebuild registration while Roboto
+   * is still parsing (text glyph loops are unavailable until then). */
+  private _textFontRebuildArmed = false;
+
+  private _buildSketchTextPlane(
+    sketch: Sketch, e: import('../../../cad/lib/types').TextEntity,
+    project: (p: { x: number; y: number }) => THREE.Vector3,
+    color: number,
+  ): THREE.Object3D | null {
+    // New (cornerIds) flow takes precedence over legacy (anchorId + size).
+    if (e.cornerIds && e.cornerIds.length === 4) {
+      const built = this._buildSketchTextFromCorners(sketch, e, project, color);
+      if (built) return built;
+    }
+    if (e.anchorId === undefined) {
+      // RECOVERY: text entity missing both cornerIds and anchorId.
+      // Try to infer the bounding rectangle from any 4 construction
+      // points that form a rectangle on this sketch. Picks the
+      // SMALLEST rect to avoid grabbing an unrelated outline.
+      const rect = this._inferTextRectFromConstructionRect(sketch);
+      if (rect) {
+        const inferred: import('../../../cad/lib/types').TextEntity = {
+          ...e,
+          cornerIds: [rect.bl, rect.br, rect.tr, rect.tl],
+          text: e.text || 'Text',
+        };
+        return this._buildSketchTextFromCorners(sketch, inferred, project, color);
+      }
+      return null;
+    }
+    const anchor2 = findPoint(sketch.state, e.anchorId);
+    if (!anchor2 || e.size === undefined) return null;
+    // Legacy renderer — synthesize `size` from the entity and run
+    // the same geometry as the new flow over a derived box.
+    const legacySize = e.size;
+    const padding = legacySize * 0.1;
+    const legacyText = (e.text ?? '').replace(/#\{([^}]+)\}/g, (full, name) => {
+      const v = this.textVariables()[String(name).trim()];
+      return v === undefined ? full : v;
+    });
+    // Measure a width using the legacy approach and synthesize the
+    // four corners, then delegate.
+    const fontPxLegacy = 96;
+    const mctxL = document.createElement('canvas').getContext('2d')!;
+    mctxL.font = `${fontPxLegacy}px sans-serif`;
+    const mL = mctxL.measureText(legacyText || ' ');
+    const ascentL = Math.max(1, Math.ceil(mL.actualBoundingBoxAscent));
+    const widthL = Math.max(1, Math.ceil(mL.actualBoundingBoxRight - mL.actualBoundingBoxLeft));
+    const mmPerPxL = legacySize / ascentL;
+    const wMm = widthL * mmPerPxL;
+    const synthEntity: import('../../../cad/lib/types').TextEntity = {
+      kind: 'text', id: e.id, text: e.text,
+      cornerIds: undefined as any,  // sentinel — we pass corners directly via closure
+    };
+    return this._buildSketchTextFromBox(
+      sketch, synthEntity,
+      { x: anchor2.x,        y: anchor2.y },
+      { x: anchor2.x + wMm,  y: anchor2.y },
+      { x: anchor2.x + wMm,  y: anchor2.y + legacySize },
+      { x: anchor2.x,        y: anchor2.y + legacySize },
+      color,
+    );
+  }
+
+  /** Recovery for orphaned text entities: scan the sketch for a
+   * 4-construction-point axis-aligned rectangle and return its
+   * corner ids in BL/BR/TR/TL order. Returns null when no obvious
+   * candidate exists. */
+  private _inferTextRectFromConstructionRect(sketch: Sketch): { bl: string; br: string; tr: string; tl: string } | null {
+    const pts = sketch.state.entities.filter(p => p.kind === 'point' && p.construction === true) as Array<{ id: string; x: number; y: number; kind: 'point' }>;
+    if (pts.length < 4) return null;
+    // Find any 4 points that form an axis-aligned rectangle.
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        const a = pts[i], b = pts[j];
+        if (Math.abs(a.x - b.x) < 1e-3 || Math.abs(a.y - b.y) < 1e-3) continue;
+        const xmin = Math.min(a.x, b.x), xmax = Math.max(a.x, b.x);
+        const ymin = Math.min(a.y, b.y), ymax = Math.max(a.y, b.y);
+        const blP = pts.find(p => Math.abs(p.x - xmin) < 1e-3 && Math.abs(p.y - ymin) < 1e-3);
+        const brP = pts.find(p => Math.abs(p.x - xmax) < 1e-3 && Math.abs(p.y - ymin) < 1e-3);
+        const trP = pts.find(p => Math.abs(p.x - xmax) < 1e-3 && Math.abs(p.y - ymax) < 1e-3);
+        const tlP = pts.find(p => Math.abs(p.x - xmin) < 1e-3 && Math.abs(p.y - ymax) < 1e-3);
+        if (blP && brP && trP && tlP) return { bl: blP.id, br: brP.id, tr: trP.id, tl: tlP.id };
+      }
+    }
+    return null;
+  }
+
+  /** New flow — read the four corner points off the sketch state
+   * and use them as the text bounding box. */
+  private _buildSketchTextFromCorners(
+    sketch: Sketch, e: import('../../../cad/lib/types').TextEntity,
+    _project: (p: { x: number; y: number }) => THREE.Vector3,
+    color: number,
+  ): THREE.Object3D | null {
+    if (!e.cornerIds) return null;
+    const [blId, brId, trId, tlId] = e.cornerIds;
+    const bl = findPoint(sketch.state, blId);
+    const br = findPoint(sketch.state, brId);
+    const tr = findPoint(sketch.state, trId);
+    const tl = findPoint(sketch.state, tlId);
+    if (!bl || !br || !tr || !tl) return null;
+    return this._buildSketchTextFromBox(sketch, e,
+      { x: bl.x, y: bl.y },
+      { x: br.x, y: br.y },
+      { x: tr.x, y: tr.y },
+      { x: tl.x, y: tl.y },
+      color);
+  }
+
+  /** Shared text-render path. Box corners come from cornerIds (new
+   * flow) or a synthesized rect (legacy). Width / height of the box
+   * dictate the rendered text's stretch + size. */
+  private _buildSketchTextFromBox(
+    sketch: Sketch, e: import('../../../cad/lib/types').TextEntity,
+    bl: { x: number; y: number },
+    br: { x: number; y: number },
+    tr: { x: number; y: number },
+    tl: { x: number; y: number },
+    color: number,
+  ): THREE.Object3D | null {
+    const boxW = Math.hypot(br.x - bl.x, br.y - bl.y);
+    const boxH = Math.hypot(tl.x - bl.x, tl.y - bl.y);
+    // Drop only on EXACTLY-degenerate boxes. Tiny ones still get a
+    // tiny preview rather than disappearing — useful while the
+    // solver settles a dimension that briefly collapses the box.
+    if (boxW < 1e-6 || boxH < 1e-6) return null;
+    const displayText = (e.text ?? '').replace(/#\{([^}]+)\}/g, (full, name) => {
+      const v = this.textVariables()[String(name).trim()];
+      return v === undefined ? full : v;
+    });
+    // Render the SAME Roboto glyph outlines the extrude path consumes
+    // (textGlyphs.tryGlyphLoopsForText → profile.extractClosedLoops), so the
+    // in-sketch text and the extrude footprint are byte-for-byte identical
+    // geometry — no more sans-serif-vs-Roboto mismatch. Loops come back in
+    // sketch 2D coords anchored at the box's bottom-left; project each through
+    // the sketch plane and draw as plain line geometry (same material/colour
+    // as ordinary sketch lines).
+    const justify = e.justify ?? 'left';
+    const mirror = !!e.mirror;
+    const group = new THREE.Group();
+    // The box + centerline are REAL construction geometry that rotates with the
+    // box (rotateTextBox moves the corner points), so the dispatcher renders
+    // them normally — nothing to draw here. Glyphs are laid out axis-aligned
+    // then mapped onto the box basis so they follow the rotated corners.
+    // Single-line engraving font — open stroke centrelines (built-in, no async
+    // load). These don't extrude (open), but render in the sketch.
+    if (e.font === 'singleLine') {
+      const strokes = singleLineStrokesForText(displayText, { x: bl.x, y: bl.y }, boxH, justify, boxW);
+      const strokeLoops = strokes.map(s => s.map(([x, y]) => ({ x, y })));
+      const tStrokes = applyTextTransform(strokeLoops, bl, br, tl, boxW, boxH, mirror);
+      for (const s of tStrokes) {
+        if (s.length < 2) continue;
+        group.add(this.makeLineSegments(s.map(p => this.project2DTo3D(sketch, p)), color, false));
+      }
+      if (group.children.length === 0) return null;
+      group.userData = { entityId: e.id };
+      return group;
+    }
+    const loops = tryGlyphLoopsForText(displayText, { x: bl.x, y: bl.y }, boxH, justify, boxW);
+    if (loops === null) {
+      // Font still parsing — re-render the overlay once Roboto lands.
+      if (!this._textFontRebuildArmed) {
+        this._textFontRebuildArmed = true;
+        onFontReady(() => {
+          this._textFontRebuildArmed = false;
+          if (this.scene) {
+            this.syncSketches(this.sketchDoc(), this.activeSketchId(),
+              this.selectedSketchEntities(), this.mirrorAxisId());
+          }
+        });
+      }
+      return null;
+    }
+    // Map glyphs onto the box basis (rotation/mirror via the corners) — matches
+    // the extrude path.
+    const transformed = applyTextTransform(loops, bl, br, tl, boxW, boxH, mirror);
+    for (const loop of transformed) {
+      if (loop.length < 2) continue;
+      const pts = loop.map(p => this.project2DTo3D(sketch, p));
+      group.add(this.makeLineSegments(pts, color, false));
+    }
+    // Dashed box for legacy (anchorId) entities only — they have no real
+    // construction lines.
+    if (!e.cornerIds) {
+      const w = (p: { x: number; y: number }) => this.project2DTo3D(sketch, p);
+      const lineMat = new THREE.LineDashedMaterial({
+        color: 0x666666, dashSize: boxH * 0.06, gapSize: boxH * 0.04,
+        depthWrite: false, transparent: true, opacity: 0.7,
+      });
+      const boxGeom = new THREE.BufferGeometry().setFromPoints([w(bl), w(br), w(tr), w(tl), w(bl)]);
+      const boxLine = new THREE.Line(boxGeom, lineMat);
+      boxLine.computeLineDistances();
+      group.add(boxLine);
+    }
+    if (group.children.length === 0) return null;
+    group.userData = { entityId: e.id };
+    return group;
+  }
+
+  /** Batch 6 — render sketch picture as a textured plane anchored
+   * at `anchorId`. Reuses the same plane-orientation math as text. */
+  private _buildSketchPicturePlane(
+    sketch: Sketch, e: import('../../../cad/lib/types').PictureEntity,
+    project: (p: { x: number; y: number }) => THREE.Vector3,
+  ): THREE.Object3D | null {
+    const anchor2 = findPoint(sketch.state, e.anchorId);
+    if (!anchor2) return null;
+    const tex = new THREE.TextureLoader().load(e.src);
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    const geom = new THREE.PlaneGeometry(e.width, e.height);
+    geom.translate(e.width / 2, e.height / 2, 0);
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, opacity: e.opacity,
+      side: THREE.DoubleSide, depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    const p3 = this.project2DTo3D(sketch, { x: anchor2.x, y: anchor2.y });
+    mesh.position.copy(p3);
+    const m = new THREE.Matrix4().makeBasis(
+      new THREE.Vector3(sketch.plane.xAxis[0], sketch.plane.xAxis[1], sketch.plane.xAxis[2]),
+      new THREE.Vector3(sketch.plane.yAxis[0], sketch.plane.yAxis[1], sketch.plane.yAxis[2]),
+      new THREE.Vector3(sketch.plane.normal[0], sketch.plane.normal[1], sketch.plane.normal[2]),
+    );
+    // Apply rotation about the sketch normal AFTER the plane orientation.
+    if (e.rotation !== 0) {
+      const rotM = new THREE.Matrix4().makeRotationAxis(
+        new THREE.Vector3(sketch.plane.normal[0], sketch.plane.normal[1], sketch.plane.normal[2]).normalize(),
+        e.rotation,
+      );
+      m.premultiply(rotM);
+    }
+    mesh.quaternion.setFromRotationMatrix(m);
+    mesh.userData = { entityId: e.id };
+    return mesh;
   }
 
   // REQ 631 — selected sketch lines render via Line2 (thick, pixel linewidth)
@@ -2412,14 +4093,19 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     return line;
   }
 
-  private recolor(selected: string | null, hovered: string | null, selectedFeatures: Set<string> = new Set()) {
+  private recolor(selected: string | null, hovered: string | null, selectedFeatures: Set<string> = new Set(), pickedFaces: Set<string> = new Set()) {
+    // Colors: single-face selection in deep blue (CAM-style), picker-
+    // set faces in medium blue (sticky), feature multi-select in
+    // orange, hover in lighter cyan-blue (transient preview).
+    // Priority: hover > selected > picked > feature-select > default.
     for (const [id, mesh] of this.faceMeshes) {
       const mat = mesh.material as THREE.MeshStandardMaterial;
       const ud = mesh.userData as { featureId?: string | null };
       const ownFeatureSelected = ud.featureId != null && selectedFeatures.has(ud.featureId);
-      if (id === selected) mat.color.setHex(0xec407a);
-      else if (ownFeatureSelected) mat.color.setHex(0xffb74d);  // orange for multi-select
-      else if (id === hovered) mat.color.setHex(0xffeb3b);
+      if (id === hovered) mat.color.setHex(0x40c4ff);
+      else if (id === selected) mat.color.setHex(0x0066cc);
+      else if (pickedFaces.has(id)) mat.color.setHex(0x1976d2);
+      else if (ownFeatureSelected) mat.color.setHex(0xffb74d);
       else mat.color.setHex(0x8aa0c4);
     }
     for (const [id, obj] of this.datumMeshes) {
@@ -2440,4 +4126,84 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       });
     }
   }
+}
+
+/** Extract the body-suffix index from a face id JSON string. Face IDs
+ * encode the OCCT persistent name like
+ * `{"feature_id":"f3#pattern#body2","role":"side","sub_index":4,…}`;
+ * the `#bodyN` part identifies which OCCT solid (when the body is a
+ * compound). Returns null when no body suffix is present — single-
+ * solid bodies skip the suffix entirely. */
+function _bodyIndexFromFaceId(raw: string | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw) as { feature_id?: string };
+    const fid = obj.feature_id ?? '';
+    const m = /#body([^#]+)$/.exec(fid);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Return only the face meshes whose face id's body suffix matches the
+ * lexically-smallest one in the set. Used by the pattern preview to
+ * pick a single "source instance" out of a multi-solid upstream body
+ * (e.g. a downstream pattern after an existing pattern). Meshes
+ * without a body suffix are treated as belonging to the same source
+ * and pass through. REQ 658. */
+function filterToFirstBody(children: THREE.Object3D[]): THREE.Object3D[] {
+  let smallest: string | null = null;
+  let anyHadSuffix = false;
+  for (const c of children) {
+    const id = _bodyIndexFromFaceId((c.userData as { faceId?: string }).faceId);
+    if (id !== null) {
+      anyHadSuffix = true;
+      if (smallest === null || id < smallest) smallest = id;
+    }
+  }
+  if (!anyHadSuffix || smallest === null) return children;
+  return children.filter(c => {
+    const id = _bodyIndexFromFaceId((c.userData as { faceId?: string }).faceId);
+    return id === null || id === smallest;
+  });
+}
+
+/** Convert a kernel-protocol PatternTransform into a Three.js Matrix4
+ * matching the gp_Trsf the kernel would build server-side. Used by the
+ * pattern preview to ghost the body at each transform position. The
+ * matrix multiplication order here mirrors OCCT's BRepBuilderAPI_Transform
+ * semantics (transform applied to model coords). REQ 658. */
+function patternTransformToMatrix4(
+  t:
+    | { kind: 'translate'; dx: number; dy: number; dz: number }
+    | { kind: 'rotate'; origin: [number, number, number]; direction: [number, number, number]; angleRad: number }
+    | { kind: 'mirror'; origin: [number, number, number]; normal: [number, number, number] },
+): THREE.Matrix4 {
+  if (t.kind === 'translate') {
+    return new THREE.Matrix4().makeTranslation(t.dx, t.dy, t.dz);
+  }
+  if (t.kind === 'rotate') {
+    // Compose: T(origin) · R(axis, angle) · T(-origin) so the rotation
+    // pivots through `origin` rather than through the world origin.
+    const axis = new THREE.Vector3(t.direction[0], t.direction[1], t.direction[2]).normalize();
+    const rot = new THREE.Matrix4().makeRotationAxis(axis, t.angleRad);
+    const toOrigin = new THREE.Matrix4().makeTranslation(-t.origin[0], -t.origin[1], -t.origin[2]);
+    const fromOrigin = new THREE.Matrix4().makeTranslation(t.origin[0], t.origin[1], t.origin[2]);
+    return new THREE.Matrix4().multiplyMatrices(fromOrigin, rot).multiply(toOrigin);
+  }
+  // Mirror: build a Householder reflection across the plane through
+  // `origin` with normal `normal`. Same composition trick as rotate —
+  // translate so the plane goes through world origin, reflect, then
+  // translate back.
+  const n = new THREE.Vector3(t.normal[0], t.normal[1], t.normal[2]).normalize();
+  const refl = new THREE.Matrix4().set(
+    1 - 2 * n.x * n.x,     -2 * n.x * n.y,     -2 * n.x * n.z, 0,
+        -2 * n.x * n.y, 1 - 2 * n.y * n.y,     -2 * n.y * n.z, 0,
+        -2 * n.x * n.z,     -2 * n.y * n.z, 1 - 2 * n.z * n.z, 0,
+                     0,                  0,                  0, 1,
+  );
+  const toOrigin = new THREE.Matrix4().makeTranslation(-t.origin[0], -t.origin[1], -t.origin[2]);
+  const fromOrigin = new THREE.Matrix4().makeTranslation(t.origin[0], t.origin[1], t.origin[2]);
+  return new THREE.Matrix4().multiplyMatrices(fromOrigin, refl).multiply(toOrigin);
 }

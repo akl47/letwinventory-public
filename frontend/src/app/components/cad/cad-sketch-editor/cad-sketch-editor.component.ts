@@ -1,43 +1,71 @@
-import { Component, input, output, signal, computed, effect, untracked, OnDestroy, HostListener } from '@angular/core';
+import { Component, inject, input, output, signal, computed, effect, untracked, OnDestroy, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
-import { MatIconModule } from '@angular/material/icon';
+import { MatIconModule, MatIconRegistry } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatMenuModule } from '@angular/material/menu';
+import { DomSanitizer } from '@angular/platform-browser';
+import { registerCadIcons } from '../cad-icons';
 import type {
   SketchDocument, SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity, SketchEntity,
   ConstraintType,
 } from '../../../cad/lib/types';
 import { pointsOf, linesOf, findPoint } from '../../../cad/lib/types';
 import {
-  addPoint, addLine, addCircle, addArc, addConstraint, movePoint, deletePrimitive, emptySketchState,
-  addRectangleCorners, addRectangleCenter, addPolygon, addSlotStraight,
-  addCircle3Points, addArc3Points, addEllipse, addSpline,
-  setConstructionFlag,
+  addPoint, addLine, addCircle, addCircleByPoint, addArc, addArcByPoints, addConstraint, movePoint, deletePrimitive, emptySketchState,
+  addRectangleCorners, addRectangleCenter, addRectangle3PtCorner, addRectangle3PtCenter, addParallelogram,
+  addPolygon, addSlotStraight, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
+  addCircle3Points, addArc3Points, addEllipse, addEllipticalArc, addSpline,
+  addParabolaByPoints, addEquationCurve, addText, addTextBoxByCorners, addPicture,
+  setConstructionFlag, mergePoints,
 } from '../../../cad/lib/store';
 import { solveSketch, solveSketchAfterAdd } from '../../../cad/lib/solver';
 import { extractClosedLoops } from '../../../cad/lib/profile';
 import { pickEntity } from '../../../cad/lib/picking';
 import { inferLineEnd, type InferenceResult, type PendingConstraint } from '../../../cad/lib/inference';
-import { findEntity } from '../../../cad/lib/types';
+import { findEntity, isProjectedEntity } from '../../../cad/lib/types';
 import { previewDimension, chooseTwoPointDimType, twoPointDimValue, type DimensionRender } from '../../../cad/lib/dimensions';
 import { analyzeDeterminacy } from '../../../cad/lib/determinacy';
 import {
-  trimAt, extendLine, splitLineAt, offsetCurve, mirrorEntities, filletLines, chamferLines,
+  trimAt, extendLine, splitLineAt, offsetCurve, offsetChain, propagateOffsetSides, mirrorEntities, filletLines, filletLineArc, chamferLines, jogLineAt,
   moveEntities, copyEntities, rotateEntities, scaleEntities,
-  previewTrimLine, previewExtendLine,
+  linearPatternEntities, circularPatternEntities, stretchEntities,
+  findChainedEntities, flipSidePoint,
+  previewTrimLine, previewTrimCircle, previewTrimArc, previewExtendLine,
+  addRoundedRectangleCorners, addRoundedRectangleCenter,
   type ChamferMode,
 } from '../../../cad/lib/sketchEditOps';
 
 type Tool =
-  | 'select' | 'point' | 'line' | 'circle' | 'arc'
-  | 'rect-corner' | 'rect-center' | 'polygon' | 'slot'
-  | 'circle-3pt' | 'arc-3pt' | 'ellipse' | 'spline'
+  | 'select' | 'point' | 'line' | 'centerline' | 'midpoint-line' | 'circle' | 'arc'
+  | 'rect-corner' | 'rect-center' | 'rect-3pt-corner' | 'rect-3pt-center'
+  | 'rect-rounded-corner' | 'rect-rounded-center'
+  | 'parallelogram' | 'polygon'
+  | 'slot' | 'slot-centerpoint' | 'slot-arc-3pt' | 'slot-arc-centerpoint'
+  | 'circle-3pt' | 'arc-3pt' | 'ellipse' | 'partial-ellipse' | 'spline' | 'style-spline'
+  | 'parabola' | 'equation-curve' | 'text' | 'picture'
   | 'circle-perimeter' | 'tangent-arc'
   | 'smart-dim'
-  | 'trim' | 'extend' | 'split' | 'offset' | 'mirror' | 'fillet' | 'chamfer'
-  | 'move' | 'copy' | 'rotate' | 'scale';
-type PendingPoint = { x: number; y: number };
+  | 'trim' | 'extend' | 'split' | 'offset' | 'mirror' | 'dynamic-mirror' | 'fillet' | 'chamfer' | 'jog'
+  | 'move' | 'copy' | 'rotate' | 'scale' | 'stretch'
+  | 'pattern-linear' | 'pattern-circular'
+  | 'convert-entities';
+type PendingPoint = {
+  x: number;
+  y: number;
+  /** When the user's click landed on an existing point entity, the
+   * tools commit the entity using that point's id (via addCircleByPoint
+   * / addArcByPoints) instead of synthesizing a fresh coincident
+   * point. Saves the user from having to add a coincident constraint
+   * afterwards and keeps the sketch dependency graph clean. */
+  pointId?: string;
+  /** Set when the click landed ON an existing line / arc / circle
+   * (including a converted on-edge entity). The tool commits a fresh
+   * point at the projected location and adds a `coincident` constraint
+   * tying it to that curve — SolidWorks-style "click on a line with a
+   * tool drops a coincident-on-curve point". */
+  onCurveId?: string;
+};
 
 interface ConstraintSpec {
   type: ConstraintType;
@@ -53,6 +81,11 @@ interface ConstraintSpec {
    * `vertical-distance` with value 0 — same underlying constraint type,
    * different button affordance. */
   implicitValue?: number;
+  /** Optional one-shot action: when set, applyConstraint dispatches
+   * to a special handler instead of adding a persisted constraint
+   * record. Used by Merge Points, which mutates the entity graph
+   * (collapses two ids into one) rather than emitting a constraint. */
+  action?: 'merge-points';
 }
 
 const CURVE_KINDS = new Set<SketchEntity['kind']>(['circle', 'arc', 'ellipse', 'ellipticalArc']);
@@ -67,11 +100,11 @@ const isPointEntity = (e: SketchEntity) => e.kind === 'point';
 const isCurveEntity = (e: SketchEntity) => CURVE_KINDS.has(e.kind);
 
 const CONSTRAINT_SPECS: ConstraintSpec[] = [
-  { type: 'fixed', label: 'Fix', icon: 'lock',
+  { type: 'fixed', label: 'Fix', icon: 'cad-fixed',
     predicate: es => es.length === 1 && isPointEntity(es[0]) },
   // Coincident is the unified "this is on that" constraint: two points,
   // or a point and any line/curve. The solver dispatches on target kinds.
-  { type: 'coincident', label: 'Coincident', icon: 'merge_type',
+  { type: 'coincident', label: 'Coincident', icon: 'cad-coincident',
     predicate: es => {
       if (es.length !== 2) return false;
       if (es.every(isPointEntity)) return true;
@@ -79,56 +112,56 @@ const CONSTRAINT_SPECS: ConstraintSpec[] = [
       const hasLineOrCurve = es.some(e => isLineEntity(e) || isCurveEntity(e));
       return hasPoint && hasLineOrCurve;
     } },
-  { type: 'horizontal', label: 'Horizontal', icon: 'horizontal_rule',
+  { type: 'horizontal', label: 'Horizontal', icon: 'cad-horizontal',
     predicate: es => es.length === 1 && isLineEntity(es[0]) },
-  { type: 'vertical', label: 'Vertical', icon: 'unfold_more',
+  { type: 'vertical', label: 'Vertical', icon: 'cad-vertical',
     predicate: es => es.length === 1 && isLineEntity(es[0]) },
   // Distance has moved exclusively to Smart Dim — point↔point distance is
   // its primary case (single click → place → type). Leaving a duplicate
   // button on the constraint toolbar caused users to pick the wrong path.
   // `point-on-line` / `point-on-curve` are also gone: both are now expressed
   // as `coincident` and handled above.
-  { type: 'perpendicular', label: 'Perpendicular', icon: 'turn_right',
+  { type: 'perpendicular', label: 'Perpendicular', icon: 'cad-perpendicular',
     predicate: es => es.length === 2 && es.every(isLineEntity) },
-  { type: 'parallel', label: 'Parallel', icon: 'drag_handle',
+  { type: 'parallel', label: 'Parallel', icon: 'cad-parallel',
     predicate: es => es.length === 2 && es.every(isLineEntity) },
-  { type: 'tangent', label: 'Tangent', icon: 'timeline',
+  { type: 'tangent', label: 'Tangent', icon: 'cad-tangent',
     predicate: es => {
       if (es.length !== 2) return false;
       const lines = es.filter(isLineEntity).length;
       const curves = es.filter(isCurveEntity).length;
       return (lines === 1 && curves === 1) || (lines === 0 && curves === 2);
     } },
-  { type: 'equal', label: 'Equal', icon: 'compare_arrows',
+  { type: 'equal', label: 'Equal', icon: 'cad-equal',
     predicate: es => {
       if (es.length !== 2) return false;
       const allLines = es.every(isLineEntity);
       const allCurves = es.every(e => e.kind === 'circle' || e.kind === 'arc');
       return allLines || allCurves;
     } },
-  { type: 'midpoint', label: 'Midpoint', icon: 'vertical_align_center',
+  { type: 'midpoint', label: 'Midpoint', icon: 'cad-midpoint',
     predicate: es => es.length === 2 && es.some(isPointEntity) && es.some(isLineEntity) },
-  { type: 'symmetric', label: 'Symmetric', icon: 'flip',
+  { type: 'symmetric', label: 'Symmetric', icon: 'cad-symmetric',
     predicate: es => es.length === 3 &&
       es.filter(isPointEntity).length === 2 && es.filter(isLineEntity).length === 1 },
-  { type: 'concentric', label: 'Concentric', icon: 'adjust',
+  { type: 'concentric', label: 'Concentric', icon: 'cad-concentric',
     predicate: es => es.length === 2 && es.every(e => e.kind === 'circle' || e.kind === 'arc') },
-  { type: 'coradial', label: 'Coradial', icon: 'donut_large',
+  { type: 'coradial', label: 'Coradial', icon: 'cad-coradial',
     predicate: es => es.length === 2 && es.every(e => e.kind === 'circle' || e.kind === 'arc') },
-  { type: 'collinear', label: 'Collinear', icon: 'linear_scale',
+  { type: 'collinear', label: 'Collinear', icon: 'cad-collinear',
     predicate: es => es.length === 2 && es.every(isLineEntity) },
   // Dimensional constraints — drive a numeric value rather than relate
   // geometry symbolically. Radius/diameter take one circle or arc; angle
   // takes two lines and stores the value in radians.
-  { type: 'radius', label: 'Radius', icon: 'radio_button_unchecked', requiresValue: true,
+  { type: 'radius', label: 'Radius', icon: 'cad-radius', requiresValue: true,
     predicate: es => es.length === 1 && (es[0].kind === 'circle' || es[0].kind === 'arc') },
-  { type: 'diameter', label: 'Diameter', icon: 'all_out', requiresValue: true,
+  { type: 'diameter', label: 'Diameter', icon: 'cad-diameter', requiresValue: true,
     predicate: es => es.length === 1 && (es[0].kind === 'circle' || es[0].kind === 'arc') },
-  { type: 'angle', label: 'Angle', icon: 'rotate_right', requiresValue: true,
+  { type: 'angle', label: 'Angle', icon: 'cad-angle', requiresValue: true,
     predicate: es => es.length === 2 && es.every(isLineEntity) },
-  { type: 'horizontal-distance', label: 'Horizontal distance', icon: 'swap_horiz', requiresValue: true,
+  { type: 'horizontal-distance', label: 'Horizontal distance', icon: 'cad-horizontal-distance', requiresValue: true,
     predicate: es => es.length === 2 && es.every(isPointEntity) },
-  { type: 'vertical-distance', label: 'Vertical distance', icon: 'swap_vert', requiresValue: true,
+  { type: 'vertical-distance', label: 'Vertical distance', icon: 'cad-vertical-distance', requiresValue: true,
     predicate: es => es.length === 2 && es.every(isPointEntity) },
   // Equal-X / Equal-Y: shortcuts that fire horizontal-distance /
   // vertical-distance with value 0. Same underlying constraint type as the
@@ -136,14 +169,22 @@ const CONSTRAINT_SPECS: ConstraintSpec[] = [
   // so the click commits in one shot.
   //   Equal X (same x-coord) ⇒ Δx = 0 ⇒ horizontal-distance(0)
   //   Equal Y (same y-coord) ⇒ Δy = 0 ⇒ vertical-distance(0)
-  { type: 'horizontal-distance', label: 'Equal X', icon: 'align_vertical_center', implicitValue: 0,
+  { type: 'horizontal-distance', label: 'Equal X', icon: 'cad-equal-x', implicitValue: 0,
     predicate: es => es.length === 2 && es.every(isPointEntity) },
-  { type: 'vertical-distance', label: 'Equal Y', icon: 'align_horizontal_center', implicitValue: 0,
+  { type: 'vertical-distance', label: 'Equal Y', icon: 'cad-equal-y', implicitValue: 0,
     predicate: es => es.length === 2 && es.every(isPointEntity) },
-  { type: 'point-line-distance', label: 'Point-line distance', icon: 'straighten', requiresValue: true,
+  { type: 'point-line-distance', label: 'Point-line distance', icon: 'cad-point-line-distance', requiresValue: true,
     predicate: es => es.length === 2 && es.some(isPointEntity) && es.some(isLineEntity) },
-  { type: 'arc-length', label: 'Arc length', icon: 'timeline', requiresValue: true,
+  { type: 'arc-length', label: 'Arc length', icon: 'cad-arc-length', requiresValue: true,
     predicate: es => es.length === 1 && es[0].kind === 'arc' },
+  { type: 'chord-distance', label: 'Chord distance', icon: 'cad-chord-distance', requiresValue: true,
+    predicate: es => es.length === 1 && es[0].kind === 'arc' },
+  // Merge Points: collapse two coincident-by-position points into a
+  // single identity. NOT a persisted constraint — applyConstraint
+  // dispatches to mergePoints(...) in store.ts. SolidWorks lists this
+  // in the Relations dialog so we keep the same UI surface.
+  { type: 'coincident', label: 'Merge Points', icon: 'cad-merge-points', action: 'merge-points',
+    predicate: es => es.length === 2 && es.every(isPointEntity) },
 ];
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -156,43 +197,65 @@ const CONSTRAINT_SPECS: ConstraintSpec[] = [
 interface ToolSpec { tool: Tool; icon: string; label: string; tooltip: string; }
 
 const PRIMITIVE_TOOLS: readonly ToolSpec[] = [
-  { tool: 'point',  icon: 'radio_button_unchecked', label: 'Point',  tooltip: 'Point' },
-  { tool: 'line',   icon: 'show_chart',             label: 'Line',   tooltip: 'Line' },
-  { tool: 'spline', icon: 'gesture',                label: 'Spline', tooltip: 'Spline (click control points, Enter to commit)' },
+  { tool: 'point',          icon: 'cad-point',          label: 'Point',          tooltip: 'Point' },
+  { tool: 'line',           icon: 'cad-line',           label: 'Line',           tooltip: 'Line' },
+  { tool: 'centerline',     icon: 'cad-centerline',     label: 'Centerline',     tooltip: 'Centerline — draws a construction line (dashed, reference-only)' },
+  { tool: 'midpoint-line',  icon: 'cad-midpoint-line',  label: 'Midpoint Line',  tooltip: 'Midpoint Line — draws a line and auto-pins a point to its midpoint' },
+  { tool: 'spline',         icon: 'cad-spline',         label: 'Spline',         tooltip: 'Spline (degree 3, click control points, Enter to commit)' },
+  { tool: 'style-spline',   icon: 'cad-style-spline',   label: 'Style Spline',   tooltip: 'Style Spline (variable degree — prompts for degree at start of gesture)' },
 ];
 
 const CIRCLE_TOOLS: readonly ToolSpec[] = [
-  { tool: 'circle',           icon: 'circle',            label: 'Circle',      tooltip: 'Circle (center + radius)' },
-  { tool: 'circle-perimeter', icon: 'radio_button_checked', label: 'Perim. Circle', tooltip: 'Perimeter circle (two clicks define the diameter)' },
-  { tool: 'arc',              icon: 'roundabout_right',  label: 'Arc',         tooltip: 'Arc (center + endpoints)' },
-  { tool: 'circle-3pt',       icon: 'data_usage',        label: '3-pt Circle', tooltip: 'Circle through 3 points' },
-  { tool: 'arc-3pt',          icon: 'line_curve',        label: '3-pt Arc',    tooltip: 'Arc through 3 points' },
-  { tool: 'tangent-arc',      icon: 'turn_slight_right', label: 'Tangent Arc', tooltip: 'Tangent arc — click an existing endpoint, then the arc end. Arc is tangent to the entity at the picked endpoint' },
-  { tool: 'ellipse',          icon: 'panorama_fish_eye', label: 'Ellipse',     tooltip: 'Ellipse (center + major + minor)' },
+  { tool: 'circle',           icon: 'cad-circle',            label: 'Circle',          tooltip: 'Circle (center + radius)' },
+  { tool: 'circle-perimeter', icon: 'cad-circle-perimeter',  label: 'Perim. Circle',   tooltip: 'Perimeter circle (two clicks define the diameter)' },
+  { tool: 'arc',              icon: 'cad-arc',               label: 'Center Arc',      tooltip: 'Center Arc — click 1: center, click 2: start, click 3: end (3 clicks define a circular arc starting from the center)' },
+  { tool: 'circle-3pt',       icon: 'cad-circle-3pt',        label: '3-pt Circle',     tooltip: 'Circle through 3 points' },
+  { tool: 'arc-3pt',          icon: 'cad-arc-3pt',           label: '3-pt Arc',        tooltip: 'Arc through 3 points' },
+  { tool: 'tangent-arc',      icon: 'cad-tangent-arc',       label: 'Tangent Arc',     tooltip: 'Tangent arc — click an existing endpoint, then the arc end. Arc is tangent to the entity at the picked endpoint' },
+  { tool: 'ellipse',          icon: 'cad-ellipse',           label: 'Ellipse',         tooltip: 'Ellipse (center + major + minor)' },
+  { tool: 'partial-ellipse',  icon: 'cad-partial-ellipse',   label: 'Partial Ellipse', tooltip: 'Partial ellipse (center + major + minor + start angle + end angle)' },
+  { tool: 'parabola',         icon: 'cad-arc',               label: 'Parabola',        tooltip: 'Parabola — click vertex, then focus, then a sample point on the curve (3 clicks)' },
+  { tool: 'equation-curve',   icon: 'cad-spline',            label: 'Equation Curve',  tooltip: 'Equation-driven curve — click to anchor, then enter parametric x(t)/y(t) expressions + [tMin..tMax]' },
 ];
 
 const SHAPE_TOOLS: readonly ToolSpec[] = [
-  { tool: 'rect-corner', icon: 'rectangle',       label: 'Rect',        tooltip: 'Rectangle (corner + corner)' },
-  { tool: 'rect-center', icon: 'crop_landscape',  label: 'Center Rect', tooltip: 'Rectangle (center + corner)' },
-  { tool: 'polygon',     icon: 'hexagon',         label: 'Polygon',     tooltip: 'Regular polygon (prompts for N)' },
-  { tool: 'slot',        icon: 'view_stream',     label: 'Slot',        tooltip: 'Slot (endpoint, endpoint, width)' },
+  { tool: 'rect-corner',           icon: 'cad-rect-corner',           label: 'Rect',             tooltip: 'Rectangle (corner + corner)' },
+  { tool: 'rect-center',           icon: 'cad-rect-center',           label: 'Center Rect',      tooltip: 'Rectangle (center + corner)' },
+  { tool: 'rect-rounded-corner',   icon: 'cad-rect-rounded-corner',   label: 'Rounded Rect',     tooltip: 'Rounded rectangle (corner + corner). Prompts for the fillet radius on the first click of each gesture; the radius persists across draws.' },
+  { tool: 'rect-rounded-center',   icon: 'cad-rect-rounded-center',   label: 'Center Rounded Rect', tooltip: 'Center-anchored rounded rectangle. Construction diagonal runs from fillet center to fillet center.' },
+  { tool: 'rect-3pt-corner',       icon: 'cad-rect-3pt-corner',       label: '3-pt Rect',        tooltip: '3-point rectangle: 1st corner, 2nd corner along edge, 3rd point picks the opposite-side offset' },
+  { tool: 'rect-3pt-center',       icon: 'cad-rect-3pt-center',       label: '3-pt Center Rect', tooltip: '3-point center rectangle: center, side midpoint, opposite-side offset' },
+  { tool: 'parallelogram',         icon: 'cad-parallelogram',         label: 'Parallelogram',    tooltip: 'Parallelogram (3 corners — 4th derived from closure)' },
+  { tool: 'polygon',               icon: 'cad-polygon',               label: 'Polygon',          tooltip: 'Regular polygon (prompts for N)' },
+  { tool: 'slot',                  icon: 'cad-slot',                  label: 'Slot',             tooltip: 'Straight slot (endpoint, endpoint, width)' },
+  { tool: 'slot-centerpoint',      icon: 'cad-slot-centerpoint',      label: 'C-pt Slot',        tooltip: 'Straight slot from center + one cap + width' },
+  { tool: 'slot-arc-3pt',          icon: 'cad-slot-arc-3pt',          label: '3-pt Arc Slot',    tooltip: 'Arc slot through 3 centerline points + width' },
+  { tool: 'slot-arc-centerpoint',  icon: 'cad-slot-arc-centerpoint',  label: 'C-pt Arc Slot',    tooltip: 'Arc slot: arc center, start, end + width' },
+  { tool: 'text',                  icon: 'cad-point',                 label: 'Text',             tooltip: 'Sketch Text — click to anchor, then enter the string + height (mm)' },
+  { tool: 'picture',               icon: 'cad-point',                 label: 'Picture',          tooltip: 'Sketch Picture — pick an image file, then click to anchor (lower-left). Use Properties to resize / rotate.' },
 ];
 
 const EDIT_TOOLS: readonly ToolSpec[] = [
-  { tool: 'trim',    icon: 'content_cut',         label: 'Trim',    tooltip: 'Trim — click a curve to remove a segment between intersections' },
-  { tool: 'extend',  icon: 'open_in_full',        label: 'Extend',  tooltip: 'Extend — click a line near the endpoint to extend to the next boundary' },
-  { tool: 'fillet',  icon: 'rounded_corner',      label: 'Fillet',  tooltip: 'Fillet — prompts for radius; click two lines to round their corner' },
-  { tool: 'chamfer', icon: 'crop_din',            label: 'Chamfer', tooltip: 'Chamfer — prompts for distance; click two lines to cut a straight chamfer' },
-  { tool: 'split',   icon: 'call_split',          label: 'Split',   tooltip: 'Split — click a line to break it at the click point' },
-  { tool: 'offset',  icon: 'auto_awesome_motion', label: 'Offset',  tooltip: 'Offset — prompts for distance; click side of curve to offset toward' },
-  { tool: 'mirror',  icon: 'flip',                label: 'Mirror',  tooltip: 'Mirror — select entities first, then click an axis line' },
+  { tool: 'trim',             icon: 'cad-trim',             label: 'Trim',         tooltip: 'Trim — click a curve to remove a segment between intersections' },
+  { tool: 'extend',           icon: 'cad-extend',           label: 'Extend',       tooltip: 'Extend — click a line near the endpoint to extend to the next boundary' },
+  { tool: 'fillet',           icon: 'cad-fillet',           label: 'Fillet',       tooltip: 'Fillet — prompts for radius; click two lines to round their corner' },
+  { tool: 'chamfer',          icon: 'cad-chamfer',          label: 'Chamfer',      tooltip: 'Chamfer — prompts for distance; click two lines to cut a straight chamfer' },
+  { tool: 'split',            icon: 'cad-split',            label: 'Split',        tooltip: 'Split — click a line to break it at the click point' },
+  { tool: 'jog',              icon: 'cad-jog',              label: 'Jog',          tooltip: 'Jog Line — click the line, then click the jog start (perpendicular offset = distance from line), then click the jog end along the line' },
+  { tool: 'offset',           icon: 'cad-offset',           label: 'Offset',       tooltip: 'Offset — prompts for distance; click side of curve to offset toward' },
+  { tool: 'mirror',           icon: 'cad-mirror',           label: 'Mirror',       tooltip: 'Mirror — select entities first, then click an axis line' },
+  { tool: 'dynamic-mirror',   icon: 'cad-dynamic-mirror',   label: 'Dyn. Mirror',  tooltip: 'Dynamic Mirror — pick an axis line, then everything you draw is mirrored across it. Click the tool again to turn off.' },
+  { tool: 'convert-entities', icon: 'cad-convert',          label: 'Convert',      tooltip: 'Convert Entities — click an edge of the existing body to project it onto the sketch plane as a new sketch entity' },
 ];
 
 const TRANSFORM_TOOLS: readonly ToolSpec[] = [
-  { tool: 'move',   icon: 'open_with',     label: 'Move',   tooltip: 'Move — pre-select entities, then click a reference point and a destination' },
-  { tool: 'copy',   icon: 'content_copy',  label: 'Copy',   tooltip: 'Copy — pre-select entities, then click a reference and destination to place a duplicate' },
-  { tool: 'rotate', icon: 'rotate_right',  label: 'Rotate', tooltip: 'Rotate — pre-select entities, click a pivot, enter angle (degrees)' },
-  { tool: 'scale',  icon: 'aspect_ratio',  label: 'Scale',  tooltip: 'Scale — pre-select entities, click a pivot, enter scale factor' },
+  { tool: 'move',             icon: 'cad-move',             label: 'Move',             tooltip: 'Move — pre-select entities, then click a reference point and a destination' },
+  { tool: 'copy',             icon: 'cad-copy',             label: 'Copy',             tooltip: 'Copy — pre-select entities, then click a reference and destination to place a duplicate' },
+  { tool: 'rotate',           icon: 'cad-rotate',           label: 'Rotate',           tooltip: 'Rotate — pre-select entities, click a pivot, enter angle (degrees)' },
+  { tool: 'scale',            icon: 'cad-scale',            label: 'Scale',            tooltip: 'Scale — pre-select entities, click a pivot, enter scale factor' },
+  { tool: 'stretch',          icon: 'cad-stretch',          label: 'Stretch',          tooltip: 'Stretch — pre-select POINTS only. Click a reference and destination; selected points move, attached lines stretch.' },
+  { tool: 'pattern-linear',   icon: 'cad-pattern-linear',   label: 'Linear Pattern',   tooltip: 'Linear Sketch Pattern — pre-select entities, click direction-from then direction-to, prompts for count' },
+  { tool: 'pattern-circular', icon: 'cad-pattern-circular', label: 'Circular Pattern', tooltip: 'Circular Sketch Pattern — pre-select entities, click center; prompts for count + total angle' },
 ];
 
 const PRIMITIVE_TOOL_SET = new Set<Tool>(PRIMITIVE_TOOLS.map(t => t.tool));
@@ -226,7 +289,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
   template: `
     <div class="sketch-toolbar" data-testid="sketch-toolbar">
       <button class="ribbon-button" data-testid="tool-select" [class.active]="tool() === 'select'" (click)="setTool('select')" matTooltip="Select">
-        <mat-icon>arrow_selector_tool</mat-icon>
+        <mat-icon svgIcon="cad-select"></mat-icon>
         <span class="ribbon-label">Select</span>
       </button>
 
@@ -240,7 +303,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
                 [matTooltip]="primitiveCurrent().tooltip"
                 (click)="setTool(lastPrimitiveTool())"
                 [disabled]="readonly()">
-          <mat-icon>{{ primitiveCurrent().icon }}</mat-icon>
+          <mat-icon [svgIcon]="primitiveCurrent().icon"></mat-icon>
           <span class="ribbon-label">{{ primitiveCurrent().label }}</span>
         </button>
         <button class="split-chevron"
@@ -256,7 +319,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
                 [attr.data-testid]="'tool-' + spec.tool"
                 [class.menu-active]="tool() === spec.tool"
                 (click)="setTool(spec.tool)">
-          <mat-icon>{{ spec.icon }}</mat-icon>
+          <mat-icon [svgIcon]="spec.icon"></mat-icon>
           <span>{{ spec.label }}</span>
         </button>
       </mat-menu>
@@ -268,7 +331,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
                 [matTooltip]="circleCurrent().tooltip"
                 (click)="setTool(lastCircleTool())"
                 [disabled]="readonly()">
-          <mat-icon>{{ circleCurrent().icon }}</mat-icon>
+          <mat-icon [svgIcon]="circleCurrent().icon"></mat-icon>
           <span class="ribbon-label">{{ circleCurrent().label }}</span>
         </button>
         <button class="split-chevron"
@@ -284,7 +347,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
                 [attr.data-testid]="'tool-' + spec.tool"
                 [class.menu-active]="tool() === spec.tool"
                 (click)="setTool(spec.tool)">
-          <mat-icon>{{ spec.icon }}</mat-icon>
+          <mat-icon [svgIcon]="spec.icon"></mat-icon>
           <span>{{ spec.label }}</span>
         </button>
       </mat-menu>
@@ -296,7 +359,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
                 [matTooltip]="shapeCurrent().tooltip"
                 (click)="setTool(lastShapeTool())"
                 [disabled]="readonly()">
-          <mat-icon>{{ shapeCurrent().icon }}</mat-icon>
+          <mat-icon [svgIcon]="shapeCurrent().icon"></mat-icon>
           <span class="ribbon-label">{{ shapeCurrent().label }}</span>
         </button>
         <button class="split-chevron"
@@ -312,7 +375,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
                 [attr.data-testid]="'tool-' + spec.tool"
                 [class.menu-active]="tool() === spec.tool"
                 (click)="setTool(spec.tool)">
-          <mat-icon>{{ spec.icon }}</mat-icon>
+          <mat-icon [svgIcon]="spec.icon"></mat-icon>
           <span>{{ spec.label }}</span>
         </button>
       </mat-menu>
@@ -324,7 +387,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
                 [matTooltip]="editCurrent().tooltip"
                 (click)="setTool(lastEditTool())"
                 [disabled]="readonly()">
-          <mat-icon>{{ editCurrent().icon }}</mat-icon>
+          <mat-icon [svgIcon]="editCurrent().icon"></mat-icon>
           <span class="ribbon-label">{{ editCurrent().label }}</span>
         </button>
         <button class="split-chevron"
@@ -340,7 +403,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
                 [attr.data-testid]="'tool-' + spec.tool"
                 [class.menu-active]="tool() === spec.tool"
                 (click)="setTool(spec.tool)">
-          <mat-icon>{{ spec.icon }}</mat-icon>
+          <mat-icon [svgIcon]="spec.icon"></mat-icon>
           <span>{{ spec.label }}</span>
         </button>
       </mat-menu>
@@ -353,7 +416,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
                 [matTooltip]="transformCurrent().tooltip"
                 (click)="setTool(lastTransformTool())"
                 [disabled]="readonly()">
-          <mat-icon>{{ transformCurrent().icon }}</mat-icon>
+          <mat-icon [svgIcon]="transformCurrent().icon"></mat-icon>
           <span class="ribbon-label">{{ transformCurrent().label }}</span>
         </button>
         <button class="split-chevron"
@@ -369,7 +432,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
                 [attr.data-testid]="'tool-' + spec.tool"
                 [class.menu-active]="tool() === spec.tool"
                 (click)="setTool(spec.tool)">
-          <mat-icon>{{ spec.icon }}</mat-icon>
+          <mat-icon [svgIcon]="spec.icon"></mat-icon>
           <span>{{ spec.label }}</span>
         </button>
       </mat-menu>
@@ -382,7 +445,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               (click)="setTool('smart-dim')"
               matTooltip="Smart Dimension — click entities; constraint inferred from selection"
               [disabled]="readonly()">
-        <mat-icon>straighten</mat-icon>
+        <mat-icon svgIcon="cad-smart-dim"></mat-icon>
         <span class="ribbon-label">Smart Dim</span>
       </button>
 
@@ -397,7 +460,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               [disabled]="readonly() || selectedEntities().length === 0"
               (click)="toggleConstruction()"
               [matTooltip]="constructionTooltip()">
-        <mat-icon>{{ constructionIcon() }}</mat-icon>
+        <mat-icon [svgIcon]="constructionIcon()"></mat-icon>
         <span class="ribbon-label">{{ constructionLabel() }}</span>
       </button>
       <button class="ribbon-button"
@@ -406,8 +469,16 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               (click)="drawConstruction.set(!drawConstruction())"
               matTooltip="Draw as Construction — when on, new geometry comes in as construction (dashed reference)"
               [disabled]="readonly()">
-        <mat-icon>border_style</mat-icon>
+        <mat-icon svgIcon="cad-construction"></mat-icon>
         <span class="ribbon-label">Draw Cons.</span>
+      </button>
+      <button class="ribbon-button"
+              data-testid="break-projection-link"
+              [disabled]="readonly() || !hasProjectedSelection()"
+              (click)="breakProjectionLink()"
+              matTooltip="Break Link — selected projected entity stops tracking its source edge and becomes editable like any other sketch entity">
+        <mat-icon svgIcon="cad-break-link"></mat-icon>
+        <span class="ribbon-label">Break Link</span>
       </button>
 
       <span class="ribbon-divider"></span>
@@ -418,7 +489,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               [disabled]="readonly() || !spec.predicate(selectedEntities())"
               (click)="applyConstraint(spec)"
               [matTooltip]="spec.label">
-        <mat-icon>{{ spec.icon }}</mat-icon>
+        <mat-icon [svgIcon]="spec.icon"></mat-icon>
       </button>
 
       <span class="ribbon-divider"></span>
@@ -585,13 +656,50 @@ export class CadSketchEditorComponent implements OnDestroy {
   // current gesture; `clearAllDrafts` resets them all.
   draftRectCorner = signal<PendingPoint | null>(null);          // rect-corner: first corner
   draftRectCenter = signal<PendingPoint | null>(null);          // rect-center: center
+  // Rounded rect variants. First click stores the anchor (corner or
+  // center); on first use, a prompt collects the corner radius. The
+  // radius value persists across draws so the user can chain rounded
+  // rects of the same size without re-prompting.
+  draftRectRoundedCorner = signal<PendingPoint | null>(null);
+  draftRectRoundedCenter = signal<PendingPoint | null>(null);
+  roundedRectRadius = signal<number>(5);
   draftPolygonCenter = signal<PendingPoint | null>(null);       // polygon: center
   polygonSides = signal<number>(6);                              // polygon: N (persisted across draws)
   draftSlotPath = signal<{ p1?: PendingPoint; p2?: PendingPoint }>({});  // slot: 2 centerline endpoints + 1 width click
+  // 3-point rectangle (corner variant): 2 clicks define the first edge,
+  // 3rd click picks the opposite-side offset.
+  draftRect3Corner = signal<PendingPoint[]>([]);
+  // 3-point center rectangle: center + side-midpoint + opposite-side-offset.
+  draftRect3Center = signal<PendingPoint[]>([]);
+  // Parallelogram: 3 corners; 4th derived.
+  draftParallelogram = signal<PendingPoint[]>([]);
+  // Centerpoint straight slot: 2 clicks define center + one cap, 3rd
+  // click picks the perpendicular half-width.
+  draftSlotCenterpoint = signal<{ center?: PendingPoint; cap?: PendingPoint }>({});
+  // 3-point arc slot: 3 centerline points + 1 width click.
+  draftSlotArc3 = signal<PendingPoint[]>([]);
+  // Centerpoint arc slot: arc center + start + end + 1 width click.
+  draftSlotArcCenterpoint = signal<PendingPoint[]>([]);
   draftCircle3 = signal<PendingPoint[]>([]);                     // circle-3pt: up to 3 points
   draftArc3 = signal<PendingPoint[]>([]);                        // arc-3pt: up to 3 points
   draftEllipse = signal<{ center?: PendingPoint; majorEnd?: PendingPoint }>({});  // ellipse: 2 anchors + 1 minor click
+  // Partial ellipse: same first 3 clicks as ellipse (center, major
+  // end, minor radius click), then 2 angle clicks (start, end).
+  draftPartialEllipse = signal<{ center?: PendingPoint; majorEnd?: PendingPoint; minorRadius?: number; startAngle?: number }>({});
   draftSpline = signal<PendingPoint[]>([]);                     // spline: control points so far
+  /** Batch 6 — parabola gesture state. Three clicks: vertex, focus,
+   * sample point on the curve. Resets after commit / tool change. */
+  draftParabola = signal<{ vertex?: PendingPoint; focus?: PendingPoint }>({});
+  /** Batch 6 — text-tool first-corner state for drag-out rectangle. */
+  draftTextRect = signal<PendingPoint | null>(null);
+  /** Batch 6 — picture-tool pending image (loaded ahead of the
+   * anchor click). When set, the next click anchors the image at
+   * (x, y). */
+  pendingPictureSrc = signal<{ src: string; pxW: number; pxH: number } | null>(null);
+  /** Style Spline shares draftSpline but also tracks the chosen
+   * degree for the current gesture. Persists across draws so the
+   * user keeps the last-picked degree without re-typing. */
+  styleSplineDegree = signal<number>(3);
   draftCirclePerimeter = signal<PendingPoint | null>(null);     // perimeter circle: first diameter endpoint
   draftTangentArc = signal<{ tangentPointId: string } | null>(null);  // tangent arc: the picked endpoint
   selected = signal<Set<string>>(new Set());
@@ -699,16 +807,30 @@ export class CadSketchEditorComponent implements OnDestroy {
     ['select', () => { this.clearAllDrafts(); }],
     ['point', () => { this.clearAllDrafts(); }],
     ['line', () => { this.clearAllDraftsExcept(['line']); }],
+    // Centerline + Midpoint Line share `draftLineStart` with the plain
+    // Line tool; the `mode` arg in handleLineClick controls what gets
+    // emitted on commit. Keeping the draft alive across the variants
+    // lets the user switch tools mid-chain without losing their start.
+    ['centerline',     () => { this.clearAllDraftsExcept(['centerline']); }],
+    ['midpoint-line',  () => { this.clearAllDraftsExcept(['midpoint-line']); }],
     ['circle', () => { this.clearAllDraftsExcept(['circle']); }],
     ['arc', () => { this.clearAllDraftsExcept(['arc']); }],
     ['rect-corner', () => { this.clearAllDraftsExcept(['rect-corner']); }],
     ['rect-center', () => { this.clearAllDraftsExcept(['rect-center']); }],
+    ['rect-3pt-corner', () => { this.clearAllDraftsExcept(['rect-3pt-corner']); }],
+    ['rect-3pt-center', () => { this.clearAllDraftsExcept(['rect-3pt-center']); }],
+    ['parallelogram',   () => { this.clearAllDraftsExcept(['parallelogram']); }],
     ['polygon', () => { this.clearAllDraftsExcept(['polygon']); }],
     ['slot', () => { this.clearAllDraftsExcept(['slot']); }],
+    ['slot-centerpoint',     () => { this.clearAllDraftsExcept(['slot-centerpoint']); }],
+    ['slot-arc-3pt',         () => { this.clearAllDraftsExcept(['slot-arc-3pt']); }],
+    ['slot-arc-centerpoint', () => { this.clearAllDraftsExcept(['slot-arc-centerpoint']); }],
     ['circle-3pt', () => { this.clearAllDraftsExcept(['circle-3pt']); }],
     ['arc-3pt', () => { this.clearAllDraftsExcept(['arc-3pt']); }],
     ['ellipse', () => { this.clearAllDraftsExcept(['ellipse']); }],
+    ['partial-ellipse', () => { this.clearAllDraftsExcept(['partial-ellipse']); }],
     ['spline', () => { this.clearAllDraftsExcept(['spline']); }],
+    ['style-spline', () => { this.clearAllDraftsExcept(['style-spline']); }],
     ['circle-perimeter', () => { this.clearAllDraftsExcept(['circle-perimeter']); }],
     ['tangent-arc', () => { this.clearAllDraftsExcept(['tangent-arc']); }],
     // Smart-dim accumulates into the selection signal rather than a tool-
@@ -729,10 +851,32 @@ export class CadSketchEditorComponent implements OnDestroy {
     ['scale',   () => { this.clearAllDraftsExcept([]); }],
   ]);
 
-  /** Persisted offset distance for the Offset tool. Prompted on first use,
-   * reused for subsequent clicks so the user can offset multiple curves
-   * without re-typing. Re-prompted when re-entering the tool. */
-  private offsetDistance = signal<number | null>(null);
+  /** Offset sidebar state — distance, the curves queued for the batch
+   * commit (each with the cursor position that picked it, used as the
+   * sidePoint when computing which side to offset toward), and
+   * toggles for chain auto-selection and keep-original-as-construction.
+   *
+   * Public so the cad-editor template can bind to them — same pattern
+   * as fillet / chamfer / mirror. */
+  offsetDistance = signal<number>(5);
+  offsetSelections = signal<Map<string, { sidePoint: { x: number; y: number } }>>(new Map());
+  /** When true, clicking one curve auto-extends the selection through
+   * every chain-connected curve via shared endpoints. Lets the user
+   * offset a whole polyline / closed loop in one click. Defaults ON
+   * — matches SolidWorks' "Select chain" default. */
+  offsetChainMode = signal<boolean>(true);
+  /** Optional: flag the original curves as construction after the
+   * offset commits — useful when the offset is the working geometry
+   * and the user wants to keep the original as a dashed reference. */
+  offsetKeepConstruction = signal<boolean>(false);
+  /** When true, the commit produces an offset on BOTH sides of every
+   * queued curve. SolidWorks "Bi-directional" option. */
+  offsetBothDirections = signal<boolean>(false);
+  /** When true, convex chain corners get an arc filler (radius =
+   * offset distance, centered at the original vertex). When false,
+   * convex corners get a sharp extension to the line-line
+   * intersection. SW default = on. */
+  offsetFillCorners = signal<boolean>(true);
   /** Fillet sidebar state — radius value (mm), the set of corner-point
    * ids queued for the batch commit, and the "keep removed as
    * construction" toggle. Public so the sidebar template (rendered up in
@@ -780,6 +924,20 @@ export class CadSketchEditorComponent implements OnDestroy {
    * commits. */
   private draftMoveRef = signal<{ x: number; y: number } | null>(null);
   private draftCopyRef = signal<{ x: number; y: number } | null>(null);
+  /** Stretch: same two-click gesture as move, but only translates the
+   * POINTS in the selection (so attached lines stretch). */
+  private draftStretchRef = signal<{ x: number; y: number } | null>(null);
+  /** Jog Line: three-click gesture — click 1 picks the line, clicks 2
+   * and 3 pick the jog start (with perpendicular offset baked in) and
+   * jog end (along the line). */
+  private draftJog = signal<{ lineId?: string; start?: { x: number; y: number } }>({});
+  /** Linear pattern: stores the first click (direction-from) of the
+   * direction vector; the second click sets direction-to + spacing. */
+  private draftPatternRef = signal<{ x: number; y: number } | null>(null);
+  /** Dynamic mirror axis line id. Null means dynamic mirror is OFF;
+   * set means every subsequent draw commit gets mirrored across the
+   * named line. The tool button toggles this on/off. */
+  dynamicMirrorAxisId = signal<string | null>(null);
 
   /** Mirror tool state machine. The Mirror panel exposes two fields that
    * accept different clicks based on which stage is active:
@@ -806,22 +964,42 @@ export class CadSketchEditorComponent implements OnDestroy {
 
   private clearAllDraftsExcept(keep: Tool[]) {
     const k = new Set<Tool>(keep);
-    if (!k.has('line')) this.draftLineStart.set(null);
+    // Line, centerline, and midpoint-line all share `draftLineStart`
+    // so the user can switch between them mid-chain without dropping
+    // their pending start point.
+    if (!k.has('line') && !k.has('centerline') && !k.has('midpoint-line')) this.draftLineStart.set(null);
     if (!k.has('circle')) this.draftCircleCenter.set(null);
     if (!k.has('arc')) { this.draftArcCenter.set(null); this.draftArcStart.set(null); }
     if (!k.has('rect-corner')) this.draftRectCorner.set(null);
     if (!k.has('rect-center')) this.draftRectCenter.set(null);
+    if (!k.has('rect-rounded-corner')) this.draftRectRoundedCorner.set(null);
+    if (!k.has('rect-rounded-center')) this.draftRectRoundedCenter.set(null);
+    if (!k.has('rect-3pt-corner')) this.draftRect3Corner.set([]);
+    if (!k.has('rect-3pt-center')) this.draftRect3Center.set([]);
+    if (!k.has('parallelogram')) this.draftParallelogram.set([]);
     if (!k.has('polygon')) this.draftPolygonCenter.set(null);
     if (!k.has('slot')) this.draftSlotPath.set({});
+    if (!k.has('slot-centerpoint')) this.draftSlotCenterpoint.set({});
+    if (!k.has('slot-arc-3pt')) this.draftSlotArc3.set([]);
+    if (!k.has('slot-arc-centerpoint')) this.draftSlotArcCenterpoint.set([]);
     if (!k.has('circle-3pt')) this.draftCircle3.set([]);
     if (!k.has('arc-3pt')) this.draftArc3.set([]);
     if (!k.has('ellipse')) this.draftEllipse.set({});
-    if (!k.has('spline')) this.draftSpline.set([]);
+    if (!k.has('partial-ellipse')) this.draftPartialEllipse.set({});
+    // Spline and style-spline share `draftSpline` so switching between
+    // them mid-gesture preserves the placed control points.
+    if (!k.has('spline') && !k.has('style-spline')) this.draftSpline.set([]);
     if (!k.has('circle-perimeter')) this.draftCirclePerimeter.set(null);
     if (!k.has('tangent-arc')) this.draftTangentArc.set(null);
+    if (!k.has('parabola')) this.draftParabola.set({});
+    if (!k.has('text')) this.draftTextRect.set(null);
+    if (!k.has('picture')) this.pendingPictureSrc.set(null);
   }
 
   constructor() {
+    // Register custom CAD icons once for the whole component tree.
+    // Idempotent — safe across HMR + test setup.
+    registerCadIcons(inject(MatIconRegistry), inject(DomSanitizer));
     effect(() => {
       const tool = this.tool();
       // Everything inside `untracked` runs without registering the read
@@ -843,8 +1021,19 @@ export class CadSketchEditorComponent implements OnDestroy {
       const preservesSelection = tool === 'select' || tool === 'smart-dim' || tool === 'mirror'
         || tool === 'fillet' || tool === 'chamfer' || TRANSFORM_TOOL_SET.has(tool);
       if (!preservesSelection) this.selected.set(new Set());
-      // Re-prompt for offset distance each time the user re-enters Offset.
-      if (tool !== 'offset') this.offsetDistance.set(null);
+      // Offset sidebar: seed defaults on entry, clear queue on exit.
+      // Distance persists across re-entry (common dim value during a
+      // session); the curve queue resets so each entry starts clean.
+      if (tool === 'offset') {
+        if (this.offsetDistance() <= 0) this.offsetDistance.set(5);
+      } else {
+        this.offsetSelections.set(new Map());
+        this.offsetChainMode.set(true);  // reset to SW-default ON
+        this.offsetKeepConstruction.set(false);
+        this.offsetBothDirections.set(false);
+        // Don't reset offsetFillCorners — SW-style corner fill is
+        // the user's preference, persists across tool entries.
+      }
       // Fillet & Chamfer: PropertyManager-style sidebars (see Mirror for
       // the pattern). On entry, default the dimension value if unset and
       // seed the corner list from any pre-selection of corner points. On
@@ -872,6 +1061,9 @@ export class CadSketchEditorComponent implements OnDestroy {
       // Move/Copy reset their in-flight reference-point pick on tool exit.
       if (tool !== 'move') this.draftMoveRef.set(null);
       if (tool !== 'copy') this.draftCopyRef.set(null);
+      if (tool !== 'stretch') this.draftStretchRef.set(null);
+      if (tool !== 'pattern-linear') this.draftPatternRef.set(null);
+      if (tool !== 'jog') this.draftJog.set({});
       // Mirror's two-stage panel resets each time the user re-enters it.
       // Leaving Mirror also clears the axis selection so a stray previous
       // pick doesn't carry over to a new gesture.
@@ -967,6 +1159,16 @@ export class CadSketchEditorComponent implements OnDestroy {
       if (cycled) { ev.preventDefault(); return; }
     }
 
+    if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey && ev.key.toLowerCase() === 'a') {
+      // Ctrl/⌘+A — select every entity in the current sketch. Skips
+      // ephemeral draft entities (those have non-stored ids and don't
+      // belong in the selection set). Same handler runs for both keys
+      // so Mac users get the platform-native shortcut.
+      ev.preventDefault();
+      this.selected.set(new Set(this.state().entities.map(e => e.id)));
+      return;
+    }
+
     if (this.readonly()) return;
     if (this.applySketchShortcut(ev)) ev.preventDefault();
   }
@@ -1047,14 +1249,26 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.draftArcStart.set(null);
     this.draftRectCorner.set(null);
     this.draftRectCenter.set(null);
+    this.draftRectRoundedCorner.set(null);
+    this.draftRectRoundedCenter.set(null);
+    this.draftRect3Corner.set([]);
+    this.draftRect3Center.set([]);
+    this.draftParallelogram.set([]);
     this.draftPolygonCenter.set(null);
     this.draftSlotPath.set({});
+    this.draftSlotCenterpoint.set({});
+    this.draftSlotArc3.set([]);
+    this.draftSlotArcCenterpoint.set([]);
     this.draftCircle3.set([]);
     this.draftArc3.set([]);
     this.draftEllipse.set({});
+    this.draftPartialEllipse.set({});
     this.draftSpline.set([]);
     this.draftCirclePerimeter.set(null);
     this.draftTangentArc.set(null);
+    this.draftParabola.set({});
+    this.draftTextRect.set(null);
+    this.pendingPictureSrc.set(null);
   }
 
   strokeFor(e: SketchEntity): string {
@@ -1116,30 +1330,51 @@ export class CadSketchEditorComponent implements OnDestroy {
     switch (tool) {
       case 'select':      this.handleSelectClick(x, y, p.shiftKey); break;
       case 'point':       this.commit(addPoint(this.state(), x, y).state); break;
-      case 'line':        this.handleLineClick(x, y); break;
+      case 'line':           this.handleLineClick(x, y, 'normal'); break;
+      case 'centerline':     this.handleLineClick(x, y, 'construction'); break;
+      case 'midpoint-line':  this.handleLineClick(x, y, 'midpoint'); break;
       case 'circle':      this.handleCircleClick(x, y); break;
       case 'arc':         this.handleArcClick(x, y); break;
-      case 'rect-corner': this.handleRectCornerClick(x, y); break;
-      case 'rect-center': this.handleRectCenterClick(x, y); break;
-      case 'polygon':     this.handlePolygonClick(x, y); break;
-      case 'slot':        this.handleSlotClick(x, y); break;
+      case 'rect-corner':         this.handleRectCornerClick(x, y); break;
+      case 'rect-center':         this.handleRectCenterClick(x, y); break;
+      case 'rect-rounded-corner': this.handleRectRoundedCornerClick(x, y); break;
+      case 'rect-rounded-center': this.handleRectRoundedCenterClick(x, y); break;
+      case 'rect-3pt-corner':     this.handleRect3PtCornerClick(x, y); break;
+      case 'rect-3pt-center':     this.handleRect3PtCenterClick(x, y); break;
+      case 'parallelogram':       this.handleParallelogramClick(x, y); break;
+      case 'polygon':             this.handlePolygonClick(x, y); break;
+      case 'slot':                this.handleSlotClick(x, y); break;
+      case 'slot-centerpoint':    this.handleSlotCenterpointClick(x, y); break;
+      case 'slot-arc-3pt':        this.handleSlotArc3Click(x, y); break;
+      case 'slot-arc-centerpoint': this.handleSlotArcCenterpointClick(x, y); break;
       case 'circle-3pt':  this.handleCircle3Click(x, y); break;
       case 'arc-3pt':     this.handleArc3Click(x, y); break;
-      case 'ellipse':     this.handleEllipseClick(x, y); break;
-      case 'spline':      this.handleSplineClick(x, y); break;
+      case 'ellipse':         this.handleEllipseClick(x, y); break;
+      case 'partial-ellipse': this.handlePartialEllipseClick(x, y); break;
+      case 'spline':          this.handleSplineClick(x, y, 3); break;
+      case 'style-spline':    this.handleSplineClick(x, y, this.styleSplineDegree()); break;
+      case 'parabola':        this.handleParabolaClick(x, y); break;
+      case 'equation-curve':  this.handleEquationCurveClick(x, y); break;
+      case 'text':            this.handleTextClick(x, y); break;
+      case 'picture':         this.handlePictureClick(x, y); break;
       case 'circle-perimeter': this.handleCirclePerimeterClick(x, y); break;
       case 'tangent-arc': this.handleTangentArcClick(x, y); break;
       case 'smart-dim':   this.handleSmartDimClick(x, y, p.shiftKey); break;
       case 'trim':        this.handleTrimClick(x, y); break;
       case 'extend':      this.handleExtendClick(x, y); break;
       case 'split':       this.handleSplitClick(x, y); break;
+      case 'jog':         this.handleJogClick(x, y); break;
       case 'offset':      this.handleOffsetClick(x, y); break;
       case 'mirror':      this.handleMirrorClick(x, y); break;
       case 'fillet':      this.handleFilletClick(x, y); break;
       case 'chamfer':     this.handleChamferClick(x, y); break;
-      case 'move':        this.handleMoveClick(x, y); break;
-      case 'copy':        this.handleCopyClick(x, y); break;
-      case 'rotate':      this.handleRotateClick(x, y); break;
+      case 'move':              this.handleMoveClick(x, y); break;
+      case 'copy':              this.handleCopyClick(x, y); break;
+      case 'rotate':            this.handleRotateClick(x, y); break;
+      case 'stretch':           this.handleStretchClick(x, y); break;
+      case 'pattern-linear':    this.handlePatternLinearClick(x, y); break;
+      case 'pattern-circular':  this.handlePatternCircularClick(x, y); break;
+      case 'dynamic-mirror':    this.handleDynamicMirrorClick(x, y); break;
       case 'scale':       this.handleScaleClick(x, y); break;
     }
   }
@@ -1161,6 +1396,16 @@ export class CadSketchEditorComponent implements OnDestroy {
       return;
     }
     const state = this.state();
+    // Refuse drag when ANY entity referencing the captured points is
+    // a Convert-Entities projected entity. Their coordinates are
+    // derived from the source body edge and get overwritten on every
+    // regen, so a drag would just snap back. The user has to Break
+    // Link first if they want to edit it freely.
+    if (this._pointsBelongToProjectedEntity(state, pointIds)) {
+      // Fall through to rubber-band (no drag, but click still selects).
+      this.rubberBand.set({ start: p, current: p });
+      return;
+    }
     // Expand the drag set through point↔point coincident constraints so the
     // tied "rigid group" translates as one block. Without this, a circle
     // center dragged while a line is coincident to it would let the line's
@@ -1170,12 +1415,58 @@ export class CadSketchEditorComponent implements OnDestroy {
     // changing size. Translating all coincident-linked points uniformly
     // sidesteps that.
     const expanded = this.expandToCoincidentGroup(state, new Set(pointIds));
+    // Strip projected-entity anchors from the drag set. Convert
+    // Entities lines are fixed in place — coincident-tied free points
+    // should orbit around them, not be towed along when the user
+    // drags an attached entity. The solver re-runs after the drag and
+    // re-satisfies the coincident constraint relative to the fixed
+    // projected anchor.
+    const projectedAnchors = this._projectedAnchorPoints(state);
+    for (const a of projectedAnchors) expanded.delete(a);
     const points: Array<{ id: string; origX: number; origY: number }> = [];
     for (const id of expanded) {
       const pt = findPoint(state, id);
       if (pt) points.push({ id, origX: pt.x, origY: pt.y });
     }
+    if (points.length === 0) {
+      // Every point in the expanded group was a projected anchor —
+      // nothing left to drag. Fall through to rubber-band so the
+      // click still selects.
+      this.rubberBand.set({ start: p, current: p });
+      return;
+    }
     this.dragState.set({ points, startCursor: p, isDragging: false });
+  }
+
+  /** Collect every point id that anchors a projected entity. Used to
+   * subtract from a drag's coincident-group expansion so projected
+   * geometry stays put even when free entities tied to it get
+   * dragged. Source is the on-edge constraint list. */
+  private _projectedAnchorPoints(state: SketchState): Set<string> {
+    const out = new Set<string>();
+    const entityById = new Map(state.entities.map(en => [en.id, en] as const));
+    for (const c of state.constraints) {
+      if (c.type !== 'on-edge') continue;
+      for (const t of c.targets) {
+        const e = entityById.get(t.entityId);
+        if (!e) continue;
+        if (e.kind === 'line') { out.add(e.startId); out.add(e.endId); }
+        else if (e.kind === 'circle') { out.add(e.centerId); }
+        else if (e.kind === 'arc') { out.add(e.centerId); out.add(e.startId); out.add(e.endId); }
+        else if (e.kind === 'point') { out.add(e.id); }
+      }
+    }
+    return out;
+  }
+
+  /** True when any of the given point ids is referenced by an entity
+   * locked to a body edge (on-edge constraint). Used to refuse drags
+   * on projected geometry — they snap back on the next regen and
+   * confuse the user. */
+  private _pointsBelongToProjectedEntity(state: SketchState, pointIds: string[]): boolean {
+    const anchors = this._projectedAnchorPoints(state);
+    for (const id of pointIds) if (anchors.has(id)) return true;
+    return false;
   }
 
   /** Walk the point↔point coincident graph from a seed set and return the
@@ -1289,9 +1580,18 @@ export class CadSketchEditorComponent implements OnDestroy {
     const dragged = new Set(this.dragState()?.points.map(p => p.id) ?? []);
     let result;
     if (dragged.size > 0) {
+      // Projected-entity anchors are FIXED (their coords come from
+      // the body's source edge each regen). Exclude them from
+      // movable so the solver can't slide them around to satisfy a
+      // coincident-with-projected constraint while the user is
+      // dragging a free entity tied to them.
+      const projectedAnchors = this._projectedAnchorPoints(state);
       const movable = new Set<string>();
       for (const e of state.entities) {
-        if (e.kind === 'point' && !dragged.has(e.id)) movable.add(e.id);
+        if (e.kind !== 'point') continue;
+        if (dragged.has(e.id)) continue;
+        if (projectedAnchors.has(e.id)) continue;
+        movable.add(e.id);
       }
       // Pin curve radii so circles / arcs can't grow or shrink to satisfy
       // constraints during the drag. The user is just translating the
@@ -1351,19 +1651,39 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.selected.set(next);
   }
 
-  private handleLineClick(x: number, y: number) {
+  /** Shared handler for Line, Centerline, and Midpoint Line. The three
+   * tools draw the same way — first click sets the start, second click
+   * commits the line — but differ in what they emit:
+   *   - `normal`       → plain line entity.
+   *   - `construction` → line entity with `construction: true` (dashed
+   *     reference geometry, doesn't participate in profile loops).
+   *   - `midpoint`     → plain line plus a fresh point pinned via
+   *     `midpoint(point, line)` so the user can reference / dimension
+   *     the line's midpoint without manually building it.
+   */
+  private handleLineClick(x: number, y: number, mode: 'normal' | 'construction' | 'midpoint' = 'normal') {
     const start = this.draftLineStart();
     if (!start) {
-      // First click of a chain. Always create a fresh endpoint for the new
-      // line, but if the click lands on an existing point, also pin it
-      // there via a `coincident` constraint — SW-style: each entity owns
-      // its endpoints, shared positions are enforced by constraints
-      // rather than reused entity ids.
+      // First click of a chain. Always create a fresh endpoint for the
+      // new line, but if the click lands on an existing point OR an
+      // existing curve (sketched or converted), pin the new endpoint
+      // with a coincident — SW-style: each entity owns its endpoints,
+      // shared positions / on-curve placement are enforced by
+      // constraints rather than reused entity ids.
       let s = this.state();
       const nearby = this.findNearbyPoint(x, y);
-      const r = addPoint(s, nearby ? nearby.x : x, nearby ? nearby.y : y);
-      s = r.state;
-      if (nearby) s = addConstraint(s, 'coincident', [r.id, nearby.id]).state;
+      if (nearby) {
+        const r = addPoint(s, nearby.x, nearby.y); s = r.state;
+        s = addConstraint(s, 'coincident', [r.id, nearby.id]).state;
+        this.commit(s);
+        this.draftLineStart.set(r.id);
+        return;
+      }
+      const snap = this._snapClickToPoint(x, y);
+      const r = addPoint(s, snap.x, snap.y); s = r.state;
+      if (snap.onCurveId) {
+        s = addConstraint(s, 'coincident', [r.id, snap.onCurveId]).state;
+      }
       this.commit(s);
       this.draftLineStart.set(r.id);
       return;
@@ -1374,14 +1694,20 @@ export class CadSketchEditorComponent implements OnDestroy {
     // when the cursor is in open space).
     const startPt = findPoint(this.state(), start);
     let snapped = { x, y };
-    let pending: PendingConstraint | null = null;
+    let pendings: PendingConstraint[] = [];
     const nearby = this.findNearbyPoint(x, y);
     if (nearby) {
       snapped = { x: nearby.x, y: nearby.y };
     } else if (startPt) {
       const inf = inferLineEnd(this.state(), startPt, { x, y });
       snapped = inf.snapped;
-      pending = inf.constraint;
+      // Apply EVERY inference constraint the hover fired — e.g. when
+      // hovering on a vertical converted line whose snap point also
+      // happens to be horizontal-from-start, we'll add both
+      // coincident-on-line AND horizontal so the new line is fully
+      // constrained on commit. Falls back to the legacy single-
+      // constraint shape for back-compat.
+      pendings = inf.constraints ?? (inf.constraint ? [inf.constraint] : []);
     }
 
     // Zero-length self-line guard: if the snapped endpoint sits at the
@@ -1403,42 +1729,94 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (nearby) {
       s = addConstraint(s, 'coincident', [endId, nearby.id]).state;
       // Snapping onto an existing point dominates inference (horizontal/
-      // vertical/on-line) — drop the pending constraint so we don't
+      // vertical/on-line) — drop the pending constraints so we don't
       // over-constrain.
-      pending = null;
+      pendings = [];
     }
-    const ln = addLine(s, start, endId);
+    const ln = addLine(s, start, endId, { construction: mode === 'construction' });
     s = ln.state;
-    if (pending) s = applyPendingConstraint(s, ln.id, pending);
+    for (const p of pendings) s = applyPendingConstraint(s, ln.id, p);
+    if (mode === 'midpoint') {
+      // Midpoint Line: emit a fresh point at the visual midpoint of the
+      // line and constrain it via `midpoint(point, line)`. The solver
+      // keeps it pinned even as the line's endpoints move.
+      const startCoords = findPoint(s, start);
+      const endCoords = findPoint(s, endId);
+      if (startCoords && endCoords) {
+        const mid = addPoint(s, (startCoords.x + endCoords.x) / 2, (startCoords.y + endCoords.y) / 2);
+        s = mid.state;
+        s = addConstraint(s, 'midpoint', [mid.id, ln.id]).state;
+      }
+    }
     this.commit(s);
     // Click landed on an existing point (closing the chain or branching) →
     // end the chain. Otherwise continue from the just-placed endpoint so
-    // the user can keep walking a polyline.
-    this.draftLineStart.set(nearby ? null : endId);
+    // the user can keep walking a polyline. Midpoint Line is a single-
+    // segment tool (chains don't add useful midpoint geometry).
+    this.draftLineStart.set(nearby || mode === 'midpoint' ? null : endId);
   }
 
   private handleCircleClick(x: number, y: number) {
     const center = this.draftCircleCenter();
     if (!center) {
-      this.draftCircleCenter.set({ x, y });
+      this.draftCircleCenter.set(this._snapClickToPoint(x, y));
       return;
     }
-    const radius = Math.hypot(x - center.x, y - center.y);
+    // Snap the second (radius-defining) click to an existing point too
+    // so the circumference can be locked via a coincident constraint —
+    // SolidWorks-style "click center, click point on circumference."
+    const onCircum = this._snapClickToPoint(x, y);
+    const radius = Math.hypot(onCircum.x - center.x, onCircum.y - center.y);
     if (radius < 0.5) return;  // ignore second click on top of first
-    this.commit(addCircle(this.state(), center.x, center.y, radius).state);
+    let s = this.state();
+    let circleId: string;
+    if (center.pointId) {
+      // Reuse the existing point as the center — no synthetic
+      // coincident-with-original-point pair.
+      const r = addCircleByPoint(s, center.pointId, radius);
+      s = r.state; circleId = r.id;
+    } else {
+      const r = addCircle(s, center.x, center.y, radius);
+      s = r.state; circleId = r.id;
+      // SW-style: clicking ON a curve drops the center as a point and
+      // pins it with coincident-on-curve. We need the center point's
+      // id, which addCircle synthesised; find it via the new circle
+      // entity's centerId.
+      if (center.onCurveId) {
+        const newCircle = s.entities.find(e => e.id === circleId);
+        if (newCircle && newCircle.kind === 'circle') {
+          s = addConstraint(s, 'coincident', [newCircle.centerId, center.onCurveId]).state;
+        }
+      }
+    }
+    if (onCircum.pointId) {
+      // Lock the radius: with the center pinned and a point on the
+      // circumference, |P - C| = R locks R via the existing
+      // pointCurveResid residual. Adds a green-friendly DOF.
+      s = addConstraint(s, 'coincident', [onCircum.pointId, circleId]).state;
+    } else if (onCircum.onCurveId) {
+      // Second click landed on another curve — synthesise a point on
+      // the circumference of the new circle that's ALSO coincident
+      // with that curve. Locks the intersection between circles /
+      // arcs / lines without the user adding it explicitly.
+      const pp = addPoint(s, onCircum.x, onCircum.y); s = pp.state;
+      s = addConstraint(s, 'coincident', [pp.id, circleId]).state;
+      s = addConstraint(s, 'coincident', [pp.id, onCircum.onCurveId]).state;
+    }
+    this.commit(s);
     this.draftCircleCenter.set(null);
   }
 
   private handleArcClick(x: number, y: number) {
     const center = this.draftArcCenter();
     if (!center) {
-      this.draftArcCenter.set({ x, y });
+      this.draftArcCenter.set(this._snapClickToPoint(x, y));
       return;
     }
     const start = this.draftArcStart();
     if (!start) {
       if (Math.hypot(x - center.x, y - center.y) < 0.5) return;
-      this.draftArcStart.set({ x, y });
+      this.draftArcStart.set(this._snapClickToPoint(x, y));
       return;
     }
     // Choose ccw=true when the (start → end) sweep around the center is positive.
@@ -1448,9 +1826,97 @@ export class CadSketchEditorComponent implements OnDestroy {
     while (delta <= -Math.PI) delta += 2 * Math.PI;
     while (delta > Math.PI) delta -= 2 * Math.PI;
     const ccw = delta >= 0;
-    this.commit(addArc(this.state(), center.x, center.y, start.x, start.y, x, y, ccw).state);
+    const end = this._snapClickToPoint(x, y);
+    // Any of center / start / end snapping to an existing point OR
+    // curve: use addArcByPoints so existing point ids are reused and
+    // on-curve clicks pick up a coincident-with-curve constraint.
+    // arc_rules in the solver reconciles the radius if the snapped
+    // end isn't exactly |start - center| away from the center.
+    if (center.pointId || start.pointId || end.pointId
+        || center.onCurveId || start.onCurveId || end.onCurveId) {
+      let s = this.state();
+      const ensurePointId = (pp: PendingPoint): string => {
+        if (pp.pointId) return pp.pointId;
+        const r = addPoint(s, pp.x, pp.y);
+        s = r.state;
+        // SW-style: clicking ON a curve drops a coincident-on-curve
+        // anchor. Works the same for sketched and converted curves.
+        if (pp.onCurveId) s = addConstraint(s, 'coincident', [r.id, pp.onCurveId]).state;
+        return r.id;
+      };
+      const centerId = ensurePointId(center);
+      const startId = ensurePointId(start);
+      const endId = ensurePointId(end);
+      const ar = addArcByPoints(s, centerId, startId, endId, ccw);
+      this.commit(ar.state);
+    } else {
+      this.commit(addArc(this.state(), center.x, center.y, start.x, start.y, x, y, ccw).state);
+    }
     this.draftArcCenter.set(null);
     this.draftArcStart.set(null);
+  }
+
+  /** Convert a raw click into a PendingPoint, snapping onto an existing
+   * point entity if the click landed on one (within the standard point-
+   * pick tolerance). Used by every click in the circle/arc tools so a
+   * snapped click either reuses the point id directly (center / start)
+   * or anchors the curve via a coincident constraint (circle
+   * circumference / arc end). */
+  private _snapClickToPoint(x: number, y: number): PendingPoint {
+    const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
+    if (picked?.kind === 'point') {
+      // Use the existing point's authoritative coords so the new
+      // entity lands precisely on it rather than at the cursor's
+      // sub-pixel offset.
+      return { x: picked.x, y: picked.y, pointId: picked.id };
+    }
+    // Curve hit (sketched or converted line/arc/circle) — project the
+    // click onto the curve and remember which curve we hit. The
+    // entity commit then anchors the new point to it via coincident.
+    const onCurve = this._projectClickOntoCurve(picked, x, y);
+    if (onCurve) return onCurve;
+    return { x, y };
+  }
+
+  /** Project a click onto a picked curve and return a PendingPoint
+   * carrying the projected coords plus `onCurveId`. Returns null when
+   * the picked entity isn't a curve (or when its support points are
+   * missing). Used by every "click to drop a point" tool so they all
+   * snap onto sketched and converted curves identically. */
+  private _projectClickOntoCurve(
+    picked: SketchEntity | null | undefined, x: number, y: number,
+  ): PendingPoint | null {
+    if (!picked) return null;
+    const state = this.state();
+    if (picked.kind === 'line') {
+      const a = findPoint(state, picked.startId);
+      const b = findPoint(state, picked.endId);
+      if (!a || !b) return null;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len2 = dx * dx + dy * dy;
+      if (len2 < 1e-12) return null;
+      const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / len2));
+      return { x: a.x + dx * t, y: a.y + dy * t, onCurveId: picked.id };
+    }
+    if (picked.kind === 'circle') {
+      const c = findPoint(state, picked.centerId);
+      if (!c) return null;
+      const ddx = x - c.x, ddy = y - c.y;
+      const len = Math.hypot(ddx, ddy) || 1;
+      return { x: c.x + picked.radius * ddx / len, y: c.y + picked.radius * ddy / len, onCurveId: picked.id };
+    }
+    if (picked.kind === 'arc') {
+      const c = findPoint(state, picked.centerId);
+      if (!c) return null;
+      const ddx = x - c.x, ddy = y - c.y;
+      const len = Math.hypot(ddx, ddy) || 1;
+      // Project onto the arc's circle. Coincident-with-arc will pull
+      // the point onto the sweep at solve time if it landed off-sweep;
+      // pickEntity won't return an arc unless the click was already
+      // near the arc's actual extent, so this is rarely an issue.
+      return { x: c.x + picked.radius * ddx / len, y: c.y + picked.radius * ddy / len, onCurveId: picked.id };
+    }
+    return null;
   }
 
   // ─── construction toggle ──────────────────────────────────────────────
@@ -1464,7 +1930,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     return sel.every(e => e.construction === true);
   }
 
-  constructionIcon = computed(() => this.allSelectedConstructionForIcon() ? 'edit' : 'edit_off');
+  constructionIcon = computed(() => this.allSelectedConstructionForIcon() ? 'cad-construction' : 'cad-line');
   constructionLabel = computed(() => this.allSelectedConstructionForIcon() ? 'Make Normal' : 'Make Cons.');
   constructionTooltip = computed(() => {
     const sel = this.selectedEntities();
@@ -1489,6 +1955,33 @@ export class CadSketchEditorComponent implements OnDestroy {
     const next = setConstructionFlag(this.state(), ids, nextValue);
     this.commit(next);
     this.selected.set(new Set());
+  }
+
+  /** Selection contains at least one entity locked by an on-edge
+   * constraint (Convert Entities link) — Break Link button is enabled. */
+  hasProjectedSelection = computed<boolean>(() => {
+    const state = this.state();
+    return this.selectedEntities().some(e => isProjectedEntity(state, e.id));
+  });
+
+  /** Drop every on-edge constraint that targets a selected entity.
+   * After break, the entity stays in place but stops auto-updating
+   * when the source feature changes — and the user can edit it freely. */
+  breakProjectionLink(): void {
+    if (this.readonly()) return;
+    const state = this.state();
+    const projectedIds = new Set(
+      this.selectedEntities().filter(e => isProjectedEntity(state, e.id)).map(e => e.id),
+    );
+    if (projectedIds.size === 0) return;
+    const next: SketchState = {
+      ...state,
+      constraints: state.constraints.filter(c => {
+        if (c.type !== 'on-edge') return true;
+        return !c.targets.some(t => projectedIds.has(t.entityId));
+      }),
+    };
+    this.commit(next);
   }
 
   // ─── smart dimension ──────────────────────────────────────────────────
@@ -1573,25 +2066,201 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.selected.set(new Set());
   }
 
+  /** Offset click: PropertyManager-style — each click toggles a curve
+   * in the queue rather than applying immediately. The cursor position
+   * is remembered as the offset's `sidePoint` (used by `offsetCurve`
+   * to figure out which side of the curve to offset toward). The
+   * sidebar's OK button commits every queued curve in one batch.
+   *
+   * Chain mode (`offsetChainMode`): clicking one curve also pulls in
+   * every curve connected to it through shared endpoints — handy for
+   * offsetting a whole polyline / closed loop without clicking each
+   * segment. Each chained curve uses the original click's cursor
+   * position as its sidePoint; for tightly-curved chains the result
+   * may need a flip pass, but the common case (gently-curved chains)
+   * comes out consistent. */
   private handleOffsetClick(x: number, y: number) {
-    let d = this.offsetDistance();
-    if (d === null) {
-      // First click after entering Offset is consumed by the prompt only —
-      // the user hasn't picked a curve yet (they're just answering "how
-      // far?"). Subsequent clicks pick the curve and apply the offset.
-      const raw = window.prompt('Offset distance:', '5');
-      if (raw === null) { this.tool.set('select'); return; }
-      const parsed = parseFloat(raw);
-      if (!isFinite(parsed) || parsed <= 0) { this.tool.set('select'); return; }
-      this.offsetDistance.set(parsed);
-      return;
-    }
     const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
     if (!picked) return;
-    const result = offsetCurve(this.state(), picked.id, d, { x, y });
-    if (result.error) { console.warn('Offset:', result.error); return; }
-    this.commit(result.state);
-    this.selected.set(new Set());
+    if (picked.kind !== 'line' && picked.kind !== 'circle' && picked.kind !== 'arc') {
+      console.warn('Offset: only lines, circles, and arcs can be offset');
+      return;
+    }
+    // Construction geometry is allowed — SW behavior. The pure-op
+    // (offsetCurve / offsetChain) accepts it, and a construction-line
+    // offset is useful for building reference geometry without
+    // affecting profile extraction.
+    const next = new Map(this.offsetSelections());
+    if (next.has(picked.id)) {
+      // Toggle off — and if we're in chain mode, drop the chain
+      // group around this pick so the user can clear a whole chain
+      // by re-clicking any member.
+      if (this.offsetChainMode()) {
+        for (const id of findChainedEntities(this.state(), picked.id)) next.delete(id);
+      } else {
+        next.delete(picked.id);
+      }
+    } else {
+      const seedSidePoint = { x, y };
+      next.set(picked.id, { sidePoint: seedSidePoint });
+      if (this.offsetChainMode()) {
+        // Delegate to the chain-aware propagation helper. It walks
+        // the chain in traversal order so each curve's sidePoint is
+        // computed in the same direction relative to the chain
+        // (open chain) or the same in/out region of the loop
+        // (closed chain). Without this, segments stored with mixed
+        // directions ended up on opposite sides of the chain.
+        const chainIds = findChainedEntities(this.state(), picked.id);
+        const propagated = propagateOffsetSides(this.state(), picked.id, seedSidePoint, chainIds);
+        for (const [id, sp] of propagated) {
+          if (!next.has(id)) next.set(id, { sidePoint: sp });
+        }
+      }
+    }
+    this.offsetSelections.set(next);
+  }
+
+  /** Compute the offset RESULT state without committing it. Used by
+   * both the commit path (run it, then commit + tool-exit) and the
+   * preview path (run it, then tessellate the new entities so the
+   * viewer can render dashed ghosts). Centralizing the computation
+   * keeps preview ⇔ commit visually identical. */
+  private computeOffsetResult(): { state: SketchState; newIds: string[] } | null {
+    const dist = this.offsetDistance();
+    const queue = this.offsetSelections();
+    if (queue.size === 0 || dist <= 0) return null;
+    const items = [...queue].map(([id, v]) => ({ entityId: id, sidePoint: v.sidePoint }));
+    const r = offsetChain(this.state(), items, dist, {
+      bothDirections: this.offsetBothDirections(),
+      fillCorners: this.offsetFillCorners(),
+      // Linking adds constraints (parallel / concentric +
+      // dimensional dim). Skipped for bothDirections because the
+      // two passes would conflict over the same dim value.
+      linkToOriginals: !this.offsetBothDirections(),
+    });
+    if (r.error) {
+      console.warn('Offset:', r.error);
+      return null;
+    }
+    // window.__cadDebug dump — captures the inputs (sources +
+    // sidePoints) and outputs (newIds + their geometry) so we can
+    // tell where the corner reconciliation is misfiring.
+    if (typeof globalThis !== 'undefined' && (globalThis as { __cadDebug?: boolean }).__cadDebug) {
+      const itemDump = items.map(it => {
+        const ent = this.state().entities.find(e => e.id === it.entityId);
+        const span = ent && ent.kind === 'line'
+          ? (() => {
+              const a = findPoint(this.state(), ent.startId);
+              const b = findPoint(this.state(), ent.endId);
+              return a && b ? `(${a.x.toFixed(2)},${a.y.toFixed(2)}) → (${b.x.toFixed(2)},${b.y.toFixed(2)})` : null;
+            })()
+          : null;
+        return { id: it.entityId, kind: ent?.kind, span, sidePoint: it.sidePoint };
+      });
+      const outDump = (r.affectedIds ?? []).map(id => {
+        const ent = r.state.entities.find(e => e.id === id);
+        if (!ent) return { id, kind: null };
+        if (ent.kind === 'line') {
+          const a = findPoint(r.state, ent.startId);
+          const b = findPoint(r.state, ent.endId);
+          return { id, kind: 'line', start: a ? { x: a.x, y: a.y } : null, end: b ? { x: b.x, y: b.y } : null };
+        }
+        if (ent.kind === 'arc') {
+          const c = findPoint(r.state, ent.centerId);
+          const a = findPoint(r.state, ent.startId);
+          const b = findPoint(r.state, ent.endId);
+          return { id, kind: 'arc', center: c, start: a, end: b, radius: ent.radius, ccw: ent.ccw };
+        }
+        return { id, kind: ent.kind };
+      });
+      // eslint-disable-next-line no-console
+      console.log('[cad-offset]\n' + JSON.stringify({
+        distance: dist,
+        bothDirections: this.offsetBothDirections(),
+        fillCorners: this.offsetFillCorners(),
+        keepConstruction: this.offsetKeepConstruction(),
+        chainMode: this.offsetChainMode(),
+        inputs: itemDump,
+        outputs: outDump,
+        opError: r.error,
+      }, null, 2));
+    }
+    let s = r.state;
+    if (this.offsetKeepConstruction()) {
+      s = setConstructionFlag(s, [...queue.keys()], true);
+    }
+    return { state: s, newIds: r.affectedIds ?? [] };
+  }
+
+  /** Commit the queued offsets in one batch via `offsetChain`. The
+   * chain op handles corner reconciliation (arc filler at convex
+   * corners, intersect-trim at concave corners) and the both-
+   * directions flag for free. */
+  commitOffset() {
+    const r = this.computeOffsetResult();
+    if (!r) return;
+    this.commit(r.state);
+    this.offsetSelections.set(new Map());
+    this.tool.set('select');
+  }
+
+  /** Reactive preview state derived from the offset queue + settings.
+   * Returns the IDs of new entities that would be created on commit,
+   * AND the SketchState that contains them (so the viewer can read
+   * their geometry to tessellate the ghost). Null when the queue is
+   * empty or the result is invalid. The cad-viewer reads these via
+   * a parent computed and renders them as dashed orange polylines. */
+  offsetPreviewState = computed<{ state: SketchState; newIds: string[] } | null>(() => {
+    if (this.tool() !== 'offset') return null;
+    // Touch the inputs so this computed invalidates when any of them
+    // change — distance, queue contents, both-directions, fill-
+    // corners.
+    void this.offsetSelections();
+    void this.offsetDistance();
+    void this.offsetBothDirections();
+    void this.offsetFillCorners();
+    void this.state();
+    return this.computeOffsetResult();
+  });
+
+  /** Sidebar Cancel — drop the queue and go back to Select. */
+  cancelOffset() {
+    this.offsetSelections.set(new Map());
+    this.tool.set('select');
+  }
+
+  /** Sidebar entity-row × button — drop a single curve from the
+   * queue. Used when the user picked something wrong without
+   * needing to re-click in the canvas. */
+  removeOffsetSelection(id: string) {
+    const next = new Map(this.offsetSelections());
+    next.delete(id);
+    this.offsetSelections.set(next);
+  }
+
+  /** Sidebar "Flip side" button — toggles which side of every
+   * queued curve the offset lands on. Mirrors each entity's
+   * sidePoint across its own geometry, so the next preview /
+   * commit goes the opposite direction. */
+  flipOffsetSide() {
+    const s = this.state();
+    const next = new Map<string, { sidePoint: { x: number; y: number } }>();
+    for (const [id, { sidePoint }] of this.offsetSelections()) {
+      next.set(id, { sidePoint: flipSidePoint(s, id, sidePoint) });
+    }
+    this.offsetSelections.set(next);
+  }
+
+  /** Per-row flip — toggles the side for ONLY the one queued curve
+   * rather than all of them. Lets the user mix in/out offsets in
+   * the same batch (e.g., offset two chain segments outward and one
+   * inward without separating into two commits). */
+  flipOffsetSelectionSide(id: string) {
+    const entry = this.offsetSelections().get(id);
+    if (!entry) return;
+    const next = new Map(this.offsetSelections());
+    next.set(id, { sidePoint: flipSidePoint(this.state(), id, entry.sidePoint) });
+    this.offsetSelections.set(next);
   }
 
   /** Fillet — prompts for radius on first entry, then either:
@@ -1615,12 +2284,14 @@ export class CadSketchEditorComponent implements OnDestroy {
     const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
     if (!picked) return;
     if (picked.kind !== 'point') {
-      console.warn('Fillet: click a corner point (a vertex shared by two lines)');
+      console.warn('Fillet: click a corner point (a vertex shared by two curves)');
       return;
     }
-    const lines = this.linesIncidentTo(this.state(), picked.id);
-    if (lines.length !== 2) {
-      console.warn('Fillet: clicked point is not shared by exactly two lines');
+    // Allow corners shared by ANY two non-construction curves (line
+    // or arc) — supports line+line, line+arc, and arc+arc fillets.
+    const curves = this.curvesIncidentTo(this.state(), picked.id);
+    if (curves.length !== 2) {
+      console.warn('Fillet: clicked point is not shared by exactly two curves');
       return;
     }
     const next = new Set(this.filletCorners());
@@ -1651,11 +2322,29 @@ export class CadSketchEditorComponent implements OnDestroy {
     let s = this.state();
     const newArcIds: string[] = [];
     for (const id of corners) {
-      const lines = this.linesIncidentTo(s, id);
-      if (lines.length !== 2) continue;
-      const result = filletLines(s, lines[0].id, lines[1].id, r, {
-        keepRemovedAsConstruction: this.filletKeepConstruction(),
-      });
+      const curves = this.curvesIncidentTo(s, id);
+      if (curves.length !== 2) continue;
+      const [c1, c2] = curves;
+      // Dispatch by kind pair: line+line uses the existing fillet,
+      // mixed line+arc uses the new filletLineArc, arc+arc is not
+      // yet supported.
+      let result: ReturnType<typeof filletLines> | null = null;
+      if (c1.kind === 'line' && c2.kind === 'line') {
+        result = filletLines(s, c1.id, c2.id, r, {
+          keepRemovedAsConstruction: this.filletKeepConstruction(),
+        });
+      } else if (c1.kind === 'line' && c2.kind === 'arc') {
+        result = filletLineArc(s, c1.id, c2.id, r, {
+          keepRemovedAsConstruction: this.filletKeepConstruction(),
+        });
+      } else if (c1.kind === 'arc' && c2.kind === 'line') {
+        result = filletLineArc(s, c2.id, c1.id, r, {
+          keepRemovedAsConstruction: this.filletKeepConstruction(),
+        });
+      } else {
+        console.warn(`Fillet at ${id}: arc+arc not yet supported`);
+        continue;
+      }
       if (result.error) { console.warn(`Fillet at ${id}:`, result.error); continue; }
       s = result.state;
       if (result.affectedIds) {
@@ -1690,13 +2379,13 @@ export class CadSketchEditorComponent implements OnDestroy {
   }
 
   /** Pre-selected corners eligible for batch fillet — points whose
-   * coincident-group has exactly two incident lines. */
+   * coincident-group has exactly two incident curves (line or arc). */
   private cornersInSelection(): string[] {
     const out: string[] = [];
     for (const e of this.selectedEntities()) {
       if (e.kind !== 'point') continue;
-      const lines = this.linesIncidentTo(this.state(), e.id);
-      if (lines.length === 2) out.push(e.id);
+      const curves = this.curvesIncidentTo(this.state(), e.id);
+      if (curves.length === 2) out.push(e.id);
     }
     return out;
   }
@@ -1707,9 +2396,19 @@ export class CadSketchEditorComponent implements OnDestroy {
   private batchFilletCorners(cornerIds: string[], radius: number) {
     let s = this.state();
     for (const id of cornerIds) {
-      const lines = this.linesIncidentTo(s, id);
-      if (lines.length !== 2) continue;
-      const result = filletLines(s, lines[0].id, lines[1].id, radius);
+      const curves = this.curvesIncidentTo(s, id);
+      if (curves.length !== 2) continue;
+      const [c1, c2] = curves;
+      let result: ReturnType<typeof filletLines> | null = null;
+      if (c1.kind === 'line' && c2.kind === 'line') {
+        result = filletLines(s, c1.id, c2.id, radius);
+      } else if (c1.kind === 'line' && c2.kind === 'arc') {
+        result = filletLineArc(s, c1.id, c2.id, radius);
+      } else if (c1.kind === 'arc' && c2.kind === 'line') {
+        result = filletLineArc(s, c2.id, c1.id, radius);
+      } else {
+        continue;
+      }
       if (result.error) {
         console.warn(`Fillet at ${id}:`, result.error);
         continue;
@@ -1738,12 +2437,38 @@ export class CadSketchEditorComponent implements OnDestroy {
    * by clicking into open space at a corner location, not by snapping
    * to an existing point. Position matching catches all three.
    */
+  /** Lines (excluding construction) ending at or coincident with the
+   * given point. Used by Fillet + Chamfer to identify a corner — both
+   * tools only operate on real geometry, so a construction line passing
+   * through the same vertex is intentionally ignored. This lets the
+   * user fillet two normal lines that share a corner even when a
+   * construction diagonal also meets there (REQ 642). */
   linesIncidentTo(state: SketchState, pointId: string): LineEntity[] {
     const pt = findPoint(state, pointId);
     if (!pt) return [];
     const out: LineEntity[] = [];
     for (const e of state.entities) {
       if (e.kind !== 'line') continue;
+      if (e.construction) continue;
+      const a = findPoint(state, e.startId);
+      const b = findPoint(state, e.endId);
+      const aAt = a && Math.hypot(a.x - pt.x, a.y - pt.y) < LINES_INCIDENT_TOL;
+      const bAt = b && Math.hypot(b.x - pt.x, b.y - pt.y) < LINES_INCIDENT_TOL;
+      if (aAt || bAt) out.push(e);
+    }
+    return out;
+  }
+
+  /** Same as `linesIncidentTo` but also matches arcs whose start or
+   * end endpoint sits at `pointId`. Used by Fillet so line+arc and
+   * arc+arc corners can be picked alongside line+line ones. */
+  curvesIncidentTo(state: SketchState, pointId: string): Array<LineEntity | ArcEntity> {
+    const pt = findPoint(state, pointId);
+    if (!pt) return [];
+    const out: Array<LineEntity | ArcEntity> = [];
+    for (const e of state.entities) {
+      if (e.construction) continue;
+      if (e.kind !== 'line' && e.kind !== 'arc') continue;
       const a = findPoint(state, e.startId);
       const b = findPoint(state, e.endId);
       const aAt = a && Math.hypot(a.x - pt.x, a.y - pt.y) < LINES_INCIDENT_TOL;
@@ -2049,6 +2774,136 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.commit(result.state);
   }
 
+  /** Jog Line — three clicks:
+   *   1. Pick the line.
+   *   2. Click the jog START: along position is the click's projection
+   *      onto the line; perpendicular offset is the click's distance
+   *      from the line.
+   *   3. Click the jog END: along position is the click's projection.
+   * Calls `jogLineAt(line, t1, t2, perpOffset)` which replaces the
+   * line with a 5-segment Z-jog.
+   */
+  private handleJogClick(x: number, y: number) {
+    const draft = this.draftJog();
+    if (!draft.lineId) {
+      const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
+      if (!picked || picked.kind !== 'line') return;
+      this.draftJog.set({ lineId: picked.id });
+      return;
+    }
+    const ln = findEntity<LineEntity>(this.state(), draft.lineId);
+    if (!ln) { this.draftJog.set({}); return; }
+    const a = findPoint(this.state(), ln.startId);
+    const b = findPoint(this.state(), ln.endId);
+    if (!a || !b) { this.draftJog.set({}); return; }
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) { this.draftJog.set({}); return; }
+    const ux = dx / len, uy = dy / len;
+    const nx = -uy, ny = ux;
+    const along = (px: number, py: number) => ((px - a.x) * ux + (py - a.y) * uy) / len;
+    const perp = (px: number, py: number) => (px - a.x) * nx + (py - a.y) * ny;
+    if (!draft.start) {
+      this.draftJog.set({ lineId: draft.lineId, start: { x, y } });
+      return;
+    }
+    const t1 = along(draft.start.x, draft.start.y);
+    const perpOffset = perp(draft.start.x, draft.start.y);
+    const t2 = along(x, y);
+    const result = jogLineAt(this.state(), draft.lineId, t1, t2, perpOffset);
+    if (result.error) {
+      console.warn('Jog:', result.error);
+      this.draftJog.set({});
+      return;
+    }
+    this.commit(result.state);
+    this.draftJog.set({});
+  }
+
+  /** Stretch — same two-click gesture as Move, but only translates the
+   * POINTS in the selection (lines stretch as their endpoints move).
+   * Pre-select via rubber-band; bare line selections won't move
+   * anything since stretchEntities ignores non-point ids. */
+  private handleStretchClick(x: number, y: number) {
+    if (this.selected().size === 0) {
+      console.warn('Stretch: select points (and any entities you want to drag) first');
+      return;
+    }
+    const ref = this.draftStretchRef();
+    if (!ref) { this.draftStretchRef.set({ x, y }); return; }
+    const dx = x - ref.x, dy = y - ref.y;
+    const result = stretchEntities(this.state(), Array.from(this.selected()), dx, dy);
+    if (result.error) { console.warn('Stretch:', result.error); this.draftStretchRef.set(null); return; }
+    this.commit(result.state);
+    this.draftStretchRef.set(null);
+  }
+
+  /** Linear pattern — pre-select entities, then two clicks define the
+   * spacing vector. Prompt asks for instance count (>= 2). The first
+   * click pins the "from" point; the second click's delta becomes the
+   * step vector. */
+  private handlePatternLinearClick(x: number, y: number) {
+    if (this.selected().size === 0) {
+      console.warn('Linear pattern: select entities first');
+      return;
+    }
+    const ref = this.draftPatternRef();
+    if (!ref) { this.draftPatternRef.set({ x, y }); return; }
+    const dx = x - ref.x, dy = y - ref.y;
+    if (Math.hypot(dx, dy) < 1) { this.draftPatternRef.set(null); return; }
+    const raw = window.prompt('Number of instances (including original):', '3');
+    if (raw === null) { this.draftPatternRef.set(null); return; }
+    const n = parseInt(raw, 10);
+    if (!isFinite(n) || n < 2) { console.warn('Linear pattern: count must be >= 2'); this.draftPatternRef.set(null); return; }
+    const result = linearPatternEntities(this.state(), Array.from(this.selected()), dx, dy, n);
+    if (result.error) { console.warn('Linear pattern:', result.error); this.draftPatternRef.set(null); return; }
+    this.commit(result.state);
+    this.draftPatternRef.set(null);
+  }
+
+  /** Circular pattern — pre-select entities, click center, prompt for
+   * count + total sweep angle (degrees). */
+  private handlePatternCircularClick(x: number, y: number) {
+    if (this.selected().size === 0) {
+      console.warn('Circular pattern: select entities first');
+      return;
+    }
+    const rawN = window.prompt('Number of instances (including original):', '6');
+    if (rawN === null) return;
+    const n = parseInt(rawN, 10);
+    if (!isFinite(n) || n < 2) { console.warn('Circular pattern: count must be >= 2'); return; }
+    const rawA = window.prompt('Total sweep angle (degrees, CCW positive). Use 360 for a full circle:', '360');
+    if (rawA === null) return;
+    const totalDeg = parseFloat(rawA);
+    if (!isFinite(totalDeg) || Math.abs(totalDeg) < 1) { console.warn('Circular pattern: invalid angle'); return; }
+    const result = circularPatternEntities(
+      this.state(), Array.from(this.selected()), { x, y }, totalDeg * Math.PI / 180, n,
+    );
+    if (result.error) { console.warn('Circular pattern:', result.error); return; }
+    this.commit(result.state);
+  }
+
+  /** Dynamic mirror — click a line to set as the live mirror axis.
+   * Every subsequent draw commit gets mirrored across it (see the
+   * dynamic-mirror branch in `commit`). Clicking the tool again with
+   * an axis already set turns it OFF instead of waiting for another
+   * line click; cleaner than a separate disable button. */
+  private handleDynamicMirrorClick(x: number, y: number) {
+    if (this.dynamicMirrorAxisId() !== null) {
+      // Axis already set → tool click toggles off.
+      this.dynamicMirrorAxisId.set(null);
+      this.tool.set('select');
+      return;
+    }
+    const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
+    if (!picked || picked.kind !== 'line') {
+      console.warn('Dynamic mirror: click on a line to use as the axis');
+      return;
+    }
+    this.dynamicMirrorAxisId.set(picked.id);
+    this.tool.set('select');
+  }
+
   /** Mirror — two-stage gesture driven by the PropertyManager-style sidebar.
    *   Stage 1 ('pick-entities'): each click toggles an entity in the
    *       selection set. The sidebar's first field shows the count.
@@ -2120,27 +2975,37 @@ export class CadSketchEditorComponent implements OnDestroy {
    * them in *ngFor without churning signals. */
   entityShortLabel(e: SketchEntity): string {
     switch (e.kind) {
-      case 'point':         return 'Point';
-      case 'line':          return 'Line';
-      case 'circle':        return 'Circle';
-      case 'arc':           return 'Arc';
-      case 'ellipse':       return 'Ellipse';
-      case 'ellipticalArc': return 'Elliptical arc';
-      case 'spline':        return 'Spline';
-      case 'conic':         return 'Conic';
+      case 'point':            return 'Point';
+      case 'line':             return 'Line';
+      case 'circle':           return 'Circle';
+      case 'arc':              return 'Arc';
+      case 'ellipse':          return 'Ellipse';
+      case 'ellipticalArc':    return 'Elliptical arc';
+      case 'spline':           return 'Spline';
+      case 'conic':            return 'Parabola';
+      case 'text':             return 'Text';
+      case 'picture':          return 'Picture';
+      case 'equation':         return 'Equation curve';
+      case 'intersection':     return 'Intersection curve';
+      case 'splineOnSurface':  return 'Spline on surface';
     }
   }
 
   entityIcon(e: SketchEntity): string {
     switch (e.kind) {
-      case 'point':         return 'radio_button_unchecked';
-      case 'line':          return 'show_chart';
-      case 'circle':        return 'circle';
-      case 'arc':           return 'roundabout_right';
-      case 'ellipse':       return 'panorama_fish_eye';
-      case 'ellipticalArc': return 'line_curve';
-      case 'spline':        return 'gesture';
-      case 'conic':         return 'all_inclusive';
+      case 'point':            return 'radio_button_unchecked';
+      case 'line':             return 'show_chart';
+      case 'circle':           return 'circle';
+      case 'arc':              return 'roundabout_right';
+      case 'ellipse':          return 'panorama_fish_eye';
+      case 'ellipticalArc':    return 'line_curve';
+      case 'spline':           return 'gesture';
+      case 'conic':            return 'all_inclusive';
+      case 'text':             return 'text_fields';
+      case 'picture':          return 'image';
+      case 'equation':         return 'functions';
+      case 'intersection':     return 'merge_type';
+      case 'splineOnSurface':  return 'waves';
     }
   }
 
@@ -2214,7 +3079,12 @@ export class CadSketchEditorComponent implements OnDestroy {
   }
 
   private findSpec(type: ConstraintType): ConstraintSpec | null {
-    return CONSTRAINT_SPECS.find(s => s.type === type) ?? null;
+    // Prefer the regular (non-action) spec when multiple share a type.
+    // Merge Points reuses type='coincident' but is an action button —
+    // it should never be returned as "the spec for `coincident`".
+    return CONSTRAINT_SPECS.find(s => s.type === type && !s.action)
+      ?? CONSTRAINT_SPECS.find(s => s.type === type)
+      ?? null;
   }
 
   /** Hover preview for the Trim / Extend tools. Parent's `sketchPreview`
@@ -2227,18 +3097,37 @@ export class CadSketchEditorComponent implements OnDestroy {
    * the parent dumb: it just folds the result into the existing array.
    */
   editHoverPreview(cursor: { x: number; y: number } | null): {
-    kind: 'edit-hover'; start: { x: number; y: number }; end: { x: number; y: number }; mode: 'remove' | 'add';
+    kind: 'edit-hover'; start: { x: number; y: number }; end: { x: number; y: number };
+    mode: 'remove' | 'add'; points?: { x: number; y: number }[];
   } | null {
     if (!cursor) return null;
     const t = this.tool();
     if (t !== 'trim' && t !== 'extend') return null;
     const picked = pickEntity(this.state(), cursor, this.lastPickTolerance, this.lastPointPickTolerance);
-    if (!picked || picked.kind !== 'line') return null;
+    if (!picked) return null;
     if (t === 'trim') {
-      const seg = previewTrimLine(this.state(), picked.id, cursor);
-      if (!seg) return null;
-      return { kind: 'edit-hover', start: seg.start, end: seg.end, mode: 'remove' };
+      if (picked.kind === 'line') {
+        const seg = previewTrimLine(this.state(), picked.id, cursor);
+        if (!seg) return null;
+        return { kind: 'edit-hover', start: seg.start, end: seg.end, mode: 'remove' };
+      }
+      if (picked.kind === 'circle' || picked.kind === 'arc') {
+        const pts = picked.kind === 'circle'
+          ? previewTrimCircle(this.state(), picked.id, cursor)
+          : previewTrimArc(this.state(), picked.id, cursor);
+        if (!pts || pts.length < 2) return null;
+        return {
+          kind: 'edit-hover',
+          start: pts[0],
+          end: pts[pts.length - 1],
+          mode: 'remove',
+          points: pts,
+        };
+      }
+      return null;
     }
+    // Extend tool — lines only (matches the operation).
+    if (picked.kind !== 'line') return null;
     const seg = previewExtendLine(this.state(), picked.id, cursor);
     if (!seg) return null;
     return { kind: 'edit-hover', start: seg.start, end: seg.end, mode: 'add' };
@@ -2264,6 +3153,17 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (this.readonly()) return;
     const entities = this.selectedEntities();
     if (!spec.predicate(entities)) return;
+    // One-shot actions short-circuit the persisted-constraint path.
+    // Merge Points collapses the second-picked point into the first;
+    // no constraint record gets created.
+    if (spec.action === 'merge-points') {
+      const [keep, drop] = entities;
+      if (keep?.kind === 'point' && drop?.kind === 'point') {
+        this.commit(mergePoints(this.state(), keep.id, drop.id));
+        this.selected.set(new Set());
+      }
+      return;
+    }
     let value: number | undefined;
     if (spec.implicitValue !== undefined) {
       // Skip the prompt entirely — the spec hard-codes the value (e.g.,
@@ -2304,10 +3204,61 @@ export class CadSketchEditorComponent implements OnDestroy {
 
   private handleRectCenterClick(x: number, y: number) {
     const center = this.draftRectCenter();
-    if (!center) { this.draftRectCenter.set({ x, y }); return; }
+    if (!center) {
+      // First click defines the center — snap to an existing point if
+      // the user clicked one (origin or any earlier sketch point). When
+      // snapped, the diagonal's midpoint constraint will target that
+      // existing point at commit, pinning the rectangle to it.
+      this.draftRectCenter.set(this._snapClickToPoint(x, y));
+      return;
+    }
     if (Math.hypot(x - center.x, y - center.y) < 1) return;
-    this.commit(addRectangleCenter(this.state(), center.x, center.y, x, y).state);
+    this.commit(addRectangleCenter(
+      this.state(), center.x, center.y, x, y, center.pointId,
+    ).state);
     this.draftRectCenter.set(null);
+  }
+
+  /** Default rounded-rect corner radius — 10% of the rectangle's
+   * shorter side, with a 1mm floor so degenerate near-square clicks
+   * still produce a usable fillet. Matches SW's "Slot Through Hole"
+   * default of "a fraction of the bounding dimension". */
+  private _defaultRoundedRadius(width: number, height: number): number {
+    return Math.max(1, 0.1 * Math.min(Math.abs(width), Math.abs(height)));
+  }
+
+  /** Rounded corner-anchored rectangle. Two-click gesture: 1st corner,
+   * 2nd corner. The fillet radius defaults to 10% of the shorter side
+   * — no prompt. Users can dimension or drag to change the radius
+   * after commit. */
+  private handleRectRoundedCornerClick(x: number, y: number) {
+    const first = this.draftRectRoundedCorner();
+    if (!first) { this.draftRectRoundedCorner.set({ x, y }); return; }
+    if (Math.hypot(x - first.x, y - first.y) < 1) return;
+    const r = this._defaultRoundedRadius(x - first.x, y - first.y);
+    this.commit(addRoundedRectangleCorners(this.state(), first.x, first.y, x, y, r).state);
+    this.draftRectRoundedCorner.set(null);
+  }
+
+  /** Rounded center-anchored rectangle. First click is the center
+   * (snaps to an existing point if available — same as plain Center
+   * Rectangle). The fillet radius defaults to 10% of the shorter side
+   * and the diagonal construction line runs fillet-center to fillet-
+   * center. */
+  private handleRectRoundedCenterClick(x: number, y: number) {
+    const center = this.draftRectRoundedCenter();
+    if (!center) {
+      this.draftRectRoundedCenter.set(this._snapClickToPoint(x, y));
+      return;
+    }
+    if (Math.hypot(x - center.x, y - center.y) < 1) return;
+    const width = 2 * (x - center.x);
+    const height = 2 * (y - center.y);
+    const r = this._defaultRoundedRadius(width, height);
+    this.commit(addRoundedRectangleCenter(
+      this.state(), center.x, center.y, x, y, r, center.pointId,
+    ).state);
+    this.draftRectRoundedCenter.set(null);
   }
 
   private handlePolygonClick(x: number, y: number) {
@@ -2347,6 +3298,108 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.draftSlotPath.set({});
   }
 
+  /** 3-point corner rectangle: click 1 sets corner A, click 2 sets corner
+   * B along one edge, click 3 picks the offset to the opposite side. */
+  private handleRect3PtCornerClick(x: number, y: number) {
+    const pts = [...this.draftRect3Corner(), { x, y }];
+    if (pts.length < 3) { this.draftRect3Corner.set(pts); return; }
+    const r = addRectangle3PtCorner(this.state(),
+      pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
+    if (r.ids.length > 0) this.commit(r.state);
+    this.draftRect3Corner.set([]);
+  }
+
+  /** 3-point center rectangle: click 1 = center, click 2 = side midpoint
+   * (defines orientation + half-length), click 3 = opposite-side
+   * offset (defines half-width). */
+  private handleRect3PtCenterClick(x: number, y: number) {
+    const pts = [...this.draftRect3Center(), { x, y }];
+    if (pts.length < 3) { this.draftRect3Center.set(pts); return; }
+    const r = addRectangle3PtCenter(this.state(),
+      pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
+    if (r.ids.length > 0) this.commit(r.state);
+    this.draftRect3Center.set([]);
+  }
+
+  /** Parallelogram: 3 corners (4th derived from closure rule). */
+  private handleParallelogramClick(x: number, y: number) {
+    const pts = [...this.draftParallelogram(), { x, y }];
+    if (pts.length < 3) { this.draftParallelogram.set(pts); return; }
+    const r = addParallelogram(this.state(),
+      pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
+    if (r.ids.length > 0) this.commit(r.state);
+    this.draftParallelogram.set([]);
+  }
+
+  /** Centerpoint straight slot: click 1 = slot center, click 2 = one
+   * cap center, click 3 = width (perp distance from centerline). */
+  private handleSlotCenterpointClick(x: number, y: number) {
+    const draft = this.draftSlotCenterpoint();
+    if (!draft.center) { this.draftSlotCenterpoint.set({ center: { x, y } }); return; }
+    if (!draft.cap) {
+      if (Math.hypot(x - draft.center.x, y - draft.center.y) < 1) return;
+      this.draftSlotCenterpoint.set({ center: draft.center, cap: { x, y } }); return;
+    }
+    const dx = draft.cap.x - draft.center.x, dy = draft.cap.y - draft.center.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) { this.draftSlotCenterpoint.set({}); return; }
+    const nx = -dy / len, ny = dx / len;
+    const halfWidth = Math.abs(nx * (x - draft.center.x) + ny * (y - draft.center.y));
+    if (halfWidth < 0.5) return;
+    this.commit(addSlotStraightCenterpoint(
+      this.state(), draft.center.x, draft.center.y, draft.cap.x, draft.cap.y, halfWidth,
+    ).state);
+    this.draftSlotCenterpoint.set({});
+  }
+
+  /** 3-point arc slot: clicks 1-3 define the centerline arc through 3
+   * points, click 4 = width. */
+  private handleSlotArc3Click(x: number, y: number) {
+    const pts = [...this.draftSlotArc3(), { x, y }];
+    if (pts.length < 4) { this.draftSlotArc3.set(pts); return; }
+    // Width = perpendicular distance from the 4th click to the closest
+    // point on the centerline arc — approximated as |radius - distance
+    // from arc center to click|.
+    const r = addSlotArc3Pt(this.state(),
+      pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y,
+      this._widthFromArcWidthClick(pts[0], pts[1], pts[2], pts[3]));
+    if (r.ids.length > 0) this.commit(r.state);
+    this.draftSlotArc3.set([]);
+  }
+
+  /** Centerpoint arc slot: clicks 1 = arc center, 2 = start, 3 = end,
+   * 4 = width. */
+  private handleSlotArcCenterpointClick(x: number, y: number) {
+    const pts = [...this.draftSlotArcCenterpoint(), { x, y }];
+    if (pts.length < 4) { this.draftSlotArcCenterpoint.set(pts); return; }
+    const [c, s, e, w] = pts;
+    const r = Math.hypot(s.x - c.x, s.y - c.y);
+    const halfWidth = Math.abs(r - Math.hypot(w.x - c.x, w.y - c.y));
+    if (halfWidth < 0.5) return;
+    const res = addSlotArcCenterpoint(this.state(),
+      c.x, c.y, s.x, s.y, e.x, e.y, halfWidth);
+    if (res.ids.length > 0) this.commit(res.state);
+    this.draftSlotArcCenterpoint.set([]);
+  }
+
+  /** Helper: derive arc-slot width from a width-click. Computes the
+   * 3-point arc's center analytically, then takes |R - |click - C|| as
+   * the slot half-width. Same formula whether the click is inside or
+   * outside the centerline arc. */
+  private _widthFromArcWidthClick(p1: { x: number; y: number }, p2: { x: number; y: number }, p3: { x: number; y: number }, click: { x: number; y: number }): number {
+    const ax = p2.x - p1.x, ay = p2.y - p1.y;
+    const bx = p3.x - p1.x, by = p3.y - p1.y;
+    const d = 2 * (ax * by - ay * bx);
+    if (Math.abs(d) < 1e-9) return 0;
+    const a2 = ax * ax + ay * ay;
+    const b2 = bx * bx + by * by;
+    const ux = (by * a2 - ay * b2) / d;
+    const uy = (ax * b2 - bx * a2) / d;
+    const cx = p1.x + ux, cy = p1.y + uy;
+    const r = Math.hypot(ux, uy);
+    return Math.abs(r - Math.hypot(click.x - cx, click.y - cy));
+  }
+
   private handleCircle3Click(x: number, y: number) {
     const pts = [...this.draftCircle3(), { x, y }];
     if (pts.length < 3) { this.draftCircle3.set(pts); return; }
@@ -2384,19 +3437,86 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.draftEllipse.set({});
   }
 
-  private handleSplineClick(x: number, y: number) {
-    // Spline accumulates control points; Enter / Escape / double-click on the
-    // last point commits. Single-click adds a control point.
+  /** Shared handler for the standard Spline tool (fixed degree=3) and
+   * Style Spline (variable degree). First click in a style-spline
+   * gesture prompts for the degree. Subsequent clicks add control
+   * points; double-click on the last point commits.
+   *
+   * `desiredDegree` carries the caller's intent — for `spline` it's
+   * hard-coded 3; for `style-spline` it's whatever the user picked.
+   * Either way the resulting entity needs (degree + 1) control
+   * points minimum. */
+  private handleSplineClick(x: number, y: number, desiredDegree: number = 3) {
     const pts = this.draftSpline();
+    // Style-spline degree prompt on the very first click.
+    if (pts.length === 0 && this.tool() === 'style-spline') {
+      const raw = window.prompt(
+        'Spline degree (1 = polyline, 2 = quadratic, 3 = cubic, 5 = quintic):',
+        String(this.styleSplineDegree()),
+      );
+      if (raw === null) { this.tool.set('select'); return; }
+      const n = parseInt(raw, 10);
+      if (!isFinite(n) || n < 1 || n > 9) return;
+      this.styleSplineDegree.set(n);
+      desiredDegree = n;
+    }
     const last = pts[pts.length - 1];
     const doubleClick = last && Math.hypot(x - last.x, y - last.y) < 1;
-    if (doubleClick && pts.length >= 4) {
-      const r = addSpline(this.state(), pts, 3);
+    const minCps = desiredDegree + 1;
+    if (doubleClick && pts.length >= minCps) {
+      const r = addSpline(this.state(), pts, desiredDegree);
       if (r.id) this.commit(r.state);
       this.draftSpline.set([]);
       return;
     }
     this.draftSpline.set([...pts, { x, y }]);
+  }
+
+  /** Partial ellipse: clicks 1-3 mirror the standard ellipse tool
+   * (center, major-axis end, minor-radius), then clicks 4-5 pick the
+   * start and end angles (cursor angle measured around the center). */
+  private handlePartialEllipseClick(x: number, y: number) {
+    const draft = this.draftPartialEllipse();
+    if (!draft.center) { this.draftPartialEllipse.set({ center: { x, y } }); return; }
+    if (!draft.majorEnd) {
+      if (Math.hypot(x - draft.center.x, y - draft.center.y) < 1) return;
+      this.draftPartialEllipse.set({ center: draft.center, majorEnd: { x, y } }); return;
+    }
+    if (draft.minorRadius === undefined) {
+      const ux = draft.majorEnd.x - draft.center.x;
+      const uy = draft.majorEnd.y - draft.center.y;
+      const len = Math.hypot(ux, uy);
+      if (len < 1e-6) { this.draftPartialEllipse.set({}); return; }
+      const px = -uy / len, py = ux / len;
+      const minor = Math.abs(px * (x - draft.center.x) + py * (y - draft.center.y));
+      if (minor < 0.5) return;
+      this.draftPartialEllipse.set({ ...draft, minorRadius: minor });
+      return;
+    }
+    // Compute the cursor's angle in the ellipse's local frame (where
+    // +x runs from center → majorEnd). That's the angle the
+    // EllipticalArcEntity stores, NOT the world-frame atan2.
+    const localAngle = (cx: number, cy: number, mx: number, my: number, qx: number, qy: number): number => {
+      const ux = mx - cx, uy = my - cy;
+      const len = Math.hypot(ux, uy);
+      const uxN = ux / len, uyN = uy / len;
+      const vxN = -uyN, vyN = uxN;
+      const dx = qx - cx, dy = qy - cy;
+      return Math.atan2(dx * vxN + dy * vyN, dx * uxN + dy * uyN);
+    };
+    if (draft.startAngle === undefined) {
+      const sa = localAngle(draft.center.x, draft.center.y, draft.majorEnd.x, draft.majorEnd.y, x, y);
+      this.draftPartialEllipse.set({ ...draft, startAngle: sa });
+      return;
+    }
+    const ea = localAngle(draft.center.x, draft.center.y, draft.majorEnd.x, draft.majorEnd.y, x, y);
+    if (Math.abs(ea - draft.startAngle) < 0.01) return;
+    this.commit(addEllipticalArc(
+      this.state(),
+      draft.center.x, draft.center.y, draft.majorEnd.x, draft.majorEnd.y,
+      draft.minorRadius!, draft.startAngle, ea, true,
+    ).state);
+    this.draftPartialEllipse.set({});
   }
 
   /** Perimeter circle — two clicks define the diameter (a "circle through
@@ -2411,6 +3531,110 @@ export class CadSketchEditorComponent implements OnDestroy {
     const radius = Math.hypot(x - first.x, y - first.y) / 2;
     this.commit(addCircle(this.state(), cx, cy, radius).state);
     this.draftCirclePerimeter.set(null);
+  }
+
+  /** Batch 6 — Parabola tool. Three clicks: (1) vertex, (2) focus
+   * (sets axis direction and focal distance), (3) sample point on
+   * the curve (sets symmetric extent). Each click commits a real
+   * sketch point so the user can drag them later. */
+  private handleParabolaClick(x: number, y: number) {
+    const d = this.draftParabola();
+    if (!d.vertex) { this.draftParabola.set({ vertex: { x, y } }); return; }
+    if (!d.focus) {
+      if (Math.hypot(x - d.vertex.x, y - d.vertex.y) < 1e-3) return;
+      this.draftParabola.set({ vertex: d.vertex, focus: { x, y } }); return;
+    }
+    // Third click — emit the three real points + the conic.
+    let s = this.state();
+    const v = addPoint(s, d.vertex.x, d.vertex.y); s = v.state;
+    const f = addPoint(s, d.focus.x, d.focus.y); s = f.state;
+    const p = addPoint(s, x, y); s = p.state;
+    const r = addParabolaByPoints(s, v.id, f.id, p.id);
+    this.commit(r.state);
+    this.draftParabola.set({});
+  }
+
+  /** Batch 6 — Equation curve tool. One click anchors the curve
+   * (purely a hint — the actual geometry comes from the expressions).
+   * Then prompts for x(t), y(t), tMin, tMax, samples. */
+  private handleEquationCurveClick(_x: number, _y: number) {
+    const xExpr = window.prompt('x(t) — e.g. "5*Math.cos(t)":', '5*Math.cos(t)');
+    if (xExpr === null) { this.tool.set('select'); return; }
+    const yExpr = window.prompt('y(t) — e.g. "5*Math.sin(t)":', '5*Math.sin(t)');
+    if (yExpr === null) { this.tool.set('select'); return; }
+    const tMinStr = window.prompt('t min:', '0');
+    if (tMinStr === null) { this.tool.set('select'); return; }
+    const tMaxStr = window.prompt('t max:', String(Math.PI * 2));
+    if (tMaxStr === null) { this.tool.set('select'); return; }
+    const tMin = parseFloat(tMinStr), tMax = parseFloat(tMaxStr);
+    if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMin === tMax) return;
+    const samplesStr = window.prompt('Samples (8..2000):', '100');
+    const samples = Math.max(8, Math.min(2000, parseInt(samplesStr || '100', 10) || 100));
+    const r = addEquationCurve(this.state(), xExpr, yExpr, tMin, tMax, samples);
+    this.commit(r.state);
+  }
+
+  /** Batch 6 — Sketch Text tool. Two-click rectangle drag-out: the
+   * first click sets one corner; the second click sets the opposite
+   * corner. Between clicks the cursor live-previews the rect. The
+   * resulting box has 4 real construction points + 4 lines (so the
+   * user can dimension it via Smart Dim), and the text inside
+   * stretches to fit the box's aspect — OnShape style.
+   * No popup dialogs; sidebar handles all editing. */
+  private handleTextClick(x: number, y: number) {
+    const first = this.draftTextRect();
+    if (!first) { this.draftTextRect.set({ x, y }); return; }
+    if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-17');
+    this.commit(r.state);
+    this.selected.set(new Set([r.id]));
+    this.draftTextRect.set(null);
+    this.tool.set('select');
+  }
+
+  /** Batch 6 — Sketch Picture tool. Click 1 opens a file picker
+   * (handled by the editor — the result is held in
+   * `pendingPictureSrc`). Click 2 anchors the picture at (x, y),
+   * using the loaded image's pixel aspect to derive width / height
+   * in mm (heuristic: 1 mm ≈ 4 px, like ~100 dpi). */
+  private handlePictureClick(x: number, y: number) {
+    if (!this.pendingPictureSrc()) {
+      this._openImagePickerForSketch();
+      return;
+    }
+    const pi = this.pendingPictureSrc()!;
+    const pxPerMm = 4;
+    const widthMm = Math.max(1, pi.pxW / pxPerMm);
+    const heightMm = Math.max(1, pi.pxH / pxPerMm);
+    let s = this.state();
+    const anchor = addPoint(s, x, y); s = anchor.state;
+    const r = addPicture(s, anchor.id, pi.src, widthMm, heightMm, 0, 0.6);
+    this.commit(r.state);
+    this.pendingPictureSrc.set(null);
+  }
+  private _openImagePickerForSketch(): void {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.style.display = 'none';
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const src = String(reader.result || '');
+        if (!src.startsWith('data:image/')) return;
+        const img = new Image();
+        img.onload = () => {
+          this.pendingPictureSrc.set({ src, pxW: img.naturalWidth, pxH: img.naturalHeight });
+        };
+        img.src = src;
+      };
+      reader.readAsDataURL(file);
+    });
+    document.body.appendChild(input);
+    input.click();
+    setTimeout(() => input.remove(), 0);
   }
 
   /** Tangent arc — click an existing point (must be an endpoint of a line
@@ -2516,24 +3740,43 @@ export class CadSketchEditorComponent implements OnDestroy {
   /** Public — called by document Enter key to commit an in-flight spline. */
   commitSplineIfReady() {
     const pts = this.draftSpline();
-    if (pts.length < 4) return;
-    const r = addSpline(this.state(), pts, 3);
+    // Use the tool's degree — style-spline carries the user's chosen
+    // value; plain spline is always 3.
+    const degree = this.tool() === 'style-spline' ? this.styleSplineDegree() : 3;
+    if (pts.length < degree + 1) return;
+    const r = addSpline(this.state(), pts, degree);
     if (r.id) this.commit(r.state);
     this.draftSpline.set([]);
   }
 
   private async commit(next: SketchState) {
-    // Draw-as-construction mode: flag every entity that didn't exist in the
-    // previous state as construction. setConstructionFlag cascades to the
-    // supporting points (line endpoints, circle center, etc.) so the
-    // dashed-vs-solid rendering stays coherent. No-op when the flag is off
-    // OR when the commit didn't add new entities (e.g., a drag commit just
-    // moves existing points).
-    if (this.drawConstruction()) {
-      const prevIds = new Set(this.state().entities.map(e => e.id));
-      const addedIds = next.entities.filter(e => !prevIds.has(e.id)).map(e => e.id);
-      if (addedIds.length > 0) {
-        next = setConstructionFlag(next, addedIds, true);
+    // Compute the entity-id diff once — both draw-as-construction and
+    // dynamic-mirror read it. Skip when the commit doesn't add any
+    // entities (drag-only / state-replace commits).
+    const prevIds = new Set(this.state().entities.map(e => e.id));
+    const addedIds = next.entities.filter(e => !prevIds.has(e.id)).map(e => e.id);
+    // Draw-as-construction mode: flag every newly-added entity as
+    // construction. setConstructionFlag cascades to the supporting
+    // points so the dashed-vs-solid rendering stays coherent.
+    if (this.drawConstruction() && addedIds.length > 0) {
+      next = setConstructionFlag(next, addedIds, true);
+    }
+    // Dynamic Mirror: when an axis is set, every freshly-added
+    // non-axis entity gets a mirror copy via mirrorEntities. Skipped
+    // when the current tool is itself a mirror / transform / pattern
+    // op (those already manage their own copies and would otherwise
+    // produce mirror-of-mirror duplicates).
+    const dynAxis = this.dynamicMirrorAxisId();
+    const skipForTool = this.tool() === 'mirror'
+      || this.tool() === 'dynamic-mirror'
+      || this.tool() === 'pattern-linear'
+      || this.tool() === 'pattern-circular'
+      || this.tool() === 'copy';
+    if (dynAxis && addedIds.length > 0 && !skipForTool) {
+      const mirrorable = addedIds.filter(id => id !== dynAxis);
+      if (mirrorable.length > 0) {
+        const m = mirrorEntities(next, mirrorable, dynAxis);
+        if (!m.error) next = m.state;
       }
     }
     const id = ++this.latestCommitId;
@@ -2613,6 +3856,19 @@ function resolveSmartDim(
   }
   if (sel.length === 2 && sel.every(e => e.kind === 'line')) {
     const [l1, l2] = sel as LineEntity[];
+    // Parallel-line case (Smart Dim convention): two near-parallel
+    // lines get a perpendicular-distance constraint instead of an
+    // angle constraint, since the angle would be 0 or 180 and the
+    // distance is what the user actually wants. Pin one of l1's
+    // endpoints against l2 — the perp distance from that point to
+    // l2 equals the gap between the lines while they stay parallel.
+    if (linesAreNearParallel(state, l1, l2)) {
+      const a = findPoint(state, l1.startId);
+      if (!a) return null;
+      const v = measurePointLineDistance(state, a, l2);
+      if (v === null) return null;
+      return { type: 'point-line-distance', targets: [l1.startId, l2.id], value: v };
+    }
     const v = measureAngleBetween(state, l1, l2);
     if (v === null) return null;
     return { type: 'angle', targets: [l1.id, l2.id], value: v };
@@ -2666,6 +3922,23 @@ function sharedEndpointId(a: LineEntity, b: LineEntity): string | null {
   if (a.startId === b.startId || a.startId === b.endId) return a.startId;
   if (a.endId === b.startId   || a.endId === b.endId)   return a.endId;
   return null;
+}
+
+/** True when two lines' direction vectors are within ~0.5° of parallel
+ * or anti-parallel. Tolerance is generous on purpose — Smart Dim picks
+ * the "distance between parallels" interpretation whenever a literal
+ * angle reading would be meaningless (i.e. 0 or 180°). */
+function linesAreNearParallel(state: SketchState, a: LineEntity, b: LineEntity): boolean {
+  const a1 = findPoint(state, a.startId), a2 = findPoint(state, a.endId);
+  const b1 = findPoint(state, b.startId), b2 = findPoint(state, b.endId);
+  if (!a1 || !a2 || !b1 || !b2) return false;
+  const ax = a2.x - a1.x, ay = a2.y - a1.y;
+  const bx = b2.x - b1.x, by = b2.y - b1.y;
+  const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+  if (la < 1e-9 || lb < 1e-9) return false;
+  // |cross| / (|a||b|) == sin(angle); parallel ⇒ sin ≈ 0. 0.5° → sin ≈ 0.0087.
+  const sinTheta = Math.abs(ax * by - ay * bx) / (la * lb);
+  return sinTheta < 0.01;
 }
 
 /** Smart Dim measurement helper: perpendicular distance from a point to a

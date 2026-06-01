@@ -40,9 +40,14 @@ export type CadStreamEvent =
       type: 'feature-result';
       modelId: number;
       featureId: string;
-      faces: Array<{ faceId: string; persistentName: string; isFlat: boolean; positions: number[]; normals: number[]; indices: number[] }>;
-      topology: { vertices: Array<{ id: string; position: [number, number, number] }>; edges: Array<{ id: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]] }> };
+      faces: Array<{ faceId: string; persistentName: string; isFlat: boolean; positions: number[]; normals: number[]; indices: number[]; boundaryEdgeIds?: string[] }>;
+      topology: { vertices: Array<{ id: string; position: [number, number, number] }>; edges: Array<{ id: string; isStraight: boolean; isTangent?: boolean; endpoints: [[number, number, number], [number, number, number]]; polyline?: Array<[number, number, number]> }> };
       cached: boolean;
+      /** Backend-emitted hash of this body's composed state after the
+       * feature ran. Frontend handler uses it to suppress redundant
+       * perBodyGeometry updates when an event echoes the same body
+       * state we already have. Missing on legacy backend builds. */
+      bodyParamHash?: string;
       error?: string;
     }
   | { type: 'regenerate-complete'; modelId: number; errors: string[] }
