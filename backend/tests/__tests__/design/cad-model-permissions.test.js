@@ -90,14 +90,16 @@ describe('CAD Model permission enforcement (CAD-106)', () => {
       expect(res.status).toBe(403);
     });
 
-    it('returns 200 on release with cad.approve granted', async () => {
+    it('returns 200 on release after approval (cad.approve)', async () => {
       const writer = await authenticatedRequest();
       const part = await createTestPart();
       const created = await writer.post(`/api/design/cad-model/by-part/${part.id}`).send({});
+      await writer.post(`/api/design/cad-model/${created.body.id}/workflow`).send({ action: 'submit' });
 
       const approverUser = await createTestUser({ displayName: 'cad-approver' });
       const approver = await authenticatedRequest(approverUser, { grantPermissions: false });
       await grantCadActions(approver.user.id, ['read', 'approve']);
+      await approver.post(`/api/design/cad-model/${created.body.id}/workflow`).send({ action: 'approve' });
       const res = await approver.post(`/api/design/cad-model/${created.body.id}/release`);
       expect(res.status).toBe(200);
       expect(res.body.commitHash).toBeTruthy();

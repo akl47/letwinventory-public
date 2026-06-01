@@ -26,6 +26,12 @@ export interface CadModel {
   part?: { id: number; name: string; sku?: string | null; manufacturerPN?: string | null; revision: string } | null;
 }
 
+/** The review-workflow state of a CAD model + the actions available now. */
+export interface CadWorkflow {
+  state: string;
+  actions: { action: string; to: string }[];
+}
+
 /** A VCS branch in a CAD model's repository. */
 export interface CadBranch {
   name: string;

@@ -211,7 +211,7 @@ beforeAll(async () => {
 // Clean up user-created data between tests (keep reference data)
 afterEach(async () => {
   const tablesToClean = [
-    'VcsChangeset', 'VcsUsage', 'VcsRef', 'VcsObject', 'UserPermission', 'GroupPermission', 'UserGroupMember', 'UserGroup',
+    'VcsWorkflowState', 'VcsChangeset', 'VcsUsage', 'VcsRef', 'VcsObject', 'UserPermission', 'GroupPermission', 'UserGroupMember', 'UserGroup',
     // DesignBRepCache cascades from DesignCADModel, but listing it first
     // keeps the cleanup explicit + insulates against accidental ordering
     // flips in future edits.

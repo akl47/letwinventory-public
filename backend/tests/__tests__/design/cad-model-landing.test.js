@@ -30,6 +30,8 @@ describe('CAD landing endpoint (parts-with-cad)', () => {
     const auth = await authenticatedRequest();
     const part = await createTestPart();
     const a = await createDraft(auth, part.id);
+    await auth.post(`/api/design/cad-model/${a.id}/workflow`).send({ action: 'submit' });
+    await auth.post(`/api/design/cad-model/${a.id}/workflow`).send({ action: 'approve' });
     const rel = await auth.post(`/api/design/cad-model/${a.id}/release`);
     expect(rel.status).toBe(200);
 

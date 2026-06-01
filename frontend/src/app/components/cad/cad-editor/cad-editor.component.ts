@@ -15,7 +15,7 @@ import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import { CadModelService } from '../../../services/cad-model.service';
 import { InventoryService } from '../../../services/inventory.service';
 import { Part } from '../../../models/part.model';
-import { CadModel, CadCommit, CadBranch, CadCommitDiff } from '../../../models/cad-model.model';
+import { CadModel, CadCommit, CadBranch, CadCommitDiff, CadWorkflow } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { CadStreamService, type CadStreamEvent } from '../../../services/cad-stream.service';
@@ -3131,6 +3131,12 @@ interface HistorySnapshot {
               <div class="footer-group footer-group-left">
                 <app-category-badge data-testid="revision-badge" *ngIf="model()?.part?.revision"
                   [label]="'Rev ' + model()!.part!.revision" subtle />
+                <app-category-badge data-testid="workflow-badge" *ngIf="workflow()"
+                  [label]="workflow()!.state"
+                  [variant]="workflow()!.state==='approved' ? 'success' : workflow()!.state==='in_review' ? 'info' : 'warning'" />
+                <button class="btn" *ngFor="let a of workflow()?.actions || []"
+                        [attr.data-testid]="'workflow-' + a.action"
+                        (click)="onWorkflowAction(a.action)">{{ a.action }}</button>
                 <span class="footer-mode" data-testid="cad-hud-ready" *ngIf="activeSketchId() === null">
                   mode: {{ mode() }} · selected: {{ selected() || '(none)' }} · features: {{ featureTree().features.length }}
                 </span>
@@ -5212,6 +5218,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   diffA = signal<string | null>(null);
   diffB = signal<string | null>(null);
   diffResult = signal<CadCommitDiff | null>(null);
+  workflow = signal<CadWorkflow | null>(null);  // Phase 4 review workflow
   isDirty = computed(() => !!this.model()?.dirty);
   lockHolderId = computed(() => this.model()?.lockedByUserID ?? null);
   isLockedByMe = computed(() => {
@@ -10813,9 +10820,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.streamSub = this.stream.events$.subscribe((ev) => this.onStreamEvent(ev));
     }
     this.stream.subscribeToModel(m.id);
-    // Load the model's commit history + branches for the VCS panels.
+    // Load the model's commit history, branches, and workflow state.
     this.loadCommits();
     this.loadBranches();
+    this.loadWorkflow();
     // Kick the initial regeneration so the cached/freshly-built faces render.
     this.regenerate();
   }
@@ -11556,7 +11564,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   onRelease() {
     const m = this.model(); if (!m) return;
     this.cadApi.release(m.id).subscribe({
-      next: res => { this.model.set(res.model); this.loadCommits(); },
+      next: res => { this.model.set(res.model); this.loadCommits(); this.loadWorkflow(); },
       error: err => this.errors.showError(err?.error?.error || 'Release failed'),
     });
   }
@@ -11673,6 +11681,24 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.cadApi.cherryPick(m.id, b, featureId).subscribe({
       next: updated => { this.bootstrap(updated); this.loadCommits(); this.loadBranches(); },
       error: err => this.errors.showError(err?.error?.error || 'Cherry-pick failed'),
+    });
+  }
+
+  // ── VCS: review workflow (Phase 4) ──────────────────────────────────────────
+
+  loadWorkflow() {
+    const m = this.model(); if (!m) return;
+    this.cadApi.getWorkflow(m.id).subscribe({
+      next: w => this.workflow.set(w),
+      error: () => this.workflow.set(null),
+    });
+  }
+
+  onWorkflowAction(action: string) {
+    const m = this.model(); if (!m) return;
+    this.cadApi.transitionWorkflow(m.id, action).subscribe({
+      next: w => this.workflow.set(w),
+      error: err => this.errors.showError(err?.error?.error || `Workflow ${action} failed`),
     });
   }
 

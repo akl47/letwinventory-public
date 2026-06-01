@@ -4,6 +4,7 @@ const cadStreamService = require('../../../services/cadStreamService');
 const cadVcsService = require('../../../services/vcs/cadVcsService');
 const cadBranchService = require('../../../services/vcs/cadBranchService');
 const cadDiffService = require('../../../services/vcs/cadDiffService');
+const workflowEngine = require('../../../services/vcs/workflowEngine');
 const vcsService = require('../../../services/vcs/vcsService');
 const { KernelDisconnected, KernelRpcError } = require('../../../services/cadKernelClient');
 
@@ -211,7 +212,13 @@ module.exports = {
     }
 
     try {
+      const repo = await cadVcsService.repoForModel(model);
+      // VC-37: release is gated by the review workflow.
+      if (!(await workflowEngine.canRelease(repo))) {
+        return res.status(409).json({ error: 'CAD model must be approved before it can be released' });
+      }
       const { commitHash, tag } = await cadVcsService.release(model, req.user.id, revision, {});
+      await workflowEngine.setState(repo, 'draft', req.user.id); // next change starts a fresh cycle
       await recordHistory(model.id, req.user.id, 'released', null, { revision: tag, commitHash });
       return res.json({ commitHash, revision: tag, model });
     } catch (err) {
@@ -359,6 +366,30 @@ module.exports = {
       if (err instanceof KernelDisconnected) return res.status(503).json({ error: err.message });
       return res.status(err.statusCode || 500).json({ error: err.message });
     }
+  },
+
+  // ── VCS: review workflow (Phase 4) ──────────────────────────────────────────
+
+  async getWorkflow(req, res) {
+    const model = await fetchActiveModel(Number(req.params.id));
+    if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    try {
+      const repo = await cadVcsService.repoForModel(model);
+      return res.json({ state: await workflowEngine.getState(repo), actions: await workflowEngine.availableActions(repo, req.user.id) });
+    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+  },
+
+  // The route is read-gated; the engine enforces each transition's own permission.
+  async transitionWorkflow(req, res) {
+    const model = await fetchActiveModel(Number(req.params.id));
+    if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    const { action } = req.body || {};
+    if (!action) return res.status(400).json({ error: 'action is required' });
+    try {
+      const repo = await cadVcsService.repoForModel(model);
+      const r = await workflowEngine.transition(repo, action, req.user.id, { authorUserID: model.createdByUserID });
+      return res.json({ state: r.state, actions: await workflowEngine.availableActions(repo, req.user.id) });
+    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
   },
 
   // Phase 1 — server-side regen. Walks the feature tree, looks up each

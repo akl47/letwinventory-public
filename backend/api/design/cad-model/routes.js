@@ -31,6 +31,10 @@ router.post('/:id/switch-branch', checkToken, checkPermission('cad', 'write'), c
 router.delete('/:id/branches/:name', checkToken, checkPermission('cad', 'write'), controller.archiveBranch);
 router.post('/:id/cherry-pick', checkToken, checkPermission('cad', 'write'), controller.cherryPick);
 
+// VCS Phase 4: review workflow (transition permissions enforced by the engine).
+router.get('/:id/workflow', checkToken, checkPermission('cad', 'read'), controller.getWorkflow);
+router.post('/:id/workflow', checkToken, checkPermission('cad', 'read'), controller.transitionWorkflow);
+
 // VCS Phase 3: structural + 3D diff between two commits.
 router.get('/:id/commits/:a/diff/:b', checkToken, checkPermission('cad', 'read'), controller.getCommitDiff);
 router.post('/:id/commits/:a/diff/:b/regen', checkToken, checkPermission('cad', 'read'), controller.getBodyDiff3D);
