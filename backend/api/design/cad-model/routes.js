@@ -24,6 +24,13 @@ router.post('/:id/release-lock', checkToken, checkPermission('cad', 'write'), co
 router.post('/:id/force-unlock', checkToken, checkPermission('cad', 'approve'), controller.forceUnlock);
 router.get('/:id/commits', checkToken, checkPermission('cad', 'read'), controller.getCommits);
 
+// VCS Phase 2: variant branches + cherry-pick (no merge).
+router.get('/:id/branches', checkToken, checkPermission('cad', 'read'), controller.listBranches);
+router.post('/:id/branches', checkToken, checkPermission('cad', 'write'), controller.createBranch);
+router.post('/:id/switch-branch', checkToken, checkPermission('cad', 'write'), controller.switchBranch);
+router.delete('/:id/branches/:name', checkToken, checkPermission('cad', 'write'), controller.archiveBranch);
+router.post('/:id/cherry-pick', checkToken, checkPermission('cad', 'write'), controller.cherryPick);
+
 // Phase 1 — server-side regeneration. Walks the feature tree, hits the
 // Postgres-backed BRep cache, falls through to the Rust kernel on miss.
 // Returns tessellated face meshes for the viewer to render.

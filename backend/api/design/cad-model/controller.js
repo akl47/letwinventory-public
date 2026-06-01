@@ -2,6 +2,7 @@ const db = require('../../../models');
 const cadRegenService = require('../../../services/cadRegenService');
 const cadStreamService = require('../../../services/cadStreamService');
 const cadVcsService = require('../../../services/vcs/cadVcsService');
+const cadBranchService = require('../../../services/vcs/cadBranchService');
 const vcsService = require('../../../services/vcs/vcsService');
 const { KernelDisconnected, KernelRpcError } = require('../../../services/cadKernelClient');
 
@@ -291,6 +292,50 @@ module.exports = {
     } catch (err) {
       return res.status(500).json({ error: `Failed to fetch CAD commit log: ${err.message}` });
     }
+  },
+
+  // ── VCS: variant branches + cherry-pick (Phase 2) ───────────────────────────
+
+  async listBranches(req, res) {
+    const model = await fetchActiveModel(Number(req.params.id));
+    if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    try { return res.json(await cadBranchService.listBranches(model)); }
+    catch (err) { return res.status(500).json({ error: err.message }); }
+  },
+
+  async createBranch(req, res) {
+    const model = await fetchActiveModel(Number(req.params.id));
+    if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    const { name, fromCommit } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Branch name is required' });
+    try { return res.json(await cadBranchService.createBranch(model, name, { fromCommit }, req.user.id)); }
+    catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+  },
+
+  async switchBranch(req, res) {
+    const model = await fetchActiveModel(Number(req.params.id));
+    if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    const { name } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Branch name is required' });
+    try { await cadBranchService.switchBranch(model, name, req.user.id); return res.json(model); }
+    catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+  },
+
+  async archiveBranch(req, res) {
+    const model = await fetchActiveModel(Number(req.params.id));
+    if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    const name = req.params.name || (req.body && req.body.name);
+    try { return res.json(await cadBranchService.archiveBranch(model, name)); }
+    catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+  },
+
+  async cherryPick(req, res) {
+    const model = await fetchActiveModel(Number(req.params.id));
+    if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    const { sourceCommit, featureId } = req.body || {};
+    if (!sourceCommit || !featureId) return res.status(400).json({ error: 'sourceCommit and featureId are required' });
+    try { const r = await cadBranchService.cherryPick(model, sourceCommit, featureId, req.user.id); return res.json(r.model); }
+    catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
   },
 
   // Phase 1 — server-side regen. Walks the feature tree, looks up each

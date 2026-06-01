@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { CadModel, CadCommit, CadModelHistoryEntry, PartWithCadSummary } from '../models/cad-model.model';
+import { CadModel, CadBranch, CadCommit, CadModelHistoryEntry, PartWithCadSummary } from '../models/cad-model.model';
 import { environment } from '../../environments/environment';
 
 /** Server-side regeneration response (Phase 1 — see backend cadRegenService.js). */
@@ -115,6 +115,32 @@ export class CadModelService {
   /** Commit history for the model's branch, newest first. */
   getCommits(id: number): Observable<CadCommit[]> {
     return this.http.get<CadCommit[]>(`${this.apiUrl}/${id}/commits`);
+  }
+
+  // ── VCS: variant branches + cherry-pick (Phase 2) ───────────────────────────
+
+  listBranches(id: number): Observable<CadBranch[]> {
+    return this.http.get<CadBranch[]>(`${this.apiUrl}/${id}/branches`);
+  }
+
+  /** Create a variant branch (defaults to the current head). */
+  createBranch(id: number, name: string, fromCommit?: string): Observable<CadBranch> {
+    return this.http.post<CadBranch>(`${this.apiUrl}/${id}/branches`, { name, fromCommit });
+  }
+
+  /** Switch the working copy to another branch (rejected while dirty). */
+  switchBranch(id: number, name: string): Observable<CadModel> {
+    return this.http.post<CadModel>(`${this.apiUrl}/${id}/switch-branch`, { name });
+  }
+
+  /** Archive a branch (current + default are protected). */
+  archiveBranch(id: number, name: string): Observable<{ archived: string }> {
+    return this.http.delete<{ archived: string }>(`${this.apiUrl}/${id}/branches/${encodeURIComponent(name)}`);
+  }
+
+  /** Cherry-pick a single feature from a source commit into the working copy. */
+  cherryPick(id: number, sourceCommit: string, featureId: string): Observable<CadModel> {
+    return this.http.post<CadModel>(`${this.apiUrl}/${id}/cherry-pick`, { sourceCommit, featureId });
   }
 
   /** Download the model's bodies as a STEP file (returns the file text). The

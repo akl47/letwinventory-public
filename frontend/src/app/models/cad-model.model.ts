@@ -26,6 +26,13 @@ export interface CadModel {
   part?: { id: number; name: string; sku?: string | null; manufacturerPN?: string | null; revision: string } | null;
 }
 
+/** A VCS branch in a CAD model's repository. */
+export interface CadBranch {
+  name: string;
+  kind: 'branch';
+  targetHash: string;
+}
+
 /** A VCS commit on a CAD model's branch (newest-first in the log). */
 export interface CadCommit {
   hash: string;

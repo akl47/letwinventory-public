@@ -15,7 +15,7 @@ import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import { CadModelService } from '../../../services/cad-model.service';
 import { InventoryService } from '../../../services/inventory.service';
 import { Part } from '../../../models/part.model';
-import { CadModel, CadCommit } from '../../../models/cad-model.model';
+import { CadModel, CadCommit, CadBranch } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { CadStreamService, type CadStreamEvent } from '../../../services/cad-stream.service';
@@ -3169,6 +3169,26 @@ interface HistorySnapshot {
                     </li>
                   </ul>
                 </div>
+                <button class="btn" data-testid="action-branches"
+                        *ngIf="model()" (click)="toggleBranches()">⑂ {{ currentBranch() }} ({{ branches().length }})</button>
+                <div class="vcs-commits-panel" data-testid="vcs-branches-panel" *ngIf="showBranches()">
+                  <div class="vcs-commits-head">
+                    <span>Branches</span>
+                    <button class="vcs-commits-close" (click)="toggleBranches()">×</button>
+                  </div>
+                  <div class="vcs-commits-empty" *ngIf="!branches().length">No branches yet — check in first.</div>
+                  <ul class="vcs-commits-list">
+                    <li *ngFor="let b of branches()">
+                      <span class="vcs-commit-msg">{{ b.name }}<span *ngIf="b.name===currentBranch()" class="vcs-cur"> · current</span></span>
+                      <button class="vcs-mini" *ngIf="b.name!==currentBranch()" (click)="onSwitchBranch(b.name)">switch</button>
+                      <button class="vcs-mini" *ngIf="b.name!=='main' && b.name!==currentBranch()" (click)="onArchiveBranch(b.name)">archive</button>
+                    </li>
+                  </ul>
+                  <div class="vcs-branch-actions">
+                    <button class="btn" (click)="onCreateBranch()">+ New branch</button>
+                    <button class="btn" (click)="onCherryPick()">Cherry-pick…</button>
+                  </div>
+                </div>
                 <button class="btn btn-primary"
                         data-testid="action-release"
                         *ngIf="model() && canApprove()"
@@ -3629,6 +3649,9 @@ interface HistorySnapshot {
     .vcs-commit-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .vcs-commit-hash { font-family: ui-monospace, monospace; opacity: 0.7; }
     .vcs-commit-time { opacity: 0.55; white-space: nowrap; }
+    .vcs-cur { opacity: 0.6; font-style: italic; }
+    .vcs-mini { background: rgba(255,255,255,0.1); border: none; color: #ddd; font-size: 11px; padding: 1px 7px; border-radius: 4px; cursor: pointer; }
+    .vcs-branch-actions { display: flex; gap: 8px; margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; }
   `],
 })
 export class CadEditorComponent implements OnInit, OnDestroy {
@@ -5148,6 +5171,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // ── VCS working-copy state (Phase 1) ──────────────────────────────────────
   commits = signal<CadCommit[]>([]);
   showCommits = signal(false);
+  branches = signal<CadBranch[]>([]);      // Phase 2 variant branches
+  showBranches = signal(false);
   isDirty = computed(() => !!this.model()?.dirty);
   lockHolderId = computed(() => this.model()?.lockedByUserID ?? null);
   isLockedByMe = computed(() => {
@@ -10749,8 +10774,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.streamSub = this.stream.events$.subscribe((ev) => this.onStreamEvent(ev));
     }
     this.stream.subscribeToModel(m.id);
-    // Load the model's commit history for the VCS panel.
+    // Load the model's commit history + branches for the VCS panels.
     this.loadCommits();
+    this.loadBranches();
     // Kick the initial regeneration so the cached/freshly-built faces render.
     this.regenerate();
   }
@@ -11535,6 +11561,57 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   toggleCommits() { this.showCommits.update(v => !v); }
 
   shortHash(h: string): string { return (h || '').slice(0, 8); }
+
+  // ── VCS: variant branches + cherry-pick (Phase 2) ───────────────────────────
+
+  currentBranch(): string { return this.model()?.branchName || 'main'; }
+  toggleBranches() { this.showBranches.update(v => !v); }
+
+  loadBranches() {
+    const m = this.model(); if (!m) return;
+    this.cadApi.listBranches(m.id).subscribe({
+      next: list => this.branches.set(list),
+      error: () => this.branches.set([]),
+    });
+  }
+
+  onCreateBranch() {
+    const m = this.model(); if (!m) return;
+    const name = window.prompt('New branch name:', '');
+    if (!name) return;
+    this.cadApi.createBranch(m.id, name).subscribe({
+      next: () => this.loadBranches(),
+      error: err => this.errors.showError(err?.error?.error || 'Create branch failed'),
+    });
+  }
+
+  onSwitchBranch(name: string) {
+    const m = this.model(); if (!m || name === this.currentBranch()) return;
+    this.cadApi.switchBranch(m.id, name).subscribe({
+      next: updated => { this.bootstrap(updated); this.showBranches.set(false); },
+      error: err => this.errors.showError(err?.error?.error || 'Switch branch failed'),
+    });
+  }
+
+  onArchiveBranch(name: string) {
+    const m = this.model(); if (!m) return;
+    this.cadApi.archiveBranch(m.id, name).subscribe({
+      next: () => this.loadBranches(),
+      error: err => this.errors.showError(err?.error?.error || 'Archive branch failed'),
+    });
+  }
+
+  onCherryPick() {
+    const m = this.model(); if (!m) return;
+    const sourceCommit = window.prompt('Source commit hash to cherry-pick from:', '');
+    if (!sourceCommit) return;
+    const featureId = window.prompt('Feature id to cherry-pick:', '');
+    if (!featureId) return;
+    this.cadApi.cherryPick(m.id, sourceCommit, featureId).subscribe({
+      next: updated => { this.bootstrap(updated); this.loadBranches(); },
+      error: err => this.errors.showError(err?.error?.error || 'Cherry-pick failed'),
+    });
+  }
 
   toggleFullscreen() {
     this.fullscreen.update(v => !v);
