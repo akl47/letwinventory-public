@@ -35,15 +35,42 @@ function resolveEquations(doc) {
   const order = [];
   const entries = (doc && doc.entries) || {};
 
-  const parsed = new Map();
-  for (const [key, entry] of Object.entries(entries)) {
-    try {
-      const ast = parser.parse(entry.expression);
-      parsed.set(key, { deps: ast.variables(), evaluate: ctx => ast.evaluate(ctx) });
-    } catch (e) {
-      errors[key] = e.message;
+  // User-defined names win over built-in expr-eval operators/functions, the
+  // same way clearing `parser.consts` makes them win over built-in constants.
+  // expr-eval spreads built-ins across several surfaces — `length`, `sin`,
+  // `abs`, … are unary operators; `min`, `max`, … are functions — so a variable
+  // named after any of them tokenizes as that built-in and an expression like
+  // `length / 4` fails to parse ("unexpected TOP: /"). Remove any shadowed
+  // built-in for the duration of parsing, then restore it so it stays usable in
+  // expressions that don't redefine it. resolveEquations runs synchronously, so
+  // the shared parser is never observed mid-mutation. (Symbol operators like
+  // `+`/`/` can never collide with identifier-shaped entry keys.)
+  const opSurfaces = [parser.functions, parser.unaryOps, parser.binaryOps];
+  const shadowed = [];
+  for (const name of Object.keys(entries)) {
+    for (const surface of opSurfaces) {
+      if (Object.prototype.hasOwnProperty.call(surface, name)) {
+        shadowed.push({ surface, name, value: surface[name] });
+        delete surface[name];
+      }
     }
   }
+
+  const parsed = new Map();
+  // The shadow stays in effect for the WHOLE resolve (parse AND eval): expr-eval
+  // re-resolves operator tokens at evaluate time, so restoring before evaluation
+  // would turn a name like `length` back into an operator mid-eval. The finally
+  // guard restores the built-ins even if resolution throws, so a stray error
+  // never leaves the shared parser corrupted for later calls.
+  try {
+    for (const [key, entry] of Object.entries(entries)) {
+      try {
+        const ast = parser.parse(entry.expression);
+        parsed.set(key, { deps: ast.variables(), evaluate: ctx => ast.evaluate(ctx) });
+      } catch (e) {
+        errors[key] = e.message;
+      }
+    }
 
   const color = new Map();  // 0=WHITE, 1=GRAY, 2=BLACK
   const stack = [];
@@ -88,6 +115,9 @@ function resolveEquations(doc) {
     } catch (e) {
       errors[key] = e.message;
     }
+  }
+  } finally {
+    for (const s of shadowed) s.surface[s.name] = s.value;
   }
 
   return { values, errors, order };

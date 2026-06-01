@@ -103,15 +103,45 @@ export function resolveEquations(doc: EquationDoc): ResolveResult {
   const order: string[] = [];
 
   type Parsed = { deps: string[]; evaluate: (ctx: Record<string, number>) => unknown };
-  const parsed = new Map<string, Parsed>();
-  for (const [key, entry] of Object.entries(doc.entries)) {
-    try {
-      const ast = parser.parse(entry.expression);
-      parsed.set(key, { deps: ast.variables(), evaluate: ctx => ast.evaluate(ctx) });
-    } catch (e) {
-      errors[key] = (e as Error).message;
+  // User-defined names win over built-in expr-eval operators/functions, the
+  // same way clearing `parser.consts` makes them win over built-in constants.
+  // expr-eval spreads built-ins across several surfaces — `length`, `sin`,
+  // `abs`, … are unary operators; `min`, `max`, … are functions — so a variable
+  // named after any of them otherwise tokenizes as that built-in and an
+  // expression like `length / 4` fails to parse ("unexpected TOP: /"). The
+  // shadow stays in effect for the WHOLE resolve (parse AND eval): expr-eval
+  // re-resolves operator tokens at evaluate time, so restoring before evaluation
+  // would turn a name like `length` back into an operator mid-eval. The finally
+  // guard restores the built-ins even if resolution throws, so a stray error
+  // never leaves the shared parser corrupted. resolveEquations runs
+  // synchronously, so the parser is never observed mid-mutation. (Symbol
+  // operators like `+`/`/` can never collide with identifier-shaped entry keys.)
+  const p = parser as unknown as {
+    functions: Record<string, unknown>;
+    unaryOps: Record<string, unknown>;
+    binaryOps: Record<string, unknown>;
+  };
+  const opSurfaces = [p.functions, p.unaryOps, p.binaryOps];
+  const shadowed: { surface: Record<string, unknown>; name: string; value: unknown }[] = [];
+  for (const name of Object.keys(doc.entries)) {
+    for (const surface of opSurfaces) {
+      if (Object.prototype.hasOwnProperty.call(surface, name)) {
+        shadowed.push({ surface, name, value: surface[name] });
+        delete surface[name];
+      }
     }
   }
+
+  const parsed = new Map<string, Parsed>();
+  try {
+    for (const [key, entry] of Object.entries(doc.entries)) {
+      try {
+        const ast = parser.parse(entry.expression);
+        parsed.set(key, { deps: ast.variables(), evaluate: ctx => ast.evaluate(ctx) });
+      } catch (e) {
+        errors[key] = (e as Error).message;
+      }
+    }
 
   // DFS with three-color state. WHITE = unvisited; GRAY = in the current
   // recursion stack (cycle target); BLACK = fully processed.
@@ -169,6 +199,9 @@ export function resolveEquations(doc: EquationDoc): ResolveResult {
     } catch (e) {
       errors[key] = (e as Error).message;
     }
+  }
+  } finally {
+    for (const s of shadowed) s.surface[s.name] = s.value;
   }
 
   return { values, errors, order };
