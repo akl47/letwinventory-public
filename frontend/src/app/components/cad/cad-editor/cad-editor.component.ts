@@ -15,7 +15,7 @@ import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import { CadModelService } from '../../../services/cad-model.service';
 import { InventoryService } from '../../../services/inventory.service';
 import { Part } from '../../../models/part.model';
-import { CadModel } from '../../../models/cad-model.model';
+import { CadModel, CadCommit } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { CadStreamService, type CadStreamEvent } from '../../../services/cad-stream.service';
@@ -3145,6 +3145,35 @@ interface HistorySnapshot {
                   sketch · x: {{ formatCursorCoord(sketchCursor()?.x) }} · y: {{ formatCursorCoord(sketchCursor()?.y) }}
                 </span>
                 <span class="readonly-banner" data-testid="readonly-banner" *ngIf="readonly()">View only</span>
+
+                <!-- VCS: lock + check-in controls (Phase 1) -->
+                <span class="vcs-dirty" data-testid="vcs-dirty" *ngIf="isDirty()"
+                      matTooltip="Uncommitted changes since the last check-in">● unsaved</span>
+                <span class="vcs-lock" data-testid="vcs-lock-foreign" *ngIf="lockedByOther()"
+                      matTooltip="Checked out by another user">🔒 checked out</span>
+                <button class="btn" data-testid="action-checkout"
+                        *ngIf="model()?.releaseState==='draft' && canWrite() && !model()?.lockedByUserID"
+                        (click)="onCheckout()">Check out</button>
+                <button class="btn btn-primary" data-testid="action-checkin"
+                        *ngIf="isLockedByMe()" (click)="onCheckin()">Check in</button>
+                <button class="btn" data-testid="action-release-lock"
+                        *ngIf="isLockedByMe()" (click)="onReleaseLock()">Release lock</button>
+                <button class="btn" data-testid="action-history"
+                        *ngIf="model()" (click)="toggleCommits()">History ({{ commits().length }})</button>
+                <div class="vcs-commits-panel" data-testid="vcs-commits-panel" *ngIf="showCommits()">
+                  <div class="vcs-commits-head">
+                    <span>Commit history</span>
+                    <button class="vcs-commits-close" (click)="toggleCommits()">×</button>
+                  </div>
+                  <div class="vcs-commits-empty" *ngIf="!commits().length">No commits yet — check in to create the first.</div>
+                  <ul class="vcs-commits-list">
+                    <li *ngFor="let c of commits()">
+                      <span class="vcs-commit-msg">{{ c.message || '(no message)' }}</span>
+                      <span class="vcs-commit-hash">{{ shortHash(c.hash) }}</span>
+                      <span class="vcs-commit-time">{{ c.timestamp | date:'short' }}</span>
+                    </li>
+                  </ul>
+                </div>
                 <button class="btn btn-primary"
                         data-testid="action-release"
                         *ngIf="model()?.releaseState==='review' && canApprove()"
@@ -3597,6 +3626,19 @@ interface HistorySnapshot {
     .quick-start li { margin-bottom: 4px; }
     .quick-start .muted { margin: 10px 0 0; font-size: 11px; opacity: 0.6; }
     .loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; }
+    /* VCS lock / check-in / history (Phase 1) */
+    .vcs-dirty { color: #ffb74d; font-size: 12px; }
+    .vcs-lock { color: #e57373; font-size: 12px; }
+    .vcs-commits-panel { position: absolute; bottom: 56px; left: 16px; width: 360px; max-height: 320px; overflow: auto;
+      background: rgba(0,0,0,0.82); border: 1px solid rgba(255,255,255,0.14); border-radius: 8px; padding: 10px 12px; font-size: 12px; z-index: 30; }
+    .vcs-commits-head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; margin-bottom: 8px; }
+    .vcs-commits-close { background: none; border: none; color: #ccc; font-size: 16px; cursor: pointer; line-height: 1; }
+    .vcs-commits-empty { opacity: 0.6; }
+    .vcs-commits-list { list-style: none; margin: 0; padding: 0; }
+    .vcs-commits-list li { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-top: 1px solid rgba(255,255,255,0.08); }
+    .vcs-commit-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .vcs-commit-hash { font-family: ui-monospace, monospace; opacity: 0.7; }
+    .vcs-commit-time { opacity: 0.55; white-space: nowrap; }
   `],
 })
 export class CadEditorComponent implements OnInit, OnDestroy {
@@ -5113,10 +5155,26 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     return sk.hostId.startsWith('datum:') ? sk.hostId.substring('datum:'.length).replace('_', ' ') : sk.hostId;
   });
 
+  // ── VCS working-copy state (Phase 1) ──────────────────────────────────────
+  commits = signal<CadCommit[]>([]);
+  showCommits = signal(false);
+  isDirty = computed(() => !!this.model()?.dirty);
+  lockHolderId = computed(() => this.model()?.lockedByUserID ?? null);
+  isLockedByMe = computed(() => {
+    const id = this.lockHolderId();
+    return id != null && id === this.auth.currentUser()?.id;
+  });
+  lockedByOther = computed(() => {
+    const id = this.lockHolderId();
+    return id != null && id !== this.auth.currentUser()?.id;
+  });
+
   readonly = computed(() => {
     const m = this.model();
     if (!m) return true;
     if (m.releaseState !== 'draft') return true;
+    // Another user holds the exclusive checkout — view only until they release.
+    if (this.lockedByOther()) return true;
     return !this.canWrite();
   });
 
@@ -10702,6 +10760,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.streamSub = this.stream.events$.subscribe((ev) => this.onStreamEvent(ev));
     }
     this.stream.subscribeToModel(m.id);
+    // Load the model's commit history for the VCS panel.
+    this.loadCommits();
     // Kick the initial regeneration so the cached/freshly-built faces render.
     this.regenerate();
   }
@@ -11461,6 +11521,46 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       error: err => this.errors.showError(err?.error?.error || 'New revision failed'),
     });
   }
+
+  // ── VCS: checkout / check-in / lock / history (Phase 1) ─────────────────────
+
+  onCheckout() {
+    const m = this.model(); if (!m) return;
+    this.cadApi.checkout(m.id).subscribe({
+      next: updated => this.model.set(updated),
+      error: err => this.errors.showError(err?.error?.error || 'Checkout failed'),
+    });
+  }
+
+  onCheckin() {
+    const m = this.model(); if (!m) return;
+    const message = window.prompt('Check-in message:', '');
+    if (message === null) return; // cancelled
+    this.cadApi.checkin(m.id, message).subscribe({
+      next: res => { this.model.set(res.model); this.loadCommits(); },
+      error: err => this.errors.showError(err?.error?.error || 'Check-in failed'),
+    });
+  }
+
+  onReleaseLock() {
+    const m = this.model(); if (!m) return;
+    this.cadApi.releaseLock(m.id).subscribe({
+      next: updated => this.model.set(updated),
+      error: err => this.errors.showError(err?.error?.error || 'Release lock failed'),
+    });
+  }
+
+  loadCommits() {
+    const m = this.model(); if (!m) return;
+    this.cadApi.getCommits(m.id).subscribe({
+      next: list => this.commits.set(list),
+      error: () => this.commits.set([]),
+    });
+  }
+
+  toggleCommits() { this.showCommits.update(v => !v); }
+
+  shortHash(h: string): string { return (h || '').slice(0, 8); }
 
   toggleFullscreen() {
     this.fullscreen.update(v => !v);
