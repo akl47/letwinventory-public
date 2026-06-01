@@ -20,6 +20,11 @@ module.exports = (sequelize, DataTypes) => {
     previousRevisionID: { type: DataTypes.INTEGER, allowNull: true },
     featureTree: { type: DataTypes.JSONB, allowNull: false },
     sketchDoc: { type: DataTypes.JSONB, allowNull: false },
+    // SolidWorks-style equations doc — { entries: { name: { expression,
+    // lastValue?, error? } } }. Keys are either global names (no dot)
+    // or target paths (feature.<id>.distance, sketch.<id>.constraint.<id>,
+    // …). Resolved by cadEquations.applyEquationsToModel at regen time.
+    equations: { type: DataTypes.JSONB, allowNull: false, defaultValue: { entries: {} } },
     releaseState: {
       type: DataTypes.ENUM('draft', 'review', 'released'),
       allowNull: false,

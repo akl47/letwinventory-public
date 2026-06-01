@@ -5,6 +5,7 @@ const { KernelDisconnected, KernelRpcError } = require('../../../services/cadKer
 
 const INITIAL_FEATURE_TREE = { features: [{ id: 'f1', type: 'origin' }], nextFeatureSeq: 2 };
 const INITIAL_SKETCH_DOC = { sketches: {}, nextSketchSeq: 1 };
+const INITIAL_EQUATIONS = { entries: {} };
 
 function nextRevisionLetter(letter) {
   const chars = letter.split('');
@@ -35,7 +36,12 @@ function activeWhere(extra = {}) {
 }
 
 async function fetchActiveModel(id) {
-  return db.DesignCADModel.findOne({ where: activeWhere({ id }) });
+  return db.DesignCADModel.findOne({
+    where: activeWhere({ id }),
+    // Part identity feeds `#{partNumber}` / `#{partRevision}` etc. in sketch
+    // text — cadRegenService builds the text-variable resolver from it.
+    include: [{ model: db.Part, as: 'part', attributes: ['id', 'name', 'sku', 'manufacturerPN', 'revision'] }],
+  });
 }
 
 module.exports = {
@@ -142,6 +148,7 @@ module.exports = {
         previousRevisionID: null,
         featureTree: INITIAL_FEATURE_TREE,
         sketchDoc: INITIAL_SKETCH_DOC,
+        equations: INITIAL_EQUATIONS,
         releaseState: 'draft',
         createdByUserID: req.user.id,
         activeFlag: true,
@@ -178,15 +185,22 @@ module.exports = {
     }
 
     const patch = {};
-    const previousSnapshot = { featureTree: model.featureTree, sketchDoc: model.sketchDoc };
+    const previousSnapshot = {
+      featureTree: model.featureTree,
+      sketchDoc: model.sketchDoc,
+      equations: model.equations,
+    };
     if (req.body && req.body.featureTree !== undefined) patch.featureTree = req.body.featureTree;
     if (req.body && req.body.sketchDoc !== undefined) patch.sketchDoc = req.body.sketchDoc;
+    if (req.body && req.body.equations !== undefined) patch.equations = req.body.equations;
     if (req.body && req.body.name !== undefined) patch.name = req.body.name;
 
     try {
       await model.update(patch);
       await recordHistory(model.id, req.user.id, 'updated', previousSnapshot, {
-        featureTree: model.featureTree, sketchDoc: model.sketchDoc,
+        featureTree: model.featureTree,
+        sketchDoc: model.sketchDoc,
+        equations: model.equations,
       });
       return res.json(model);
     } catch (err) {
@@ -291,6 +305,7 @@ module.exports = {
         previousRevisionID: source.id,
         featureTree: source.featureTree,
         sketchDoc: source.sketchDoc,
+        equations: source.equations,
         releaseState: 'draft',
         createdByUserID: req.user.id,
         activeFlag: true,
@@ -333,14 +348,28 @@ module.exports = {
     if (!id) return res.status(400).json({ error: 'invalid model id' });
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: 'CAD model not found' });
+    // SolidWorks-style rollback bar: optional POST body field. Frontend
+    // sends the index of the first feature to skip (matches the
+    // rollbackBeforeIndex signal); backend skips features at/past that
+    // index entirely, saving kernel work + cache lookups.
+    const rollbackBeforeIndex =
+      typeof req.body?.rollbackBeforeIndex === 'number' && req.body.rollbackBeforeIndex >= 0
+        ? req.body.rollbackBeforeIndex
+        : null;
     cadStreamService.broadcastToModel(id, { type: 'regenerate-started', modelId: id });
     try {
       const result = await cadRegenService.regenerateModel(model, {
+        rollbackBeforeIndex,
         onFeatureResult: (featureResult) => {
           cadStreamService.broadcastToModel(id, {
             type: 'feature-result',
             modelId: id,
             featureId: featureResult.featureId,
+            // bodyId is load-bearing for the frontend's per-body stream
+            // handler — without it, the handler returns early and the
+            // body never appears until the HTTP response lands.
+            bodyId: featureResult.bodyId,
+            bodyDeleted: featureResult.bodyDeleted,
             faces: featureResult.faces,
             topology: featureResult.topology,
             cached: featureResult.cached,
@@ -371,6 +400,38 @@ module.exports = {
         return res.status(500).json({ error: `CAD kernel error (${err.code}): ${err.message}` });
       }
       return res.status(500).json({ error: `Regenerate failed: ${err.message}` });
+    }
+  },
+
+  /** Export the model's bodies as a downloadable STEP file. Regenerates
+   * (cache-backed) to get the final body BReps, then has the kernel combine +
+   * serialize them via STEPControl_Writer. */
+  async exportStep(req, res) {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'invalid model id' });
+    const model = await fetchActiveModel(id);
+    if (!model) return res.status(404).json({ error: 'CAD model not found' });
+    // Optional ?bodyIds=a,b,c to export only a subset of bodies.
+    const bodyIds = typeof req.query.bodyIds === 'string' && req.query.bodyIds.trim()
+      ? req.query.bodyIds.split(',').map(s => s.trim()).filter(Boolean)
+      : undefined;
+    try {
+      const { step } = await cadRegenService.exportModelStep(model, { bodyIds });
+      const pn = String(model.part?.sku || model.part?.name || `part-${model.partID}`);
+      const rev = String(model.part?.revision || '');
+      const base = (rev ? `${pn}-${rev}` : pn)
+        .replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'part';
+      res.setHeader('Content-Type', 'application/step');
+      res.setHeader('Content-Disposition', `attachment; filename="${base}.step"`);
+      return res.send(step);
+    } catch (err) {
+      if (err instanceof KernelDisconnected) {
+        return res.status(503).json({ error: `CAD kernel unavailable: ${err.message}` });
+      }
+      if (err instanceof KernelRpcError) {
+        return res.status(500).json({ error: `CAD kernel error (${err.code}): ${err.message}` });
+      }
+      return res.status(500).json({ error: `STEP export failed: ${err.message}` });
     }
   },
 

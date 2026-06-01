@@ -22,5 +22,6 @@ router.get('/:id/history', checkToken, checkPermission('cad', 'read'), controlle
 // Postgres-backed BRep cache, falls through to the Rust kernel on miss.
 // Returns tessellated face meshes for the viewer to render.
 router.post('/:id/regenerate', checkToken, checkPermission('cad', 'read'), controller.regenerate);
+router.get('/:id/export/step', checkToken, checkPermission('cad', 'read'), controller.exportStep);
 
 module.exports = router;

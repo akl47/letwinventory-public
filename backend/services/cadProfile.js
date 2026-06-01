@@ -8,6 +8,8 @@
 // resolved Cartesian coordinates that the client already solved and saved.
 // PlaneGCS-backed server-side re-solving is a separate work item.
 
+const { bezierLoopsFromTextEntity } = require('./cadTextGlyphs');
+
 /**
  * @typedef {{x:number, y:number}} Point2
  * @typedef {{kind:'line', start:Point2, end:Point2}} LineProfileEdge
@@ -21,14 +23,96 @@
  */
 
 /**
+ * Merge point ids that the sketch treats as the same vertex before the
+ * walker keys adjacency on them. Two sources of equivalence:
+ *   (1) explicit `coincident` constraints between two points
+ *   (2) two points sitting within `spatialTol` of each other (catches
+ *       accidental duplicates the user hasn't constrained yet).
+ *
+ * The sketch editor draws every line with a fresh endpoint id and links
+ * snapped clicks via a coincident constraint instead of reusing ids, so
+ * a four-line square otherwise looks like 8 vertices of degree 1 to the
+ * walker and is rejected as "open chain at point …".
+ *
+ * @param {object} state @returns {object}
+ */
+function canonicalizePoints(state) {
+  const spatialTol = 1e-4;
+  const parent = new Map();
+  const find = (id) => {
+    let p = parent.get(id);
+    if (p === undefined) p = id;
+    while (parent.has(p) && parent.get(p) !== p) p = parent.get(p);
+    parent.set(id, p);
+    return p;
+  };
+  const union = (a, b) => {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(rb, ra);
+  };
+  const pointIds = new Set();
+  for (const e of state.entities) {
+    if (e.kind === 'point') { parent.set(e.id, e.id); pointIds.add(e.id); }
+  }
+  for (const c of (state.constraints || [])) {
+    if (c.type !== 'coincident' || !c.targets || c.targets.length !== 2) continue;
+    const a = c.targets[0] && c.targets[0].entityId;
+    const b = c.targets[1] && c.targets[1].entityId;
+    if (a && b && pointIds.has(a) && pointIds.has(b)) union(a, b);
+  }
+  const KEY = Math.round(1 / spatialTol);
+  const bucketRep = new Map();
+  for (const e of state.entities) {
+    if (e.kind !== 'point') continue;
+    const key = `${Math.round(e.x * KEY)}/${Math.round(e.y * KEY)}`;
+    const existing = bucketRep.get(key);
+    if (existing) union(existing, e.id);
+    else bucketRep.set(key, e.id);
+  }
+  let anyMerged = false;
+  for (const id of pointIds) { if (find(id) !== id) { anyMerged = true; break; } }
+  if (!anyMerged) return state;
+
+  const rewrite = (id) => pointIds.has(id) ? find(id) : id;
+  const rewritten = state.entities.map(e => {
+    if (e.kind === 'line') return { ...e, startId: rewrite(e.startId), endId: rewrite(e.endId) };
+    if (e.kind === 'circle') return { ...e, centerId: rewrite(e.centerId) };
+    if (e.kind === 'arc') return { ...e, centerId: rewrite(e.centerId), startId: rewrite(e.startId), endId: rewrite(e.endId) };
+    return e;
+  });
+  return { entities: rewritten, constraints: state.constraints || [] };
+}
+
+/**
  * @param {object} state sketch state ({entities, constraints}) from sketchDoc
+ * @param {(raw:string)=>string} [resolve] expands `#{var}` placeholders in text
  * @returns {ProfilesResult}
  */
-function extractClosedLoops(state) {
+function extractClosedLoops(state, resolve = (s) => s) {
+  state = canonicalizePoints(state);
   /** @type {ProfileLoop[]} */
   const loops = [];
   /** @type {string[]} */
   const errors = [];
+
+  // Text glyphs contribute closed loops via the Roboto glyph engine (mirrors
+  // the frontend `profile.ts` text branch). Emitted FIRST — same order as the
+  // frontend — so a text-only sketch's region indices line up with the
+  // `regionIndices` the client stored at commit time. Each glyph outline (and
+  // any inner counter for O / A / D) becomes a chain of analytic Bézier edges
+  // so the kernel builds one smooth face per curve (Edge::bezier).
+  for (const e of state.entities) {
+    if (e.kind !== 'text') continue;
+    // Single-line (engraving) text is open strokes — nothing to extrude.
+    if (e.font === 'singleLine') continue;
+    const bezierLoops = bezierLoopsFromTextEntity(state, e, resolve);
+    for (const contour of bezierLoops) {
+      if (contour.length < 2) continue;
+      /** @type {ProfileLoop} */
+      const edges = contour.map((seg) => ({ kind: 'bezier', points: seg.points }));
+      loops.push(edges);
+    }
+  }
 
   // Each non-construction circle is its own component (a closed loop on its
   // own — same fast path REQ 612 added on the frontend).
@@ -184,8 +268,8 @@ function extractClosedLoop(state) {
  * @param {object} state
  * @returns {RegionsResult}
  */
-function extractRegions(state) {
-  const { loops, errors } = extractClosedLoops(state);
+function extractRegions(state, resolve = (s) => s) {
+  const { loops, errors } = extractClosedLoops(state, resolve);
   const polys = loops.map(l => tessellateProfileLoopJS(l));
   /** @type {Set<number>[]} */
   const insideOf = loops.map(() => new Set());
@@ -236,7 +320,37 @@ function tessellateProfileLoopJS(loop) {
     } else if (e.kind === 'circle') {
       const pts = tessellateCircleJS(e.center, e.radius, chord);
       for (let i = 0; i < pts.length; i++) out.push(pts[i]);
+    } else if (e.kind === 'bezier') {
+      // Sample for containment only (the analytic edge still goes to the
+      // kernel). Drop the trailing point — the next edge repeats it.
+      const pts = sampleBezierJS(e.points, chord);
+      for (let i = 0; i < pts.length - 1; i++) out.push(pts[i]);
     }
+  }
+  return out;
+}
+
+/** Sample a Bézier (2/3/4 control points) into a polyline incl. both
+ * endpoints, via de Casteljau. Mirrors `sampleBezier` in profile.ts. */
+function sampleBezierJS(pts, chord) {
+  if (pts.length < 2) return pts.slice();
+  if (pts.length === 2) return [pts[0], pts[1]];
+  let ctrlLen = 0;
+  for (let i = 1; i < pts.length; i++) ctrlLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  const segs = Math.max(2, Math.min(48, Math.ceil(ctrlLen / Math.max(1e-6, chord))));
+  const n = pts.length - 1;
+  const out = [];
+  for (let s = 0; s <= segs; s++) {
+    const t = s / segs;
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    for (let r = 1; r <= n; r++) {
+      for (let i = 0; i <= n - r; i++) {
+        xs[i] = (1 - t) * xs[i] + t * xs[i + 1];
+        ys[i] = (1 - t) * ys[i] + t * ys[i + 1];
+      }
+    }
+    out.push({ x: xs[0], y: ys[0] });
   }
   return out;
 }
@@ -281,12 +395,25 @@ function pointInPolygon(p, poly) {
 
 function interiorSample(poly) {
   if (!poly || poly.length < 3) return null;
+  // Pick a vertex and nudge it slightly toward the centroid. This
+  // gives a point near the polygon's BOUNDARY (distinct from the
+  // centroid) so two concentric loops produce different samples
+  // — without this, two concentric circles both sample at the
+  // shared centre, point-in-polygon reports each "inside" the
+  // other, and parent detection emits duplicate annulus regions
+  // instead of an annulus + inner disk. The 1% nudge stays well
+  // inside the polygon for any convex shape (circles, rectangles)
+  // and for most non-pathological non-convex shapes too.
   let sx = 0, sy = 0;
   for (const p of poly) { sx += p.x; sy += p.y; }
   const centroid = { x: sx / poly.length, y: sy / poly.length };
-  if (pointInPolygon(centroid, poly)) return centroid;
   const v0 = poly[0];
-  return { x: v0.x + (centroid.x - v0.x) * 0.01, y: v0.y + (centroid.y - v0.y) * 0.01 };
+  const candidate = { x: v0.x + (centroid.x - v0.x) * 0.01, y: v0.y + (centroid.y - v0.y) * 0.01 };
+  if (pointInPolygon(candidate, poly)) return candidate;
+  // Defensive fallback: try the centroid (works for any convex
+  // polygon even when the vertex-offset somehow misses).
+  if (pointInPolygon(centroid, poly)) return centroid;
+  return null;
 }
 
 /** @param {object} state @returns {ProfileSegment[]} */
