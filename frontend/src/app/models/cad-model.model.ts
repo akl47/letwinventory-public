@@ -20,6 +20,24 @@ export interface CadModel {
   activeFlag: boolean;
   createdAt: string;
   updatedAt: string;
+  // VCS working-copy state (Phase 1).
+  branchName?: string;
+  baseCommitHash?: string | null;
+  dirty?: boolean;
+  lockedByUserID?: number | null;
+  lockedAt?: string | null;
+  lockExpiresAt?: string | null;
+}
+
+/** A VCS commit on a CAD model's branch (newest-first in the log). */
+export interface CadCommit {
+  hash: string;
+  treeHash: string;
+  parents: string[];
+  authorUserID: number | null;
+  message: string;
+  timestamp: string;
+  meta: { kernelVersion?: string; namingVersion?: number; frozen?: unknown };
 }
 
 export interface PartWithCadSummary {

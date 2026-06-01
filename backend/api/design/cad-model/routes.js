@@ -18,6 +18,13 @@ router.post('/:id/new-revision', checkToken, checkPermission('cad', 'write'), co
 
 router.get('/:id/history', checkToken, checkPermission('cad', 'read'), controller.getHistory);
 
+// VCS: checkout (exclusive lock), check-in (commit), release/force-unlock, log.
+router.post('/:id/checkout', checkToken, checkPermission('cad', 'write'), controller.checkout);
+router.post('/:id/checkin', checkToken, checkPermission('cad', 'write'), controller.checkin);
+router.post('/:id/release-lock', checkToken, checkPermission('cad', 'write'), controller.releaseLock);
+router.post('/:id/force-unlock', checkToken, checkPermission('cad', 'approve'), controller.forceUnlock);
+router.get('/:id/commits', checkToken, checkPermission('cad', 'read'), controller.getCommits);
+
 // Phase 1 — server-side regeneration. Walks the feature tree, hits the
 // Postgres-backed BRep cache, falls through to the Rust kernel on miss.
 // Returns tessellated face meshes for the viewer to render.

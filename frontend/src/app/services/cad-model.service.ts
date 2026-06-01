@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { CadModel, CadModelHistoryEntry, PartWithCadSummary } from '../models/cad-model.model';
+import { CadModel, CadCommit, CadModelHistoryEntry, PartWithCadSummary } from '../models/cad-model.model';
 import { environment } from '../../environments/environment';
 
 /** Server-side regeneration response (Phase 1 — see backend cadRegenService.js). */
@@ -95,6 +95,33 @@ export class CadModelService {
   regenerate(id: number, rollbackBeforeIndex: number | null = null): Observable<RegenerateResponse> {
     const body = rollbackBeforeIndex !== null ? { rollbackBeforeIndex } : {};
     return this.http.post<RegenerateResponse>(`${this.apiUrl}/${id}/regenerate`, body);
+  }
+
+  // ── VCS: checkout / check-in / lock / commit log (Phase 1) ──────────────────
+
+  /** Acquire the exclusive edit lock; returns the updated model. */
+  checkout(id: number): Observable<CadModel> {
+    return this.http.post<CadModel>(`${this.apiUrl}/${id}/checkout`, {});
+  }
+
+  /** Commit the working copy with a message; returns the new commit hash. */
+  checkin(id: number, message: string): Observable<{ commitHash: string; model: CadModel }> {
+    return this.http.post<{ commitHash: string; model: CadModel }>(`${this.apiUrl}/${id}/checkin`, { message });
+  }
+
+  /** Release the lock the current user holds. */
+  releaseLock(id: number): Observable<CadModel> {
+    return this.http.post<CadModel>(`${this.apiUrl}/${id}/release-lock`, {});
+  }
+
+  /** Admin override: force-release whoever holds the lock (needs cad.approve). */
+  forceUnlock(id: number): Observable<CadModel> {
+    return this.http.post<CadModel>(`${this.apiUrl}/${id}/force-unlock`, {});
+  }
+
+  /** Commit history for the model's branch, newest first. */
+  getCommits(id: number): Observable<CadCommit[]> {
+    return this.http.get<CadCommit[]>(`${this.apiUrl}/${id}/commits`);
   }
 
   /** Download the model's bodies as a STEP file (returns the file text). The

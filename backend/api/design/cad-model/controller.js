@@ -1,6 +1,7 @@
 const db = require('../../../models');
 const cadRegenService = require('../../../services/cadRegenService');
 const cadStreamService = require('../../../services/cadStreamService');
+const cadVcsService = require('../../../services/vcs/cadVcsService');
 const { KernelDisconnected, KernelRpcError } = require('../../../services/cadKernelClient');
 
 const INITIAL_FEATURE_TREE = { features: [{ id: 'f1', type: 'origin' }], nextFeatureSeq: 2 };
@@ -184,6 +185,19 @@ module.exports = {
       });
     }
 
+    // VC-10: while another user holds a live checkout lock, reject edits with
+    // 423 (Locked) naming the holder. An unheld (or self-held, or expired) lock
+    // allows the edit — autosave never requires an explicit checkout.
+    if (
+      model.lockedByUserID && model.lockedByUserID !== req.user.id &&
+      (!model.lockExpiresAt || new Date(model.lockExpiresAt) > new Date())
+    ) {
+      const holder = await db.User.findByPk(model.lockedByUserID);
+      return res.status(423).json({
+        error: `CAD model ${id} is checked out by ${holder ? holder.displayName : 'another user'}`,
+      });
+    }
+
     const patch = {};
     const previousSnapshot = {
       featureTree: model.featureTree,
@@ -194,6 +208,10 @@ module.exports = {
     if (req.body && req.body.sketchDoc !== undefined) patch.sketchDoc = req.body.sketchDoc;
     if (req.body && req.body.equations !== undefined) patch.equations = req.body.equations;
     if (req.body && req.body.name !== undefined) patch.name = req.body.name;
+    // Any content change makes the working copy differ from its base commit (VC-13).
+    if (patch.featureTree !== undefined || patch.sketchDoc !== undefined || patch.equations !== undefined) {
+      patch.dirty = true;
+    }
 
     try {
       await model.update(patch);
@@ -330,6 +348,69 @@ module.exports = {
       return res.json(rows);
     } catch (err) {
       return res.status(500).json({ error: `Failed to fetch CAD model history: ${err.message}` });
+    }
+  },
+
+  // ── VCS: checkout / check-in / lock / commit log (Phase 1) ──────────────────
+
+  async checkout(req, res) {
+    const id = Number(req.params.id);
+    const model = await fetchActiveModel(id);
+    if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
+    try {
+      await cadVcsService.checkout(model, req.user.id, {});
+      return res.json(model);
+    } catch (err) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  },
+
+  async checkin(req, res) {
+    const id = Number(req.params.id);
+    const model = await fetchActiveModel(id);
+    if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
+    const message = (req.body && req.body.message) || '';
+    try {
+      const { commitHash } = await cadVcsService.checkin(model, req.user.id, message);
+      return res.json({ commitHash, model });
+    } catch (err) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  },
+
+  async releaseLock(req, res) {
+    const id = Number(req.params.id);
+    const model = await fetchActiveModel(id);
+    if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
+    try {
+      await cadVcsService.releaseLock(model, req.user.id, { force: false });
+      return res.json(model);
+    } catch (err) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  },
+
+  // Admin override — route is gated by cad.approve.
+  async forceUnlock(req, res) {
+    const id = Number(req.params.id);
+    const model = await fetchActiveModel(id);
+    if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
+    try {
+      await cadVcsService.releaseLock(model, req.user.id, { force: true });
+      return res.json(model);
+    } catch (err) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  },
+
+  async getCommits(req, res) {
+    const id = Number(req.params.id);
+    const model = await fetchActiveModel(id);
+    if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
+    try {
+      return res.json(await cadVcsService.history(model));
+    } catch (err) {
+      return res.status(500).json({ error: `Failed to fetch CAD commit log: ${err.message}` });
     }
   },
 
