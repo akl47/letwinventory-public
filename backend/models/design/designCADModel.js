@@ -25,6 +25,17 @@ module.exports = (sequelize, DataTypes) => {
     // or target paths (feature.<id>.distance, sketch.<id>.constraint.<id>,
     // …). Resolved by cadEquations.applyEquationsToModel at regen time.
     equations: { type: DataTypes.JSONB, allowNull: false, defaultValue: { entries: {} } },
+    // ── VCS working-copy state (Phase 1) ──────────────────────────────────
+    // The model row IS the editable working copy; commits/branches/tags live in
+    // the VcsObject/VcsRef store. These columns track which branch the copy is
+    // on, the commit it was checked out from, whether it has uncommitted edits,
+    // and the exclusive edit lock (PDM-style checkout).
+    branchName: { type: DataTypes.STRING(255), allowNull: false, defaultValue: 'main' },
+    baseCommitHash: { type: DataTypes.STRING(64), allowNull: true },
+    dirty: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    lockedByUserID: { type: DataTypes.INTEGER, allowNull: true },
+    lockedAt: { type: DataTypes.DATE, allowNull: true },
+    lockExpiresAt: { type: DataTypes.DATE, allowNull: true },
     releaseState: {
       type: DataTypes.ENUM('draft', 'review', 'released'),
       allowNull: false,
