@@ -24,6 +24,11 @@ const PICK_RANK: Record<SketchEntity['kind'], number> = {
   ellipticalArc: 1,
   spline: 1,
   conic: 1,
+  text: 2,           // reference rows beneath curves
+  picture: 3,        // background, last
+  equation: 1,
+  intersection: 1,
+  splineOnSurface: 1,
 };
 
 function dist(a: Point2, b: Point2): number {
@@ -136,10 +141,117 @@ export function distanceToEntity(state: SketchState, entity: SketchEntity, p: Po
     case 'ellipse': return distanceToEllipse(state, entity, p);
     case 'spline': return distanceToSpline(state, entity, p);
     case 'ellipticalArc':
+      return Infinity;
     case 'conic':
-      // Phase C — exact closest-point per kind.
+      return distanceToConic(state, entity, p);
+    case 'equation':
+      return distanceToPolyline(tessellateEquationCurveExternal(entity.xExpr, entity.yExpr, entity.tMin, entity.tMax, entity.samples), p);
+    case 'text':
+      return distanceToTextBBox(state, entity, p);
+    case 'picture':
+      return distanceToPictureBBox(state, entity, p);
+    case 'intersection':
+    case 'splineOnSurface':
+      // 3D-only entities — viewer handles their selection.
       return Infinity;
   }
+}
+
+/** Distance to the text's bounding rect. New flow uses the 4 real
+ * corner points; legacy flow falls back to (anchor, approximated
+ * width via text.length * size * 0.55). Inside = 0. */
+function distanceToTextBBox(
+  state: SketchState, e: import('./types').TextEntity, p: Point2,
+): number {
+  if (e.cornerIds && e.cornerIds.length === 4) {
+    const corners = e.cornerIds.map(id => pt(state, id));
+    if (corners.some(c => !c)) return Infinity;
+    const xs = corners.map(c => c!.x);
+    const ys = corners.map(c => c!.y);
+    return rectDistance(p, Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys));
+  }
+  if (!e.anchorId || e.size === undefined) return Infinity;
+  const a = pt(state, e.anchorId);
+  if (!a) return Infinity;
+  const w = Math.max(0.5, e.text.length * e.size * 0.55);
+  const h = e.size;
+  return rectDistance(p, a.x, a.y, a.x + w, a.y + h);
+}
+
+function distanceToPictureBBox(
+  state: SketchState, e: import('./types').PictureEntity, p: Point2,
+): number {
+  const a = pt(state, e.anchorId);
+  if (!a) return Infinity;
+  // Rotation: rotate p into the picture's local frame before bbox
+  // testing. Origin at anchor.
+  const c = Math.cos(-e.rotation), s = Math.sin(-e.rotation);
+  const lx = (p.x - a.x) * c - (p.y - a.y) * s;
+  const ly = (p.x - a.x) * s + (p.y - a.y) * c;
+  return rectDistance({ x: lx, y: ly }, 0, 0, e.width, e.height);
+}
+
+function rectDistance(p: Point2, x0: number, y0: number, x1: number, y1: number): number {
+  const dx = Math.max(x0 - p.x, 0, p.x - x1);
+  const dy = Math.max(y0 - p.y, 0, p.y - y1);
+  return Math.hypot(dx, dy);
+}
+
+/** Distance from `p` to the parabola tessellation. Cheap brute-force
+ * over the polyline samples — accurate enough for hit-test
+ * tolerances. */
+function distanceToConic(state: SketchState, entity: import('./types').ConicEntity, p: Point2): number {
+  if (entity.conicType !== 'parabola') return Infinity;
+  // Mirror tessellateParabola without pulling in the import cycle.
+  const v = pt(state, entity.pointIds[0]);
+  const f = pt(state, entity.pointIds[1]);
+  const s = pt(state, entity.pointIds[2]);
+  if (!v || !f || !s) return Infinity;
+  const ax = f.x - v.x, ay = f.y - v.y;
+  const focal = Math.hypot(ax, ay);
+  if (focal < 1e-9) return Infinity;
+  const ux = ax / focal, uy = ay / focal;
+  const nx = -uy, ny = ux;
+  const dx = s.x - v.x, dy = s.y - v.y;
+  const sLocalX = dx * nx + dy * ny;
+  if (Math.abs(sLocalX) < 1e-9) return Infinity;
+  const halfWidth = Math.abs(sLocalX);
+  const segs = 64;
+  const poly: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i <= segs; i++) {
+    const t = (i / segs) * 2 - 1;
+    const lx = t * halfWidth;
+    const ly = (lx * lx) / (4 * focal);
+    poly.push({ x: v.x + nx * lx + ux * ly, y: v.y + ny * lx + uy * ly });
+  }
+  return distanceToPolyline(poly, p);
+}
+function pt(state: SketchState, id: string): Point2 | null {
+  const e = state.entities.find(e => e.id === id);
+  if (!e || e.kind !== 'point') return null;
+  return { x: e.x, y: e.y };
+}
+/** Avoid circular import via the tessellator by inlining the
+ * equation eval here. Same algorithm as tessellateEquationCurve. */
+function tessellateEquationCurveExternal(
+  xExpr: string, yExpr: string, tMin: number, tMax: number, samples: number,
+): Array<{ x: number; y: number }> {
+  const n = Math.max(8, Math.min(2000, Math.floor(samples)));
+  if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMin === tMax) return [];
+  let fx: (t: number) => number, fy: (t: number) => number;
+  try {
+    fx = new Function('t', `with (Math) { return (${xExpr}); }`) as any;
+    fy = new Function('t', `with (Math) { return (${yExpr}); }`) as any;
+  } catch { return []; }
+  const out: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i <= n; i++) {
+    const t = tMin + (i / n) * (tMax - tMin);
+    let x: number, y: number;
+    try { x = fx(t); y = fy(t); } catch { continue; }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    out.push({ x, y });
+  }
+  return out;
 }
 
 /**
@@ -169,7 +281,11 @@ export function pickEntity(
   }
   if (bestPoint) return bestPoint;
 
-  // Pass 2 — fall back to the regular nearest-by-distance among all kinds.
+  // Pass 2 — nearest within tolerance, but RANK DOMINATES so a curve/line
+  // always wins over a text/picture it overlaps. Text/picture bounding boxes
+  // return distance 0 across their whole interior, so a distance-first rule
+  // would let them "absorb" every click and make the border construction lines
+  // (and centerline) unselectable. Distance only breaks ties within a rank.
   let best: SketchEntity | null = null;
   let bestDist = Infinity;
   let bestRank = Infinity;
@@ -177,7 +293,7 @@ export function pickEntity(
     const d = distanceToEntity(state, e, p);
     if (d > tolerance) continue;
     const rank = PICK_RANK[e.kind];
-    if (d < bestDist - 1e-9 || (Math.abs(d - bestDist) < 1e-9 && rank < bestRank)) {
+    if (rank < bestRank || (rank === bestRank && d < bestDist - 1e-9)) {
       best = e;
       bestDist = d;
       bestRank = rank;

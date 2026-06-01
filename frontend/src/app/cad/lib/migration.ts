@@ -68,10 +68,89 @@ export function migrateSketchState(state: LegacySketchState | SketchState): Sket
     // any persisted `point-on-line` / `point-on-curve` constraints into
     // `coincident` since the unified type replaced them. Idempotent.
     const modern = state as SketchState;
-    const constraints = modern.constraints.map(c =>
+    let constraints = modern.constraints.map(c =>
       LEGACY_ON_TYPES.has(c.type) ? { ...c, type: rewriteLegacyType(c.type) } : c,
     );
-    return ensureOriginPoint({ ...modern, constraints });
+    // SW-style on-edge constraint backfill: previously the link to a 3D
+    // body edge lived in a `projectedFrom` field on the sketch entity.
+    // Now it's a SketchConstraint of type 'on-edge' that targets the
+    // entity. Synthesise one for every entity that still carries the old
+    // field, and strip the field so the entity stays clean. Idempotent —
+    // if a constraint already exists for the entity, we skip.
+    const existingTargets = new Set<string>();
+    for (const c of constraints) {
+      if (c.type !== 'on-edge') continue;
+      for (const t of c.targets) existingTargets.add(t.entityId);
+    }
+    const synthesised: SketchConstraint[] = [];
+    const cleanedEntities = modern.entities.map(e => {
+      const pf = (e as SketchEntity & { projectedFrom?: { featureId: string; edgeId: string } }).projectedFrom;
+      if (!pf) return e;
+      if (!existingTargets.has(e.id)) {
+        synthesised.push({
+          id: `on-edge-${e.id}`,
+          type: 'on-edge',
+          targets: [{ entityId: e.id }],
+          externalRef: { featureId: pf.featureId, edgeId: pf.edgeId },
+        });
+        existingTargets.add(e.id);
+      }
+      const { projectedFrom: _stripped, ...rest } = e as SketchEntity & { projectedFrom?: unknown };
+      void _stripped;
+      return rest as SketchEntity;
+    });
+    if (synthesised.length > 0) constraints = [...constraints, ...synthesised];
+    // REQ Batch 6 — retrofit a `fixed` constraint on existing text
+    // boxes' BL corner so dimensioning them doesn't drift the
+    // whole box. Idempotent: skipped when the BL is already fixed.
+    const hasFixedOn = (pointId: string) =>
+      constraints.some(c => c.type === 'fixed' && c.targets[0]?.entityId === pointId);
+    for (const e of cleanedEntities) {
+      if (e.kind !== 'text') continue;
+      const te = e as import('./types').TextEntity;
+      if (!te.cornerIds || te.cornerIds.length < 1) continue;
+      const blId = te.cornerIds[0];
+      if (!hasFixedOn(blId)) {
+        constraints = [...constraints, {
+          id: `c-textfix-${te.id}`,
+          type: 'fixed',
+          targets: [{ entityId: blId }],
+        }];
+      }
+    }
+    // REQ Batch 6 — repair text entities that lost their text /
+    // cornerIds fields (e.g. via a stale signal write). Heuristic:
+    // if a text entity has no cornerIds AND no anchorId, find a
+    // 4-construction-point axis-aligned rectangle in the same
+    // sketch state and bind it.
+    const repairedEntities = cleanedEntities.map(e => {
+      if (e.kind !== 'text') return e;
+      const te = e as import('./types').TextEntity;
+      if (te.cornerIds && te.cornerIds.length === 4) return e;
+      if (te.anchorId !== undefined) return e;
+      // Recover: scan construction points for a rectangle.
+      const pts = cleanedEntities.filter(p => p.kind === 'point' && (p as any).construction === true) as Array<{ id: string; x: number; y: number; kind: 'point' }>;
+      for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 1; j < pts.length; j++) {
+          const a = pts[i], b = pts[j];
+          if (Math.abs(a.x - b.x) < 1e-3 || Math.abs(a.y - b.y) < 1e-3) continue;
+          const xmin = Math.min(a.x, b.x), xmax = Math.max(a.x, b.x);
+          const ymin = Math.min(a.y, b.y), ymax = Math.max(a.y, b.y);
+          const blP = pts.find(p => Math.abs(p.x - xmin) < 1e-3 && Math.abs(p.y - ymin) < 1e-3);
+          const brP = pts.find(p => Math.abs(p.x - xmax) < 1e-3 && Math.abs(p.y - ymin) < 1e-3);
+          const trP = pts.find(p => Math.abs(p.x - xmax) < 1e-3 && Math.abs(p.y - ymax) < 1e-3);
+          const tlP = pts.find(p => Math.abs(p.x - xmin) < 1e-3 && Math.abs(p.y - ymax) < 1e-3);
+          if (blP && brP && trP && tlP) {
+            return {
+              ...te, text: te.text || 'Text',
+              cornerIds: [blP.id, brP.id, trP.id, tlP.id] as [string, string, string, string],
+            };
+          }
+        }
+      }
+      return e;
+    });
+    return ensureOriginPoint({ ...modern, entities: repairedEntities, constraints });
   }
 
   const entities: SketchEntity[] = [];
@@ -127,7 +206,7 @@ export function migrateFeatureTree(tree: FeatureTree): FeatureTree {
       next = { ...rest, regionIndices: loopIndices };
     }
     if (next.endCondition === undefined) {
-      next = { ...next, endCondition: { kind: 'blind' } };
+      next = { ...next, endCondition: { kind: 'blind' } } as typeof legacy;
     }
     return next as Feature;
   });

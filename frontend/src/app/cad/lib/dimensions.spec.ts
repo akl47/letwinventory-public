@@ -99,3 +99,78 @@ describe('previewDimension', () => {
     expect(r!.dimensionLine![1]).toEqual({ x: 10, y: 4 });
   });
 });
+
+describe('point-line-distance render — parallel-lines case', () => {
+  it('uses a perpendicular dim line + parallel extension lines when the picked point is on a line parallel to the target', () => {
+    // l1: horizontal at y=10, l2: horizontal at y=0. p is l1.startId.
+    const p1a: PointEntity = { kind: 'point', id: 'p1a', x: 0, y: 10 };
+    const p1b: PointEntity = { kind: 'point', id: 'p1b', x: 5, y: 10 };
+    const p2a: PointEntity = { kind: 'point', id: 'p2a', x: 0, y: 0 };
+    const p2b: PointEntity = { kind: 'point', id: 'p2b', x: 5, y: 0 };
+    const l1: LineEntity = { kind: 'line', id: 'l1', startId: 'p1a', endId: 'p1b' };
+    const l2: LineEntity = { kind: 'line', id: 'l2', startId: 'p2a', endId: 'p2b' };
+    // Placement at x=12 (past the right end of both lines). Dim line
+    // should be vertical at x=12, spanning y=0..10.
+    const r = previewDimension(
+      state(p1a, p1b, p2a, p2b, l1, l2),
+      'point-line-distance', ['p1a', 'l2'], 10, { x: 12, y: 5 },
+    );
+    expect(r).not.toBeNull();
+    const [d0, d1] = r!.dimensionLine!;
+    expect(d0.x).toBeCloseTo(12);
+    expect(d1.x).toBeCloseTo(12);
+    expect(Math.abs(d0.y - d1.y)).toBeCloseTo(10);
+    // Extension lines should run ALONG the source lines (horizontal),
+    // each from an endpoint OF that line out to the dim line.
+    expect(r!.extensionLines).toHaveLength(2);
+    for (const [from, to] of r!.extensionLines) {
+      // |Δy| should be ~0 (extension is along the horizontal source line).
+      expect(Math.abs(to.y - from.y)).toBeLessThan(1e-6);
+    }
+  });
+
+  it('renders a chord-distance dim between the arc’s start and end points', () => {
+    const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+    const s: PointEntity = { kind: 'point', id: 's', x: 5, y: 0 };
+    const e: PointEntity = { kind: 'point', id: 'e', x: 0, y: 5 };
+    const a: ArcEntity = { kind: 'arc', id: 'a', centerId: 'c', startId: 's', endId: 'e', radius: 5, ccw: true };
+    const r = previewDimension(state(c, s, e, a), 'chord-distance', ['a'], 7.07, { x: 5, y: 5 });
+    expect(r).not.toBeNull();
+    // Same render shape as a distance dim between (5,0) and (0,5).
+    expect(r!.dimensionLine).not.toBeNull();
+    expect(r!.extensionLines).toHaveLength(2);
+    expect(r!.text).toContain('—');
+  });
+
+  it('wraps driven dim text in parentheses', () => {
+    const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 0 };
+    const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: 0 };
+    const driven: SketchConstraint = {
+      id: 'cdriven', type: 'distance',
+      targets: [{ entityId: 'a' }, { entityId: 'b' }],
+      value: 10, driven: true,
+    };
+    const r = dimensionRenders(state(a, b, driven));
+    expect(r.length).toBe(1);
+    expect(r[0].text).toBe('(10 mm)');
+  });
+
+  it('falls back to the original point-to-line render when the point is not on a parallel line', () => {
+    // p is a free-standing point, not an endpoint of any line. The
+    // original render extends BOTH p and its foot perpendicular to
+    // `l` by the same offset, producing a dim line along that
+    // perpendicular (extension lines along the perp too).
+    const p: PointEntity = { kind: 'point', id: 'p', x: 5, y: 10 };
+    const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 0 };
+    const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: 0 };
+    const l: LineEntity = { kind: 'line', id: 'l', startId: 'a', endId: 'b' };
+    const r = previewDimension(state(p, a, b, l), 'point-line-distance', ['p', 'l'], 10, { x: 5, y: 15 });
+    expect(r).not.toBeNull();
+    const [d0, d1] = r!.dimensionLine!;
+    // dim line is vertical (along perp to horizontal l): both x=5, y
+    // differs by |p.y - foot.y| = 10.
+    expect(d0.x).toBeCloseTo(5);
+    expect(d1.x).toBeCloseTo(5);
+    expect(Math.abs(d0.y - d1.y)).toBeCloseTo(10);
+  });
+});

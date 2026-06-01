@@ -3,7 +3,7 @@ import {
   emptyDocument, createSketch, updateSketchState, findSketchByHost, promoteVertex, promoteEdge,
   deleteSketch, setSketchVisibility,
 } from './document';
-import { emptySketchState } from './store';
+import { emptySketchState, ORIGIN_POINT_ID } from './store';
 import type { ModelTopology, Plane3, SketchState } from './types';
 import { pointsOf, findPoint, findLine } from './types';
 
@@ -131,7 +131,11 @@ describe('Sketch document (CAD-022, CAD-023, CAD-026, CAD-028, CAD-030)', () => 
     it('promoteEdge returns a construction line with two construction endpoints (REQ 560)', () => {
       const { state, id } = promoteEdge(emptySketchState(), 'e1', { x: 0, y: 0 }, { x: 10, y: 0 });
       expect(findLine(state, id)?.construction).toBe(true);
-      expect(pointsOf(state).filter(p => p.construction === true).length).toBe(2);
+      // Exclude the synthetic origin point (always construction) from the
+      // count — we only care about the two endpoints promoteEdge introduced.
+      const userConstruction = pointsOf(state)
+        .filter(p => p.id !== ORIGIN_POINT_ID && p.construction === true);
+      expect(userConstruction.length).toBe(2);
     });
   });
 

@@ -55,8 +55,9 @@ function analyzeExact(state: SketchState): Set<string> {
   const entById = new Map<string, SketchEntity>();
   for (const e of state.entities) entById.set(e.id, e);
 
-  // Pre-fixed params: origin + every `fixed` constraint's target. These are
-  // omitted from the column set entirely (no Jacobian column allocated).
+  // Pre-fixed params: origin + every `fixed` constraint's target +
+  // every projected (Convert Entities) anchor. These are omitted from
+  // the column set entirely (no Jacobian column allocated).
   const preFixed = new Set<string>();  // entries: `${id}:x` / `${id}:y` / `${id}:radius`
   preFixed.add(`${ORIGIN_POINT_ID}:x`);
   preFixed.add(`${ORIGIN_POINT_ID}:y`);
@@ -65,6 +66,33 @@ function analyzeExact(state: SketchState): Set<string> {
       const id = c.targets[0].entityId;
       preFixed.add(`${id}:x`);
       preFixed.add(`${id}:y`);
+    }
+  }
+  // The solver always pins projected anchor points (see solver.ts —
+  // their positions come from the body's source edge, not the
+  // constraint system). Mirror that here or sketches that are fully
+  // pinned by a Convert outline will never roll up to "determined".
+  // Source is now the on-edge constraint list, not an entity field.
+  const entityById = new Map(state.entities.map(en => [en.id, en] as const));
+  for (const c of state.constraints) {
+    if (c.type !== 'on-edge') continue;
+    for (const t of c.targets) {
+      const e = entityById.get(t.entityId);
+      if (!e) continue;
+      if (e.kind === 'line') {
+        preFixed.add(`${e.startId}:x`); preFixed.add(`${e.startId}:y`);
+        preFixed.add(`${e.endId}:x`);   preFixed.add(`${e.endId}:y`);
+      } else if (e.kind === 'circle') {
+        preFixed.add(`${e.centerId}:x`); preFixed.add(`${e.centerId}:y`);
+        preFixed.add(`${e.id}:radius`);
+      } else if (e.kind === 'arc') {
+        preFixed.add(`${e.centerId}:x`); preFixed.add(`${e.centerId}:y`);
+        preFixed.add(`${e.startId}:x`);  preFixed.add(`${e.startId}:y`);
+        preFixed.add(`${e.endId}:x`);    preFixed.add(`${e.endId}:y`);
+        preFixed.add(`${e.id}:radius`);
+      } else if (e.kind === 'point') {
+        preFixed.add(`${e.id}:x`); preFixed.add(`${e.id}:y`);
+      }
     }
   }
 
@@ -171,7 +199,41 @@ function evalAllResiduals(
   values: number[], index: EntityIndex,
 ): number[] {
   const out: number[] = [];
-  for (const c of state.constraints) appendResiduals(c, state, entById, values, index, out);
+  // Intrinsic arc invariants (mirrors the solver's arc_rules primitive):
+  // every arc's start and end MUST lie on the circle of radius R around
+  // the arc's center. Without these residuals, the analyzer treats
+  // start/end as 4 free DOFs unrelated to the radius — and an arc that
+  // is geometrically fully pinned (via center + a coincident point on
+  // the curve) is still marked as under-determined because the radius
+  // residual alone can't bring start/end to a unique value. PlaneGCS
+  // handles this implicitly at solve time; here we have to spell it out.
+  for (const e of state.entities) {
+    if (e.kind !== 'arc') continue;
+    const arc = e as ArcEntity;
+    const px = (id: string) => paramX(state, entById, values, index, id);
+    const py = (id: string) => paramY(state, entById, values, index, id);
+    const pr = (id: string) => paramR(state, entById, values, index, id);
+    const cx = px(arc.centerId), cy = py(arc.centerId);
+    const sx = px(arc.startId),  sy = py(arc.startId);
+    const ex = px(arc.endId),    ey = py(arc.endId);
+    const r = pr(arc.id);
+    out.push(Math.hypot(sx - cx, sy - cy) - r);
+    out.push(Math.hypot(ex - cx, ey - cy) - r);
+  }
+  for (const c of state.constraints) {
+    // Driven dims don't constrain the system — they just read back a
+    // measurement. Skip so they don't double-count DOFs.
+    if (c.driven) continue;
+    appendResiduals(c, state, entById, values, index, out);
+  }
+  // A NaN residual (e.g. from a constraint whose value resolves to NaN
+  // because an upstream equation errored out) poisons the Jacobian and
+  // makes EVERY pivot fall below the tol check — the whole sketch
+  // reads as under-constrained. Substitute zero so the OTHER
+  // constraints can still pin their params.
+  for (let i = 0; i < out.length; i++) {
+    if (!Number.isFinite(out[i])) out[i] = 0;
+  }
   return out;
 }
 
@@ -390,6 +452,16 @@ function appendResiduals(
       out.push(pr(arc.id) * sweep - c.value);
       return;
     }
+    case 'chord-distance': {
+      // Straight-line distance between arc start and end — reduces to
+      // the same residual as `distance(start, end, value)`.
+      if (e0?.kind !== 'arc' || c.value === undefined) return;
+      const arc = e0 as ArcEntity;
+      const dx = px(arc.endId) - px(arc.startId);
+      const dy = py(arc.endId) - py(arc.startId);
+      out.push(Math.hypot(dx, dy) - c.value);
+      return;
+    }
   }
 }
 
@@ -489,13 +561,16 @@ function determinedColumns(matrix: number[][]): Set<number> {
   const a = matrix.map(row => row.slice());
 
   // Tolerance scales with the matrix's largest absolute entry — handles
-  // sketches with mixed dimension scales (mm vs μm vs in, etc.).
+  // sketches with mixed dimension scales (mm vs μm vs in, etc.). The
+  // floor 1e-6 covers FD truncation noise: the numerical Jacobian is
+  // computed with a step h ≈ 1e-7, so derivatives of nominally-zero
+  // residuals can leak ~1e-7 in magnitude. Anything below that is noise.
   let maxAbs = 0;
   for (let r = 0; r < M; r++) for (let c = 0; c < N; c++) {
     const v = Math.abs(a[r][c]);
     if (v > maxAbs) maxAbs = v;
   }
-  const tol = (maxAbs > 0 ? maxAbs : 1) * 1e-9;
+  const tol = Math.max((maxAbs > 0 ? maxAbs : 1) * 1e-7, 1e-6);
 
   const pivotCols = new Set<number>();
   // pivotRowForCol[c] = which row holds the pivot for column c.
@@ -567,8 +642,27 @@ function analyzeHeuristic(state: SketchState): Set<string> {
       if (pointDof.has(id)) { pointDof.set(id, 0); determined.add(id); }
     }
   }
+  // Projected entities — same treatment as the solver: anchors are
+  // always pinned, radius (for projected circles/arcs) is locked.
+  // Source is the on-edge constraint list (SolidWorks-style link).
+  const projectedRadiusLocked = new Set<string>();
+  const entityByIdDet = new Map(state.entities.map(en => [en.id, en] as const));
+  for (const c of state.constraints) {
+    if (c.type !== 'on-edge') continue;
+    const pin = (id: string) => {
+      if (pointDof.has(id)) { pointDof.set(id, 0); determined.add(id); }
+    };
+    for (const t of c.targets) {
+      const e = entityByIdDet.get(t.entityId);
+      if (!e) continue;
+      if (e.kind === 'line') { pin(e.startId); pin(e.endId); }
+      else if (e.kind === 'circle') { pin(e.centerId); projectedRadiusLocked.add(e.id); }
+      else if (e.kind === 'arc') { pin(e.centerId); pin(e.startId); pin(e.endId); projectedRadiusLocked.add(e.id); }
+      else if (e.kind === 'point') { pin(e.id); }
+    }
+  }
 
-  const radiusDimensioned = new Set<string>();
+  const radiusDimensioned = new Set<string>(projectedRadiusLocked);
   for (const c of state.constraints) {
     if ((c.type === 'radius' || c.type === 'diameter') && c.targets[0]) {
       radiusDimensioned.add(c.targets[0].entityId);

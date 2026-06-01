@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { analyzeDeterminacy } from './determinacy';
-import { emptySketchState, addPoint, addLine, addCircle, addConstraint, addRectangleCorners, ORIGIN_POINT_ID } from './store';
+import { emptySketchState, addPoint, addLine, addCircle, addArc, addConstraint, addRectangleCorners, ORIGIN_POINT_ID } from './store';
 
 describe('analyzeDeterminacy', () => {
   it('marks the origin as determined in an empty sketch', () => {
@@ -123,6 +123,110 @@ describe('analyzeDeterminacy', () => {
     expect(det.has(a.id)).toBe(true);
     expect(det.has(b.id)).toBe(false);  // rotation freedom
     expect(det.has(cc.id)).toBe(false);
+  });
+
+  it('marks a trimmed-circle arc as determined when its start/end points are themselves fixed', () => {
+    // Mirrors the trim-a-circle outcome: the surviving arc shares the
+    // original circle's centerId AND its start/end are reused from
+    // the existing standalone circumference points (or pinned to the
+    // crossing curves). With those fully determined, the arc invariants
+    // pin the radius and the analyzer rolls up.
+    //
+    // Geometry chosen so the arc invariant Jacobian is non-degenerate
+    // — start/end NOT at (±R, 0), since at those points d|P−C|/dP.y = 0.
+    let s = emptySketchState();
+    const center = addPoint(s, 0, 0); s = center.state;
+    s = addConstraint(s, 'fixed', [center.id]).state;
+    const onArc = addPoint(s, 4, 3); s = onArc.state;
+    s = addConstraint(s, 'fixed', [onArc.id]).state;
+    // Pre-pin start (3, 4) and end (-3, 4) — both at distance 5 from
+    // origin, at non-degenerate positions on the arc.
+    const startPt = addPoint(s, 3, 4); s = startPt.state;
+    s = addConstraint(s, 'fixed', [startPt.id]).state;
+    const endPt = addPoint(s, -3, 4); s = endPt.state;
+    s = addConstraint(s, 'fixed', [endPt.id]).state;
+    // Build the arc using the prebuilt center/start/end.
+    const a = addArc(s, 0, 0, 3, 4, -3, 4, true); s = a.state;
+    const arcEnt = s.entities.find(e => e.id === a.id) as any;
+    s = addConstraint(s, 'coincident', [center.id, arcEnt.centerId]).state;
+    s = addConstraint(s, 'coincident', [startPt.id, arcEnt.startId]).state;
+    s = addConstraint(s, 'coincident', [endPt.id, arcEnt.endId]).state;
+    s = addConstraint(s, 'coincident', [onArc.id, a.id]).state;
+    const det = analyzeDeterminacy(s);
+    expect(det.has(a.id)).toBe(true);
+  });
+
+  it('treats projected (Convert Entities) anchors as pre-fixed', () => {
+    // A projected line whose endpoint points are NOT explicitly fixed
+    // should still report the line as determined, because the solver
+    // pins those anchors at solve time. Without this, every sketch
+    // that has a Convert outline never reads as fully constrained.
+    // The projection link now lives in an on-edge SketchConstraint.
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const ln = addLine(s, a.id, b.id); s = ln.state;
+    s = {
+      ...s,
+      constraints: [
+        ...s.constraints,
+        { id: 'oe1', type: 'on-edge', targets: [{ entityId: ln.id }],
+          externalRef: { featureId: 'f1', edgeId: 'f1/e0' } },
+      ],
+    };
+    const det = analyzeDeterminacy(s);
+    expect(det.has(a.id)).toBe(true);
+    expect(det.has(b.id)).toBe(true);
+    expect(det.has(ln.id)).toBe(true);
+  });
+
+  it('treats a projected circle as fully determined (center + radius pre-fixed)', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 5, 5, 3); s = c.state;
+    s = {
+      ...s,
+      constraints: [
+        ...s.constraints,
+        { id: 'oe1', type: 'on-edge', targets: [{ entityId: c.id }],
+          externalRef: { featureId: 'f1', edgeId: 'f1/e0' } },
+      ],
+    };
+    expect(analyzeDeterminacy(s).has(c.id)).toBe(true);
+  });
+
+  it('marks a circle whose center is coincident with a fixed point + radius dim as determined', () => {
+    // Mirrors the new snap-to-existing-point behavior for circle clicks.
+    let s = emptySketchState();
+    const p = addPoint(s, 5, 5); s = p.state;
+    s = addConstraint(s, 'fixed', [p.id]).state;
+    const c = addCircle(s, 5, 5, 3); s = c.state;
+    const circ = s.entities.find(e => e.id === c.id) as any;
+    s = addConstraint(s, 'coincident', [p.id, circ.centerId]).state;
+    s = addConstraint(s, 'radius', [c.id], 3).state;
+    expect(analyzeDeterminacy(s).has(c.id)).toBe(true);
+  });
+
+  it('does not crash on a radius constraint whose value is NaN', () => {
+    // Failed equation can leave c.value = NaN. Without the residual
+    // sanitization, every pivot falls below the tol check and the
+    // whole sketch reads as under-constrained.
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    const center = s.entities.find(e => e.id === (s.entities.find(en => en.id === c.id) as any).centerId)!;
+    s = addConstraint(s, 'fixed', [center.id]).state;
+    // Add another fixed point so the analyzer has something else to
+    // determine — confirms NaN in one constraint doesn't poison the
+    // rest of the system.
+    const q = addPoint(s, 7, 7); s = q.state;
+    s = addConstraint(s, 'fixed', [q.id]).state;
+    s = addConstraint(s, 'radius', [c.id], NaN).state;
+    const det = analyzeDeterminacy(s);
+    // q is still determined.
+    expect(det.has(q.id)).toBe(true);
+    // center is still determined.
+    expect(det.has(center.id)).toBe(true);
+    // circle is NOT determined (radius residual gets dropped).
+    expect(det.has(c.id)).toBe(false);
   });
 
   it('horizontal line from determined point: locks the other endpoint`s y but not its x', () => {

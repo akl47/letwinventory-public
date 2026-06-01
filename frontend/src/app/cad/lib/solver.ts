@@ -73,6 +73,22 @@ function equalPrimitive(id: string, a: SketchEntity, b: SketchEntity): SketchPri
   return null;
 }
 
+/** True when `pointId` has a POSITION-determining constraint
+ * (coincident with a curve / another point, fixed, or midpoint).
+ * Mirrors `isOtherwiseConstrained` in `solve()` — defined at module
+ * scope so `translateConstraint` can use it without a closure.
+ * Dimensions / orientation constraints don't anchor a point's 2D
+ * position, so they don't count. */
+function isAnchorPoint(state: SketchState, pointId: string): boolean {
+  for (const c of state.constraints) {
+    if (c.type !== 'coincident' && c.type !== 'fixed' && c.type !== 'midpoint') continue;
+    for (const t of c.targets) {
+      if (t.entityId === pointId) return true;
+    }
+  }
+  return false;
+}
+
 function translateConstraint(state: SketchState, c: SketchConstraint): SketchPrimitive[] {
   const tid = (i: number) => c.targets[i].entityId;
   const at = (i: number) => findEntity(state, tid(i));
@@ -80,6 +96,35 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
     case 'fixed':
       // Handled at the point level (push as { fixed: true }). No PlaneGCS constraint.
       return [];
+    case 'on-edge': {
+      // SolidWorks-style Convert Entities link. The target entity's
+      // anchor points are usually pinned by the extraFixed pass below
+      // (see `solve()`), and re-projection rewrites their coords
+      // from the source body edge each regen.
+      //
+      // When the target is an axis-aligned LINE and at least one
+      // endpoint is FREE (otherwise constrained — typically a trim
+      // point coincident with a cutter), emit a horizontal /
+      // vertical primitive so the line stays axis-aligned through
+      // user edits. When both endpoints are pinned in extraFixed,
+      // the line is fully determined by the fixed points and a
+      // horizontal/vertical primitive would just be reported as a
+      // redundant constraint. Diagonal source edges aren't enforced
+      // yet; that'd require a phantom collinear reference line.
+      if (c.targets.length === 0) return [];
+      const target = at(0);
+      if (!target || target.kind !== 'line') return [];
+      if (!isAnchorPoint(state, target.startId) && !isAnchorPoint(state, target.endId)) return [];
+      const p = findPoint(state, target.startId);
+      const q = findPoint(state, target.endId);
+      if (!p || !q) return [];
+      const dx = Math.abs(q.x - p.x);
+      const dy = Math.abs(q.y - p.y);
+      const TOL = 1e-3;
+      if (dx < TOL && dy > TOL) return [{ id: c.id, type: 'vertical_l', l_id: target.id }];
+      if (dy < TOL && dx > TOL) return [{ id: c.id, type: 'horizontal_l', l_id: target.id }];
+      return [];
+    }
     case 'coincident': {
       // Unified "this is on that" constraint. Dispatches on target kinds:
       //   point  + point  → p2p_coincident
@@ -235,10 +280,13 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
       if (!pA || !pB) return [];
       const mag = Math.abs(c.value ?? 0);
       const signed = pB.x >= pA.x ? mag : -mag;
+      // PlaneGCS `difference` is param2 - param1 = difference (FreeCAD's
+      // convention). Setting param1=A, param2=B drives B.x - A.x to the
+      // signed target so the user-typed distance lands on B's side of A.
       return [{
         id: c.id, type: 'difference',
-        param1: { o_id: pB.id, prop: 'x' },
-        param2: { o_id: pA.id, prop: 'x' },
+        param1: { o_id: pA.id, prop: 'x' },
+        param2: { o_id: pB.id, prop: 'x' },
         difference: signed,
       }];
     }
@@ -250,8 +298,8 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
       const signed = pB.y >= pA.y ? mag : -mag;
       return [{
         id: c.id, type: 'difference',
-        param1: { o_id: pB.id, prop: 'y' },
-        param2: { o_id: pA.id, prop: 'y' },
+        param1: { o_id: pA.id, prop: 'y' },
+        param2: { o_id: pB.id, prop: 'y' },
         difference: signed,
       }];
     }
@@ -267,6 +315,15 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
       const a = at(0);
       if (!a || a.kind !== 'arc') return [];
       return [{ id: c.id, type: 'arc_length', a_id: a.id, dist: c.value ?? 0 }];
+    }
+    case 'chord-distance': {
+      // Targets: [arc]. Drives the straight-line distance between the
+      // arc's start and end points to c.value. Reuses p2p_distance on
+      // the arc's two endpoint references — no new PlaneGCS primitive
+      // needed since the arc's start/end are first-class points.
+      const a = at(0);
+      if (!a || a.kind !== 'arc') return [];
+      return [{ id: c.id, type: 'p2p_distance', p1_id: a.startId, p2_id: a.endId, distance: c.value ?? 0 }];
     }
   }
 }
@@ -344,6 +401,12 @@ function buildPrimitives(
     }
   }
   for (const c of state.constraints) {
+    // Driven dimensions read geometry back; they don't drive it. Skip
+    // them at primitive translation so the solver treats them as
+    // display-only annotations and the user can over-pin geometry
+    // (e.g. add a redundant chord-distance dim alongside a radius
+    // dim) without the system going inconsistent.
+    if (c.driven) continue;
     for (const t of translateConstraint(state, c)) primitives.push(t);
   }
   return { primitives, fixedIds };
@@ -409,6 +472,49 @@ export async function solveSketch(
     extraFixed = new Set<string>();
     for (const p of pointsOf(state)) {
       if (!opts.movablePoints.has(p.id)) extraFixed.add(p.id);
+    }
+  }
+  // Projected-entity anchors are USUALLY fixed. Their coordinates
+  // come from the body's source edge each regen; if the solver moves
+  // them to satisfy a downstream constraint, the next regen
+  // overwrites the change and the sketch oscillates.
+  //
+  // Exception: when a projected entity has been trimmed, the surviving
+  // sub-segment inherits its on-edge link AND gets a coincident
+  // constraint at the trim point (the cutting curve anchors it). For
+  // those endpoints we must NOT pin via on-edge — that would make the
+  // coincident unsatisfiable. Skip pinning when the point already has
+  // a non-on-edge constraint referencing it. Source is the on-edge
+  // constraint list (SolidWorks-style link).
+  const entityByIdSolver = new Map(state.entities.map(en => [en.id, en] as const));
+  // Only POSITION-determining constraints (coincident / fixed /
+  // midpoint) actually anchor a point's 2D coords. Dimensions and
+  // orientation constraints don't, so they shouldn't unpin a point
+  // from its on-edge anchor — otherwise adding a smart dim to a
+  // converted line silently lets the solver drift its endpoints.
+  const isOtherwiseConstrained = (pointId: string): boolean => {
+    for (const c of state.constraints) {
+      if (c.type !== 'coincident' && c.type !== 'fixed' && c.type !== 'midpoint') continue;
+      for (const t of c.targets) {
+        if (t.entityId === pointId) return true;
+      }
+    }
+    return false;
+  };
+  const pinPoint = (pointId: string): void => {
+    if (isOtherwiseConstrained(pointId)) return;
+    if (!extraFixed) extraFixed = new Set<string>();
+    extraFixed.add(pointId);
+  };
+  for (const c of state.constraints) {
+    if (c.type !== 'on-edge') continue;
+    for (const t of c.targets) {
+      const e = entityByIdSolver.get(t.entityId);
+      if (!e) continue;
+      if (e.kind === 'line') { pinPoint(e.startId); pinPoint(e.endId); }
+      else if (e.kind === 'circle') { pinPoint(e.centerId); }
+      else if (e.kind === 'arc') { pinPoint(e.centerId); pinPoint(e.startId); pinPoint(e.endId); }
+      else if (e.kind === 'point') { pinPoint(e.id); }
     }
   }
 

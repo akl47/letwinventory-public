@@ -4,8 +4,13 @@ import {
   tessellateEllipse, tessellateSpline,
 } from './tessellator';
 import type {
-  SketchState, PointEntity, CircleEntity, ArcEntity, EllipseEntity, SplineEntity,
+  SketchState, SketchEntity, PointEntity, CircleEntity, ArcEntity, EllipseEntity, SplineEntity,
 } from './types';
+
+// Small helper: pack a variadic list of entities into a SketchState. Used by
+// dispatch tests below where tessellateEntity needs a state to resolve
+// per-entity point references.
+const state = (...entities: SketchEntity[]): SketchState => ({ entities, constraints: [] });
 
 // REQ 562 — chord-height tessellator. Tests assert chord-error bound and vertex counts.
 

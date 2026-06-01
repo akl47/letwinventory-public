@@ -77,8 +77,12 @@ describe('migration: legacy SketchState → entity model (REQ 565)', () => {
   });
 
   it('round-trips a state that is already in the new schema unchanged', () => {
+    // The synthetic origin is injected by `ensureOriginPoint` so old saved
+    // states that pre-date the origin still gain a selectable origin on
+    // load. A state that already carries it round-trips literally.
     const already = {
       entities: [
+        { kind: 'point' as const, id: 'origin', x: 0, y: 0, construction: true as const },
         { kind: 'point' as const, id: 'p1', x: 1, y: 2 },
       ],
       constraints: [
@@ -104,5 +108,73 @@ describe('migration: legacy SketchState → entity model (REQ 565)', () => {
     };
     const next = migrateSketchDocument(doc);
     expect(next.sketches.s1.state).toEqual(migrateSketchState(legacy));
+  });
+});
+
+describe('migration: projectedFrom → on-edge constraint backfill', () => {
+  it('synthesises an on-edge constraint and strips projectedFrom', () => {
+    // Modern-schema doc with a converted line stored in the old shape
+    // (projectedFrom field on the entity). Migration must add an
+    // on-edge SketchConstraint targeting the line and remove the
+    // legacy field. Subsequent loads are idempotent.
+    const legacy = {
+      entities: [
+        { kind: 'point', id: 'p1', x: 0, y: 0 },
+        { kind: 'point', id: 'p2', x: 10, y: 0 },
+        { kind: 'line',  id: 'l1', startId: 'p1', endId: 'p2',
+          projectedFrom: { featureId: 'f1', edgeId: 'f1/e0' } },
+      ],
+      constraints: [],
+    };
+    const migrated = migrateSketchState(legacy as unknown as Parameters<typeof migrateSketchState>[0]);
+
+    // projectedFrom is gone from every entity.
+    for (const e of migrated.entities) {
+      expect((e as Record<string, unknown>)['projectedFrom']).toBeUndefined();
+    }
+    // Exactly one on-edge constraint exists and targets the line.
+    const onEdge = migrated.constraints.filter(c => c.type === 'on-edge');
+    expect(onEdge.length).toBe(1);
+    expect(onEdge[0].targets).toEqual([{ entityId: 'l1' }]);
+    expect(onEdge[0].externalRef).toEqual({ featureId: 'f1', edgeId: 'f1/e0' });
+  });
+
+  it('is idempotent — running migration twice does not double-emit constraints', () => {
+    const legacy = {
+      entities: [
+        { kind: 'point', id: 'p1', x: 0, y: 0 },
+        { kind: 'point', id: 'p2', x: 10, y: 0 },
+        { kind: 'line',  id: 'l1', startId: 'p1', endId: 'p2',
+          projectedFrom: { featureId: 'f1', edgeId: 'f1/e0' } },
+      ],
+      constraints: [],
+    };
+    const once = migrateSketchState(legacy as unknown as Parameters<typeof migrateSketchState>[0]);
+    const twice = migrateSketchState(once);
+    expect(twice.constraints.filter(c => c.type === 'on-edge').length).toBe(1);
+  });
+
+  it('does NOT add a duplicate constraint when on-edge already exists', () => {
+    // Mixed state: entity already has projectedFrom AND an on-edge
+    // constraint targeting it. Migration strips the field but doesn't
+    // synthesise a second constraint.
+    const mixed = {
+      entities: [
+        { kind: 'point', id: 'p1', x: 0, y: 0 },
+        { kind: 'point', id: 'p2', x: 10, y: 0 },
+        { kind: 'line',  id: 'l1', startId: 'p1', endId: 'p2',
+          projectedFrom: { featureId: 'f1', edgeId: 'f1/e0' } },
+      ],
+      constraints: [
+        { id: 'oe-existing', type: 'on-edge', targets: [{ entityId: 'l1' }],
+          externalRef: { featureId: 'f1', edgeId: 'f1/e0' } },
+      ],
+    };
+    const migrated = migrateSketchState(mixed as unknown as Parameters<typeof migrateSketchState>[0]);
+    expect(migrated.constraints.filter(c => c.type === 'on-edge').length).toBe(1);
+    // projectedFrom still removed.
+    for (const e of migrated.entities) {
+      expect((e as Record<string, unknown>)['projectedFrom']).toBeUndefined();
+    }
   });
 });

@@ -409,4 +409,92 @@ describe('Profile extraction (CAD-038, REQ 560, REQ 617)', () => {
       expect(regions[0].holes.length).toBe(0);
     });
   });
+
+  describe('Convert Entities — on-edge constraint links to body edge', () => {
+    // SolidWorks treats a converted entity as a first-class line/arc/
+    // circle with an `on-edge` constraint pointing at the source body
+    // edge. The entity itself is plain; the constraint is the link.
+    // Profile extraction is agnostic to the link — it just walks the
+    // geometry. These tests lock that contract.
+    it('3 sketched lines + 1 converted line forms a closed rectangle', () => {
+      const state: SketchState = {
+        entities: [
+          { kind: 'point', id: 'p1', x: 0,  y: 0 },
+          { kind: 'point', id: 'p2', x: 10, y: 0 },
+          { kind: 'point', id: 'p3', x: 10, y: 10 },
+          { kind: 'point', id: 'p4', x: 0,  y: 10 },
+          { kind: 'line',  id: 'l1', startId: 'p1', endId: 'p2' },
+          { kind: 'line',  id: 'l2', startId: 'p2', endId: 'p3' },
+          { kind: 'line',  id: 'l3', startId: 'p3', endId: 'p4' },
+          // The "converted" closing edge — same shape as l1/l2/l3, but
+          // the on-edge constraint below pins it to a body edge.
+          { kind: 'line',  id: 'l4', startId: 'p4', endId: 'p1' },
+        ],
+        constraints: [
+          { id: 'oe1', type: 'on-edge', targets: [{ entityId: 'l4' }],
+            externalRef: { featureId: 'f1', edgeId: 'f1/e0' } },
+        ],
+      };
+      const { loops } = extractClosedLoops(state);
+      expect(loops.length).toBe(1);
+      expect(loops[0].length).toBe(4);
+    });
+
+    it('converted arc closes a rectangle-with-arc-side profile', () => {
+      // Three straight sides + one converted semicircular arc on the right:
+      //   (0,0) → (5,0) → arc → (5,10) → (0,10) → (0,0)
+      // The arc is the projection of a fillet on the body; the rest is
+      // sketched. Must form one closed loop regardless of which side is
+      // projected.
+      const state: SketchState = {
+        entities: [
+          { kind: 'point', id: 'p1', x: 0, y: 0 },
+          { kind: 'point', id: 'p2', x: 5, y: 0 },
+          { kind: 'point', id: 'p3', x: 5, y: 10 },
+          { kind: 'point', id: 'p4', x: 0, y: 10 },
+          { kind: 'point', id: 'pc', x: 5, y: 5 },  // arc centre
+          { kind: 'line',  id: 'l1', startId: 'p1', endId: 'p2' },
+          { kind: 'arc',   id: 'a1', startId: 'p2', endId: 'p3', centerId: 'pc',
+            radius: 5, ccw: false },
+          { kind: 'line',  id: 'l2', startId: 'p3', endId: 'p4' },
+          { kind: 'line',  id: 'l3', startId: 'p4', endId: 'p1' },
+        ],
+        constraints: [
+          { id: 'oe1', type: 'on-edge', targets: [{ entityId: 'a1' }],
+            externalRef: { featureId: 'f1', edgeId: 'f1/e0' } },
+        ],
+      };
+      const { loops } = extractClosedLoops(state);
+      expect(loops.length).toBe(1);
+      expect(loops[0].length).toBe(4);
+    });
+
+    it('an all-converted closed loop (4 projected lines) extracts as one region', () => {
+      // Every side is locked to a body edge via on-edge. Profile
+      // extraction must not require any sketched (non-projected)
+      // entities at all.
+      const state: SketchState = {
+        entities: [
+          { kind: 'point', id: 'p1', x: 0,  y: 0 },
+          { kind: 'point', id: 'p2', x: 10, y: 0 },
+          { kind: 'point', id: 'p3', x: 10, y: 10 },
+          { kind: 'point', id: 'p4', x: 0,  y: 10 },
+          { kind: 'line',  id: 'l1', startId: 'p1', endId: 'p2' },
+          { kind: 'line',  id: 'l2', startId: 'p2', endId: 'p3' },
+          { kind: 'line',  id: 'l3', startId: 'p3', endId: 'p4' },
+          { kind: 'line',  id: 'l4', startId: 'p4', endId: 'p1' },
+        ],
+        constraints: [
+          { id: 'oe1', type: 'on-edge', targets: [{ entityId: 'l1' }], externalRef: { featureId: 'f1', edgeId: 'f1/e0' } },
+          { id: 'oe2', type: 'on-edge', targets: [{ entityId: 'l2' }], externalRef: { featureId: 'f1', edgeId: 'f1/e1' } },
+          { id: 'oe3', type: 'on-edge', targets: [{ entityId: 'l3' }], externalRef: { featureId: 'f1', edgeId: 'f1/e2' } },
+          { id: 'oe4', type: 'on-edge', targets: [{ entityId: 'l4' }], externalRef: { featureId: 'f1', edgeId: 'f1/e3' } },
+        ],
+      };
+      const { regions } = extractRegions(state);
+      expect(regions.length).toBe(1);
+      expect(regions[0].outer.length).toBe(4);
+      expect(regions[0].holes.length).toBe(0);
+    });
+  });
 });

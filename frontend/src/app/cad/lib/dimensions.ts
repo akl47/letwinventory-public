@@ -80,6 +80,7 @@ export interface DimensionRender {
 const DIMENSIONAL_TYPES = new Set<ConstraintType>([
   'distance', 'radius', 'diameter', 'angle',
   'horizontal-distance', 'vertical-distance', 'point-line-distance', 'arc-length',
+  'chord-distance',
 ]);
 
 /** Default offset (in sketch units) used when a constraint has no
@@ -111,6 +112,7 @@ export function formatDimensionText(
     case 'vertical-distance': return '↕ ' + num;
     case 'point-line-distance': return '⊥ ' + num;
     case 'arc-length': return '~ ' + num;
+    case 'chord-distance': return '— ' + num;
     default: return num;
   }
 }
@@ -121,6 +123,10 @@ export function dimensionRenders(state: SketchState, defaultUnit: Unit = 'mm'): 
   const out: DimensionRender[] = [];
   for (const c of state.constraints) {
     if (!DIMENSIONAL_TYPES.has(c.type) || c.value === undefined) continue;
+    // Chain-internal duplicates (added by offset to give the solver
+    // enough equations for full constraint) omit `placement`. Skip
+    // them — only the chain's ONE visible dim renders.
+    if (c.chainId && !c.placement) continue;
     const r = renderConstraint(state, c, defaultUnit);
     if (r) out.push(r);
   }
@@ -144,9 +150,17 @@ export function previewDimension(
 }
 
 function renderConstraint(state: SketchState, c: SketchConstraint, defaultUnit: Unit): DimensionRender | null {
-  return computeRender(
+  const r = computeRender(
     state, c.id, c.type, c.targets.map(t => t.entityId), c.value!, c.placement, c.unit, defaultUnit,
   );
+  if (!r) return r;
+  // Driven dim convention (SolidWorks-style): wrap the value text in
+  // parentheses so the user can tell at a glance that this dim is
+  // read-only / display-only. The renderer in cad-viewer additionally
+  // applies a muted color when it sees a driven dim — colored render
+  // logic doesn't belong here (this module is pure geometry).
+  if (c.driven) return { ...r, text: `(${r.text})` };
+  return r;
 }
 
 function computeRender(
@@ -211,6 +225,17 @@ function computeRender(
         y: c.y + (a.radius + DEFAULT_OFFSET) * Math.sin(mid),
       };
       return { constraintId, text, labelAnchor, dimensionLine: null, extensionLines: [] };
+    }
+    case 'chord-distance': {
+      // Render same as a 2-point distance between the arc's start and
+      // end — the chord IS that segment. Reuses distanceRender so the
+      // label drag / unit handling matches the rest of the dim family.
+      const e = findEntity(state, targetIds[0]);
+      if (!e || e.kind !== 'arc') return null;
+      const start = findPoint(state, e.startId);
+      const end = findPoint(state, e.endId);
+      if (!start || !end) return null;
+      return distanceRender(constraintId, text, start, end, placement, 'distance');
     }
   }
   return null;
@@ -375,8 +400,14 @@ function angleRender(
   };
 }
 
-/** Perpendicular distance from point to line — same render as Distance
- * but with the line's direction supplying the orientation. */
+/** Perpendicular distance from point to line. Two visual layouts:
+ *   1. Plain point→line: dim line parallel to `l`, perpendicular witness
+ *      lines from `p` and from p's foot on `l`.
+ *   2. Line→line (parallel lines): when `p` is an endpoint of a line
+ *      parallel to `l`, the layout flips to the SolidWorks convention
+ *      for line-to-line — dim line PERPENDICULAR to the two lines at
+ *      the user's chosen "along" position, with extension lines running
+ *      ALONG each source line out to the dim line. */
 function pointLineDistanceRender(
   constraintId: string, text: string,
   state: SketchState, p: PointEntity, l: LineEntity,
@@ -392,6 +423,14 @@ function pointLineDistanceRender(
   const nx = -uy, ny = ux;
   const t = ((p.x - a.x) * ux + (p.y - a.y) * uy);
   const foot = { x: a.x + ux * t, y: a.y + uy * t };
+
+  // Parallel-line case: render as line-to-line.
+  const containing = findLineContainingPoint(state, p.id, l.id);
+  if (containing && linesNearParallel(state, containing, l)) {
+    const r = parallelLinesRender(constraintId, text, state, containing, l, p, placement);
+    if (r) return r;
+  }
+
   const offset = placement
     ? (placement.x - foot.x) * nx + (placement.y - foot.y) * ny
     : DEFAULT_OFFSET;
@@ -402,6 +441,88 @@ function pointLineDistanceRender(
     labelAnchor: { x: (pProj.x + fProj.x) / 2, y: (pProj.y + fProj.y) / 2 },
     dimensionLine: [pProj, fProj],
     extensionLines: [[p, pProj], [foot, fProj]],
+  };
+}
+
+/** Find a non-construction LineEntity in `state` that has `pointId` as
+ * one of its endpoints. Excludes `excludeLineId` so we don't return the
+ * dim's target line if the picked point happens to also be on it. */
+function findLineContainingPoint(state: SketchState, pointId: string, excludeLineId: string): LineEntity | null {
+  for (const e of state.entities) {
+    if (e.kind !== 'line' || e.id === excludeLineId) continue;
+    if (e.startId === pointId || e.endId === pointId) return e as LineEntity;
+  }
+  return null;
+}
+
+/** True when two lines' direction vectors are within ~0.5° of parallel
+ * or anti-parallel. Mirrors the Smart-Dim detection in the editor. */
+function linesNearParallel(state: SketchState, a: LineEntity, b: LineEntity): boolean {
+  const a1 = findPoint(state, a.startId), a2 = findPoint(state, a.endId);
+  const b1 = findPoint(state, b.startId), b2 = findPoint(state, b.endId);
+  if (!a1 || !a2 || !b1 || !b2) return false;
+  const ax = a2.x - a1.x, ay = a2.y - a1.y;
+  const bx = b2.x - b1.x, by = b2.y - b1.y;
+  const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+  if (la < 1e-9 || lb < 1e-9) return false;
+  const sinTheta = Math.abs(ax * by - ay * bx) / (la * lb);
+  return sinTheta < Math.sin(0.5 * Math.PI / 180);
+}
+
+/** SolidWorks-style parallel-line distance dimension. The dim line is
+ * PERPENDICULAR to the two lines at the "along" position implied by the
+ * placement. The two extension lines run ALONG each source line from a
+ * sensible attachment point on that line out to the dim line — so a
+ * horizontal-line dimension shows horizontal extension lines and a
+ * vertical dim line between them. Dragging the label moves the "along"
+ * position; the dim length stays fixed (it's the gap between the
+ * lines). */
+function parallelLinesRender(
+  constraintId: string, text: string,
+  state: SketchState, l1: LineEntity, l2: LineEntity, picked: PointEntity,
+  placement: { x: number; y: number } | undefined,
+): DimensionRender | null {
+  const a2 = findPoint(state, l2.startId);
+  const b2 = findPoint(state, l2.endId);
+  const a1 = findPoint(state, l1.startId);
+  const b1 = findPoint(state, l1.endId);
+  if (!a1 || !b1 || !a2 || !b2) return null;
+  // Along/perp basis from l2 (l1 is parallel, equivalent choice).
+  const dx = b2.x - a2.x, dy = b2.y - a2.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) return null;
+  const ux = dx / len, uy = dy / len;
+  const nx = -uy, ny = ux;
+  // Project the placement onto l2's along-axis (origin = a2). Without
+  // a placement, default to the picked point's projection plus a small
+  // outward shift so the dim sits clear of the geometry.
+  const projAlong = (px: number, py: number) =>
+    ((px - a2.x) * ux + (py - a2.y) * uy);
+  const t = placement
+    ? projAlong(placement.x, placement.y)
+    : projAlong(picked.x, picked.y) + DEFAULT_OFFSET;
+  // Foot on l2 (where the dim line touches l2) and matching foot on l1.
+  const footL2 = { x: a2.x + ux * t, y: a2.y + uy * t };
+  // Signed perp distance from l2 to l1, using l1.startId as a reference
+  // point on l1.
+  const l1Offset = (a1.x - a2.x) * nx + (a1.y - a2.y) * ny;
+  const footL1 = { x: footL2.x + nx * l1Offset, y: footL2.y + ny * l1Offset };
+  // Extension lines: along each source line FROM whichever endpoint is
+  // nearer the foot OUT to the foot itself. Picking the nearer endpoint
+  // keeps the extension line short when the dim sits next to the line,
+  // and grows naturally when the user drags the dim past the line's end.
+  const nearerEndpoint = (line: LineEntity, foot: { x: number; y: number }) => {
+    const s = findPoint(state, line.startId)!;
+    const e = findPoint(state, line.endId)!;
+    return Math.hypot(s.x - foot.x, s.y - foot.y) <= Math.hypot(e.x - foot.x, e.y - foot.y) ? s : e;
+  };
+  const attachL1 = nearerEndpoint(l1, footL1);
+  const attachL2 = nearerEndpoint(l2, footL2);
+  return {
+    constraintId, text,
+    labelAnchor: { x: (footL1.x + footL2.x) / 2, y: (footL1.y + footL2.y) / 2 },
+    dimensionLine: [footL1, footL2],
+    extensionLines: [[attachL1, footL1], [attachL2, footL2]],
   };
 }
 

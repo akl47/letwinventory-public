@@ -39,12 +39,22 @@ export function createSketch(
   topology: ModelTopology | null,
 ): { doc: SketchDocument; sketchId: string } {
   const sketchId = `s${doc.nextSketchSeq}`;
+  // SolidWorks-style default name: "Sketch N" where N counts existing
+  // sketches in the doc. setSketchName overrides this when the user
+  // renames; we only fill in at creation.
+  const defaultName = `Sketch ${Object.keys(doc.sketches).length + 1}`;
   const sketch: Sketch = {
     id: sketchId,
     hostId,
     plane,
     state: emptySketchState(),
     candidates: projectTopologyToCandidates(plane, topology),
+    // Unified creation timestamp so the feature tree can interleave
+    // orphan sketches between features by chronological order, the way
+    // SolidWorks does. Date.now() is precise enough — two creates
+    // within the same ms are rare and stable-sort breaks ties by id.
+    createdAt: Date.now(),
+    name: defaultName,
   };
   return {
     doc: {

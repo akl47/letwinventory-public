@@ -222,8 +222,94 @@ export function tessellateEntity(
       return tessellateSpline(pts.map(p => ({ x: p.x, y: p.y })), entity.degree, chordTolerance);
     }
     case 'ellipticalArc':
-    case 'conic':
-      // Phase C: per-entity tessellators land alongside the entity tools.
+      // Tessellation for elliptical arc is the ellipse path clipped
+      // to the arc's angle range — kept simple for now.
+      return [];
+    case 'conic': {
+      if (entity.conicType !== 'parabola') return [];
+      return tessellateParabola(state, entity, chordTolerance);
+    }
+    case 'equation': {
+      return tessellateEquationCurve(entity.xExpr, entity.yExpr, entity.tMin, entity.tMax, entity.samples);
+    }
+    case 'text':
+    case 'picture':
+    case 'intersection':
+    case 'splineOnSurface':
+      // Reference-only entities — drawn directly by the renderer
+      // (raster picture, vector glyphs, 3D overlay). No polyline
+      // contribution to profile extraction.
       return [];
   }
+}
+
+/** REQ 597 — Parabola tessellation. The parabola is defined by
+ * three points: vertex V, focus F, and a sample point S on the
+ * curve. The axis runs from V toward F; the curve opens in that
+ * direction with focal distance p = |VF|. In local coords aligned
+ * to the axis, the parabola is y = x²/(4p). We tessellate from
+ * −s..+s where s = the sample point's local-x coord, sampled
+ * uniformly in x. */
+function tessellateParabola(
+  state: SketchState, entity: import('./types').ConicEntity, chordTolerance: number,
+): Array<{ x: number; y: number }> {
+  if (entity.pointIds.length < 3) return [];
+  const v = findPoint(state, entity.pointIds[0]);
+  const f = findPoint(state, entity.pointIds[1]);
+  const s = findPoint(state, entity.pointIds[2]);
+  if (!v || !f || !s) return [];
+  const ax = f.x - v.x, ay = f.y - v.y;
+  const p = Math.hypot(ax, ay);
+  if (p < 1e-9) return [];
+  const ux = ax / p, uy = ay / p;       // axis unit vector
+  const nx = -uy, ny = ux;              // perpendicular (axis × ẑ)
+  // Sample point in local frame.
+  const dx = s.x - v.x, dy = s.y - v.y;
+  const sLocalY = dx * ux + dy * uy;    // along axis
+  const sLocalX = dx * nx + dy * ny;    // perp from axis
+  if (!Number.isFinite(sLocalX) || Math.abs(sLocalX) < 1e-9) return [];
+  const halfWidth = Math.abs(sLocalX);
+  // Adaptive sample count: more samples for higher curvature.
+  // For y=x²/4p, the curvature is max at the vertex with radius
+  // 2p. Use the circle-segment heuristic on that curvature.
+  const segs = Math.max(16, segmentsForCircle(Math.max(1, 2 * p), chordTolerance));
+  const out: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i <= segs; i++) {
+    const t = (i / segs) * 2 - 1;       // −1 .. +1
+    const lx = t * halfWidth;
+    const ly = (lx * lx) / (4 * p);
+    out.push({ x: v.x + nx * lx + ux * ly, y: v.y + ny * lx + uy * ly });
+  }
+  return out;
+}
+
+/** REQ — Equation curve tessellation. Compiles `x(t)` and `y(t)`
+ * once per call via the Function constructor; evaluates at N samples
+ * and pushes valid (finite) points into the polyline. Skips any
+ * (t) value that throws or yields a non-finite result so the rest
+ * of the curve still renders. */
+export function tessellateEquationCurve(
+  xExpr: string, yExpr: string, tMin: number, tMax: number, samples: number,
+): Array<{ x: number; y: number }> {
+  const n = Math.max(8, Math.min(2000, Math.floor(samples)));
+  if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMin === tMax) return [];
+  // Trusted code path — expressions come from the user's own
+  // sketch document, no remote / network input. Function ctor is
+  // appropriate here; we still try/catch in case the user types
+  // a bad expression.
+  let fx: (t: number) => number;
+  let fy: (t: number) => number;
+  try {
+    fx = new Function('t', `with (Math) { return (${xExpr}); }`) as (t: number) => number;
+    fy = new Function('t', `with (Math) { return (${yExpr}); }`) as (t: number) => number;
+  } catch { return []; }
+  const out: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i <= n; i++) {
+    const t = tMin + (i / n) * (tMax - tMin);
+    let x: number, y: number;
+    try { x = fx(t); y = fy(t); } catch { continue; }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    out.push({ x, y });
+  }
+  return out;
 }

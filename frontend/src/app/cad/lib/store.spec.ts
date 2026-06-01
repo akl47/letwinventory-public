@@ -2,19 +2,27 @@ import { describe, it, expect } from 'vitest';
 import {
   emptySketchState, addPoint, addLine, addCircle, addArc, movePoint, deletePrimitive,
   addConstraint, setDistanceValue,
-  addRectangleCorners, addRectangleCenter, addPolygon, addSlotStraight,
-  addCircle3Points, addArc3Points, addEllipse, addSpline,
-  setConstructionFlag,
+  addRectangleCorners, addRectangleCenter, addRectangle3PtCorner, addRectangle3PtCenter, addParallelogram,
+  addPolygon, addSlotStraight, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
+  addCircle3Points, addArc3Points, addEllipse, addEllipticalArc, addSpline,
+  setConstructionFlag, mergePoints,
+  ORIGIN_POINT_ID,
 } from './store';
-import type { SketchState, CircleEntity, ArcEntity, EllipseEntity, SplineEntity, LineEntity } from './types';
+import type { SketchState, CircleEntity, ArcEntity, EllipseEntity, SplineEntity, LineEntity, PointEntity } from './types';
 import { pointsOf, linesOf, findEntity, findPoint } from './types';
+
+// Every state from `emptySketchState()` carries the synthetic origin point.
+// Tests that examine "the points the operation added" filter it out so
+// they don't have to subtract one everywhere.
+const userPoints = (s: SketchState): PointEntity[] =>
+  pointsOf(s).filter(p => p.id !== ORIGIN_POINT_ID);
 
 describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () => {
   describe('addPoint (CAD-010)', () => {
     it('adds a Point entity at the given location', () => {
       const s0 = emptySketchState();
       const { state: s1, id } = addPoint(s0, 3, 4);
-      const pts = pointsOf(s1);
+      const pts = userPoints(s1);
       expect(pts.length).toBe(1);
       expect(pts[0]).toMatchObject({ id, x: 3, y: 4, kind: 'point' });
     });
@@ -22,7 +30,7 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
     it('is immutable', () => {
       const s0 = emptySketchState();
       addPoint(s0, 1, 1);
-      expect(pointsOf(s0).length).toBe(0);
+      expect(userPoints(s0).length).toBe(0);
     });
 
     it('assigns unique IDs across multiple adds', () => {
@@ -59,7 +67,9 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
     it('is immutable', () => {
       const s0 = emptySketchState();
       addCircle(s0, 0, 0, 5);
-      expect(s0.entities.length).toBe(0);
+      // Only the synthetic origin remains; addCircle didn't mutate s0.
+      expect(s0.entities.length).toBe(1);
+      expect(s0.entities[0].id).toBe(ORIGIN_POINT_ID);
     });
   });
 
@@ -94,7 +104,7 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
     it("updates a non-construction point's location", () => {
       const { state: s1, id } = addPoint(emptySketchState(), 0, 0);
       const s2 = movePoint(s1, id, 7, 8);
-      const p = pointsOf(s2)[0];
+      const p = findPoint(s2, id)!;
       expect(p.x).toBe(7);
       expect(p.y).toBe(8);
     });
@@ -303,10 +313,10 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
     it('produces 4 lines + 4 points walked CCW', () => {
       const { state, ids } = addRectangleCorners(emptySketchState(), 0, 0, 10, 5);
       expect(ids.length).toBe(4);
-      expect(pointsOf(state).length).toBe(4);
+      expect(userPoints(state).length).toBe(4);
       expect(linesOf(state).length).toBe(4);
-      const xs = pointsOf(state).map(p => p.x).sort((a, b) => a - b);
-      const ys = pointsOf(state).map(p => p.y).sort((a, b) => a - b);
+      const xs = userPoints(state).map(p => p.x).sort((a, b) => a - b);
+      const ys = userPoints(state).map(p => p.y).sort((a, b) => a - b);
       expect(xs).toEqual([0, 0, 10, 10]);
       expect(ys).toEqual([0, 0, 5, 5]);
     });
@@ -314,9 +324,20 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
 
   describe('addRectangleCenter', () => {
     it('mirrors the corner around the center', () => {
-      const { state } = addRectangleCenter(emptySketchState(), 5, 5, 8, 7);
-      const xs = pointsOf(state).map(p => p.x).sort((a, b) => a - b);
-      const ys = pointsOf(state).map(p => p.y).sort((a, b) => a - b);
+      const r = addRectangleCenter(emptySketchState(), 5, 5, 8, 7);
+      // ids = [l1, l2, l3, l4, diag, center]. The 4 line endpoints
+      // span the corner set; the trailing `center` point is the
+      // midpoint of the diagonal and lives at (cx, cy) = (5, 5),
+      // which would otherwise pollute the [2, 2, 8, 8] expectation.
+      const cornerPtIds = new Set<string>();
+      for (const lid of r.ids.slice(0, 4)) {
+        const ln = findEntity(r.state, lid) as LineEntity;
+        cornerPtIds.add(ln.startId);
+        cornerPtIds.add(ln.endId);
+      }
+      const cornerPts = userPoints(r.state).filter(p => cornerPtIds.has(p.id));
+      const xs = cornerPts.map(p => p.x).sort((a, b) => a - b);
+      const ys = cornerPts.map(p => p.y).sort((a, b) => a - b);
       // hw = 3, hh = 2 → corners at (2,3) (8,3) (8,7) (2,7)
       expect(xs).toEqual([2, 2, 8, 8]);
       expect(ys).toEqual([3, 3, 7, 7]);
@@ -328,9 +349,9 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       const { state, ids } = addPolygon(emptySketchState(), 0, 0, 10, 0, 6);
       expect(ids.length).toBe(6);
       expect(linesOf(state).length).toBe(6);
-      expect(pointsOf(state).length).toBe(6);
+      expect(userPoints(state).length).toBe(6);
       // First vertex at (10, 0)
-      const first = pointsOf(state)[0];
+      const first = userPoints(state)[0];
       expect(first.x).toBeCloseTo(10);
       expect(first.y).toBeCloseTo(0);
     });
@@ -450,6 +471,185 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       const dia = addConstraint(s, 'diameter', [r.id], 30); s = dia.state;
       expect(s.constraints.find(c => c.type === 'radius')?.value).toBe(15);
       expect(s.constraints.find(c => c.type === 'diameter')?.value).toBe(30);
+    });
+  });
+
+  describe('addRectangle3PtCorner', () => {
+    it('builds a tilted rectangle whose opposite-side offset matches the 3rd-click perp distance', () => {
+      // Edge from (0,0) to (10,0); 3rd click at (5,4) → height 4.
+      const r = addRectangle3PtCorner(emptySketchState(), 0, 0, 10, 0, 5, 4);
+      expect(r.ids.length).toBe(4);
+      const pts = userPoints(r.state);
+      expect(pts.length).toBe(4);
+      const ys = pts.map(p => p.y).sort((a, b) => a - b);
+      expect(ys).toEqual([0, 0, 4, 4]);
+    });
+    it('rejects degenerate inputs (zero edge or zero offset)', () => {
+      expect(addRectangle3PtCorner(emptySketchState(), 0, 0, 0, 0, 5, 4).ids).toEqual([]);
+      expect(addRectangle3PtCorner(emptySketchState(), 0, 0, 10, 0, 5, 0).ids).toEqual([]);
+    });
+  });
+
+  describe('addRectangle3PtCenter', () => {
+    it('produces 4 corners symmetric around the click center', () => {
+      // center (5,5), side midpoint (10, 5) → half-len 5 along +x; 3rd
+      // click at (10, 8) → half-width 3 along +y.
+      const r = addRectangle3PtCenter(emptySketchState(), 5, 5, 10, 5, 10, 8);
+      const cornerPtIds = new Set<string>();
+      for (const lid of r.ids.slice(0, 4)) {
+        const ln = findEntity(r.state, lid) as LineEntity;
+        cornerPtIds.add(ln.startId); cornerPtIds.add(ln.endId);
+      }
+      const corners = userPoints(r.state).filter(p => cornerPtIds.has(p.id));
+      const xs = corners.map(p => p.x).sort((a, b) => a - b);
+      const ys = corners.map(p => p.y).sort((a, b) => a - b);
+      expect(xs).toEqual([0, 0, 10, 10]);
+      expect(ys).toEqual([2, 2, 8, 8]);
+    });
+  });
+
+  describe('addParallelogram', () => {
+    it('derives the 4th corner from the closure rule', () => {
+      const r = addParallelogram(emptySketchState(), 0, 0, 5, 0, 6, 3);
+      const pts = userPoints(r.state);
+      const sortedByX = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+      // c4 = c1 + (c3 - c2) = (0,0) + ((6,3) - (5,0)) = (1, 3)
+      expect(sortedByX.map(p => [p.x, p.y])).toEqual([[0, 0], [1, 3], [5, 0], [6, 3]]);
+    });
+    it('emits parallel + equal constraints for opposite sides', () => {
+      const r = addParallelogram(emptySketchState(), 0, 0, 5, 0, 6, 3);
+      const parallels = r.state.constraints.filter(c => c.type === 'parallel');
+      const equals = r.state.constraints.filter(c => c.type === 'equal');
+      expect(parallels.length).toBe(2);
+      expect(equals.length).toBe(2);
+    });
+  });
+
+  describe('addSlotStraightCenterpoint', () => {
+    it('produces the same shape as addSlotStraight with cap centers mirrored across the input center', () => {
+      // Center at (5,0), cap at (10,0), halfWidth 2 → equivalent to
+      // addSlotStraight((0,0), (10,0), 2).
+      const r1 = addSlotStraightCenterpoint(emptySketchState(), 5, 0, 10, 0, 2);
+      const r2 = addSlotStraight(emptySketchState(), 0, 0, 10, 0, 2);
+      expect(r1.ids.length).toBe(r2.ids.length);
+      // Both produce 2 lines + 2 caps.
+      expect(r1.ids.length).toBe(4);
+    });
+  });
+
+  describe('addSlotArc3Pt', () => {
+    it('builds an arc slot with 4 boundary entities (inner arc, outer arc, two caps)', () => {
+      // Centerline arc through (10,0), (0,10), (-10,0): half-circle on
+      // origin, radius 10. Slot half-width 2 → inner r=8, outer r=12.
+      const r = addSlotArc3Pt(emptySketchState(), 10, 0, 0, 10, -10, 0, 2);
+      expect(r.ids.length).toBe(4);
+    });
+    it('rejects half-widths >= centerline radius', () => {
+      const r = addSlotArc3Pt(emptySketchState(), 10, 0, 0, 10, -10, 0, 15);
+      expect(r.ids).toEqual([]);
+    });
+  });
+
+  describe('addSlotArcCenterpoint', () => {
+    it('builds an arc slot from explicit center + start + end', () => {
+      // Center (0,0), start (10,0), end (0,10), half-width 2.
+      const r = addSlotArcCenterpoint(emptySketchState(), 0, 0, 10, 0, 0, 10, 2);
+      expect(r.ids.length).toBe(4);
+    });
+    it('snaps the end onto the radius circle so inner/outer arcs match', () => {
+      // End at (0,20) — wrong distance. Snap should pull it onto r=10.
+      const r = addSlotArcCenterpoint(emptySketchState(), 0, 0, 10, 0, 0, 20, 2);
+      expect(r.ids.length).toBe(4);
+    });
+  });
+
+  describe('mergePoints', () => {
+    it('collapses dropId into keepId across line endpoints', () => {
+      let s = emptySketchState();
+      const p1 = addPoint(s, 0, 0); s = p1.state;
+      const p2 = addPoint(s, 5, 0); s = p2.state;
+      const p3 = addPoint(s, 5, 0); s = p3.state;  // duplicate of p2
+      const l1 = addLine(s, p1.id, p2.id); s = l1.state;
+      const l2 = addLine(s, p3.id, p1.id); s = l2.state;
+      const merged = mergePoints(s, p2.id, p3.id);
+      // p3 is gone.
+      expect(findEntity(merged, p3.id)).toBeUndefined();
+      // l2 now references p2 where it previously referenced p3.
+      expect((findEntity(merged, l2.id) as LineEntity).startId).toBe(p2.id);
+      // l1 unchanged.
+      expect((findEntity(merged, l1.id) as LineEntity).endId).toBe(p2.id);
+    });
+
+    it('drops constraints that become self-referential after the merge', () => {
+      let s = emptySketchState();
+      const p1 = addPoint(s, 0, 0); s = p1.state;
+      const p2 = addPoint(s, 0, 0); s = p2.state;
+      s = addConstraint(s, 'coincident', [p1.id, p2.id]).state;
+      const merged = mergePoints(s, p1.id, p2.id);
+      // The coincident(p1, p1) constraint would be vacuous — pruned.
+      expect(merged.constraints.length).toBe(0);
+    });
+
+    it('refuses to drop the origin point', () => {
+      let s = emptySketchState();
+      const p = addPoint(s, 0, 0); s = p.state;
+      // Trying to drop the origin returns state unchanged.
+      const merged = mergePoints(s, p.id, ORIGIN_POINT_ID);
+      expect(findEntity(merged, ORIGIN_POINT_ID)).toBeDefined();
+      expect(findEntity(merged, p.id)).toBeDefined();
+    });
+
+    it('is a no-op when keepId === dropId', () => {
+      let s = emptySketchState();
+      const p = addPoint(s, 3, 4); s = p.state;
+      expect(mergePoints(s, p.id, p.id)).toBe(s);
+    });
+
+    it('rewires circle / arc / ellipse / spline center & control refs', () => {
+      let s = emptySketchState();
+      const c1 = addPoint(s, 5, 5); s = c1.state;
+      const c2 = addPoint(s, 5, 5); s = c2.state;
+      // Build a circle using c2 as its center, then merge c2 → c1.
+      const cir: CircleEntity = { kind: 'circle', id: 'cir-test', centerId: c2.id, radius: 3 };
+      s = { ...s, entities: [...s.entities, cir] };
+      const merged = mergePoints(s, c1.id, c2.id);
+      expect((findEntity(merged, 'cir-test') as CircleEntity).centerId).toBe(c1.id);
+    });
+  });
+
+  describe('addEllipticalArc', () => {
+    it('produces a partial-ellipse entity with center, major-end, and sweep angles', () => {
+      const r = addEllipticalArc(emptySketchState(), 0, 0, 10, 0, 5, 0, Math.PI / 2, true);
+      const ea = findEntity(r.state, r.id);
+      expect(ea?.kind).toBe('ellipticalArc');
+      const e = ea as any;
+      expect(e.minorRadius).toBe(5);
+      expect(e.startAngle).toBe(0);
+      expect(e.endAngle).toBeCloseTo(Math.PI / 2);
+      expect(e.ccw).toBe(true);
+      // Materialized center + major-end points.
+      expect(userPoints(r.state).length).toBe(2);
+    });
+  });
+
+  describe('addSpline (variable degree)', () => {
+    it('accepts degree 1 (polyline) with 2 control points', () => {
+      const r = addSpline(emptySketchState(),
+        [{ x: 0, y: 0 }, { x: 5, y: 5 }], 1);
+      expect(r.id).not.toBeNull();
+    });
+    it('accepts degree 5 with 6 control points (style spline / quintic)', () => {
+      const cps = [0, 1, 2, 3, 4, 5].map(i => ({ x: i, y: i * i }));
+      const r = addSpline(emptySketchState(), cps, 5);
+      expect(r.id).not.toBeNull();
+      const s = findEntity(r.state, r.id!) as SplineEntity;
+      expect(s.degree).toBe(5);
+      expect(s.controlPointIds.length).toBe(6);
+    });
+    it('rejects when control-point count < degree + 1', () => {
+      const cps = [0, 1, 2].map(i => ({ x: i, y: i }));
+      const r = addSpline(emptySketchState(), cps, 5);
+      expect(r.id).toBeNull();
     });
   });
 });

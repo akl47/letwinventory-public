@@ -1,6 +1,8 @@
 import type { SketchState, CircleEntity, ArcEntity } from './types';
 import { findPoint, findEntity } from './types';
 import { tessellateCircle, tessellateArc, DEFAULT_CHORD_TOLERANCE } from './tessellator';
+import { splitAtIntersections, extractArrangementFaces, type HalfEdge } from './arrangement';
+import { bezierLoopsFromTextEntity, type TextResolver } from './textGlyphs';
 
 // REQ 617 — typed profile edges. Each edge owns its analytic identity (line /
 // arc / circle) so the extrude kernel can produce one face per edge instead of
@@ -33,7 +35,16 @@ export interface CircleProfileEdge {
   radius: number;
 }
 
-export type ProfileEdge = LineProfileEdge | ArcProfileEdge | CircleProfileEdge;
+/** A single Bézier segment. `points` are control points (2 = line, 3 =
+ * quadratic, 4 = cubic); the edge runs points[0] → points[last]. Used for
+ * text glyph outlines so the kernel builds one smooth face per curve via
+ * OCCT `Edge::bezier` instead of N faces per tessellated chord. */
+export interface BezierProfileEdge {
+  kind: 'bezier';
+  points: Point2[];
+}
+
+export type ProfileEdge = LineProfileEdge | ArcProfileEdge | CircleProfileEdge | BezierProfileEdge;
 
 export type ProfileLoop = ProfileEdge[];
 
@@ -69,9 +80,46 @@ export function tessellateProfileLoop(
       // closed loop by itself). Defensive: append tessellation.
       const pts = tessellateCircle(e.center, e.radius, chordTolerance);
       for (let i = 0; i < pts.length - 1; i++) out.push(pts[i]);
+    } else if (e.kind === 'bezier') {
+      // Sample the Bézier for containment/preview (the analytic edge still
+      // goes to the kernel verbatim). Drop the trailing point — the next
+      // edge repeats it.
+      const pts = sampleBezier(e.points, chordTolerance);
+      for (let i = 0; i < pts.length - 1; i++) out.push(pts[i]);
     }
   }
   return out;
+}
+
+/** Adaptive sample of a Bézier (2/3/4 control points) into a polyline,
+ * including both endpoints. Segment count scales with the control-polygon
+ * length against the chord tolerance. */
+function sampleBezier(pts: Point2[], chordTolerance: number): Point2[] {
+  if (pts.length < 2) return pts.slice();
+  if (pts.length === 2) return [pts[0], pts[1]];
+  let ctrlLen = 0;
+  for (let i = 1; i < pts.length; i++) ctrlLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  const segs = Math.max(2, Math.min(48, Math.ceil(ctrlLen / Math.max(1e-6, chordTolerance))));
+  const out: Point2[] = [];
+  const n = pts.length - 1;  // degree
+  for (let s = 0; s <= segs; s++) {
+    const t = s / segs;
+    out.push(deCasteljau(pts, t, n));
+  }
+  return out;
+}
+
+function deCasteljau(pts: Point2[], t: number, n: number): Point2 {
+  // Copy and reduce. n == degree == pts.length-1.
+  let xs = pts.map(p => p.x);
+  let ys = pts.map(p => p.y);
+  for (let r = 1; r <= n; r++) {
+    for (let i = 0; i <= n - r; i++) {
+      xs[i] = (1 - t) * xs[i] + t * xs[i + 1];
+      ys[i] = (1 - t) * ys[i] + t * ys[i + 1];
+    }
+  }
+  return { x: xs[0], y: ys[0] };
 }
 
 /** Lines and arcs share an "edge with two endpoints" structure for profile
@@ -119,67 +167,168 @@ export interface ProfilesResult {
   errors: string[];
 }
 
-export function extractClosedLoops(state: SketchState): ProfilesResult {
+export function extractClosedLoops(
+  state: SketchState, resolve: TextResolver = s => s,
+): ProfilesResult {
   const loops: ProfileLoop[] = [];
   const errors: string[] = [];
 
-  // Each non-construction circle is its own component.
+  // REQ Batch 6 — Text glyphs contribute closed loops via the Roboto glyph
+  // engine (opentype.js). Each character's outline (and any inner counter for
+  // O / A / D) is emitted as a chain of analytic Bézier edges, so the kernel
+  // builds ONE smooth face per curve (OCCT Edge::bezier) instead of N faces
+  // per tessellated chord — keeps the face count low at any text size. Falls
+  // through to [] when the font hasn't loaded yet (first frame after page
+  // open); subsequent regens pick it up.
   for (const e of state.entities) {
+    if (e.kind !== 'text') continue;
+    const te = e as import('./types').TextEntity;
+    // Single-line (engraving) text is open strokes — no closed region to
+    // extrude. Skip it; it renders in the sketch but contributes no profile.
+    if (te.font === 'singleLine') continue;
+    const bezierLoops = bezierLoopsFromTextEntity(state, te, resolve);
+    for (const contour of bezierLoops) {
+      if (contour.length < 2) continue;
+      const edges: ProfileLoop = contour.map(seg => ({ kind: 'bezier', points: seg.points }));
+      loops.push(edges);
+    }
+  }
+
+  // First: split every non-construction curve at every intersection. This
+  // turns "circle + line through it" into "two arcs + three line segments",
+  // wiring intersection points into the topology so the arrangement walker
+  // can discover the two half-disk regions.
+  const split = splitAtIntersections(state);
+
+  // Each non-construction circle that survived splitting (i.e. had no
+  // intersections — fewer than 2 crossings = stays a circle) is its own
+  // standalone loop. A circle with 2+ intersections has already been
+  // converted to arcs that the face walker will pick up below.
+  for (const e of split.entities) {
     if (e.kind !== 'circle' || e.construction) continue;
-    const center = findPoint(state, e.centerId);
+    const center = findPoint(split, e.centerId);
     if (!center) { errors.push(`circle ${e.id}: center point not found`); continue; }
     loops.push([{ kind: 'circle', center: { x: center.x, y: center.y }, radius: e.radius }]);
   }
 
-  // Segment components (lines + arcs): BFS through shared endpoints so a
-  // chain like "line → arc → line → arc → …" lands in a single component.
-  // Without arcs in the adjacency, a filleted rectangle (4 lines + 4 arcs,
-  // no two lines sharing an endpoint) gets split into 4 single-line
-  // components that each fail the ≥3-segments check.
-  const segments = segmentsOf(state);
-  const adj = buildSegmentAdjacency(segments);
-  const segById = new Map(segments.map(s => [s.id, s] as const));
-  const visited = new Set<string>();
-  for (const startSeg of segments) {
-    if (visited.has(startSeg.id)) continue;
-    const componentIds = new Set<string>([startSeg.id]);
-    const componentPointIds = new Set<string>([startSeg.startId, startSeg.endId]);
-    const queue: string[] = [startSeg.id];
-    while (queue.length > 0) {
-      const sid = queue.shift()!;
-      const seg = segById.get(sid)!;
-      for (const pid of [seg.startId, seg.endId]) {
-        for (const adjSid of adj.get(pid) ?? []) {
-          if (componentIds.has(adjSid)) continue;
-          componentIds.add(adjSid);
-          queue.push(adjSid);
-          const adjSeg = segById.get(adjSid)!;
-          componentPointIds.add(adjSeg.startId);
-          componentPointIds.add(adjSeg.endId);
-        }
+  // Run the DCEL face walker over the split state. We keep only bounded
+  // faces (positive signed area). The unbounded outer face — which is the
+  // one that encloses the figure and includes any dangling chains — has
+  // negative or zero area and is discarded. A few extra rejections:
+  //   - Faces with fewer than 2 edges can't be real regions.
+  //   - Faces whose signed area is below an epsilon are collinear or
+  //     zero-area artefacts of how dangling segments get folded into the
+  //     outer face's traversal.
+  const faces = extractArrangementFaces(split);
+  const AREA_EPS = 1e-6;
+  for (const f of faces) {
+    if (f.edges.length < 2) continue;
+    if (f.signedArea <= AREA_EPS) continue;
+    const loop = faceToProfileLoop(f, split);
+    if (loop.length > 0) loops.push(loop);
+  }
+
+  // Diagnostic dump for "looks closed but won't extrude". Gated on
+  // window.__cadDebug so it's silent in normal use. Turn on in
+  // DevTools (`window.__cadDebug = true`), then click Extrude on
+  // the failing sketch and the console will explain which case fired:
+  //   - per-point degree (1 == open chain, 3+ == branch point)
+  //   - face count + each face's signedArea (filtered out if <= 1e-6)
+  //   - non-construction line / arc / circle counts
+  // Safe to ship — emits nothing unless the flag is set.
+  if (typeof globalThis !== 'undefined'
+      && (globalThis as { __cadDebug?: boolean }).__cadDebug) {
+    const lineCount = state.entities.filter(e => e.kind === 'line' && !e.construction).length;
+    const arcCount = state.entities.filter(e => e.kind === 'arc' && !e.construction).length;
+    const circleCount = state.entities.filter(e => e.kind === 'circle' && !e.construction).length;
+    const constructionCount = state.entities.filter(
+      e => e.construction && (e.kind === 'line' || e.kind === 'arc' || e.kind === 'circle'),
+    ).length;
+
+    // Per-point degree on the post-split state (the same view the
+    // face walker sees). Degree 1 = dangling endpoint = open chain
+    // there; degree 3+ = T-intersection. The split state's IDs may
+    // include synthetic `arr_pt_N` points injected by intersection.
+    const degree = new Map<string, number>();
+    for (const e of split.entities) {
+      if (e.construction) continue;
+      if (e.kind === 'line') {
+        degree.set(e.startId, (degree.get(e.startId) ?? 0) + 1);
+        degree.set(e.endId, (degree.get(e.endId) ?? 0) + 1);
+      } else if (e.kind === 'arc') {
+        degree.set(e.startId, (degree.get(e.startId) ?? 0) + 1);
+        degree.set(e.endId, (degree.get(e.endId) ?? 0) + 1);
       }
     }
-    for (const sid of componentIds) visited.add(sid);
-    // Arcs also reference a center point — include it in the sub-state so
-    // extractClosedLoop can compute the arc's angles.
-    const componentEntityIds = new Set<string>(componentIds);
-    for (const id of componentIds) {
-      const e = findEntity(state, id);
-      if (e?.kind === 'arc') componentPointIds.add(e.centerId);
+    const dangling: Array<{ id: string; x: number; y: number }> = [];
+    const branches: Array<{ id: string; deg: number; x: number; y: number }> = [];
+    for (const [id, deg] of degree) {
+      if (deg === 2) continue;
+      const pt = findPoint(split, id);
+      if (!pt) continue;
+      if (deg === 1) dangling.push({ id, x: pt.x, y: pt.y });
+      else branches.push({ id, deg, x: pt.x, y: pt.y });
     }
-    const subState: SketchState = {
-      entities: state.entities.filter(e =>
-        (e.kind === 'point' && componentPointIds.has(e.id)) ||
-        componentEntityIds.has(e.id),
-      ),
-      constraints: [],
+
+    const facesSummary = faces.map(f => ({
+      edges: f.edges.length,
+      signedArea: f.signedArea,
+      kept: f.edges.length >= 2 && f.signedArea > AREA_EPS,
+    }));
+
+    const payload = {
+      input: { lines: lineCount, arcs: arcCount, circles: circleCount, construction: constructionCount },
+      split: { entities: split.entities.length },
+      degree: {
+        dangling_open_endpoints: dangling,
+        branch_points: branches,
+      },
+      faces: facesSummary,
+      loops_returned: loops.length,
+      note: dangling.length > 0
+        ? 'Open chain: each "dangling" entry is a point with only one incident segment. The visual gap is right there.'
+        : branches.length > 0
+        ? 'Branch point: a vertex touches 3+ segments. Likely a duplicated/overlapping segment or a T-intersection.'
+        : faces.length === 0
+        ? 'No faces found — graph has no cycles at all.'
+        : facesSummary.every(f => !f.kept)
+        ? 'Faces exist but were all filtered out (zero/negative area or <2 edges) — arc geometry may be inconsistent.'
+        : 'Faces kept; loops_returned should be > 0.',
     };
-    const sub = extractClosedLoop(subState);
-    if (sub.loop) loops.push(sub.loop);
-    else if (sub.error) errors.push(sub.error);
+    // eslint-disable-next-line no-console
+    console.log('[cad-extract] sketch profile diagnostic\n' + JSON.stringify(payload, null, 2));
   }
 
   return { loops, errors };
+}
+
+/** Convert a DCEL face's half-edge boundary into a typed ProfileLoop the
+ * extrude kernel expects. Each line half-edge maps to one LineProfileEdge,
+ * each arc to one ArcProfileEdge. */
+function faceToProfileLoop(face: { edges: HalfEdge[] }, state: SketchState): ProfileLoop {
+  const out: ProfileEdge[] = [];
+  for (const e of face.edges) {
+    if (e.kind === 'line' && e.from && e.to) {
+      out.push({ kind: 'line', start: { x: e.from.x, y: e.from.y }, end: { x: e.to.x, y: e.to.y } });
+    } else if (e.kind === 'arc' && e.arcCenter && e.arcRadius !== undefined
+               && e.arcStartAngle !== undefined && e.arcEndAngle !== undefined
+               && e.arcCcw !== undefined) {
+      const from = findPoint(state, e.fromId);
+      const to = findPoint(state, e.toId);
+      if (!from || !to) continue;
+      out.push({
+        kind: 'arc',
+        center: { x: e.arcCenter.x, y: e.arcCenter.y },
+        radius: e.arcRadius,
+        startAngle: e.arcStartAngle,
+        endAngle: e.arcEndAngle,
+        ccw: e.arcCcw,
+        start: { x: from.x, y: from.y },
+        end: { x: to.x, y: to.y },
+      });
+    }
+  }
+  return out;
 }
 
 /** A planar region in the sketch — one outer loop, optionally with one or
@@ -200,23 +349,24 @@ export interface RegionsResult {
   errors: string[];
 }
 
-export function extractRegions(state: SketchState): RegionsResult {
-  const { loops, errors } = extractClosedLoops(state);
+export function extractRegions(
+  state: SketchState, resolve: TextResolver = s => s,
+): RegionsResult {
+  const { loops, errors } = extractClosedLoops(state, resolve);
   // Pre-tessellate each loop once for the containment tests below. Use a
   // coarse chord tolerance — point-in-polygon doesn't need fidelity.
   const tessellated = loops.map(l => tessellateProfileLoop(l, 1.0));
-  // Containment matrix: contains[i][j] = "loop i is inside loop j".
-  // Use a representative point of loop i (its first vertex is fine — any
-  // non-degenerate loop has a vertex strictly on its own boundary; we test
-  // a sample point slightly interior by offsetting toward the polygon's
-  // centroid, so boundary-on-boundary ambiguity doesn't break the test).
+  // Containment matrix: insideOf[i] contains every j such that loop i is
+  // strictly inside loop j. Earlier we used a single centroid sample, but
+  // for concentric circles every centroid coincides and the sample lands
+  // inside every loop. Switching to all-vertices-in-polygon is robust:
+  // extractClosedLoops produces non-self-intersecting loops, so if every
+  // vertex of i lies inside j, i is contained in j.
   const insideOf: Set<number>[] = loops.map(() => new Set<number>());
   for (let i = 0; i < loops.length; i++) {
-    const sample = interiorSample(tessellated[i]);
-    if (!sample) continue;
     for (let j = 0; j < loops.length; j++) {
       if (i === j) continue;
-      if (pointInPolygon(sample, tessellated[j])) insideOf[i].add(j);
+      if (loopContains(tessellated[i], tessellated[j])) insideOf[i].add(j);
     }
   }
   // Parent of i = the loop j∈insideOf[i] that itself has the most
@@ -245,6 +395,27 @@ export function extractRegions(state: SketchState): RegionsResult {
   return { regions, errors };
 }
 
+// Region indices whose loop is NOT contained inside any other loop — i.e. the
+// top-level (outer) profiles. Holes/counters (a letter's inner bowl, an inner
+// circle) are contained in a parent and excluded. Used to seed the extrude
+// region selection for text so a whole word's letters extrude in one click,
+// each with its counter already attached as a hole by extractRegions.
+export function topLevelRegionIndices(
+  state: SketchState, resolve: TextResolver = s => s,
+): number[] {
+  const { loops } = extractClosedLoops(state, resolve);
+  const tess = loops.map(l => tessellateProfileLoop(l, 1.0));
+  const out: number[] = [];
+  for (let i = 0; i < loops.length; i++) {
+    let contained = false;
+    for (let j = 0; j < loops.length; j++) {
+      if (i !== j && loopContains(tess[i], tess[j])) { contained = true; break; }
+    }
+    if (!contained) out.push(i);
+  }
+  return out;
+}
+
 // Point-in-polygon via the standard ray-cast crossings test. Works on the
 // tessellated polyline produced by tessellateProfileLoop (vertex list,
 // last vertex does NOT repeat the first).
@@ -260,24 +431,22 @@ function pointInPolygon(p: Point2, poly: Point2[]): boolean {
   return inside;
 }
 
-// Pick a sample point strictly inside the polygon. We use the centroid —
-// for any non-self-intersecting polygon (which a valid profile loop must
-// be) the centroid is in the interior. This avoids the "first vertex sits
-// on the boundary" ambiguity of a naive ray-cast self-test.
-function interiorSample(poly: Point2[]): Point2 | null {
-  if (poly.length < 3) return null;
+// True iff every vertex of `inner` lies strictly inside `outer`. Loops
+// produced by extractClosedLoops are non-self-intersecting, so a vertex-
+// containment majority implies the entire loop is contained — no
+// boundary crossings are possible without one vertex falling outside.
+// Nudge each test point a hair toward the inner loop's bounding-box
+// centre to avoid the ambiguity when two loops share a vertex.
+function loopContains(inner: Point2[], outer: Point2[]): boolean {
+  if (inner.length === 0 || outer.length < 3) return false;
   let sx = 0, sy = 0;
-  for (const p of poly) { sx += p.x; sy += p.y; }
-  const centroid = { x: sx / poly.length, y: sy / poly.length };
-  if (pointInPolygon(centroid, poly)) return centroid;
-  // Centroid fell outside (concave polygon, rare for sketch loops). Fall
-  // back to nudging the first vertex toward the centroid by a small
-  // fraction — far enough off the boundary to escape the ambiguity.
-  const v0 = poly[0];
-  return {
-    x: v0.x + (centroid.x - v0.x) * 0.01,
-    y: v0.y + (centroid.y - v0.y) * 0.01,
-  };
+  for (const p of inner) { sx += p.x; sy += p.y; }
+  const cx = sx / inner.length, cy = sy / inner.length;
+  for (const p of inner) {
+    const test = { x: p.x + (cx - p.x) * 1e-3, y: p.y + (cy - p.y) * 1e-3 };
+    if (!pointInPolygon(test, outer)) return false;
+  }
+  return true;
 }
 
 export function extractClosedLoop(state: SketchState): ProfileResult {

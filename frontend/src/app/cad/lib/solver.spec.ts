@@ -244,7 +244,9 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('ct', 'tangent', ['l1', 'c1']),
       ],
     };
-    const res = await solveSketch(pinned(state));
+    // pinAllRadii: construction circle's radius stays at 5, so the line is the
+    // only thing that can move to satisfy the tangent constraint.
+    const res = await solveSketch(pinned(state), { pinAllRadii: true });
     expect(res.status).toBe('ok');
     const l1s = pointsOf(res.state).find(p => p.id === 'l1s')!;
     const l1e = pointsOf(res.state).find(p => p.id === 'l1e')!;
@@ -267,7 +269,9 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
         c('ct', 'tangent', ['c1', 'c2']),
       ],
     };
-    const res = await solveSketch(pinned(state));
+    // pinAllRadii: both radii stay at 5 and 3; the free center moves to
+    // produce a tangent configuration.
+    const res = await solveSketch(pinned(state), { pinAllRadii: true });
     expect(res.status).toBe('ok');
     const p2 = pointsOf(res.state).find(p => p.id === 'p2')!;
     const d = Math.hypot(p2.x, p2.y);
@@ -480,7 +484,8 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
       ],
       constraints: [c('cpc', 'coincident', ['p', 'k1'])],
     };
-    const res = await solveSketch(pinned(state));
+    // pinAllRadii: circle stays at radius 10 instead of shrinking to absorb p.
+    const res = await solveSketch(pinned(state), { pinAllRadii: true });
     expect(res.status).toBe('ok');
     const p = pointsOf(res.state).find(pt => pt.id === 'p')!;
     expect(Math.hypot(p.x, p.y)).toBeCloseTo(10, 3);
@@ -549,5 +554,149 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
     const p = pointsOf(res.state).find(pt => pt.id === 'p')!;
     // Line lies on y=0 → perpendicular distance == |p.y|.
     expect(Math.abs(Math.abs(p.y) - 7)).toBeLessThan(1e-2);
+  });
+
+  it('chord-distance drives the straight-line distance between an arc’s endpoints', async () => {
+    // Center at origin, start at (5, 0), end somewhere on the radius
+    // circle. The chord-distance constraint pulls the chord length to
+    // exactly 6 → end must land where |start - end| = 6.
+    const state: SketchState = {
+      entities: [
+        pt('c', 0, 0, true),
+        pt('s', 5, 0, true),
+        pt('e', 0, 5),
+        arc('a', 'c', 's', 'e', 5, true),
+      ],
+      constraints: [c('cc', 'chord-distance', ['a'], 6)],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const startPt = pointsOf(res.state).find(pt => pt.id === 's')!;
+    const endPt = pointsOf(res.state).find(pt => pt.id === 'e')!;
+    const chordLen = Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y);
+    expect(Math.abs(chordLen - 6)).toBeLessThan(1e-2);
+  });
+
+  it('skips driven dimensions — they report measurements without pinning DOFs', async () => {
+    // Two points, one driving distance (5), and a driven horizontal-
+    // distance dim that would conflict if it weren't driven. The
+    // solver should satisfy the driving 5 and ignore the driven
+    // 999.
+    const drivenC: SketchConstraint = {
+      id: 'driven', type: 'horizontal-distance',
+      targets: [{ entityId: 'a' }, { entityId: 'b' }],
+      value: 999, driven: true,
+    };
+    const state: SketchState = {
+      entities: [pt('a', 0, 0, true), pt('b', 5, 0)],
+      constraints: [c('drive', 'distance', ['a', 'b'], 5), drivenC],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const b = pointsOf(res.state).find(pt => pt.id === 'b')!;
+    // Distance = 5; not 999. Driven dim ignored.
+    expect(Math.hypot(b.x, b.y)).toBeCloseTo(5, 2);
+  });
+
+  it('linked offset constraint set (parallel + equal len + perp construction line + perp dim) solves cleanly with dof=0', async () => {
+    // Reproduces the linkSingleOffset constraint set for lines and
+    // verifies the solver converges fully. Source line is fixed;
+    // offset has 4 free DOFs; the 4 constraints pin all 4.
+    const state: SketchState = {
+      entities: [
+        pt('a', 0,  0, true),  pt('b', 10, 0, true),  // source endpoints (fixed)
+        ln('orig', 'a', 'b'),
+        pt('oa', 0,  3),       pt('ob', 10, 3),        // offset endpoints (initial guess)
+        ln('off', 'oa', 'ob'),
+        ln('cl1', 'a', 'oa'),  // perpendicular construction line
+      ],
+      constraints: [
+        c('par',   'parallel',           ['orig', 'off']),
+        c('eq',    'equal',              ['orig', 'off']),
+        c('perp',  'perpendicular',      ['orig', 'cl1']),
+        c('pld',   'point-line-distance', ['a', 'off'], 3),
+      ],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    expect(res.dof).toBe(0);  // fully constrained
+    const oa = pointsOf(res.state).find(pt => pt.id === 'oa')!;
+    const ob = pointsOf(res.state).find(pt => pt.id === 'ob')!;
+    expect(Math.abs(oa.x)).toBeLessThan(1e-2);
+    expect(Math.abs(Math.abs(oa.y) - 3)).toBeLessThan(1e-2);
+    expect(Math.abs(ob.x - 10)).toBeLessThan(1e-2);
+    expect(Math.abs(Math.abs(ob.y) - 3)).toBeLessThan(1e-2);
+    expect(Math.sign(oa.y)).toBe(Math.sign(ob.y));
+  });
+
+  it('linked chain offset (2-line L-shape) with the full constraint set solves to dof=0', async () => {
+    // Mirrors linkOffsetsToOriginals's output for a 2-line open
+    // chain. The L is horizontal+vertical, both source lines
+    // fully pinned. Offset gets: per-segment parallel + dim, 2
+    // perpendicular construction lines at the chain ends, and a
+    // coincident at the corner (the offset L's corner endpoint
+    // is shared between off1.endId and off2.startId).
+    const state: SketchState = {
+      entities: [
+        // source L: (0,0) → V(10,0) → (10,10)
+        pt('a',  0,  0,  true), pt('v',  10, 0,  true), pt('c',  10, 10, true),
+        ln('o1', 'a', 'v'),
+        ln('o2', 'v', 'c'),
+        // offset L (outward — offset1 below x-axis y=-3, offset2 right of x=10 at x=13).
+        pt('oa', 0, -3),  pt('ov1', 13, -3),
+        pt('ov2', 13, -3), pt('oc', 13, 10),
+        ln('of1', 'oa',  'ov1'),
+        ln('of2', 'ov2', 'oc'),
+        // Chain-end perpendicular construction lines.
+        ln('cl-a', 'a', 'oa', false), ln('cl-c', 'c', 'oc', false),
+      ],
+      constraints: [
+        // Per-segment direction + dim.
+        c('par1', 'parallel',           ['o1', 'of1']),
+        c('par2', 'parallel',           ['o2', 'of2']),
+        c('dim1', 'point-line-distance', ['a', 'of1'], 3),
+        c('dim2', 'point-line-distance', ['v', 'of2'], 3),
+        // Chain-end perpendicular construction line perpendicular constraints.
+        c('perpA', 'perpendicular', ['o1', 'cl-a']),
+        c('perpC', 'perpendicular', ['o2', 'cl-c']),
+        // Corner coincident between off1.endId and off2.startId.
+        c('cornerC', 'coincident', ['ov1', 'ov2']),
+      ],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    expect(res.dof).toBe(0);
+  });
+
+  it('linked offset over a REAL fully-constrained source (origin + horizontal + length dim) → dof=0', async () => {
+    // The previous spec used `fixed` on both source endpoints
+    // (the simplest way to nail them down). Real user workflow:
+    // source has a coincident-with-origin + horizontal + length
+    // dim setup. Verify the linked offset still solves to dof=0.
+    const state: SketchState = {
+      entities: [
+        pt('o', 0, 0),                              // sketch origin (auto-fixed)
+        pt('a', 0, 0),     pt('b', 10, 0),         // source endpoints (initial)
+        ln('orig', 'a', 'b'),
+        pt('oa', 0, 3),    pt('ob', 10, 3),         // offset endpoints
+        ln('off', 'oa', 'ob'),
+        ln('cl1', 'a', 'oa'),                       // perp construction line
+      ],
+      constraints: [
+        // Source pinning.
+        c('fix-o',   'fixed',      ['o']),
+        c('coin-ao', 'coincident', ['a', 'o']),     // a at origin
+        c('horiz',   'horizontal', ['orig']),       // orig direction
+        c('len',     'distance',   ['a', 'b'], 10), // orig length
+        // Offset linking (the linkSingleOffset constraint set).
+        c('par',    'parallel',           ['orig', 'off']),
+        c('eq',     'equal',              ['orig', 'off']),
+        c('perp',   'perpendicular',      ['orig', 'cl1']),
+        c('pld',    'point-line-distance', ['a', 'off'], 3),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    expect(res.dof).toBe(0);  // entire sketch fully constrained
   });
 });

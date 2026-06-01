@@ -1,4 +1,7 @@
-import type { Feature, FeatureTree, OriginFeature, ExtrudeFeature, CutExtrudeFeature, RevolveFeature } from './types';
+import type {
+  Feature, FeatureTree, OriginFeature, ExtrudeFeature, CutExtrudeFeature,
+  RevolveFeature, CutRevolveFeature, SweepFeature, CutSweepFeature,
+} from './types';
 // Phase 1: regenerateModel + the KernelAdapter interface used to live here
 // and ran in the browser. Both moved server-side. The server handles regen
 // via `backend/services/cadRegenService.js`; this module is now just the
@@ -23,11 +26,60 @@ export function emptyFeatureTree(): FeatureTree {
 
 export function addFeature(tree: FeatureTree, feature: FeatureInput): FeatureTree {
   const id = `f${tree.nextFeatureSeq}`;
-  const next = { ...feature, id } as Feature;
+  // Unified creation timestamp — same source/scale as Sketch.createdAt
+  // so the feature tree can interleave orphan sketches by chronological
+  // order. New features land at the end of the tree, so the tail of
+  // features.map(f => f.createdAt) is always non-decreasing.
+  const partial = { ...feature, id, createdAt: Date.now() } as Feature;
+  // SolidWorks-style default name: "<Kind> N" where N is the next
+  // sequence number for THIS kind in the tree. The user can rename via
+  // the tree's right-click menu; we only fill in when no explicit name
+  // was supplied, so renames stick across edits.
+  const next: Feature = (partial as { name?: string }).name
+    ? partial
+    : { ...partial, name: defaultFeatureName(tree, partial) } as Feature;
   return {
     features: [...tree.features, next],
     nextFeatureSeq: tree.nextFeatureSeq + 1,
   };
+}
+
+/** Produce a human-readable default name for a newly-created feature.
+ * Mirrors SolidWorks: "Extrude 1", "Extrude 2", "Cut-Extrude 1",
+ * "Revolve 1", etc. Indexing counts existing features of the same kind
+ * already in the tree (renames don't shift later indices because the
+ * count includes renamed entries too — we're just looking at type). */
+function defaultFeatureName(tree: FeatureTree, feature: Feature): string | undefined {
+  const label = featureKindLabel(feature.type);
+  if (!label) return undefined;
+  const existing = tree.features.filter(f => f.type === feature.type).length;
+  return `${label} ${existing + 1}`;
+}
+
+function featureKindLabel(kind: Feature['type']): string | null {
+  switch (kind) {
+    case 'extrude':    return 'Extrude';
+    case 'cutExtrude': return 'Cut-Extrude';
+    case 'revolve':    return 'Revolve';
+    case 'cutRevolve': return 'Cut-Revolve';
+    case 'sweep':      return 'Sweep';
+    case 'cutSweep':   return 'Cut-Sweep';
+    case 'loft':       return 'Loft';
+    case 'fillet':     return 'Fillet';
+    case 'chamfer':    return 'Chamfer';
+    case 'datumPlane': return 'Plane';
+    case 'mirror':           return 'Mirror';
+    case 'linearPattern':    return 'Linear Pattern';
+    case 'circularPattern':  return 'Circular Pattern';
+    case 'shell':            return 'Shell';
+    case 'datumAxis':        return 'Axis';
+    case 'datumPoint':       return 'Point';
+    case 'combine':          return 'Combine';
+    case 'hole':             return 'Hole';
+    case 'mirrorBody':       return 'Mirror Body';
+    case 'moveCopyBody':     return 'Move/Copy Body';
+    case 'origin':     return null;  // origin gets no default name
+  }
 }
 
 export function removeFeature(tree: FeatureTree, id: string): FeatureTree {
@@ -47,14 +99,17 @@ export function updateFeatureParam<T extends Feature>(
   };
 }
 
-// REQ 608 cascade: drops every Extrude / CutExtrude / Revolve feature whose
-// sketchId matches. Origin features (and any future features without a
-// sketchId) are unaffected.
+// REQ 608 cascade: drops every sketch-hosted feature whose sketchId (or
+// profileSketchId/pathSketchId for Sweep variants) matches. Origin
+// features and any future features without a sketch ref are unaffected.
 export function removeFeaturesReferencingSketch(tree: FeatureTree, sketchId: string): FeatureTree {
   return {
     features: tree.features.filter(f => {
-      if (f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve') {
+      if (f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve' || f.type === 'cutRevolve') {
         return f.sketchId !== sketchId;
+      }
+      if (f.type === 'sweep' || f.type === 'cutSweep') {
+        return f.profileSketchId !== sketchId && f.pathSketchId !== sketchId;
       }
       return true;
     }),
@@ -66,9 +121,16 @@ export function isOriginFeature(f: Feature): f is OriginFeature { return f.type 
 export function isExtrudeFeature(f: Feature): f is ExtrudeFeature { return f.type === 'extrude'; }
 export function isCutExtrudeFeature(f: Feature): f is CutExtrudeFeature { return f.type === 'cutExtrude'; }
 export function isRevolveFeature(f: Feature): f is RevolveFeature { return f.type === 'revolve'; }
+export function isCutRevolveFeature(f: Feature): f is CutRevolveFeature { return f.type === 'cutRevolve'; }
+export function isSweepFeature(f: Feature): f is SweepFeature { return f.type === 'sweep'; }
+export function isCutSweepFeature(f: Feature): f is CutSweepFeature { return f.type === 'cutSweep'; }
 /** Any sketch-hosted feature — useful for code paths that treat them
  * the same (e.g. sketch-deletion cascade, "is this feature sketch-
- * based?" checks). */
-export function isAnyExtrudeFeature(f: Feature): f is ExtrudeFeature | CutExtrudeFeature | RevolveFeature {
-  return f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve';
+ * based?" checks). Note: Sweep variants reference TWO sketches. */
+export function isAnyExtrudeFeature(
+  f: Feature,
+): f is ExtrudeFeature | CutExtrudeFeature | RevolveFeature | CutRevolveFeature | SweepFeature | CutSweepFeature {
+  return f.type === 'extrude' || f.type === 'cutExtrude'
+    || f.type === 'revolve' || f.type === 'cutRevolve'
+    || f.type === 'sweep' || f.type === 'cutSweep';
 }

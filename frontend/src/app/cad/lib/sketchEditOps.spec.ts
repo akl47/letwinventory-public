@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { emptySketchState, addPoint, addLine, addCircle, addArc } from './store';
+import { emptySketchState, addPoint, addLine, addCircle, addArc, addArcByPoints, addConstraint } from './store';
 import {
-  trimAt, extendLine, splitLineAt, mirrorEntities, offsetCurve, filletLines, chamferLines,
+  trimAt, extendLine, splitLineAt, mirrorEntities, offsetCurve, offsetChain, filletLines, chamferLines, jogLineAt,
   moveEntities, copyEntities, rotateEntities, scaleEntities,
+  linearPatternEntities, circularPatternEntities, stretchEntities,
+  findChainedEntities,
 } from './sketchEditOps';
 import { findEntity, findPoint } from './types';
 import type { LineEntity, ArcEntity, CircleEntity, PointEntity } from './types';
@@ -82,6 +84,82 @@ describe('trimAt — lines', () => {
     expect(r.error).toBeDefined();
     expect(findEntity(r.state, main.lineId)).toBeDefined();
   });
+
+  it('trims a converted (on-edge) line — sub-segment survives and inherits the link', () => {
+    // Mirrors the user's scenario: a converted body edge running along
+    // y=0 plus a sketched vertical line crossing it at x=5. Clicking
+    // trim on the right portion should remove that portion and leave
+    // a sub-segment from (0,0) to (5,0). The sub-segment must keep
+    // its on-edge link to the source body edge — SolidWorks parity.
+    let s = emptySketchState();
+    const main = horizontalLine(s); s = main.state;
+    // Tag main with an on-edge constraint linking to a body edge.
+    s = addConstraint(s, 'on-edge', [main.lineId]).state;
+    // Set externalRef on the on-edge constraint (addConstraint helper
+    // doesn't take it, so we patch it in directly).
+    const oeId = s.constraints[s.constraints.length - 1].id;
+    s = {
+      ...s,
+      constraints: s.constraints.map(c =>
+        c.id === oeId ? { ...c, externalRef: { featureId: 'f1', edgeId: 'f1/e0' } } : c,
+      ),
+    };
+    // Crossing sketched line at x=5.
+    const va = addPoint(s, 5, -1); s = va.state;
+    const vb = addPoint(s, 5,  1); s = vb.state;
+    const vl = addLine(s, va.id, vb.id); s = vl.state;
+    // Click on the RIGHT portion (x=7), expecting the (0..5) sub-segment to remain.
+    const r = trimAt(s, main.lineId, { x: 7, y: 0 });
+    expect(r.error).toBeUndefined();
+    expect(findEntity(r.state, main.lineId)).toBeUndefined();
+    // Sub-segment must exist — 2 non-construction lines after trim:
+    // the vertical sketched cutter + the sub-segment.
+    expect(lineCount(r.state)).toBe(2);
+    // SolidWorks parity: the on-edge link survives, retargeted to the
+    // new sub-segment. externalRef carries the same source edge id.
+    const remainingOnEdge = r.state.constraints.filter(c => c.type === 'on-edge');
+    expect(remainingOnEdge.length).toBe(1);
+    expect(remainingOnEdge[0].externalRef).toEqual({ featureId: 'f1', edgeId: 'f1/e0' });
+    // The on-edge constraint now targets the new sub-segment (a line
+    // that is NOT the cutter `vl` and NOT the deleted `main`).
+    const targetId = remainingOnEdge[0].targets[0].entityId;
+    expect(targetId).not.toBe(main.lineId);
+    expect(targetId).not.toBe(vl.id);
+    const target = findEntity(r.state, targetId);
+    expect(target?.kind).toBe('line');
+  });
+
+  it('mid-segment trim of an on-edge line — BOTH stubs inherit the link', () => {
+    // Two crossing sketched lines cut the converted line at x=3 and x=7.
+    // Clicking between them removes the middle (3..7) and leaves two
+    // stubs (0..3) and (7..10). Each stub must inherit the on-edge
+    // link to the same source body edge (with unique constraint ids).
+    let s = emptySketchState();
+    const main = horizontalLine(s); s = main.state;
+    s = addConstraint(s, 'on-edge', [main.lineId]).state;
+    const oeId = s.constraints[s.constraints.length - 1].id;
+    s = {
+      ...s,
+      constraints: s.constraints.map(c =>
+        c.id === oeId ? { ...c, externalRef: { featureId: 'f1', edgeId: 'f1/e0' } } : c,
+      ),
+    };
+    const va = addPoint(s, 3, -1); s = va.state;
+    const vb = addPoint(s, 3,  1); s = vb.state;
+    s = addLine(s, va.id, vb.id).state;
+    const vc = addPoint(s, 7, -1); s = vc.state;
+    const vd = addPoint(s, 7,  1); s = vd.state;
+    s = addLine(s, vc.id, vd.id).state;
+    const r = trimAt(s, main.lineId, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    const onEdge = r.state.constraints.filter(c => c.type === 'on-edge');
+    expect(onEdge.length).toBe(2);
+    expect(new Set(onEdge.map(c => c.id)).size).toBe(2);  // unique ids
+    for (const c of onEdge) {
+      expect(c.externalRef).toEqual({ featureId: 'f1', edgeId: 'f1/e0' });
+    }
+  });
+});
 });
 
 describe('trimAt — circles', () => {
@@ -106,6 +184,89 @@ describe('trimAt — circles', () => {
     const r = trimAt(s, c.id, { x: 5, y: 0 });
     expect(r.error).toBeUndefined();
     expect(findEntity(r.state, c.id)).toBeUndefined();
+  });
+
+  it('rewires radius + coincident constraints onto the replacement arc', () => {
+    // SolidWorks-style: trimming a circle that has a radius dim and a
+    // point-on-circumference constraint should NOT silently drop those
+    // constraints. They should re-anchor onto the new arc, so the
+    // resulting sketch stays fully constrained.
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    const onCircum = addPoint(s, 5, 0); s = onCircum.state;
+    // Anchor the radius via a coincident point on the circumference.
+    const cc = addConstraint(s, 'coincident', [onCircum.id, c.id]); s = cc.state;
+    // Pre-trim radius constraint that should also follow the arc.
+    const rc = addConstraint(s, 'radius', [c.id], 5); s = rc.state;
+    // Crossing line so trim has something to split against.
+    const a = addPoint(s, 0, -10); s = a.state;
+    const b = addPoint(s, 0,  10); s = b.state;
+    const l = addLine(s, a.id, b.id); s = l.state;
+    const r = trimAt(s, c.id, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds && r.affectedIds.length).toBe(1);
+    const newArcId = r.affectedIds![0];
+    // Every constraint that referenced the circle now references the arc.
+    const referencesCircle = r.state.constraints.some(con =>
+      con.targets.some(t => t.entityId === c.id),
+    );
+    expect(referencesCircle).toBe(false);
+    const radiusRef = r.state.constraints.find(con => con.type === 'radius');
+    expect(radiusRef?.targets[0].entityId).toBe(newArcId);
+    const coinRef = r.state.constraints.find(con =>
+      con.type === 'coincident' && con.targets.some(t => t.entityId === newArcId),
+    );
+    expect(coinRef).toBeDefined();
+    expect(coinRef!.targets.map(t => t.entityId)).toContain(onCircum.id);
+  });
+
+  it('rewires constraints when trimming an arc into a single sub-arc', () => {
+    let s = emptySketchState();
+    // Half-circle from (5,0) → (-5,0) above the x-axis.
+    const a = addArc(s, 0, 0, 5, 0, -5, 0, true); s = a.state;
+    const arcEnt = findEntity(s, a.id) as any;
+    const onArc = addPoint(s, 0, 5); s = onArc.state;
+    const cc = addConstraint(s, 'coincident', [onArc.id, a.id]); s = cc.state;
+    // Vertical cut line at x=0 — crosses the arc at (0, 5).
+    const pA = addPoint(s, 0, -10); s = pA.state;
+    const pB = addPoint(s, 0,  10); s = pB.state;
+    const ln = addLine(s, pA.id, pB.id); s = ln.state;
+    // Click on the right half of the arc — keeps the left half.
+    const r = trimAt(s, a.id, { x: 3, y: 4 });
+    expect(r.error).toBeUndefined();
+    expect((r.affectedIds || []).length).toBeGreaterThanOrEqual(1);
+    const firstArc = r.affectedIds![0];
+    const referencesOldArc = r.state.constraints.some(con =>
+      con.targets.some(t => t.entityId === a.id),
+    );
+    expect(referencesOldArc).toBe(false);
+    const coinRef = r.state.constraints.find(con =>
+      con.type === 'coincident' && con.targets.some(t => t.entityId === firstArc),
+    );
+    expect(coinRef).toBeDefined();
+    void arcEnt;
+  });
+
+  it('preserves the original center point id so center-anchored constraints survive', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    const circ = findEntity(s, c.id) as any;
+    const originalCenterId = circ.centerId as string;
+    // Fix the center — exactly the kind of constraint a trim used to
+    // silently drop because the old center point got cascaded out.
+    s = addConstraint(s, 'fixed', [originalCenterId]).state;
+    const a = addPoint(s, 0, -10); s = a.state;
+    const b = addPoint(s, 0,  10); s = b.state;
+    s = addLine(s, a.id, b.id).state;
+    const r = trimAt(s, c.id, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    // Center point and its `fixed` constraint both survive.
+    expect(findEntity(r.state, originalCenterId)).toBeDefined();
+    const fixedCon = r.state.constraints.find(con => con.type === 'fixed');
+    expect(fixedCon?.targets[0].entityId).toBe(originalCenterId);
+    // And the new arc uses that same center.
+    const newArc = findEntity(r.state, r.affectedIds![0]) as any;
+    expect(newArc.centerId).toBe(originalCenterId);
   });
 });
 
@@ -549,5 +710,435 @@ describe('scaleEntities', () => {
     const center = findPoint(r.state, circ.centerId)!;
     expect(center.x).toBeCloseTo(30);  // scaled 3×
     expect(circ.radius).toBeCloseTo(6);  // radius scaled too
+  });
+});
+
+describe('linearPatternEntities', () => {
+  it('produces (count - 1) clones spaced by (dx, dy)', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 3); s = c.state;
+    const r = linearPatternEntities(s, [c.id], 10, 0, 4);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(3);  // 4 total, 1 original + 3 clones
+    const lastId = r.affectedIds![r.affectedIds!.length - 1];
+    const last = findEntity<CircleEntity>(r.state, lastId)!;
+    const center = findPoint(r.state, last.centerId)!;
+    expect(center.x).toBeCloseTo(30);
+  });
+  it('rejects count < 2', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 3); s = c.state;
+    expect(linearPatternEntities(s, [c.id], 10, 0, 1).error).toBeDefined();
+  });
+});
+
+describe('circularPatternEntities', () => {
+  it('produces (count - 1) clones rotated around the pivot', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 10, 0, 1); s = c.state;
+    const r = circularPatternEntities(s, [c.id], { x: 0, y: 0 }, 2 * Math.PI, 4);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(3);
+    const firstId = r.affectedIds![0];
+    const first = findEntity<CircleEntity>(r.state, firstId)!;
+    const center = findPoint(r.state, first.centerId)!;
+    expect(center.x).toBeCloseTo(10 * Math.cos(2 * Math.PI / 3));
+    expect(center.y).toBeCloseTo(10 * Math.sin(2 * Math.PI / 3));
+  });
+});
+
+describe('jogLineAt', () => {
+  it('replaces the line with 5 segments forming a Z-jog', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const l = addLine(s, a.id, b.id); s = l.state;
+    const r = jogLineAt(s, l.id, 0.3, 0.7, 2);  // jog from x=3 to x=7, perp offset 2
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(5);
+    // The original line is gone.
+    expect(findEntity(r.state, l.id)).toBeUndefined();
+  });
+  it('rejects degenerate inputs (zero offset, swapped params, etc.)', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const l = addLine(s, a.id, b.id); s = l.state;
+    expect(jogLineAt(s, l.id, 0.3, 0.7, 0).error).toBeDefined();    // zero offset
+    expect(jogLineAt(s, l.id, 0.7, 0.3, 2).error).toBeDefined();    // swapped t1 / t2
+    expect(jogLineAt(s, l.id, -0.1, 0.5, 2).error).toBeDefined();   // t1 < 0
+    expect(jogLineAt(s, l.id, 0.5, 1.1, 2).error).toBeDefined();    // t2 > 1
+  });
+});
+
+describe('stretchEntities', () => {
+  it('moves only the point entities in the selection — lines stretch', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    addLine(s, a.id, b.id); s = addLine(s, a.id, b.id).state;
+    const r = stretchEntities(s, [b.id], 5, 0);
+    expect(r.error).toBeUndefined();
+    expect(findPoint(r.state, a.id)).toMatchObject({ x: 0, y: 0 });
+    expect(findPoint(r.state, b.id)).toMatchObject({ x: 15, y: 0 });
+  });
+  it('selecting only a line does NOT move its endpoints (use Move instead)', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const l = addLine(s, a.id, b.id); s = l.state;
+    const r = stretchEntities(s, [l.id], 5, 0);
+    expect(findPoint(r.state, a.id)).toMatchObject({ x: 0, y: 0 });
+    expect(findPoint(r.state, b.id)).toMatchObject({ x: 10, y: 0 });
+  });
+});
+
+describe('offsetChain', () => {
+  it('reconciles a 90° convex corner with an arc filler when fillCorners is on', () => {
+    // L-shape: line from (0,0)→(10,0), then (10,0)→(10,10). The
+    // convex corner is at (10, 0) — offsetting outward (sidePoint
+    // below + right) should produce two offset lines + a quarter
+    // arc filler at the corner.
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const c = addPoint(s, 10, 10); s = c.state;
+    const l1 = addLine(s, a.id, b.id); s = l1.state;
+    const l2 = addLine(s, b.id, c.id); s = l2.state;
+    // sidePoint below for l1 (offset down), right of l2 (offset right)
+    // → both offsets go "outward" from the L → convex corner at b.
+    const items = [
+      { entityId: l1.id, sidePoint: { x: 5, y: -2 } },
+      { entityId: l2.id, sidePoint: { x: 12, y: 5 } },
+    ];
+    const r = offsetChain(s, items, 3, { fillCorners: true });
+    expect(r.error).toBeUndefined();
+    // 2 offset lines + 1 arc filler.
+    expect(r.affectedIds?.length).toBe(3);
+    const lastId = r.affectedIds![2];
+    const filler = findEntity(r.state, lastId);
+    expect(filler?.kind).toBe('arc');
+  });
+  it('intersect-trims a concave corner without an arc', () => {
+    // L-shape same as above but offset INWARD: sidePoint above l1
+    // and left of l2 → concave corner → no arc; offsets trim to
+    // the (interior) intersection.
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const c = addPoint(s, 10, 10); s = c.state;
+    const l1 = addLine(s, a.id, b.id); s = l1.state;
+    const l2 = addLine(s, b.id, c.id); s = l2.state;
+    const items = [
+      { entityId: l1.id, sidePoint: { x: 5, y: 2 } },
+      { entityId: l2.id, sidePoint: { x: 8, y: 5 } },
+    ];
+    const r = offsetChain(s, items, 3, { fillCorners: true });
+    expect(r.error).toBeUndefined();
+    // Concave: only 2 offset lines, no filler.
+    expect(r.affectedIds?.length).toBe(2);
+    for (const id of r.affectedIds!) {
+      expect(findEntity(r.state, id)?.kind).toBe('line');
+    }
+  });
+  it('bothDirections doubles the output count', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const l = addLine(s, a.id, b.id); s = l.state;
+    const r = offsetChain(s, [{ entityId: l.id, sidePoint: { x: 5, y: 1 } }], 2, { bothDirections: true });
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(2);
+  });
+  it('reconciles corners when adjacent curves have DISTINCT point IDs at the shared vertex (user-drawn polyline)', () => {
+    // Real user workflow: draw line 1 with addLine, then draw line 2
+    // with addLine starting at a NEW point that happens to coincide
+    // with line 1's end. The two lines visually meet but use
+    // separate (coincidence-constrained) point ids — no shared id.
+    // Chain detection should still see them as connected and the
+    // corner should reconcile.
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b1 = addPoint(s, 10, 0); s = b1.state;
+    const b2 = addPoint(s, 10, 0); s = b2.state;  // SAME coord as b1, different id
+    const c = addPoint(s, 10, 10); s = c.state;
+    const l1 = addLine(s, a.id, b1.id); s = l1.state;
+    const l2 = addLine(s, b2.id, c.id); s = l2.state;
+    const items = [
+      { entityId: l1.id, sidePoint: { x: 5, y: -2 } },    // offset down (convex side)
+      { entityId: l2.id, sidePoint: { x: 12, y: 5 } },    // offset right
+    ];
+    const r = offsetChain(s, items, 3, { fillCorners: true });
+    expect(r.error).toBeUndefined();
+    // 2 offset lines + 1 filler arc — corner was reconciled
+    // despite b1 !== b2.
+    expect(r.affectedIds?.length).toBe(3);
+    expect(findEntity(r.state, r.affectedIds![2])?.kind).toBe('arc');
+  });
+
+  it('fully constrains a single-line offset when linkToOriginals is on', () => {
+    // SolidWorks-style: offset of a fully-constrained line
+    // produces a fully-constrained offset line. Constraint set:
+    //   parallel + equal length + 1 perpendicular construction
+    //   line + point-line-distance dim. 4 constraints, 4 DOFs
+    //   killed (verified by solver spec). A second perpendicular
+    //   construction line over-constrained the system per
+    //   PlaneGCS's redundancy detection.
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const l = addLine(s, a.id, b.id); s = l.state;
+    const r = offsetChain(s, [{ entityId: l.id, sidePoint: { x: 5, y: 3 } }], 3,
+      { linkToOriginals: true });
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(1);
+    const lines = r.state.entities.filter(e => e.kind === 'line');
+    expect(lines.length).toBe(3);  // orig + offset + 1 construction
+    const construction = lines.filter(l => l.construction === true);
+    expect(construction.length).toBe(1);
+    const types = r.state.constraints.map(c => c.type);
+    expect(types).toContain('parallel');
+    expect(types).toContain('equal');
+    expect(types).toContain('perpendicular');
+    expect(types).toContain('point-line-distance');
+    const dim = r.state.constraints.find(c => c.type === 'point-line-distance');
+    expect(dim?.placement).toBeDefined();
+    expect(dim?.value).toBe(3);
+  });
+
+  it('fully constrains a single-arc offset (concentric + radius dim + 2 radial construction lines)', () => {
+    let s = emptySketchState();
+    const arc = addArc(s, 0, 0, 5, 0, 0, 5, true); s = arc.state;  // quarter arc, CCW
+    const r = offsetChain(s, [{ entityId: arc.id, sidePoint: { x: 10, y: 10 } }], 2,
+      { linkToOriginals: true });
+    expect(r.error).toBeUndefined();
+    const types = r.state.constraints.map(co => co.type);
+    expect(types).toContain('concentric');
+    expect(types).toContain('radius');
+    // Two coincident constraints — one per arc endpoint, each
+    // pinning the offset endpoint on the radial through the
+    // source's matching endpoint.
+    expect(types.filter(t => t === 'coincident').length).toBeGreaterThanOrEqual(2);
+    // Two construction lines (the radials).
+    const construction = r.state.entities.filter(e => e.kind === 'line' && e.construction);
+    expect(construction.length).toBe(2);
+  });
+
+  it('fully constrains a single-circle offset', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    const r = offsetChain(s, [{ entityId: c.id, sidePoint: { x: 10, y: 0 } }], 2,
+      { linkToOriginals: true });
+    expect(r.error).toBeUndefined();
+    const types = r.state.constraints.map(co => co.type);
+    expect(types).toContain('concentric');
+    expect(types).toContain('radius');
+    const dim = r.state.constraints.find(co => co.type === 'radius' && co.targets[0].entityId !== c.id);
+    expect(dim?.value).toBe(7);   // 5 + 2 (outward)
+    expect(dim?.placement).toBeDefined();
+  });
+
+  it('chain offset: parallel + dim per segment + chain-end perpendicular construction lines + corner coincidents', () => {
+    // L-shape polyline of two perpendicular lines. Each offset
+    // line gets parallel + a perpendicular-distance dim. Chain
+    // ends get perpendicular construction lines pinning the
+    // outermost offset endpoints to perpendicular feet of source
+    // endpoints. The corner endpoint between adjacent offsets is
+    // coincident-pinned (in reconcileCorner). Together these
+    // fully constrain an open chain offset.
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b1 = addPoint(s, 10, 0); s = b1.state;
+    const b2 = addPoint(s, 10, 0); s = b2.state;
+    const c = addPoint(s, 10, 10); s = c.state;
+    const l1 = addLine(s, a.id, b1.id); s = l1.state;
+    const l2 = addLine(s, b2.id, c.id); s = l2.state;
+    const items = [
+      { entityId: l1.id, sidePoint: { x: 5, y: -2 } },
+      { entityId: l2.id, sidePoint: { x: 12, y: 5 } },
+    ];
+    const r = offsetChain(s, items, 3, { fillCorners: true, linkToOriginals: true });
+    expect(r.error).toBeUndefined();
+    const parallels = r.state.constraints.filter(co => co.type === 'parallel');
+    expect(parallels.length).toBe(2);
+    const dims = r.state.constraints.filter(co => co.type === 'point-line-distance');
+    expect(dims.length).toBe(2);  // one per segment
+    expect(dims.every(d => d.value === 3)).toBe(true);
+    // 2 perpendicular construction lines (one per chain end) +
+    // 2 perpendicular constraints.
+    expect(r.state.constraints.filter(co => co.type === 'perpendicular').length).toBe(2);
+    const construction = r.state.entities.filter(e => e.kind === 'line' && e.construction);
+    expect(construction.length).toBe(2);
+    // The convex corner is implicitly coincident via the filler
+    // arc sharing point ids with the adjacent offsets — no
+    // explicit coincident constraint needed. (Concave corners
+    // would add one in reconcileCorner.)
+  });
+
+  it('chain offset: CONCAVE corner gets an explicit coincident constraint between the two offset corners', () => {
+    // L-shape but offset INWARD this time — concave corner.
+    // Adjacent offsets trim to the intersection and get
+    // coincident-pinned so subsequent edits keep the corner
+    // connected.
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b1 = addPoint(s, 10, 0); s = b1.state;
+    const b2 = addPoint(s, 10, 0); s = b2.state;
+    const c = addPoint(s, 10, 10); s = c.state;
+    const l1 = addLine(s, a.id, b1.id); s = l1.state;
+    const l2 = addLine(s, b2.id, c.id); s = l2.state;
+    const items = [
+      { entityId: l1.id, sidePoint: { x: 5, y: 2 } },   // offset into the corner interior
+      { entityId: l2.id, sidePoint: { x: 8, y: 5 } },
+    ];
+    const r = offsetChain(s, items, 1, { fillCorners: true, linkToOriginals: true });
+    expect(r.error).toBeUndefined();
+    const coincidents = r.state.constraints.filter(co => co.type === 'coincident');
+    expect(coincidents.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('handles single-segment queues (no corner pass)', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const l = addLine(s, a.id, b.id); s = l.state;
+    const r = offsetChain(s, [{ entityId: l.id, sidePoint: { x: 5, y: 2 } }], 1.5, {});
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(1);
+  });
+
+  it('reconciles a line→arc corner (convex): adds an arc filler at the shared vertex', () => {
+    // Line: (0, 0) → V=(10, 0). Arc: quarter CW around center
+    // (15, 0) from V up to (15, 5). At V the line outgoing is
+    // WEST and the arc outgoing is NORTH — a real 90° corner.
+    // Offset OUTWARD (line down, arc to larger radius). The
+    // offsets diverge → convex → filler arc.
+    //
+    // IMPORTANT: build the line + arc with a SHARED V point id
+    // so the chain detector sees them as connected. addArc /
+    // addLine alone wouldn't (they create fresh point ids).
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const v = addPoint(s, 10, 0); s = v.state;
+    const arcCenter = addPoint(s, 15, 0); s = arcCenter.state;
+    const arcEnd = addPoint(s, 15, 5); s = arcEnd.state;
+    const l = addLine(s, a.id, v.id); s = l.state;
+    const arc = addArcByPoints(s, arcCenter.id, v.id, arcEnd.id, false); s = arc.state;  // CW
+    const items = [
+      { entityId: l.id, sidePoint: { x: 5, y: -2 } },     // offset down
+      { entityId: arc.id, sidePoint: { x: 30, y: 5 } },   // sidePoint OUTSIDE → larger radius
+    ];
+    const r = offsetChain(s, items, 2, { fillCorners: true });
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(3);  // 2 offsets + 1 filler arc
+    const filler = findEntity(r.state, r.affectedIds![2]);
+    expect(filler?.kind).toBe('arc');
+  });
+
+  it('reconciles a line→arc corner (concave): trims to the line-circle intersection', () => {
+    // Same L + arc with shared V, offset INWARD. The corner's
+    // interior is the upper-left quadrant; offsetting "into" it
+    // means line goes UP (y+) and arc goes LARGER radius (the
+    // arc bulges east of V around center (15, 0), so the OUTWARD
+    // radial direction at V points WEST → into the interior).
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const v = addPoint(s, 10, 0); s = v.state;
+    const arcCenter = addPoint(s, 15, 0); s = arcCenter.state;
+    const arcEnd = addPoint(s, 15, 5); s = arcEnd.state;
+    const l = addLine(s, a.id, v.id); s = l.state;
+    const arc = addArcByPoints(s, arcCenter.id, v.id, arcEnd.id, false); s = arc.state;
+    const items = [
+      { entityId: l.id, sidePoint: { x: 5, y: 1 } },     // up — into interior
+      { entityId: arc.id, sidePoint: { x: 5, y: 5 } },   // far from arc center → larger radius → moves arc V-end WEST into interior
+    ];
+    const r = offsetChain(s, items, 1, { fillCorners: true });
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(2);  // 2 offsets, no filler
+  });
+
+  it('reconciles an arc→arc corner (convex): adds an arc filler at the shared vertex', () => {
+    // Two arcs meeting at V=(10, 0) with a 90° corner. The
+    // shared point id is the key — without it the chain
+    // detector would treat them as disconnected.
+    let s = emptySketchState();
+    const start1 = addPoint(s, 0, 0); s = start1.state;
+    const v = addPoint(s, 10, 0); s = v.state;
+    const end2 = addPoint(s, 10, 10); s = end2.state;
+    const c1 = addPoint(s, 5, 0); s = c1.state;
+    const c2 = addPoint(s, 10, 5); s = c2.state;
+    // arc1: top semicircle from start1 to v, center c1, CW
+    // → outgoing at V (back along arc1) points NORTH.
+    const arc1 = addArcByPoints(s, c1.id, start1.id, v.id, false); s = arc1.state;
+    // arc2: right-bulging semicircle from v to end2, center c2, CCW
+    // → outgoing at V (along sweep) points EAST.
+    const arc2 = addArcByPoints(s, c2.id, v.id, end2.id, true); s = arc2.state;
+    const items = [
+      { entityId: arc1.id, sidePoint: { x: 5, y: 20 } },  // outside arc1 → larger radius
+      { entityId: arc2.id, sidePoint: { x: 20, y: 5 } },  // outside arc2 → larger radius
+    ];
+    const r = offsetChain(s, items, 2, { fillCorners: true });
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(3);  // 2 offsets + 1 filler arc
+    const filler = findEntity(r.state, r.affectedIds![2]);
+    expect(filler?.kind).toBe('arc');
+  });
+
+  it('skips filler at a convex line→arc corner when fillCorners=false (sharp miter)', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const v = addPoint(s, 10, 0); s = v.state;
+    const arcCenter = addPoint(s, 15, 0); s = arcCenter.state;
+    const arcEnd = addPoint(s, 15, 5); s = arcEnd.state;
+    const l = addLine(s, a.id, v.id); s = l.state;
+    const arc = addArcByPoints(s, arcCenter.id, v.id, arcEnd.id, false); s = arc.state;
+    const items = [
+      { entityId: l.id, sidePoint: { x: 5, y: -2 } },
+      { entityId: arc.id, sidePoint: { x: 30, y: 5 } },
+    ];
+    const r = offsetChain(s, items, 2, { fillCorners: false });
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(2);  // just the two offsets, extended to intersection
+  });
+});
+
+describe('findChainedEntities', () => {
+  it('walks endpoint-connected lines (polyline)', () => {
+    // Build a 3-segment polyline: a→b→c→d.
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 5, 0); s = b.state;
+    const c = addPoint(s, 5, 5); s = c.state;
+    const d = addPoint(s, 10, 5); s = d.state;
+    const l1 = addLine(s, a.id, b.id); s = l1.state;
+    const l2 = addLine(s, b.id, c.id); s = l2.state;
+    const l3 = addLine(s, c.id, d.id); s = l3.state;
+    // Plus an unrelated disconnected line.
+    const e = addPoint(s, 20, 20); s = e.state;
+    const f = addPoint(s, 30, 30); s = f.state;
+    const l4 = addLine(s, e.id, f.id); s = l4.state;
+    const chain = findChainedEntities(s, l1.id);
+    expect(chain.has(l1.id)).toBe(true);
+    expect(chain.has(l2.id)).toBe(true);
+    expect(chain.has(l3.id)).toBe(true);
+    expect(chain.has(l4.id)).toBe(false);
+  });
+  it('does not chain through circles (no endpoints)', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    expect(findChainedEntities(s, c.id).size).toBe(1);
+  });
+  it('skips construction curves when chaining', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 5, 0); s = b.state;
+    const c = addPoint(s, 5, 5); s = c.state;
+    const l1 = addLine(s, a.id, b.id); s = l1.state;
+    const l2 = addLine(s, b.id, c.id, { construction: true }); s = l2.state;  // construction
+    const chain = findChainedEntities(s, l1.id);
+    // l1 alone; the construction l2 is intentionally excluded so
+    // offset chains stick to solid geometry.
+    expect(chain.has(l1.id)).toBe(true);
+    expect(chain.has(l2.id)).toBe(false);
   });
 });
