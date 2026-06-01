@@ -12,9 +12,8 @@ router.get('/:id', checkToken, checkPermission('cad', 'read'), controller.getByI
 router.put('/:id', checkToken, checkPermission('cad', 'write'), controller.update);
 router.delete('/:id', checkToken, checkPermission('cad', 'delete'), controller.delete);
 
-router.post('/:id/submit', checkToken, checkPermission('cad', 'write'), controller.submit);
+// Release = commit + freeze + tag the commit with Parts.revision (VC-18).
 router.post('/:id/release', checkToken, checkPermission('cad', 'approve'), controller.release);
-router.post('/:id/new-revision', checkToken, checkPermission('cad', 'write'), controller.newRevision);
 
 router.get('/:id/history', checkToken, checkPermission('cad', 'read'), controller.getHistory);
 

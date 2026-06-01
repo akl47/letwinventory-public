@@ -8,6 +8,7 @@
 const RestError = require('../../util/RestError');
 const vcs = require('./vcsService');
 const { cadSerialize } = require('./cadSerializer');
+const freeze = require('./cadFreezeService');
 const { NAMING_VERSION } = require('../cadRegenService');
 
 const DEFAULT_LOCK_TTL_MS = Number(process.env.CAD_LOCK_TTL_MS) || 30 * 60 * 1000; // 30 min
@@ -106,6 +107,35 @@ async function checkin(model, userId, message, { at } = {}, db) {
   return { commitHash, model };
 }
 
+/** Release the working copy as a Part revision (VC-18): commit the current
+ * state, freeze its geometry into that commit, advance the branch, and create a
+ * write-once tag named for the revision. Returns { commitHash, tag }. */
+async function release(model, userId, revisionLabel, { kernelClient, at } = {}, db) {
+  const repo = await repoForModel(model, db);
+  const branch = model.branchName || 'main';
+  const treeHash = await cadSerialize(repo, docOf(model), db);
+  const head = await vcs.getRef(repo, branch, db);
+  const frozen = await freeze.freezeGeometry(repo, model, { kernelClient }, db);
+  const commitHash = await vcs.createCommit(repo, {
+    treeHash,
+    parents: head ? [head.targetHash] : [],
+    authorUserID: userId,
+    message: `release ${revisionLabel}`,
+    timestamp: nowAt(at).toISOString(),
+    meta: { ...cadVersionInfo(), frozen },
+  }, db);
+  if (head) await vcs.updateBranch(repo, branch, commitHash, userId, db);
+  else await vcs.createBranch(repo, branch, commitHash, userId, db);
+
+  const tag = String(revisionLabel);
+  if (await vcs.getRef(repo, tag, db)) {
+    throw new RestError(`Revision ${tag} has already been released (tags are write-once)`, 409);
+  }
+  await vcs.createTag(repo, tag, commitHash, userId, db);
+  await model.update({ baseCommitHash: commitHash, dirty: false });
+  return { commitHash, tag };
+}
+
 /** Flag the working copy as having uncommitted edits (autosave path, VC-13). */
 async function markDirty(model, db) {
   if (!model.dirty) await model.update({ dirty: true });
@@ -138,6 +168,7 @@ module.exports = {
   checkout,
   releaseLock,
   checkin,
+  release,
   markDirty,
   history,
   sweepExpiredLocks,

@@ -26,22 +26,19 @@ describe('CAD landing endpoint (parts-with-cad)', () => {
     expect(ids).toEqual([a.id, b.id].sort());
   });
 
-  it('reports revisionCount and latest revision per part', async () => {
+  it('reports release-tag count and the part revision per part', async () => {
     const auth = await authenticatedRequest();
     const part = await createTestPart();
     const a = await createDraft(auth, part.id);
-    await auth.post(`/api/design/cad-model/${a.id}/submit`);
-    await auth.post(`/api/design/cad-model/${a.id}/release`);
-    const b = await auth.post(`/api/design/cad-model/${a.id}/new-revision`);
-    expect(b.status).toBe(201);
+    const rel = await auth.post(`/api/design/cad-model/${a.id}/release`);
+    expect(rel.status).toBe(200);
 
     const res = await auth.get('/api/design/cad-model/parts-with-cad');
     const row = res.body.find(r => r.partID === part.id);
-    expect(row.revisionCount).toBe(2);
-    expect(row.latestRevision).toBe('B');
-    expect(row.latestReleaseState).toBe('draft');
+    expect(row.revisionCount).toBe(1);            // one release tag
+    expect(row.latestRevision).toBe(part.revision); // = Parts.revision
     expect(row.hasReleased).toBe(true);
-    expect(row.releasedRevision).toBe('A');
+    expect(row.releasedRevision).toBe(part.revision);
   });
 
   it('omits soft-deleted CAD models', async () => {

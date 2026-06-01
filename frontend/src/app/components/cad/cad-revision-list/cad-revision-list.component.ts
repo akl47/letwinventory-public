@@ -11,6 +11,8 @@ import { CadModel } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 
+// One editable working copy per part. Revisions are VCS tags created by Release
+// in the editor — not extra rows here.
 @Component({
   selector: 'app-cad-revision-list',
   standalone: true,
@@ -18,7 +20,7 @@ import { ErrorNotificationService } from '../../../services/error-notification.s
   template: `
     <div class="cad-revision-list" data-testid="cad-tab">
       <header class="page-header">
-        <h2>CAD Models</h2>
+        <h2>CAD Model</h2>
         <button
           mat-raised-button color="primary"
           data-testid="cad-create-button"
@@ -26,14 +28,6 @@ import { ErrorNotificationService } from '../../../services/error-notification.s
           (click)="onCreate()"
           *ngIf="models().length === 0">
           <mat-icon>add</mat-icon> Create CAD
-        </button>
-        <button
-          mat-stroked-button
-          data-testid="cad-new-revision-button"
-          [disabled]="!canWrite() || creating() || !releasedModel()"
-          *ngIf="models().length > 0 && releasedModel()"
-          (click)="onNewRevision(releasedModel()!.id)">
-          <mat-icon>add</mat-icon> New Revision from {{ releasedModel()!.revision }}
         </button>
       </header>
 
@@ -50,17 +44,9 @@ import { ErrorNotificationService } from '../../../services/error-notification.s
         mat-table [dataSource]="models()"
         data-testid="cad-revision-list"
         class="revision-table">
-        <ng-container matColumnDef="revision">
-          <th mat-header-cell *matHeaderCellDef>Rev</th>
-          <td mat-cell *matCellDef="let m">{{ m.revision }}</td>
-        </ng-container>
-        <ng-container matColumnDef="state">
-          <th mat-header-cell *matHeaderCellDef>State</th>
-          <td mat-cell *matCellDef="let m">
-            <span class="state-badge" [class.draft]="m.releaseState==='draft'" [class.review]="m.releaseState==='review'" [class.released]="m.releaseState==='released'">
-              {{ m.releaseState }}
-            </span>
-          </td>
+        <ng-container matColumnDef="name">
+          <th mat-header-cell *matHeaderCellDef>Model</th>
+          <td mat-cell *matCellDef="let m">{{ m.name || 'Working copy' }}</td>
         </ng-container>
         <ng-container matColumnDef="created">
           <th mat-header-cell *matHeaderCellDef>Created</th>
@@ -86,10 +72,6 @@ import { ErrorNotificationService } from '../../../services/error-notification.s
     .loading { display: flex; justify-content: center; padding: 32px; }
     .empty { padding: 32px; text-align: center; color: #666; border: 1px dashed #ccc; border-radius: 8px; }
     .revision-table { width: 100%; }
-    .state-badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; text-transform: uppercase; font-weight: 600; }
-    .state-badge.draft { background: #fff3e0; color: #e65100; }
-    .state-badge.review { background: #e3f2fd; color: #1565c0; }
-    .state-badge.released { background: #e8f5e9; color: #2e7d32; }
   `],
 })
 export class CadRevisionListComponent implements OnInit {
@@ -104,13 +86,9 @@ export class CadRevisionListComponent implements OnInit {
   loading = signal<boolean>(true);
   creating = signal<boolean>(false);
 
-  displayedColumns = ['revision', 'state', 'created', 'actions'];
+  displayedColumns = ['name', 'created', 'actions'];
 
   canWrite() { return this.auth.hasPermission('cad', 'write'); }
-
-  releasedModel() {
-    return this.models().find(m => m.releaseState === 'released') ?? null;
-  }
 
   ngOnInit() {
     this.route.parent?.paramMap.subscribe(pm => {
@@ -149,20 +127,6 @@ export class CadRevisionListComponent implements OnInit {
       error: err => {
         this.creating.set(false);
         this.errors.showError(err?.error?.error || 'Failed to create CAD model');
-      },
-    });
-  }
-
-  onNewRevision(sourceID: number) {
-    this.creating.set(true);
-    this.cadApi.newRevision(sourceID).subscribe({
-      next: created => {
-        this.creating.set(false);
-        this.router.navigate(['editor'], { relativeTo: this.route, queryParams: { revisionID: created.id } });
-      },
-      error: err => {
-        this.creating.set(false);
-        this.errors.showError(err?.error?.error || 'Failed to create new revision');
       },
     });
   }

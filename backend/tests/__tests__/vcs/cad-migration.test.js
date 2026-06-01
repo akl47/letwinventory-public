@@ -47,27 +47,13 @@ describe('cadMigrationService', () => {
     expect(r2.commitHash).toBe(r1.commitHash);
   });
 
-  test('tags released models with their revision', async () => {
-    const part = await createTestPart();
-    const model = await makeModel(uid, part.id, { revision: 'B', releaseState: 'released', releasedAt: new Date(), releasedByUserID: uid });
-    const { repo, commitHash } = await migrateModelToVcs(model);
-    expect(await vcs.getRef(repo, 'B')).toMatchObject({ kind: 'tag', targetHash: commitHash });
-  });
-
-  test('migrateAll chains revisions of one part into a continuous history', async () => {
-    const part = await createTestPart();
-    const a = await makeModel(uid, part.id, { revision: 'A' });
-    const b = await makeModel(uid, part.id, {
-      revision: 'B', previousRevisionID: a.id,
-      featureTree: { features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 10 }], nextFeatureSeq: 3 },
-    });
+  test('migrateAll imports every active working copy', async () => {
+    const partA = await createTestPart();
+    const partB = await createTestPart();
+    await makeModel(uid, partA.id);
+    await makeModel(uid, partB.id);
     const { total, created } = await migrateAll();
     expect(total).toBe(2);
     expect(created).toBe(2);
-
-    await a.reload(); await b.reload();
-    const repo = await cadvcs.repoForModel(b);
-    const headCommit = await vcs.getCommit(repo, b.baseCommitHash);
-    expect(headCommit.parents).toEqual([a.baseCommitHash]);
   });
 });

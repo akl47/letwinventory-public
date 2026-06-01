@@ -67,16 +67,9 @@ export class CadModelService {
     return this.http.delete<void>(`${this.apiUrl}/${id}`);
   }
 
-  submit(id: number): Observable<CadModel> {
-    return this.http.post<CadModel>(`${this.apiUrl}/${id}/submit`, {});
-  }
-
-  release(id: number): Observable<CadModel> {
-    return this.http.post<CadModel>(`${this.apiUrl}/${id}/release`, {});
-  }
-
-  newRevision(id: number): Observable<CadModel> {
-    return this.http.post<CadModel>(`${this.apiUrl}/${id}/new-revision`, {});
+  /** Release the working copy as the Part's revision: commit + freeze + tag. */
+  release(id: number): Observable<{ commitHash: string; revision: string; model: CadModel }> {
+    return this.http.post<{ commitHash: string; revision: string; model: CadModel }>(`${this.apiUrl}/${id}/release`, {});
   }
 
   getHistory(id: number): Observable<CadModelHistoryEntry[]> {

@@ -50,15 +50,15 @@ describe('CAD Model permission enforcement (CAD-106)', () => {
       expect(res.status).toBe(403);
     });
 
-    it('returns 403 on submit without cad.write', async () => {
+    it('returns 403 on checkout without cad.write', async () => {
       const writer = await authenticatedRequest();
       const part = await createTestPart();
       const created = await writer.post(`/api/design/cad-model/by-part/${part.id}`).send({});
 
-      const readUser = await createTestUser({ displayName: 'cad-reader-submit' });
+      const readUser = await createTestUser({ displayName: 'cad-reader-checkout' });
       const reader = await authenticatedRequest(readUser, { grantPermissions: false });
       await grantCadActions(reader.user.id, ['read']);
-      const res = await reader.post(`/api/design/cad-model/${created.body.id}/submit`);
+      const res = await reader.post(`/api/design/cad-model/${created.body.id}/checkout`);
       expect(res.status).toBe(403);
     });
   });
@@ -82,7 +82,6 @@ describe('CAD Model permission enforcement (CAD-106)', () => {
       const writer = await authenticatedRequest();
       const part = await createTestPart();
       const created = await writer.post(`/api/design/cad-model/by-part/${part.id}`).send({});
-      await writer.post(`/api/design/cad-model/${created.body.id}/submit`);
 
       const noapproveUser = await createTestUser({ displayName: 'cad-no-approve' });
       const noapprove = await authenticatedRequest(noapproveUser, { grantPermissions: false });
@@ -95,28 +94,13 @@ describe('CAD Model permission enforcement (CAD-106)', () => {
       const writer = await authenticatedRequest();
       const part = await createTestPart();
       const created = await writer.post(`/api/design/cad-model/by-part/${part.id}`).send({});
-      await writer.post(`/api/design/cad-model/${created.body.id}/submit`);
 
       const approverUser = await createTestUser({ displayName: 'cad-approver' });
       const approver = await authenticatedRequest(approverUser, { grantPermissions: false });
       await grantCadActions(approver.user.id, ['read', 'approve']);
       const res = await approver.post(`/api/design/cad-model/${created.body.id}/release`);
       expect(res.status).toBe(200);
-      expect(res.body.releaseState).toBe('released');
-    });
-
-    it('rejects new-revision with only cad.approve (requires cad.write)', async () => {
-      const writer = await authenticatedRequest();
-      const part = await createTestPart();
-      const created = await writer.post(`/api/design/cad-model/by-part/${part.id}`).send({});
-      await writer.post(`/api/design/cad-model/${created.body.id}/submit`);
-      await writer.post(`/api/design/cad-model/${created.body.id}/release`);
-
-      const onlyApproveUser = await createTestUser({ displayName: 'cad-only-approve' });
-      const onlyApprove = await authenticatedRequest(onlyApproveUser, { grantPermissions: false });
-      await grantCadActions(onlyApprove.user.id, ['read', 'approve']);
-      const res = await onlyApprove.post(`/api/design/cad-model/${created.body.id}/new-revision`);
-      expect(res.status).toBe(403);
+      expect(res.body.commitHash).toBeTruthy();
     });
   });
 });

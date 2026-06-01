@@ -5,7 +5,7 @@ const EMPTY_DOC = { sketches: {}, nextSketchSeq: 1 };
 
 describe('CAD Model CRUD (CAD-101, CAD-102, CAD-107)', () => {
   describe('POST /api/design/cad-model/by-part/:partID (CAD-102)', () => {
-    it('creates a draft CAD model at revision A for an existing part', async () => {
+    it('creates a working copy for an existing part', async () => {
       const auth = await authenticatedRequest();
       const part = await createTestPart();
 
@@ -14,9 +14,6 @@ describe('CAD Model CRUD (CAD-101, CAD-102, CAD-107)', () => {
       expect(res.status).toBe(201);
       expect(res.body.id).toBeDefined();
       expect(res.body.partID).toBe(part.id);
-      expect(res.body.revision).toBe('A');
-      expect(res.body.releaseState).toBe('draft');
-      expect(res.body.previousRevisionID).toBeNull();
       expect(res.body.createdByUserID).toBe(auth.user.id);
       expect(res.body.activeFlag).toBe(true);
     });
@@ -45,7 +42,7 @@ describe('CAD Model CRUD (CAD-101, CAD-102, CAD-107)', () => {
       expect(res.body.error || res.body.errorMessage).toMatch(/part/i);
     });
 
-    it('rejects a second active model for the same part at the same revision', async () => {
+    it('rejects a second active model for the same part', async () => {
       const auth = await authenticatedRequest();
       const part = await createTestPart();
 
@@ -88,21 +85,7 @@ describe('CAD Model CRUD (CAD-101, CAD-102, CAD-107)', () => {
   });
 
   describe('GET /api/design/cad-model/by-part/:partID/active (CAD-102)', () => {
-    it('returns the most recently released revision when one exists', async () => {
-      const auth = await authenticatedRequest();
-      const part = await createTestPart();
-
-      const a = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({});
-      await auth.post(`/api/design/cad-model/${a.body.id}/submit`);
-      await auth.post(`/api/design/cad-model/${a.body.id}/release`);
-
-      const res = await auth.get(`/api/design/cad-model/by-part/${part.id}/active`);
-      expect(res.status).toBe(200);
-      expect(res.body.id).toBe(a.body.id);
-      expect(res.body.releaseState).toBe('released');
-    });
-
-    it('falls back to the latest draft when no revision is released yet', async () => {
+    it('returns the part\'s working copy', async () => {
       const auth = await authenticatedRequest();
       const part = await createTestPart();
 
@@ -110,7 +93,6 @@ describe('CAD Model CRUD (CAD-101, CAD-102, CAD-107)', () => {
       const res = await auth.get(`/api/design/cad-model/by-part/${part.id}/active`);
       expect(res.status).toBe(200);
       expect(res.body.id).toBe(a.body.id);
-      expect(res.body.releaseState).toBe('draft');
     });
 
     it('returns 404 for a part with no CAD models', async () => {
@@ -184,7 +166,7 @@ describe('CAD Model CRUD (CAD-101, CAD-102, CAD-107)', () => {
       expect(get.status).toBe(404);
     });
 
-    it('allows creating a new active revision A after the previous one is soft-deleted', async () => {
+    it('allows creating a new model after the previous one is soft-deleted', async () => {
       const auth = await authenticatedRequest();
       const part = await createTestPart();
 
@@ -193,7 +175,7 @@ describe('CAD Model CRUD (CAD-101, CAD-102, CAD-107)', () => {
 
       const second = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({});
       expect(second.status).toBe(201);
-      expect(second.body.revision).toBe('A');
+      expect(second.body.partID).toBe(part.id);
     });
   });
 });

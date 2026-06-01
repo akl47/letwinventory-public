@@ -3129,13 +3129,8 @@ interface HistorySnapshot {
                  outside it. -->
             <div class="editor-footer">
               <div class="footer-group footer-group-left">
-                <app-category-badge data-testid="revision-badge" *ngIf="model()"
-                  [label]="'Rev ' + model()!.revision" subtle />
-                <app-category-badge data-testid="state-badge" *ngIf="model()"
-                  [label]="model()!.releaseState"
-                  [variant]="model()!.releaseState === 'draft' ? 'warning'
-                           : model()!.releaseState === 'review' ? 'info'
-                           : 'success'" />
+                <app-category-badge data-testid="revision-badge" *ngIf="model()?.part?.revision"
+                  [label]="'Rev ' + model()!.part!.revision" subtle />
                 <span class="footer-mode" data-testid="cad-hud-ready" *ngIf="activeSketchId() === null">
                   mode: {{ mode() }} · selected: {{ selected() || '(none)' }} · features: {{ featureTree().features.length }}
                 </span>
@@ -3152,7 +3147,7 @@ interface HistorySnapshot {
                 <span class="vcs-lock" data-testid="vcs-lock-foreign" *ngIf="lockedByOther()"
                       matTooltip="Checked out by another user">🔒 checked out</span>
                 <button class="btn" data-testid="action-checkout"
-                        *ngIf="model()?.releaseState==='draft' && canWrite() && !model()?.lockedByUserID"
+                        *ngIf="model() && canWrite() && !model()?.lockedByUserID"
                         (click)="onCheckout()">Check out</button>
                 <button class="btn btn-primary" data-testid="action-checkin"
                         *ngIf="isLockedByMe()" (click)="onCheckin()">Check in</button>
@@ -3176,15 +3171,10 @@ interface HistorySnapshot {
                 </div>
                 <button class="btn btn-primary"
                         data-testid="action-release"
-                        *ngIf="model()?.releaseState==='review' && canApprove()"
+                        *ngIf="model() && canApprove()"
+                        [matTooltip]="'Commit + freeze + tag as Rev ' + (model()?.part?.revision || '')"
                         (click)="onRelease()">
-                  Release
-                </button>
-                <button class="btn"
-                        data-testid="action-new-revision"
-                        *ngIf="model()?.releaseState==='released' && canWrite()"
-                        (click)="onNewRevision()">
-                  New Revision
+                  Release Rev {{ model()?.part?.revision }}
                 </button>
                 <span class="kernel-badge"
                       data-testid="kernel-badge"
@@ -5172,7 +5162,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   readonly = computed(() => {
     const m = this.model();
     if (!m) return true;
-    if (m.releaseState !== 'draft') return true;
     // Another user holds the exclusive checkout — view only until they release.
     if (this.lockedByOther()) return true;
     return !this.canWrite();
@@ -10987,7 +10976,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    */
   private save(opts?: { skipRegen?: boolean }) {
     const m = this.model();
-    if (!m || m.releaseState !== 'draft') return;
+    if (!m) return;
     const skipRegen = opts?.skipRegen === true;
     if (this.debouncedSave) clearTimeout(this.debouncedSave);
     this.debouncedSave = window.setTimeout(() => {
@@ -11498,27 +11487,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onBack() { this.router.navigate(['../'], { relativeTo: this.route }); }
 
-  onSubmit() {
-    const m = this.model(); if (!m) return;
-    this.cadApi.submit(m.id).subscribe({
-      next: updated => this.model.set(updated),
-      error: err => this.errors.showError(err?.error?.error || 'Submit failed'),
-    });
-  }
-
+  // Release the working copy as the Part's revision (commit + freeze + tag).
   onRelease() {
     const m = this.model(); if (!m) return;
     this.cadApi.release(m.id).subscribe({
-      next: updated => this.model.set(updated),
+      next: res => { this.model.set(res.model); this.loadCommits(); },
       error: err => this.errors.showError(err?.error?.error || 'Release failed'),
-    });
-  }
-
-  onNewRevision() {
-    const m = this.model(); if (!m) return;
-    this.cadApi.newRevision(m.id).subscribe({
-      next: created => this.router.navigate([], { relativeTo: this.route, queryParams: { revisionID: created.id }, replaceUrl: true }),
-      error: err => this.errors.showError(err?.error?.error || 'New revision failed'),
     });
   }
 

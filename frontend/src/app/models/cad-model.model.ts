@@ -7,26 +7,23 @@ export interface CadModel {
   id: number;
   name: string | null;
   partID: number;
-  revision: string;
-  previousRevisionID: number | null;
   featureTree: FeatureTree;
   sketchDoc: SketchDocument;
   equations?: EquationDoc;
-  releaseState: CadReleaseState;
-  submittedAt: string | null;
-  releasedAt: string | null;
-  releasedByUserID: number | null;
   createdByUserID: number;
   activeFlag: boolean;
   createdAt: string;
   updatedAt: string;
-  // VCS working-copy state (Phase 1).
+  // VCS working-copy state (Phase 1). Revision identity = the Part's revision;
+  // released states are VCS tags, not model columns.
   branchName?: string;
   baseCommitHash?: string | null;
   dirty?: boolean;
   lockedByUserID?: number | null;
   lockedAt?: string | null;
   lockExpiresAt?: string | null;
+  // Part identity, included by getById / getActiveByPart.
+  part?: { id: number; name: string; sku?: string | null; manufacturerPN?: string | null; revision: string } | null;
 }
 
 /** A VCS commit on a CAD model's branch (newest-first in the log). */

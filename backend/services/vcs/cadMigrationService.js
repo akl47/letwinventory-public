@@ -46,21 +46,13 @@ async function migrateModelToVcs(model, db) {
     treeHash,
     parents: head ? [head.targetHash] : [],
     authorUserID: author,
-    message: head ? `migrate revision ${model.revision || ''}`.trim() : 'initial import (migrated)',
+    message: head ? 'migrate snapshot' : 'initial import (migrated)',
     timestamp: (model.updatedAt ? new Date(model.updatedAt) : new Date()).toISOString(),
     meta: cadvcs.cadVersionInfo(),
   }, db);
   if (head) await vcs.updateBranch(repo, branch, commitHash, author, db);
   else await vcs.createBranch(repo, branch, commitHash, author, db);
   await model.update({ baseCommitHash: commitHash, dirty: false, branchName: branch });
-
-  // Released models become a write-once tag named for their revision (VC-18).
-  if (model.releaseState === 'released' && model.revision) {
-    const tagName = String(model.revision);
-    if (!(await vcs.getRef(repo, tagName, db))) {
-      await vcs.createTag(repo, tagName, commitHash, author, db);
-    }
-  }
 
   return { repo, commitHash, created: true };
 }
