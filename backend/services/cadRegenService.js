@@ -22,7 +22,10 @@
 //     incremental-edit path.
 
 const crypto = require('crypto');
-const { getDefaultClient } = require('./cadKernelClient');
+// Imported as a namespace (not destructured) so tests can swap the kernel via
+// `jest.spyOn(cadKernelClient, 'getDefaultClient')` — a destructured binding
+// captures the original function and the spy would never take effect.
+const cadKernelClient = require('./cadKernelClient');
 const { extractRegions } = require('./cadProfile');
 const { applyEquationsToModel, resolveEquations } = require('./cadEquations');
 const { applyProjectionToSketchDoc } = require('./cadProjection');
@@ -156,7 +159,7 @@ function buildTextResolver(model) {
 }
 
 async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollbackBeforeIndex, includeBodyBreps } = {}) {
-  const client = kernelClient || getDefaultClient();
+  const client = kernelClient || cadKernelClient.getDefaultClient();
   const dbClient = db || global.db;
   // Resolve any equations BEFORE we hash params / dispatch features.
   // Returns a new featureTree + sketchDoc with every drivable numeric
@@ -807,7 +810,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
  * Reuses the regen (cache-backed) to obtain the final composed body BReps,
  * then calls the kernel `exportStep` RPC to combine + serialize them. */
 async function exportModelStep(model, { kernelClient, db, bodyIds } = {}) {
-  const client = kernelClient || getDefaultClient();
+  const client = kernelClient || cadKernelClient.getDefaultClient();
   const regen = await regenerateModel(model, { kernelClient: client, db, includeBodyBreps: true });
   let bodies = (regen.bodies || []).filter(b => b.brep);
   // Optional filter to a subset of bodies (by id).

@@ -231,10 +231,13 @@ describe('POST /api/design/cad-model/:id/regenerate (REQ 700)', () => {
     expect(res.status).toBe(200);
     const f2 = res.body.features[0];
     expect(f2.topology).toBeDefined();
-    // Kernel-local 'v0'/'e0' get prefixed by the regen service so the IDs
-    // stay globally unique once meshes from multiple features are merged.
-    expect(f2.topology.vertices[0].id).toBe('f2#0/v0');
-    expect(f2.topology.edges[0].id).toBe('f2#0/e0');
+    // Kernel-local 'v0'/'e0' are scoped twice for global uniqueness: first per
+    // feature-region (`f2#0/…`) by the kernel-result handler, then by the owning
+    // body's id (`f2/…`) so the viewer's edge-id Map can't collide across bodies
+    // (NAMING_VERSION 14). For the primary body (bodyId === featureId) that
+    // yields `f2/f2#0/v0`.
+    expect(f2.topology.vertices[0].id).toBe('f2/f2#0/v0');
+    expect(f2.topology.edges[0].id).toBe('f2/f2#0/e0');
     expect(f2.topology.edges[0].endpoints).toEqual([[0, 0, 0], [1, 0, 0]]);
   });
 
