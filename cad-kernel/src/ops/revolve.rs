@@ -19,7 +19,7 @@ use tracing::info;
 
 use crate::ops::extrude::{build_compound_face_with_holes, build_profile_face, build_workplane};
 use crate::ops::shape_io::{
-    brep_to_base64, extract_topology, serialize_brep, tessellate_faces_generic,
+    brep_to_base64, extract_topology, serialize_brep,
 };
 use crate::protocol::{BuildRevolveParams, BuildRevolveResult};
 
@@ -51,21 +51,66 @@ pub fn build(params: &BuildRevolveParams) -> Result<BuildRevolveResult> {
         params.axis_dir[1] / axis_dir_len,
         params.axis_dir[2] / axis_dir_len,
     );
-    // `Some(angle)` for a partial revolve; `None` means 360° in opencascade-rs.
-    // We always pass Some(angle) because the angle_deg field is unconditional.
-    let angle = Some(Angle::Degrees(params.angle_deg));
+    // For a full 360° revolution, `None` triggers opencascade-rs's true-
+    // closed revolve: the resulting surface wraps parametrically, the
+    // start and end positions of the profile collapse into the SAME
+    // boundary, and the source profile's edges don't survive as
+    // standalone topology edges. `Some(360°)` instead does a partial
+    // revolve that happens to be 360° — OCCT keeps the start-position
+    // and end-position profile edges as separate entities in the BRep
+    // even though they coincide geometrically, leaving visible seam-
+    // like edges (e.g. polyline kinks from the sketch) baked into the
+    // result. Anything within 0.001° of 360 is treated as full.
+    let is_full = (params.angle_deg - 360.0).abs() < 1.0e-3;
+    let angle = if is_full { None } else { Some(Angle::Degrees(params.angle_deg)) };
+    info!(
+        feature_id = %params.feature_id,
+        angle_deg_input = params.angle_deg,
+        is_full,
+        will_use_constructor = if is_full { "no-angle (closed)" } else { "with-angle (partial)" },
+        profile_pts = params.profile.len(),
+        holes = params.holes.len(),
+        "revolve: classifying angle",
+    );
 
     let workplane = build_workplane(&params.plane);
+    // Face/CompoundFace::revolve now returns Option — None means OCCT
+    // threw (caught by cxx via Result<UniquePtr<...>>). Surface that as
+    // a clean human-readable error instead of letting the kernel abort.
+    let revolve_err = || anyhow!(
+        "revolve failed: OCCT couldn't build the swept solid. Common causes: \
+         profile coincident with the rotation axis, axis crosses the profile \
+         interior, or degenerate / self-intersecting profile."
+    );
     let shape: Shape = if params.holes.is_empty() {
         let face = build_profile_face(&workplane, &params.profile)?;
-        face.revolve(axis_origin, axis_dir, angle).into()
+        let solid = face.revolve(axis_origin, axis_dir, angle).ok_or_else(revolve_err)?;
+        solid.into()
     } else {
         let compound = build_compound_face_with_holes(&workplane, &params.profile, &params.holes)?;
-        compound.revolve(axis_origin, axis_dir, angle)
+        compound.revolve(axis_origin, axis_dir, angle).ok_or_else(revolve_err)?
     };
 
-    let faces = tessellate_faces_generic(&shape, &params.feature_id)?;
+    // Dump face + edge counts of the raw revolve result before clean()
+    // and before topology extraction, so we can see what OCCT produced.
+    let raw_face_count = shape.faces().count();
+    let raw_edge_count = shape.edges().count();
+    info!(
+        feature_id = %params.feature_id,
+        raw_face_count,
+        raw_edge_count,
+        "revolve: raw shape before tessellation",
+    );
+
     let topology = extract_topology(&shape);
+    let faces = crate::ops::shape_io::tessellate_faces_generic_with_topology(&shape, &params.feature_id, Some(&topology))?;
+    info!(
+        feature_id = %params.feature_id,
+        emitted_face_count = faces.len(),
+        emitted_edge_count = topology.edges.len(),
+        emitted_vertex_count = topology.vertices.len(),
+        "revolve: after tessellation + topology extract",
+    );
     let brep_bytes = serialize_brep(&shape);
     if brep_bytes.is_empty() {
         return Err(anyhow!(

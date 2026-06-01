@@ -16,8 +16,8 @@ use anyhow::{anyhow, Result};
 use tracing::info;
 
 use crate::ops::shape_io::{
-    brep_to_base64, deserialize_brep_from_base64, extract_topology, serialize_brep,
-    tessellate_faces_generic,
+    brep_to_base64, decompose_into_solids, deserialize_brep_from_base64, extract_topology,
+    serialize_brep,
 };
 use crate::protocol::{BuildBooleanOp, BuildBooleanParams, BuildBooleanResult};
 
@@ -38,10 +38,20 @@ pub fn build(params: &BuildBooleanParams) -> Result<BuildBooleanResult> {
         BuildBooleanOp::Common => a.intersect(&b),
     };
     // BooleanShape → Shape. The conversion is a From impl in opencascade-rs.
-    let shape: opencascade::primitives::Shape = result.into();
+    let raw: opencascade::primitives::Shape = result.into();
+    // Boolean ops can split a single analytic surface into many sub-faces
+    // wherever the other shape's vertices, edges, or seams cross it —
+    // e.g. revolving against a cube produces pie-slice sub-faces on the
+    // revolve's lateral surface that radiate from each cube vertex. The
+    // sub-faces are visually identical to the original surface but each
+    // gets its own perimeter rendered, looking like spurious tessellation
+    // lines on a smooth surface. `clean()` (ShapeUpgrade_UnifySameDomain
+    // with all three unify flags) merges co-domain adjacents and drops
+    // the spurious edges.
+    let shape = raw.clean();
 
-    let faces = tessellate_faces_generic(&shape, &params.feature_id)?;
     let topology = extract_topology(&shape);
+    let faces = crate::ops::shape_io::tessellate_faces_generic_with_topology(&shape, &params.feature_id, Some(&topology))?;
     let brep_bytes = serialize_brep(&shape);
     if brep_bytes.is_empty() {
         return Err(anyhow!(
@@ -51,9 +61,23 @@ pub fn build(params: &BuildBooleanParams) -> Result<BuildBooleanResult> {
         ));
     }
 
+    // SolidWorks-style body tracking: decompose the result into its
+    // independent disjoint solids. >1 means the op split a body into
+    // pieces; the backend uses the per-solid info to assign persistent
+    // body ids (largest piece keeps the original, others become new
+    // bodies). 0 means the op annihilated the body (cut that produced
+    // empty volume) — backend handles that as a body deletion.
+    let solids = decompose_into_solids(&shape, &params.feature_id)?;
+    info!(
+        feature_id = %params.feature_id,
+        solid_count = solids.len(),
+        "buildBoolean: decomposed into N solids",
+    );
+
     Ok(BuildBooleanResult {
         brep_bytes: brep_to_base64(&brep_bytes),
         faces,
         topology,
+        solids,
     })
 }

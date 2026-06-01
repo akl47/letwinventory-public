@@ -237,6 +237,192 @@ async fn run_handler(method: &str, params: Value) -> Result<Value, HandlerError>
                 }
             }
         }
+        "buildEdgeBlend" => {
+            let params: crate::protocol::BuildEdgeBlendParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::edge_blend::build(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "buildEdgeBlend failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "buildEdgeBlend panicked");
+                    Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    })
+                }
+            }
+        }
+        "buildSweep" => {
+            let params: crate::protocol::BuildSweepParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::sweep::build(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "buildSweep failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "buildSweep panicked");
+                    Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    })
+                }
+            }
+        }
+        "buildShell" => {
+            let params: crate::protocol::BuildShellParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::shell::build(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "buildShell failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "buildShell panicked");
+                    Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    })
+                }
+            }
+        }
+        "buildPattern" => {
+            let params: crate::protocol::BuildPatternParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::pattern::build(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "buildPattern failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "buildPattern panicked");
+                    Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    })
+                }
+            }
+        }
+        "buildLoft" => {
+            let params: crate::protocol::BuildLoftParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::extrude::build_loft(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "buildLoft failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "buildLoft panicked");
+                    Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    })
+                }
+            }
+        }
+        "exportStep" => {
+            let params: crate::protocol::ExportStepParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::export::export_step(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "exportStep failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "exportStep panicked");
+                    Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    })
+                }
+            }
+        }
         _ => Err(HandlerError {
             code: METHOD_NOT_FOUND,
             message: format!("unknown method {method:?}"),

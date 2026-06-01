@@ -40,7 +40,48 @@ mod server;
 /// 7: multi-body. ExtrudeFeature.merge controls whether the new prism
 ///    fuses into the most-recent body or creates a new one. Backend-
 ///    only change; kernel ops are unchanged.
-pub const NAMING_SCHEMA_VERSION: u32 = 7;
+/// 8: extrude direction 2 + start offset. buildExtrude folds both into
+///    a single prism (translate start back by d2, extrude d1+d2) so no
+///    internal parting face remains at the sketch plane. Kernel-side
+///    geometry change; older caches must rebuild.
+/// 9: buildSweep RPC lands. Sweep + Cut Sweep features land in the
+///    cumulative pipeline. Existing extrudes/revolves produce
+///    byte-identical output; bumped so backend + kernel stay in sync.
+/// 10: sweep now uses BRepOffsetAPI_MakePipeShell (forgiving, handles
+///     sharp corners) instead of MakePipe (C1-only). Different topology
+///     output; cached sweep results from v9 are invalid.
+/// 11: MakeRevol constructors wrapped in Result via cxx so OCCT
+///     exceptions no longer abort the kernel. Geometry unchanged for
+///     successful cases; bumping so callers see the new error path.
+/// 12: boolean ops decompose their result into independent solids
+///     (TopExp_Explorer TopAbs_SOLID). BuildBooleanResult gains a
+///     `solids: Vec<SolidPart>` field so the backend can track
+///     multi-body splits SolidWorks-style. Geometry unchanged for the
+///     single-solid case; bumping so v11 cache rows rebuild fresh
+///     under the new schema.
+/// 13: matches backend bump — invalidates v12 cache rows that may
+///     have been written before the backend's solids-storage edits
+///     fully shipped (nodemon mid-edit reload). Kernel unchanged.
+/// 16: shell op's MakeThickSolid shim now runs BRepCheck_Analyzer
+///     and rejects malformed-but-IsDone-true shapes. Pre-bump cache
+///     rows could store the malformed geometry as a "successful"
+///     output; bumping forces every shell to re-dispatch.
+/// 17: matches backend bump — v16 cache rows still held the
+///     pre-validity-check garbage. Bumping again to evict.
+/// 18: instrumentation added inside try_offset_solid_inward to flag
+///     when the inner-offset returns an open shell rather than a
+///     closed solid. Pre-bump shell results may have stored such a
+///     malformed cavity.
+/// 19: shell's Stage 2 punch-through prism direction fixed (was
+///     extruding outward / away from the body; now extrudes inward
+///     so the picked face actually opens). Bumping to evict the
+///     cached "closed cavity inside intact body" results.
+/// 20: prism cross-section was still wrong (matched OUTER picked
+///     face = whole-body cross-section, so subtract removed wall
+///     material around cavity). Now matches inner cavity's
+///     corresponding face and extrudes from THAT, so the prism has
+///     the cavity's smaller cross-section.
+pub const NAMING_SCHEMA_VERSION: u32 = 20;
 
 /// Default bind address. Override with `CAD_KERNEL_ADDR`. We default to
 /// `0.0.0.0` because the standard dev setup runs the Node backend in Docker,
@@ -56,6 +97,13 @@ pub(crate) static REQUEST_COUNT: AtomicU64 = AtomicU64::new(0);
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     init_tracing();
+
+    // Install a C++ std::terminate handler that prints the active
+    // exception's what() string before aborting. We can't recover from
+    // terminate (UB), but every OCCT throw we DON'T catch should at
+    // least leave a diagnosable log line so we know which call to wrap
+    // in try_construct_unique next.
+    opencascade::install_terminate_handler();
 
     let bind_addr = std::env::var("CAD_KERNEL_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
     info!(addr = %bind_addr, "starting cad-kernel");

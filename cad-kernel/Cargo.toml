@@ -15,7 +15,7 @@ publish = false
 #
 # BREP serialization is OCCT-version-sensitive — treat upstream upgrades
 # as data migrations (recompute cached BRep from feature definitions).
-opencascade = { git = "https://github.com/bschwind/opencascade-rs.git", branch = "main" }
+opencascade = { path = "vendor/opencascade-rs/crates/opencascade" }
 # Must match the version opencascade-rs pulls in (currently 0.24). Any other
 # version in our direct deps produces "expected DVec3 found DVec3" type-id
 # conflicts at compile time.

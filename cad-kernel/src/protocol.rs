@@ -82,9 +82,10 @@ pub struct Plane3 {
 
 /// Typed profile loop matching `frontend/src/app/cad/lib/profile.ts:ProfileEdge`.
 ///
-/// All three edge kinds (line, arc, circle) produce analytic OCCT edges —
-/// `Edge::segment` for lines, `Edge::arc` (3-point) for arcs, and
-/// `Workplane::circle` for the single-circle profile fast path.
+/// Edge kinds produce analytic OCCT edges — `Edge::segment` for lines,
+/// `Edge::arc` (3-point) for arcs, `Workplane::circle` for the single-circle
+/// fast path, and `Edge::bezier` for glyph (text) outlines so each curve is
+/// one smooth face rather than N tessellated chords.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ProfileEdge {
@@ -107,6 +108,12 @@ pub enum ProfileEdge {
         center: Point2,
         radius: f64,
     },
+    /// One Bézier segment. `points` are control points (2 = line, 3 =
+    /// quadratic, 4 = cubic); the edge runs points[0] → points[last] and
+    /// chains to the next edge. Used for text glyph outlines.
+    Bezier {
+        points: Vec<Point2>,
+    },
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -128,7 +135,29 @@ pub struct BuildExtrudeParams {
     pub distance: f64,
     #[serde(default)]
     pub flipped: bool,
+    /// Offset from the sketch plane (along its normal) at which the
+    /// profile face is placed before being swept. Missing == 0
+    /// (sketchPlane start). Negative values move opposite the normal.
+    #[serde(default, rename = "startOffset")]
+    pub start_offset: f64,
+    /// Optional Direction 2. When present, a second prism is built
+    /// starting from the same start plane but growing the OPPOSITE
+    /// direction from direction 1, and the two are fused into a single
+    /// body. Mirrors SolidWorks' Direction 2.
+    #[serde(default, rename = "direction2")]
+    pub direction2: Option<BuildExtrudeDirection2>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct BuildExtrudeDirection2 {
+    pub distance: f64,
+    /// 'blind' or 'throughAll' for now — others fall back to blind in
+    /// the kernel until end-condition resolution lands here too.
+    #[serde(default = "default_blind_kind")]
+    pub kind: String,
+}
+
+fn default_blind_kind() -> String { "blind".to_string() }
 
 fn default_feature_id() -> String {
     "f_anon".to_string()
@@ -156,6 +185,12 @@ pub struct FaceMesh {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
+    /// Topology edge IDs (matching `Topology.edges[i].id`) that bound
+    /// this face. Excludes dropped seam edges. Empty until populated by
+    /// `tessellate_faces_generic_with_topology` (or the extrude variant)
+    /// when called with a topology argument; otherwise empty.
+    #[serde(rename = "boundaryEdgeIds", default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary_edge_ids: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -175,8 +210,25 @@ pub struct TopologyEdge {
     pub id: String,
     #[serde(rename = "isStraight")]
     pub is_straight: bool,
+    /// True when the two faces meeting at this edge share a tangent
+    /// plane (G1-continuous). These are the boundary edges of fillet /
+    /// chamfer blends and parametric seams. The viewer typically draws
+    /// them lighter / dashed so they're visible without dominating the
+    /// silhouette. Frontend defaults to `false` when missing
+    /// (backwards-compat with pre-2026-05 kernels). */
+    #[serde(rename = "isTangent", default, skip_serializing_if = "is_false")]
+    pub is_tangent: bool,
     pub endpoints: [[f64; 3]; 2],
+    /// Sampled points along the actual analytic curve (start → end,
+    /// inclusive). Populated for non-straight edges so the viewer can
+    /// render the smooth curve directly instead of chord-approximating
+    /// it from per-face mesh tessellation. None for straight edges (the
+    /// two endpoints fully describe them).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub polyline: Option<Vec<[f64; 3]>>,
 }
+
+fn is_false(b: &bool) -> bool { !b }
 
 // ────────────────────────────────────────────────────────────────────────────
 // buildBoolean
@@ -210,10 +262,237 @@ pub struct BuildBooleanParams {
 
 #[derive(Debug, Serialize)]
 pub struct BuildBooleanResult {
+    /// Whole-shape BRep — the compound result of the boolean op. This is
+    /// what the backend feeds into the NEXT compose op (so the cumulative
+    /// pipeline stays intact even when the body has split into multiple
+    /// disjoint solids).
+    #[serde(rename = "brepBytes")]
+    pub brep_bytes: String,
+    /// Whole-shape face tessellation. Equivalent to the union of every
+    /// `solids[i].faces`, kept for backward compat with paths that don't
+    /// care about per-solid tracking.
+    pub faces: Vec<FaceMesh>,
+    pub topology: Topology,
+    /// Per-solid breakdown. A boolean cut can split a single body into
+    /// two or more disjoint pieces (think "cut a donut in half" or
+    /// "slice a part through the middle"); each gets its own entry here
+    /// so the backend can track them SolidWorks-style as independent
+    /// bodies. Always has ≥ 1 entry on success.
+    #[serde(default)]
+    pub solids: Vec<SolidPart>,
+}
+
+/// One disjoint solid extracted from a multi-solid boolean result. Used
+/// by the backend's body-tracking logic to detect when a cut has split
+/// a body and assign persistent body ids to each piece.
+#[derive(Debug, Serialize)]
+pub struct SolidPart {
+    /// BRep payload for THIS solid only (not the surrounding compound).
+    /// The backend caches each split body's BRep separately so subsequent
+    /// per-body operations can act on a single piece.
+    #[serde(rename = "brepBytes")]
+    pub brep_bytes: String,
+    /// World-space centroid (center of mass). Used by the backend to
+    /// match this solid to its "ancestor" body across regens — the
+    /// largest piece keeps the original body id; closest-centroid wins
+    /// when volumes tie.
+    pub centroid: [f64; 3],
+    /// Solid volume in mm³. The body with the largest volume keeps the
+    /// original body id; smaller pieces get derived ids like
+    /// `${feature.id}#split${N}`.
+    pub volume: f64,
+    /// Per-solid face tessellation, namespaced by solid index in the
+    /// emitting feature's id so face ids stay unique across bodies.
+    pub faces: Vec<FaceMesh>,
+    pub topology: Topology,
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildEdgeBlend (fillet / chamfer)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Kind of edge blend operation. `Fillet` rounds the picked edges with the
+/// given radius; `Chamfer` cuts a bevel using one of three modes
+/// (see `ChamferMode`).
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeBlendKind {
+    Fillet,
+    Chamfer,
+}
+
+/// SolidWorks-style chamfer mode.
+///   - `Equal` — single distance applied symmetrically (existing
+///     behaviour; matches OCCT's `MakeChamfer::Add(d, edge)`).
+///   - `TwoDistance` — distance + distance2, asymmetric. The first
+///     adjacent face the kernel finds is the reference face for the
+///     primary distance.
+///   - `DistanceAngle` — distance + angle (in degrees) measured FROM
+///     the reference face.
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ChamferMode {
+    #[default]
+    Equal,
+    TwoDistance,
+    DistanceAngle,
+}
+
+/// One target edge for a blend, identified by its two world-space endpoints.
+/// The kernel iterates the input shape's edges and matches the one whose
+/// endpoint pair (in either order) is closest — robust to OCCT renumbering
+/// across booleans, since geometry is the stable identity.
+///
+/// `value` is an optional per-edge override (radius for fillet, distance
+/// for chamfer). When omitted, the feature-level `value` applies.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EdgeRef {
+    pub start: [f64; 3],
+    pub end: [f64; 3],
+    #[serde(default)]
+    pub value: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BuildEdgeBlendParams {
+    #[serde(rename = "featureId", default = "default_feature_id")]
+    pub feature_id: String,
+    /// Input body BREP — the shape we're filleting/chamfering.
+    #[serde(rename = "aBrep")]
+    pub a_brep: String,
+    pub kind: EdgeBlendKind,
+    /// Common parameter (radius for fillet, leg distance for chamfer).
+    pub value: f64,
+    /// Edges to blend, identified by world-space endpoint coordinates.
+    pub edges: Vec<EdgeRef>,
+    /// Chamfer mode. Ignored when `kind` is `Fillet`. Missing field
+    /// defaults to `Equal` so legacy payloads keep working.
+    #[serde(default, rename = "chamferMode")]
+    pub chamfer_mode: ChamferMode,
+    /// Secondary distance for `ChamferMode::TwoDistance`.
+    #[serde(default, rename = "distance2")]
+    pub distance2: Option<f64>,
+    /// Angle in DEGREES for `ChamferMode::DistanceAngle`. Converted to
+    /// radians before being handed to OCCT.
+    #[serde(default)]
+    pub angle: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BuildEdgeBlendResult {
     #[serde(rename = "brepBytes")]
     pub brep_bytes: String,
     pub faces: Vec<FaceMesh>,
     pub topology: Topology,
+    /// Per-solid breakdown — same convention as buildBoolean. Always
+    /// ≥ 1 entry on success; a successful fillet/chamfer of a single
+    /// body yields one solid.
+    #[serde(default)]
+    pub solids: Vec<SolidPart>,
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildPattern (Mirror Feature, Linear Pattern, Circular Pattern)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// One transform in a pattern's transform list. Frontend computes the
+/// list per pattern kind: mirror → 1 entry (kind=mirror); linear → N
+/// entries (kind=translate, one per step beyond the source); circular
+/// → N entries (kind=rotate, one per step). REQ 658.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum PatternTransform {
+    Translate {
+        dx: f64,
+        dy: f64,
+        dz: f64,
+    },
+    Rotate {
+        origin: [f64; 3],
+        direction: [f64; 3],
+        #[serde(rename = "angleRad")]
+        angle_rad: f64,
+    },
+    Mirror {
+        origin: [f64; 3],
+        normal: [f64; 3],
+    },
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BuildPatternParams {
+    #[serde(rename = "featureId", default = "default_feature_id")]
+    pub feature_id: String,
+    /// Source body BREP — the shape getting replicated.
+    #[serde(rename = "aBrep")]
+    pub a_brep: String,
+    /// One transform per copy. Order doesn't matter for the geometric
+    /// result (fuse is commutative) but the kernel applies them in
+    /// list order anyway.
+    pub transforms: Vec<PatternTransform>,
+    /// When true (default), the source body is fused with the copies
+    /// into one body. When false, only the copies are fused — the
+    /// source stays as its own upstream body. Matches SolidWorks's
+    /// "Geometry pattern" / "Merge result" options.
+    #[serde(rename = "mergeWithSource", default = "default_true")]
+    pub merge_with_source: bool,
+}
+
+fn default_true() -> bool { true }
+
+#[derive(Debug, Serialize)]
+pub struct BuildPatternResult {
+    #[serde(rename = "brepBytes")]
+    pub brep_bytes: String,
+    pub faces: Vec<FaceMesh>,
+    pub topology: Topology,
+    #[serde(default)]
+    pub solids: Vec<SolidPart>,
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildShell (Shell — hollow a solid by removing faces + wall thickness)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// One face to remove from the source body during the shell operation.
+/// Matched geometrically by `centroid` + `normal` so the kernel doesn't
+/// depend on stable face IDs across regens. REQ 659.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ShellFaceRef {
+    pub centroid: [f64; 3],
+    pub normal: [f64; 3],
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BuildShellParams {
+    #[serde(rename = "featureId", default = "default_feature_id")]
+    pub feature_id: String,
+    /// Source body BREP — the solid to hollow.
+    #[serde(rename = "aBrep")]
+    pub a_brep: String,
+    /// Faces to remove (the open faces of the resulting thin-walled
+    /// body). At least one must be supplied.
+    pub faces: Vec<ShellFaceRef>,
+    /// Wall thickness in mm. Positive = outward offset (adds material
+    /// outside the body); negative = inward offset (removes material
+    /// from inside). Convention matches OCCT's BRepOffsetAPI_MakeThickSolid.
+    pub thickness: f64,
+    /// Approximation tolerance for the offset surface (mm). 1e-3 mm is
+    /// a sensible default for typical body sizes.
+    #[serde(default = "default_shell_tolerance")]
+    pub tolerance: f64,
+}
+
+fn default_shell_tolerance() -> f64 { 1.0e-3 }
+
+#[derive(Debug, Serialize)]
+pub struct BuildShellResult {
+    #[serde(rename = "brepBytes")]
+    pub brep_bytes: String,
+    pub faces: Vec<FaceMesh>,
+    pub topology: Topology,
+    #[serde(default)]
+    pub solids: Vec<SolidPart>,
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -248,4 +527,104 @@ pub struct BuildRevolveResult {
     pub brep_bytes: String,
     pub faces: Vec<FaceMesh>,
     pub topology: Topology,
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildSweep
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Typed path edge for sweeps. Coordinates are WORLD-space — the backend
+/// has already projected the sketched 2D segments through the path
+/// sketch's plane. Lines/arcs walk in chain order; arcs use the 3-point
+/// (start, mid, end) form that OCCT's GC_MakeArcOfCircle consumes
+/// directly. A single circle path is a one-edge closed curve.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum PathEdge {
+    Line {
+        start: [f64; 3],
+        end: [f64; 3],
+    },
+    Arc {
+        start: [f64; 3],
+        /// A point on the arc between `start` and `end` — the unique
+        /// circular arc through these three points is what OCCT builds.
+        mid: [f64; 3],
+        end: [f64; 3],
+    },
+    Circle {
+        center: [f64; 3],
+        radius: f64,
+        /// Plane normal (the path sketch's normal) — defines the circle's
+        /// orientation in 3D. The reference direction (zero angle) is
+        /// implementation-defined; the swept result is rotationally
+        /// symmetric so it doesn't matter.
+        normal: [f64; 3],
+    },
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BuildSweepParams {
+    #[serde(rename = "featureId", default = "default_feature_id")]
+    pub feature_id: String,
+    /// Outer loop of the closed profile region being swept.
+    pub profile: Vec<ProfileEdge>,
+    /// Inner loops (holes) of the profile region. Each becomes a hole
+    /// running the length of the swept solid. Empty for solid profiles.
+    #[serde(default)]
+    pub holes: Vec<Vec<ProfileEdge>>,
+    /// Workplane the profile is drawn on. The profile face is built here
+    /// and then transported along the path by OCCT's pipe builder.
+    #[serde(rename = "profilePlane")]
+    pub profile_plane: Plane3,
+    /// Path the profile is swept along, in chain order. At least one
+    /// edge is required; the kernel rejects degenerate paths
+    /// (zero-length lines, coincident arc endpoints, etc.).
+    #[serde(rename = "pathEdges")]
+    pub path_edges: Vec<PathEdge>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BuildSweepResult {
+    #[serde(rename = "brepBytes")]
+    pub brep_bytes: String,
+    pub faces: Vec<FaceMesh>,
+    pub topology: Topology,
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// exportStep — combine body BReps into a STEP file
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ExportStepParams {
+    /// Base64-encoded BREP for each body to include in the STEP file.
+    #[serde(default)]
+    pub breps: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExportStepResult {
+    /// STEP file contents as text.
+    pub step: String,
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildLoft — solid lofted through ordered profile sections
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct LoftSection {
+    /// Outer loop of this section's profile (holes not yet supported in loft).
+    pub profile: Vec<ProfileEdge>,
+    /// The sketch plane this section's profile lives on.
+    pub plane: Plane3,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BuildLoftParams {
+    #[serde(rename = "featureId", default = "default_feature_id")]
+    pub feature_id: String,
+    /// Two or more ordered profile sections to loft between.
+    pub sections: Vec<LoftSection>,
 }

@@ -11,14 +11,14 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use glam::{dvec3, DVec3};
 use opencascade::{
-    primitives::{CompoundFace, Face, Shape, Solid},
+    primitives::{CompoundFace, Edge, Face, Shape, Solid, Wire},
     workplane::Workplane,
 };
 use tracing::{info, warn};
 
 use crate::naming::PersistentName;
 use crate::protocol::{
-    BuildExtrudeParams, BuildExtrudeResult, FaceMesh, Plane3, ProfileEdge,
+    BuildExtrudeParams, BuildExtrudeResult, BuildLoftParams, FaceMesh, Plane3, ProfileEdge,
     Topology, TopologyEdge, TopologyVertex,
 };
 
@@ -28,36 +28,56 @@ use crate::protocol::{
 const DEFAULT_CHORD_TOLERANCE: f64 = 0.05;
 
 pub fn build(params: &BuildExtrudeParams) -> Result<BuildExtrudeResult> {
-    let signed_distance = if params.flipped { -params.distance } else { params.distance };
-
-    let workplane = build_workplane(&params.plane);
-
-    // Extrude along the host plane's normal × signed distance.
-    let extrude_dir = dvec3(
-        params.plane.normal[0] * signed_distance,
-        params.plane.normal[1] * signed_distance,
-        params.plane.normal[2] * signed_distance,
-    );
-
-    // Branch on holes. The fast path (no holes) keeps the existing
-    // Face::extrude pipeline so non-annular extrudes stay byte-identical
-    // to schema-version-2 output for the same input. The donut/annular
-    // path builds outer + hole faces and subtracts them into a
-    // CompoundFace, then extrudes that.
-    let shape: Shape = if params.holes.is_empty() {
-        let face = build_profile_face(&workplane, &params.profile)?;
-        let solid: Solid = face.extrude(extrude_dir);
-        solid.into()
-    } else {
-        let compound = build_compound_face_with_holes(&workplane, &params.profile, &params.holes)?;
-        compound.extrude(extrude_dir)
-    };
-
-    let plane_origin = dvec3(params.plane.origin[0], params.plane.origin[1], params.plane.origin[2]);
     let plane_normal = dvec3(params.plane.normal[0], params.plane.normal[1], params.plane.normal[2]);
 
-    let faces_out = tessellate_and_name(&shape, plane_origin, plane_normal, signed_distance, &params.feature_id)?;
+    // Resolve direction 2's signed magnitude up front, so we can fold it
+    // into a SINGLE prism rather than fusing two prisms post-hoc. Fusing
+    // two prisms via Shape::union leaves the shared start face as an
+    // internal seam (OCCT's UnifySameDomain pass doesn't reliably merge
+    // it across the parting plane), which renders as a visible parting
+    // ring around the result. Folding into one prism — translate the
+    // start back by d2, extrude the whole (d1 + d2) length — produces
+    // exactly the same volume with no internal seam.
+    const THROUGH_ALL_FALLBACK: f64 = 1.0e4;
+    let d2_magnitude: f64 = match &params.direction2 {
+        Some(d2) if d2.kind == "throughAll" => THROUGH_ALL_FALLBACK,
+        Some(d2) => d2.distance,
+        None => 0.0,
+    };
+
+    // Direction 1's signed extent along the plane normal.
+    let d1_signed = if params.flipped { -params.distance } else { params.distance };
+    // Direction 2 grows the OPPOSITE way from direction 1.
+    let d2_signed = if params.flipped { d2_magnitude } else { -d2_magnitude };
+    // Translate the start by (start_offset + d2_signed) along the normal,
+    // then extrude by the TOTAL length in direction-1's direction. The
+    // total length is |d1| + |d2| (the two pieces stacked), signed by
+    // direction 1.
+    let effective_start = params.start_offset + d2_signed;
+    let total_signed = d1_signed - d2_signed;  // |d1| + |d2| with d1's sign
+
+    let mut offset_plane = params.plane.clone();
+    if effective_start != 0.0 {
+        offset_plane.origin = [
+            params.plane.origin[0] + plane_normal.x * effective_start,
+            params.plane.origin[1] + plane_normal.y * effective_start,
+            params.plane.origin[2] + plane_normal.z * effective_start,
+        ];
+    }
+    let workplane = build_workplane(&offset_plane);
+
+    let extrude_dir = dvec3(
+        plane_normal.x * total_signed,
+        plane_normal.y * total_signed,
+        plane_normal.z * total_signed,
+    );
+    let shape: Shape = build_prism(&workplane, &params.profile, &params.holes, extrude_dir)?;
+
+    let plane_origin = dvec3(params.plane.origin[0], params.plane.origin[1], params.plane.origin[2]);
+    // Naming continues to reference the original sketch-plane origin and
+    // direction-1's signed distance — same persistent ids across saves.
     let topology = extract_topology(&shape);
+    let faces_out = tessellate_and_name(&shape, plane_origin, plane_normal, d1_signed, &params.feature_id, Some(&topology))?;
     let brep_bytes = serialize_brep(&shape);
 
     Ok(BuildExtrudeResult {
@@ -65,6 +85,62 @@ pub fn build(params: &BuildExtrudeParams) -> Result<BuildExtrudeResult> {
         faces: faces_out,
         topology,
     })
+}
+
+/// `buildLoft` — loft a solid through two or more ordered profile sections.
+/// Each section's profile is built into a face via the same path extrude uses,
+/// then its outer wire feeds OCCT `BRepOffsetAPI_ThruSections` (Solid::loft).
+/// Result shape matches BuildExtrudeResult so the backend composer is
+/// indifferent to which op produced the body.
+pub fn build_loft(params: &BuildLoftParams) -> Result<BuildExtrudeResult> {
+    if params.sections.len() < 2 {
+        return Err(anyhow!(
+            "loft needs at least 2 profile sections, got {}",
+            params.sections.len()
+        ));
+    }
+    let mut wires: Vec<opencascade::primitives::Wire> = Vec::with_capacity(params.sections.len());
+    for (i, sec) in params.sections.iter().enumerate() {
+        let wp = build_workplane(&sec.plane);
+        let face = build_profile_face(&wp, &sec.profile)
+            .with_context(|| format!("loft section {i}"))?;
+        wires.push(face.outer_wire());
+    }
+    let solid: Solid = Solid::loft(wires.iter());
+    let shape: Shape = solid.into();
+
+    // Naming / orientation reference the FIRST section's plane.
+    let p0 = &params.sections[0].plane;
+    let plane_origin = dvec3(p0.origin[0], p0.origin[1], p0.origin[2]);
+    let plane_normal = dvec3(p0.normal[0], p0.normal[1], p0.normal[2]);
+    let topology = extract_topology(&shape);
+    let faces_out =
+        tessellate_and_name(&shape, plane_origin, plane_normal, 0.0, &params.feature_id, Some(&topology))?;
+    let brep_bytes = serialize_brep(&shape);
+    Ok(BuildExtrudeResult {
+        brep_bytes: BASE64.encode(&brep_bytes),
+        faces: faces_out,
+        topology,
+    })
+}
+
+/// Single-direction prism builder shared by direction 1 and direction 2.
+/// Branches on holes the same way the original `build` did; pulled out
+/// so direction 2 doesn't duplicate the logic. */
+fn build_prism(
+    workplane: &Workplane,
+    profile: &[ProfileEdge],
+    holes: &[Vec<ProfileEdge>],
+    extrude_dir: glam::DVec3,
+) -> Result<Shape> {
+    if holes.is_empty() {
+        let face = build_profile_face(workplane, profile)?;
+        let solid: Solid = face.extrude(extrude_dir);
+        Ok(solid.into())
+    } else {
+        let compound = build_compound_face_with_holes(workplane, profile, holes)?;
+        Ok(compound.extrude(extrude_dir))
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -108,6 +184,17 @@ pub fn build_profile_face(workplane: &Workplane, profile: &[ProfileEdge]) -> Res
         }
     }
 
+    // Glyph (text) profiles carry Bézier edges, which the 2D sketch DSL can't
+    // express. Build those via OCCT `Edge::bezier` + `Wire::from_edges` so each
+    // curve becomes ONE smooth face instead of N tessellated chords. Handled
+    // BEFORE the chord-polygon validation below — those guards (min-3 verts,
+    // collinear corners, zero-length edges) are tuned for straight-edge
+    // profiles and would falsely reject valid glyph contours. Lines/arcs in a
+    // bezier loop build uniformly there.
+    if profile.iter().any(|e| matches!(e, ProfileEdge::Bezier { .. })) {
+        return build_bezier_profile_face(workplane, profile);
+    }
+
     // Chord polygon — vertex per edge's start. Used for the orientation/area
     // check and the validate_polygon defensive guards. With arcs in the loop
     // this is an approximation, but a fine one for determining the loop's
@@ -116,6 +203,7 @@ pub fn build_profile_face(workplane: &Workplane, profile: &[ProfileEdge]) -> Res
     let mut polygon: Vec<(f64, f64)> = profile.iter().map(|e| match e {
         ProfileEdge::Line { start, .. } => (start.x, start.y),
         ProfileEdge::Arc  { start, .. } => (start.x, start.y),
+        ProfileEdge::Bezier { points } => (points[0].x, points[0].y),
         ProfileEdge::Circle { .. } => unreachable!("rejected above"),
     }).collect();
     if polygon.len() < 3 {
@@ -212,6 +300,9 @@ pub fn build_profile_face(workplane: &Workplane, profile: &[ProfileEdge]) -> Res
                 sketch = sketch.three_point_arc((mid_x, mid_y), (ex, ey));
                 cursor = (ex, ey);
             }
+            // Profiles containing Bézier edges are built by the Edge/Wire path
+            // above (early return), so the 2D sketch DSL never sees one.
+            ProfileEdge::Bezier { .. } => unreachable!("bezier profiles use the Edge/Wire path"),
             ProfileEdge::Circle { .. } => unreachable!("rejected above"),
         }
     }
@@ -221,6 +312,121 @@ pub fn build_profile_face(workplane: &Workplane, profile: &[ProfileEdge]) -> Res
     // `wire()` collects the closed chain. `close()` would add a tautological
     // zero-length segment that OCCT rejects.
     let wire = sketch.wire();
+    Ok(Face::from_wire(&wire))
+}
+
+/// Build a planar face for a profile containing Bézier edges (text glyphs).
+/// Each curve becomes one smooth OCCT edge via `Edge::bezier`, so a letter is
+/// a handful of faces instead of hundreds of tessellated chords. Orientation
+/// comes from the concatenated control-point polygon (its signed-area sign
+/// matches the curve loop's); the chord-polygon validation in
+/// `build_profile_face` is intentionally skipped — glyph contours legitimately
+/// contain short or collinear segments those guards would reject.
+fn build_bezier_profile_face(workplane: &Workplane, profile: &[ProfileEdge]) -> Result<Face> {
+    const MIN_EDGE_LEN_SQ: f64 = 1.0e-10;
+
+    // Orientation from every control point in loop order.
+    let mut orient: Vec<(f64, f64)> = Vec::new();
+    for e in profile {
+        match e {
+            ProfileEdge::Line { start, .. } => orient.push((start.x, start.y)),
+            ProfileEdge::Arc { start, .. } => orient.push((start.x, start.y)),
+            ProfileEdge::Bezier { points } => {
+                for p in points {
+                    orient.push((p.x, p.y));
+                }
+            }
+            ProfileEdge::Circle { .. } => unreachable!("circles rejected above"),
+        }
+    }
+    let reverse = signed_polygon_area(&orient) < 0.0;
+    let ordered: Vec<&ProfileEdge> = if reverse {
+        profile.iter().rev().collect()
+    } else {
+        profile.iter().collect()
+    };
+
+    // Map a 2D workplane point onto the plane in world space. `Workplane`
+    // doesn't expose `transform_point`, so compose it from the basis accessors:
+    // world = origin + x_dir·x + y_dir·y.
+    let wp_origin = workplane.origin();
+    let wp_x = workplane.x_dir();
+    let wp_y = workplane.y_dir();
+    let to_world = |x: f64, y: f64| wp_origin + wp_x * x + wp_y * y;
+    let mut occ_edges: Vec<Edge> = Vec::new();
+    let mut cursor = traversal_start(ordered[0], reverse);
+    for edge in &ordered {
+        match **edge {
+            ProfileEdge::Line { start, end } => {
+                let (ex, ey) = if reverse { (start.x, start.y) } else { (end.x, end.y) };
+                if (ex - cursor.0).powi(2) + (ey - cursor.1).powi(2) < MIN_EDGE_LEN_SQ {
+                    continue;
+                }
+                occ_edges.push(Edge::segment(to_world(cursor.0, cursor.1), to_world(ex, ey)));
+                cursor = (ex, ey);
+            }
+            ProfileEdge::Arc { center, radius, start_angle, end_angle, ccw, start, end } => {
+                let (sa, ea, sweep_ccw, ex, ey) = if reverse {
+                    (end_angle, start_angle, !ccw, start.x, start.y)
+                } else {
+                    (start_angle, end_angle, ccw, end.x, end.y)
+                };
+                if (ex - cursor.0).powi(2) + (ey - cursor.1).powi(2) < MIN_EDGE_LEN_SQ {
+                    continue;
+                }
+                let mut sweep = ea - sa;
+                if sweep_ccw {
+                    while sweep <= 0.0 { sweep += std::f64::consts::TAU; }
+                } else {
+                    while sweep >= 0.0 { sweep -= std::f64::consts::TAU; }
+                }
+                let mid_angle = sa + sweep / 2.0;
+                let mid_x = center.x + radius * mid_angle.cos();
+                let mid_y = center.y + radius * mid_angle.sin();
+                occ_edges.push(Edge::arc(
+                    to_world(cursor.0, cursor.1),
+                    to_world(mid_x, mid_y),
+                    to_world(ex, ey),
+                ));
+                cursor = (ex, ey);
+            }
+            ProfileEdge::Bezier { ref points } => {
+                if points.len() < 2 {
+                    continue;
+                }
+                let raw: Vec<DVec3> = if reverse {
+                    points.iter().rev().map(|p| to_world(p.x, p.y)).collect()
+                } else {
+                    points.iter().map(|p| to_world(p.x, p.y)).collect()
+                };
+                // Drop coincident consecutive control points (repeated poles).
+                // A repeated pole makes a cusped/degenerate Bézier whose
+                // linear-extrusion side surface BRepMesh fails to mesh — the
+                // most common "BRepMesh failed on a face" for glyph profiles.
+                let mut ctrl: Vec<DVec3> = Vec::with_capacity(raw.len());
+                for p in raw {
+                    if ctrl.last().map_or(true, |q: &DVec3| (p - *q).length_squared() > MIN_EDGE_LEN_SQ) {
+                        ctrl.push(p);
+                    }
+                }
+                let endp = if reverse { &points[0] } else { &points[points.len() - 1] };
+                // Collapsed to a point → skip entirely (cursor unchanged, since
+                // a degenerate segment has coincident endpoints anyway).
+                if ctrl.len() >= 2 {
+                    occ_edges.push(Edge::bezier(ctrl));
+                }
+                cursor = (endp.x, endp.y);
+            }
+            ProfileEdge::Circle { .. } => unreachable!("circles rejected above"),
+        }
+    }
+    if occ_edges.len() < 2 {
+        return Err(anyhow!(
+            "text/bezier profile produced too few edges ({})",
+            occ_edges.len()
+        ));
+    }
+    let wire = Wire::from_edges(&occ_edges);
     Ok(Face::from_wire(&wire))
 }
 
@@ -254,6 +460,11 @@ fn traversal_start(edge: &ProfileEdge, reverse: bool) -> (f64, f64) {
         ProfileEdge::Line { start, end } |
         ProfileEdge::Arc  { start, end, .. } => {
             if reverse { (end.x, end.y) } else { (start.x, start.y) }
+        }
+        ProfileEdge::Bezier { points } => {
+            let p = if reverse { points.last() } else { points.first() };
+            let p = p.expect("bezier edge has no control points");
+            (p.x, p.y)
         }
         ProfileEdge::Circle { .. } => unreachable!(),
     }
@@ -367,6 +578,7 @@ fn tessellate_and_name(
     plane_normal: DVec3,
     signed_distance: f64,
     feature_id: &str,
+    topology: Option<&Topology>,
 ) -> Result<Vec<FaceMesh>> {
     // Pre-pass: classify each OCCT face by where its centroid sits along the
     // normal axis. Cap-bottom = axial ≈ 0; cap-top = axial ≈ signed_distance;
@@ -398,6 +610,30 @@ fn tessellate_and_name(
         order_a.cmp(&order_b).then_with(|| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
     });
 
+    // Pre-build edge_id_by_key from topology so each face's boundary
+    // can be resolved without centroid-match guessing. The OCCT face is
+    // right here in the loop, so this is exact: face.edges() → key →
+    // topology edge id.
+    let id_by_key: std::collections::HashMap<[[i64; 3]; 3], String> = topology
+        .map(|t| {
+            t.edges.iter().map(|e| {
+                fn quantize(v: [f64; 3]) -> [i64; 3] {
+                    const STEP: f64 = 1.0e6;
+                    [(v[0] * STEP).round() as i64, (v[1] * STEP).round() as i64, (v[2] * STEP).round() as i64]
+                }
+                let start = quantize(e.endpoints[0]);
+                let end = quantize(e.endpoints[1]);
+                let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+                let mid = if let Some(poly) = &e.polyline {
+                    if poly.len() >= 3 { quantize(poly[poly.len() / 2]) } else { lo }
+                } else {
+                    lo
+                };
+                ([lo, mid, hi], e.id.clone())
+            }).collect()
+        })
+        .unwrap_or_default();
+
     let mut side_index = 0_u32;
     let mut out = Vec::with_capacity(classified.len());
     for (kind, face, _axial, _angle) in classified {
@@ -416,6 +652,15 @@ fn tessellate_and_name(
             }
         };
         let id = persistent.encode();
+        let mut boundary_edge_ids: Vec<String> = if id_by_key.is_empty() {
+            Vec::new()
+        } else {
+            face.edges()
+                .filter_map(|e| id_by_key.get(&crate::ops::shape_io::edge_geom_key(&e)).cloned())
+                .collect()
+        };
+        boundary_edge_ids.sort();
+        boundary_edge_ids.dedup();
         out.push(FaceMesh {
             face_id: id.clone(),
             persistent_name: id,
@@ -423,6 +668,7 @@ fn tessellate_and_name(
             positions,
             normals,
             indices,
+            boundary_edge_ids,
         });
     }
     Ok(out)
@@ -493,12 +739,22 @@ fn extract_topology(shape: &Shape) -> Topology {
         [(v.x * STEP).round() as i64, (v.y * STEP).round() as i64, (v.z * STEP).round() as i64]
     }
 
+    // Tangent-edge detection: see shape_io::detect_tangent_edges for the
+    // rationale. Seam-class entries get dropped entirely; Tangent-class
+    // entries remain in topology but flagged so the viewer dashes them.
+    let classified = crate::ops::shape_io::detect_tangent_edges_pub(shape);
+
     for (e_idx, edge) in shape.edges().enumerate() {
         let start = edge.start_point();
         let end = edge.end_point();
+        let key = crate::ops::shape_io::edge_geom_key(&edge);
+        let kind = classified.get(&key).copied();
+        if matches!(kind, Some(crate::ops::shape_io::TangentKind::Seam)) {
+            continue;
+        }
         for p in [start, end] {
-            let key = quantize(p);
-            if seen_v.insert(key) {
+            let vkey = quantize(p);
+            if seen_v.insert(vkey) {
                 vertices.push(TopologyVertex {
                     id: format!("v{}", v_id_counter),
                     position: [p.x, p.y, p.z],
@@ -506,10 +762,14 @@ fn extract_topology(shape: &Shape) -> Topology {
                 v_id_counter += 1;
             }
         }
+        let is_tangent = matches!(kind, Some(crate::ops::shape_io::TangentKind::Tangent));
+        let (is_straight, polyline) = crate::ops::shape_io::sample_edge_curve(&edge);
         edges.push(TopologyEdge {
             id: format!("e{}", e_idx),
-            is_straight: true,  // TODO Phase 1: edge.edge_type() match → curve metadata
+            is_straight,
+            is_tangent,
             endpoints: [[start.x, start.y, start.z], [end.x, end.y, end.z]],
+            polyline,
         });
     }
     Topology { vertices, edges }

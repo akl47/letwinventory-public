@@ -31,6 +31,12 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY tests ./tests
+# Vendored opencascade + opencascade-sys — patched to expose OCCT's
+# closed-revolution constructor (no-angle BRepPrimAPI_MakeRevol overload).
+# Upstream opencascade-rs always passes an angle (2π for "full"), which
+# OCCT treats as a partial revolve and leaves the profile edges as
+# visible seams. See vendor/opencascade-rs/crates/opencascade-sys/src/b_rep_prim_api.rs.
+COPY vendor ./vendor
 
 # BuildKit cache mounts: persist Cargo's downloaded crates + git deps +
 # the `target/` incremental compilation directory across builds. After
