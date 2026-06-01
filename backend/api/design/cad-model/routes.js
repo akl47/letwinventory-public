@@ -31,6 +31,10 @@ router.post('/:id/switch-branch', checkToken, checkPermission('cad', 'write'), c
 router.delete('/:id/branches/:name', checkToken, checkPermission('cad', 'write'), controller.archiveBranch);
 router.post('/:id/cherry-pick', checkToken, checkPermission('cad', 'write'), controller.cherryPick);
 
+// VCS Phase 3: structural + 3D diff between two commits.
+router.get('/:id/commits/:a/diff/:b', checkToken, checkPermission('cad', 'read'), controller.getCommitDiff);
+router.post('/:id/commits/:a/diff/:b/regen', checkToken, checkPermission('cad', 'read'), controller.getBodyDiff3D);
+
 // Phase 1 — server-side regeneration. Walks the feature tree, hits the
 // Postgres-backed BRep cache, falls through to the Rust kernel on miss.
 // Returns tessellated face meshes for the viewer to render.

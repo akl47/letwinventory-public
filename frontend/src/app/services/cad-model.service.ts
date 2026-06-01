@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { CadModel, CadBranch, CadCommit, CadModelHistoryEntry, PartWithCadSummary } from '../models/cad-model.model';
+import { CadModel, CadBranch, CadCommit, CadCommitDiff, CadBodyDiff, CadModelHistoryEntry, PartWithCadSummary } from '../models/cad-model.model';
 import { environment } from '../../environments/environment';
 
 /** Server-side regeneration response (Phase 1 — see backend cadRegenService.js). */
@@ -141,6 +141,18 @@ export class CadModelService {
   /** Cherry-pick a single feature from a source commit into the working copy. */
   cherryPick(id: number, sourceCommit: string, featureId: string): Observable<CadModel> {
     return this.http.post<CadModel>(`${this.apiUrl}/${id}/cherry-pick`, { sourceCommit, featureId });
+  }
+
+  // ── VCS: diff (Phase 3) ─────────────────────────────────────────────────────
+
+  /** Structural diff between two commits. */
+  commitDiff(id: number, a: string, b: string): Observable<CadCommitDiff> {
+    return this.http.get<CadCommitDiff>(`${this.apiUrl}/${id}/commits/${a}/diff/${b}`);
+  }
+
+  /** Body-level 3D diff between two commits (regenerates each). */
+  bodyDiff3D(id: number, a: string, b: string): Observable<CadBodyDiff> {
+    return this.http.post<CadBodyDiff>(`${this.apiUrl}/${id}/commits/${a}/diff/${b}/regen`, {});
   }
 
   /** Download the model's bodies as a STEP file (returns the file text). The

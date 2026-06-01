@@ -15,7 +15,7 @@ import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import { CadModelService } from '../../../services/cad-model.service';
 import { InventoryService } from '../../../services/inventory.service';
 import { Part } from '../../../models/part.model';
-import { CadModel, CadCommit, CadBranch } from '../../../models/cad-model.model';
+import { CadModel, CadCommit, CadBranch, CadCommitDiff } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { CadStreamService, type CadStreamEvent } from '../../../services/cad-stream.service';
@@ -3189,6 +3189,36 @@ interface HistorySnapshot {
                     <button class="btn" (click)="onCherryPick()">Cherry-pick…</button>
                   </div>
                 </div>
+                <button class="btn" data-testid="action-compare"
+                        *ngIf="commits().length >= 2" (click)="toggleCompare()">Compare</button>
+                <div class="vcs-commits-panel" data-testid="vcs-compare-panel" *ngIf="showCompare()">
+                  <div class="vcs-commits-head">
+                    <span>Compare commits</span>
+                    <button class="vcs-commits-close" (click)="toggleCompare()">×</button>
+                  </div>
+                  <div class="vcs-compare-pickers">
+                    <select [ngModel]="diffA()" (ngModelChange)="diffA.set($event)">
+                      <option [ngValue]="null">— from —</option>
+                      <option *ngFor="let c of commits()" [ngValue]="c.hash">{{ shortHash(c.hash) }} · {{ c.message }}</option>
+                    </select>
+                    <select [ngModel]="diffB()" (ngModelChange)="diffB.set($event)">
+                      <option [ngValue]="null">— to —</option>
+                      <option *ngFor="let c of commits()" [ngValue]="c.hash">{{ shortHash(c.hash) }} · {{ c.message }}</option>
+                    </select>
+                    <button class="btn" [disabled]="!diffA() || !diffB()" (click)="runDiff()">Diff</button>
+                  </div>
+                  <ul class="vcs-commits-list" *ngIf="diffResult()">
+                    <li *ngFor="let e of diffResult()!.entries"
+                        [class.diff-added]="e.status==='added'"
+                        [class.diff-removed]="e.status==='removed'"
+                        [class.diff-modified]="e.status==='modified'">
+                      <span class="vcs-commit-msg">{{ e.name }}</span>
+                      <span class="vcs-commit-hash">{{ e.status }}</span>
+                      <button class="vcs-mini" *ngIf="e.name.startsWith('feature:') && (e.status==='added' || e.status==='modified')"
+                              (click)="cherryPickEntry(e.name)">cherry-pick</button>
+                    </li>
+                  </ul>
+                </div>
                 <button class="btn btn-primary"
                         data-testid="action-release"
                         *ngIf="model() && canApprove()"
@@ -3652,6 +3682,11 @@ interface HistorySnapshot {
     .vcs-cur { opacity: 0.6; font-style: italic; }
     .vcs-mini { background: rgba(255,255,255,0.1); border: none; color: #ddd; font-size: 11px; padding: 1px 7px; border-radius: 4px; cursor: pointer; }
     .vcs-branch-actions { display: flex; gap: 8px; margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; }
+    .vcs-compare-pickers { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+    .vcs-compare-pickers select { flex: 1; min-width: 0; background: rgba(255,255,255,0.08); color: #ddd; border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; font-size: 11px; padding: 2px; }
+    .vcs-commits-list li.diff-added .vcs-commit-hash { color: #81c784; }
+    .vcs-commits-list li.diff-removed .vcs-commit-hash { color: #e57373; }
+    .vcs-commits-list li.diff-modified .vcs-commit-hash { color: #ffb74d; }
   `],
 })
 export class CadEditorComponent implements OnInit, OnDestroy {
@@ -5173,6 +5208,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   showCommits = signal(false);
   branches = signal<CadBranch[]>([]);      // Phase 2 variant branches
   showBranches = signal(false);
+  showCompare = signal(false);             // Phase 3 commit compare
+  diffA = signal<string | null>(null);
+  diffB = signal<string | null>(null);
+  diffResult = signal<CadCommitDiff | null>(null);
   isDirty = computed(() => !!this.model()?.dirty);
   lockHolderId = computed(() => this.model()?.lockedByUserID ?? null);
   isLockedByMe = computed(() => {
@@ -11609,6 +11648,30 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!featureId) return;
     this.cadApi.cherryPick(m.id, sourceCommit, featureId).subscribe({
       next: updated => { this.bootstrap(updated); this.loadBranches(); },
+      error: err => this.errors.showError(err?.error?.error || 'Cherry-pick failed'),
+    });
+  }
+
+  // ── VCS: compare commits (Phase 3) ──────────────────────────────────────────
+
+  toggleCompare() { this.showCompare.update(v => !v); }
+
+  runDiff() {
+    const m = this.model(); const a = this.diffA(); const b = this.diffB();
+    if (!m || !a || !b) return;
+    this.cadApi.commitDiff(m.id, a, b).subscribe({
+      next: r => this.diffResult.set(r),
+      error: err => this.errors.showError(err?.error?.error || 'Diff failed'),
+    });
+  }
+
+  /** Cherry-pick a changed feature (from the diff's "to" commit) into the copy. */
+  cherryPickEntry(name: string) {
+    const m = this.model(); const b = this.diffB();
+    if (!m || !b || !name.startsWith('feature:')) return;
+    const featureId = name.slice('feature:'.length);
+    this.cadApi.cherryPick(m.id, b, featureId).subscribe({
+      next: updated => { this.bootstrap(updated); this.loadCommits(); this.loadBranches(); },
       error: err => this.errors.showError(err?.error?.error || 'Cherry-pick failed'),
     });
   }

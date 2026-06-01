@@ -3,6 +3,7 @@ const cadRegenService = require('../../../services/cadRegenService');
 const cadStreamService = require('../../../services/cadStreamService');
 const cadVcsService = require('../../../services/vcs/cadVcsService');
 const cadBranchService = require('../../../services/vcs/cadBranchService');
+const cadDiffService = require('../../../services/vcs/cadDiffService');
 const vcsService = require('../../../services/vcs/vcsService');
 const { KernelDisconnected, KernelRpcError } = require('../../../services/cadKernelClient');
 
@@ -336,6 +337,28 @@ module.exports = {
     if (!sourceCommit || !featureId) return res.status(400).json({ error: 'sourceCommit and featureId are required' });
     try { const r = await cadBranchService.cherryPick(model, sourceCommit, featureId, req.user.id); return res.json(r.model); }
     catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+  },
+
+  // ── VCS: diff (Phase 3) ─────────────────────────────────────────────────────
+
+  async getCommitDiff(req, res) {
+    const model = await fetchActiveModel(Number(req.params.id));
+    if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    try {
+      const repo = await cadVcsService.repoForModel(model);
+      return res.json(await cadDiffService.commitDiff(repo, req.params.a, req.params.b));
+    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+  },
+
+  async getBodyDiff3D(req, res) {
+    const model = await fetchActiveModel(Number(req.params.id));
+    if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    try {
+      return res.json(await cadDiffService.bodyDiff3D(model, req.params.a, req.params.b, {}));
+    } catch (err) {
+      if (err instanceof KernelDisconnected) return res.status(503).json({ error: err.message });
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
   },
 
   // Phase 1 — server-side regen. Walks the feature tree, looks up each

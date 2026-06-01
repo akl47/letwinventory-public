@@ -33,6 +33,18 @@ export interface CadBranch {
   targetHash: string;
 }
 
+/** One entry in a structural diff between two commits. */
+export interface CadDiffEntry {
+  name: string;
+  kind: string;
+  status: 'added' | 'removed' | 'modified' | 'unchanged';
+  aHash: string | null;
+  bHash: string | null;
+  paramDiff?: { changed: { key: string; a: unknown; b: unknown }[]; added: string[]; removed: string[] };
+}
+export interface CadCommitDiff { commitA: string; commitB: string; entries: CadDiffEntry[]; }
+export interface CadBodyDiff { commitA: string; commitB: string; bodies: { id: string; status: string }[]; }
+
 /** A VCS commit on a CAD model's branch (newest-first in the log). */
 export interface CadCommit {
   hash: string;
