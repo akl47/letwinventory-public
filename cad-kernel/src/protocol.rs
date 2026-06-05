@@ -610,6 +610,28 @@ pub struct ExportStepResult {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// exportStl — combine body BReps into a (binary) STL file
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ExportStlParams {
+    /// Base64-encoded BREP for each body to include in the STL file.
+    #[serde(default)]
+    pub breps: Vec<String>,
+    /// Mesh chord tolerance (mm). Defaults to 0.01.
+    #[serde(default = "default_stl_tolerance")]
+    pub tolerance: f64,
+}
+fn default_stl_tolerance() -> f64 { 0.01 }
+
+#[derive(Debug, Serialize)]
+pub struct ExportStlResult {
+    /// Binary STL file contents, base64-encoded.
+    #[serde(rename = "stlBase64")]
+    pub stl_base64: String,
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // buildLoft — solid lofted through ordered profile sections
 // ────────────────────────────────────────────────────────────────────────────
 

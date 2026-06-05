@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { CadModel, CadBranch, CadCommit, CadCommitDiff, CadBodyDiff, CadWorkflow, CadModelHistoryEntry, PartWithCadSummary } from '../models/cad-model.model';
+import { CadModel, CadBranch, CadCommit, CadCommitDiff, CadBodyDiff, CadFaceDiff, CadWorkflow, CadVersionGraph, CadCommitGeometry, CadDefaultView, CadModelHistoryEntry, PartWithCadSummary } from '../models/cad-model.model';
 import { environment } from '../../environments/environment';
 
 /** Server-side regeneration response (Phase 1 — see backend cadRegenService.js). */
@@ -72,6 +72,31 @@ export class CadModelService {
     return this.http.post<{ commitHash: string; revision: string; model: CadModel }>(`${this.apiUrl}/${id}/release`, {});
   }
 
+  /** Development release (self-service): freeze + tag the numeric revision + lock. */
+  devRelease(id: number): Observable<{ commitHash: string; revision: string; model: CadModel }> {
+    return this.http.post<{ commitHash: string; revision: string; model: CadModel }>(`${this.apiUrl}/${id}/dev-release`, {});
+  }
+
+  /** Create the next numeric revision + a fresh editable model copy. Returns it. */
+  newRevision(id: number): Observable<CadModel> {
+    return this.http.post<CadModel>(`${this.apiUrl}/${id}/new-revision`, {});
+  }
+
+  /** Promote a dev-released, approved design to a production (letter) revision. */
+  productionRelease(id: number): Observable<{ revision: string; prodModelID: number; model: CadModel }> {
+    return this.http.post<{ revision: string; prodModelID: number; model: CadModel }>(`${this.apiUrl}/${id}/production-release`, {});
+  }
+
+  /** Download a released revision's frozen STEP (text). */
+  exportReleaseStep(id: number): Observable<string> {
+    return this.http.get(`${this.apiUrl}/${id}/release/step`, { responseType: 'text' });
+  }
+
+  /** Download a released revision's frozen STL (binary blob). */
+  exportReleaseStl(id: number): Observable<Blob> {
+    return this.http.get(`${this.apiUrl}/${id}/release/stl`, { responseType: 'blob' });
+  }
+
   getHistory(id: number): Observable<CadModelHistoryEntry[]> {
     return this.http.get<CadModelHistoryEntry[]>(`${this.apiUrl}/${id}/history`);
   }
@@ -85,8 +110,10 @@ export class CadModelService {
    * @param rollbackBeforeIndex when set, the backend skips features at
    *   or past this index entirely (no kernel work, no cache lookups).
    *   Mirrors the frontend's rollback-bar signal. */
-  regenerate(id: number, rollbackBeforeIndex: number | null = null): Observable<RegenerateResponse> {
-    const body = rollbackBeforeIndex !== null ? { rollbackBeforeIndex } : {};
+  regenerate(id: number, rollbackBeforeIndex: number | null = null, regenId?: string): Observable<RegenerateResponse> {
+    const body: { rollbackBeforeIndex?: number; regenId?: string } = {};
+    if (rollbackBeforeIndex !== null) body.rollbackBeforeIndex = rollbackBeforeIndex;
+    if (regenId) body.regenId = regenId;
     return this.http.post<RegenerateResponse>(`${this.apiUrl}/${id}/regenerate`, body);
   }
 
@@ -97,14 +124,28 @@ export class CadModelService {
     return this.http.post<CadModel>(`${this.apiUrl}/${id}/checkout`, {});
   }
 
-  /** Commit the working copy with a message; returns the new commit hash. */
-  checkin(id: number, message: string): Observable<{ commitHash: string; model: CadModel }> {
-    return this.http.post<{ commitHash: string; model: CadModel }>(`${this.apiUrl}/${id}/checkin`, { message });
+  /** Commit the working copy with a message; returns the new commit hash. An
+   * optional low-res PNG data URL (captured from the default view) is stored
+   * with the commit for the version-history preview. */
+  checkin(id: number, message: string, thumbnail?: string | null): Observable<{ commitHash: string; model: CadModel }> {
+    return this.http.post<{ commitHash: string; model: CadModel }>(`${this.apiUrl}/${id}/checkin`, { message, thumbnail: thumbnail || undefined });
   }
 
-  /** Release the lock the current user holds. */
-  releaseLock(id: number): Observable<CadModel> {
-    return this.http.post<CadModel>(`${this.apiUrl}/${id}/release-lock`, {});
+  /** Persist the model's default camera view (not lock-gated). */
+  setDefaultView(id: number, view: CadDefaultView): Observable<CadModel> {
+    return this.http.post<CadModel>(`${this.apiUrl}/${id}/default-view`, view);
+  }
+
+  /** The stored low-res commit thumbnail as a Blob (via the auth interceptor),
+   * for use as an `<img>` poster. 404s when no thumbnail was captured. */
+  getCommitThumbnail(id: number, hash: string): Observable<Blob> {
+    return this.http.get(`${this.apiUrl}/${id}/commits/${hash}/thumbnail`, { responseType: 'blob' });
+  }
+
+  /** Undo checkout: discard uncommitted changes, roll back to the last
+   * check-in, and release the lock. */
+  undoCheckout(id: number): Observable<CadModel> {
+    return this.http.post<CadModel>(`${this.apiUrl}/${id}/undo-checkout`, {});
   }
 
   /** Admin override: force-release whoever holds the lock (needs cad.approve). */
@@ -115,6 +156,30 @@ export class CadModelService {
   /** Commit history for the model's branch, newest first. */
   getCommits(id: number): Observable<CadCommit[]> {
     return this.http.get<CadCommit[]>(`${this.apiUrl}/${id}/commits`);
+  }
+
+  /** Full version graph (all branches) for the part's CAD history view. */
+  getGraph(id: number): Observable<CadVersionGraph> {
+    return this.http.get<CadVersionGraph>(`${this.apiUrl}/${id}/graph`);
+  }
+
+  /** A single commit's face meshes for the lightweight 3D preview. */
+  getCommitGeometry(id: number, hash: string): Observable<CadCommitGeometry> {
+    return this.http.get<CadCommitGeometry>(`${this.apiUrl}/${id}/commits/${hash}/geometry`);
+  }
+
+  /** Real CAD-kernel health probe (pings the Rust/OCCT kernel). Drives the
+   * editor's accurate "kernel offline" state — independent of the best-effort
+   * WebSocket progress stream. Always resolves 200; `online` carries the truth. */
+  getKernelStatus(): Observable<{ online: boolean; namingVersion?: number }> {
+    return this.http.get<{ online: boolean; namingVersion?: number }>(`${this.apiUrl}/kernel/status`);
+  }
+
+  /** A historical commit's CAD document (featureTree/sketchDoc/equations),
+   * reconstructed from the object store. Powers the editor's read-only
+   * "Open version" view (REQ 743) without touching the working copy. */
+  getCommitDoc(id: number, hash: string): Observable<{ featureTree: unknown; sketchDoc: unknown; equations: unknown; hash: string; message: string | null }> {
+    return this.http.get<{ featureTree: unknown; sketchDoc: unknown; equations: unknown; hash: string; message: string | null }>(`${this.apiUrl}/${id}/commits/${hash}/doc`);
   }
 
   // ── VCS: variant branches + cherry-pick (Phase 2) ───────────────────────────
@@ -143,6 +208,22 @@ export class CadModelService {
     return this.http.post<CadModel>(`${this.apiUrl}/${id}/cherry-pick`, { sourceCommit, featureId });
   }
 
+  /** Rebase a behind-main draft branch onto main's head (bumps its draft rev). */
+  rebase(id: number): Observable<CadModel> {
+    return this.http.post<CadModel>(`${this.apiUrl}/${id}/rebase`, {});
+  }
+
+  /** Merge main into the current branch, applying the selected branch features + sketches. */
+  reconcile(id: number, featureIds: string[], sketchIds: string[] = []): Observable<CadModel> {
+    return this.http.post<CadModel>(`${this.apiUrl}/${id}/reconcile`, { featureIds, sketchIds });
+  }
+
+  /** Geometry of the hypothetical merge result (main + selected branch features +
+   * sketches), regenerated without committing — for the merge tool's 3D preview. */
+  reconcilePreview(id: number, branch: string, featureIds: string[], sketchIds: string[] = []): Observable<CadCommitGeometry> {
+    return this.http.post<CadCommitGeometry>(`${this.apiUrl}/${id}/reconcile/preview`, { branch, featureIds, sketchIds });
+  }
+
   // ── VCS: diff (Phase 3) ─────────────────────────────────────────────────────
 
   /** Structural diff between two commits. */
@@ -150,9 +231,19 @@ export class CadModelService {
     return this.http.get<CadCommitDiff>(`${this.apiUrl}/${id}/commits/${a}/diff/${b}`);
   }
 
+  /** Uncommitted changes: the working copy diffed against its base commit. */
+  workingDiff(id: number): Observable<{ baseCommitHash: string | null; entries: CadCommitDiff['entries'] }> {
+    return this.http.get<{ baseCommitHash: string | null; entries: CadCommitDiff['entries'] }>(`${this.apiUrl}/${id}/working-diff`);
+  }
+
   /** Body-level 3D diff between two commits (regenerates each). */
   bodyDiff3D(id: number, a: string, b: string): Observable<CadBodyDiff> {
     return this.http.post<CadBodyDiff>(`${this.apiUrl}/${id}/commits/${a}/diff/${b}/regen`, {});
+  }
+
+  /** Face-level diff (persistent face-name sets) for colouring the Compare previews. */
+  faceDiff(id: number, a: string, b: string): Observable<CadFaceDiff> {
+    return this.http.get<CadFaceDiff>(`${this.apiUrl}/${id}/commits/${a}/diff/${b}/faces`);
   }
 
   // ── VCS: review workflow (Phase 4) ──────────────────────────────────────────

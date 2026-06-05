@@ -15,7 +15,7 @@ module.exports = (sequelize, DataTypes) => {
     hash: { type: DataTypes.STRING(64), primaryKey: true, allowNull: false },
     kind: {
       type: DataTypes.STRING(16), allowNull: false,
-      validate: { isIn: [['blob', 'tree', 'commit', 'geometry', 'component']] },
+      validate: { isIn: [['blob', 'tree', 'commit', 'geometry', 'component', 'thumbnail']] },
     },
     content: { type: DataTypes.JSONB, allowNull: true },
     bytes: { type: DataTypes.BLOB, allowNull: true },

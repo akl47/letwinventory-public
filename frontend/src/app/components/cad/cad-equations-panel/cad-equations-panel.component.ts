@@ -40,7 +40,10 @@ import {
       Equations
     </h2>
     <mat-dialog-content class="eqn-content">
-      <p class="hint">
+      <p class="hint view-only" *ngIf="readonly" data-testid="eqn-view-only">
+        <mat-icon>visibility</mat-icon> View only — check out the part to edit variables.
+      </p>
+      <p class="hint" *ngIf="!readonly">
         Define named scalars below and reference them from any dimension input by typing
         <code>=name</code> in place of a literal number.
       </p>
@@ -64,6 +67,7 @@ import {
                 <div class="name-cell">
                   <input class="cell-input"
                          data-testid="eqn-name"
+                         [disabled]="readonly"
                          [value]="row.key"
                          (blur)="renameGlobal(row.key, $any($event.target).value)" />
                   <span *ngIf="nameWarning(row.key) as w"
@@ -75,6 +79,7 @@ import {
               <td>
                 <input class="cell-input"
                        data-testid="eqn-expression"
+                       [disabled]="readonly"
                        [value]="row.expression"
                        (input)="setLiveExpression(row.key, $any($event.target).value)"
                        (blur)="commitExpression(row.key, $any($event.target).value)" />
@@ -85,6 +90,7 @@ import {
               </td>
               <td class="col-act">
                 <button class="btn-icon" data-testid="eqn-delete"
+                        *ngIf="!readonly"
                         matTooltip="Delete"
                         (click)="deleteEntry(row.key)">
                   <mat-icon>delete</mat-icon>
@@ -93,7 +99,7 @@ import {
             </tr>
             <!-- Always-present draft row — typing here auto-creates a new
                  variable, a fresh empty row appears immediately. -->
-            <tr class="draft-row" [class.has-error]="!!draftError()">
+            <tr class="draft-row" *ngIf="!readonly" [class.has-error]="!!draftError()">
               <td class="col-name">
                 <div class="name-cell">
                   <input #draftNameInput
@@ -128,6 +134,30 @@ import {
         </table>
       </section>
 
+      <!-- DEFAULT VARIABLES (built-in, from the part) ─────────────────── -->
+      <section class="eqn-section" *ngIf="defaultVariables.length > 0">
+        <h3 class="section-title">Default variables</h3>
+        <table class="eqn-table">
+          <thead>
+            <tr>
+              <th class="col-name">Name</th>
+              <th class="col-expr">Reference</th>
+              <th class="col-val">Value</th>
+              <th class="col-act"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let v of defaultVariables" data-testid="eqn-default-var">
+              <td class="col-name"><code class="target-label">{{ v.name }}</code></td>
+              <td><code class="target-label">{{ '#{' + v.name + '}' }}</code></td>
+              <td class="col-val"><span class="value-ok">{{ v.value || '—' }}</span></td>
+              <td class="col-act"><mat-icon class="lock-icon" matTooltip="Built-in — provided by the part">lock</mat-icon></td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="hint" style="margin: 6px 0 0">Built-in, read-only. Use in sketch text via <code>#{{ '{name}' }}</code>.</p>
+      </section>
+
       <!-- USED IN (feature + sketch bindings) ──────────────────────── -->
       <section class="eqn-section" *ngIf="bindings().length > 0">
         <h3 class="section-title">Used in</h3>
@@ -148,6 +178,7 @@ import {
               </td>
               <td>
                 <input class="cell-input"
+                       [disabled]="readonly"
                        [value]="row.expression"
                        (input)="setLiveExpression(row.key, $any($event.target).value)"
                        (blur)="commitExpression(row.key, $any($event.target).value)" />
@@ -158,6 +189,7 @@ import {
               </td>
               <td class="col-act">
                 <button class="btn-icon"
+                        *ngIf="!readonly"
                         matTooltip="Unbind (keep current numeric value)"
                         (click)="deleteEntry(row.key)">
                   <mat-icon>link_off</mat-icon>
@@ -182,6 +214,8 @@ import {
       padding: 16px 20px;
     }
     .hint { font-size: 12px; color: #aaa; margin-bottom: 14px; line-height: 1.5; }
+    .hint.view-only { display: flex; align-items: center; gap: 6px; color: #ffcc80; }
+    .hint.view-only mat-icon { font-size: 16px; width: 16px; height: 16px; }
     .hint code {
       background: #2d2d44; color: #ffeb3b;
       padding: 1px 4px; border-radius: 2px; font-size: 11px;
@@ -270,6 +304,7 @@ import {
     }
     .btn-icon:hover { opacity: 1; color: #ef9a9a; }
     .btn-icon mat-icon { font-size: 18px; width: 18px; height: 18px; }
+    .lock-icon { font-size: 15px; width: 15px; height: 15px; color: #6a6a80; cursor: help; }
 
     .title-icon { vertical-align: middle; margin-right: 4px; }
 
@@ -300,6 +335,13 @@ export class CadEquationsPanelComponent {
   private ref = inject(MatDialogRef<CadEquationsPanelComponent>);
   private data = inject(MAT_DIALOG_DATA) as {
     doc: EquationDoc;
+    /** Built-in variables provided by the part (partName / partRevision / …).
+     * Read-only; shown so the user knows what they can reference (in sketch
+     * text via `#{name}`) without redefining them. */
+    defaultVariables?: { name: string; value: string }[];
+    /** View-only mode (part not checked out): variables are visible but every
+     * edit affordance is disabled. */
+    readonly?: boolean;
     /** Called every time the doc reaches a stable state (after each
      * commit, rename, delete, or draft promotion). Parent uses this
      * to push the new doc into its signal + trigger save+regen.
@@ -308,6 +350,8 @@ export class CadEquationsPanelComponent {
   };
 
   doc = signal<EquationDoc>(this.data.doc);
+  defaultVariables = this.data.defaultVariables ?? [];
+  readonly = !!this.data.readonly;
 
   /** Push the current doc upward whenever it reaches a stable state.
    * Called from every mutation path so the parent stays in sync

@@ -21,7 +21,8 @@ describe('CAD VCS branch routes', () => {
 
     const list = await auth.get(`/api/design/cad-model/${model.id}/branches`);
     expect(list.status).toBe(200);
-    expect(list.body.map(b => b.name).sort()).toEqual(['main', 'variant']);
+    // A new model auto-creates draft/01 and lands on it; plus main and variant.
+    expect(list.body.map(b => b.name).sort()).toEqual(['draft/01', 'main', 'variant']);
 
     const sw = await auth.post(`/api/design/cad-model/${model.id}/switch-branch`).send({ name: 'variant' });
     expect(sw.status).toBe(200);
@@ -37,6 +38,7 @@ describe('CAD VCS branch routes', () => {
     const model = await setupCommitted(auth); // committed origin-only
 
     await auth.post(`/api/design/cad-model/${model.id}/branches`).send({ name: 'variant' });
+    await auth.post(`/api/design/cad-model/${model.id}/checkout`).send({}); // check-in released the lock
     await auth.put(`/api/design/cad-model/${model.id}`).send({
       featureTree: { features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 10 }], nextFeatureSeq: 3 },
       sketchDoc: { sketches: { s1: { id: 's1', state: { entities: [], constraints: [] } } }, nextSketchSeq: 2 },

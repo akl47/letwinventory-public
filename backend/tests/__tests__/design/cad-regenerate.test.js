@@ -82,6 +82,7 @@ describe('POST /api/design/cad-model/:id/regenerate (REQ 700)', () => {
     const part = await createTestPart();
     const create = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({ name: 'Regen test' });
     const modelId = create.body.id;
+    await auth.post(`/api/design/cad-model/${modelId}/checkout`).send({});
 
     // Add a sketch + one extrude.
     const sketch = fakeCircleSketch('s1');
@@ -110,6 +111,7 @@ describe('POST /api/design/cad-model/:id/regenerate (REQ 700)', () => {
     const part = await createTestPart();
     const create = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({ name: 'Hidden test' });
     const modelId = create.body.id;
+    await auth.post(`/api/design/cad-model/${modelId}/checkout`).send({});
     const tree = {
       features: [
         { id: 'f1', type: 'origin' },
@@ -131,6 +133,7 @@ describe('POST /api/design/cad-model/:id/regenerate (REQ 700)', () => {
     const part = await createTestPart();
     const create = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({ name: 'Cache test' });
     const modelId = create.body.id;
+    await auth.post(`/api/design/cad-model/${modelId}/checkout`).send({});
     const tree = {
       features: [
         { id: 'f1', type: 'origin' },
@@ -153,6 +156,7 @@ describe('POST /api/design/cad-model/:id/regenerate (REQ 700)', () => {
     const part = await createTestPart();
     const create = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({ name: 'Edit test' });
     const modelId = create.body.id;
+    await auth.post(`/api/design/cad-model/${modelId}/checkout`).send({});
     const doc = { sketches: { s1: fakeCircleSketch('s1') }, nextSketchSeq: 2 };
     const tree1 = { features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 20 }], nextFeatureSeq: 3 };
     const tree2 = { ...tree1, features: tree1.features.map(f => f.id === 'f2' ? { ...f, distance: 40 } : f) };
@@ -171,6 +175,7 @@ describe('POST /api/design/cad-model/:id/regenerate (REQ 700)', () => {
     const part = await createTestPart();
     const create = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({ name: 'Stream test' });
     const modelId = create.body.id;
+    await auth.post(`/api/design/cad-model/${modelId}/checkout`).send({});
     const doc = { sketches: { s1: fakeCircleSketch('s1') }, nextSketchSeq: 2 };
     const tree = {
       features: [
@@ -196,6 +201,7 @@ describe('POST /api/design/cad-model/:id/regenerate (REQ 700)', () => {
     const part = await createTestPart();
     const create = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({ name: 'Throw test' });
     const modelId = create.body.id;
+    await auth.post(`/api/design/cad-model/${modelId}/checkout`).send({});
     const doc = { sketches: { s1: fakeCircleSketch('s1') }, nextSketchSeq: 2 };
     const tree = {
       features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 20 }],
@@ -217,6 +223,7 @@ describe('POST /api/design/cad-model/:id/regenerate (REQ 700)', () => {
     const part = await createTestPart();
     const create = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({ name: 'Topo test' });
     const modelId = create.body.id;
+    await auth.post(`/api/design/cad-model/${modelId}/checkout`).send({});
     const tree = {
       features: [
         { id: 'f1', type: 'origin' },
@@ -246,6 +253,7 @@ describe('POST /api/design/cad-model/:id/regenerate (REQ 700)', () => {
     const part = await createTestPart();
     const create = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({ name: 'Kernel-down test' });
     const modelId = create.body.id;
+    await auth.post(`/api/design/cad-model/${modelId}/checkout`).send({});
     const tree = { features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 20 }], nextFeatureSeq: 3 };
     const doc = { sketches: { s1: fakeCircleSketch('s1') }, nextSketchSeq: 2 };
     await auth.put(`/api/design/cad-model/${modelId}`).send({ featureTree: tree, sketchDoc: doc });

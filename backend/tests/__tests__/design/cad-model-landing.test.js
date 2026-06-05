@@ -28,19 +28,23 @@ describe('CAD landing endpoint (parts-with-cad)', () => {
 
   it('reports release-tag count and the part revision per part', async () => {
     const auth = await authenticatedRequest();
-    const part = await createTestPart();
-    const a = await createDraft(auth, part.id);
+    const part = await createTestPart(); // revision '00'
+    const a = await createDraft(auth, part.id); // lands on draft/01
     await auth.post(`/api/design/cad-model/${a.id}/workflow`).send({ action: 'submit' });
     await auth.post(`/api/design/cad-model/${a.id}/workflow`).send({ action: 'approve' });
+    // Release the approved draft onto main → mints the next numeric Part revision
+    // ('01') and the working copy moves onto it.
     const rel = await auth.post(`/api/design/cad-model/${a.id}/release`);
     expect(rel.status).toBe(200);
+    const releasedRev = rel.body.revision;     // '01'
+    const releasedPartID = rel.body.model.partID;
 
     const res = await auth.get('/api/design/cad-model/parts-with-cad');
-    const row = res.body.find(r => r.partID === part.id);
-    expect(row.revisionCount).toBe(1);            // one release tag
-    expect(row.latestRevision).toBe(part.revision); // = Parts.revision
+    const row = res.body.find(r => r.partID === releasedPartID);
+    expect(row.revisionCount).toBe(1);          // one release tag on the repo
+    expect(row.latestRevision).toBe(releasedRev);
     expect(row.hasReleased).toBe(true);
-    expect(row.releasedRevision).toBe(part.revision);
+    expect(row.releasedRevision).toBe(releasedRev);
   });
 
   it('omits soft-deleted CAD models', async () => {

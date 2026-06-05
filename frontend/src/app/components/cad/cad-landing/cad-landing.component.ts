@@ -104,13 +104,20 @@ import { filterBySearch } from '../../../utils/search';
 
         <ng-container matColumnDef="actions">
           <th mat-header-cell *matHeaderCellDef></th>
-          <td mat-cell *matCellDef="let r">
-            <a mat-stroked-button
-               [routerLink]="['/parts', r.partID, 'cad', 'editor']"
-               [queryParams]="{ revisionID: r.latestRevisionID }"
-               matTooltip="Open the latest revision in the CAD editor">
-              <mat-icon>open_in_new</mat-icon> Open
-            </a>
+          <td mat-cell *matCellDef="let r" (click)="$event.stopPropagation()">
+            <div class="row-actions">
+              <a mat-stroked-button
+                 [routerLink]="['/parts', r.partID, 'cad']"
+                 matTooltip="View the version history — graph, branches, diffs">
+                <mat-icon>history</mat-icon> Show history
+              </a>
+              <a mat-stroked-button
+                 [routerLink]="['/parts', r.partID, 'cad', 'editor']"
+                 [queryParams]="{ revisionID: r.latestRevisionID }"
+                 matTooltip="Open the latest revision in the CAD editor">
+                <mat-icon>open_in_new</mat-icon> Open
+              </a>
+            </div>
           </td>
         </ng-container>
 
@@ -136,7 +143,8 @@ import { filterBySearch } from '../../../utils/search';
     .part-link strong { font-weight: 600; }
     .part-rev { opacity: 0.6; font-size: 12px; }
     .part-desc { font-size: 12px; opacity: 0.6; max-width: 380px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .rev-tag { display: inline-block; padding: 2px 6px; background: #eee; border-radius: 4px; font-family: monospace; font-size: 12px; margin-right: 8px; }
+    .rev-tag { display: inline-block; padding: 2px 8px; background: #e8eaf0; color: #2a2a3a; border: 1px solid #c8ccd8; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; font-weight: 600; margin-right: 8px; }
+    .row-actions { display: flex; gap: 8px; justify-content: flex-end; }
     .state-badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; text-transform: uppercase; font-weight: 600; }
     .state-badge.draft { background: #fff3e0; color: #e65100; }
     .state-badge.review { background: #e3f2fd; color: #1565c0; }

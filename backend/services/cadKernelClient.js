@@ -73,16 +73,19 @@ class CadKernelClient {
   // Public RPC entry point. Resolves to the `result` payload from the
   // kernel; throws KernelRpcError on remote errors and KernelDisconnected on
   // socket errors.
-  async call(method, params = {}) {
+  async call(method, params = {}, { timeoutMs } = {}) {
     if (this.shuttingDown) throw new KernelDisconnected('client is shut down');
     await this._ensureConnected();
     const id = this.nextId++;
     const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
+    // Per-call override lets cheap probes (e.g. the `ping` health check) fail
+    // fast instead of hanging on the 30 s default when the kernel is wedged.
+    const t = timeoutMs || this.timeoutMs;
     return new Promise((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`CAD kernel ${method} timed out after ${this.timeoutMs}ms`));
-      }, this.timeoutMs);
+        reject(new Error(`CAD kernel ${method} timed out after ${t}ms`));
+      }, t);
       this.pending.set(id, { resolve, reject, timeoutHandle, method });
       this.socket.write(payload, (err) => {
         if (err) {

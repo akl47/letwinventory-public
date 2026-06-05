@@ -99,6 +99,7 @@ interface TreeNode {
           <span class="chevron-spacer" *ngIf="!n.expandable && n.kind !== 'rollback-bar'"></span>
           <mat-icon class="kind-icon" [ngClass]="n.iconClass">{{ n.iconName }}</mat-icon>
           <span class="label">{{ n.label }}</span>
+          <span class="dbg-id" *ngIf="dbgId(n)">({{ dbgId(n) }})</span>
           <ng-container *ngIf="n.kind === 'feature' && n.feature && featureErrors().has(n.feature.id)">
             <mat-icon class="error-indicator"
                       [matTooltip]="featureErrors().get(n.feature.id) || ''"
@@ -296,7 +297,8 @@ interface TreeNode {
     .kind-icon.datum-plane-xy { color: #1e88e5; }
     .kind-icon.datum-plane-yz { color: #e53935; }
     .kind-icon.datum-plane-xz { color: #43a047; }
-    .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .label { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dbg-id { flex: 1 0 auto; margin-left: 4px; font-family: ui-monospace, monospace; font-size: 10px; opacity: 0.45; }
     .visibility-toggle { border: none; background: none; cursor: pointer; opacity: 0.55; padding: 2px; display: inline-flex; align-items: center; justify-content: center; color: inherit; }
     .visibility-toggle:hover { opacity: 1; }
     .visibility-toggle mat-icon { font-size: 16px; width: 16px; height: 16px; }
@@ -1247,6 +1249,9 @@ export class CadFeatureTreePanelComponent {
     this.menuTrigger?.closeMenu();
     this.actionRequested.emit(action);
   }
+
+  /** Debug: the underlying feature/sketch/datum id for a row. */
+  dbgId(n: TreeNode): string { return n.feature?.id || n.sketchId || n.datumId || ''; }
 
   /** Resolve the underlying sketch id for a feature, or null when the
    * feature kind doesn't own a sketch (fillet, chamfer, origin) or

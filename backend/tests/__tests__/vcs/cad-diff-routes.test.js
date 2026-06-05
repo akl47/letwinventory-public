@@ -12,6 +12,8 @@ describe('CAD VCS diff routes', () => {
     await auth.post(`/api/design/cad-model/${model.id}/checkout`).send({});
     const c0 = (await auth.post(`/api/design/cad-model/${model.id}/checkin`).send({ message: 'init' })).body.commitHash;
 
+    // Check-in releases the lock; re-check-out before the next edit.
+    await auth.post(`/api/design/cad-model/${model.id}/checkout`).send({});
     await auth.put(`/api/design/cad-model/${model.id}`).send({
       featureTree: { features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 10 }], nextFeatureSeq: 3 },
       sketchDoc: { sketches: { s1: { id: 's1', state: { entities: [], constraints: [] } } }, nextSketchSeq: 2 },

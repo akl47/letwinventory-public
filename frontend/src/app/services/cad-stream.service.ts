@@ -127,6 +127,7 @@ export class CadStreamService {
       } else if (msg.type === 'auth-failed') {
         console.warn('[cad-stream] auth-failed:', msg.reason);
       }
+      const mm = msg as { modelId?: number; featureId?: string };
       this.subject.next(msg);
     });
 

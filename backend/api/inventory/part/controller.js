@@ -411,126 +411,21 @@ exports.getPartLocations = async (req, res, next) => {
   }
 };
 
-// Production revision letters: A-Y excluding I, O, Q, S, X, Z
-// Sequence: A B C D E F G H J K L M N P R T U V W Y
-// After Y: AA AB AC ... AY, then BA BB ... BY, etc.
-const REV_LETTERS = 'ABCDEFGHJKLMNPRTUVWY'.split('');
-
-function letterRevToIndex(rev) {
-  const chars = rev.toUpperCase().split('');
-  let index = 0;
-  for (const ch of chars) {
-    const pos = REV_LETTERS.indexOf(ch);
-    if (pos === -1) return -1;
-    index = index * REV_LETTERS.length + pos;
-  }
-  // Offset for length: single-letter = 0..19, double-letter starts at 20
-  for (let len = 1; len < chars.length; len++) {
-    index += Math.pow(REV_LETTERS.length, len);
-  }
-  return index;
-}
-
-function indexToLetterRev(index) {
-  // Determine how many characters needed
-  let len = 1;
-  let capacity = REV_LETTERS.length; // 20 single letters
-  while (index >= capacity) {
-    index -= capacity;
-    len++;
-    capacity = Math.pow(REV_LETTERS.length, len);
-  }
-  let result = '';
-  for (let i = len - 1; i >= 0; i--) {
-    const divisor = Math.pow(REV_LETTERS.length, i);
-    const digit = Math.floor(index / divisor);
-    result += REV_LETTERS[digit];
-    index %= divisor;
-  }
-  return result;
-}
-
-function getNextLetterRevision(current) {
-  if (!current) return REV_LETTERS[0];
-  const idx = letterRevToIndex(current);
-  if (idx === -1) return REV_LETTERS[0];
-  return indexToLetterRev(idx + 1);
-}
+// Revision numbering + revision-row creation live in partRevisionService so the
+// CAD release workflow can reuse them inside its own transaction.
+const partRevisionService = require('../../../services/partRevisionService');
 
 exports.createNewRevision = async (req, res, next) => {
   let partName = '?';
-  let nextRev = '?';
   try {
-    const part = await db.Part.findByPk(req.params.id, {
-      include: [{ model: db.BillOfMaterialItem, as: 'bomItems', where: { activeFlag: true }, required: false }]
-    });
+    const part = await db.Part.findByPk(req.params.id);
     if (!part) return next(createError(404, 'Part not found'));
     partName = part.name;
-
-    // Find the latest numeric revision for this part name
-    const allRevisions = await db.Part.findAll({
-      where: { name: part.name },
-      attributes: ['id', 'revision']
-    });
-    const existingRevisions = new Set(allRevisions.map(p => p.revision));
-    const numericRevisions = [...existingRevisions].filter(r => /^\d+$/.test(r));
-    let nextNum = 1;
-    if (numericRevisions.length > 0) {
-      nextNum = Math.max(...numericRevisions.map(r => parseInt(r, 10))) + 1;
-    }
-    nextRev = nextNum.toString().padStart(2, '0');
-    while (existingRevisions.has(nextRev)) {
-      nextNum++;
-      nextRev = nextNum.toString().padStart(2, '0');
-    }
-    const partData = part.toJSON();
-    const newPart = await db.Part.create({
-      name: partData.name,
-      description: partData.description,
-      internalPart: partData.internalPart,
-      vendor: partData.vendor,
-      sku: partData.sku,
-      link: partData.link,
-      minimumOrderQuantity: partData.minimumOrderQuantity,
-      partCategoryID: partData.partCategoryID,
-      serialNumberRequired: partData.serialNumberRequired,
-      lotNumberRequired: partData.lotNumberRequired,
-      defaultUnitOfMeasureID: partData.defaultUnitOfMeasureID,
-      manufacturer: partData.manufacturer,
-      manufacturerPN: partData.manufacturerPN,
-      minimumStockQuantity: partData.minimumStockQuantity,
-      imageFileID: partData.imageFileID,
-      activeFlag: true,
-      revision: nextRev,
-      revisionLocked: false,
-      previousRevisionID: part.id,
-    });
-
-    // Copy BOM items
-    if (partData.bomItems?.length > 0) {
-      await db.BillOfMaterialItem.bulkCreate(
-        partData.bomItems.map(item => ({
-          partID: newPart.id,
-          componentPartID: item.componentPartID,
-          quantity: item.quantity,
-          activeFlag: true,
-        }))
-      );
-    }
-
-    // Record history
-    await db.PartRevisionHistory.create({
-      partID: newPart.id,
-      changedByUserID: req.user?.id || null,
-      changeType: 'new_revision',
-      changes: { previousRevision: { old: null, new: part.revision }, previousPartID: { old: null, new: part.id } },
-      createdAt: new Date()
-    });
-
+    const newPart = await partRevisionService.createNewRevision(part, req.user?.id, {});
     res.json(newPart);
   } catch (error) {
     if (error.name === 'SequelizeUniqueConstraintError') {
-      return next(createError(409, `Part "${partName}" already has revision "${nextRev}". Existing revisions may need to be cleaned up.`));
+      return next(createError(409, `Part "${partName}" revision conflict. Existing revisions may need to be cleaned up.`));
     }
     if (error.name === 'SequelizeValidationError') {
       const details = error.errors.map(e => `${e.path}: ${e.message}`).join('; ');
@@ -542,90 +437,15 @@ exports.createNewRevision = async (req, res, next) => {
 
 exports.releaseToProduction = async (req, res, next) => {
   let partName = '?';
-  let nextRev = '?';
   try {
-    const part = await db.Part.findByPk(req.params.id, {
-      include: [{ model: db.BillOfMaterialItem, as: 'bomItems', where: { activeFlag: true }, required: false }]
-    });
+    const part = await db.Part.findByPk(req.params.id);
     if (!part) return next(createError(404, 'Part not found'));
     partName = part.name;
-
-    // Find the latest letter revision for this part name
-    const allRevisions = await db.Part.findAll({
-      where: { name: part.name },
-      attributes: ['revision']
-    });
-    const existingRevisions = new Set(allRevisions.map(p => p.revision));
-    const letterRevisions = allRevisions.map(p => p.revision).filter(r => /^[A-Z]+$/.test(r));
-    nextRev = REV_LETTERS[0];
-    if (letterRevisions.length > 0) {
-      const sorted = letterRevisions.sort((a, b) => letterRevToIndex(a) - letterRevToIndex(b));
-      nextRev = getNextLetterRevision(sorted[sorted.length - 1]);
-    }
-    while (existingRevisions.has(nextRev)) {
-      nextRev = getNextLetterRevision(nextRev);
-    }
-
-    const partData = part.toJSON();
-    const newPart = await db.Part.create({
-      name: partData.name,
-      description: partData.description,
-      internalPart: partData.internalPart,
-      vendor: partData.vendor,
-      sku: partData.sku,
-      link: partData.link,
-      minimumOrderQuantity: partData.minimumOrderQuantity,
-      partCategoryID: partData.partCategoryID,
-      serialNumberRequired: partData.serialNumberRequired,
-      lotNumberRequired: partData.lotNumberRequired,
-      defaultUnitOfMeasureID: partData.defaultUnitOfMeasureID,
-      manufacturer: partData.manufacturer,
-      manufacturerPN: partData.manufacturerPN,
-      minimumStockQuantity: partData.minimumStockQuantity,
-      imageFileID: partData.imageFileID,
-      activeFlag: true,
-      revision: nextRev,
-      revisionLocked: false,
-      previousRevisionID: part.id,
-    });
-
-    // Copy BOM items
-    if (partData.bomItems?.length > 0) {
-      await db.BillOfMaterialItem.bulkCreate(
-        partData.bomItems.map(item => ({
-          partID: newPart.id,
-          componentPartID: item.componentPartID,
-          quantity: item.quantity,
-          activeFlag: true,
-        }))
-      );
-    }
-
-    // Lock the source part
-    await part.update({ revisionLocked: true });
-
-    // Record history for the new part
-    await db.PartRevisionHistory.create({
-      partID: newPart.id,
-      changedByUserID: req.user?.id || null,
-      changeType: 'production_release',
-      changes: { previousRevision: { old: null, new: part.revision }, previousPartID: { old: null, new: part.id } },
-      createdAt: new Date()
-    });
-
-    // Record lock history for the source part
-    await db.PartRevisionHistory.create({
-      partID: part.id,
-      changedByUserID: req.user?.id || null,
-      changeType: 'locked',
-      changes: null,
-      createdAt: new Date()
-    });
-
+    const newPart = await partRevisionService.releaseToProduction(part, req.user?.id, {});
     res.json(newPart);
   } catch (error) {
     if (error.name === 'SequelizeUniqueConstraintError') {
-      return next(createError(409, `Part "${partName}" already has revision "${nextRev}". Existing revisions may need to be cleaned up.`));
+      return next(createError(409, `Part "${partName}" revision conflict. Existing revisions may need to be cleaned up.`));
     }
     if (error.name === 'SequelizeValidationError') {
       const details = error.errors.map(e => `${e.path}: ${e.message}`).join('; ');

@@ -2,6 +2,7 @@ import type {
   Feature, FeatureTree, OriginFeature, ExtrudeFeature, CutExtrudeFeature,
   RevolveFeature, CutRevolveFeature, SweepFeature, CutSweepFeature,
 } from './types';
+import { newFeatureId } from './ids';
 // Phase 1: regenerateModel + the KernelAdapter interface used to live here
 // and ran in the browser. Both moved server-side. The server handles regen
 // via `backend/services/cadRegenService.js`; this module is now just the
@@ -25,7 +26,9 @@ export function emptyFeatureTree(): FeatureTree {
 }
 
 export function addFeature(tree: FeatureTree, feature: FeatureInput): FeatureTree {
-  const id = `f${tree.nextFeatureSeq}`;
+  // Globally-unique id (see ids.ts) — sequential ids collide across branches.
+  // nextFeatureSeq is still advanced (legacy counter; some UI gating reads it).
+  const id = newFeatureId();
   // Unified creation timestamp — same source/scale as Sketch.createdAt
   // so the feature tree can interleave orphan sketches by chronological
   // order. New features land at the end of the tree, so the tail of

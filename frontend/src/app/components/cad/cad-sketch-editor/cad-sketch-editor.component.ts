@@ -608,8 +608,12 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
   `],
 })
 export class CadSketchEditorComponent implements OnDestroy {
-  sketchId = input.required<string>();
-  doc = input.required<SketchDocument>();
+  // Defaults (not `input.required`) so the parent's computeds that read this
+  // component's derived signals — e.g. `state()` → `doc()` — don't throw NG0950
+  // during the first change-detection pass before the inputs are bound. The
+  // editor always binds real values; these are just init-time placeholders.
+  sketchId = input<string>('');
+  doc = input<SketchDocument>({ sketches: {}, nextSketchSeq: 1 });
   readonly = input<boolean>(false);
   sketchChanged = output<SketchState>();
   exitSketch = output<void>();
@@ -3585,7 +3589,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-17');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-88');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);

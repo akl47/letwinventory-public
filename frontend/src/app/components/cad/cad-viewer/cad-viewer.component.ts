@@ -3,6 +3,8 @@ import {
   effect, input, output, signal, untracked, NgZone, inject, HostListener,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { MatIconModule } from '@angular/material/icon';
+import type { CadDefaultView } from '../../../models/cad-model.model';
 import * as THREE from 'three';
 // REQ 631 — Line2 supports a real linewidth (in pixels). Three.js's
 // LineBasicMaterial is stuck at 1px on most WebGL implementations.
@@ -160,16 +162,63 @@ export interface HolePreview {
 @Component({
   selector: 'app-cad-viewer',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, MatIconModule],
   template: `
     <div class="viewer" data-testid="cad-viewer">
       <div #mount class="canvas-mount"></div>
+      <div class="webgl-error" *ngIf="webglUnavailable()" data-testid="webgl-error">
+        <mat-icon>desktop_access_disabled</mat-icon>
+        <div class="we-title">3D view unavailable</div>
+        <div class="we-sub">The browser couldn't create a WebGL context — usually too many 3D views open this session, or hardware acceleration is off.</div>
+        <div class="we-sub">Fully quit and reopen your browser, then try again.</div>
+      </div>
       <div #cubeMount class="nav-cube" data-testid="nav-cube"
            (pointerdown)="onCubePointerDown($event)"
            (pointermove)="onCubePointerMove($event)"
            (pointerup)="onCubePointerUp($event)"
            (pointerleave)="onCubePointerUp($event)"
            (click)="onCubeClick($event)"></div>
+      <!-- Onshape/Fusion-style 60° roll arcs hugging the cube's top corners. -->
+      <button type="button" class="rot-btn rot-ccw"
+              title="Rotate view 90° counter-clockwise" aria-label="Rotate counter-clockwise"
+              (click)="rotateView(1)">
+        <svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M25.3 6.9 A26 26 0 0 0 6.4 27.5"/>
+          <path d="M4.7 23.9 L6.4 27.5 L9.2 24.7"/>
+        </svg>
+      </button>
+      <button type="button" class="rot-btn rot-cw"
+              title="Rotate view 90° clockwise" aria-label="Rotate clockwise"
+              (click)="rotateView(-1)">
+        <svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.7 6.9 A26 26 0 0 1 29.6 27.5"/>
+          <path d="M31.3 23.9 L29.6 27.5 L26.8 24.7"/>
+        </svg>
+      </button>
+      <!-- View controls beneath the orientation cube: nav modes + default view. -->
+      <div class="view-controls">
+        <button type="button" class="vc-btn" [class.on]="navMode()==='orbit'" title="Orbit (drag to rotate)" aria-label="Orbit"
+                (click)="setNav('orbit')"><mat-icon>3d_rotation</mat-icon></button>
+        <button type="button" class="vc-btn" [class.on]="navMode()==='pan'" title="Pan (drag to move)" aria-label="Pan"
+                (click)="setNav('pan')"><mat-icon>open_with</mat-icon></button>
+        <button type="button" class="vc-btn" [class.on]="navMode()==='zoom'" title="Zoom (drag up/down)" aria-label="Zoom"
+                (click)="setNav('zoom')"><mat-icon>zoom_in</mat-icon></button>
+        <span class="vc-sep"></span>
+        <button type="button" class="vc-btn" title="Default view" aria-label="Default view"
+                (click)="applyDefaultView()">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9h5v-5h4v5h5v-9"/>
+          </svg>
+        </button>
+        <button type="button" class="vc-btn" title="Save current as default view" aria-label="Save as default view"
+                (click)="onSaveDefaultView()">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><path d="M8 20v-6h8v6"/>
+          </svg>
+        </button>
+      </div>
       <div class="hud" *ngIf="loading()">
         <span class="spinner"></span>
         Regenerating geometry{{ loadProgress() ? ' — ' + loadProgress() : '…' }}
@@ -180,8 +229,31 @@ export interface HolePreview {
     .viewer { position: relative; width: 100%; height: 100%; background: #1e1e2e; }
     .canvas-mount { width: 100%; height: 100%; }
     .canvas-mount canvas { display: block; }
+    .webgl-error { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: #ef9a9a; }
+    .webgl-error mat-icon { font-size: 44px; width: 44px; height: 44px; }
+    .webgl-error .we-title { font-size: 17px; font-weight: 700; }
+    .webgl-error .we-sub { font-size: 13px; color: #c9c9d6; max-width: 420px; }
     .nav-cube { position: absolute; top: 12px; right: 62px; width: 103px; height: 103px; cursor: pointer; user-select: none; }
     .nav-cube canvas { display: block; }
+    /* Centre the controls row on the nav cube's centre (cube: right 62px, width
+       103px → centre at right 113.5px). translateX(50%) keeps it centred
+       regardless of how many buttons the row holds. */
+    .view-controls { position: absolute; top: 118px; right: calc(62px + 103px / 2); transform: translateX(50%);
+                     display: flex; align-items: center; gap: 4px; }
+    .vc-btn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; padding: 0;
+              background: rgba(42,42,58,0.92); border: 1px solid #3a3a4a; border-radius: 4px; color: #cfd2e0; cursor: pointer; }
+    .vc-btn:hover { background: #34344a; color: #fff; border-color: #4a4a5e; }
+    .vc-btn.on { background: #1976d2; border-color: #1976d2; color: #fff; }
+    .vc-btn mat-icon { font-size: 16px; width: 16px; height: 16px; line-height: 16px; }
+    .vc-sep { width: 1px; height: 18px; background: #3a3a4a; margin: 0 2px; }
+    /* Roll-arc arrows at the cube's top corners (cube: top 12px, 103px square,
+       spanning right 62–165px). Borderless like Onshape/Fusion. */
+    .rot-btn { position: absolute; top: 4px; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
+               padding: 0; background: none; border: none; color: #c4c8d8; cursor: pointer; opacity: 0.85; }
+    .rot-btn:hover { color: #fff; opacity: 1; }
+    .rot-btn svg { width: 36px; height: 36px; display: block; filter: drop-shadow(0 0 2px rgba(0,0,0,0.7)); }
+    .rot-ccw { right: 138px; }
+    .rot-cw  { right: 52px; }
     .hud { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); padding: 8px 16px; background: rgba(0,0,0,0.7); border-radius: 4px; font-size: 12px; color: #fff; display: flex; align-items: center; gap: 10px; }
     .hud .spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.25); border-top-color: #66bb6a; border-radius: 50%; animation: hud-spin 0.9s linear infinite; }
     @keyframes hud-spin { to { transform: rotate(360deg); } }
@@ -323,6 +395,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   /** Model default unit, used to format dim values + suggest a default
    * input value when the inline editor opens for a bare-number dim. */
   defaultUnit = input<Unit>('mm');
+  /** Saved default camera view; the Default-view control returns here. Null
+   * means "no saved view" — the control falls back to a framed isometric. */
+  defaultView = input<CadDefaultView | null>(null);
+  /** Emitted when the user clicks "Save as default view"; carries the current
+   * camera orientation for the parent to persist. */
+  saveDefaultView = output<CadDefaultView>();
   /** Live-preview dimension while the user is mid-Smart-Dim (after two
    * picks, before the placement click). Rendered in orange/dashed so it
    * reads as a draft. */
@@ -598,6 +676,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private orbiting = false;
   private panning = false;
   private zoomDragging = false;
+  // Which gesture a left-button drag performs in 3D mode (the on-screen
+  // orbit/pan/zoom buttons set this). Left-click still selects; middle-button
+  // navigation keeps working regardless.
+  navMode = signal<'orbit' | 'pan' | 'zoom'>('orbit');
+  // Set when the browser can't give us a WebGL context (usually GPU-context
+  // exhaustion after a long session, or hardware acceleration disabled). Drives
+  // a visible notice instead of a silent blank viewport.
+  webglUnavailable = signal(false);
+  private didNavDrag = false;   // suppress click-select after a left-drag navigate
   private orbitTheta = Math.PI / 4;
   private orbitPhi = Math.PI / 4;
   private orbitTarget = new THREE.Vector3(0, 0, 0);
@@ -835,16 +922,36 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.orbitTarget.set(plane.origin[0], plane.origin[1], plane.origin[2]);
     // Position the camera directly along the plane normal — don't go
     // through orbit theta/phi spherical coords. Those assume world-Y
-    // up and round-trip slightly off-axis on tilted planes because we
-    // then override camera.up to plane.yAxis (which is independent of
-    // world-Y). Setting position + up explicitly + lookAt gives a
-    // pixel-perfect normal view on any plane orientation.
+    // up and round-trip slightly off-axis on tilted planes. Setting
+    // position + up explicitly + lookAt gives a pixel-perfect normal
+    // view on any plane orientation.
     this.camera.position.set(
       plane.origin[0] + ux * this.orbitDistance,
       plane.origin[1] + uy * this.orbitDistance,
       plane.origin[2] + uz * this.orbitDistance,
     );
-    this.camera.up.set(plane.yAxis[0], plane.yAxis[1], plane.yAxis[2]).normalize();
+    // Gravity-aligned screen-up: world-up projected onto the sketch plane.
+    // This keeps "up is up" so the same plane always orients the same way,
+    // independent of the plane's stored yAxis (which only needs to make the
+    // basis right-handed, not point anywhere meaningful on screen). The
+    // camera stays on the +normal side, so the sketch is NON-mirrored;
+    // changing only `up` rotates the view in-plane and cannot affect
+    // handedness. (worldUp = [0,1,0] → worldUp·N = uy.)
+    let upx = -uy * ux;
+    let upy = 1 - uy * uy;
+    let upz = -uy * uz;
+    let upLen = Math.hypot(upx, upy, upz);
+    if (upLen < 1e-6) {
+      // Near-horizontal plane (normal ≈ ±Y): world-up projects to ~0. Use a
+      // stable horizontal convention — Top (+Y) → -Z up, Bottom (-Y) → +Z up.
+      const sz = uy >= 0 ? -1 : 1;
+      const sDotN = sz * uz;
+      upx = -sDotN * ux;
+      upy = -sDotN * uy;
+      upz = sz - sDotN * uz;
+      upLen = Math.hypot(upx, upy, upz) || 1;
+    }
+    this.camera.up.set(upx / upLen, upy / upLen, upz / upLen);
     this.camera.lookAt(this.orbitTarget);
     // Keep orbit theta/phi consistent with the new position so the
     // user's first drag rotates from this orientation rather than
@@ -895,6 +1002,20 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const width = mount.clientWidth || 800;
     const height = mount.clientHeight || 600;
 
+    // Create the WebGL context FIRST. If the browser can't give us one (GPU
+    // context exhaustion after a long session, or hardware acceleration off),
+    // bail before `this.scene`/groups are created — every render effect guards
+    // on `if (this.scene)`, so leaving it undefined makes them all short-circuit
+    // (instead of crashing on undefined groups). Surface a notice via the signal.
+    try {
+      this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    } catch (err) {
+      console.error('[cad-viewer] WebGL unavailable:', err);
+      this.zone.run(() => this.webglUnavailable.set(true));
+      return;
+    }
+    this.zone.run(() => this.webglUnavailable.set(false));
+
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1e1e2e);
 
@@ -920,7 +1041,6 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.selectedSketchMaterial.resolution.set(width, height);
     this.mirrorAxisMaterial.resolution.set(width, height);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(width, height);
     mount.appendChild(this.renderer.domElement);
@@ -1109,13 +1229,118 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (this.camera.isOrthographicCamera) this.updateOrthoFrustum();
   }
 
-  /** Current camera position as a [x, y, z] tuple in world space. Used by
-   * the parent editor when starting a new sketch — we flip the sketch
-   * plane's normal so the camera ends up on the "+normal" side, i.e., the
-   * user always looks AT the sketch plane from the side they're currently
-   * viewing the model from. */
-  cameraPosition(): [number, number, number] {
-    return [this.camera.position.x, this.camera.position.y, this.camera.position.z];
+  /** Rotate the view 90° about the look axis (in-plane roll), animated. `sign`
+   * +1 = CCW, -1 = CW on screen. Persists until the next orbit (resets up). */
+  rotateView(sign: 1 | -1) {
+    if (this.cubeAnimHandle) cancelAnimationFrame(this.cubeAnimHandle);
+    const fwd = new THREE.Vector3().subVectors(this.orbitTarget, this.camera.position).normalize();
+    const startUp = this.camera.up.clone();
+    const total = sign * Math.PI / 2;
+    const durationMs = 380;
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      this.camera.up.copy(startUp).applyAxisAngle(fwd, total * e).normalize();
+      this.updateCamera();
+      if (t < 1) this.cubeAnimHandle = requestAnimationFrame(step);
+      else this.cubeAnimHandle = 0;
+    };
+    this.cubeAnimHandle = requestAnimationFrame(step);
+  }
+
+  // ─── Default view (REQ 708/709) ──────────────────────────────────────────
+  // The current camera orientation as a serializable spherical preset.
+  currentView(): CadDefaultView {
+    return {
+      theta: this.orbitTheta,
+      phi: this.orbitPhi,
+      distance: this.orbitDistance,
+      target: [this.orbitTarget.x, this.orbitTarget.y, this.orbitTarget.z],
+    };
+  }
+
+  /** Orient the camera to the saved default view, or to a framed isometric
+   * when none is saved. Leaves sketch mode's pinned-plane view untouched. */
+  applyDefaultView() {
+    if (this.sketchPlaneNormal) return; // sketch mode pins the view to the plane
+    const v = this.defaultView();
+    if (v) {
+      this.orbitTarget.set(v.target[0], v.target[1], v.target[2]);
+      this.orbitDistance = v.distance;
+      this.animateOrbitTo(v.theta, v.phi, 480);
+    } else {
+      this.frameToGeometry();
+      this.animateOrbitTo(Math.PI / 4, Math.PI / 4, 480);
+    }
+  }
+
+  onSaveDefaultView() {
+    this.saveDefaultView.emit(this.currentView());
+  }
+
+  /** Set which gesture a left-button drag performs in 3D mode. */
+  setNav(mode: 'orbit' | 'pan' | 'zoom') { this.navMode.set(mode); }
+
+  /** Center the orbit target on the model and pick a distance that frames it. */
+  private frameToGeometry() {
+    const box = new THREE.Box3().setFromObject(this.faceGroup);
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    this.orbitTarget.copy(center);
+    // orbitDistance doubles as the ortho half-height; pad so the part doesn't
+    // touch the frustum edges.
+    this.orbitDistance = Math.max(size.x, size.y, size.z, 1) * 0.75;
+  }
+
+  /** Render a low-resolution PNG of the model from its default view (or the
+   * current view if none saved) for the commit thumbnail. Datum planes and
+   * sketch overlays are hidden so the image shows the solid only. Returns a
+   * data URL, or null when there is no geometry to capture. */
+  captureThumbnail(width = 260, height = 180): string | null {
+    if (!this.scene || !this.faceGroup) return null;
+    const box = new THREE.Box3().setFromObject(this.faceGroup);
+    if (box.isEmpty()) return null;
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+
+    const v = this.defaultView();
+    const theta = v ? v.theta : this.orbitTheta;
+    const phi = v ? v.phi : this.orbitPhi;
+    const dist = Math.max(size.x, size.y, size.z, 1) * 2.2;
+    const half = Math.max(size.x, size.y, size.z, 1) * 0.7;
+    const aspect = width / height;
+
+    const cam = new THREE.OrthographicCamera(-half * aspect, half * aspect, half, -half, -10000, 10000);
+    cam.position.set(
+      center.x + dist * Math.sin(phi) * Math.cos(theta),
+      center.y + dist * Math.cos(phi),
+      center.z + dist * Math.sin(phi) * Math.sin(theta),
+    );
+    cam.lookAt(center);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(1);
+    renderer.setSize(width, height);
+
+    const datumVis = this.datumGroup ? this.datumGroup.visible : true;
+    const sketchVis = this.sketchGroup ? this.sketchGroup.visible : true;
+    if (this.datumGroup) this.datumGroup.visible = false;
+    if (this.sketchGroup) this.sketchGroup.visible = false;
+    let url: string | null = null;
+    try {
+      renderer.render(this.scene, cam);
+      url = renderer.domElement.toDataURL('image/png');
+    } catch {
+      url = null;
+    } finally {
+      if (this.datumGroup) this.datumGroup.visible = datumVis;
+      if (this.sketchGroup) this.sketchGroup.visible = sketchVis;
+      renderer.dispose();
+      renderer.forceContextLoss();
+    }
+    return url;
   }
 
   // ─── Navigation cube ─────────────────────────────────────────────────────
@@ -1131,7 +1356,16 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const w = mount.clientWidth  || 103;
     const h = mount.clientHeight || 103;
 
-    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    } catch (err) {
+      // The cube is a second WebGL context; if it can't be created (the main
+      // viewport got the last available context) just skip it — the 3D view
+      // still works without the orientation cube.
+      console.error('[cad-viewer] nav cube WebGL unavailable:', err);
+      return;
+    }
     // setPixelRatio FIRST so the subsequent setSize accounts for it when
     // sizing the internal buffer. setSize with updateStyle=true (default)
     // also sets the canvas's CSS width/height to match the div so the
@@ -1433,7 +1667,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // rotation.
     const local = this.cubeMesh.worldToLocal(hits[0].point.clone());
     const target = this.cubeTargetFromHit(local);
-    this.animateOrbitTo(target.theta, target.phi, 300);
+    this.animateOrbitTo(target.theta, target.phi, 480);
   }
 
   /** Convert a hit point on the beveled cube (in local cube space) to a
@@ -1472,6 +1706,18 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (this.cubeAnimHandle) cancelAnimationFrame(this.cubeAnimHandle);
     const startTheta = this.orbitTheta;
     const startPhi   = this.orbitPhi;
+    // Target up-vector. For non-pole targets the turntable up (world +Y) is
+    // correct. At the poles (Top/Bottom) world-Y is parallel to the look
+    // direction and gimbal-locks to an arbitrary roll — so use a fixed
+    // horizontal up that yields the canonical, axis-aligned view:
+    //   Top    (phi→0) → -Z up  (FRONT/+Z points down, RIGHT/+X to the right)
+    //   Bottom (phi→π) → +Z up
+    const su = this.camera.up.clone();
+    const tu = targetPhi < 0.01
+      ? new THREE.Vector3(0, 0, -1)
+      : targetPhi > Math.PI - 0.01
+        ? new THREE.Vector3(0, 0, 1)
+        : new THREE.Vector3(0, 1, 0);
     // Shortest-arc theta: pick whichever direction (±) is closer.
     let deltaTheta = targetTheta - startTheta;
     while (deltaTheta >  Math.PI) deltaTheta -= 2 * Math.PI;
@@ -1484,15 +1730,23 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
       this.orbitTheta = startTheta + deltaTheta * e;
       this.orbitPhi   = startPhi   + deltaPhi   * e;
+      // Tween the up-vector alongside so pole views land on a well-defined up
+      // (set before updateCamera, whose lookAt reuses camera.up).
+      this.camera.up.set(
+        su.x + (tu.x - su.x) * e,
+        su.y + (tu.y - su.y) * e,
+        su.z + (tu.z - su.z) * e,
+      ).normalize();
       this.updateCamera();
       if (t < 1) this.cubeAnimHandle = requestAnimationFrame(step);
-      else this.cubeAnimHandle = 0;
+      else { this.camera.up.copy(tu); this.updateCamera(); this.cubeAnimHandle = 0; }
     };
     this.cubeAnimHandle = requestAnimationFrame(step);
   }
 
   private onPointerDown = (ev: PointerEvent) => {
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
+    this.didNavDrag = false;
     const inSketch = this.activeSketchId() !== null;
     // SolidWorks-style input map. MMB is the navigation button in both
     // 3D and sketch modes:
@@ -1507,6 +1761,13 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (ev.button === 1) {
       if (ev.shiftKey) this.panning = true;
       else if (ev.ctrlKey || ev.metaKey) this.zoomDragging = true;
+      else this.orbiting = true;
+    } else if (ev.button === 0 && !inSketch) {
+      // Left-drag navigates per the active nav-mode button; a click (no drag)
+      // still falls through to onClick for selection.
+      const m = this.navMode();
+      if (m === 'pan') this.panning = true;
+      else if (m === 'zoom') this.zoomDragging = true;
       else this.orbiting = true;
     } else if (ev.button === 0 && inSketch) {
       const p = this.toSketchCoords(ev);
@@ -1523,7 +1784,13 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const dx = ev.clientX - this.lastPointer.x;
     const dy = ev.clientY - this.lastPointer.y;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
+    if ((this.orbiting || this.panning || this.zoomDragging) && (dx || dy)) this.didNavDrag = true;
     if (this.orbiting) {
+      // Free orbit is a world-Y-up turntable. Reset the up here so orbiting
+      // away from a canonical pole view (Top/Bottom, which set a horizontal
+      // up) re-establishes the turntable instead of orbiting about -Z/+Z.
+      // Skip in sketch mode, where the up is pinned to the sketch plane.
+      if (!this.sketchPlaneNormal && this.camera.up.y < 0.999) this.camera.up.set(0, 1, 0);
       // Horizontal drag rotates the model the SAME direction the cursor
       // moves (drag right → model spins right). Vertical drag tilts up
       // (drag up → top of model toward camera).
@@ -1646,10 +1913,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     ev.preventDefault();  // stop arrows from also scrolling the surrounding page
     const targetTheta = this.orbitTheta + dTheta;
     const targetPhi   = Math.max(0.05, Math.min(Math.PI - 0.05, this.orbitPhi + dPhi));
-    this.animateOrbitTo(targetTheta, targetPhi, 200);
+    this.animateOrbitTo(targetTheta, targetPhi, 340);
   }
 
   private onClick = (ev: MouseEvent) => {
+    // A left-drag that navigated (orbit/pan/zoom) must not also select.
+    if (this.didNavDrag) { this.didNavDrag = false; return; }
     // REQ 616: in sketch mode the click dispatches to the sketch toolbar's click
     // handler with 2D plane coords; selection of 3D faces/datums is paused…
     // EXCEPT when a 3D edge/face picker is armed (Convert Entities, etc.) —
@@ -2036,6 +2305,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     for (const obj of this.datumMeshes.values()) {
       this.datumGroup.remove(obj);
       obj.traverse(child => {
+        if (child instanceof CSS2DObject) { child.element.remove(); return; }
         const m = (child as THREE.Mesh).material as THREE.Material | undefined;
         if (m) Array.isArray(m) ? m.forEach(x => x.dispose()) : m.dispose();
         const g = (child as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
@@ -2120,8 +2390,28 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         mesh.quaternion.copy(quat);
       }
       mesh.userData = { datumId: d.id };
+      // Small corner label with the plane name (REQ — shown only for visible
+      // planes, since `datums` is already visibility-filtered upstream). Added
+      // as a child of the quad so it tracks the plane's position/orientation.
+      const labelEl = document.createElement('div');
+      labelEl.textContent = this.datumPlaneName(d);
+      labelEl.style.cssText = 'font: 600 11px ui-monospace, SFMono-Regular, monospace; opacity: 0.92; pointer-events: none; user-select: none; white-space: nowrap; text-shadow: 0 0 3px rgba(0,0,0,0.75);';
+      labelEl.style.color = '#' + color.toString(16).padStart(6, '0');
+      const labelObj = new CSS2DObject(labelEl);
+      labelObj.position.set(-38, 38, 0); // top-left corner of the 80×80 quad (plane-local)
+      mesh.add(labelObj);
       this.datumGroup.add(mesh);
       this.datumMeshes.set(d.id, mesh);
+    }
+  }
+
+  /** Short display name for a datum plane's corner label. */
+  private datumPlaneName(d: DatumElement): string {
+    switch (d.id) {
+      case 'xy_plane': return 'XY';
+      case 'yz_plane': return 'YZ';
+      case 'xz_plane': return 'XZ';
+      default: return (d as { name?: string }).name || 'Plane';
     }
   }
 

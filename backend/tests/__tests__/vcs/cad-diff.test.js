@@ -8,6 +8,23 @@ const cadvcs = require('../../../services/vcs/cadVcsService');
 const diff = require('../../../services/vcs/cadDiffService');
 const cadKernelClient = require('../../../services/cadKernelClient');
 
+describe('cadDiffService — sketch sub-diff (REQ 712)', () => {
+  test('names specific entity / constraint / dimension changes', () => {
+    const A = { state: { entities: [{ id: 'l1', kind: 'line' }, { id: 'p1', kind: 'point' }], constraints: [{ id: 'd1', type: 'distance', value: 10 }] } };
+    const B = { state: { entities: [{ id: 'l1', kind: 'line' }, { id: 'c1', kind: 'circle' }], constraints: [{ id: 'd1', type: 'distance', value: 25 }, { id: 'h1', type: 'horizontal' }] } };
+    const d = diff.sketchDiff(A, B);
+    expect(d.entities).toEqual(expect.arrayContaining([
+      { id: 'p1', kind: 'point', status: 'removed' },
+      { id: 'c1', kind: 'circle', status: 'added' },
+    ]));
+    expect(d.entities).not.toContainEqual(expect.objectContaining({ id: 'l1' })); // unchanged → omitted
+    expect(d.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'd1', type: 'distance', status: 'modified', a: 10, b: 25 }),
+      expect.objectContaining({ id: 'h1', type: 'horizontal', status: 'added' }),
+    ]));
+  });
+});
+
 async function makeModel(uid) {
   const part = await createTestPart();
   return db.DesignCADModel.create({
@@ -95,5 +112,23 @@ describe('cadDiffService — 3D body diff', () => {
 
     const mod = await diff.bodyDiff3D(model, c1, c2, { kernelClient: kernelStub });
     expect(mod.bodies.find(b => b.id === 'f2').status).toBe('modified');
+  });
+
+  test('faceNameDiff reports added / removed faces by persistent name (REQ 712)', async () => {
+    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const c0 = (await cadvcs.checkin(model, uid, 'init')).commitHash; // origin only → no faces
+    await model.update({ featureTree: F2(10), sketchDoc: F2DOC, dirty: true });
+    const c1 = (await cadvcs.checkin(model, uid, 'add f2')).commitHash; // gains face f2-f0
+
+    // c0 → c1: the new face is present in B, absent from A. Regen scopes the
+    // kernel's raw persistentName (f2-f0) to the body it belongs to → f2#0-f0.
+    const fwd = await diff.faceNameDiff(model, c0, c1, { kernelClient: kernelStub });
+    expect(fwd.namesA).toHaveLength(0);
+    expect(fwd.namesB).toContain('f2#0-f0');
+
+    // c1 → c0: same face is now only in A → it would render as removed.
+    const back = await diff.faceNameDiff(model, c1, c0, { kernelClient: kernelStub });
+    expect(back.namesA).toContain('f2#0-f0');
+    expect(back.namesB).toHaveLength(0);
   });
 });

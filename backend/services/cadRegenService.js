@@ -140,7 +140,12 @@ function buildTextResolver(model) {
   if (part) {
     vars.partName = part.name || '';
     vars.partNumber = part.sku || part.manufacturerPN || part.name || '';
-    vars.partRevision = part.revision || '';
+    // The revision being worked on: caller may attach the draft display rev
+    // (`__partRevision`) — the rev a draft will release as — which leads the
+    // part row's revision until release. Falls back to the part row's revision.
+    vars.partRevision = (model.__partRevision != null && model.__partRevision !== '')
+      ? String(model.__partRevision)
+      : (part.revision || '');
     vars.manufacturerPN = part.manufacturerPN || '';
   }
   try {
@@ -809,21 +814,44 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
 /** Regenerate the model and export its bodies as a single STEP file (text).
  * Reuses the regen (cache-backed) to obtain the final composed body BReps,
  * then calls the kernel `exportStep` RPC to combine + serialize them. */
+/** Serialize a set of body BReps to a CAD file via the kernel. `format` is
+ * 'step' (returns { step } text) or 'stl' (returns { stlBase64 } binary). Used
+ * by both the live exporters and the frozen-release exporters (controller). */
+async function exportBodyBreps(breps, format, { kernelClient } = {}) {
+  const client = kernelClient || cadKernelClient.getDefaultClient();
+  if (!Array.isArray(breps) || breps.length === 0) {
+    throw new Error('No matching body geometry to export.');
+  }
+  if (format === 'stl') {
+    const rpc = await client.call('exportStl', { breps });
+    return { stlBase64: rpc.stlBase64 || rpc.stl_base64 || rpc.stl, bodyCount: breps.length };
+  }
+  const rpc = await client.call('exportStep', { breps });
+  return { step: rpc.step, bodyCount: breps.length };
+}
+
 async function exportModelStep(model, { kernelClient, db, bodyIds } = {}) {
   const client = kernelClient || cadKernelClient.getDefaultClient();
   const regen = await regenerateModel(model, { kernelClient: client, db, includeBodyBreps: true });
   let bodies = (regen.bodies || []).filter(b => b.brep);
-  // Optional filter to a subset of bodies (by id).
   if (Array.isArray(bodyIds) && bodyIds.length > 0) {
     const want = new Set(bodyIds);
     bodies = bodies.filter(b => want.has(b.id));
   }
-  const breps = bodies.map(b => b.brep);
-  if (breps.length === 0) {
-    throw new Error('No matching body geometry to export.');
+  const out = await exportBodyBreps(bodies.map(b => b.brep), 'step', { kernelClient: client });
+  return { ...out, errors: regen.errors };
+}
+
+async function exportModelStl(model, { kernelClient, db, bodyIds } = {}) {
+  const client = kernelClient || cadKernelClient.getDefaultClient();
+  const regen = await regenerateModel(model, { kernelClient: client, db, includeBodyBreps: true });
+  let bodies = (regen.bodies || []).filter(b => b.brep);
+  if (Array.isArray(bodyIds) && bodyIds.length > 0) {
+    const want = new Set(bodyIds);
+    bodies = bodies.filter(b => want.has(b.id));
   }
-  const rpc = await client.call('exportStep', { breps });
-  return { step: rpc.step, bodyCount: breps.length, errors: regen.errors };
+  const out = await exportBodyBreps(bodies.map(b => b.brep), 'stl', { kernelClient: client });
+  return { ...out, errors: regen.errors };
 }
 
 function _safeCallback(fn) {
@@ -2980,14 +3008,23 @@ function _resolveEndConditionDispatch(endCondition, plane, feature, vertexMap, f
       return { plane, distance: Math.abs(signed), flipped: signed < 0 };
     }
     case 'upToSurface': {
+      // Is a candidate face perpendicular to the extrude direction (its normal
+      // parallel to the sketch normal)? |cos angle| ≈ 1.
+      const n = plane.normal;
+      const isPerp = (t) => {
+        if (!t || !t.normal) return false;
+        const d = n[0] * t.normal[0] + n[1] * t.normal[1] + n[2] * t.normal[2];
+        return Math.abs(Math.abs(d) - 1) <= 1e-3;
+      };
       // Two-stage lookup: prefer the persistent face id from an upstream
-      // feature's topology, but fall back to the geometry the frontend
-      // captured at pick time when the persistent id can't be resolved.
-      // The fallback covers the case where a merging extrude re-tags
-      // upstream faces with the merging feature's own id (proper
-      // topological naming is deferred — see Notes-2026-05-23.md).
+      // feature's topology, but fall back to the plane the frontend captured at
+      // pick time when the persistent id can't be resolved — OR when it resolves
+      // to an UNSUITABLE (oblique) face. The latter happens when an upstream
+      // change (e.g. a merge that keeps a feature the branch removed) renumbers
+      // the body's faces, so the stored sub-index now points at the wrong face;
+      // the pick-time plane still describes the intended perpendicular target.
       let target = faceMap && faceMap.get(endCondition.faceId);
-      if (!target && endCondition.fallbackPlane) {
+      if ((!target || !isPerp(target)) && endCondition.fallbackPlane) {
         target = {
           origin: endCondition.fallbackPlane.origin,
           normal: endCondition.fallbackPlane.normal,
@@ -3000,13 +3037,9 @@ function _resolveEndConditionDispatch(endCondition, plane, feature, vertexMap, f
           `Re-pick the target face.`
         );
       }
-      // Require the target face's normal to be parallel to the extrude
-      // direction. Oblique / curved targets need BRepFeat_MakeDPrism
-      // (kernel work, future pass). |cos angle| ≈ 1 means parallel.
-      const n = plane.normal;
-      const fn = target.normal;
-      const dot = n[0] * fn[0] + n[1] * fn[1] + n[2] * fn[2];
-      if (Math.abs(Math.abs(dot) - 1) > 1e-3) {
+      // Oblique / curved targets need BRepFeat_MakeDPrism (kernel work, future
+      // pass) — reject only if even the fallback plane isn't perpendicular.
+      if (!isPerp(target)) {
         throw new Error(
           'Up to Surface: target face must be perpendicular to the extrude direction ' +
           '(i.e. its normal parallel to the sketch normal). Oblique / curved targets ' +
@@ -3146,6 +3179,8 @@ function _canonicalJson(value) {
 
 module.exports = {
   regenerateModel,
+  exportBodyBreps,
   exportModelStep,
+  exportModelStl,
   NAMING_VERSION,
 };

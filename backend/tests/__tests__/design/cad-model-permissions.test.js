@@ -77,30 +77,26 @@ describe('CAD Model permission enforcement (CAD-106)', () => {
     });
   });
 
-  describe('cad.approve gates release specifically', () => {
-    it('returns 403 on release with cad.write but no cad.approve', async () => {
+  describe('release-to-main is self-service (cad.write); no approval needed', () => {
+    it('returns 403 on release without cad.write', async () => {
       const writer = await authenticatedRequest();
       const part = await createTestPart();
       const created = await writer.post(`/api/design/cad-model/by-part/${part.id}`).send({});
 
-      const noapproveUser = await createTestUser({ displayName: 'cad-no-approve' });
-      const noapprove = await authenticatedRequest(noapproveUser, { grantPermissions: false });
-      await grantCadActions(noapprove.user.id, ['read', 'write']);
-      const res = await noapprove.post(`/api/design/cad-model/${created.body.id}/release`);
+      const readUser = await createTestUser({ displayName: 'cad-read-only' });
+      const reader = await authenticatedRequest(readUser, { grantPermissions: false });
+      await grantCadActions(reader.user.id, ['read']);
+      const res = await reader.post(`/api/design/cad-model/${created.body.id}/release`);
       expect(res.status).toBe(403);
     });
 
-    it('returns 200 on release after approval (cad.approve)', async () => {
-      const writer = await authenticatedRequest();
+    it('releases a draft branch onto main with cad.write alone (no submit/approve)', async () => {
+      const writerUser = await createTestUser({ displayName: 'cad-writer' });
+      const writer = await authenticatedRequest(writerUser, { grantPermissions: false });
+      await grantCadActions(writer.user.id, ['read', 'write']);
       const part = await createTestPart();
       const created = await writer.post(`/api/design/cad-model/by-part/${part.id}`).send({});
-      await writer.post(`/api/design/cad-model/${created.body.id}/workflow`).send({ action: 'submit' });
-
-      const approverUser = await createTestUser({ displayName: 'cad-approver' });
-      const approver = await authenticatedRequest(approverUser, { grantPermissions: false });
-      await grantCadActions(approver.user.id, ['read', 'approve']);
-      await approver.post(`/api/design/cad-model/${created.body.id}/workflow`).send({ action: 'approve' });
-      const res = await approver.post(`/api/design/cad-model/${created.body.id}/release`);
+      const res = await writer.post(`/api/design/cad-model/${created.body.id}/release`);
       expect(res.status).toBe(200);
       expect(res.body.commitHash).toBeTruthy();
     });

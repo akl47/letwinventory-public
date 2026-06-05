@@ -32,6 +32,14 @@ module.exports = (sequelize, DataTypes) => {
     lockedByUserID: { type: DataTypes.INTEGER, allowNull: true },
     lockedAt: { type: DataTypes.DATE, allowNull: true },
     lockExpiresAt: { type: DataTypes.DATE, allowNull: true },
+    // Saved camera orientation for the Default-view control + commit thumbnails
+    // (REQ 708/709). A view preference, not versioned doc content, so it is
+    // editable without a checkout. Shape: { theta, phi, distance, target:[x,y,z] }.
+    defaultView: { type: DataTypes.JSONB, allowNull: true },
+    // Set true by a development release (REQ 715-718): the design is locked
+    // read-only and edits require a new revision. Distinct from the checkout
+    // edit-lock (lockedByUserID) and from Parts.revisionLocked.
+    releaseLocked: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     createdByUserID: { type: DataTypes.INTEGER, allowNull: false },
     activeFlag: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     createdAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },

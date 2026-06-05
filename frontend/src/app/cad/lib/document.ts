@@ -4,6 +4,7 @@ import type {
 } from './types';
 import { emptySketchState } from './store';
 import { projectFrom3D } from './plane';
+import { newSketchId } from './ids';
 
 let _docSeq = 0;
 function nextCandidateId(): string {
@@ -38,7 +39,7 @@ export function createSketch(
   plane: Plane3,
   topology: ModelTopology | null,
 ): { doc: SketchDocument; sketchId: string } {
-  const sketchId = `s${doc.nextSketchSeq}`;
+  const sketchId = newSketchId(); // globally-unique (see ids.ts); nextSketchSeq still advanced for UI gating
   // SolidWorks-style default name: "Sketch N" where N counts existing
   // sketches in the doc. setSketchName overrides this when the user
   // renames; we only fill in at creation.

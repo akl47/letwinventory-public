@@ -132,6 +132,7 @@ describe('CAD Model CRUD (CAD-101, CAD-102, CAD-107)', () => {
       const newTree = { features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 10 }] };
       const newDoc = { sketches: { s1: { hostId: 'datum:xy_plane', primitives: [] } } };
 
+      await auth.post(`/api/design/cad-model/${created.body.id}/checkout`).send({});
       const res = await auth.put(`/api/design/cad-model/${created.body.id}`)
         .send({ featureTree: newTree, sketchDoc: newDoc });
       expect(res.status).toBe(200);
@@ -147,6 +148,7 @@ describe('CAD Model CRUD (CAD-101, CAD-102, CAD-107)', () => {
       const created = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({});
 
       const newTree = { features: [{ id: 'f1', type: 'origin' }] };
+      await auth.post(`/api/design/cad-model/${created.body.id}/checkout`).send({});
       const res = await auth.put(`/api/design/cad-model/${created.body.id}`).send({ featureTree: newTree });
       expect(res.status).toBe(200);
       expect(res.body.sketchDoc).toEqual(EMPTY_DOC);

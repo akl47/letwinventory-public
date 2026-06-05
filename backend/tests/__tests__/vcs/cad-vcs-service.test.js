@@ -104,4 +104,52 @@ describe('cadVcsService — checkout / check-in / lock', () => {
     expect(commit.meta.namingVersion).toBe(NAMING_VERSION);
     expect(commit.meta.kernelVersion).toBeTruthy();
   });
+
+  test('undoCheckout discards changes, rolls back to the last check-in, and unlocks', async () => {
+    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    await cadvcs.checkin(model, uid, 'base'); // base = origin only
+    await model.update({
+      featureTree: { features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 9 }], nextFeatureSeq: 3 },
+      dirty: true,
+    });
+    expect(model.featureTree.features).toHaveLength(2);
+
+    await cadvcs.undoCheckout(model, uid);
+    expect(model.featureTree.features.map(f => f.id)).toEqual(['f1']); // rolled back
+    expect(model.dirty).toBe(false);
+    expect(model.lockedByUserID).toBeNull();
+  });
+
+  test('undoCheckout requires holding the lock', async () => {
+    const model = await makeModel(uid); // not checked out
+    await expect(cadvcs.undoCheckout(model, uid)).rejects.toMatchObject({ statusCode: 423 });
+  });
+
+  // Regression: a second release of the same revision must fail BEFORE mutating
+  // anything. Otherwise the branch advances past the tagged commit and orphans a
+  // duplicate `release N` commit, which corrupts the history graph (the released
+  // HEAD ends up buried under untagged duplicates).
+  test('re-releasing the same revision is rejected without advancing the branch', async () => {
+    const cadKernelClient = require('../../../services/cadKernelClient');
+    const stub = { call: jest.fn().mockResolvedValue({
+      brepBytes: 'BREP', faces: [], topology: { vertices: [], edges: [] },
+    }) };
+    const spy = jest.spyOn(cadKernelClient, 'getDefaultClient').mockReturnValue(stub);
+    try {
+      const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+      await cadvcs.checkin(model, uid, 'base');
+
+      const first = await cadvcs.release(model, uid, '00', {});
+      const repo = await cadvcs.repoForModel(model);
+      expect((await vcs.getRef(repo, '00')).targetHash).toBe(first.commitHash);
+      expect((await vcs.getRef(repo, 'main')).targetHash).toBe(first.commitHash);
+
+      // Second release: 409, and the branch head + tag stay on the first commit.
+      await expect(cadvcs.release(model, uid, '00', {})).rejects.toMatchObject({ statusCode: 409 });
+      expect((await vcs.getRef(repo, 'main')).targetHash).toBe(first.commitHash);
+      expect((await vcs.getRef(repo, '00')).targetHash).toBe(first.commitHash);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

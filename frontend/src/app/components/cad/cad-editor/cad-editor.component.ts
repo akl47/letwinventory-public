@@ -2,7 +2,10 @@ import { Component, inject, signal, computed, effect, untracked, OnInit, OnDestr
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
-import { MatIconModule } from '@angular/material/icon';
+import { MatIconModule, MatIconRegistry } from '@angular/material/icon';
+import { DomSanitizer } from '@angular/platform-browser';
+import { registerCadIcons } from '../cad-icons';
+import { CadCheckinDialogComponent, CadCheckinResult } from '../cad-checkin-dialog/cad-checkin-dialog.component';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
@@ -15,7 +18,7 @@ import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import { CadModelService } from '../../../services/cad-model.service';
 import { InventoryService } from '../../../services/inventory.service';
 import { Part } from '../../../models/part.model';
-import { CadModel, CadCommit, CadBranch, CadCommitDiff, CadWorkflow } from '../../../models/cad-model.model';
+import { CadModel, CadCommit, CadBranch, CadCommitDiff, CadWorkflow, CadDefaultView, CadCommitGeometry } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { CadStreamService, type CadStreamEvent } from '../../../services/cad-stream.service';
@@ -36,6 +39,7 @@ import {
   emptyFeatureTree, addFeature, defaultDatumVisibility,
   removeFeature, updateFeatureParam, removeFeaturesReferencingSketch,
 } from '../../../cad/lib/featureTree';
+import { newFeatureId } from '../../../cad/lib/ids';
 import { emptyDocument, createSketch, updateSketchState, deleteSketch, setSketchVisibility, setSketchName } from '../../../cad/lib/document';
 import { sizeOptions as holeSizeOptionsFor, defaultSizeFor as holeDefaultSizeFor, holeSpec, type HoleStandard, type HoleSizeKey } from '../../../cad/lib/holeSpecs';
 import { removeConstraint, setConstraintValue, addPoint, addLine, addCircle, addCircleByPoint, addArc, addArcByPoints, updateTextEntity, updatePictureEntity, updateEquationCurveEntity, rotateTextBox } from '../../../cad/lib/store';
@@ -76,6 +80,10 @@ interface HistorySnapshot {
   doc: SketchDocument;
 }
 
+// Fed to the viewer when the kernel is offline so it clears all meshes (an
+// empty-but-truthy geometry triggers syncGeometry's clear-and-rebuild path).
+const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { vertices: [], edges: [] } };
+
 @Component({
   selector: 'app-cad-editor',
   standalone: true,
@@ -93,7 +101,121 @@ interface HistorySnapshot {
            sketch is active) but the user can manually click tabs to override.
            OnShape/SolidWorks layout: content row on top, tab labels at the bottom. -->
       <div class="ribbon">
+        <div class="tab-strip tab-strip-top">
+          <button class="tab" data-testid="tab-file"
+                  [class.active]="activeTab() === 'file'"
+                  (click)="setActiveTab('file')">File</button>
+          <button class="tab" data-testid="tab-features"
+                  *ngIf="activeSketchId() === null"
+                  [class.active]="activeTab() === 'features'"
+                  (click)="setActiveTab('features')">Features</button>
+          <button class="tab" data-testid="tab-sketch"
+                  *ngIf="activeSketchId() !== null"
+                  [class.active]="activeTab() === 'sketch'"
+                  (click)="setActiveTab('sketch')">Sketch</button>
+        </div>
         <div class="ribbon-content">
+          <!-- File tab: version control + release (Phase 1-4). -->
+          <div class="ribbon-pane" [hidden]="activeTab() !== 'file'">
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="action-checkout"
+                        *ngIf="model() && canWrite()" [disabled]="!!model()?.lockedByUserID"
+                        [matTooltip]="onMainBranch() ? 'main is protected — check out creates a draft branch to edit' : 'Check out — acquire the exclusive edit lock'"
+                        (click)="onCheckout()">
+                  <mat-icon svgIcon="cad-checkout"></mat-icon><span class="ribbon-label">Check out</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-branches"
+                        [disabled]="!model()" [class.active]="showBranches()"
+                        matTooltip="Branches + cherry-pick" (click)="toggleBranches()">
+                  <mat-icon svgIcon="cad-branch"></mat-icon><span class="ribbon-label">{{ currentBranch() }}</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-checkin"
+                        [disabled]="!isLockedByMe()"
+                        matTooltip="Check in — commit the working copy"
+                        (click)="onCheckin()">
+                  <mat-icon svgIcon="cad-checkin"></mat-icon><span class="ribbon-label">Check in</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-undo-checkout"
+                        [disabled]="!isLockedByMe()"
+                        matTooltip="Undo checkout — discard uncommitted changes + unlock"
+                        (click)="onUndoCheckout()">
+                  <mat-icon svgIcon="cad-reopen"></mat-icon><span class="ribbon-label">Undo checkout</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Working copy</div>
+            </div>
+            <div class="ribbon-divider"></div>
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="action-history"
+                        [disabled]="!model()"
+                        matTooltip="Open the part's full version history" (click)="openVersionHistory()">
+                  <mat-icon svgIcon="cad-history"></mat-icon><span class="ribbon-label">History</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-compare"
+                        [disabled]="commits().length < 2" [class.active]="showCompare()"
+                        matTooltip="Compare two commits" (click)="toggleCompare()">
+                  <mat-icon svgIcon="cad-compare"></mat-icon><span class="ribbon-label">Compare</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">History</div>
+            </div>
+            <div class="ribbon-divider"></div>
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <!-- Production review workflow (submit / approve) — only on main,
+                     gating the production-letter release. -->
+                <button class="ribbon-button" *ngFor="let a of (onMainBranch() ? (workflow()?.actions || []) : [])"
+                        [attr.data-testid]="'workflow-' + a.action"
+                        [matTooltip]="'Production review: ' + a.action"
+                        (click)="onWorkflowAction(a.action)">
+                  <mat-icon [svgIcon]="'cad-' + a.action"></mat-icon><span class="ribbon-label">{{ a.action }}</span>
+                </button>
+                <!-- Release the draft branch onto main as the next revision —
+                     self-service (no approval); locks the released revision. -->
+                <button class="ribbon-button" data-testid="action-release-main"
+                        *ngIf="canWrite() && !onMainBranch()"
+                        [disabled]="model()?.behindMain || model()?.dirty || !model()?.baseCommitHash"
+                        [matTooltip]="model()?.behindMain ? 'Behind main — merge main in before releasing' : (model()?.dirty || !model()?.baseCommitHash) ? 'Check in the branch first' : 'Release this branch onto main and lock it as the next revision'"
+                        (click)="onReleaseToMain()">
+                  <mat-icon svgIcon="cad-release"></mat-icon><span class="ribbon-label">Release</span>
+                </button>
+                <!-- Behind main → merge main's latest in (pick which branch changes to keep). -->
+                <button class="ribbon-button" data-testid="action-merge"
+                        *ngIf="model()?.behindMain"
+                        matTooltip="Branch is behind main — merge main's latest features in (choose which branch changes to keep)"
+                        (click)="onMerge()">
+                  <mat-icon>merge</mat-icon><span class="ribbon-label">Merge</span>
+                </button>
+                <!-- Production release — promote the released main revision to a letter rev. -->
+                <button class="ribbon-button" data-testid="action-prod-release"
+                        *ngIf="canApprove() && onMainBranch() && model()?.released"
+                        [disabled]="workflow()?.state !== 'approved'"
+                        [matTooltip]="workflow()?.state === 'approved' ? 'Promote to production (letter revision)' : 'Requires workflow approval first'"
+                        (click)="onProductionRelease()">
+                  <mat-icon svgIcon="cad-approve"></mat-icon><span class="ribbon-label">Production</span>
+                </button>
+                <!-- Edit a released part: create the next draft branch. -->
+                <button class="ribbon-button" data-testid="action-new-branch"
+                        *ngIf="canWrite() && onMainBranch()"
+                        matTooltip="Create a draft branch to make changes"
+                        (click)="onCreateBranch()">
+                  <mat-icon svgIcon="cad-branch"></mat-icon><span class="ribbon-label">New branch</span>
+                </button>
+                <!-- Download the released revision's frozen files. -->
+                <button class="ribbon-button" data-testid="action-dl-step" *ngIf="model()?.released"
+                        matTooltip="Download released STEP" (click)="downloadReleaseStep()">
+                  <mat-icon>category</mat-icon><span class="ribbon-label">STEP</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-dl-stl" *ngIf="model()?.released"
+                        matTooltip="Download released STL" (click)="downloadReleaseStl()">
+                  <mat-icon>view_in_ar</mat-icon><span class="ribbon-label">STL</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Review &amp; release</div>
+            </div>
+          </div>
           <div class="ribbon-pane" [hidden]="activeTab() !== 'features'">
             <!-- ── Sketch-based: Sketch + Extrude/Revolve/Sweep (each
                  with a Boss/Cut split-button). ────────────────────── -->
@@ -105,18 +227,19 @@ interface HistorySnapshot {
                         [class.active]="mode() === 'pick-plane'"
                         matTooltip="Start a new sketch on a datum plane"
                         (click)="onSketchAction()">
-                  <mat-icon>draw</mat-icon>
+                  <mat-icon svgIcon="cad-new-sketch"></mat-icon>
                   <span class="ribbon-label">Sketch</span>
                 </button>
-                <!-- Extrude split-button -->
+                <!-- Extrude split-button (Boss/Cut via the dropdown; also
+                     toggleable in the sidebar once open). -->
                 <div class="ribbon-split">
                   <button class="ribbon-button"
                           data-testid="action-extrude"
                           [disabled]="readonly() || activeSketchId() !== null || (extrudeMode() === 'cut' && !hasAdditiveBody())"
-                          [class.active]="mode() === 'pick-extrude-target' || mode() === 'pick-cut-extrude-target'"
+                          [class.active]="mode() === 'pick-extrude-target' || mode() === 'pick-cut-extrude-target' || extrudeSidebar() !== null"
                           [matTooltip]="extrudeMode() === 'cut' ? 'Cut Extrude — subtract the sketched profile from the existing body' : 'Extrude an existing sketch, or start a new one on a plane'"
                           (click)="invokeExtrude()">
-                    <mat-icon>{{ extrudeMode() === 'cut' ? 'vertical_align_bottom' : 'vertical_align_top' }}</mat-icon>
+                    <mat-icon [svgIcon]="extrudeMode() === 'cut' ? 'cad-cut-extrude' : 'cad-extrude'"></mat-icon>
                     <span class="ribbon-label">{{ extrudeMode() === 'cut' ? 'Cut Extrude' : 'Extrude' }}</span>
                   </button>
                   <button class="ribbon-split-chevron"
@@ -127,10 +250,10 @@ interface HistorySnapshot {
                   </button>
                   <mat-menu #extrudeMenu>
                     <button mat-menu-item (click)="extrudeMode.set('boss'); onExtrudeAction()">
-                      <mat-icon>vertical_align_top</mat-icon> Boss Extrude
+                      <mat-icon svgIcon="cad-extrude"></mat-icon> Boss Extrude
                     </button>
                     <button mat-menu-item [disabled]="!hasAdditiveBody()" (click)="extrudeMode.set('cut'); onCutExtrudeAction()">
-                      <mat-icon>vertical_align_bottom</mat-icon> Cut Extrude
+                      <mat-icon svgIcon="cad-cut-extrude"></mat-icon> Cut Extrude
                     </button>
                   </mat-menu>
                 </div>
@@ -142,7 +265,7 @@ interface HistorySnapshot {
                           [class.active]="mode() === 'pick-revolve-target' || mode() === 'pick-cut-revolve-target'"
                           [matTooltip]="revolveMode() === 'cut' ? 'Cut Revolve — subtract a revolved profile' : 'Revolve a sketch around a sketched axis line'"
                           (click)="invokeRevolve()">
-                    <mat-icon>{{ revolveMode() === 'cut' ? 'remove_circle_outline' : '360' }}</mat-icon>
+                    <mat-icon [svgIcon]="revolveMode() === 'cut' ? 'cad-cut-revolve' : 'cad-revolve'"></mat-icon>
                     <span class="ribbon-label">{{ revolveMode() === 'cut' ? 'Cut Revolve' : 'Revolve' }}</span>
                   </button>
                   <button class="ribbon-split-chevron"
@@ -153,10 +276,10 @@ interface HistorySnapshot {
                   </button>
                   <mat-menu #revolveMenu>
                     <button mat-menu-item (click)="revolveMode.set('boss'); onRevolveAction()">
-                      <mat-icon>360</mat-icon> Boss Revolve
+                      <mat-icon svgIcon="cad-revolve"></mat-icon> Boss Revolve
                     </button>
                     <button mat-menu-item [disabled]="!hasAdditiveBody()" (click)="revolveMode.set('cut'); onCutRevolveAction()">
-                      <mat-icon>remove_circle_outline</mat-icon> Cut Revolve
+                      <mat-icon svgIcon="cad-cut-revolve"></mat-icon> Cut Revolve
                     </button>
                   </mat-menu>
                 </div>
@@ -168,7 +291,7 @@ interface HistorySnapshot {
                           [class.active]="mode() === 'pick-sweep-target' || mode() === 'pick-cut-sweep-target'"
                           [matTooltip]="sweepMode() === 'cut' ? 'Cut Sweep — subtract a swept profile' : 'Sweep — drag a profile sketch along a path sketch'"
                           (click)="invokeSweep()">
-                    <mat-icon>{{ sweepMode() === 'cut' ? 'turn_right' : 'route' }}</mat-icon>
+                    <mat-icon [svgIcon]="sweepMode() === 'cut' ? 'cad-cut-sweep' : 'cad-sweep'"></mat-icon>
                     <span class="ribbon-label">{{ sweepMode() === 'cut' ? 'Cut Sweep' : 'Sweep' }}</span>
                   </button>
                   <button class="ribbon-split-chevron"
@@ -179,10 +302,10 @@ interface HistorySnapshot {
                   </button>
                   <mat-menu #sweepMenu>
                     <button mat-menu-item (click)="sweepMode.set('boss'); onSweepAction()">
-                      <mat-icon>route</mat-icon> Boss Sweep
+                      <mat-icon svgIcon="cad-sweep"></mat-icon> Boss Sweep
                     </button>
                     <button mat-menu-item [disabled]="!hasAdditiveBody()" (click)="sweepMode.set('cut'); onCutSweepAction()">
-                      <mat-icon>turn_right</mat-icon> Cut Sweep
+                      <mat-icon svgIcon="cad-cut-sweep"></mat-icon> Cut Sweep
                     </button>
                   </mat-menu>
                 </div>
@@ -192,7 +315,7 @@ interface HistorySnapshot {
                         [class.active]="loftSidebar() !== null"
                         matTooltip="Loft — blend a solid through 2+ profile sketches"
                         (click)="onLoftAction()">
-                  <mat-icon>layers</mat-icon>
+                  <mat-icon svgIcon="cad-loft"></mat-icon>
                   <span class="ribbon-label">Loft</span>
                 </button>
                 <button class="ribbon-button"
@@ -201,7 +324,7 @@ interface HistorySnapshot {
                         [class.active]="holeSidebar() !== null"
                         matTooltip="Hole Wizard — click faces to drop standardized hardware holes"
                         (click)="onHoleAction()">
-                  <mat-icon>radio_button_unchecked</mat-icon>
+                  <mat-icon svgIcon="cad-hole"></mat-icon>
                   <span class="ribbon-label">Hole</span>
                 </button>
               </div>
@@ -219,7 +342,7 @@ interface HistorySnapshot {
                         [class.active]="edgeBlendSidebar()?.kind === 'fillet'"
                         matTooltip="Fillet — round edges of the existing body"
                         (click)="onFilletAction()">
-                  <mat-icon>rounded_corner</mat-icon>
+                  <mat-icon svgIcon="cad-fillet"></mat-icon>
                   <span class="ribbon-label">Fillet</span>
                 </button>
                 <button class="ribbon-button"
@@ -228,7 +351,7 @@ interface HistorySnapshot {
                         [class.active]="edgeBlendSidebar()?.kind === 'chamfer'"
                         matTooltip="Chamfer — bevel edges of the existing body"
                         (click)="onChamferAction()">
-                  <mat-icon>format_shapes</mat-icon>
+                  <mat-icon svgIcon="cad-chamfer"></mat-icon>
                   <span class="ribbon-label">Chamfer</span>
                 </button>
                 <button class="ribbon-button"
@@ -237,7 +360,7 @@ interface HistorySnapshot {
                         [class.active]="shellSidebar() !== null"
                         matTooltip="Shell — hollow the body by removing faces"
                         (click)="onShellAction()">
-                  <mat-icon>view_in_ar</mat-icon>
+                  <mat-icon svgIcon="cad-shell"></mat-icon>
                   <span class="ribbon-label">Shell</span>
                 </button>
                 <button class="ribbon-button"
@@ -246,7 +369,7 @@ interface HistorySnapshot {
                         [class.active]="combineSidebar() !== null"
                         matTooltip="Combine — boolean operation between bodies (add / subtract / common)"
                         (click)="onCombineAction()">
-                  <mat-icon>merge_type</mat-icon>
+                  <mat-icon svgIcon="cad-combine"></mat-icon>
                   <span class="ribbon-label">Combine</span>
                 </button>
                 <button class="ribbon-button"
@@ -255,7 +378,7 @@ interface HistorySnapshot {
                         [class.active]="mirrorBodySidebar() !== null"
                         matTooltip="Mirror Body — reflect bodies across a plane"
                         (click)="onMirrorBodyAction()">
-                  <mat-icon>flip</mat-icon>
+                  <mat-icon svgIcon="cad-mirror"></mat-icon>
                   <span class="ribbon-label">Mirror Body</span>
                 </button>
                 <button class="ribbon-button"
@@ -264,7 +387,7 @@ interface HistorySnapshot {
                         [class.active]="moveCopyBodySidebar() !== null"
                         matTooltip="Move/Copy Body — translate and/or rotate selected bodies"
                         (click)="onMoveCopyBodyAction()">
-                  <mat-icon>open_with</mat-icon>
+                  <mat-icon svgIcon="cad-move"></mat-icon>
                   <span class="ribbon-label">Move/Copy</span>
                 </button>
               </div>
@@ -282,7 +405,7 @@ interface HistorySnapshot {
                         [class.active]="datumPlaneSidebar() !== null"
                         matTooltip="Plane — create a user-defined reference plane (offset, three-point, angled, etc.)"
                         (click)="onDatumPlaneAction()">
-                  <mat-icon>crop_din</mat-icon>
+                  <mat-icon svgIcon="cad-datum-plane"></mat-icon>
                   <span class="ribbon-label">Plane</span>
                 </button>
                 <button class="ribbon-button"
@@ -291,7 +414,7 @@ interface HistorySnapshot {
                         [class.active]="datumAxisSidebar() !== null"
                         matTooltip="Axis — create a user-defined reference axis"
                         (click)="onDatumAxisAction()">
-                  <mat-icon>show_chart</mat-icon>
+                  <mat-icon svgIcon="cad-datum-axis"></mat-icon>
                   <span class="ribbon-label">Axis</span>
                 </button>
                 <button class="ribbon-button"
@@ -300,7 +423,7 @@ interface HistorySnapshot {
                         [class.active]="datumPointSidebar() !== null"
                         matTooltip="Point — create a user-defined reference point"
                         (click)="onDatumPointAction()">
-                  <mat-icon>place</mat-icon>
+                  <mat-icon svgIcon="cad-datum-point"></mat-icon>
                   <span class="ribbon-label">Point</span>
                 </button>
               </div>
@@ -318,7 +441,7 @@ interface HistorySnapshot {
                         [class.active]="patternSidebar()?.kind === 'mirror'"
                         matTooltip="Mirror — reflect the body across a plane"
                         (click)="onMirrorAction()">
-                  <mat-icon>flip</mat-icon>
+                  <mat-icon svgIcon="cad-mirror"></mat-icon>
                   <span class="ribbon-label">Mirror</span>
                 </button>
                 <button class="ribbon-button"
@@ -327,7 +450,7 @@ interface HistorySnapshot {
                         [class.active]="patternSidebar()?.kind === 'linearPattern'"
                         matTooltip="Linear Pattern — copy the body along one or two directions"
                         (click)="onLinearPatternAction()">
-                  <mat-icon>grid_on</mat-icon>
+                  <mat-icon svgIcon="cad-pattern-linear"></mat-icon>
                   <span class="ribbon-label">Linear</span>
                 </button>
                 <button class="ribbon-button"
@@ -336,7 +459,7 @@ interface HistorySnapshot {
                         [class.active]="patternSidebar()?.kind === 'circularPattern'"
                         matTooltip="Circular Pattern — rotate copies of the body around an axis"
                         (click)="onCircularPatternAction()">
-                  <mat-icon>rotate_right</mat-icon>
+                  <mat-icon svgIcon="cad-pattern-circular"></mat-icon>
                   <span class="ribbon-label">Circular</span>
                 </button>
               </div>
@@ -354,15 +477,15 @@ interface HistorySnapshot {
                         [class.active]="measureSidebar()"
                         matTooltip="Measure — distance / angle between vertices, edges, or faces"
                         (click)="onMeasureAction()">
-                  <mat-icon>straighten</mat-icon>
+                  <mat-icon svgIcon="cad-measure"></mat-icon>
                   <span class="ribbon-label">Measure</span>
                 </button>
                 <button class="ribbon-button"
                         data-testid="action-equations"
-                        [disabled]="readonly()"
-                        matTooltip="Equations — define global variables and drive dimensions by expression"
+                        [disabled]="!model()"
+                        [matTooltip]="readonly() ? 'Equations — view variables (check out to edit)' : 'Equations — define global variables and drive dimensions by expression'"
                         (click)="openEquationsPanel()">
-                  <mat-icon>functions</mat-icon>
+                  <mat-icon svgIcon="cad-equations"></mat-icon>
                   <span class="ribbon-label">Equations</span>
                 </button>
               </div>
@@ -398,18 +521,6 @@ interface HistorySnapshot {
               Pick or create a sketch first — switch to Features → Sketch.
             </span>
           </div>
-        </div>
-        <div class="tab-strip">
-          <button class="tab" data-testid="tab-features"
-                  [class.active]="activeTab() === 'features'"
-                  (click)="setActiveTab('features')">
-            Features
-          </button>
-          <button class="tab" data-testid="tab-sketch"
-                  [class.active]="activeTab() === 'sketch'"
-                  (click)="setActiveTab('sketch')">
-            Sketch
-          </button>
         </div>
       </div>
 
@@ -1066,6 +1177,21 @@ interface HistorySnapshot {
                   ? (ctx.mode === 'cutExtrude' ? 'Edit Cut' : 'Edit Extrude')
                   : (ctx.mode === 'cutExtrude' ? 'Cut Extrude' : 'Extrude') }}
             </h3>
+            <!-- Boss vs Cut toggle. Cut needs an existing body to subtract from
+                 (unless we're editing a feature that's already a cut). -->
+            <div class="mode-toggle" data-testid="extrude-mode-toggle">
+              <button type="button" class="mt-btn" [class.on]="ctx.mode !== 'cutExtrude'"
+                      data-testid="extrude-mode-boss" (click)="setExtrudeSidebarMode('extrude')">
+                <mat-icon svgIcon="cad-extrude"></mat-icon> Boss
+              </button>
+              <button type="button" class="mt-btn" [class.on]="ctx.mode === 'cutExtrude'"
+                      data-testid="extrude-mode-cut"
+                      [disabled]="!hasAdditiveBody() && ctx.mode !== 'cutExtrude'"
+                      [matTooltip]="(!hasAdditiveBody() && ctx.mode !== 'cutExtrude') ? 'Needs an existing body to cut from' : ''"
+                      (click)="setExtrudeSidebarMode('cutExtrude')">
+                <mat-icon svgIcon="cad-cut-extrude"></mat-icon> Cut
+              </button>
+            </div>
             <p class="panel-hint">
               Pick the end condition. {{ ctx.regionCount > 1 ? 'Choose which closed regions in the sketch to extrude.' : '' }}
             </p>
@@ -3009,10 +3135,17 @@ interface HistorySnapshot {
         </ng-container>
 
         <div class="viewport-wrap">
+          <!-- Kernel offline: the kernel produces geometry, so with it down we
+               render nothing (displayedGeometry → empty) and say so here. -->
+          <div class="kernel-offline-overlay" *ngIf="!kernelOnline()" data-testid="kernel-offline-overlay">
+            <mat-icon>cloud_off</mat-icon>
+            <div class="koo-title">CAD kernel offline</div>
+            <div class="koo-sub">Geometry can’t be generated. Reconnecting…</div>
+          </div>
           <ng-container *ngIf="!loading(); else loadingTpl">
             <app-cad-viewer
               #viewer
-              [geometry]="geometry()"
+              [geometry]="displayedGeometry()"
               [selected]="selected()"
               [selectedFeatures]="selectedFeatures()"
               [pickedFaceIds]="pickedFaceIdsForViewer()"
@@ -3031,6 +3164,8 @@ interface HistorySnapshot {
               [drivenDimensions]="drivenSketchDimensions()"
               [selectedConstraintId]="selectedConstraintId()"
               [defaultUnit]="defaultUnit()"
+              [defaultView]="model()?.defaultView ?? null"
+              (saveDefaultView)="onSaveDefaultView($event)"
               [smartDimPreview]="smartDimPreview()"
               [displayMode]="displayMode()"
               [profileFills]="profileFills()"
@@ -3129,14 +3264,17 @@ interface HistorySnapshot {
                  outside it. -->
             <div class="editor-footer">
               <div class="footer-group footer-group-left">
-                <app-category-badge data-testid="revision-badge" *ngIf="model()?.part?.revision"
-                  [label]="'Rev ' + model()!.part!.revision" subtle />
+                <app-category-badge data-testid="revision-badge" *ngIf="model()?.displayRevision"
+                  [label]="'Rev ' + model()!.displayRevision + (model()?.released ? '' : '*')"
+                  [matTooltip]="model()?.released ? 'Released revision (on main)' : 'Draft revision — releases as this number when approved'"
+                  subtle />
+                <span class="branch-badge" data-testid="cad-branch-badge" *ngIf="model()"
+                  [matTooltip]="'On branch ' + currentBranch()">
+                  <mat-icon svgIcon="cad-branch" class="branch-badge-ico"></mat-icon>{{ currentBranch() }}
+                </span>
                 <app-category-badge data-testid="workflow-badge" *ngIf="workflow()"
                   [label]="workflow()!.state"
                   [variant]="workflow()!.state==='approved' ? 'success' : workflow()!.state==='in_review' ? 'info' : 'warning'" />
-                <button class="btn" *ngFor="let a of workflow()?.actions || []"
-                        [attr.data-testid]="'workflow-' + a.action"
-                        (click)="onWorkflowAction(a.action)">{{ a.action }}</button>
                 <span class="footer-mode" data-testid="cad-hud-ready" *ngIf="activeSketchId() === null">
                   mode: {{ mode() }} · selected: {{ selected() || '(none)' }} · features: {{ featureTree().features.length }}
                 </span>
@@ -3145,38 +3283,17 @@ interface HistorySnapshot {
                       *ngIf="activeSketchId() !== null">
                   sketch · x: {{ formatCursorCoord(sketchCursor()?.x) }} · y: {{ formatCursorCoord(sketchCursor()?.y) }}
                 </span>
-                <span class="readonly-banner" data-testid="readonly-banner" *ngIf="readonly()">View only</span>
+                <span class="readonly-banner" data-testid="readonly-banner" *ngIf="readonly()">{{ readonlyHint() }}</span>
+                <button class="readonly-exit" data-testid="exit-commit-view" *ngIf="viewingCommit()"
+                        (click)="exitCommitView()" matTooltip="Return to the live working copy">
+                  <mat-icon>logout</mat-icon> Exit version
+                </button>
 
-                <!-- VCS: lock + check-in controls (Phase 1) -->
+                <!-- VCS status (actions live in the File ribbon tab) -->
                 <span class="vcs-dirty" data-testid="vcs-dirty" *ngIf="isDirty()"
                       matTooltip="Uncommitted changes since the last check-in">● unsaved</span>
                 <span class="vcs-lock" data-testid="vcs-lock-foreign" *ngIf="lockedByOther()"
                       matTooltip="Checked out by another user">🔒 checked out</span>
-                <button class="btn" data-testid="action-checkout"
-                        *ngIf="model() && canWrite() && !model()?.lockedByUserID"
-                        (click)="onCheckout()">Check out</button>
-                <button class="btn btn-primary" data-testid="action-checkin"
-                        *ngIf="isLockedByMe()" (click)="onCheckin()">Check in</button>
-                <button class="btn" data-testid="action-release-lock"
-                        *ngIf="isLockedByMe()" (click)="onReleaseLock()">Release lock</button>
-                <button class="btn" data-testid="action-history"
-                        *ngIf="model()" (click)="toggleCommits()">History ({{ commits().length }})</button>
-                <div class="vcs-commits-panel" data-testid="vcs-commits-panel" *ngIf="showCommits()">
-                  <div class="vcs-commits-head">
-                    <span>Commit history</span>
-                    <button class="vcs-commits-close" (click)="toggleCommits()">×</button>
-                  </div>
-                  <div class="vcs-commits-empty" *ngIf="!commits().length">No commits yet — check in to create the first.</div>
-                  <ul class="vcs-commits-list">
-                    <li *ngFor="let c of commits()">
-                      <span class="vcs-commit-msg">{{ c.message || '(no message)' }}</span>
-                      <span class="vcs-commit-hash">{{ shortHash(c.hash) }}</span>
-                      <span class="vcs-commit-time">{{ c.timestamp | date:'short' }}</span>
-                    </li>
-                  </ul>
-                </div>
-                <button class="btn" data-testid="action-branches"
-                        *ngIf="model()" (click)="toggleBranches()">⑂ {{ currentBranch() }} ({{ branches().length }})</button>
                 <div class="vcs-commits-panel" data-testid="vcs-branches-panel" *ngIf="showBranches()">
                   <div class="vcs-commits-head">
                     <span>Branches</span>
@@ -3195,8 +3312,6 @@ interface HistorySnapshot {
                     <button class="btn" (click)="onCherryPick()">Cherry-pick…</button>
                   </div>
                 </div>
-                <button class="btn" data-testid="action-compare"
-                        *ngIf="commits().length >= 2" (click)="toggleCompare()">Compare</button>
                 <div class="vcs-commits-panel" data-testid="vcs-compare-panel" *ngIf="showCompare()">
                   <div class="vcs-commits-head">
                     <span>Compare commits</span>
@@ -3225,18 +3340,11 @@ interface HistorySnapshot {
                     </li>
                   </ul>
                 </div>
-                <button class="btn btn-primary"
-                        data-testid="action-release"
-                        *ngIf="model() && canApprove()"
-                        [matTooltip]="'Commit + freeze + tag as Rev ' + (model()?.part?.revision || '')"
-                        (click)="onRelease()">
-                  Release Rev {{ model()?.part?.revision }}
-                </button>
                 <span class="kernel-badge"
                       data-testid="kernel-badge"
-                      *ngIf="regenLoading() || !stream.connected()"
-                      [class.streaming]="regenLoading() && stream.connected()"
-                      [class.disconnected]="!stream.connected()"
+                      *ngIf="regenLoading() || !kernelOnline()"
+                      [class.streaming]="regenLoading() && kernelOnline()"
+                      [class.disconnected]="!kernelOnline()"
                       [matTooltip]="kernelBadgeTooltip()">
                   <span class="kernel-dot"></span>
                   {{ kernelBadgeLabel() }}
@@ -3377,6 +3485,11 @@ interface HistorySnapshot {
     .state-badge.review { background: #e3f2fd; color: #1565c0; }
     .state-badge.released { background: #e8f5e9; color: #2e7d32; }
     .readonly-banner { padding: 4px 10px; background: #ffebee; color: #c62828; border-radius: 4px; font-size: 12px; font-weight: 600; }
+    .readonly-exit { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; background: #c62828; color: #fff; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .readonly-exit mat-icon { font-size: 15px; width: 15px; height: 15px; }
+    .readonly-exit:hover { background: #a31515; }
+    .branch-badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; background: rgba(66,165,245,0.18); color: #8fc6f5; border-radius: 4px; font-size: 12px; font-weight: 500; }
+    .branch-badge-ico { font-size: 14px; width: 14px; height: 14px; }
     .kernel-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: #1b3a1b; color: #b5e0b5; border-radius: 4px; font-size: 12px; font-weight: 500; }
     .kernel-badge.streaming { background: #1b2e3a; color: #9cc7e0; }
     .kernel-badge.disconnected { background: #3a1b1b; color: #ef9a9a; }
@@ -3442,6 +3555,10 @@ interface HistorySnapshot {
     .tab { background: none; border: none; color: #aaa; padding: 0 14px; font-size: 12px; cursor: pointer; border-top: 2px solid transparent; font-weight: 500; height: 100%; text-transform: uppercase; letter-spacing: 0.4px; }
     .tab:hover { color: #fff; }
     .tab.active { color: #fff; border-top-color: #42a5f5; background: rgba(66,165,245,0.08); }
+    /* Tabs now sit ABOVE the ribbon content — point the active indicator down. */
+    .tab-strip-top { border-bottom: 1px solid #333; }
+    .tab-strip-top .tab { border-top: none; border-bottom: 2px solid transparent; }
+    .tab-strip-top .tab.active { border-bottom-color: #42a5f5; }
     .editor-body { display: flex; flex: 1; min-height: 0; }
     .feature-tree { width: 240px; background: #25253a; border-right: 1px solid #444; }
     .constraint-list { width: 220px; border-right: 1px solid #444; }
@@ -3471,6 +3588,12 @@ interface HistorySnapshot {
       color: #ddd;
     }
     .panel-title mat-icon { font-size: 18px; width: 18px; height: 18px; }
+    .mode-toggle { display: flex; gap: 0; margin: 4px 0 8px; border: 1px solid #3a3a4a; border-radius: 6px; overflow: hidden; }
+    .mode-toggle .mt-btn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 8px; background: #26263340; color: #c9c9d6; border: none; cursor: pointer; font-size: 13px; font-weight: 600; }
+    .mode-toggle .mt-btn + .mt-btn { border-left: 1px solid #3a3a4a; }
+    .mode-toggle .mt-btn mat-icon { font-size: 16px; width: 16px; height: 16px; }
+    .mode-toggle .mt-btn.on { background: #1976d2; color: #fff; }
+    .mode-toggle .mt-btn:disabled { opacity: 0.4; cursor: not-allowed; }
     .panel-hint {
       font-size: 11px;
       color: #aaa;
@@ -3664,6 +3787,10 @@ interface HistorySnapshot {
       margin-top: 12px;
     }
     .panel-actions button { flex: 1; }
+    .kernel-offline-overlay { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; background: rgba(10, 10, 20, 0.82); color: #ef9a9a; text-align: center; pointer-events: none; }
+    .kernel-offline-overlay mat-icon { font-size: 48px; width: 48px; height: 48px; }
+    .kernel-offline-overlay .koo-title { font-size: 17px; font-weight: 700; }
+    .kernel-offline-overlay .koo-sub { font-size: 13px; color: #c9c9d6; }
     .mode-prompt { position: absolute; bottom: 56px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: rgba(66, 165, 245, 0.92); color: #0a0a14; border-radius: 8px; font-weight: 500; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
     .mode-prompt .prompt-text { font-size: 13px; }
     .quick-start { position: absolute; top: 64px; right: 16px; max-width: 320px; padding: 16px 18px; background: rgba(0,0,0,0.55); border-radius: 8px; font-size: 13px; }
@@ -3675,7 +3802,7 @@ interface HistorySnapshot {
     /* VCS lock / check-in / history (Phase 1) */
     .vcs-dirty { color: #ffb74d; font-size: 12px; }
     .vcs-lock { color: #e57373; font-size: 12px; }
-    .vcs-commits-panel { position: absolute; bottom: 56px; left: 16px; width: 360px; max-height: 320px; overflow: auto;
+    .vcs-commits-panel { position: absolute; top: 112px; left: 16px; width: 360px; max-height: 320px; overflow: auto;
       background: rgba(0,0,0,0.82); border: 1px solid rgba(255,255,255,0.14); border-radius: 8px; padding: 10px 12px; font-size: 12px; z-index: 30; }
     .vcs-commits-head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; margin-bottom: 8px; }
     .vcs-commits-close { background: none; border: none; color: #ccc; font-size: 16px; cursor: pointer; line-height: 1; }
@@ -3736,7 +3863,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (p) {
       out['partName'] = p.name ?? '';
       out['partNumber'] = p.sku ?? p.manufacturerPN ?? p.name ?? '';
-      out['partRevision'] = p.revision ?? '';
+      // The rev being worked on: the draft branch's displayed revision (highest
+      // released + 1) on a draft, or the released revision on main — NOT the
+      // underlying part row's revision, which lags until release.
+      out['partRevision'] = this.model()?.displayRevision ?? p.revision ?? '';
       out['manufacturerPN'] = p.manufacturerPN ?? '';
     }
     for (const [k, v] of Object.entries(this.equationValues())) {
@@ -3769,6 +3899,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   fullscreen = signal<boolean>(false);
   partID = signal<number | null>(null);
   geometry = signal<ModelGeometry | null>(null);
+  // What the viewer actually renders. When the kernel is offline we feed it an
+  // EMPTY geometry (not null) so the viewer's syncGeometry clears every mesh —
+  // the kernel produces geometry, so with it down nothing should be shown. The
+  // underlying `geometry` signal is left intact so recovery repaints instantly.
+  displayedGeometry = computed<ModelGeometry | null>(() =>
+    this.kernelOnline() ? this.geometry() : EMPTY_GEOMETRY,
+  );
   // Multi-body state. Each entry is one body in the part; faces are kept
   // per-body so a hidden body just drops out of the union. The body
   // roster (id + name) is what the Bodies panel renders. Visibility is
@@ -4105,7 +4242,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     return null;
   });
   kernelBadgeLabel = computed<string>(() => {
-    if (!this.stream.connected()) return 'Kernel offline';
+    if (!this.kernelOnline()) return 'Kernel offline';
     if (this.regenLoading()) {
       const txt = this.regenProgressText();
       return txt ? `Regenerating · ${txt}` : 'Regenerating';
@@ -4113,16 +4250,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     return 'Idle';
   });
   kernelBadgeTooltip = computed<string>(() => {
-    if (!this.stream.connected()) {
-      return 'Stream disconnected — the editor still works via HTTP but won’t see per-feature progress.';
+    if (!this.kernelOnline()) {
+      return 'The CAD kernel is not responding — geometry can’t be generated.';
     }
-    return this.regenLoading() ? 'Kernel is regenerating geometry' : 'Kernel idle, stream connected';
+    return this.regenLoading() ? 'Kernel is regenerating geometry' : 'Kernel idle';
   });
   mode = signal<EditorMode>('idle');
   pendingExtrude = signal<boolean>(false);
   // REQ 616 — ribbon tab. Auto-switches to 'sketch' when activeSketchId becomes
   // non-null and back to 'features' when it clears; user can manually override.
-  activeTab = signal<'features' | 'sketch'>('features');
+  activeTab = signal<'file' | 'features' | 'sketch'>('features');
   // REQ 619 — display mode for the 3D viewer (session state, not persisted).
   displayMode = signal<DisplayMode>('visible-edges');
   // REQ 623 — feature multi-select. Updated by viewer's featureClick event.
@@ -4135,9 +4272,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // and how many closed loops are available; the distance / flipped /
   // loop-selection inputs are separate signals so the OK button reads
   // them directly on commit.
-  /** Split-button mode for Extrude / Revolve / Sweep — picks which
-   * variant (Boss / Cut) fires when the user clicks the main button.
-   * The dropdown chevron lets them switch + remember the new default. */
+  /** Split-button mode for Extrude / Revolve / Sweep — picks which variant
+   * (Boss / Cut) fires when the user clicks the main button; the dropdown
+   * chevron switches + remembers the default. Boss/Cut can also be flipped in
+   * the Extrude sidebar after it opens. */
   extrudeMode = signal<'boss' | 'cut'>('boss');
   revolveMode = signal<'boss' | 'cut'>('boss');
   sweepMode = signal<'boss' | 'cut'>('boss');
@@ -4979,7 +5117,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!ctx) return [];
     const sketch = this.doc().sketches[ctx.sketchId];
     if (!sketch) return [];
-    const { regions } = extractRegions(sketch.state);
+    const { regions } = extractRegions(sketch.state, this.textResolver());
     const out: ProfileFill[] = [];
     for (let i = 0; i < regions.length; i++) {
       const region = regions[i];
@@ -5211,7 +5349,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   // ── VCS working-copy state (Phase 1) ──────────────────────────────────────
   commits = signal<CadCommit[]>([]);
-  showCommits = signal(false);
   branches = signal<CadBranch[]>([]);      // Phase 2 variant branches
   showBranches = signal(false);
   showCompare = signal(false);             // Phase 3 commit compare
@@ -5219,6 +5356,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   diffB = signal<string | null>(null);
   diffResult = signal<CadCommitDiff | null>(null);
   workflow = signal<CadWorkflow | null>(null);  // Phase 4 review workflow
+  // REQ 743 — when set, the editor is showing a historical commit read-only
+  // (opened from version history via ?commit=<hash>). No checkout/lock/save.
+  viewingCommit = signal<{ hash: string; message: string | null } | null>(null);
+  // Real CAD-kernel availability (from a periodic `ping` health probe — NOT the
+  // WebSocket progress stream). When false, the editor renders nothing and shows
+  // an offline notice, since the kernel is what produces geometry.
+  kernelOnline = signal(true);
+  private kernelPollTimer: number | null = null;
   isDirty = computed(() => !!this.model()?.dirty);
   lockHolderId = computed(() => this.model()?.lockedByUserID ?? null);
   isLockedByMe = computed(() => {
@@ -5230,12 +5375,31 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     return id != null && id !== this.auth.currentUser()?.id;
   });
 
+  // Nothing can be edited unless the model is checked out by THIS user.
   readonly = computed(() => {
     const m = this.model();
     if (!m) return true;
-    // Another user holds the exclusive checkout — view only until they release.
-    if (this.lockedByOther()) return true;
-    return !this.canWrite();
+    if (this.viewingCommit()) return true;  // historical commit view is always read-only
+    if (this.onMainBranch()) return true;  // main is protected — edit on a draft branch
+    if (!this.canWrite()) return true;
+    if (!this.isLockedByMe()) return true;
+    return false;
+  });
+
+  // `main` is the protected released history — it is never edited directly;
+  // changes happen on a draft branch and reach main via submit → approve.
+  onMainBranch = computed(() => (this.model()?.branchName || 'main') === 'main');
+
+  // Helpful banner text explaining why the editor is read-only.
+  readonlyHint = computed(() => {
+    const m = this.model();
+    const vc = this.viewingCommit();
+    if (vc) return `Viewing version ${vc.hash.slice(0, 8)}${vc.message ? ' — ' + vc.message : ''} (read-only)`;
+    if (this.onMainBranch()) return 'main is protected — create or switch to a draft branch to edit';
+    if (!m || !this.canWrite()) return 'View only';
+    if (this.lockedByOther()) return 'Checked out by another user';
+    if (!this.isLockedByMe()) return 'Check out to edit';
+    return 'View only';
   });
 
   selectedIsPlanar = computed(() => {
@@ -5286,8 +5450,25 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   canApprove() { return this.auth.hasPermission('cad', 'approve'); }
 
   private regenGeneration = 0;
+  // The revisionID currently loaded (guards against reloading on fullscreen/branch
+  // query-param changes) and a branch the URL asked for but we haven't applied yet.
+  private loadedRevId = 0;
+  // Identity of what's currently loaded: `${revID}:${commitHash}` (or 'active').
+  // Guards the queryParamMap subscription against reloading on unrelated param
+  // changes (fullscreen, branch-sync), while still reloading when the target
+  // model OR the historical commit being viewed changes.
+  private loadedKey = '';
+  private pendingUrlBranch: string | null = null;
+  // Per-tab token so regen stream events can be correlated to THIS tab's regen.
+  // Two windows on the same model share a WS channel keyed by model id; without
+  // this, one tab's regen results render in the other tab (crosstalk).
+  private readonly clientRegenPrefix = Math.random().toString(36).slice(2, 8);
+  private currentRegenId = '';
 
   constructor() {
+    // Register the custom CAD icon set so the ribbon's svgIcons render even
+    // before any sketch-editor (which also registers them) has mounted.
+    registerCadIcons(inject(MatIconRegistry), inject(DomSanitizer));
     // History capture — debounced 500ms. Watches the two mutable model
     // signals (featureTree + doc) and records a snapshot once they settle.
     // Skipped when replayingHistory is true (i.e. an undo/redo just set
@@ -5568,7 +5749,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // Skip save's own regen — we kick one off below for instant
     // post-undo response, then save persists in the background.
     this.save({ skipRegen: true });
-    this.regenerate();
+    this.regenerate('undo-redo');
   }
 
   ngOnInit() {
@@ -5594,9 +5775,33 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       if (fs === '1' || fs === 'true') this.fullscreen.set(true);
       this.uiState.fullscreen.set(this.fullscreen());
       const revID = Number(qp.get('revisionID'));
-      if (revID) this.loadModel(revID);
-      else this.loadActive();
+      const commitHash = qp.get('commit') || null;
+      // Only (re)load when the target model OR the viewed commit changes.
+      // Fullscreen and branch param updates re-fire this subscription; the
+      // branch is applied once after the model loads (see pendingUrlBranch),
+      // and bootstrap() syncs the URL back to the working copy's branch — so a
+      // branch-only param change must NOT trigger a reload.
+      if (revID) {
+        const key = `${revID}:${commitHash || ''}`;
+        if (key === this.loadedKey) return;
+        this.loadedKey = key;
+        this.loadedRevId = revID;
+        this.pendingUrlBranch = qp.get('branch') || null;
+        // ?commit=<hash> → open that historical commit read-only (REQ 743).
+        if (commitHash) this.loadCommitView(revID, commitHash);
+        else this.loadModel(revID);
+      } else {
+        if (this.loadedKey === 'active') return;
+        this.loadedKey = 'active';
+        this.loadedRevId = -1;
+        this.loadActive();
+      }
     });
+    // Poll real kernel availability so the badge + render-suppression reflect
+    // the kernel itself (not the WebSocket stream). Probe once now, then every
+    // ~8 s while the editor is open.
+    this.probeKernel();
+    this.kernelPollTimer = window.setInterval(() => this.probeKernel(), 8_000);
   }
 
   ngOnDestroy() {
@@ -5606,7 +5811,31 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const w = window as any;
     delete w.__cadApp; delete w.__cadSketch; delete w.__cadSetSelected;
     if (this.streamSub) { this.streamSub.unsubscribe(); this.streamSub = null; }
+    if (this.kernelPollTimer !== null) { clearInterval(this.kernelPollTimer); this.kernelPollTimer = null; }
     this.stream.disconnect();
+  }
+
+  /** Probe the real CAD kernel (`ping`). On an offline→online recovery,
+   * regenerate so the view repaints. The badge + `displayedGeometry` read
+   * `kernelOnline`, so this is the single source of truth for kernel state. */
+  private probeKernel() {
+    this.cadApi.getKernelStatus().subscribe({
+      next: s => {
+        const was = this.kernelOnline();
+        this.kernelOnline.set(!!s.online);
+        // On offline→online recovery, repaint. In the read-only commit view
+        // reload THAT commit's geometry; otherwise regenerate the working copy.
+        if (!was && s.online) {
+          const vc = this.viewingCommit();
+          const m = this.model();
+          if (vc && m) this.loadCommitGeometry(m.id, vc.hash);
+          else this.regenerate('kernel-recovered');
+        }
+      },
+      // A failed status request (network/5xx) means we can't confirm the
+      // kernel — treat as offline rather than claiming it's up.
+      error: () => this.kernelOnline.set(false),
+    });
   }
 
   setMode(m: EditorMode) {
@@ -5617,7 +5846,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   // REQ 616 — manual tab switch from the ribbon. Independent of activeSketchId.
-  setActiveTab(t: 'features' | 'sketch') { this.activeTab.set(t); }
+  setActiveTab(t: 'file' | 'features' | 'sketch') { this.activeTab.set(t); }
 
   // REQ 623 — feature click from the 3D viewer. Tracks the last clicked face
   // for REQ 625 (sketch on a flat face) but defers selection-set updates to
@@ -6361,43 +6590,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   private startSketchOnFace(faceId: string, plane: import('../../../cad/lib/types').Plane3) {
-    const oriented = this.flipPlaneTowardCamera(plane);
-    const { doc, sketchId } = createSketch(this.doc(), `face:${faceId}`, oriented, null);
+    // Store the canonical plane (the face's outward normal) — not a
+    // view-dependent flip — so the same face always opens the same side. The
+    // viewer orients normal-to from the +normal side (gravity-aligned up).
+    const { doc, sketchId } = createSketch(this.doc(), `face:${faceId}`, plane, null);
     this.doc.set(doc);
     this.activeSketchId.set(sketchId);
     this.setMode('idle');
     this.lastPickedFaceId.set(null);
     this.selectedFeatures.set(new Set());
     this.save();
-  }
-
-  /** If the plane's normal points AWAY from the current camera, return a
-   * flipped version whose normal points TOWARD the camera. We flip both
-   * `normal` and `yAxis` to keep the basis right-handed (xAxis × yAxis =
-   * normal); keeping xAxis stable means "sketch +x" is consistent across
-   * the flip. Safe to call on freshly-created sketches because the state
-   * is empty — no entities are mirrored. Without this flip, picking the
-   * back of a face would put the user behind their sketch with the
-   * camera looking through the model. */
-  private flipPlaneTowardCamera(
-    plane: import('../../../cad/lib/types').Plane3,
-  ): import('../../../cad/lib/types').Plane3 {
-    const viewer = this.viewerRef();
-    if (!viewer) return plane;
-    const cam = viewer.cameraPosition();
-    const toCam: [number, number, number] = [
-      cam[0] - plane.origin[0],
-      cam[1] - plane.origin[1],
-      cam[2] - plane.origin[2],
-    ];
-    const dot = plane.normal[0] * toCam[0] + plane.normal[1] * toCam[1] + plane.normal[2] * toCam[2];
-    if (dot >= 0) return plane;  // already facing the camera
-    return {
-      origin: plane.origin,
-      xAxis:  plane.xAxis,
-      yAxis:  [-plane.yAxis[0], -plane.yAxis[1], -plane.yAxis[2]],
-      normal: [-plane.normal[0], -plane.normal[1], -plane.normal[2]],
-    };
   }
 
   onExtrudeAction() {
@@ -6494,8 +6696,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.errors.showError('Selected host is not a planar surface');
       return;
     }
-    const oriented = this.flipPlaneTowardCamera(plane);
-    const { doc, sketchId } = createSketch(this.doc(), datumFullId, oriented, null);
+    // Store the canonical datum plane (fixed normal) — not a view-dependent
+    // flip — so the same plane always opens the same orientation and side.
+    const { doc, sketchId } = createSketch(this.doc(), datumFullId, plane, null);
     this.doc.set(doc);
     this.activeSketchId.set(sketchId);
     this.setMode('idle');
@@ -6594,7 +6797,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.errors.showError('Revolve needs a sketched line as the axis. Add a line (preferably a construction line) and try again.');
       return;
     }
-    const { regions, errors: regionErrors } = extractRegions(sketch.state);
+    const { regions, errors: regionErrors } = extractRegions(sketch.state, this.textResolver());
     if (regions.length === 0) {
       this.errors.showError(friendlyError(regionErrors[0] || 'no closed loops in sketch'));
       return;
@@ -7102,7 +7305,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!ctx) return;
     const tree = this.featureTree();
     const seq = tree.nextFeatureSeq;
-    const id = ctx.editingFeatureId || `f${seq}`;
+    const id = ctx.editingFeatureId || newFeatureId();
     const feature = this._buildDatumPlaneFeature(id);
     if (!feature) return;
     if (ctx.editingFeatureId) {
@@ -7260,7 +7463,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!ctx) return;
     const tree = this.featureTree();
     const seq = tree.nextFeatureSeq;
-    const id = ctx.editingFeatureId || `f${seq}`;
+    const id = ctx.editingFeatureId || newFeatureId();
     const feature = this._buildDatumAxisFeature(id);
     if (!feature) return;
     if (ctx.editingFeatureId) {
@@ -7435,7 +7638,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!ctx) return;
     const tree = this.featureTree();
     const seq = tree.nextFeatureSeq;
-    const id = ctx.editingFeatureId || `f${seq}`;
+    const id = ctx.editingFeatureId || newFeatureId();
     const feature = this._buildDatumPointFeature(id);
     if (!feature) return;
     if (ctx.editingFeatureId) {
@@ -7536,7 +7739,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!ctx || !this.canCommitCombine()) return;
     const tree = this.featureTree();
     const seq = tree.nextFeatureSeq;
-    const id = ctx.editingFeatureId || `f${seq}`;
+    const id = ctx.editingFeatureId || newFeatureId();
     const feature: import('../../../cad/lib/types').CombineFeature = {
       id, type: 'combine',
       operation: this.combineOperation(),
@@ -7628,7 +7831,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!ctx || !this.canCommitMirrorBody()) return;
     const tree = this.featureTree();
     const seq = tree.nextFeatureSeq;
-    const id = ctx.editingFeatureId || `f${seq}`;
+    const id = ctx.editingFeatureId || newFeatureId();
     const feature: import('../../../cad/lib/types').MirrorBodyFeature = {
       id, type: 'mirrorBody',
       bodyIds: [...this.mirrorBodyBodyIds()],
@@ -7703,7 +7906,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!ctx || !this.canCommitMoveCopyBody()) return;
     const tree = this.featureTree();
     const seq = tree.nextFeatureSeq;
-    const id = ctx.editingFeatureId || `f${seq}`;
+    const id = ctx.editingFeatureId || newFeatureId();
     const tx = this.moveCopyTx(), ty = this.moveCopyTy(), tz = this.moveCopyTz();
     const hasTranslate = tx !== 0 || ty !== 0 || tz !== 0;
     const hasRotate = this.moveCopyRotateEnabled() && this.moveCopyAngleDeg() !== 0;
@@ -7854,7 +8057,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!ctx || !this.canCommitHole()) return;
     const tree = this.featureTree();
     const seq = tree.nextFeatureSeq;
-    const id = ctx.editingFeatureId || `f${seq}`;
+    const id = ctx.editingFeatureId || newFeatureId();
     const feature: import('../../../cad/lib/types').HoleFeature = {
       id, type: 'hole',
       placements: [...this.holePlacements()],
@@ -8000,7 +8203,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!ctx || !this.canCommitShell()) return;
     const tree = this.featureTree();
     const seq = tree.nextFeatureSeq;
-    const id = ctx.editingFeatureId || `f${seq}`;
+    const id = ctx.editingFeatureId || newFeatureId();
     const feature: import('../../../cad/lib/types').ShellFeature = {
       id,
       type: 'shell',
@@ -8179,7 +8382,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!ctx || !this.canCommitPattern()) return;
     const tree = this.featureTree();
     const seq = tree.nextFeatureSeq;
-    const id = ctx.editingFeatureId || `f${seq}`;
+    const id = ctx.editingFeatureId || newFeatureId();
     let feature: import('../../../cad/lib/types').Feature | null = null;
 
     if (ctx.kind === 'mirror') {
@@ -8692,7 +8895,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     } else {
       const tree = this.featureTree();
       const seq = tree.nextFeatureSeq;
-      const id = `f${seq}`;
+      const id = newFeatureId();
       const feature: any = ctx.kind === 'fillet'
         ? { id, type: 'fillet', edges, radius: value, name: `Fillet ${this._countFeaturesByType('fillet') + 1}`, createdAt: Date.now() }
         : { id, type: 'chamfer', edges, distance: value, ...chamferExtras, name: `Chamfer ${this._countFeaturesByType('chamfer') + 1}`, createdAt: Date.now() };
@@ -8756,7 +8959,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.setMode('idle');
       return;
     }
-    const { regions, errors } = extractRegions(sketch.state);
+    const { regions, errors } = extractRegions(sketch.state, this.textResolver());
     if (regions.length === 0) {
       this.errors.showError(friendlyError(errors[0] || 'no closed loops in sketch'));
       this.setMode('idle');
@@ -10124,6 +10327,18 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.equations.set(next);
   }
 
+  /** Toggle the open Extrude sidebar between Boss (additive 'extrude') and Cut
+   * (subtractive 'cutExtrude'). The preview + commit both read the sidebar's
+   * mode, so the change applies live. Switching mode also flips the extrude
+   * direction — a boss extrudes away from the body, a cut goes into it, so the
+   * same profile should reverse so it cuts inward instead of bossing outward. */
+  setExtrudeSidebarMode(mode: 'extrude' | 'cutExtrude') {
+    const cur = this.extrudeSidebar();
+    if (!cur || cur.mode === mode) return;  // no-op if already in this mode
+    this.extrudeSidebar.set({ ...cur, mode });
+    this.extrudeFlipped.update(f => !f);
+  }
+
   cancelExtrudeSidebar() {
     this.extrudeSidebar.set(null);
     this.extrudeHoveredRegion.set(null);
@@ -10201,6 +10416,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   // Tree context-menu actions (REQs 607, 609, 610, 611) and sketch deletion (REQ 608).
   onTreeAction(action: FeatureTreeAction) {
+    // View-only visibility toggles are allowed WITHOUT checkout — they don't
+    // change the design geometry (sketch visibility is a render-layer flag,
+    // cosmetic-threads visibility is a client-only signal). When the part is
+    // checked out they persist; otherwise they apply as a transient view toggle.
+    switch (action.action) {
+      case 'toggle-sketch-visibility': return this.toggleSketchVisibility(action.sketchId);
+      case 'toggle-cosmetic-threads-visibility': return this.cosmeticThreadsVisible.set(!this.cosmeticThreadsVisible());
+    }
     if (this.readonly()) return;
     switch (action.action) {
       case 'edit-feature': return this.editFeature(action.featureId);
@@ -10210,9 +10433,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       case 'rename-feature': return this.renameFeature(action.featureId);
       case 'edit-sketch': return this.editSketch(action.sketchId);
       case 'delete-sketch': return this.requestDeleteSketch(action.sketchId);
-      case 'toggle-sketch-visibility': return this.toggleSketchVisibility(action.sketchId);
       case 'rename-sketch': return this.renameSketch(action.sketchId);
-      case 'toggle-cosmetic-threads-visibility': return this.cosmeticThreadsVisible.set(!this.cosmeticThreadsVisible());
     }
   }
 
@@ -10237,7 +10458,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (next === null) return;
     const trimmed = next.trim();
     this.doc.set(setSketchName(this.doc(), sketchId, trimmed));
-    this.save();
+    // Renaming a sketch is metadata only — no geometry change, skip regen.
+    this.save({ skipRegen: true });
   }
 
   private toggleSketchVisibility(sketchId: string) {
@@ -10253,7 +10475,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       doc = setSketchVisibility(doc, id, nextVisible);
     }
     this.doc.set(doc);
-    this.save();
+    // Sketch visibility is a render-layer flag only — it never changes the
+    // solid geometry. Persist it (no regenerate) while the part is checked out;
+    // otherwise leave it as a transient view toggle so show/hide works without
+    // checking the part out (mirrors how body visibility behaves).
+    if (this.isLockedByMe()) this.save({ skipRegen: true });
   }
 
   // Same rule as batchTargets but for the selectedSketches signal.
@@ -10337,7 +10563,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     if (feature.type !== 'extrude' && feature.type !== 'cutExtrude') return;
     const sketch = this.doc().sketches[feature.sketchId];
-    const regionCount = sketch ? extractRegions(sketch.state).regions.length : 1;
+    const regionCount = sketch ? extractRegions(sketch.state, this.textResolver()).regions.length : 1;
     // Reuse the same Extrude sidebar in "editing" mode: commit updates the
     // existing feature rather than appending a new one.
     this.extrudeDistance.set(feature.distance);
@@ -10420,7 +10646,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * feature kind gets written back. */
   private _editRevolve(feature: import('../../../cad/lib/types').RevolveFeature | import('../../../cad/lib/types').CutRevolveFeature) {
     const sketch = this.doc().sketches[feature.sketchId];
-    const regionCount = sketch ? extractRegions(sketch.state).regions.length : 1;
+    const regionCount = sketch ? extractRegions(sketch.state, this.textResolver()).regions.length : 1;
     this.revolveAxisLineId.set(feature.axisLineId);
     this.revolveAngle.set(feature.angle);
     this.revolveAngleExpression.set(this.featureEquation(`feature.${feature.id}.angle`));
@@ -10722,11 +10948,22 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * the new doc back via the onChange callback; the parent's save()
    * is debounced so rapid edits batch into a single PATCH+regen. */
   openEquationsPanel(): void {
-    if (this.readonly()) return;
+    const ro = this.readonly();
+    // Built-in part variables (the same ones `#{...}` text substitution uses) —
+    // sourced from textVariables() so partRevision shows the draft rev, matching
+    // the sketch. Shown read-only so the user sees what's available.
+    const tv = this.textVariables();
+    const defaultVariables = ['partName', 'partNumber', 'partRevision', 'manufacturerPN']
+      .filter(n => n in tv)
+      .map(n => ({ name: n, value: tv[n] }));
     this.dialog.open(CadEquationsPanelComponent, {
       data: {
         doc: this.equations(),
-        onChange: (next: EquationDoc) => {
+        defaultVariables,
+        // View-only when the part isn't checked out — the user can see the
+        // variables but can't edit them.
+        readonly: ro,
+        onChange: ro ? undefined : (next: EquationDoc) => {
           this.equations.set(next);
           this.save();
         },
@@ -10765,10 +11002,141 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   private loadModel(id: number) {
+    const wantBranch = this.pendingUrlBranch;
+    this.pendingUrlBranch = null;
     this.loading.set(true);
     this.cadApi.getById(id).subscribe({
-      next: m => this.bootstrap(m),
+      next: m => {
+        // If the URL targets a specific branch and the shared working copy is
+        // on a different one, switch it before bootstrapping. This is what makes
+        // a per-branch URL actually land on that branch (and lets two windows
+        // open distinct branches of the same part by their distinct URLs).
+        if (wantBranch && (m.branchName || 'main') !== wantBranch) {
+          this.cadApi.switchBranch(m.id, wantBranch).subscribe({
+            next: sm => this.bootstrap(sm),
+            error: () => this.bootstrap(m),  // branch gone / dirty — fall back to current
+          });
+          return;
+        }
+        this.bootstrap(m);
+      },
       error: err => { this.loading.set(false); this.errors.showError(err?.error?.error || 'Failed to load CAD model'); },
+    });
+  }
+
+  /**
+   * REQ 743 — open a historical commit read-only. Loads the working-copy row
+   * only for context (part, defaultView), then overlays the commit's doc +
+   * geometry. Deliberately bypasses checkout/lock/stream/save/regenerate: this
+   * is a non-mutating view of frozen history, so `readonly()` is forced true
+   * via the `viewingCommit` signal and the live working copy is untouched.
+   */
+  private loadCommitView(modelId: number, hash: string) {
+    this.loading.set(true);
+    this.cadApi.getById(modelId).subscribe({
+      next: m => {
+        // If the working copy is checked out by THIS user, they're editing —
+        // a stale ?commit= (e.g. left in the URL across a refresh) must not trap
+        // them in a read-only historical view. Drop it and load the live doc.
+        if (m.lockedByUserID != null && m.lockedByUserID === this.auth.currentUser()?.id) {
+          this.loadedKey = `${modelId}:`;  // skip the reload the upcoming nav would trigger
+          this.router.navigate([], {
+            relativeTo: this.route,
+            queryParams: { revisionID: modelId, branch: m.branchName || 'main' },
+            replaceUrl: true,
+          });
+          this.bootstrap(m);
+          return;
+        }
+        this.model.set(m);
+        this.cadApi.getCommitDoc(modelId, hash).subscribe({
+          next: docResp => {
+            this.viewingCommit.set({ hash, message: docResp.message });
+            this.featureTree.set(migrateFeatureTree(docResp.featureTree as FeatureTree));
+            this.doc.set(migrateSketchDocument(docResp.sketchDoc as SketchDocument));
+            this.equations.set(
+              docResp.equations && typeof docResp.equations === 'object' && (docResp.equations as EquationDoc).entries
+                ? (docResp.equations as EquationDoc)
+                : { entries: {} },
+            );
+            this.activeSketchId.set(null);
+            this.setMode('idle');
+            this.loading.set(false);
+            // Single-entry history so undo can't escape the read-only view.
+            this.history.set({ snapshots: [{ featureTree: this.featureTree(), doc: this.doc() }], index: 0 });
+            this.loadCommitGeometry(modelId, hash);
+          },
+          error: err => { this.loading.set(false); this.errors.showError(err?.error?.error || 'Failed to load version'); },
+        });
+      },
+      error: err => { this.loading.set(false); this.errors.showError(err?.error?.error || 'Failed to load CAD model'); },
+    });
+  }
+
+  /** Render a historical commit's geometry (frozen or regenerated server-side)
+   * read-only. Builds per-body geometry from the endpoint's `bodies` so the
+   * Bodies panel populates and per-body show/hide works — and so the final
+   * per-body state renders (not every feature's cumulative faces overlaid). */
+  private loadCommitGeometry(modelId: number, hash: string) {
+    this.regenLoading.set(true);
+    this.regenError.set(null);
+    this.cadApi.getCommitGeometry(modelId, hash).subscribe({
+      next: geo => {
+        this.regenLoading.set(false);
+        const toFaces = (fs: CadCommitGeometry['faces']) => (fs || []).map((f, i) => ({
+          faceId: f.persistentName || `f${i}`,
+          positions: new Float32Array(f.positions),
+          normals: new Float32Array(f.normals),
+          indices: new Uint32Array(f.indices),
+        }));
+        const toTopology = (vs?: [number, number, number][], es?: { polyline: [number, number, number][] }[]): ModelTopology => ({
+          vertices: (vs || []).map((p, i) => ({ id: `v${i}`, position: p })),
+          edges: (es || []).map((e, i) => {
+            const poly = e.polyline || [];
+            const endpoints: [[number, number, number], [number, number, number]] =
+              [poly[0] ?? [0, 0, 0], poly[poly.length - 1] ?? [0, 0, 0]];
+            return { id: `e${i}`, isStraight: poly.length <= 2, endpoints, polyline: poly };
+          }),
+        });
+        const bodiesData = geo.bodies && geo.bodies.length
+          ? geo.bodies
+          // Legacy backend (no per-body split) — treat the flat set as one body.
+          : [{ id: 'body', name: null, faces: geo.faces, vertices: geo.vertices, edges: geo.edges }];
+        const perBody = new Map<string, { faces: ReturnType<typeof toFaces>; topology: ModelTopology }>();
+        for (const b of bodiesData) {
+          perBody.set(b.id, { faces: toFaces(b.faces), topology: toTopology(b.vertices, b.edges) });
+        }
+        this.perBodyGeometry.set(perBody);
+        this.bodies.set(bodiesData.map(b => ({ id: b.id, name: b.name ?? null })));
+        this.hiddenBodies.set(new Set());
+        this.latestRegenFeatures.set([]);
+        this.rebuildGeometryFromBodies();
+      },
+      error: err => {
+        this.regenLoading.set(false);
+        if (err?.status === 503) this.kernelOnline.set(false);
+        const msg = err?.error?.error || err?.message || 'Failed to load version geometry';
+        this.regenError.set(friendlyError(msg));
+        this.errors.showError(friendlyError(msg));
+      },
+    });
+  }
+
+  /**
+   * Make the editor URL reflect the working copy's current branch. Called
+   * whenever the loaded branch changes (initial load, branch switch, create,
+   * release-to-main, merge). Uses replaceUrl so branch switches don't pile up
+   * back-button history, and keeps loadedRevId in step so the resulting
+   * queryParamMap emission doesn't re-trigger a load.
+   */
+  private syncUrlBranch(branch: string) {
+    const current = this.route.snapshot.queryParamMap.get('branch') || '';
+    if (current === branch) return;
+    this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { branch },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
     });
   }
 
@@ -10791,6 +11159,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   private bootstrap(m: CadModel) {
     this.model.set(m);
+    this.viewingCommit.set(null);  // a normal load is the live working copy, not a historical view
+    // Keep the URL's ?branch= in sync with the working copy's actual branch, so
+    // every branch (and branch switch) has a distinct, shareable, back-button-able
+    // URL. revID is unchanged here, so the queryParamMap guard skips a reload.
+    this.syncUrlBranch(m.branchName || 'main');
     // Apply the loopIndices → regionIndices rename to any saved ExtrudeFeature.
     this.featureTree.set(migrateFeatureTree(m.featureTree as FeatureTree));
     // REQ 565: legacy SketchDocument blobs are auto-upgraded to the entity model on load.
@@ -10825,7 +11198,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.loadBranches();
     this.loadWorkflow();
     // Kick the initial regeneration so the cached/freshly-built faces render.
-    this.regenerate();
+    this.regenerate('load');
   }
 
   // Per-feature streaming handler. Replaces the feature's faces in the
@@ -10833,6 +11206,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // wipes prior faces for *this* regen pass; `regenerate-complete` is
   // informational (HTTP response is the canonical end-of-regen confirmation).
   private onStreamEvent(ev: CadStreamEvent) {
+    // Drop events from a different regen (e.g. another tab on the same model id):
+    // the WS channel is shared per model, so only apply events from OUR regen.
+    const evRegenId = (ev as { regenId?: string }).regenId;
+    if (evRegenId && evRegenId !== this.currentRegenId) {
+      return;
+    }
     if (ev.type === 'regenerate-started') {
       this.regenStreamedCount.set(0);
       return;
@@ -10944,7 +11323,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // passes — important for slow features whose kernel work we don't
     // want to repeat just because we briefly scrubbed the bar past them.
     this._rederivePerBodyFromCache();
-    this.regenerate();
+    this.regenerate('rollback');
   }
 
   /** Convenience helper — opens the menu's "Roll back to here" action. */
@@ -11067,7 +11446,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           // again with activeSketchId === null, which is when the
           // accumulated sketch changes propagate to the kernel.
           if (skipRegen) return;
-          if (this.activeSketchId() === null) this.regenerate();
+          if (this.activeSketchId() === null) this.regenerate('save');
         },
         error: err => this.errors.showError(err?.error?.error || 'Save failed'),
       });
@@ -11078,10 +11457,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // returned per-feature face meshes into the geometry signal. Older
   // in-flight regens are dropped by `regenGeneration` so a stale response
   // can't overwrite a newer one.
-  private regenerate() {
+  private regenerate(reason = '?') {
     const m = this.model();
     if (!m) return;
     const genId = ++this.regenGeneration;
+    const regenId = `${this.clientRegenPrefix}:${genId}`;
+    this.currentRegenId = regenId;
     this.regenLoading.set(true);
     this.regenError.set(null);
     // Seed the progress counters from the current featureTree so the HUD
@@ -11095,8 +11476,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.featureErrors.set(new Map());
     // Pass the rollback bar so the backend skips features past it — no
     // kernel work, no cache lookups. Default null = process all features.
-    this.cadApi.regenerate(m.id, this.rollbackBeforeIndex()).subscribe({
+    this.cadApi.regenerate(m.id, this.rollbackBeforeIndex(), regenId).subscribe({
       next: (resp) => {
+        const cachedN = (resp.features || []).filter((f: any) => f.cached).length;
+        const kernelN = (resp.features || []).filter((f: any) => !f.cached && !f.error).length;
         if (genId !== this.regenGeneration) return;
         this.regenLoading.set(false);
         // Multi-body pipeline: each feature reports its target body's
@@ -11167,6 +11550,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       error: (err) => {
         if (genId !== this.regenGeneration) return;
         this.regenLoading.set(false);
+        // 503 = kernel unreachable. Flip offline immediately (the poller
+        // confirms recovery) so the badge + render-suppression react at once.
+        if (err?.status === 503) this.kernelOnline.set(false);
         const msg = err?.error?.error || err?.message || 'Regenerate failed';
         const friendly = friendlyError(msg);
         this.regenError.set(friendly);
@@ -11569,31 +11955,145 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     });
   }
 
+  // Development release — self-service; locks the design at the numeric revision.
+  onDevRelease() {
+    const m = this.model(); if (!m) return;
+    if (!window.confirm(
+      `Development release as Rev ${m.part?.revision || ''}?\n\n`
+      + 'This locks the design read-only and fixes the revision. To make further '
+      + 'changes you will create a new revision.')) return;
+    this.cadApi.devRelease(m.id).subscribe({
+      next: res => { this.model.set(res.model); this.loadCommits(); this.loadWorkflow(); },
+      error: err => this.errors.showError(err?.error?.error || 'Development release failed'),
+    });
+  }
+
+  // Create the next numeric revision (editable copy) and open it.
+  onNewRevision() {
+    const m = this.model(); if (!m) return;
+    if (!window.confirm(
+      'Create a new revision?\n\nThis copies the current design into a new editable '
+      + 'revision (the next number). The current release stays locked.')) return;
+    this.cadApi.newRevision(m.id).subscribe({
+      next: nm => this.router.navigate(['/parts', nm.partID, 'cad', 'editor'], { queryParams: { revisionID: nm.id } }),
+      error: err => this.errors.showError(err?.error?.error || 'New revision failed'),
+    });
+  }
+
+  // Promote an approved dev release to a production (letter) revision.
+  onProductionRelease() {
+    const m = this.model(); if (!m) return;
+    if (!window.confirm(
+      'Promote to a production release?\n\nThis creates a letter revision with the '
+      + 'same geometry, locks the source, and requires approval.')) return;
+    this.cadApi.productionRelease(m.id).subscribe({
+      next: res => this.router.navigate(['/parts', res.model.partID, 'cad', 'editor'], { queryParams: { revisionID: res.prodModelID } }),
+      error: err => this.errors.showError(err?.error?.error || 'Production release failed'),
+    });
+  }
+
+  private _releaseFileBase(): string {
+    const p = this.model()?.part;
+    const pn = (p?.sku || p?.name || 'part').replace(/[^a-zA-Z0-9._-]+/g, '_');
+    return `${pn}-${p?.revision || ''}`.replace(/^_+|_+$/g, '') || 'part';
+  }
+
+  downloadReleaseStep() {
+    const m = this.model(); if (!m) return;
+    this.cadApi.exportReleaseStep(m.id).subscribe({
+      next: step => this._downloadBlob(new Blob([step], { type: 'application/step' }), `${this._releaseFileBase()}.step`),
+      error: err => this.errors.showError(err?.error?.error || 'STEP download failed'),
+    });
+  }
+
+  downloadReleaseStl() {
+    const m = this.model(); if (!m) return;
+    this.cadApi.exportReleaseStl(m.id).subscribe({
+      next: blob => this._downloadBlob(blob, `${this._releaseFileBase()}.stl`),
+      error: err => this.errors.showError(err?.error?.error || 'STL download failed'),
+    });
+  }
+
   // ── VCS: checkout / check-in / lock / history (Phase 1) ─────────────────────
 
   onCheckout() {
     const m = this.model(); if (!m) return;
+    // main is protected — there is nothing to "check out" on it. Editing means
+    // branching a new draft off main, which onCreateBranch does (create + switch
+    // + checkout + open).
+    if (this.onMainBranch()) { this.onCreateBranch(); return; }
     this.cadApi.checkout(m.id).subscribe({
-      next: updated => this.model.set(updated),
+      next: updated => {
+        // Checking out means editing the live working copy — never stay in a
+        // historical (?commit=) view, which forces read-only and persists
+        // across a refresh. Drop the param + reload the live doc.
+        if (this.route.snapshot.queryParamMap.get('commit')) { this.exitCommitView(); return; }
+        this.model.set(updated);
+      },
       error: err => this.errors.showError(err?.error?.error || 'Checkout failed'),
+    });
+  }
+
+  // Released-revision checkout: create the next dev revision (draft), lock it,
+  // and open it for editing.
+  private checkoutAsNewRevision(m: CadModel) {
+    if (!window.confirm(
+      `Rev ${m.part?.revision} is released and locked.\n\n`
+      + 'Check out the next revision (a draft copy) to make changes?')) return;
+    this.cadApi.newRevision(m.id).subscribe({
+      next: nm => this.cadApi.checkout(nm.id).subscribe({
+        next: () => {
+          this.errors.showSuccess(`Created Rev ${nm.part?.revision} (draft) for editing`);
+          this.router.navigate(['/parts', nm.partID, 'cad', 'editor'], { queryParams: { revisionID: nm.id } });
+        },
+        error: err => this.errors.showError(err?.error?.error || 'Checkout failed'),
+      }),
+      error: err => this.errors.showError(err?.error?.error || 'New revision failed'),
     });
   }
 
   onCheckin() {
     const m = this.model(); if (!m) return;
-    const message = window.prompt('Check-in message:', '');
-    if (message === null) return; // cancelled
-    this.cadApi.checkin(m.id, message).subscribe({
-      next: res => { this.model.set(res.model); this.loadCommits(); },
-      error: err => this.errors.showError(err?.error?.error || 'Check-in failed'),
+    // Dialog shows the uncommitted changes (working copy vs last check-in) and
+    // collects a message; returns null on cancel.
+    this.dialog.open(CadCheckinDialogComponent, { data: { modelId: m.id }, width: '460px' })
+      .afterClosed().subscribe((result: CadCheckinResult | null) => {
+        if (!result) return;
+        // Capture a low-res image of the model from its default view so the
+        // version history can show this commit instantly (REQ 710). Best-effort.
+        const thumbnail = this.viewerRef()?.captureThumbnail() ?? null;
+        this.cadApi.checkin(m.id, result.message, thumbnail).subscribe({
+          next: res => { this.model.set(res.model); this.loadCommits(); },
+          error: err => this.errors.showError(err?.error?.error || 'Check-in failed'),
+        });
+      });
+  }
+
+  // Persist the current camera orientation as the model's default view (REQ 709).
+  // A view preference — not lock-gated, so it works whether or not checked out.
+  onSaveDefaultView(view: CadDefaultView) {
+    const m = this.model(); if (!m) return;
+    this.cadApi.setDefaultView(m.id, view).subscribe({
+      next: updated => this.model.set({ ...m, defaultView: updated.defaultView }),
+      error: err => this.errors.showError(err?.error?.error || 'Failed to save default view'),
     });
   }
 
-  onReleaseLock() {
+  // Undo checkout: discard uncommitted changes, roll back to the last check-in,
+  // and release the lock. Warns the user when there are changes to lose.
+  onUndoCheckout() {
     const m = this.model(); if (!m) return;
-    this.cadApi.releaseLock(m.id).subscribe({
-      next: updated => this.model.set(updated),
-      error: err => this.errors.showError(err?.error?.error || 'Release lock failed'),
+    if (this.isDirty()) {
+      const ok = window.confirm(
+        'Undo checkout?\n\n'
+        + 'Your uncommitted changes since the last check-in will be DISCARDED and the '
+        + 'model rolled back to that state, then unlocked.\n\nThis cannot be undone.',
+      );
+      if (!ok) return;
+    }
+    this.cadApi.undoCheckout(m.id).subscribe({
+      next: updated => { this.bootstrap(updated); this.loadCommits(); this.loadWorkflow(); },
+      error: err => this.errors.showError(err?.error?.error || 'Undo checkout failed'),
     });
   }
 
@@ -11605,7 +12105,20 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     });
   }
 
-  toggleCommits() { this.showCommits.update(v => !v); }
+  // The "History" ribbon button leaves the editor for the part's full version
+  // history page (cad-revision-list at /parts/:id/cad — the Graph/Diff/Log
+  // views). From there, Checkout / Open editor navigates back here.
+  openVersionHistory() { this.router.navigate(['../'], { relativeTo: this.route }); }
+
+  // Leave the read-only historical view (REQ 743) and return to the live
+  // working copy by dropping the ?commit= param.
+  exitCommitView() {
+    const m = this.model(); if (!m) return;
+    this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { revisionID: m.id, branch: m.branchName || 'main' },
+    });
+  }
 
   shortHash(h: string): string { return (h || '').slice(0, 8); }
 
@@ -11624,10 +12137,28 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onCreateBranch() {
     const m = this.model(); if (!m) return;
+    // Switching to the new branch loads its head doc and discards the working
+    // copy — refuse if there are uncommitted edits.
+    if (this.isDirty()) { this.errors.showError('Check in your changes before branching'); return; }
     const name = window.prompt('New branch name:', '');
     if (!name) return;
+    // Create the branch, switch the working copy onto it, then check it out so
+    // the user can start editing immediately.
     this.cadApi.createBranch(m.id, name).subscribe({
-      next: () => this.loadBranches(),
+      next: () => this.cadApi.switchBranch(m.id, name).subscribe({
+        next: switched => this.cadApi.checkout(m.id).subscribe({
+          next: updated => {
+            this.bootstrap(updated);
+            this.loadCommits(); this.loadWorkflow();
+            this.showBranches.set(false);
+            this.errors.showSuccess(`Created and switched to branch "${name}"`);
+          },
+          // Branch + switch already applied; the working copy is on the new
+          // branch even if acquiring the lock failed — degrade to a warning.
+          error: err => { this.bootstrap(switched); this.loadBranches(); this.showBranches.set(false); this.errors.showError(err?.error?.error || `On branch "${name}" but checkout failed`); },
+        }),
+        error: err => this.errors.showError(err?.error?.error || 'Switch to new branch failed'),
+      }),
       error: err => this.errors.showError(err?.error?.error || 'Create branch failed'),
     });
   }
@@ -11697,10 +12228,31 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   onWorkflowAction(action: string) {
     const m = this.model(); if (!m) return;
     this.cadApi.transitionWorkflow(m.id, action).subscribe({
-      next: w => this.workflow.set(w),
+      next: (w: any) => {
+        this.workflow.set({ state: w.state, actions: w.actions });
+        if (w.model) this.model.set(w.model);
+      },
       error: err => this.errors.showError(err?.error?.error || `Workflow ${action} failed`),
     });
   }
+
+  // Release an approved draft branch onto main (mint the next rev + archive the
+  // branch). The model flips to the protected main line.
+  onReleaseToMain() {
+    const m = this.model(); if (!m) return;
+    this.cadApi.release(m.id).subscribe({
+      next: (r: any) => {
+        if (r.model) { this.bootstrap(r.model); this.loadCommits(); this.loadBranches(); }
+        this.loadWorkflow();
+        this.errors.showSuccess(`Released as Rev ${r.revision} on main`);
+      },
+      error: err => this.errors.showError(err?.error?.error || 'Release failed'),
+    });
+  }
+
+  // The feature-level merge/reconciliation tool lives in the version history
+  // (Branches tab → Merge). Open it there.
+  onMerge() { this.openVersionHistory(); }
 
   toggleFullscreen() {
     this.fullscreen.update(v => !v);

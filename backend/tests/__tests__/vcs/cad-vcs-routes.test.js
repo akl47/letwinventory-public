@@ -38,8 +38,10 @@ describe('CAD VCS routes', () => {
 
     const log = await auth.get(`/api/design/cad-model/${model.id}/commits`);
     expect(log.status).toBe(200);
-    expect(log.body).toHaveLength(1);
+    // draft/01 history: the check-in on top of the seeded initial main commit.
+    expect(log.body).toHaveLength(2);
     expect(log.body[0].message).toBe('first');
+    expect(log.body[1].message).toBe('initial');
   });
 
   test('a second user is blocked from editing + checking out while locked (423)', async () => {
@@ -55,7 +57,7 @@ describe('CAD VCS routes', () => {
     expect(co.status).toBe(423);
   });
 
-  test('the lock holder can edit (dirty=true) and release the lock', async () => {
+  test('the lock holder can edit, then undo checkout', async () => {
     const a = await authenticatedRequest();
     const part = await createTestPart();
     const model = await createModel(a, part.id);
@@ -65,7 +67,7 @@ describe('CAD VCS routes', () => {
     expect(put.status).toBe(200);
     expect(put.body.dirty).toBe(true);
 
-    const rel = await a.post(`/api/design/cad-model/${model.id}/release-lock`).send({});
+    const rel = await a.post(`/api/design/cad-model/${model.id}/undo-checkout`).send({});
     expect(rel.status).toBe(200);
     expect(rel.body.lockedByUserID).toBeNull();
   });

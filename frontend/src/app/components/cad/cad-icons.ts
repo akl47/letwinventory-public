@@ -39,7 +39,68 @@ function dot(cx: number, cy: number, r = 1.6): string {
 // Each value is the INNER svg markup (everything between <svg> and
 // </svg>). registerCadIcons wraps it in the standard svg shell.
 
+// A bold minus in the top-right corner — the "subtract" badge that turns a
+// boss feature icon into its Cut variant.
+const MINUS = '<line x1="15" y1="4" x2="22" y2="4" stroke-width="2.4"/>';
+// Boss-feature bodies, reused (with MINUS appended) for the Cut variants.
+const EXTRUDE = `<rect x="7" y="13" width="10" height="7"/><line x1="7" y1="13" x2="7" y2="6"/><line x1="17" y1="13" x2="17" y2="6"/><polyline points="9,9 12,6 15,9"/>`;
+const REVOLVE = `<line x1="5" y1="3" x2="5" y2="21" stroke-dasharray="3 2"/><path d="M9 6 A 8 8 0 0 1 9 18"/><polyline points="7,16 9,18 11,16"/><rect x="9" y="10" width="4" height="4"/>`;
+const SWEEP = `<path d="M4 19 C 9 9, 15 15, 20 5"/><polyline points="16,5 20,5 19,8"/><rect x="3.5" y="16" width="5" height="4"/>`;
+
 const ICONS: Record<string, string> = {
+  // ─── 3D feature tools ──────────────────────────────────────────────────
+  'cad-extrude': EXTRUDE,
+  'cad-cut-extrude': EXTRUDE + MINUS,
+  'cad-revolve': REVOLVE,
+  'cad-cut-revolve': REVOLVE + MINUS,
+  'cad-sweep': SWEEP,
+  'cad-cut-sweep': SWEEP + MINUS,
+  // Loft: blend between two unlike profiles.
+  'cad-loft': `<ellipse cx="8" cy="17" rx="4" ry="1.7"/><rect x="9.5" y="5" width="7" height="4"/><line x1="4" y1="17" x2="9.5" y2="7"/><line x1="12" y1="17" x2="16.5" y2="5"/>`,
+  // Hole: counterbored hole (concentric circles).
+  'cad-hole': `<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="3.2"/>`,
+  // Shell: hollowed box (outer + inner wall, open top).
+  'cad-shell': `<rect x="4" y="6" width="16" height="14"/><polyline points="7,6 7,17 17,17 17,6"/>`,
+  // Combine: two overlapping solids fused (boolean).
+  'cad-combine': `<rect x="3.5" y="8" width="10" height="10"/><circle cx="15" cy="13" r="5"/>`,
+  // New sketch: a pencil drawing on a plane.
+  'cad-new-sketch': `<path d="M3 9 L 13 9 L 17 17 L 7 17 Z"/><line x1="9" y1="11" x2="17" y2="3"/><polyline points="15,3 17,3 17,5"/>`,
+
+  // ─── datums ─────────────────────────────────────────────────────────────
+  'cad-datum-plane': `<path d="M4 8 L 16 8 L 20 16 L 8 16 Z"/>`,
+  'cad-datum-axis': `<line x1="4" y1="20" x2="20" y2="4" stroke-dasharray="6 2 1 2"/>`,
+  'cad-datum-point': `<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>${dot(12, 12, 2.4)}`,
+
+  // ─── inspect / parametric ───────────────────────────────────────────────
+  // Measure: a ruler with tick marks.
+  'cad-measure': `<rect x="3" y="13" width="18" height="5"/><line x1="6" y1="13" x2="6" y2="16"/><line x1="9" y1="13" x2="9" y2="15"/><line x1="12" y1="13" x2="12" y2="16"/><line x1="15" y1="13" x2="15" y2="15"/><line x1="18" y1="13" x2="18" y2="16"/>`,
+  // Equations: an italic "fx".
+  'cad-equations': `<text x="11" y="16" fill="currentColor" stroke="none" font-size="13" text-anchor="middle" font-family="serif" font-style="italic">fx</text>`,
+
+  // ─── version control / file ─────────────────────────────────────────────
+  // Checkout: open padlock.
+  'cad-checkout': `<rect x="5" y="11" width="13" height="9" rx="1.5"/><path d="M8.5 11 V 8 A 3.2 3.2 0 0 1 14.5 6.2"/>`,
+  // Locked (held by another): closed padlock.
+  'cad-lock': `<rect x="5.5" y="11" width="13" height="9" rx="1.5"/><path d="M8.5 11 V 8 A 3.5 3.5 0 0 1 15.5 8 V 11"/>`,
+  // Check in (commit): a commit node on a branch line.
+  'cad-checkin': `<line x1="12" y1="3" x2="12" y2="21"/>${dot(12, 12, 3)}`,
+  // History: a clock.
+  'cad-history': `<circle cx="12" cy="12" r="8"/><polyline points="12,7 12,12 16,14"/>`,
+  // Branch: a fork off the main line.
+  'cad-branch': `<line x1="7" y1="4" x2="7" y2="20"/>${dot(7, 4, 2.2)}${dot(7, 20, 2.2)}<path d="M7 8 C 13 8, 17 9, 17 13"/>${dot(17, 15, 2.2)}`,
+  // Cherry-pick: pull a single commit forward.
+  'cad-cherry-pick': `${dot(6, 12, 2.6)}<line x1="9" y1="12" x2="18" y2="12"/><polyline points="15,9 18,12 15,15"/>`,
+  // Compare (diff): two panels with − / +.
+  'cad-compare': `<rect x="3" y="5" width="7" height="14"/><rect x="14" y="5" width="7" height="14"/><line x1="5" y1="9" x2="8" y2="9"/><line x1="16" y1="9" x2="19" y2="9"/><line x1="17.5" y1="7.5" x2="17.5" y2="10.5"/>`,
+  // Release: a tag.
+  'cad-release': `<path d="M3 11 L 11 3 L 21 3 L 21 13 L 13 21 Z"/>${dot(17, 7, 1.6)}`,
+  // Workflow: submit (up), approve (check), reject (x), reopen (undo).
+  'cad-submit': `<line x1="12" y1="20" x2="12" y2="6"/><polyline points="7,11 12,6 17,11"/>`,
+  'cad-approve': `<polyline points="5,13 10,18 19,6"/>`,
+  'cad-reject': `<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>`,
+  'cad-reopen': `<path d="M6 10 H 14 A 5 5 0 0 1 14 20 H 9"/><polyline points="9,7 6,10 9,13"/>`,
+
+
   // ─── selection / construction ──────────────────────────────────────────
   'cad-select': `<path d="M5 4 L 5 18 L 9.5 14.5 L 12 19.5 L 14 18.5 L 11.5 13.5 L 17 13.5 Z" fill="currentColor" stroke="none"/>`,
   'cad-construction': `<line x1="3" y1="12" x2="21" y2="12" stroke-dasharray="3 2"/>`,

@@ -3,6 +3,15 @@ import type { EquationDoc } from '../cad/lib/equations';
 
 export type CadReleaseState = 'draft' | 'review' | 'released';
 
+/** A saved camera orientation (spherical orbit) for the viewer's Default-view
+ * control and commit thumbnails. */
+export interface CadDefaultView {
+  theta: number;
+  phi: number;
+  distance: number;
+  target: [number, number, number];
+}
+
 export interface CadModel {
   id: number;
   name: string | null;
@@ -22,8 +31,64 @@ export interface CadModel {
   lockedByUserID?: number | null;
   lockedAt?: string | null;
   lockExpiresAt?: string | null;
+  /** Saved camera orientation for the Default-view control + commit thumbnails. */
+  defaultView?: CadDefaultView | null;
+  /** True when on main and at least one numeric revision is released. */
+  released?: boolean;
+  /** True after a development release: the design is locked read-only. */
+  releaseLocked?: boolean;
+  /** Display revision: on main = highest released numeric; on a draft branch =
+   * the derived next number (highest released + 1), shared by all drafts. */
+  displayRevision?: string | null;
+  /** The derived draft revision (null on main). */
+  draftRevision?: string | null;
+  /** True when a draft branch is behind main (main advanced) — rebase to release. */
+  behindMain?: boolean;
   // Part identity, included by getById / getActiveByPart.
   part?: { id: number; name: string; sku?: string | null; manufacturerPN?: string | null; revision: string } | null;
+}
+
+/** A commit's trimmed geometry for the lightweight 3D preview. `vertices` and
+ * `edges` feed measurement snapping; `persistentName` feeds the face-level diff. */
+export interface CadCommitGeometry {
+  faces: { persistentName?: string; positions: number[]; normals: number[]; indices: number[] }[];
+  vertices?: [number, number, number][];
+  edges?: { polyline: [number, number, number][] }[];
+  bodyCount: number;
+  /** Per-feature regen errors (e.g. a merge preview where a feature can't apply
+   * against the chosen result body). Surfaced so the merge tool can flag which
+   * features failed instead of silently dropping them. */
+  errors?: string[];
+  /** Per-body final geometry — lets the editor's read-only commit view populate
+   * the Bodies panel and support per-body show/hide (the flat `faces` above is
+   * the same data merged, kept for the lightweight preview). */
+  bodies?: {
+    id: string;
+    name: string | null;
+    faces: { persistentName?: string; positions: number[]; normals: number[]; indices: number[] }[];
+    vertices?: [number, number, number][];
+    edges?: { polyline: [number, number, number][] }[];
+  }[];
+}
+
+/** A node in the part's CAD version graph (a commit, with lane + tags). */
+export interface CadVersionNode {
+  hash: string;
+  shortHash: string;
+  parents: string[];
+  message: string;
+  timestamp: string;
+  branch: string;
+  lane: 'main' | 'exp';
+  tags: string[];
+  isHead: boolean;
+  author: { id: number; name: string; initials: string } | null;
+  state: 'draft' | 'review' | 'released';
+}
+export interface CadVersionGraph {
+  head: string | null;
+  branches: { name: string; head: string }[];
+  nodes: CadVersionNode[];
 }
 
 /** The review-workflow state of a CAD model + the actions available now. */
@@ -42,14 +107,27 @@ export interface CadBranch {
 /** One entry in a structural diff between two commits. */
 export interface CadDiffEntry {
   name: string;
+  /** Feature-tree-style display name (feature/sketch's own name, or type label). */
+  displayName?: string;
   kind: string;
   status: 'added' | 'removed' | 'modified' | 'unchanged';
   aHash: string | null;
   bHash: string | null;
   paramDiff?: { changed: { key: string; a: unknown; b: unknown }[]; added: string[]; removed: string[] };
+  /** For modified sketches: the specific entity/constraint changes. */
+  sketchDiff?: {
+    entities: { id: string; kind: string; status: 'added' | 'removed' | 'modified' }[];
+    constraints: { id: string; type: string; status: 'added' | 'removed' | 'modified'; a?: number; b?: number }[];
+    meta: { key: string; a: unknown; b: unknown }[];
+  };
 }
 export interface CadCommitDiff { commitA: string; commitB: string; entries: CadDiffEntry[]; }
 export interface CadBodyDiff { commitA: string; commitB: string; bodies: { id: string; status: string }[]; }
+
+/** Per-face status used to paint the Compare previews. */
+export type FaceStatus = 'added' | 'removed' | 'unchanged';
+/** Face-level diff between two commits, by persistent face name. */
+export interface CadFaceDiff { commitA: string; commitB: string; namesA: string[]; namesB: string[]; }
 
 /** A VCS commit on a CAD model's branch (newest-first in the log). */
 export interface CadCommit {

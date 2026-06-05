@@ -74,10 +74,16 @@ class CadStreamService {
   broadcastToModel(modelId, event) {
     if (!this.wss) return;
     const payload = JSON.stringify(event);
+    let matched = 0, total = 0;
     for (const [ws, session] of this.sessions) {
+      total++;
       if (session.authenticated && session.modelId === modelId && ws.readyState === WebSocket.OPEN) {
         ws.send(payload);
+        matched++;
       }
+    }
+    if (event.type !== 'feature-result') {
+      const subs = [...this.sessions.values()].map((s) => `u${s.userId}:m${s.modelId}`).join(',');
     }
   }
 

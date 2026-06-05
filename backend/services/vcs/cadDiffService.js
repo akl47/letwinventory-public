@@ -10,7 +10,7 @@
 const crypto = require('crypto');
 const vcs = require('./vcsService');
 const { repoForModel } = require('./cadVcsService');
-const { cadDeserialize } = require('./cadSerializer');
+const { cadSerialize, cadDeserialize } = require('./cadSerializer');
 const { loadFrozenGeometry } = require('./cadFreezeService');
 const cadRegen = require('../cadRegenService');
 
@@ -51,19 +51,96 @@ function paramDiff(objA, objB) {
   return out;
 }
 
-/** Structural diff between two commits, with paramDiff on modified blobs. */
+/** Specific change list for a modified sketch blob: which entities and
+ * constraints were added / removed / changed (with dimension value deltas), so
+ * the diff names the actual edits instead of just "the sketch changed". */
+function sketchDiff(a, b) {
+  a = a || {}; b = b || {};
+  const byId = (arr) => new Map((arr || []).filter((x) => x && x.id != null).map((x) => [x.id, x]));
+  const ea = byId(a.state && a.state.entities), eb = byId(b.state && b.state.entities);
+  const ca = byId(a.state && a.state.constraints), cb = byId(b.state && b.state.constraints);
+
+  const entities = [];
+  for (const id of new Set([...ea.keys(), ...eb.keys()])) {
+    const x = ea.get(id), y = eb.get(id);
+    if (x && !y) entities.push({ id, kind: x.kind, status: 'removed' });
+    else if (!x && y) entities.push({ id, kind: y.kind, status: 'added' });
+    else if (JSON.stringify(x) !== JSON.stringify(y)) entities.push({ id, kind: y.kind || x.kind, status: 'modified' });
+  }
+  const constraints = [];
+  for (const id of new Set([...ca.keys(), ...cb.keys()])) {
+    const x = ca.get(id), y = cb.get(id);
+    if (x && !y) constraints.push({ id, type: x.type, status: 'removed', a: x.value });
+    else if (!x && y) constraints.push({ id, type: y.type, status: 'added', b: y.value });
+    else if (JSON.stringify(x) !== JSON.stringify(y)) constraints.push({ id, type: y.type || x.type, status: 'modified', a: x.value, b: y.value });
+  }
+  const meta = [];
+  if ((a.name || '') !== (b.name || '')) meta.push({ key: 'name', a: a.name || '', b: b.name || '' });
+  if ((a.visible !== false) !== (b.visible !== false)) meta.push({ key: 'visible', a: a.visible !== false, b: b.visible !== false });
+  return { entities, constraints, meta };
+}
+
+/** Structural diff between two commits, with field-level detail on modified
+ * blobs (sketches get an entity/constraint sub-diff; features/equations get a
+ * one-level paramDiff). */
+// Friendly type name for an unnamed feature (mirrors the feature-tree default).
+const FEATURE_TYPE_LABEL = {
+  origin: 'Origin', extrude: 'Extrude', cutExtrude: 'Cut-Extrude', revolve: 'Revolve',
+  cutRevolve: 'Cut-Revolve', sweep: 'Sweep', cutSweep: 'Cut-Sweep', loft: 'Loft',
+  datumPlane: 'Plane', datumAxis: 'Axis', datumPoint: 'Point', fillet: 'Fillet',
+  chamfer: 'Chamfer', shell: 'Shell', hole: 'Hole', mirror: 'Mirror',
+  linearPattern: 'Linear Pattern', circularPattern: 'Circular Pattern', combine: 'Combine',
+  moveCopyBody: 'Move/Copy Body', mirrorBody: 'Mirror Body',
+};
+function friendlyFeatureType(type) {
+  return FEATURE_TYPE_LABEL[type] || (type ? type[0].toUpperCase() + type.slice(1) : 'Feature');
+}
+
+/** Attach a feature-tree-style display name + field-level detail (sketch
+ * sub-diff / feature+equations paramDiff) to each entry, in place. The display
+ * name is read from the present side's blob (B for added/modified, A for
+ * removed): the feature/sketch's own `name` if set, else the type label. */
+async function attachEntryDetail(repo, entries, db) {
+  for (const e of entries) {
+    const isFeature = e.name.startsWith('feature:');
+    const isSketch = e.name.startsWith('sketch:');
+    const isEqs = e.name === 'equations';
+    if (!isFeature && !isSketch && !isEqs) continue;
+    const oa = e.aHash ? await vcs.getObject(repo, e.aHash, db) : null;
+    const ob = e.bHash ? await vcs.getObject(repo, e.bHash, db) : null;
+    const c = (ob && ob.content) || (oa && oa.content) || null;
+    const named = c && c.name && String(c.name).trim();
+    if (isEqs) e.displayName = 'Equations';
+    else if (isSketch) e.displayName = named ? c.name : `Sketch ${e.name.slice('sketch:'.length)}`;
+    else e.displayName = named ? c.name : friendlyFeatureType(c && c.type);
+    if (e.status === 'modified') {
+      if (isSketch) e.sketchDiff = sketchDiff(oa && oa.content, ob && ob.content);
+      else if (!isSketch) e.paramDiff = paramDiff(oa && oa.content, ob && ob.content);
+    }
+  }
+  return entries;
+}
+
 async function commitDiff(repo, commitHashA, commitHashB, db) {
   const ca = commitHashA ? await vcs.getCommit(repo, commitHashA, db) : null;
   const cb = commitHashB ? await vcs.getCommit(repo, commitHashB, db) : null;
-  const entries = await treeDiff(repo, ca && ca.treeHash, cb && cb.treeHash, db);
-  for (const e of entries) {
-    if (e.status !== 'modified') continue;
-    if (!(e.name.startsWith('feature:') || e.name.startsWith('sketch:') || e.name === 'equations')) continue;
-    const oa = e.aHash ? await vcs.getObject(repo, e.aHash, db) : null;
-    const ob = e.bHash ? await vcs.getObject(repo, e.bHash, db) : null;
-    e.paramDiff = paramDiff(oa && oa.content, ob && ob.content);
-  }
+  const entries = await attachEntryDetail(repo, await treeDiff(repo, ca && ca.treeHash, cb && cb.treeHash, db), db);
   return { commitA: commitHashA, commitB: commitHashB, entries };
+}
+
+/** Diff the live working copy against its base commit (the last check-in) — the
+ * uncommitted changes. Serializes the working doc to a tree (deduped objects,
+ * same work as check-in minus the commit) and tree-diffs it against the base. */
+async function workingDiff(model, db) {
+  const repo = await repoForModel(model, db);
+  const workTree = await cadSerialize(repo, {
+    featureTree: model.featureTree,
+    sketchDoc: model.sketchDoc,
+    equations: model.equations || { entries: {} },
+  }, db);
+  const base = model.baseCommitHash ? await vcs.getCommit(repo, model.baseCommitHash, db) : null;
+  const entries = await attachEntryDetail(repo, await treeDiff(repo, base && base.treeHash, workTree, db), db);
+  return { baseCommitHash: model.baseCommitHash || null, entries };
 }
 
 // ── 3D body diff ─────────────────────────────────────────────────────────────
@@ -84,11 +161,18 @@ function bodySignature(geo, bodyId) {
 /** Geometry for a commit: frozen objects if released (no kernel), else a live
  * regeneration of that commit's recipe. */
 async function regenCommitGeometry(repo, model, commitHash, { kernelClient } = {}, db) {
-  const commit = await vcs.getCommit(repo, commitHash, db);
+  const dbc = db || global.db;
+  const commit = await vcs.getCommit(repo, commitHash, dbc);
   if (!commit) throw new Error(`Commit ${commitHash} not found`);
   if (commit.meta && commit.meta.frozen) return loadFrozenGeometry(repo, commit.meta.frozen, db);
   const doc = await cadDeserialize(repo, commit.treeHash, db);
-  const pseudo = { id: model.id, partID: model.partID, featureTree: doc.featureTree, sketchDoc: doc.sketchDoc, equations: doc.equations };
+  // Include `part` so the text resolver can expand #{partName} / #{partRevision}
+  // placeholders in sketch text. Without it the placeholders stay literal, which
+  // produces a different glyph/region set than the frontend stored its
+  // regionIndices against — so cuts/extrudes select the wrong regions (the live
+  // working copy renders fine because its model already has `part` loaded).
+  const part = model.part || (model.partID ? await dbc.Part.findByPk(model.partID) : null);
+  const pseudo = { id: model.id, partID: model.partID, part, featureTree: doc.featureTree, sketchDoc: doc.sketchDoc, equations: doc.equations };
   return cadRegen.regenerateModel(pseudo, { kernelClient, db });
 }
 
@@ -111,4 +195,21 @@ async function bodyDiff3D(model, commitHashA, commitHashB, opts = {}, db) {
   return { commitA: commitHashA, commitB: commitHashB, bodies };
 }
 
-module.exports = { treeDiff, paramDiff, commitDiff, regenCommitGeometry, bodyDiff3D, bodySignature };
+/** Face-level diff between two commits, by persistent topological name. Returns
+ * each commit's set of face names so the viewer can colour faces present only
+ * in B as added (new) and faces present only in A as removed (deleted). Faces
+ * shared by name are unchanged. (A resized face keeps its name → unchanged; a
+ * true geometry-modified diff would also hash the mesh — out of scope here.) */
+async function faceNameDiff(model, commitHashA, commitHashB, opts = {}, db) {
+  const repo = await repoForModel(model, db);
+  const ga = await regenCommitGeometry(repo, model, commitHashA, opts, db);
+  const gb = await regenCommitGeometry(repo, model, commitHashB, opts, db);
+  const namesOf = (g) => {
+    const out = new Set();
+    for (const f of g.features || []) for (const face of f.faces || []) if (face.persistentName) out.add(face.persistentName);
+    return [...out];
+  };
+  return { commitA: commitHashA, commitB: commitHashB, namesA: namesOf(ga), namesB: namesOf(gb) };
+}
+
+module.exports = { treeDiff, paramDiff, sketchDiff, commitDiff, workingDiff, regenCommitGeometry, bodyDiff3D, bodySignature, faceNameDiff };

@@ -423,6 +423,37 @@ async fn run_handler(method: &str, params: Value) -> Result<Value, HandlerError>
                 }
             }
         }
+        "exportStl" => {
+            let params: crate::protocol::ExportStlParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::export::export_stl(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "exportStl failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "exportStl panicked");
+                    Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    })
+                }
+            }
+        }
         _ => Err(HandlerError {
             code: METHOD_NOT_FOUND,
             message: format!("unknown method {method:?}"),
