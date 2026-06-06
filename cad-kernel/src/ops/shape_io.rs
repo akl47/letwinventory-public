@@ -14,10 +14,10 @@ use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use glam::DVec3;
-use opencascade::primitives::Shape;
+use opencascade::primitives::{Face, FaceSurface, Shape};
 
 use crate::naming::PersistentName;
-use crate::protocol::{FaceMesh, SolidPart, Topology, TopologyEdge, TopologyVertex};
+use crate::protocol::{FaceMesh, FaceSurface as ProtoFaceSurface, SolidPart, Topology, TopologyEdge, TopologyVertex};
 
 const DEFAULT_CHORD_TOLERANCE: f64 = 0.05;
 
@@ -133,6 +133,7 @@ pub fn tessellate_faces_generic_with_topology(
             boundary_edges = format!("{:?}", boundary_edge_ids),
             "tessellate_faces_generic: face → boundary",
         );
+        let surface = classify_face_surface(&face);
         out.push(FaceMesh {
             face_id: id.clone(),
             persistent_name: id,
@@ -141,9 +142,32 @@ pub fn tessellate_faces_generic_with_topology(
             normals,
             indices,
             boundary_edge_ids,
+            surface,
         });
     }
     Ok(out)
+}
+
+/// Map a face's analytic surface classification (REQ 749) into the wire protocol
+/// shape consumed by the assembly mate solver. Returns None for surfaces that are
+/// neither planar nor cylindrical. Shared by the generic and extrude tessellators.
+pub fn classify_face_surface(face: &Face) -> Option<ProtoFaceSurface> {
+    match face.surface_kind()? {
+        FaceSurface::Plane { origin, normal } => Some(ProtoFaceSurface {
+            kind: "plane".to_string(),
+            origin: [origin.x, origin.y, origin.z],
+            normal: Some([normal.x, normal.y, normal.z]),
+            axis: None,
+            radius: None,
+        }),
+        FaceSurface::Cylinder { origin, axis, radius } => Some(ProtoFaceSurface {
+            kind: "cylinder".to_string(),
+            origin: [origin.x, origin.y, origin.z],
+            normal: None,
+            axis: Some([axis.x, axis.y, axis.z]),
+            radius: Some(radius),
+        }),
+    }
 }
 
 /// Reconstruct the same key `edge_geom_key` produces, from a serialized

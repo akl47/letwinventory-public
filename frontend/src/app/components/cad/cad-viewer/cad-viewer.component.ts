@@ -170,7 +170,10 @@ export interface HolePreview {
         <mat-icon>desktop_access_disabled</mat-icon>
         <div class="we-title">3D view unavailable</div>
         <div class="we-sub">The browser couldn't create a WebGL context — usually too many 3D views open this session, or hardware acceleration is off.</div>
-        <div class="we-sub">Fully quit and reopen your browser, then try again.</div>
+        <div class="we-sub">Try reloading the view; if it keeps failing, fully quit and reopen your browser.</div>
+        <button type="button" class="we-retry" (click)="retryWebgl()" data-testid="webgl-retry">
+          <mat-icon>refresh</mat-icon> Reload 3D view
+        </button>
       </div>
       <div #cubeMount class="nav-cube" data-testid="nav-cube"
            (pointerdown)="onCubePointerDown($event)"
@@ -233,6 +236,9 @@ export interface HolePreview {
     .webgl-error mat-icon { font-size: 44px; width: 44px; height: 44px; }
     .webgl-error .we-title { font-size: 17px; font-weight: 700; }
     .webgl-error .we-sub { font-size: 13px; color: #c9c9d6; max-width: 420px; }
+    .webgl-error .we-retry { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 7px 16px; border: 1px solid #ef9a9a; border-radius: 6px; background: transparent; color: #ef9a9a; font-size: 14px; cursor: pointer; }
+    .webgl-error .we-retry:hover { background: rgba(239,154,154,.12); }
+    .webgl-error .we-retry mat-icon { font-size: 18px; width: 18px; height: 18px; }
     .nav-cube { position: absolute; top: 12px; right: 62px; width: 103px; height: 103px; cursor: pointer; user-select: none; }
     .nav-cube canvas { display: block; }
     /* Centre the controls row on the nav cube's centre (cube: right 62px, width
@@ -289,6 +295,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private hoveredCubeSlot: number | null = null;
 
   geometry = input<ModelGeometry | null>(null);
+  /** Section view: a clipping plane (model space). Null = no section. */
+  sectionPlane = input<{ normal: [number, number, number]; point: [number, number, number] } | null>(null);
   selected = input<string | null>(null);
   selectedFeatures = input<Set<string>>(new Set());
   /** Currently-picked face ids in an active picker (Measure /
@@ -708,6 +716,18 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const g = this.geometry();
       if (this.scene && g) this.syncGeometry(g);
     });
+    // Section view (REQ 766) — a single global clipping plane on the renderer.
+    effect(() => {
+      const sp = this.sectionPlane();
+      if (!this.renderer) return;
+      if (sp) {
+        const n = new THREE.Vector3(sp.normal[0], sp.normal[1], sp.normal[2]).normalize();
+        const p = new THREE.Vector3(sp.point[0], sp.point[1], sp.point[2]);
+        this.renderer.clippingPlanes = [new THREE.Plane().setFromNormalAndCoplanarPoint(n, p)];
+      } else {
+        this.renderer.clippingPlanes = [];
+      }
+    });
     effect(() => {
       const sel = this.selected();
       const hov = this.hovered();
@@ -980,8 +1000,13 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     cancelAnimationFrame(this.rafHandle);
     if (this.cubeAnimHandle) cancelAnimationFrame(this.cubeAnimHandle);
     this.cubeRenderer?.dispose();
+    // dispose() frees GPU resources but does NOT release the WebGL context — it
+    // lingers until GC. forceContextLoss() releases it immediately, so navigating
+    // between editors doesn't leak contexts toward the browser's ~16-per-page cap.
+    this.cubeRenderer?.forceContextLoss();
     this.resizeObserver?.disconnect();
     this.renderer?.dispose();
+    this.renderer?.forceContextLoss();
     // Tear down any remaining CSS2D label DOM nodes so they don't leak past
     // the viewer's lifetime.
     this.scene?.traverse(o => {
@@ -993,6 +1018,20 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       if ((o as THREE.Mesh).material) {
         const m = (o as THREE.Mesh).material;
         Array.isArray(m) ? m.forEach(mat => mat.dispose()) : m.dispose();
+      }
+    });
+  }
+
+  // Retry creating the WebGL context after it was reported unavailable (the
+  // "Reload 3D view" button). Re-runs scene init; on success, repaints the
+  // current geometry since the syncGeometry effect only fires on geometry change.
+  retryWebgl() {
+    if (!this.webglUnavailable()) return;
+    this.zone.runOutsideAngular(() => {
+      this.initScene();
+      if (!this.webglUnavailable() && this.scene) {
+        const g = this.geometry();
+        if (g) this.syncGeometry(g);
       }
     });
   }

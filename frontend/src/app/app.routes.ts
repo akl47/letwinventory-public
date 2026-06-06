@@ -155,6 +155,22 @@ export const routes: Routes = [
         data: { resource: 'cad' },
     },
     {
+        path: 'design/assemblies',
+        title: 'Assemblies',
+        loadComponent: () =>
+            import('./components/cad/assembly-landing/assembly-landing.component').then((m) => m.AssemblyLandingComponent),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'cad' },
+    },
+    {
+        path: 'parts/:id/assembly/editor',
+        title: 'Assembly Editor',
+        loadComponent: () =>
+            import('./components/cad/cad-editor/cad-editor.component').then((m) => m.CadEditorComponent),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'cad', assemblyMode: true },
+    },
+    {
         path: 'equipment',
         title: 'Equipment',
         loadComponent: () =>

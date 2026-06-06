@@ -661,6 +661,7 @@ fn tessellate_and_name(
         };
         boundary_edge_ids.sort();
         boundary_edge_ids.dedup();
+        let surface = crate::ops::shape_io::classify_face_surface(&face);
         out.push(FaceMesh {
             face_id: id.clone(),
             persistent_name: id,
@@ -669,6 +670,7 @@ fn tessellate_and_name(
             normals,
             indices,
             boundary_edge_ids,
+            surface,
         });
     }
     Ok(out)

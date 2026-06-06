@@ -191,6 +191,26 @@ pub struct FaceMesh {
     /// when called with a topology argument; otherwise empty.
     #[serde(rename = "boundaryEdgeIds", default, skip_serializing_if = "Vec::is_empty")]
     pub boundary_edge_ids: Vec<String>,
+    /// Analytic surface classification for planar/cylindrical faces (REQ 749),
+    /// consumed by the assembly mate solver. None for other surface kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<FaceSurface>,
+}
+
+/// Analytic classification of a face's underlying surface, in the model frame.
+/// Planes carry an origin + outward `normal`; cylinders carry an axis origin,
+/// `axis` direction, and `radius`. The mate solver consumes these (not the mesh).
+#[derive(Debug, Clone, Serialize)]
+pub struct FaceSurface {
+    /// "plane" | "cylinder".
+    pub kind: String,
+    pub origin: [f64; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normal: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub axis: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f64>,
 }
 
 #[derive(Debug, Default, Serialize)]

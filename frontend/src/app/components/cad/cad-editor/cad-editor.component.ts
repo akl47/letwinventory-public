@@ -57,6 +57,7 @@ import { chooseTwoPointDimType, twoPointDimValue } from '../../../cad/lib/dimens
 import { type EquationDoc, resolveEquations, evalExpression, setEquation, removeEquation } from '../../../cad/lib/equations';
 import { DimInputComponent } from '../dim-input/dim-input.component';
 import { CadEquationsPanelComponent } from '../cad-equations-panel/cad-equations-panel.component';
+import { AssemblyEditController } from '../assembly-editor/assembly-edit.controller';
 
 /** Snap kinds. Drives the viewer's snap-indicator glyph: square for
  * endpoint (existing point), triangle for midpoint, X for intersection,
@@ -94,6 +95,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     CadViewerComponent, CadFeatureTreePanelComponent, CadSketchEditorComponent, CadConstraintListComponent,
     CategoryBadge, DimInputComponent, CadSelectionListComponent,
   ],
+  // Assembly mode state is scoped per editor instance.
+  providers: [AssemblyEditController],
   template: `
     <div class="cad-editor" [class.fullscreen]="fullscreen()" [attr.data-testid]="'cad-editor'">
       <!-- REQ 616 — tabbed ribbon. Toolbar content swaps with the active tab.
@@ -103,16 +106,21 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
       <div class="ribbon">
         <div class="tab-strip tab-strip-top">
           <button class="tab" data-testid="tab-file"
+                  *ngIf="!assemblyMode()"
                   [class.active]="activeTab() === 'file'"
                   (click)="setActiveTab('file')">File</button>
           <button class="tab" data-testid="tab-features"
-                  *ngIf="activeSketchId() === null"
+                  *ngIf="!assemblyMode() && activeSketchId() === null"
                   [class.active]="activeTab() === 'features'"
                   (click)="setActiveTab('features')">Features</button>
           <button class="tab" data-testid="tab-sketch"
-                  *ngIf="activeSketchId() !== null"
+                  *ngIf="!assemblyMode() && activeSketchId() !== null"
                   [class.active]="activeTab() === 'sketch'"
                   (click)="setActiveTab('sketch')">Sketch</button>
+          <button class="tab" data-testid="tab-assembly"
+                  *ngIf="assemblyMode()"
+                  [class.active]="activeTab() === 'assembly'"
+                  (click)="setActiveTab('assembly')">Assembly</button>
         </div>
         <div class="ribbon-content">
           <!-- File tab: version control + release (Phase 1-4). -->
@@ -521,11 +529,252 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               Pick or create a sketch first — switch to Features → Sketch.
             </span>
           </div>
+
+          <!-- Assembly ribbon -->
+          <div class="ribbon-pane" [hidden]="activeTab() !== 'assembly'" *ngIf="assemblyMode()">
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" (click)="asm.togglePicker()" [disabled]="!asm.assembly()" matTooltip="Insert a component part">
+                  <mat-icon>add_box</mat-icon><span class="ribbon-label">Insert</span>
+                </button>
+                <button class="ribbon-button" [disabled]="!asm.selectedInstance()" (click)="asm.startReplace(asm.selectedInstance()!)" matTooltip="Replace the selected component">
+                  <mat-icon>swap_horiz</mat-icon><span class="ribbon-label">Replace</span>
+                </button>
+                <button class="ribbon-button" [disabled]="!asm.selectedInstance()" (click)="asm.openPatternForm(asm.selectedInstance()!)" matTooltip="Pattern the selected component">
+                  <mat-icon>grid_view</mat-icon><span class="ribbon-label">Pattern</span>
+                </button>
+                <button class="ribbon-button" [class.active]="asm.facePickActive()" [disabled]="asm.instances().length < 2"
+                        (click)="asm.facePickActive() ? asm.cancelMate() : asm.startMate()" matTooltip="Mate two component faces">
+                  <mat-icon>link</mat-icon><span class="ribbon-label">Mate</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Components</div>
+            </div>
+            <div class="ribbon-divider"></div>
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" *ngIf="!asm.isLockedByMe()" (click)="asm.checkout()" matTooltip="Check out to commit versions">
+                  <mat-icon>lock_open</mat-icon><span class="ribbon-label">Check out</span>
+                </button>
+                <button class="ribbon-button" *ngIf="asm.isLockedByMe()" (click)="asm.checkin()" matTooltip="Commit a version">
+                  <mat-icon>save</mat-icon><span class="ribbon-label">Check in</span>
+                </button>
+                <button class="ribbon-button" *ngIf="asm.isLockedByMe()" (click)="asm.undoCheckout()" matTooltip="Discard changes since check-out">
+                  <mat-icon>undo</mat-icon><span class="ribbon-label">Undo</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Working copy</div>
+            </div>
+            <div class="ribbon-divider"></div>
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" (click)="asm.autoExplode()" matTooltip="Auto exploded view">
+                  <mat-icon>open_in_full</mat-icon><span class="ribbon-label">Explode</span>
+                </button>
+                <button class="ribbon-button" [class.active]="asm.sectionEnabled()" (click)="asm.sectionEnabled.set(!asm.sectionEnabled())" matTooltip="Section view">
+                  <mat-icon>content_cut</mat-icon><span class="ribbon-label">Section</span>
+                </button>
+                <button class="ribbon-button" (click)="asm.saveDisplayState()" matTooltip="Save current visibility as a display state">
+                  <mat-icon>bookmark_add</mat-icon><span class="ribbon-label">Save view</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Visualize</div>
+            </div>
+            <div class="ribbon-divider"></div>
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" [disabled]="asm.analysisBusy()" (click)="asm.checkInterference()" matTooltip="Detect interfering components">
+                  <mat-icon>warning</mat-icon><span class="ribbon-label">Interfere</span>
+                </button>
+                <button class="ribbon-button" [disabled]="asm.analysisBusy()" (click)="asm.computeMass()" matTooltip="Volume + center of mass">
+                  <mat-icon>scale</mat-icon><span class="ribbon-label">Mass</span>
+                </button>
+                <button class="ribbon-button" (click)="asm.syncBom()" matTooltip="Write this assembly's BOM into inventory">
+                  <mat-icon>sync</mat-icon><span class="ribbon-label">Sync BOM</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Analyze</div>
+            </div>
+            <div class="ribbon-divider"></div>
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" (click)="asm.exportStep()" matTooltip="Export STEP"><mat-icon>category</mat-icon><span class="ribbon-label">STEP</span></button>
+                <button class="ribbon-button" (click)="asm.exportStl()" matTooltip="Export STL"><mat-icon>view_in_ar</mat-icon><span class="ribbon-label">STL</span></button>
+              </div>
+              <div class="ribbon-group-label">Export</div>
+            </div>
+          </div>
         </div>
       </div>
 
       <div class="editor-body">
+        <!-- Assembly component panel (replaces the feature tree in assembly mode) -->
+        <div class="feature-tree asm-panel" *ngIf="assemblyMode()">
+          @if (asm.loading()) {
+            <div class="asm-loading"><mat-spinner diameter="28"></mat-spinner></div>
+          } @else if (!asm.assembly()) {
+            <div class="asm-empty">
+              <p>No assembly exists for this part yet.</p>
+              <button mat-flat-button color="primary" (click)="asm.createAssembly()">Create assembly</button>
+            </div>
+          } @else {
+            @if (asm.constraintState(); as cs) {
+              <div class="asm-cstate" [class.under]="cs.state === 'under'" [class.fully]="cs.state === 'fully'" [class.over]="cs.state === 'over'">
+                {{ cs.state === 'fully' ? 'Fully constrained' : cs.state === 'over' ? 'Over-constrained' : ('Under-constrained · ' + cs.dof + ' DOF') }}
+              </div>
+            }
+
+            <!-- Insert / replace picker -->
+            @if (asm.showPicker()) {
+              <div class="asm-section">
+                <div class="asm-head">{{ asm.replaceTargetId() ? 'Replace with' : 'Insert component' }}<button class="asm-x" (click)="asm.togglePicker()">×</button></div>
+                <input class="asm-input" [ngModel]="asm.partSearch()" (ngModelChange)="asm.partSearch.set($event)" placeholder="Search parts with CAD" />
+                <div class="asm-scroll">
+                  @for (p of asm.filteredParts(); track p.partID) {
+                    <button class="asm-row" (click)="asm.insert(p.partID)"><mat-icon>memory</mat-icon> {{ p.part?.name }}</button>
+                  }
+                  @if (asm.filteredParts().length === 0) { <div class="asm-hint">No parts with CAD models.</div> }
+                </div>
+              </div>
+            }
+
+            <!-- Mate type chooser -->
+            @if (asm.showMateChooser()) {
+              <div class="asm-section">
+                <div class="asm-head">Choose mate type<button class="asm-x" (click)="asm.cancelMate()">×</button></div>
+                <div class="asm-chips">
+                  @for (t of asm.chooserTypes(); track t) { <button class="asm-chip" (click)="asm.createMate(t)">{{ t }}</button> }
+                </div>
+                @if (asm.chooserTypes().includes('distance') || asm.chooserTypes().includes('angle')) {
+                  <label class="asm-field">Value (mm/°)<input type="number" [ngModel]="asm.mateValue()" (ngModelChange)="asm.mateValue.set(+$event)" /></label>
+                }
+              </div>
+            }
+            @if (asm.facePickActive()) {
+              <div class="asm-hint pick">{{ asm.matePickStage() === 'a' ? 'Select the first face…' : 'Select a face on another component…' }}</div>
+            }
+
+            <!-- Pattern form -->
+            @if (asm.patternSeedId()) {
+              <div class="asm-section">
+                <div class="asm-head">Pattern<button class="asm-x" (click)="asm.cancelPattern()">×</button></div>
+                <div class="asm-chips">
+                  <button class="asm-chip" [class.on]="asm.patternKind()==='linear'" (click)="asm.patternKind.set('linear')">Linear</button>
+                  <button class="asm-chip" [class.on]="asm.patternKind()==='circular'" (click)="asm.patternKind.set('circular')">Circular</button>
+                  <button class="asm-chip" [class.on]="asm.patternKind()==='mirror'" (click)="asm.patternKind.set('mirror')">Mirror</button>
+                </div>
+                @if (asm.patternKind()==='linear') {
+                  <div class="asm-grid3">
+                    <label>n<input type="number" [ngModel]="asm.pCount()" (ngModelChange)="asm.pCount.set(+$event)" /></label>
+                    <label>dx<input type="number" [ngModel]="asm.pSpacing()[0]" (ngModelChange)="asm.pSpacing.set([+$event, asm.pSpacing()[1], asm.pSpacing()[2]])" /></label>
+                    <label>dy<input type="number" [ngModel]="asm.pSpacing()[1]" (ngModelChange)="asm.pSpacing.set([asm.pSpacing()[0], +$event, asm.pSpacing()[2]])" /></label>
+                    <label>dz<input type="number" [ngModel]="asm.pSpacing()[2]" (ngModelChange)="asm.pSpacing.set([asm.pSpacing()[0], asm.pSpacing()[1], +$event])" /></label>
+                  </div>
+                } @else if (asm.patternKind()==='circular') {
+                  <div class="asm-grid3">
+                    <label>n<input type="number" [ngModel]="asm.pCount()" (ngModelChange)="asm.pCount.set(+$event)" /></label>
+                    <label>°<input type="number" [ngModel]="asm.pAngle()" (ngModelChange)="asm.pAngle.set(+$event)" /></label>
+                  </div>
+                } @else {
+                  <label class="asm-field">Plane<select [ngModel]="asm.pPlane()" (ngModelChange)="asm.pPlane.set($event)"><option value="YZ">YZ</option><option value="XZ">XZ</option><option value="XY">XY</option></select></label>
+                }
+                <button class="asm-apply" (click)="asm.createPattern()">Create pattern</button>
+              </div>
+            }
+
+            <!-- Component tree -->
+            <div class="asm-head">Components</div>
+            <ul class="asm-tree">
+              @for (inst of asm.instances(); track inst.instanceId) {
+                <li [class.sel]="inst.instanceId === asm.selectedId()" (click)="asm.select(inst.instanceId)">
+                  <button class="asm-eye" (click)="asm.toggleVisible(inst); $event.stopPropagation()"><mat-icon>{{ inst.visible === false ? 'visibility_off' : 'visibility' }}</mat-icon></button>
+                  <span class="asm-lbl">{{ asm.partName(inst.partID) }}</span>
+                  @if (inst.grounded) { <mat-icon class="asm-pin">push_pin</mat-icon> }
+                  <button class="asm-del" (click)="asm.remove(inst); $event.stopPropagation()"><mat-icon>delete</mat-icon></button>
+                </li>
+              }
+              @if (asm.instances().length === 0) { <li class="asm-hint">No components — click Insert.</li> }
+            </ul>
+
+            <!-- Selected component placement -->
+            @if (asm.selectedInstance(); as sel) {
+              <div class="asm-section">
+                <div class="asm-head">Placement</div>
+                <div class="asm-grid3">
+                  <label>x<input type="number" [ngModel]="asm.tx()" (ngModelChange)="asm.tx.set(+$event)" /></label>
+                  <label>y<input type="number" [ngModel]="asm.ty()" (ngModelChange)="asm.ty.set(+$event)" /></label>
+                  <label>z<input type="number" [ngModel]="asm.tz()" (ngModelChange)="asm.tz.set(+$event)" /></label>
+                  <label>rx<input type="number" [ngModel]="asm.rx()" (ngModelChange)="asm.rx.set(+$event)" /></label>
+                  <label>ry<input type="number" [ngModel]="asm.ry()" (ngModelChange)="asm.ry.set(+$event)" /></label>
+                  <label>rz<input type="number" [ngModel]="asm.rz()" (ngModelChange)="asm.rz.set(+$event)" /></label>
+                </div>
+                <label class="asm-check"><input type="checkbox" [checked]="sel.grounded" (change)="asm.toggleGrounded(sel)" /> Grounded</label>
+                <button class="asm-apply" (click)="asm.applyPlacement()">Apply</button>
+              </div>
+            }
+
+            <!-- Mates -->
+            @if (asm.mates().length) {
+              <div class="asm-head">Mates</div>
+              <ul class="asm-tree">
+                @for (m of asm.mates(); track m.mateId) {
+                  <li><mat-icon class="asm-mi">link</mat-icon><span class="asm-lbl">{{ asm.mateLabel(m) }}</span><button class="asm-del" (click)="asm.removeMate(m)"><mat-icon>delete</mat-icon></button></li>
+                }
+              </ul>
+            }
+
+            <!-- Patterns -->
+            @if (asm.patterns().length) {
+              <div class="asm-head">Patterns</div>
+              <ul class="asm-tree">
+                @for (p of asm.patterns(); track p.patternId) {
+                  <li><mat-icon class="asm-mi">grid_view</mat-icon><span class="asm-lbl">{{ p.kind }} · {{ asm.patternSeedName(p) }}</span><button class="asm-del" (click)="asm.removePattern(p)"><mat-icon>delete</mat-icon></button></li>
+                }
+              </ul>
+            }
+
+            <!-- Explode slider -->
+            <label class="asm-field">Explode<input type="range" min="0" max="1" step="0.02" [value]="asm.explodeFactor()" (input)="asm.onExplodeChange(+$any($event.target).value)" /></label>
+            @if (asm.sectionEnabled()) {
+              <div class="asm-section">
+                <div class="asm-head">Section</div>
+                <select class="asm-input" [ngModel]="asm.sectionAxis()" (ngModelChange)="asm.sectionAxis.set($event)"><option value="X">X plane</option><option value="Y">Y plane</option><option value="Z">Z plane</option></select>
+                <label class="asm-field">Pos<input type="range" min="-100" max="100" step="1" [value]="asm.sectionPos()" (input)="asm.sectionPos.set(+$any($event.target).value)" /></label>
+              </div>
+            }
+
+            <!-- Display states -->
+            @if (asm.displayStates().length) {
+              <div class="asm-head">Display states</div>
+              <ul class="asm-tree">
+                @for (s of asm.displayStates(); track s.id) {
+                  <li><button class="asm-lbl asm-apply-inline" (click)="asm.applyDisplayState(s)">{{ s.name }}</button><button class="asm-del" (click)="asm.deleteDisplayState(s)"><mat-icon>delete</mat-icon></button></li>
+                }
+              </ul>
+            }
+
+            <!-- Analysis results -->
+            @if (asm.interferencePairs(); as pairs) {
+              <div class="asm-head">Interference</div>
+              @if (pairs.length === 0) { <div class="asm-hint ok">None detected.</div> }
+              @else {
+                <ul class="asm-tree">
+                  @for (p of pairs; track p.a + p.b) {
+                    <li><mat-icon class="asm-mi warn">warning</mat-icon><span class="asm-lbl">{{ asm.instName(p.a) }} ↔ {{ asm.instName(p.b) }}{{ p.interfering === null ? ' (possible)' : '' }}</span></li>
+                  }
+                </ul>
+              }
+            }
+            @if (asm.massProps(); as mp) {
+              <div class="asm-head">Mass</div>
+              <div class="asm-hint">Vol {{ mp.volume | number:'1.0-1' }} mm³@if (mp.centerOfMass) {, CoM ({{ mp.centerOfMass[0] | number:'1.0-1' }}, {{ mp.centerOfMass[1] | number:'1.0-1' }}, {{ mp.centerOfMass[2] | number:'1.0-1' }})}</div>
+            }
+            @if (asm.regenError()) { <div class="asm-err">{{ asm.regenError() }}</div> }
+          }
+        </div>
+
         <app-cad-feature-tree-panel
+          *ngIf="!assemblyMode()"
           [features]="featureTree().features"
           [doc]="doc()"
           [selectableSketches]="mode() === 'pick-extrude-target' || mode() === 'pick-revolve-target' || mode() === 'pick-cut-extrude-target' || mode() === 'pick-cut-revolve-target'"
@@ -3148,7 +3397,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [geometry]="displayedGeometry()"
               [selected]="selected()"
               [selectedFeatures]="selectedFeatures()"
-              [pickedFaceIds]="pickedFaceIdsForViewer()"
+              [sectionPlane]="assemblyMode() ? asm.sectionPlane() : null"
+              [pickedFaceIds]="assemblyMode() ? asm.pickedFaceIds() : pickedFaceIdsForViewer()"
               [pickedEdgeIds]="pickedEdgeIdsForViewer()"
               [pickedVertexIds]="pickedVertexIdsForViewer()"
               [loading]="regenLoading()"
@@ -3176,7 +3426,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [profileFillsHovered]="extrudeHoveredRegion()"
               [vertexPickMode]="vertexPickMode()"
               [extraPickableVertices]="sketchPickableVertices()"
-              [facePickMode]="facePickActive()"
+              [facePickMode]="assemblyMode() ? asm.facePickActive() : facePickActive()"
               [facePickExcludeFeatureId]="extrudeSidebar()?.editingFeatureId ?? null"
               [axisPickMode]="axisPickMode()"
               [axisCandidates]="axisCandidates3D()"
@@ -3820,6 +4070,43 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .vcs-commits-list li.diff-added .vcs-commit-hash { color: #81c784; }
     .vcs-commits-list li.diff-removed .vcs-commit-hash { color: #e57373; }
     .vcs-commits-list li.diff-modified .vcs-commit-hash { color: #ffb74d; }
+    /* ── Assembly panel ── */
+    .asm-panel { overflow-y: auto; padding: 8px; color: #ddd; font-size: 12px; }
+    .asm-loading, .asm-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 8px; color: #aaa; }
+    .asm-cstate { font-size: 11px; padding: 3px 8px; border-radius: 10px; font-weight: 600; text-align: center; margin-bottom: 8px; }
+    .asm-cstate.under { background: rgba(230,81,0,0.18); color: #ffb74d; }
+    .asm-cstate.fully { background: rgba(46,125,50,0.22); color: #81c784; }
+    .asm-cstate.over { background: rgba(183,28,28,0.22); color: #e57373; }
+    .asm-head { font-size: 9px; text-transform: uppercase; letter-spacing: .06em; opacity: .55; margin: 10px 0 4px; display: flex; align-items: center; justify-content: space-between; }
+    .asm-section { border-top: 1px solid #3a3a52; padding-top: 6px; margin-top: 6px; }
+    .asm-x { background: none; border: none; color: #aaa; cursor: pointer; font-size: 14px; }
+    .asm-input, .asm-section select.asm-input { width: 100%; background: rgba(255,255,255,0.08); color: #ddd; border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 3px 6px; font-size: 12px; margin-bottom: 4px; }
+    .asm-scroll { max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; }
+    .asm-row { display: flex; align-items: center; gap: 6px; background: none; border: none; color: #ddd; padding: 4px; cursor: pointer; text-align: left; font-size: 12px; }
+    .asm-row:hover { background: rgba(255,255,255,0.07); }
+    .asm-row mat-icon, .asm-mi, .asm-pin { font-size: 16px; width: 16px; height: 16px; }
+    .asm-tree { list-style: none; margin: 0 0 4px; padding: 0; }
+    .asm-tree li { display: flex; align-items: center; gap: 4px; padding: 2px 2px; border-radius: 4px; cursor: pointer; }
+    .asm-tree li.sel { background: rgba(66,165,245,0.18); }
+    .asm-eye, .asm-del { background: none; border: none; color: #bbb; cursor: pointer; padding: 0; display: inline-flex; }
+    .asm-eye mat-icon, .asm-del mat-icon { font-size: 16px; width: 16px; height: 16px; }
+    .asm-lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .asm-apply-inline { background: none; border: none; color: #ddd; text-align: left; cursor: pointer; padding: 0; }
+    .asm-pin { color: #42a5f5; }
+    .asm-mi { color: #42a5f5; }
+    .asm-mi.warn { color: #ffb74d; }
+    .asm-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+    .asm-chip { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #ddd; border-radius: 4px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
+    .asm-chip.on { background: rgba(66,165,245,0.22); border-color: #42a5f5; }
+    .asm-grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; }
+    .asm-grid3 label, .asm-field { display: flex; flex-direction: column; font-size: 10px; color: #aaa; gap: 2px; margin-top: 4px; }
+    .asm-grid3 input, .asm-field input, .asm-field select { background: rgba(255,255,255,0.08); color: #ddd; border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; font-size: 11px; padding: 2px 4px; }
+    .asm-check { display: flex; align-items: center; gap: 6px; font-size: 11px; margin: 6px 0; }
+    .asm-apply { width: 100%; background: #1976d2; color: #fff; border: none; border-radius: 4px; padding: 5px; font-size: 12px; cursor: pointer; margin-top: 6px; }
+    .asm-hint { font-size: 11px; color: #999; padding: 2px; }
+    .asm-hint.pick { color: #42a5f5; }
+    .asm-hint.ok { color: #81c784; }
+    .asm-err { color: #e57373; font-size: 11px; margin-top: 6px; }
   `],
 })
 export class CadEditorComponent implements OnInit, OnDestroy {
@@ -3839,6 +4126,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   stream = inject(CadStreamService);
   private uiState = inject(CadUiStateService);
   private streamSub: { unsubscribe: () => void } | null = null;
+
+  // ── ASSEMBLY MODE ──────────────────────────────────────────────────────────
+  // When this part is an assembly, the editor runs in assembly mode: the ribbon
+  // shows the Assembly tab + tools, the left panel shows the component tree, and
+  // the viewer renders the composed assembly geometry. All assembly state/ops
+  // live in the injected controller.
+  asm = inject(AssemblyEditController);
+  assemblyMode = signal<boolean>(false);
 
   model = signal<CadModel | null>(null);
   loading = signal<boolean>(true);
@@ -3903,9 +4198,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // EMPTY geometry (not null) so the viewer's syncGeometry clears every mesh —
   // the kernel produces geometry, so with it down nothing should be shown. The
   // underlying `geometry` signal is left intact so recovery repaints instantly.
-  displayedGeometry = computed<ModelGeometry | null>(() =>
-    this.kernelOnline() ? this.geometry() : EMPTY_GEOMETRY,
-  );
+  displayedGeometry = computed<ModelGeometry | null>(() => {
+    if (this.assemblyMode()) return this.kernelOnline() ? this.asm.geometry() : EMPTY_GEOMETRY;
+    return this.kernelOnline() ? this.geometry() : EMPTY_GEOMETRY;
+  });
   // Multi-body state. Each entry is one body in the part; faces are kept
   // per-body so a hidden body just drops out of the union. The body
   // roster (id + name) is what the Bodies panel renders. Visibility is
@@ -4259,7 +4555,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   pendingExtrude = signal<boolean>(false);
   // REQ 616 — ribbon tab. Auto-switches to 'sketch' when activeSketchId becomes
   // non-null and back to 'features' when it clears; user can manually override.
-  activeTab = signal<'file' | 'features' | 'sketch'>('features');
+  activeTab = signal<'file' | 'features' | 'sketch' | 'assembly'>('features');
   // REQ 619 — display mode for the 3D viewer (session state, not persisted).
   displayMode = signal<DisplayMode>('visible-edges');
   // REQ 623 — feature multi-select. Updated by viewer's featureClick event.
@@ -5541,6 +5837,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // a user-initiated tab choice.
     effect(() => {
       const next = this.activeSketchId();
+      if (this.assemblyMode()) return; // assembly mode owns the tab
       if (next !== this.prevActiveSketchId) {
         this.activeTab.set(next ? 'sketch' : 'features');
         this.prevActiveSketchId = next;
@@ -5753,6 +6050,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit() {
+    // Assembly mode — this part is an assembly. Skip the single-part CAD load
+    // flow entirely; the controller drives the assembly. (Route data flag set on
+    // the /parts/:id/assembly/editor route.)
+    if (this.route.snapshot.data['assemblyMode']) {
+      this.assemblyMode.set(true);
+      this.activeTab.set('assembly');
+      this.loading.set(false);
+      const aid = Number(this.route.snapshot.paramMap.get('id'));
+      this.partID.set(aid);
+      this.inventory.getPartById(aid).subscribe({ next: p => this.part.set(p), error: () => {} });
+      this.asm.load(aid);
+      this.probeKernel();
+      this.kernelPollTimer = window.setInterval(() => this.probeKernel(), 8_000);
+      return;
+    }
     // Resolve the part id from whichever route segment carries it.
     // Different navigation paths (lazy-loaded nested routes vs the
     // flat /parts/:id/cad/editor path) put `:id` on different
@@ -5846,7 +6158,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   // REQ 616 — manual tab switch from the ribbon. Independent of activeSketchId.
-  setActiveTab(t: 'file' | 'features' | 'sketch') { this.activeTab.set(t); }
+  setActiveTab(t: 'file' | 'features' | 'sketch' | 'assembly') { this.activeTab.set(t); }
 
   // REQ 623 — feature click from the 3D viewer. Tracks the last clicked face
   // for REQ 625 (sketch on a flat face) but defers selection-set updates to
@@ -9361,6 +9673,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   onFacePicked(faceId: string): void {
+    // Assembly mode: route face picks to the mate-creation flow.
+    if (this.assemblyMode()) { this.asm.onFacePicked(faceId); return; }
     // Convert Entities: project every boundary edge of the picked face
     // into the active sketch. Tool stays armed so the user can chain
     // face/edge clicks.

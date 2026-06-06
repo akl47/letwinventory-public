@@ -20,8 +20,13 @@ function initialsOf(name) {
 /** Build the full version graph for a model. Returns
  * `{ head, branches: [{name, head}], nodes: [...] }`, newest node first. */
 async function buildGraph(model, db) {
+  return buildGraphForRepo(await repoForModel(model, db), model.baseCommitHash, db);
+}
+
+// Repo-keyed graph builder — usable for any document repo (CAD or assembly).
+// `headHash` marks the working copy's current commit (else falls back to main).
+async function buildGraphForRepo(repo, headHash, db) {
   const D = dbOf(db);
-  const repo = await repoForModel(model, db);
   const branches = await vcs.listRefs(repo, 'branch', db);
   const tags = await vcs.listRefs(repo, 'tag', db);
 
@@ -48,7 +53,7 @@ async function buildGraph(model, db) {
     for (const c of await vcs.log(repo, b.name, db)) if (!laneOf.has(c.hash)) laneOf.set(c.hash, b.name);
   }
 
-  const headHash = model.baseCommitHash || (mainBranch && mainBranch.targetHash) || null;
+  const headCommit = headHash || (mainBranch && mainBranch.targetHash) || null;
 
   // Resolve authors in one query.
   const authorIds = [...new Set([...commitMap.values()].map(c => c.authorUserID).filter(Boolean))];
@@ -70,17 +75,17 @@ async function buildGraph(model, db) {
         branch,
         lane: branch === 'main' ? 'main' : 'exp',
         tags: tagList,
-        isHead: c.hash === headHash,
+        isHead: c.hash === headCommit,
         author: u ? { id: u.id, name: u.displayName, initials: initialsOf(u.displayName) } : null,
         state: tagList.length ? 'released' : 'draft',
       };
     });
 
   return {
-    head: headHash,
+    head: headCommit,
     branches: branches.map(b => ({ name: b.name, head: b.targetHash })),
     nodes,
   };
 }
 
-module.exports = { buildGraph, initialsOf };
+module.exports = { buildGraph, buildGraphForRepo, initialsOf };

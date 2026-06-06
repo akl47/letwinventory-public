@@ -11,6 +11,14 @@ use cxx::UniquePtr;
 use glam::{dvec3, DVec3};
 use opencascade_sys as ffi;
 
+/// Analytic surface classification of a face (see [`Face::surface_kind`]).
+/// Only the kinds the assembly mate solver needs are represented.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FaceSurface {
+    Plane { origin: DVec3, normal: DVec3 },
+    Cylinder { origin: DVec3, axis: DVec3, radius: f64 },
+}
+
 pub struct Face {
     pub(crate) inner: UniquePtr<ffi::topo_ds::TopoDS_Face>,
 }
@@ -366,6 +374,34 @@ impl Face {
     pub fn normal_at_center(&self) -> DVec3 {
         let center = self.center_of_mass();
         self.normal_at(center)
+    }
+
+    /// Analytic classification of this face's underlying surface (REQ 749).
+    /// Returns `Some` for planar and cylindrical faces — the two surface kinds
+    /// the assembly mate solver consumes — and `None` for everything else.
+    ///
+    /// For planes the origin/normal come from the existing orientation-aware
+    /// `center_of_mass`/`normal_at_center` (so the normal points outward); only
+    /// cylinder axis + radius need the surface adaptor.
+    pub fn surface_kind(&self) -> Option<FaceSurface> {
+        let adaptor = ffi::b_rep_adaptor::BRepAdaptor_Surface_new(&self.inner);
+        match adaptor.GetType() {
+            ffi::geom_abs::GeomAbs_SurfaceType::GeomAbs_Plane => Some(FaceSurface::Plane {
+                origin: self.center_of_mass(),
+                normal: self.normal_at_center(),
+            }),
+            ffi::geom_abs::GeomAbs_SurfaceType::GeomAbs_Cylinder => {
+                let loc = ffi::b_rep_adaptor::BRepAdaptor_Surface_cyl_location(&adaptor);
+                let dir = ffi::b_rep_adaptor::BRepAdaptor_Surface_cyl_direction(&adaptor);
+                let radius = ffi::b_rep_adaptor::BRepAdaptor_Surface_cyl_radius(&adaptor);
+                Some(FaceSurface::Cylinder {
+                    origin: dvec3(loc.X(), loc.Y(), loc.Z()),
+                    axis: dvec3(dir.X(), dir.Y(), dir.Z()),
+                    radius,
+                })
+            }
+            _ => None,
+        }
     }
 
     pub fn workplane(&self) -> Workplane {

@@ -13,18 +13,18 @@ const { loadEffectivePermissions } = require('../../middleware/checkPermission')
 const notificationService = require('../notificationService');
 
 // Declarative transition tables. CAD: draft → in_review → approved.
-const WORKFLOWS = {
-  cad: {
-    initial: 'draft',
-    states: ['draft', 'in_review', 'approved'],
-    transitions: [
-      { action: 'submit', from: 'draft', to: 'in_review', permission: 'cad.write', notify: 'reviewers' },
-      { action: 'approve', from: 'in_review', to: 'approved', permission: 'cad.approve', notify: 'author' },
-      { action: 'reject', from: 'in_review', to: 'draft', permission: 'cad.approve', notify: 'author' },
-      { action: 'reopen', from: 'approved', to: 'draft', permission: 'cad.write' },
-    ],
-  },
+const CAD_WORKFLOW = {
+  initial: 'draft',
+  states: ['draft', 'in_review', 'approved'],
+  transitions: [
+    { action: 'submit', from: 'draft', to: 'in_review', permission: 'cad.write', notify: 'reviewers' },
+    { action: 'approve', from: 'in_review', to: 'approved', permission: 'cad.approve', notify: 'author' },
+    { action: 'reject', from: 'in_review', to: 'draft', permission: 'cad.approve', notify: 'author' },
+    { action: 'reopen', from: 'approved', to: 'draft', permission: 'cad.write' },
+  ],
 };
+// Assemblies share the same review workflow + the `cad` permission resource.
+const WORKFLOWS = { cad: CAD_WORKFLOW, assembly: CAD_WORKFLOW };
 
 function dbOf(db) { return db || global.db; }
 
