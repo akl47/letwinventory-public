@@ -162,7 +162,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <mat-icon svgIcon="cad-history"></mat-icon><span class="ribbon-label">History</span>
                 </button>
                 <button class="ribbon-button" data-testid="action-compare"
-                        *ngIf="!assemblyMode()" [disabled]="commits().length < 2" [class.active]="showCompare()"
+                        [disabled]="commits().length < 2" [class.active]="showCompare()"
                         matTooltip="Compare two commits" (click)="toggleCompare()">
                   <mat-icon svgIcon="cad-compare"></mat-icon><span class="ribbon-label">Compare</span>
                 </button>
@@ -191,14 +191,14 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 </button>
                 <!-- Behind main → merge main's latest in (pick which branch changes to keep). -->
                 <button class="ribbon-button" data-testid="action-merge"
-                        *ngIf="model()?.behindMain && !assemblyMode()"
+                        *ngIf="model()?.behindMain"
                         matTooltip="Branch is behind main — merge main's latest features in (choose which branch changes to keep)"
                         (click)="onMerge()">
                   <mat-icon>merge</mat-icon><span class="ribbon-label">Merge</span>
                 </button>
                 <!-- Production release — promote the released main revision to a letter rev. -->
                 <button class="ribbon-button" data-testid="action-prod-release"
-                        *ngIf="canApprove() && onMainBranch() && model()?.released && !assemblyMode()"
+                        *ngIf="canApprove() && onMainBranch() && model()?.released"
                         [disabled]="workflow()?.state !== 'approved'"
                         [matTooltip]="workflow()?.state === 'approved' ? 'Promote to production (letter revision)' : 'Requires workflow approval first'"
                         (click)="onProductionRelease()">
@@ -12322,6 +12322,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!window.confirm(
       'Promote to a production release?\n\nThis creates a letter revision with the '
       + 'same geometry, locks the source, and requires approval.')) return;
+    if (this.assemblyMode()) {
+      this.assemblyApi.productionRelease(m.id).subscribe({
+        next: res => this.router.navigate(['/parts', res.model.partID, 'assembly', 'editor']),
+        error: e => this.errors.showError(e?.error?.error || 'Production release failed'),
+      });
+      return;
+    }
     this.cadApi.productionRelease(m.id).subscribe({
       next: res => this.router.navigate(['/parts', res.model.partID, 'cad', 'editor'], { queryParams: { revisionID: res.prodModelID } }),
       error: err => this.errors.showError(err?.error?.error || 'Production release failed'),
@@ -12592,7 +12599,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   runDiff() {
     const m = this.model(); const a = this.diffA(); const b = this.diffB();
     if (!m || !a || !b) return;
-    this.cadApi.commitDiff(m.id, a, b).subscribe({
+    const obs = this.assemblyMode() ? this.assemblyApi.commitDiff(m.id, a, b) : this.cadApi.commitDiff(m.id, a, b);
+    obs.subscribe({
       next: r => this.diffResult.set(r),
       error: err => this.errors.showError(err?.error?.error || 'Diff failed'),
     });
@@ -12664,7 +12672,26 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   // The feature-level merge/reconciliation tool lives in the version history
   // (Branches tab → Merge). Open it there.
-  onMerge() { this.openVersionHistory(); }
+  onMerge() {
+    if (this.assemblyMode()) {
+      const m = this.model(); if (!m) return;
+      // Merge main's latest in, keeping all of this branch's component/mate
+      // changes (one-click; per-item selection is the version-history tool).
+      this.assemblyApi.reconcilePreview(m.id).subscribe({
+        next: ({ changes }) => {
+          const instanceIds = changes.filter(c => c.kind === 'instance').map(c => c.id);
+          const mateIds = changes.filter(c => c.kind === 'mate').map(c => c.id);
+          this.assemblyApi.reconcile(m.id, { instanceIds, mateIds }).subscribe({
+            next: u => { this.refreshAssembly(u); this.errors.showSuccess('Merged main into this branch'); },
+            error: e => this.errors.showError(e?.error?.error || 'Merge failed'),
+          });
+        },
+        error: e => this.errors.showError(e?.error?.error || 'Merge failed'),
+      });
+      return;
+    }
+    this.openVersionHistory();
+  }
 
   toggleFullscreen() {
     this.fullscreen.update(v => !v);

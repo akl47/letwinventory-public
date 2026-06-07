@@ -6,7 +6,7 @@ import {
   Assembly, AssemblyListItem, AssemblyInstance, AssemblyRegenResponse, BomLine, Placement, Mate, MateType, MateRef, EligiblePart,
   AssemblyPattern, PatternKind, ExplodeConfig, DisplayState, MassProperties, InterferencePair,
 } from '../cad/lib/assembly.types';
-import { CadBranch, CadCommit, CadWorkflow, CadVersionGraph } from '../models/cad-model.model';
+import { CadBranch, CadCommit, CadWorkflow, CadVersionGraph, CadCommitDiff } from '../models/cad-model.model';
 
 @Injectable({ providedIn: 'root' })
 export class AssemblyService {
@@ -159,6 +159,18 @@ export class AssemblyService {
   }
   releaseStl(id: number): Observable<Blob> {
     return this.http.get(`${this.apiUrl}/${id}/release/stl`, { responseType: 'blob' });
+  }
+  productionRelease(id: number): Observable<{ revision: string; prodModelID: number; model: Assembly }> {
+    return this.http.post<{ revision: string; prodModelID: number; model: Assembly }>(`${this.apiUrl}/${id}/production-release`, {});
+  }
+  commitDiff(id: number, a: string, b: string): Observable<CadCommitDiff> {
+    return this.http.get<CadCommitDiff>(`${this.apiUrl}/${id}/commits/${a}/diff/${b}`);
+  }
+  reconcilePreview(id: number): Observable<{ changes: Array<{ kind: string; id: string }> }> {
+    return this.http.get<{ changes: Array<{ kind: string; id: string }> }>(`${this.apiUrl}/${id}/reconcile/preview`);
+  }
+  reconcile(id: number, sel: { instanceIds?: string[]; mateIds?: string[] }): Observable<Assembly> {
+    return this.http.post<Assembly>(`${this.apiUrl}/${id}/reconcile`, sel);
   }
 
   exportStep(id: number): Observable<string> {

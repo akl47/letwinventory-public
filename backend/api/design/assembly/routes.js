@@ -68,7 +68,13 @@ router.post('/:id/workflow', checkToken, checkPermission('cad', 'read'), control
 
 // Release a draft branch onto main + frozen released geometry download.
 router.post('/:id/release', checkToken, checkPermission('cad', 'write'), controller.release);
+router.post('/:id/production-release', checkToken, checkPermission('cad', 'approve'), controller.productionRelease);
 router.get('/:id/release/step', checkToken, checkPermission('cad', 'read'), controller.exportReleaseStep);
 router.get('/:id/release/stl', checkToken, checkPermission('cad', 'read'), controller.exportReleaseStl);
+
+// Compare (structural diff) + merge (reconcile main into the branch).
+router.get('/:id/commits/:a/diff/:b', checkToken, checkPermission('cad', 'read'), controller.getCommitDiff);
+router.get('/:id/reconcile/preview', checkToken, checkPermission('cad', 'read'), controller.reconcilePreview);
+router.post('/:id/reconcile', checkToken, checkPermission('cad', 'write'), controller.reconcile);
 
 module.exports = router;

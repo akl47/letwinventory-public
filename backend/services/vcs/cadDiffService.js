@@ -105,17 +105,21 @@ async function attachEntryDetail(repo, entries, db) {
     const isFeature = e.name.startsWith('feature:');
     const isSketch = e.name.startsWith('sketch:');
     const isEqs = e.name === 'equations';
-    if (!isFeature && !isSketch && !isEqs) continue;
+    const isInstance = e.name.startsWith('instance:'); // assembly component
+    const isMate = e.name.startsWith('mate:');         // assembly mate
+    if (!isFeature && !isSketch && !isEqs && !isInstance && !isMate) continue;
     const oa = e.aHash ? await vcs.getObject(repo, e.aHash, db) : null;
     const ob = e.bHash ? await vcs.getObject(repo, e.bHash, db) : null;
     const c = (ob && ob.content) || (oa && oa.content) || null;
     const named = c && c.name && String(c.name).trim();
     if (isEqs) e.displayName = 'Equations';
     else if (isSketch) e.displayName = named ? c.name : `Sketch ${e.name.slice('sketch:'.length)}`;
+    else if (isInstance) e.displayName = `Component ${(c && c.partID) || e.name.slice('instance:'.length)}`;
+    else if (isMate) e.displayName = c && c.type ? `${c.type} mate` : `Mate ${e.name.slice('mate:'.length)}`;
     else e.displayName = named ? c.name : friendlyFeatureType(c && c.type);
     if (e.status === 'modified') {
       if (isSketch) e.sketchDiff = sketchDiff(oa && oa.content, ob && ob.content);
-      else if (!isSketch) e.paramDiff = paramDiff(oa && oa.content, ob && ob.content);
+      else e.paramDiff = paramDiff(oa && oa.content, ob && ob.content);
     }
   }
   return entries;

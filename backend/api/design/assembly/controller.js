@@ -13,6 +13,7 @@ const assemblyBranchService = require('../../../services/vcs/assemblyBranchServi
 const cadVcsService = require('../../../services/vcs/cadVcsService');
 const vcsService = require('../../../services/vcs/vcsService');
 const cadGraphService = require('../../../services/vcs/cadGraphService');
+const cadDiffService = require('../../../services/vcs/cadDiffService');
 const assemblyFreezeService = require('../../../services/vcs/assemblyFreezeService');
 const workflowEngine = require('../../../services/vcs/workflowEngine');
 const partRevisionService = require('../../../services/partRevisionService');
@@ -838,6 +839,72 @@ module.exports = {
   // GET /:id/release/step | /:id/release/stl — frozen released geometry export.
   async exportReleaseStep(req, res) { return exportFrozen(req, res, 'step'); },
   async exportReleaseStl(req, res) { return exportFrozen(req, res, 'stl'); },
+
+  // GET /:id/commits/:a/diff/:b — structural diff (shared cadDiffService).
+  async getCommitDiff(req, res) {
+    try {
+      const assembly = await fetchActive(Number(req.params.id));
+      if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      const repo = await assemblyVcsService.repoForAssembly(assembly);
+      return res.json(await cadDiffService.commitDiff(repo, req.params.a, req.params.b, db));
+    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+  },
+
+  // GET /:id/reconcile/preview — instances/mates that differ from main (merge picker).
+  async reconcilePreview(req, res) {
+    try {
+      const assembly = await fetchActive(Number(req.params.id));
+      if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      return res.json({ changes: await assemblyBranchService.reconcileChanges(assembly, db) });
+    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+  },
+
+  // POST /:id/reconcile — merge main's latest + selected branch instances/mates.
+  async reconcile(req, res) {
+    try {
+      const assembly = await fetchActive(Number(req.params.id));
+      if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      const sel = req.body || {};
+      await assemblyBranchService.reconcileBranch(assembly, sel, req.user.id, {}, db);
+      await recordHistory(assembly.id, req.user.id, 'merged', null, { branch: assembly.branchName });
+      return res.json(await withReleaseFlag(await fetchActive(assembly.id)));
+    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+  },
+
+  // POST /:id/production-release — promote the released revision to a letter rev,
+  // tagging the same frozen commit (cad.approve-gated, requires workflow approval).
+  async productionRelease(req, res) {
+    const assembly = await fetchActive(Number(req.params.id));
+    if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+    const part = await db.Part.findByPk(assembly.partID);
+    if (!part) return res.status(400).json({ error: 'Part not found for this assembly' });
+    try {
+      const repo = await assemblyVcsService.repoForAssembly(assembly);
+      if (!assembly.releaseLocked) return res.status(409).json({ error: 'Release the assembly before promoting to production' });
+      if (!(await workflowEngine.canRelease(await assemblyWorkflowRepo(assembly)))) {
+        return res.status(409).json({ error: 'Production release requires workflow approval' });
+      }
+      const devRef = await vcsService.getRef(repo, String(part.revision));
+      if (!devRef) return res.status(409).json({ error: 'Release tag not found' });
+      const releaseCommit = devRef.targetHash;
+      const result = await db.sequelize.transaction(async (transaction) => {
+        const prodPart = await partRevisionService.releaseToProduction(part, req.user.id, { transaction });
+        const prodAssembly = await db.DesignAssembly.create({
+          name: assembly.name, partID: prodPart.id, assemblyDoc: assembly.assemblyDoc,
+          branchName: assembly.branchName || 'main', baseCommitHash: releaseCommit,
+          dirty: false, releaseLocked: true, lockedByUserID: null,
+          createdByUserID: req.user.id, activeFlag: true,
+        }, { transaction });
+        await vcsService.createTag(repo, String(prodPart.revision), releaseCommit, req.user.id);
+        return { prodPart, prodAssembly };
+      });
+      await workflowEngine.setState(await assemblyWorkflowRepo(assembly), 'draft', req.user.id);
+      await recordHistory(result.prodAssembly.id, req.user.id, 'production_release', null, { revision: result.prodPart.revision, commitHash: releaseCommit });
+      return res.json({ revision: result.prodPart.revision, prodModelID: result.prodAssembly.id, model: await withReleaseFlag(await fetchActive(result.prodAssembly.id)) });
+    } catch (err) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  },
 };
 
 // Export a RELEASED assembly's frozen geometry (no kernel regen): resolve the
