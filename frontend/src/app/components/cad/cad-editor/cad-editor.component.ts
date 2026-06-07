@@ -183,7 +183,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <!-- Release the draft branch onto main as the next revision —
                      self-service (no approval); locks the released revision. -->
                 <button class="ribbon-button" data-testid="action-release-main"
-                        *ngIf="canWrite() && !onMainBranch() && !assemblyMode()"
+                        *ngIf="canWrite() && !onMainBranch()"
                         [disabled]="model()?.behindMain || model()?.dirty || !model()?.baseCommitHash"
                         [matTooltip]="model()?.behindMain ? 'Behind main — merge main in before releasing' : (model()?.dirty || !model()?.baseCommitHash) ? 'Check in the branch first' : 'Release this branch onto main and lock it as the next revision'"
                         (click)="onReleaseToMain()">
@@ -12336,7 +12336,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   downloadReleaseStep() {
     const m = this.model(); if (!m) return;
-    this.cadApi.exportReleaseStep(m.id).subscribe({
+    const obs = this.assemblyMode() ? this.assemblyApi.releaseStep(m.id) : this.cadApi.exportReleaseStep(m.id);
+    obs.subscribe({
       next: step => this._downloadBlob(new Blob([step], { type: 'application/step' }), `${this._releaseFileBase()}.step`),
       error: err => this.errors.showError(err?.error?.error || 'STEP download failed'),
     });
@@ -12344,7 +12345,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   downloadReleaseStl() {
     const m = this.model(); if (!m) return;
-    this.cadApi.exportReleaseStl(m.id).subscribe({
+    const obs = this.assemblyMode() ? this.assemblyApi.releaseStl(m.id) : this.cadApi.exportReleaseStl(m.id);
+    obs.subscribe({
       next: blob => this._downloadBlob(blob, `${this._releaseFileBase()}.stl`),
       error: err => this.errors.showError(err?.error?.error || 'STL download failed'),
     });
@@ -12643,6 +12645,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // branch). The model flips to the protected main line.
   onReleaseToMain() {
     const m = this.model(); if (!m) return;
+    if (this.assemblyMode()) {
+      this.assemblyApi.release(m.id).subscribe({
+        next: r => { this.refreshAssembly(r.model); this.errors.showSuccess(`Released as Rev ${r.revision} on main`); },
+        error: e => this.errors.showError(e?.error?.error || 'Release failed'),
+      });
+      return;
+    }
     this.cadApi.release(m.id).subscribe({
       next: (r: any) => {
         if (r.model) { this.bootstrap(r.model); this.loadCommits(); this.loadBranches(); }

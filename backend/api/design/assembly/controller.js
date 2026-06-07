@@ -13,9 +13,43 @@ const assemblyBranchService = require('../../../services/vcs/assemblyBranchServi
 const cadVcsService = require('../../../services/vcs/cadVcsService');
 const vcsService = require('../../../services/vcs/vcsService');
 const cadGraphService = require('../../../services/vcs/cadGraphService');
+const assemblyFreezeService = require('../../../services/vcs/assemblyFreezeService');
 const workflowEngine = require('../../../services/vcs/workflowEngine');
+const partRevisionService = require('../../../services/partRevisionService');
 const cadRegenService = require('../../../services/cadRegenService');
+const RestError = require('../../../util/RestError');
 const { KernelDisconnected, KernelRpcError, getDefaultClient } = require('../../../services/cadKernelClient');
+
+// Release a draft assembly branch onto main as the next numeric Part revision:
+// mint the revision, freeze the composed geometry, release the branch doc onto
+// main (preserving its history), lock it, and archive the branch. Mirrors the
+// CAD releaseBranchToMain — assemblies are Parts, so the same revision service
+// applies.
+async function releaseAssemblyToMain(assembly, userId, opts = {}) {
+  const branchName = assembly.branchName;
+  if (!branchName || branchName === 'main') throw new RestError('Only a draft branch can be released to main', 409);
+  if (assembly.dirty || !assembly.baseCommitHash) throw new RestError('Check in the branch before releasing it', 409);
+  const repo = await assemblyVcsService.repoForAssembly(assembly);
+  const mainRef = await vcsService.getRef(repo, 'main');
+  const branchRef = await vcsService.getRef(repo, branchName);
+  if (mainRef && branchRef) {
+    const ancestry = (await vcsService.walk(repo, branchRef.targetHash)).map((c) => c.hash);
+    if (!ancestry.includes(mainRef.targetHash)) throw new RestError('Branch is behind main — merge before releasing', 409);
+  }
+  const part = await db.Part.findByPk(assembly.partID);
+  const newPart = await partRevisionService.createNewRevision(part, userId);
+  await assembly.update({ partID: newPart.id });
+  const branchHead = branchRef ? branchRef.targetHash : (assembly.baseCommitHash || null);
+  assembly.branchName = 'main';
+  const { commitHash, tag } = await assemblyVcsService.release(
+    assembly, userId, newPart.revision,
+    { ...opts, parents: branchHead ? [branchHead] : undefined },
+  );
+  await assembly.update({ releaseLocked: true, branchName: 'main' });
+  if (!newPart.revisionLocked) await newPart.update({ revisionLocked: true });
+  await vcsService.deleteRef(repo, branchName);
+  return { commitHash, tag, newPartID: newPart.id, branch: branchName };
+}
 
 // Workflow state is keyed per branch (matches the CAD convention) so multiple
 // draft branches can be in review at once.
@@ -784,7 +818,57 @@ module.exports = {
       return res.json(await cadGraphService.buildGraphForRepo(repo, assembly.baseCommitHash, db));
     } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
   },
+
+  // POST /:id/release — release a draft branch onto main as the next revision.
+  async release(req, res) {
+    try {
+      const assembly = await fetchActive(Number(req.params.id));
+      if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      const wf = await assemblyWorkflowRepo(assembly); // draft branch key (before release)
+      const released = await releaseAssemblyToMain(assembly, req.user.id, { kernelClient: getDefaultClient() });
+      await workflowEngine.setState(wf, 'draft', req.user.id);
+      await recordHistory(assembly.id, req.user.id, 'released_to_main', null, released);
+      return res.json({ commitHash: released.commitHash, revision: released.tag, model: await withReleaseFlag(await fetchActive(assembly.id)) });
+    } catch (err) {
+      if (err instanceof KernelDisconnected || err instanceof KernelRpcError) return res.status(503).json({ error: err.message });
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  },
+
+  // GET /:id/release/step | /:id/release/stl — frozen released geometry export.
+  async exportReleaseStep(req, res) { return exportFrozen(req, res, 'step'); },
+  async exportReleaseStl(req, res) { return exportFrozen(req, res, 'stl'); },
 };
+
+// Export a RELEASED assembly's frozen geometry (no kernel regen): resolve the
+// revision tag → its frozen commit → per-body BReps → serialize via the kernel.
+async function exportFrozen(req, res, format) {
+  try {
+    const assembly = await fetchActive(Number(req.params.id));
+    if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+    const part = assembly.part || await db.Part.findByPk(assembly.partID);
+    const revision = part && part.revision;
+    const repo = await assemblyVcsService.repoForAssembly(assembly);
+    const ref = revision ? await vcsService.getRef(repo, String(revision)) : null;
+    if (!ref) return res.status(409).json({ error: 'This revision has not been released yet' });
+    const geo = await assemblyFreezeService.geometryForCommit(repo, assembly, ref.targetHash, {}, db);
+    const breps = (geo.bodies || []).filter((b) => b.brep).map((b) => b.brep);
+    if (!breps.length) return res.status(409).json({ error: 'Released revision has no body geometry' });
+    const base = String(part?.sku || part?.name || `assembly-${assembly.id}`).replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'assembly';
+    const out = await cadRegenService.exportBodyBreps(breps, format, {});
+    if (format === 'stl') {
+      res.setHeader('Content-Type', 'model/stl');
+      res.setHeader('Content-Disposition', `attachment; filename="${base}-${revision}.stl"`);
+      return res.send(Buffer.from(out.stlBase64 || '', 'base64'));
+    }
+    res.setHeader('Content-Type', 'application/step');
+    res.setHeader('Content-Disposition', `attachment; filename="${base}-${revision}.step"`);
+    return res.send(out.step);
+  } catch (err) {
+    if (err instanceof KernelDisconnected || err instanceof KernelRpcError) return res.status(503).json({ error: err.message });
+    return res.status(err.statusCode || 500).json({ error: err.message });
+  }
+}
 
 // Bake an instance placement (rotate-about-origin then translate) into a child
 // BRep via the kernel pattern op, mirroring the MoveCopyBody dispatch.

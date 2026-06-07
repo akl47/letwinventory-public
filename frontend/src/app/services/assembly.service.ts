@@ -151,6 +151,15 @@ export class AssemblyService {
   getGraph(id: number): Observable<CadVersionGraph> {
     return this.http.get<CadVersionGraph>(`${this.apiUrl}/${id}/graph`);
   }
+  release(id: number): Observable<{ commitHash: string; revision: string; model: Assembly }> {
+    return this.http.post<{ commitHash: string; revision: string; model: Assembly }>(`${this.apiUrl}/${id}/release`, {});
+  }
+  releaseStep(id: number): Observable<string> {
+    return this.http.get(`${this.apiUrl}/${id}/release/step`, { responseType: 'text' });
+  }
+  releaseStl(id: number): Observable<Blob> {
+    return this.http.get(`${this.apiUrl}/${id}/release/stl`, { responseType: 'blob' });
+  }
 
   exportStep(id: number): Observable<string> {
     return this.http.get(`${this.apiUrl}/${id}/export/step`, { responseType: 'text' });

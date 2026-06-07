@@ -6,6 +6,8 @@
 
 const vcs = require('./vcsService');
 const { makeWorkingCopy } = require('./vcsWorkingCopy');
+const { makeRelease } = require('./vcsRelease');
+const assemblyFreeze = require('./assemblyFreezeService');
 const { assemblySerialize, assemblyDeserialize } = require('./assemblySerializer');
 
 function dbOf(db) { return db || global.db; }
@@ -38,6 +40,15 @@ const wc = makeWorkingCopy({
   applyDoc: (model, doc) => ({ assemblyDoc: doc }),
 });
 
+// Release-the-revision, written once in vcsRelease; freezes the COMPOSED
+// assembly geometry so a released assembly reconstructs without the kernel.
+const { release } = makeRelease({
+  repoFor: repoForAssembly,
+  serialize: assemblySerialize,
+  docOf,
+  freeze: assemblyFreeze,
+});
+
 // Seed + record the base commit on the working-copy row (so the assembly shows
 // version history from creation).
 async function seedMain(assembly, userId, opts = {}, db) {
@@ -52,6 +63,7 @@ module.exports = {
   repoForAssembly,
   docOf,
   seedMain,
+  release,
   checkout: wc.checkout,
   releaseLock: wc.releaseLock,
   undoCheckout: wc.undoCheckout,

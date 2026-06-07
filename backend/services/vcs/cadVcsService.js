@@ -8,6 +8,7 @@
 const RestError = require('../../util/RestError');
 const vcs = require('./vcsService');
 const { makeWorkingCopy } = require('./vcsWorkingCopy');
+const { makeRelease } = require('./vcsRelease');
 const { cadSerialize, cadDeserialize } = require('./cadSerializer');
 const freeze = require('./cadFreezeService');
 const { NAMING_VERSION } = require('../cadRegenService');
@@ -93,46 +94,14 @@ const releaseLock = (model, userId, opts = {}, db) => wc.releaseLock(model, user
 const undoCheckout = (model, userId, db) => wc.undoCheckout(model, userId, db);
 const checkin = (model, userId, message, opts = {}, db) => wc.checkin(model, userId, message, opts, db);
 
-/** Release the working copy as a Part revision (VC-18): commit the current
- * state, freeze its geometry into that commit, advance the branch, and create a
- * write-once tag named for the revision. Returns { commitHash, tag }. */
-async function release(model, userId, revisionLabel, { kernelClient, at, parents } = {}, db) {
-  const repo = await repoForModel(model, db);
-  const branch = model.branchName || 'main';
-  const tag = String(revisionLabel);
-
-  // Write-once: refuse a re-release BEFORE mutating anything. Otherwise a
-  // repeated, raced, or double-clicked release would create a duplicate
-  // `release N` commit and advance the branch past the already-tagged commit
-  // (orphaning it) before the 409 ever fires — corrupting the history graph.
-  if (await vcs.getRef(repo, tag, db)) {
-    throw new RestError(`Revision ${tag} has already been released (tags are write-once)`, 409);
-  }
-
-  const treeHash = await cadSerialize(repo, docOf(model), db);
-  const head = await vcs.getRef(repo, branch, db);
-  const frozen = await freeze.freezeGeometry(repo, model, { kernelClient }, db);
-  // `parents` override lets a branch→main release chain off the BRANCH head so
-  // the branch's commits become ancestors of main (git-style merge, not a
-  // squash). Default: chain off the target branch's current head.
-  const commitParents = parents || (head ? [head.targetHash] : []);
-  const commitHash = await vcs.createCommit(repo, {
-    treeHash,
-    parents: commitParents,
-    authorUserID: userId,
-    message: `release ${revisionLabel}`,
-    timestamp: nowAt(at).toISOString(),
-    meta: { ...cadVersionInfo(), frozen },
-  }, db);
-  // Claim the write-once tag BEFORE advancing the branch, so a concurrent
-  // racing release fails here (leaving only a harmless unreachable commit
-  // object) rather than after it has already moved the branch head.
-  await vcs.createTag(repo, tag, commitHash, userId, db);
-  if (head) await vcs.updateBranch(repo, branch, commitHash, userId, db);
-  else await vcs.createBranch(repo, branch, commitHash, userId, db);
-  await model.update({ baseCommitHash: commitHash, dirty: false });
-  return { commitHash, tag };
-}
+// Release-the-revision is written once in vcsRelease; bind it to the CAD doc.
+const { release } = makeRelease({
+  repoFor: repoForModel,
+  serialize: cadSerialize,
+  docOf,
+  freeze,
+  commitMeta: cadVersionInfo,
+});
 
 /** Development release (REQ 715-718): self-service. The design must be checked
  * in; freeze + write-once-tag the current numeric Part revision, then lock the

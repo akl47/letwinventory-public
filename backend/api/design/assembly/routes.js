@@ -66,4 +66,9 @@ router.delete('/:id/branches/:name', checkToken, checkPermission('cad', 'write')
 router.get('/:id/workflow', checkToken, checkPermission('cad', 'read'), controller.getWorkflow);
 router.post('/:id/workflow', checkToken, checkPermission('cad', 'read'), controller.transitionWorkflow);
 
+// Release a draft branch onto main + frozen released geometry download.
+router.post('/:id/release', checkToken, checkPermission('cad', 'write'), controller.release);
+router.get('/:id/release/step', checkToken, checkPermission('cad', 'read'), controller.exportReleaseStep);
+router.get('/:id/release/stl', checkToken, checkPermission('cad', 'read'), controller.exportReleaseStl);
+
 module.exports = router;
