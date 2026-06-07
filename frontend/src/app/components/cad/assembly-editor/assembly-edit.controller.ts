@@ -417,7 +417,7 @@ export class AssemblyEditController {
     if (!a) return;
     const message = window.prompt('Check-in message:', '') ?? '';
     this.assemblyApi.checkin(a.id, message).subscribe({
-      next: (res) => this.assembly.set(res.assembly),
+      next: (res) => this.assembly.set(res.model),
       error: (e) => this.errors.showError(e?.error?.error || 'Failed to check in'),
     });
   }

@@ -6,6 +6,7 @@ import {
   Assembly, AssemblyListItem, AssemblyInstance, AssemblyRegenResponse, BomLine, Placement, Mate, MateType, MateRef, EligiblePart,
   AssemblyPattern, PatternKind, ExplodeConfig, DisplayState, MassProperties, InterferencePair,
 } from '../cad/lib/assembly.types';
+import { CadBranch, CadCommit, CadWorkflow, CadVersionGraph } from '../models/cad-model.model';
 
 @Injectable({ providedIn: 'root' })
 export class AssemblyService {
@@ -117,12 +118,38 @@ export class AssemblyService {
     return this.http.post<Assembly>(`${this.apiUrl}/${id}/checkout`, {});
   }
 
-  checkin(id: number, message: string): Observable<{ commitHash: string; assembly: Assembly }> {
-    return this.http.post<{ commitHash: string; assembly: Assembly }>(`${this.apiUrl}/${id}/checkin`, { message });
+  checkin(id: number, message: string): Observable<{ commitHash: string; model: Assembly }> {
+    return this.http.post<{ commitHash: string; model: Assembly }>(`${this.apiUrl}/${id}/checkin`, { message });
   }
 
   undoCheckout(id: number): Observable<Assembly> {
     return this.http.post<Assembly>(`${this.apiUrl}/${id}/undo-checkout`, {});
+  }
+
+  // ── branches / workflow / graph (shared VCS machinery) ──────────────────────
+  getCommits(id: number): Observable<CadCommit[]> {
+    return this.http.get<CadCommit[]>(`${this.apiUrl}/${id}/commits`);
+  }
+  listBranches(id: number): Observable<CadBranch[]> {
+    return this.http.get<CadBranch[]>(`${this.apiUrl}/${id}/branches`);
+  }
+  createBranch(id: number, name: string, fromCommit?: string): Observable<CadBranch> {
+    return this.http.post<CadBranch>(`${this.apiUrl}/${id}/branches`, { name, fromCommit });
+  }
+  switchBranch(id: number, name: string): Observable<Assembly> {
+    return this.http.post<Assembly>(`${this.apiUrl}/${id}/switch-branch`, { name });
+  }
+  archiveBranch(id: number, name: string): Observable<{ archived: string }> {
+    return this.http.delete<{ archived: string }>(`${this.apiUrl}/${id}/branches/${encodeURIComponent(name)}`);
+  }
+  getWorkflow(id: number): Observable<CadWorkflow> {
+    return this.http.get<CadWorkflow>(`${this.apiUrl}/${id}/workflow`);
+  }
+  transitionWorkflow(id: number, action: string): Observable<CadWorkflow & { model?: Assembly }> {
+    return this.http.post<CadWorkflow & { model?: Assembly }>(`${this.apiUrl}/${id}/workflow`, { action });
+  }
+  getGraph(id: number): Observable<CadVersionGraph> {
+    return this.http.get<CadVersionGraph>(`${this.apiUrl}/${id}/graph`);
   }
 
   exportStep(id: number): Observable<string> {

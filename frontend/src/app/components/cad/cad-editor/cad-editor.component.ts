@@ -58,6 +58,7 @@ import { type EquationDoc, resolveEquations, evalExpression, setEquation, remove
 import { DimInputComponent } from '../dim-input/dim-input.component';
 import { CadEquationsPanelComponent } from '../cad-equations-panel/cad-equations-panel.component';
 import { AssemblyEditController } from '../assembly-editor/assembly-edit.controller';
+import { AssemblyService } from '../../../services/assembly.service';
 
 /** Snap kinds. Drives the viewer's snap-indicator glyph: square for
  * endpoint (existing point), triangle for midpoint, X for intersection,
@@ -106,7 +107,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
       <div class="ribbon">
         <div class="tab-strip tab-strip-top">
           <button class="tab" data-testid="tab-file"
-                  *ngIf="!assemblyMode()"
                   [class.active]="activeTab() === 'file'"
                   (click)="setActiveTab('file')">File</button>
           <button class="tab" data-testid="tab-features"
@@ -157,12 +157,12 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <div class="ribbon-group">
               <div class="ribbon-group-row">
                 <button class="ribbon-button" data-testid="action-history"
-                        [disabled]="!model()"
+                        *ngIf="!assemblyMode()" [disabled]="!model()"
                         matTooltip="Open the part's full version history" (click)="openVersionHistory()">
                   <mat-icon svgIcon="cad-history"></mat-icon><span class="ribbon-label">History</span>
                 </button>
                 <button class="ribbon-button" data-testid="action-compare"
-                        [disabled]="commits().length < 2" [class.active]="showCompare()"
+                        *ngIf="!assemblyMode()" [disabled]="commits().length < 2" [class.active]="showCompare()"
                         matTooltip="Compare two commits" (click)="toggleCompare()">
                   <mat-icon svgIcon="cad-compare"></mat-icon><span class="ribbon-label">Compare</span>
                 </button>
@@ -183,7 +183,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <!-- Release the draft branch onto main as the next revision —
                      self-service (no approval); locks the released revision. -->
                 <button class="ribbon-button" data-testid="action-release-main"
-                        *ngIf="canWrite() && !onMainBranch()"
+                        *ngIf="canWrite() && !onMainBranch() && !assemblyMode()"
                         [disabled]="model()?.behindMain || model()?.dirty || !model()?.baseCommitHash"
                         [matTooltip]="model()?.behindMain ? 'Behind main — merge main in before releasing' : (model()?.dirty || !model()?.baseCommitHash) ? 'Check in the branch first' : 'Release this branch onto main and lock it as the next revision'"
                         (click)="onReleaseToMain()">
@@ -191,14 +191,14 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 </button>
                 <!-- Behind main → merge main's latest in (pick which branch changes to keep). -->
                 <button class="ribbon-button" data-testid="action-merge"
-                        *ngIf="model()?.behindMain"
+                        *ngIf="model()?.behindMain && !assemblyMode()"
                         matTooltip="Branch is behind main — merge main's latest features in (choose which branch changes to keep)"
                         (click)="onMerge()">
                   <mat-icon>merge</mat-icon><span class="ribbon-label">Merge</span>
                 </button>
                 <!-- Production release — promote the released main revision to a letter rev. -->
                 <button class="ribbon-button" data-testid="action-prod-release"
-                        *ngIf="canApprove() && onMainBranch() && model()?.released"
+                        *ngIf="canApprove() && onMainBranch() && model()?.released && !assemblyMode()"
                         [disabled]="workflow()?.state !== 'approved'"
                         [matTooltip]="workflow()?.state === 'approved' ? 'Promote to production (letter revision)' : 'Requires workflow approval first'"
                         (click)="onProductionRelease()">
@@ -553,21 +553,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <div class="ribbon-divider"></div>
             <div class="ribbon-group">
               <div class="ribbon-group-row">
-                <button class="ribbon-button" *ngIf="!asm.isLockedByMe()" (click)="asm.checkout()" matTooltip="Check out to commit versions">
-                  <mat-icon>lock_open</mat-icon><span class="ribbon-label">Check out</span>
-                </button>
-                <button class="ribbon-button" *ngIf="asm.isLockedByMe()" (click)="asm.checkin()" matTooltip="Commit a version">
-                  <mat-icon>save</mat-icon><span class="ribbon-label">Check in</span>
-                </button>
-                <button class="ribbon-button" *ngIf="asm.isLockedByMe()" (click)="asm.undoCheckout()" matTooltip="Discard changes since check-out">
-                  <mat-icon>undo</mat-icon><span class="ribbon-label">Undo</span>
-                </button>
-              </div>
-              <div class="ribbon-group-label">Working copy</div>
-            </div>
-            <div class="ribbon-divider"></div>
-            <div class="ribbon-group">
-              <div class="ribbon-group-row">
                 <button class="ribbon-button" (click)="asm.autoExplode()" matTooltip="Auto exploded view">
                   <mat-icon>open_in_full</mat-icon><span class="ribbon-label">Explode</span>
                 </button>
@@ -591,6 +576,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 </button>
                 <button class="ribbon-button" (click)="asm.syncBom()" matTooltip="Write this assembly's BOM into inventory">
                   <mat-icon>sync</mat-icon><span class="ribbon-label">Sync BOM</span>
+                </button>
+                <button class="ribbon-button" [class.active]="measureSidebar()" (click)="onMeasureAction()" matTooltip="Measure — distance / angle between vertices, edges, or faces">
+                  <mat-icon svgIcon="cad-measure"></mat-icon><span class="ribbon-label">Measure</span>
                 </button>
               </div>
               <div class="ribbon-group-label">Analyze</div>
@@ -4133,7 +4121,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // the viewer renders the composed assembly geometry. All assembly state/ops
   // live in the injected controller.
   asm = inject(AssemblyEditController);
+  assemblyApi = inject(AssemblyService);
   assemblyMode = signal<boolean>(false);
+  private _asmVcsLoaded = false;
+
+  // Refresh the editor + asm state after an assembly VCS action.
+  private refreshAssembly(updated: any) {
+    this.asm.assembly.set(updated);
+    this.model.set(updated);
+    this.loadCommits();
+    this.loadWorkflow();
+    this.loadBranches();
+    this.asm.regenerate();
+  }
 
   model = signal<CadModel | null>(null);
   loading = signal<boolean>(true);
@@ -5765,6 +5765,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // Register the custom CAD icon set so the ribbon's svgIcons render even
     // before any sketch-editor (which also registers them) has mounted.
     registerCadIcons(inject(MatIconRegistry), inject(DomSanitizer));
+    // In assembly mode, mirror the loaded assembly into `model()` so the shared
+    // File ribbon tab + its computeds (branch, lock, readonly, release flags)
+    // read it the same way they read a CAD model.
+    effect(() => {
+      if (!this.assemblyMode()) return;
+      const a = this.asm.assembly();
+      if (!a) return;
+      this.model.set(a as unknown as CadModel);
+      if (!this._asmVcsLoaded) {
+        this._asmVcsLoaded = true;
+        this.loadCommits(); this.loadBranches(); this.loadWorkflow();
+      }
+    });
     // History capture — debounced 500ms. Watches the two mutable model
     // signals (featureTree + doc) and records a snapshot once they settle.
     // Skipped when replayingHistory is true (i.e. an undo/redo just set
@@ -9673,8 +9686,17 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   onFacePicked(faceId: string): void {
-    // Assembly mode: route face picks to the mate-creation flow.
-    if (this.assemblyMode()) { this.asm.onFacePicked(faceId); return; }
+    // Assembly mode: measure picks (if the Measure tool is armed) read the
+    // composed geometry; otherwise face picks drive the mate-creation flow.
+    if (this.assemblyMode()) {
+      if (this.measureSidebar()) {
+        const face = this.displayedGeometry()?.faces.find(f => f.faceId === faceId);
+        this.addMeasureItem(face ? this._measureItemFromFace(faceId, face) : { kind: 'face', id: faceId, isFlat: false });
+        return;
+      }
+      this.asm.onFacePicked(faceId);
+      return;
+    }
     // Convert Entities: project every boundary edge of the picked face
     // into the active sketch. Tool stays armed so the user can chain
     // face/edge clicks.
@@ -12332,6 +12354,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onCheckout() {
     const m = this.model(); if (!m) return;
+    if (this.assemblyMode()) {
+      if (this.onMainBranch()) { this.onCreateBranch(); return; }
+      this.assemblyApi.checkout(m.id).subscribe({
+        next: u => this.refreshAssembly(u),
+        error: e => this.errors.showError(e?.error?.error || 'Checkout failed'),
+      });
+      return;
+    }
     // main is protected — there is nothing to "check out" on it. Editing means
     // branching a new draft off main, which onCreateBranch does (create + switch
     // + checkout + open).
@@ -12368,6 +12398,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onCheckin() {
     const m = this.model(); if (!m) return;
+    if (this.assemblyMode()) {
+      const msg = window.prompt('Check-in message:', '') ?? '';
+      this.assemblyApi.checkin(m.id, msg).subscribe({
+        next: r => this.refreshAssembly(r.model),
+        error: e => this.errors.showError(e?.error?.error || 'Check-in failed'),
+      });
+      return;
+    }
     // Dialog shows the uncommitted changes (working copy vs last check-in) and
     // collects a message; returns null on cancel.
     this.dialog.open(CadCheckinDialogComponent, { data: { modelId: m.id }, width: '460px' })
@@ -12405,6 +12443,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       );
       if (!ok) return;
     }
+    if (this.assemblyMode()) {
+      this.assemblyApi.undoCheckout(m.id).subscribe({
+        next: u => this.refreshAssembly(u),
+        error: e => this.errors.showError(e?.error?.error || 'Undo checkout failed'),
+      });
+      return;
+    }
     this.cadApi.undoCheckout(m.id).subscribe({
       next: updated => { this.bootstrap(updated); this.loadCommits(); this.loadWorkflow(); },
       error: err => this.errors.showError(err?.error?.error || 'Undo checkout failed'),
@@ -12413,6 +12458,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   loadCommits() {
     const m = this.model(); if (!m) return;
+    if (this.assemblyMode()) {
+      this.assemblyApi.getCommits(m.id).subscribe({ next: list => this.commits.set(list), error: () => this.commits.set([]) });
+      return;
+    }
     this.cadApi.getCommits(m.id).subscribe({
       next: list => this.commits.set(list),
       error: () => this.commits.set([]),
@@ -12443,6 +12492,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   loadBranches() {
     const m = this.model(); if (!m) return;
+    if (this.assemblyMode()) {
+      this.assemblyApi.listBranches(m.id).subscribe({ next: list => this.branches.set(list), error: () => this.branches.set([]) });
+      return;
+    }
     this.cadApi.listBranches(m.id).subscribe({
       next: list => this.branches.set(list),
       error: () => this.branches.set([]),
@@ -12454,6 +12507,20 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // Switching to the new branch loads its head doc and discards the working
     // copy — refuse if there are uncommitted edits.
     if (this.isDirty()) { this.errors.showError('Check in your changes before branching'); return; }
+    if (this.assemblyMode()) {
+      const bn = window.prompt('New branch name:', ''); if (!bn) return;
+      this.assemblyApi.createBranch(m.id, bn).subscribe({
+        next: () => this.assemblyApi.switchBranch(m.id, bn).subscribe({
+          next: () => this.assemblyApi.checkout(m.id).subscribe({
+            next: u => { this.refreshAssembly(u); this.showBranches.set(false); },
+            error: e => this.errors.showError(e?.error?.error || 'Checkout after branch failed'),
+          }),
+          error: e => this.errors.showError(e?.error?.error || 'Switch to new branch failed'),
+        }),
+        error: e => this.errors.showError(e?.error?.error || 'Create branch failed'),
+      });
+      return;
+    }
     const name = window.prompt('New branch name:', '');
     if (!name) return;
     // Create the branch, switch the working copy onto it, then check it out so
@@ -12479,6 +12546,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onSwitchBranch(name: string) {
     const m = this.model(); if (!m || name === this.currentBranch()) return;
+    if (this.assemblyMode()) {
+      this.assemblyApi.switchBranch(m.id, name).subscribe({
+        next: u => { this.refreshAssembly(u); this.showBranches.set(false); },
+        error: e => this.errors.showError(e?.error?.error || 'Switch branch failed'),
+      });
+      return;
+    }
     this.cadApi.switchBranch(m.id, name).subscribe({
       next: updated => { this.bootstrap(updated); this.showBranches.set(false); },
       error: err => this.errors.showError(err?.error?.error || 'Switch branch failed'),
@@ -12487,6 +12561,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onArchiveBranch(name: string) {
     const m = this.model(); if (!m) return;
+    if (this.assemblyMode()) {
+      this.assemblyApi.archiveBranch(m.id, name).subscribe({ next: () => this.loadBranches(), error: e => this.errors.showError(e?.error?.error || 'Archive branch failed') });
+      return;
+    }
     this.cadApi.archiveBranch(m.id, name).subscribe({
       next: () => this.loadBranches(),
       error: err => this.errors.showError(err?.error?.error || 'Archive branch failed'),
@@ -12533,6 +12611,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   loadWorkflow() {
     const m = this.model(); if (!m) return;
+    if (this.assemblyMode()) {
+      this.assemblyApi.getWorkflow(m.id).subscribe({ next: w => this.workflow.set(w), error: () => this.workflow.set(null) });
+      return;
+    }
     this.cadApi.getWorkflow(m.id).subscribe({
       next: w => this.workflow.set(w),
       error: () => this.workflow.set(null),
@@ -12541,6 +12623,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onWorkflowAction(action: string) {
     const m = this.model(); if (!m) return;
+    if (this.assemblyMode()) {
+      this.assemblyApi.transitionWorkflow(m.id, action).subscribe({
+        next: w => { this.workflow.set({ state: w.state, actions: w.actions }); if (w.model) this.asm.assembly.set(w.model); },
+        error: e => this.errors.showError(e?.error?.error || `Workflow ${action} failed`),
+      });
+      return;
+    }
     this.cadApi.transitionWorkflow(m.id, action).subscribe({
       next: (w: any) => {
         this.workflow.set({ state: w.state, actions: w.actions });
