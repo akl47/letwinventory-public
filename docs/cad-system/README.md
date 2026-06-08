@@ -2,7 +2,7 @@
 
 Full documentation for the browser-based parametric CAD system: the **CAD modeler**, the **Rust/OCCT geometry kernel**, the content-addressed **version-control system**, and the **assembly** module — plus the architecture that unifies them.
 
-The docs are layered in three tiers of increasing detail. Start at the [System Overview](./00-overview.md) and drill down. For requirement traceability, see the [Requirements Coverage Matrix](./requirements-coverage.md) — every REQ 512–769 mapped to its documentation page.
+The docs are layered in three tiers of increasing detail. Start at the [System Overview](./00-overview.md) and drill down. For requirement traceability, see the [Requirements Coverage Matrix](./requirements-coverage.md) — every REQ 512–769 mapped to its documentation page. For a narrative walkthrough, see the [Podcast Scripts](./podcast-scripts.md) — a 12-episode two-host audio deep-dive into the whole system.
 
 Every page follows one template: linked **requirements** (a table of all, full Description / Rationale / Verification / Validation for the defining ones), a **succinct** description, a **non-technical** "how it works," a **detailed technical** "how it works" (with Mermaid diagrams), and a **key files** list. All requirements are REQ 512–769 (CAD category 37, root REQ 512), currently `unapproved`.
 
