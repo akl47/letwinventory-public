@@ -239,6 +239,55 @@ export type ConstraintType =
   // entity's points each regen from the source edge's polyline.
   | 'on-edge';
 
+/** The geometry an `on-edge` constraint is locked onto. A discriminated union:
+ *  - `local` (default) — an edge of THIS part's own topology (the existing
+ *    intra-part Convert Entities behavior). `scope` may be omitted on legacy
+ *    docs; migration backfills it to 'local'.
+ *  - `cross-part` — geometry belonging to ANOTHER part, positioned by how the
+ *    two parts are mated in a defining assembly (REQ 770/771). The relative
+ *    transform is resolved live from that assembly's mate solve; a cached
+ *    snapshot (`cachedProjection`) is used for standalone regen, and the source
+ *    part's commit is pinned at check-in (`pinnedSourceCommit`) for reproducible
+ *    history. The projected entity stays a plain line/arc/circle. */
+export type ExternalRef =
+  | {
+      scope?: 'local';
+      /** Feature whose featureId-namespaced topology owns the source edge. */
+      featureId: string;
+      /** Topology edge id (kernel-assigned, namespaced by body). */
+      edgeId: string;
+    }
+  | {
+      scope: 'cross-part';
+      /** DesignAssembly that positions the source part (the defining assembly). */
+      definingAssemblyId: number;
+      /** That assembly's VCS repo lineage-root id. */
+      definingAssemblyRepoId: string;
+      /** The source component instance within the defining assembly. */
+      sourceInstanceId: string;
+      /** The source Part's id (resolver convenience + impact analysis). */
+      sourcePartId: number;
+      /** The geometry on the source part being projected. */
+      sourceGeomRef: { featureId: string; edgeId?: string; faceId?: string };
+      /** Fallback geometry (in the SOURCE part's local frame) used to
+       * re-resolve `sourceGeomRef` when the source topology renumbers. */
+      fallback?:
+        | { kind: 'edge'; start: [number, number, number]; end: [number, number, number] }
+        | { kind: 'face'; centroid: [number, number, number]; normal: [number, number, number]; surfaceKind: string };
+      /** The source part's commit, pinned at the dependent part's check-in so
+       * historical/released revisions reproduce exactly. Null in the working copy. */
+      pinnedSourceCommit?: string | null;
+      /** Last-resolved snapshot, used for standalone (out-of-assembly) regen.
+       * `edges` are the source geometry expressed in THIS part's local 3D frame;
+       * the existing projection step re-derives the 2D from them every regen. */
+      cachedProjection?: {
+        resolvedAt?: number;
+        relPlacement?: { translate: [number, number, number]; quaternion: [number, number, number, number] };
+        edges?: Array<{ polyline: Array<[number, number, number]> }>;
+        stale?: boolean;
+      };
+    };
+
 export interface SketchConstraint {
   id: string;
   type: ConstraintType;
@@ -267,12 +316,7 @@ export interface SketchConstraint {
    * projection consumes this each regen to recompute the entity's
    * point coordinates from the source edge's polyline. Absent on every
    * other constraint type. */
-  externalRef?: {
-    /** Feature whose featureId-namespaced topology owns the source edge. */
-    featureId: string;
-    /** Topology edge id (kernel-assigned, namespaced by body). */
-    edgeId: string;
-  };
+  externalRef?: ExternalRef;
   /** Groups auto-generated constraints emitted as a batch (chain
    * offset, etc.) so the editor can treat them as one logical unit:
    *   - the constraint list hides chain-internal duplicates,

@@ -12,6 +12,8 @@
 
 const cadRegenService = require('./cadRegenService');
 const mateSolver = require('./assemblyMateSolver');
+const { relativePlacement, transformPoint } = require('./cadTransform');
+const { resolveEdgeRef } = require('./cadExternalRef');
 
 const IDENTITY_PLACEMENT = { translate: [0, 0, 0], quaternion: [0, 0, 0, 1] };
 
@@ -137,7 +139,11 @@ function flattenChildGeometry(regen) {
     for (const v of topo.vertices || []) if (v.position) bVerts.push(v.position);
     for (const e of topo.edges || []) {
       const poly = (e.polyline && e.polyline.length) ? e.polyline : (e.endpoints || []);
-      if (poly.length >= 2) bEdges.push({ polyline: poly });
+      if (poly.length >= 2) {
+        // Preserve the edge id + endpoints so cross-part references (REQ 777) can
+        // re-resolve a source edge by id or by closest-endpoint fallback.
+        bEdges.push({ id: e.id, polyline: poly, endpoints: e.endpoints, isStraight: e.isStraight });
+      }
     }
     faces.push(...bFaces); vertices.push(...bVerts); edges.push(...bEdges);
     bodies.push({
@@ -150,32 +156,29 @@ function flattenChildGeometry(regen) {
   return { faces, vertices, edges, bodies };
 }
 
-// Default resolver: produce a component's child geometry. A part referenced as a
-// sub-assembly (ref.kind === 'assembly', or no CAD model but an assembly exists)
-// is recursively regenerated and returned as one rigid child (REQ 763); otherwise
-// the part's active CAD working copy is regenerated.
+// Default resolver: produce a component's child geometry. Assemblies live in the
+// unified DesignCADModels table; the row's `isAssembly` flag dispatches between
+// recursive assembly regen (REQ 763, one rigid child) and part-CAD regen. The
+// instance's `ref.kind` is advisory only — dispatching on the row self-heals
+// stale kinds (e.g. a part later converted between kinds).
 function defaultResolveChild({ db, kernelClient }) {
-  return async (instance) => {
-    const wantsAssembly = instance.ref && instance.ref.kind === 'assembly';
-    if (wantsAssembly) {
-      const childAssembly = await db.DesignAssembly.findOne({ where: { partID: instance.partID, activeFlag: true } });
-      if (!childAssembly) {
-        const err = new Error(`Component part ${instance.partID} has no assembly to resolve`);
-        err.statusCode = 422;
-        throw err;
-      }
-      const sub = await regenerateAssembly(childAssembly, { db, kernelClient });
+  return async (instance, assembly, resolveOpts = {}) => {
+    const row = await db.DesignCADModel.findOne({ where: { partID: instance.partID, activeFlag: true } });
+    if (!row) {
+      const err = new Error(`Component part ${instance.partID} has no design (CAD or assembly) to resolve`);
+      err.statusCode = 422;
+      throw err;
+    }
+    if (row.isAssembly) {
+      const sub = await regenerateAssembly(row, { db, kernelClient });
       // The sub-assembly's composed bodies are already placed in its own frame;
       // treat the whole thing as one rigid child (its body ids stay sub-scoped).
       return { faces: sub.faces, vertices: sub.vertices, edges: sub.edges, bodies: sub.bodies };
     }
-    const childModel = await db.DesignCADModel.findOne({ where: { partID: instance.partID, activeFlag: true } });
-    if (!childModel) {
-      const err = new Error(`Component part ${instance.partID} has no CAD model to resolve`);
-      err.statusCode = 422;
-      throw err;
-    }
-    const regen = await cadRegenService.regenerateModel(childModel, { kernelClient, db, includeBodyBreps: true });
+    const regen = await cadRegenService.regenerateModel(row, {
+      kernelClient, db, includeBodyBreps: true,
+      externalRefResolver: resolveOpts.externalRefResolver, // live cross-part edges (Phase B.5)
+    });
     return flattenChildGeometry(regen);
   };
 }
@@ -199,24 +202,123 @@ async function assertAcyclic(assembly, db, visited = new Set()) {
       err.statusCode = 409;
       throw err;
     }
-    if (!db || !db.DesignAssembly) continue;
-    const childAssembly = await db.DesignAssembly.findOne({ where: { partID: inst.partID, activeFlag: true } });
+    if (!db || !db.DesignCADModel) continue;
+    const childAssembly = await db.DesignCADModel.findOne({ where: { partID: inst.partID, activeFlag: true, isAssembly: true } });
     if (childAssembly) await assertAcyclic(childAssembly, db, new Set(visited));
   }
+}
+
+// ── cross-part in-context references (REQ 770/772/776/777) ────────────────────
+
+// Extract a part's cross-part on-edge references that are DEFINED BY this
+// assembly. Each becomes a dependency edge (this instance → sourceInstanceId).
+function crossPartRefsOf(sketchDoc, assemblyId) {
+  const out = [];
+  for (const sketch of Object.values((sketchDoc && sketchDoc.sketches) || {})) {
+    for (const c of (sketch && sketch.state && sketch.state.constraints) || []) {
+      const er = c.externalRef;
+      if (c.type !== 'on-edge' || !er || er.scope !== 'cross-part') continue;
+      if (assemblyId != null && er.definingAssemblyId != null && er.definingAssemblyId !== assemblyId) continue;
+      out.push({ constraintId: c.id, sourceInstanceId: er.sourceInstanceId, externalRef: er });
+    }
+  }
+  return out;
+}
+
+// Default cross-part-ref loader: read the instance's active CAD model's sketchDoc.
+function defaultChildRefs({ db }) {
+  return async (instance, assemblyId) => {
+    if (!db || !db.DesignCADModel) return [];
+    // Cross-part refs live in part-CAD sketch docs only; sub-assembly rows
+    // (isAssembly) have no sketches.
+    const model = await db.DesignCADModel.findOne({ where: { partID: instance.partID, activeFlag: true, isAssembly: false } });
+    if (!model) return [];
+    return crossPartRefsOf(model.sketchDoc, assemblyId);
+  };
+}
+
+// Dependency graph: edge D → S means "D's geometry depends on S's pose/geometry".
+function buildCrossPartDepGraph(instances, refsByInstance) {
+  const nodes = new Set(instances.map((i) => i.instanceId));
+  const edges = new Map();
+  for (const inst of instances) {
+    const srcs = new Set();
+    for (const r of refsByInstance.get(inst.instanceId) || []) {
+      if (r.sourceInstanceId && nodes.has(r.sourceInstanceId) && r.sourceInstanceId !== inst.instanceId) srcs.add(r.sourceInstanceId);
+    }
+    if (srcs.size) edges.set(inst.instanceId, srcs);
+  }
+  return { nodes, edges };
+}
+
+// Topological order with dependencies (sources) first. Nodes left in a cycle are
+// appended at the end and their unsatisfied edges returned as back-edges; the
+// resolver degrades those to the cached snapshot rather than failing (REQ 776).
+function topoOrderWithCycles(nodes, edges) {
+  const remaining = new Map();
+  for (const n of nodes) remaining.set(n, new Set(edges.get(n) || []));
+  const dependents = new Map();
+  for (const [d, srcs] of edges) for (const s of srcs) {
+    if (!dependents.has(s)) dependents.set(s, new Set());
+    dependents.get(s).add(d);
+  }
+  const order = [];
+  const placed = new Set();
+  const queue = [...nodes].filter((n) => remaining.get(n).size === 0);
+  while (queue.length) {
+    const n = queue.shift();
+    if (placed.has(n)) continue;
+    placed.add(n); order.push(n);
+    for (const d of dependents.get(n) || []) {
+      const r = remaining.get(d); r.delete(n);
+      if (r.size === 0 && !placed.has(d)) queue.push(d);
+    }
+  }
+  const backEdges = new Set();
+  for (const n of nodes) {
+    if (placed.has(n)) continue;
+    order.push(n);
+    for (const s of remaining.get(n)) backEdges.add(`${n}|${s}`);
+  }
+  return { order, backEdges };
+}
+
+// Build a live externalRefResolver for dependent `dependentId`: match each ref's
+// source edge against the source instance's current geometry, then express it in
+// the dependent's local frame via the solved poses. Returns null (→ cached
+// snapshot) for cyclic back-edges or anything that can't be resolved.
+function makeCrossPartResolver({ dependentId, childGeoById, poses, backEdges }) {
+  return (externalRef) => {
+    const sId = externalRef && externalRef.sourceInstanceId;
+    if (!sId) return null;
+    if (backEdges && backEdges.has(`${dependentId}|${sId}`)) return null;
+    const sourceGeo = childGeoById.get(sId);
+    const poseD = poses[dependentId], poseS = poses[sId];
+    if (!sourceGeo || !poseD || !poseS) return null;
+    const m = resolveEdgeRef(sourceGeo.bodies || [], externalRef.sourceGeomRef || {}, externalRef.fallback);
+    if (!m) return null;
+    const edge = m.edge;
+    const poly = edge.polyline && edge.polyline.length >= 2
+      ? edge.polyline
+      : (edge.endpoints && edge.endpoints.length === 2 ? edge.endpoints : null);
+    if (!poly) return null;
+    const rel = relativePlacement(poseD, poseS); // S-local → D-local
+    return { polyline: poly.map((p) => transformPoint(rel, p)), isStraight: edge.isStraight };
+  };
 }
 
 // ── main entry ──────────────────────────────────────────────────────────────
 
 /**
  * Regenerate an assembly into a single composed geometry.
- * @param assembly DesignAssembly row (or plain { partID, assemblyDoc }).
+ * @param assembly DesignCADModel assembly row (or plain { partID, assemblyDoc }).
  * @param opts.db Sequelize db (for the default resolver + cycle walk).
  * @param opts.resolveChild async (instance, assembly) => child geometry
  *        ({ faces, vertices, edges, bodies }). Injected for tests.
  * @param opts.kernelClient passed to the default resolver.
  * @returns { faces, vertices, edges, bodies, instances, errors, constraintState }
  */
-async function regenerateAssembly(assembly, { db, resolveChild, kernelClient } = {}) {
+async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, childRefs } = {}) {
   await assertAcyclic(assembly, db);
   const resolver = resolveChild || defaultResolveChild({ db, kernelClient });
   const doc = assembly.assemblyDoc || {};
@@ -249,6 +351,47 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient } =
   } else {
     poses = {};
     for (const inst of instances) { const { t, q } = placementOf(inst); poses[inst.instanceId] = { translate: t, quaternion: q }; }
+  }
+
+  // Phase B.5 — live cross-part in-context resolution (REQ 772/776/778). Now that
+  // poses are known, re-regenerate each instance whose part references geometry
+  // from ANOTHER instance in this assembly, feeding the source geometry
+  // transformed into the dependent's frame. Processed in dependency order; cycles
+  // degrade to the cached snapshot; under-constrained assemblies are flagged.
+  const refsByInstance = new Map();
+  const refsLoader = childRefs || defaultChildRefs({ db });
+  for (const inst of instances) {
+    if (!childGeoById.has(inst.instanceId)) continue;
+    try {
+      const refs = await refsLoader(inst, assembly.id);
+      if (refs && refs.length) refsByInstance.set(inst.instanceId, refs);
+    } catch (e) { /* instance simply has no cross-part refs */ }
+  }
+  if (refsByInstance.size) {
+    const { nodes, edges } = buildCrossPartDepGraph(instances, refsByInstance);
+    const { order, backEdges } = topoOrderWithCycles(nodes, edges);
+    const ambiguous = composed.constraintState && composed.constraintState.state && composed.constraintState.state !== 'fully';
+    for (const instanceId of order) {
+      const deps = edges.get(instanceId);
+      if (!deps || !deps.size) continue; // not a dependent
+      const inst = instances.find((i) => i.instanceId === instanceId);
+      if (!inst) continue;
+      const externalRefResolver = makeCrossPartResolver({ dependentId: instanceId, childGeoById, poses, backEdges });
+      try {
+        const live = await resolver(inst, assembly, { externalRefResolver });
+        if (live) childGeoById.set(instanceId, live);
+      } catch (err) {
+        composed.errors.push(`In-context regen of instance ${instanceId}: ${err.message}`);
+      }
+      for (const s of deps) {
+        if (backEdges.has(`${instanceId}|${s}`)) {
+          composed.errors.push(`Cyclic in-context reference ${instanceId} → ${s}: resolved from cached snapshot`);
+        }
+      }
+      if (ambiguous) {
+        composed.errors.push(`In-context reference on instance ${instanceId} is ambiguous: assembly is ${composed.constraintState.state}-constrained`);
+      }
+    }
   }
 
   // Build the list of render units: the base instances (at their solved pose)
@@ -462,4 +605,9 @@ module.exports = {
   assertAcyclic,
   flattenChildGeometry,
   defaultResolveChild,
+  // cross-part in-context helpers (REQ 772/776/777) — exported for unit tests
+  crossPartRefsOf,
+  buildCrossPartDepGraph,
+  topoOrderWithCycles,
+  makeCrossPartResolver,
 };

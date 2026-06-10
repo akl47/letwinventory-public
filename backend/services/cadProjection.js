@@ -43,6 +43,13 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
       edgeIndex.set(e.id, e);
     }
   }
+  // Cross-part in-context references (REQ 770/775): each cross-part on-edge
+  // constraint's SOURCE edge — already transformed into THIS part's frame by the
+  // resolver (or a cached snapshot) — is supplied via `opts.externalEdges`, keyed
+  // by constraint id. They join the edge index under a `cp:<constraintId>` key so
+  // the projection below is byte-identical to the intra-part path.
+  const externalEdges = _normalizeExternalEdges(opts.externalEdges);
+  for (const [cid, geo] of externalEdges) edgeIndex.set(`cp:${cid}`, geo);
   if (edgeIndex.size === 0) return sketchDoc;
 
   let docChanged = false;
@@ -63,10 +70,16 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
     const seenTargets = new Set();
     for (const c of (sketch.state.constraints || [])) {
       if (c.type !== 'on-edge' || !c.externalRef) continue;
+      // Cross-part refs project against the resolver-supplied edge (keyed by
+      // constraint id); intra-part refs project against a source body edge by id.
+      const key = c.externalRef.scope === 'cross-part' ? `cp:${c.id}` : c.externalRef.edgeId;
+      // Unresolved cross-part ref (no resolver + no snapshot, or matcher missed)
+      // → leave the entity at its last coords; the editor surfaces it as broken.
+      if (c.externalRef.scope === 'cross-part' && !edgeIndex.has(key)) continue;
       for (const t of (c.targets || [])) {
         const e = entitiesById.get(t.entityId);
         if (e) {
-          projectedPairs.push({ entity: e, edgeId: c.externalRef.edgeId });
+          projectedPairs.push({ entity: e, edgeId: key });
           seenTargets.add(e.id);
         }
       }
@@ -271,6 +284,27 @@ function _circumcircle(a, b, c) {
   const cy = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
   const radius = Math.hypot(a.x - cx, a.y - cy);
   return { cx, cy, radius };
+}
+
+/** Normalize `opts.externalEdges` (Map or plain object, keyed by constraint id)
+ * into a Map<constraintId, { isStraight, endpoints, polyline }>. Each value is a
+ * source edge already expressed in THIS part's local 3D frame; missing fields are
+ * derived from the polyline (endpoints = first/last, isStraight = 2-point). */
+function _normalizeExternalEdges(x) {
+  const out = new Map();
+  if (!x) return out;
+  const entries = x instanceof Map ? Array.from(x.entries()) : Object.entries(x);
+  for (const [cid, raw] of entries) {
+    if (!raw) continue;
+    const poly = Array.isArray(raw.polyline) && raw.polyline.length >= 2 ? raw.polyline : null;
+    const endpoints = Array.isArray(raw.endpoints) && raw.endpoints.length === 2
+      ? raw.endpoints
+      : (poly ? [poly[0], poly[poly.length - 1]] : null);
+    if (!poly && !endpoints) continue;
+    const isStraight = raw.isStraight != null ? raw.isStraight : (poly ? poly.length === 2 : true);
+    out.set(String(cid), { isStraight, endpoints, polyline: poly || endpoints });
+  }
+  return out;
 }
 
 module.exports = {

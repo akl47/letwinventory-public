@@ -21,6 +21,30 @@ function omitKey(obj, key) {
   return out;
 }
 
+// REQ 770/774 — a cross-part externalRef caches a last-resolved snapshot; its
+// `stale` flag and `resolvedAt` timestamp are volatile (they change every
+// re-snapshot without changing the design's logical content). Strip them before
+// hashing so re-resolving an in-context reference doesn't mint a new blob/commit.
+// The meaningful snapshot content (`edges`, `relPlacement`) and the load-bearing
+// `pinnedSourceCommit` are kept. Pure — returns the same object if nothing changed.
+function stripVolatileSketch(sketch) {
+  const constraints = sketch && sketch.state && sketch.state.constraints;
+  if (!Array.isArray(constraints)) return sketch;
+  let changed = false;
+  const next = constraints.map((c) => {
+    const cp = c && c.externalRef && c.externalRef.cachedProjection;
+    if (cp && (cp.stale !== undefined || cp.resolvedAt !== undefined)) {
+      changed = true;
+      const { stale, resolvedAt, ...rest } = cp;
+      void stale; void resolvedAt;
+      return { ...c, externalRef: { ...c.externalRef, cachedProjection: rest } };
+    }
+    return c;
+  });
+  if (!changed) return sketch;
+  return { ...sketch, state: { ...sketch.state, constraints: next } };
+}
+
 /** Serialize a CAD document into the object store; returns the tree hash. */
 async function cadSerialize(repo, doc, db) {
   const featureTree = (doc && doc.featureTree) || { features: [] };
@@ -37,7 +61,7 @@ async function cadSerialize(repo, doc, db) {
   }
   // Sketches sorted by id for a deterministic tree (sketch order is not semantic).
   for (const id of Object.keys(sketches).sort()) {
-    entries.push({ name: `sketch:${id}`, kind: 'blob', hash: await vcs.writeBlob(repo, sketches[id], db) });
+    entries.push({ name: `sketch:${id}`, kind: 'blob', hash: await vcs.writeBlob(repo, stripVolatileSketch(sketches[id]), db) });
   }
   entries.push({ name: 'equations', kind: 'blob', hash: await vcs.writeBlob(repo, equations, db) });
 
@@ -93,4 +117,4 @@ async function cadDeserialize(repo, treeHash, db) {
   };
 }
 
-module.exports = { cadSerialize, cadDeserialize };
+module.exports = { cadSerialize, cadDeserialize, stripVolatileSketch };

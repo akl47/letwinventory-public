@@ -163,7 +163,35 @@ function buildTextResolver(model) {
   });
 }
 
-async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollbackBeforeIndex, includeBodyBreps } = {}) {
+// REQ 770/773/775 — resolve every cross-part on-edge constraint's source edge into
+// THIS part's local frame. Prefers the injected resolver (live, assembly-driven —
+// P2); otherwise falls back to the ref's cached snapshot (standalone regen). The
+// snapshot stores the source edge as a polyline already in this part's frame.
+// Returns Map<constraintId, { polyline, isStraight?, endpoints? }>.
+function _buildExternalEdges(sketchDoc, externalRefResolver) {
+  const out = new Map();
+  for (const sketch of Object.values((sketchDoc && sketchDoc.sketches) || {})) {
+    const constraints = (sketch && sketch.state && sketch.state.constraints) || [];
+    for (const c of constraints) {
+      if (c.type !== 'on-edge' || !c.externalRef || c.externalRef.scope !== 'cross-part') continue;
+      let geo = null;
+      if (typeof externalRefResolver === 'function') {
+        try { geo = externalRefResolver(c.externalRef); } catch (e) { geo = null; }
+      }
+      if (!geo) {
+        const cp = c.externalRef.cachedProjection;
+        const e = cp && Array.isArray(cp.edges) && cp.edges[0];
+        if (e && Array.isArray(e.polyline) && e.polyline.length >= 2) {
+          geo = { polyline: e.polyline, isStraight: e.isStraight, endpoints: e.endpoints };
+        }
+      }
+      if (geo) out.set(c.id, geo);
+    }
+  }
+  return out;
+}
+
+async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollbackBeforeIndex, includeBodyBreps, externalRefResolver } = {}) {
   const client = kernelClient || cadKernelClient.getDefaultClient();
   const dbClient = db || global.db;
   // Resolve any equations BEFORE we hash params / dispatch features.
@@ -179,6 +207,13 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
   // so the per-feature dispatchers can pass it to extractRegions. Per-regen,
   // not module-level, so concurrent regens of different models stay isolated.
   model.__textResolver = buildTextResolver(model);
+  // Cross-part in-context references (REQ 770/773/775). Resolve each cross-part
+  // on-edge constraint's source edge into THIS part's frame, ONCE per regen
+  // (it depends on the resolver/snapshot, not on this part's own bodies):
+  //   - `externalRefResolver` present (live, assembly-driven — P2): use it.
+  //   - absent (standalone): fall back to the ref's cached snapshot.
+  // The result feeds applyProjectionToSketchDoc as `externalEdges`.
+  const externalEdges = _buildExternalEdges(sketchDoc, externalRefResolver);
   const emit = _safeCallback(onFeatureResult);
   // SolidWorks-style rollback bar. When set, features at index >=
   // rollbackBeforeIndex are skipped entirely — no kernel calls, no
@@ -438,7 +473,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
       // therefore see source-edge-tracked coordinates rather than
       // whatever was persisted on disk. Per-iteration (cheap; sketches
       // with no projections pass through by reference).
-      const resolvedSketchDoc = applyProjectionToSketchDoc(sketchDoc, bodies);
+      const resolvedSketchDoc = applyProjectionToSketchDoc(sketchDoc, bodies, { externalEdges });
       // Detailed sketch dump for CAD_DEBUG=1. Logs the resolved
       // sketch state the kernel will see — entities (kind, id,
       // coords), constraints (type, targets, values, on-edge
@@ -3183,4 +3218,5 @@ module.exports = {
   exportModelStep,
   exportModelStl,
   NAMING_VERSION,
+  _buildExternalEdges, // exported for unit tests (REQ 770/773)
 };

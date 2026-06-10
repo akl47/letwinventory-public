@@ -106,8 +106,8 @@ describe('migration: legacy SketchState → entity model (REQ 565)', () => {
       },
       nextSketchSeq: 2,
     };
-    const next = migrateSketchDocument(doc);
-    expect(next.sketches.s1.state).toEqual(migrateSketchState(legacy));
+    const next = migrateSketchDocument(doc as unknown as Parameters<typeof migrateSketchDocument>[0]);
+    expect(next.sketches['s1'].state).toEqual(migrateSketchState(legacy));
   });
 });
 
@@ -130,13 +130,14 @@ describe('migration: projectedFrom → on-edge constraint backfill', () => {
 
     // projectedFrom is gone from every entity.
     for (const e of migrated.entities) {
-      expect((e as Record<string, unknown>)['projectedFrom']).toBeUndefined();
+      expect((e as unknown as Record<string, unknown>)['projectedFrom']).toBeUndefined();
     }
     // Exactly one on-edge constraint exists and targets the line.
     const onEdge = migrated.constraints.filter(c => c.type === 'on-edge');
     expect(onEdge.length).toBe(1);
     expect(onEdge[0].targets).toEqual([{ entityId: 'l1' }]);
-    expect(onEdge[0].externalRef).toEqual({ featureId: 'f1', edgeId: 'f1/e0' });
+    // Migration backfills scope:'local' onto the synthesised on-edge ref (REQ 770/771).
+    expect(onEdge[0].externalRef).toEqual({ scope: 'local', featureId: 'f1', edgeId: 'f1/e0' });
   });
 
   it('is idempotent — running migration twice does not double-emit constraints', () => {
@@ -174,7 +175,47 @@ describe('migration: projectedFrom → on-edge constraint backfill', () => {
     expect(migrated.constraints.filter(c => c.type === 'on-edge').length).toBe(1);
     // projectedFrom still removed.
     for (const e of migrated.entities) {
-      expect((e as Record<string, unknown>)['projectedFrom']).toBeUndefined();
+      expect((e as unknown as Record<string, unknown>)['projectedFrom']).toBeUndefined();
     }
+  });
+});
+
+// REQ 770/771 — cross-part external-reference backfill. Existing on-edge
+// constraints store an externalRef without a `scope` field; the discriminated
+// union now distinguishes intra-part ('local') from cross-part references, so a
+// load-time backfill tags legacy refs as 'local'. Cross-part refs are untouched.
+describe('migration: externalRef scope backfill (REQ 770/771)', () => {
+  const modernWith = (externalRef: Record<string, unknown>) => ({
+    entities: [
+      { kind: 'point', id: 'p1', x: 0, y: 0 },
+      { kind: 'point', id: 'p2', x: 5, y: 0 },
+      { kind: 'line', id: 'l1', startId: 'p1', endId: 'p2' },
+    ],
+    constraints: [
+      { id: 'oe1', type: 'on-edge', targets: [{ entityId: 'l1' }], externalRef },
+    ],
+  });
+  const oeRef = (s: ReturnType<typeof migrateSketchState>) =>
+    s.constraints.find(c => c.id === 'oe1')!.externalRef as unknown as Record<string, unknown> | undefined;
+
+  it('tags a legacy (scope-less) externalRef as local', () => {
+    const migrated = migrateSketchState(modernWith({ featureId: 'f1', edgeId: 'f1/e0' }) as Parameters<typeof migrateSketchState>[0]);
+    expect(oeRef(migrated)).toMatchObject({ scope: 'local', featureId: 'f1', edgeId: 'f1/e0' });
+  });
+
+  it('is idempotent — a local ref stays local', () => {
+    const once = migrateSketchState(modernWith({ featureId: 'f1', edgeId: 'f1/e0' }) as Parameters<typeof migrateSketchState>[0]);
+    const twice = migrateSketchState(once as Parameters<typeof migrateSketchState>[0]);
+    expect(oeRef(twice)).toMatchObject({ scope: 'local' });
+  });
+
+  it('leaves a cross-part externalRef unchanged', () => {
+    const crossPart = {
+      scope: 'cross-part', definingAssemblyId: 7, definingAssemblyRepoId: '42',
+      sourceInstanceId: 'i2', sourcePartId: 99,
+      sourceGeomRef: { featureId: 'f3', edgeId: 'f3/e1' },
+    };
+    const migrated = migrateSketchState(modernWith(crossPart) as Parameters<typeof migrateSketchState>[0]);
+    expect(oeRef(migrated)).toMatchObject({ scope: 'cross-part', definingAssemblyId: 7, sourceInstanceId: 'i2' });
   });
 });

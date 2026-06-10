@@ -150,7 +150,17 @@ export function migrateSketchState(state: LegacySketchState | SketchState): Sket
       }
       return e;
     });
-    return ensureOriginPoint({ ...modern, entities: repairedEntities, constraints });
+    // REQ 770/771 — backfill `scope:'local'` onto any on-edge externalRef that
+    // predates the local/cross-part discriminated union (including ones
+    // synthesised above). Idempotent; cross-part refs already carry a scope.
+    const scoped = constraints.map(c => {
+      const er = c.externalRef as { scope?: string } | undefined;
+      if (c.type === 'on-edge' && er && er.scope === undefined) {
+        return { ...c, externalRef: { ...er, scope: 'local' as const } } as SketchConstraint;
+      }
+      return c;
+    });
+    return ensureOriginPoint({ ...modern, entities: repairedEntities, constraints: scoped });
   }
 
   const entities: SketchEntity[] = [];
