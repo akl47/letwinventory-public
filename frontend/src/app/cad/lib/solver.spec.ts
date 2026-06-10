@@ -9,8 +9,10 @@ function pt(id: string, x: number, y: number, construction = false): SketchEntit
     : { kind: 'point', id, x, y };
 }
 
-function ln(id: string, startId: string, endId: string): SketchEntity {
-  return { kind: 'line', id, startId, endId };
+function ln(id: string, startId: string, endId: string, construction = false): SketchEntity {
+  return construction
+    ? { kind: 'line', id, startId, endId, construction: true }
+    : { kind: 'line', id, startId, endId };
 }
 
 function circle(id: string, centerId: string, radius: number, construction = false): SketchEntity {

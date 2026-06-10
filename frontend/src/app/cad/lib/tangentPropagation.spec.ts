@@ -52,26 +52,36 @@ describe('propagateTangentEdges (REQ 646)', () => {
   });
 
   it('propagates through a 4-arc circumference of a circular hole (SolidWorks default)', () => {
-    // Four 90° arcs forming a unit circle in the XY plane. Each carries
-    // a 3-point polyline so the propagation walker can read tangents at
-    // the endpoints. Tangent at each arc endpoint is the perpendicular
-    // to the radius — neighboring arcs at the shared endpoint have
-    // anti-parallel outgoing tangents.
+    // Four 90° arcs forming a circle in the XY plane. The propagation
+    // walker reads the tangent from the polyline's first/last segment, so
+    // each arc carries a DENSELY sampled polyline: a 3-point polyline on a
+    // 90° arc gives a chord direction ~22.5° off the true tangent — well
+    // past the cos-5° tangent threshold — whereas the kernel emits many
+    // samples per arc, making the endpoint segment ≈ the true tangent.
+    // Tangent at each arc endpoint is the perpendicular to the radius;
+    // neighboring arcs at the shared endpoint have anti-parallel outgoing
+    // tangents.
     const r = 10;
-    // arc 0: angle 0° → 90°. Start (r,0), end (0,r). At start: tangent
-    // is +Y; at end: tangent is -X.
-    // arc 1: 90° → 180°. Start (0,r), end (-r,0).
-    // arc 2: 180° → 270°. Start (-r,0), end (0,-r).
-    // arc 3: 270° → 360°. Start (0,-r), end (r,0).
-    const arc = (id: string, start: [number, number, number], mid: [number, number, number], end: [number, number, number]) => ({
-      id, isStraight: false, endpoints: [start, end] as [[number, number, number], [number, number, number]],
-      polyline: [start, mid, end] as Array<[number, number, number]>,
-    });
+    // Sample a quarter arc [a0, a1] (radians) into a fine polyline.
+    const quarter = (id: string, a0: number, a1: number) => {
+      const N = 32;
+      const polyline: Array<[number, number, number]> = [];
+      for (let i = 0; i <= N; i++) {
+        const t = a0 + (a1 - a0) * (i / N);
+        polyline.push([r * Math.cos(t), r * Math.sin(t), 0]);
+      }
+      return {
+        id, isStraight: false,
+        endpoints: [polyline[0], polyline[N]] as [[number, number, number], [number, number, number]],
+        polyline,
+      };
+    };
+    const H = Math.PI / 2;
     const t = topo(
-      arc('e0', [r, 0, 0], [r * Math.SQRT1_2, r * Math.SQRT1_2, 0], [0, r, 0]),
-      arc('e1', [0, r, 0], [-r * Math.SQRT1_2, r * Math.SQRT1_2, 0], [-r, 0, 0]),
-      arc('e2', [-r, 0, 0], [-r * Math.SQRT1_2, -r * Math.SQRT1_2, 0], [0, -r, 0]),
-      arc('e3', [0, -r, 0], [r * Math.SQRT1_2, -r * Math.SQRT1_2, 0], [r, 0, 0]),
+      quarter('e0', 0, H),         // (r,0) → (0,r)
+      quarter('e1', H, 2 * H),     // (0,r) → (-r,0)
+      quarter('e2', 2 * H, 3 * H), // (-r,0) → (0,-r)
+      quarter('e3', 3 * H, 4 * H), // (0,-r) → (r,0)
     );
     const out = propagateTangentEdges(
       { edgeId: 'e0', start: [r, 0, 0], end: [0, r, 0] },

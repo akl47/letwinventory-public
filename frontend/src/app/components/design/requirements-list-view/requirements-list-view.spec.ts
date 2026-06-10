@@ -161,7 +161,13 @@ describe('RequirementsListView', () => {
     });
 
     it('should format date correctly', () => {
-        const result = component.formatDate('2026-03-15');
+        // Pass a Date built in LOCAL time (this is how production calls
+        // formatDate — with `updatedAt` Date values), so the asserted day is
+        // timezone-stable. A date-ONLY string like '2026-03-15' is parsed as
+        // UTC midnight and renders as the previous day in negative-offset
+        // timezones (e.g. America/Los_Angeles), which is unrelated to the
+        // formatting contract under test.
+        const result = component.formatDate(new Date(2026, 2, 15));
         expect(result).toContain('Mar');
         expect(result).toContain('15');
         expect(result).toContain('2026');

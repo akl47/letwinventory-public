@@ -74,7 +74,12 @@ describe('planeForDatum', () => {
         az * bx - ax * bz,
         ax * by - ay * bx,
       ];
-      expect(cross).toEqual(p.normal);
+      // Normalize signed zero (-0 → +0): `Object.is(-0, +0)` is false, so
+      // toEqual would spuriously fail on a mathematically-correct basis whose
+      // cross product yields a -0 component. The basis itself is right.
+      const norm0 = (v: [number, number, number]): [number, number, number] =>
+        [v[0] + 0, v[1] + 0, v[2] + 0];
+      expect(norm0(cross)).toEqual(norm0(p.normal));
     }
   });
 });

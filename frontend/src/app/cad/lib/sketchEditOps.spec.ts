@@ -160,7 +160,6 @@ describe('trimAt — lines', () => {
     }
   });
 });
-});
 
 describe('trimAt — circles', () => {
   it('produces an arc when a circle is crossed by a line', () => {
@@ -975,11 +974,12 @@ describe('offsetChain', () => {
     // would add one in reconcileCorner.)
   });
 
-  it('chain offset: CONCAVE corner gets an explicit coincident constraint between the two offset corners', () => {
+  it('chain offset: CONCAVE corner merges the two offset corners into one shared endpoint', () => {
     // L-shape but offset INWARD this time — concave corner.
-    // Adjacent offsets trim to the intersection and get
-    // coincident-pinned so subsequent edits keep the corner
-    // connected.
+    // Adjacent offsets trim to the intersection. The corner is pinned
+    // by MERGING the two near-V endpoints into a single shared point id
+    // (SolidWorks-style corner topology), not by an explicit coincident
+    // constraint — see reconcileCorner's concave branch.
     let s = emptySketchState();
     const a = addPoint(s, 0, 0); s = a.state;
     const b1 = addPoint(s, 10, 0); s = b1.state;
@@ -993,8 +993,14 @@ describe('offsetChain', () => {
     ];
     const r = offsetChain(s, items, 1, { fillCorners: true, linkToOriginals: true });
     expect(r.error).toBeUndefined();
-    const coincidents = r.state.constraints.filter(co => co.type === 'coincident');
-    expect(coincidents.length).toBeGreaterThanOrEqual(1);
+    // The two offset lines must share a single endpoint id at the merged corner.
+    const offsetLines = (r.affectedIds ?? [])
+      .map(id => findEntity(r.state, id))
+      .filter((e): e is LineEntity => !!e && e.kind === 'line');
+    expect(offsetLines.length).toBe(2);
+    const [o0, o1] = offsetLines;
+    const shared = [o0.startId, o0.endId].find(id => id === o1.startId || id === o1.endId);
+    expect(shared).toBeDefined();
   });
 
   it('handles single-segment queues (no corner pass)', () => {
@@ -1128,7 +1134,7 @@ describe('findChainedEntities', () => {
     const c = addCircle(s, 0, 0, 5); s = c.state;
     expect(findChainedEntities(s, c.id).size).toBe(1);
   });
-  it('skips construction curves when chaining', () => {
+  it('chains through construction curves (construction is a valid offset source)', () => {
     let s = emptySketchState();
     const a = addPoint(s, 0, 0); s = a.state;
     const b = addPoint(s, 5, 0); s = b.state;
@@ -1136,9 +1142,9 @@ describe('findChainedEntities', () => {
     const l1 = addLine(s, a.id, b.id); s = l1.state;
     const l2 = addLine(s, b.id, c.id, { construction: true }); s = l2.state;  // construction
     const chain = findChainedEntities(s, l1.id);
-    // l1 alone; the construction l2 is intentionally excluded so
-    // offset chains stick to solid geometry.
+    // Construction is allowed as an offset source (see findChainedEntities /
+    // offsetCurve), so the walk reaches l2 through the shared endpoint.
     expect(chain.has(l1.id)).toBe(true);
-    expect(chain.has(l2.id)).toBe(false);
+    expect(chain.has(l2.id)).toBe(true);
   });
 });

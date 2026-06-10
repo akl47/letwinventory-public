@@ -66,9 +66,11 @@ describe('computeMeasure', () => {
     it('reports 3D Euclidean distance between two vertices', () => {
       const r = computeMeasure([v('a', [0, 0, 0]), v('b', [3, 4, 12])]);
       expect(r.summary).toBe('Distance between two vertices');
-      expect(r.rows.length).toBe(1);
+      // Now also emits ΔX / ΔY / ΔZ component rows alongside Distance.
+      expect(r.rows.length).toBe(4);
       expect(r.rows[0].label).toBe('Distance');
       expect(r.rows[0].value).toMatch(/^13\./);
+      expect(r.rows.map(x => x.label)).toEqual(['Distance', 'ΔX', 'ΔY', 'ΔZ']);
     });
   });
 
@@ -149,7 +151,8 @@ describe('computeMeasure', () => {
         lineEdge('e0', [0, 0, 0], [10, 0, 0]),
         curveEdge('e1', [0, 0, 0], [10, 0, 0], 15),
       ]);
-      expect(r.summary).toMatch(/curved/);
+      // Message reworded to "non-circular curves not yet supported".
+      expect(r.summary).toMatch(/curve/);
       expect(r.rows).toEqual([]);
     });
   });

@@ -27,6 +27,6 @@ describe('CadPreview3dComponent', () => {
     expect(c.measuring()).toBe(true);
     c.toggleMeasure();
     expect(c.measuring()).toBe(false);
-    expect(c.distance()).toBeNull();
+    expect(c.measureRows()).toEqual([]);
   });
 });

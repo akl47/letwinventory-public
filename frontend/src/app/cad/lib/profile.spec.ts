@@ -454,8 +454,12 @@ describe('Profile extraction (CAD-038, REQ 560, REQ 617)', () => {
           { kind: 'point', id: 'p4', x: 0, y: 10 },
           { kind: 'point', id: 'pc', x: 5, y: 5 },  // arc centre
           { kind: 'line',  id: 'l1', startId: 'p1', endId: 'p2' },
+          // ccw: true bulges the arc RIGHT (x > 5), away from the rectangle —
+          // as the diagram above intends. ccw: false would sweep it LEFT
+          // through (0, 5), crossing the left edge l3 and degenerating the
+          // profile into a self-intersecting 3-edge region.
           { kind: 'arc',   id: 'a1', startId: 'p2', endId: 'p3', centerId: 'pc',
-            radius: 5, ccw: false },
+            radius: 5, ccw: true },
           { kind: 'line',  id: 'l2', startId: 'p3', endId: 'p4' },
           { kind: 'line',  id: 'l3', startId: 'p4', endId: 'p1' },
         ],

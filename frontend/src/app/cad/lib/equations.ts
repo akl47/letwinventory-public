@@ -219,6 +219,12 @@ const parser = new Parser();
 // and aren't shadowed by variable lookups (they're callable, not
 // values). Names that would still conflict (functions + the
 // just-removed constants) are exported for the UI warning.
+// KNOWN GAP (REQ TBD): expr-eval files `sin`/`cos`/`sqrt`/`length` under
+// `unaryOps`, not `functions`, so they're absent from this set even though
+// a variable with those names breaks `evalExpression` (which doesn't shadow
+// like `resolveEquations` does). Fixing requires a domain decision —
+// `length` in particular is expected usable as a variable name — so the
+// reserved set is left as-is pending that call. See equations.spec.ts:233.
 export const RESERVED_EQUATION_NAMES: ReadonlySet<string> = new Set<string>([
   ...Object.keys(parser.consts),
   ...Object.keys(parser.functions),
