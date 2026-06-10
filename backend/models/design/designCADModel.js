@@ -14,8 +14,18 @@ module.exports = (sequelize, DataTypes) => {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     name: { type: DataTypes.STRING(255), allowNull: true },
     partID: { type: DataTypes.INTEGER, allowNull: false },
-    featureTree: { type: DataTypes.JSONB, allowNull: false },
-    sketchDoc: { type: DataTypes.JSONB, allowNull: false },
+    // Model defaults let assembly rows be created without fabricating CAD
+    // content — they carry empty trees and their document in assemblyDoc.
+    featureTree: { type: DataTypes.JSONB, allowNull: false, defaultValue: { features: [], nextFeatureSeq: 1 } },
+    sketchDoc: { type: DataTypes.JSONB, allowNull: false, defaultValue: { sketches: {}, nextSketchSeq: 1 } },
+    // ── unified design table (assemblies merged in) ───────────────────────
+    // True for assembly rows: the design document is `assemblyDoc` (instances/
+    // mates/patterns/...) instead of featureTree+sketchDoc, the VCS binding is
+    // the assembly one (repoType 'assembly', assemblySerializer), and the
+    // domain operations live under /api/design/assembly. One active design row
+    // exists per part, of exactly one kind (the partial unique index enforces it).
+    isAssembly: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    assemblyDoc: { type: DataTypes.JSONB, allowNull: true },
     // SolidWorks-style equations doc — { entries: { name: { expression,
     // lastValue?, error? } } }. Keys are either global names (no dot)
     // or target paths (feature.<id>.distance, sketch.<id>.constraint.<id>,

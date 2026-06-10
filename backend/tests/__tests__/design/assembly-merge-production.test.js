@@ -12,13 +12,13 @@ describe('Assembly production release + compare + merge (full parity)', () => {
     const part = await createTestPart({ partCategoryID: 4 }); // rev "00"
     const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
     const id = asm.body.id;
-    await auth.post(`/api/design/assembly/${id}/branches`).send({ name: 'd1' });
-    await auth.post(`/api/design/assembly/${id}/switch-branch`).send({ name: 'd1' });
-    await auth.post(`/api/design/assembly/${id}/release`).send({}); // → main, rev 01, releaseLocked
-    await auth.post(`/api/design/assembly/${id}/workflow`).send({ action: 'submit' });
-    await auth.post(`/api/design/assembly/${id}/workflow`).send({ action: 'approve' });
+    await auth.post(`/api/design/cad-model/${id}/branches`).send({ name: 'd1' });
+    await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'd1' });
+    await auth.post(`/api/design/cad-model/${id}/release`).send({}); // → main, rev 01, releaseLocked
+    await auth.post(`/api/design/cad-model/${id}/workflow`).send({ action: 'submit' });
+    await auth.post(`/api/design/cad-model/${id}/workflow`).send({ action: 'approve' });
 
-    const prod = await auth.post(`/api/design/assembly/${id}/production-release`).send({});
+    const prod = await auth.post(`/api/design/cad-model/${id}/production-release`).send({});
     expect(prod.status).toBe(200);
     expect(prod.body.revision).toBe('A');
     expect(prod.body.prodModelID).toBeDefined();
@@ -28,7 +28,7 @@ describe('Assembly production release + compare + merge (full parity)', () => {
     const auth = await authenticatedRequest();
     const part = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
-    const res = await auth.post(`/api/design/assembly/${asm.body.id}/production-release`).send({});
+    const res = await auth.post(`/api/design/cad-model/${asm.body.id}/production-release`).send({});
     expect(res.status).toBe(409);
   });
 
@@ -38,15 +38,18 @@ describe('Assembly production release + compare + merge (full parity)', () => {
     const comp = await partWithCad(auth);
     const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
     const id = asm.body.id;
-    await auth.post(`/api/design/assembly/${id}/checkout`).send({});
+    // `main` is protected on the unified surface — work on a draft branch.
+    await auth.post(`/api/design/cad-model/${id}/branches`).send({ name: 'd1' });
+    await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'd1' });
+    await auth.post(`/api/design/cad-model/${id}/checkout`).send({});
     await auth.post(`/api/design/assembly/${id}/instances`).send({ partID: comp.id });
-    await auth.post(`/api/design/assembly/${id}/checkin`).send({ message: 'add comp' });
+    await auth.post(`/api/design/cad-model/${id}/checkin`).send({ message: 'add comp' });
 
-    const commits = await auth.get(`/api/design/assembly/${id}/commits`);
+    const commits = await auth.get(`/api/design/cad-model/${id}/commits`);
     expect(commits.body.length).toBe(2);
     const newest = commits.body[0].hash;
     const oldest = commits.body[1].hash;
-    const diff = await auth.get(`/api/design/assembly/${id}/commits/${oldest}/diff/${newest}`);
+    const diff = await auth.get(`/api/design/cad-model/${id}/commits/${oldest}/diff/${newest}`);
     expect(diff.status).toBe(200);
     expect(diff.body.entries.some((e) => e.name.startsWith('instance:') && e.status === 'added')).toBe(true);
   });
@@ -56,9 +59,10 @@ describe('Assembly production release + compare + merge (full parity)', () => {
     const part = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
     const id = asm.body.id;
-    const merge = await auth.post(`/api/design/assembly/${id}/reconcile`).send({});
+    const merge = await auth.post(`/api/design/cad-model/${id}/reconcile`).send({});
     expect(merge.status).toBe(409);
-    const preview = await auth.get(`/api/design/assembly/${id}/reconcile/preview`);
+    const preview = await auth.get(`/api/design/cad-model/${id}/reconcile/preview`);
+    expect(preview.status).toBe(200);
     expect(preview.body.changes).toEqual([]);
   });
 });

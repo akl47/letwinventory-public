@@ -80,33 +80,14 @@ export interface AssemblyDoc {
   displayStates?: DisplayState[];
 }
 
-export interface Assembly {
-  id: number;
-  name: string | null;
-  partID: number;
-  assemblyDoc: AssemblyDoc;
-  part?: { id: number; name: string; sku?: string; revision?: string };
-  branchName?: string;
-  dirty?: boolean;
-  releaseLocked?: boolean;
-  lockedByUserID?: number | null;
-  createdByUserID?: number;
-  activeFlag?: boolean;
-}
+/** An assembly is a unified DesignCADModel row (isAssembly=true) whose content
+ * lives in `assemblyDoc`. Type-only import avoids any runtime cycle. */
+export type Assembly = import('../../models/cad-model.model').CadModel & { assemblyDoc: AssemblyDoc };
 
 export interface EligiblePart {
   partID: number;
   part: { id: number; name: string; sku?: string; revision?: string };
   hasAssembly: boolean;
-}
-
-export interface AssemblyListItem {
-  id: number;
-  name: string | null;
-  partID: number;
-  part?: { id: number; name: string; sku?: string; revision?: string };
-  instanceCount: number;
-  updatedAt: string;
 }
 
 export interface ComposedFace {

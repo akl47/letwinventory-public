@@ -3,19 +3,14 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
-  Assembly, AssemblyListItem, AssemblyInstance, AssemblyRegenResponse, BomLine, Placement, Mate, MateType, MateRef, EligiblePart,
+  Assembly, AssemblyInstance, AssemblyRegenResponse, BomLine, Placement, Mate, MateType, MateRef, EligiblePart,
   AssemblyPattern, PatternKind, ExplodeConfig, DisplayState, MassProperties, InterferencePair,
 } from '../cad/lib/assembly.types';
-import { CadBranch, CadCommit, CadWorkflow, CadVersionGraph, CadCommitDiff } from '../models/cad-model.model';
 
 @Injectable({ providedIn: 'root' })
 export class AssemblyService {
   private http = inject(HttpClient);
   private apiUrl = `${environment.apiUrl}/design/assembly`;
-
-  list(): Observable<AssemblyListItem[]> {
-    return this.http.get<AssemblyListItem[]>(`${this.apiUrl}/parts-with-assembly`);
-  }
 
   /** Parts in the "Assembly" category — candidates for an assembly CAD model. */
   eligibleParts(): Observable<EligiblePart[]> {
@@ -112,65 +107,6 @@ export class AssemblyService {
 
   syncBom(id: number): Observable<{ count: number; items: Array<{ componentPartID: number; quantity: number }> }> {
     return this.http.post<{ count: number; items: Array<{ componentPartID: number; quantity: number }> }>(`${this.apiUrl}/${id}/bom/sync`, {});
-  }
-
-  checkout(id: number): Observable<Assembly> {
-    return this.http.post<Assembly>(`${this.apiUrl}/${id}/checkout`, {});
-  }
-
-  checkin(id: number, message: string): Observable<{ commitHash: string; model: Assembly }> {
-    return this.http.post<{ commitHash: string; model: Assembly }>(`${this.apiUrl}/${id}/checkin`, { message });
-  }
-
-  undoCheckout(id: number): Observable<Assembly> {
-    return this.http.post<Assembly>(`${this.apiUrl}/${id}/undo-checkout`, {});
-  }
-
-  // ── branches / workflow / graph (shared VCS machinery) ──────────────────────
-  getCommits(id: number): Observable<CadCommit[]> {
-    return this.http.get<CadCommit[]>(`${this.apiUrl}/${id}/commits`);
-  }
-  listBranches(id: number): Observable<CadBranch[]> {
-    return this.http.get<CadBranch[]>(`${this.apiUrl}/${id}/branches`);
-  }
-  createBranch(id: number, name: string, fromCommit?: string): Observable<CadBranch> {
-    return this.http.post<CadBranch>(`${this.apiUrl}/${id}/branches`, { name, fromCommit });
-  }
-  switchBranch(id: number, name: string): Observable<Assembly> {
-    return this.http.post<Assembly>(`${this.apiUrl}/${id}/switch-branch`, { name });
-  }
-  archiveBranch(id: number, name: string): Observable<{ archived: string }> {
-    return this.http.delete<{ archived: string }>(`${this.apiUrl}/${id}/branches/${encodeURIComponent(name)}`);
-  }
-  getWorkflow(id: number): Observable<CadWorkflow> {
-    return this.http.get<CadWorkflow>(`${this.apiUrl}/${id}/workflow`);
-  }
-  transitionWorkflow(id: number, action: string): Observable<CadWorkflow & { model?: Assembly }> {
-    return this.http.post<CadWorkflow & { model?: Assembly }>(`${this.apiUrl}/${id}/workflow`, { action });
-  }
-  getGraph(id: number): Observable<CadVersionGraph> {
-    return this.http.get<CadVersionGraph>(`${this.apiUrl}/${id}/graph`);
-  }
-  release(id: number): Observable<{ commitHash: string; revision: string; model: Assembly }> {
-    return this.http.post<{ commitHash: string; revision: string; model: Assembly }>(`${this.apiUrl}/${id}/release`, {});
-  }
-  releaseStep(id: number): Observable<string> {
-    return this.http.get(`${this.apiUrl}/${id}/release/step`, { responseType: 'text' });
-  }
-  releaseStl(id: number): Observable<Blob> {
-    return this.http.get(`${this.apiUrl}/${id}/release/stl`, { responseType: 'blob' });
-  }
-  productionRelease(id: number): Observable<{ revision: string; prodModelID: number; model: Assembly }> {
-    return this.http.post<{ revision: string; prodModelID: number; model: Assembly }>(`${this.apiUrl}/${id}/production-release`, {});
-  }
-  commitDiff(id: number, a: string, b: string): Observable<CadCommitDiff> {
-    return this.http.get<CadCommitDiff>(`${this.apiUrl}/${id}/commits/${a}/diff/${b}`);
-  }
-  reconcilePreview(id: number): Observable<{ changes: Array<{ kind: string; id: string }> }> {
-    return this.http.get<{ changes: Array<{ kind: string; id: string }> }>(`${this.apiUrl}/${id}/reconcile/preview`);
-  }
-  reconcile(id: number, sel: { instanceIds?: string[]; mateIds?: string[] }): Observable<Assembly> {
-    return this.http.post<Assembly>(`${this.apiUrl}/${id}/reconcile`, sel);
   }
 
   exportStep(id: number): Observable<string> {

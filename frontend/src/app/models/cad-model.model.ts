@@ -46,6 +46,11 @@ export interface CadModel {
   behindMain?: boolean;
   // Part identity, included by getById / getActiveByPart.
   part?: { id: number; name: string; sku?: string | null; manufacturerPN?: string | null; revision: string } | null;
+  /** True when this model is an assembly (assemblyDoc carries the content). */
+  isAssembly?: boolean;
+  /** Assembly document (typed as AssemblyDoc in cad/lib/assembly.types — kept
+   * `unknown` here to avoid an import cycle). */
+  assemblyDoc?: unknown;
 }
 
 /** A commit's trimmed geometry for the lightweight 3D preview. `vertices` and
@@ -142,7 +147,7 @@ export interface CadCommit {
 
 export interface PartWithCadSummary {
   partID: number;
-  part: { id: number; name: string; revision: string; description: string | null } | null;
+  part: { id: number; name: string; revision: string; description: string | null; imageFileID?: number | null } | null;
   revisionCount: number;
   latestRevisionID: number | null;
   latestRevision: string | null;
@@ -151,6 +156,8 @@ export interface PartWithCadSummary {
   hasReleased: boolean;
   releasedRevisionID: number | null;
   releasedRevision: string | null;
+  isAssembly?: boolean;
+  instanceCount?: number;
 }
 
 export interface CadModelHistoryEntry {

@@ -10,7 +10,9 @@ import { MatInputModule } from '@angular/material/input';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { CadModelService } from '../../../services/cad-model.service';
+import { AssemblyService } from '../../../services/assembly.service';
 import { PartWithCadSummary } from '../../../models/cad-model.model';
+import { EligiblePart } from '../../../cad/lib/assembly.types';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { filterBySearch } from '../../../utils/search';
@@ -29,12 +31,38 @@ import { filterBySearch } from '../../../utils/search';
         <mat-icon class="page-icon">view_in_ar</mat-icon>
         <h2>CAD Models</h2>
         <span class="spacer"></span>
+        <button mat-stroked-button (click)="showPicker.set(!showPicker())"
+                matTooltip="Start an assembly from an Assembly-category part.">
+          <mat-icon>account_tree</mat-icon>
+          New assembly
+        </button>
         <a mat-flat-button color="primary" routerLink="/parts/new"
            matTooltip="Create a new part, then return here to attach a CAD model.">
           <mat-icon>add</mat-icon>
           New Part
         </a>
       </header>
+
+      @if (showPicker()) {
+        <section class="picker">
+          <p class="hint">Pick an <strong>Assembly-category</strong> part to start an assembly for:</p>
+          <mat-form-field appearance="outline" class="picker-search">
+            <mat-label>Search parts</mat-label>
+            <input matInput [ngModel]="partSearch()" (ngModelChange)="partSearch.set($event)" placeholder="name or revision" />
+          </mat-form-field>
+          <div class="part-list">
+            @for (p of filteredParts(); track p.partID) {
+              <button mat-button class="part-row" (click)="startAssembly(p.partID)">
+                <mat-icon>account_tree</mat-icon> {{ p.part.name }} <span class="sku">{{ p.part.revision }}</span>
+                @if (p.hasAssembly) { <span class="has">has assembly</span> }
+              </button>
+            }
+            @if (filteredParts().length === 0) {
+              <p class="empty-parts">No parts in the Assembly category. Set a part's category to “Assembly” to make it eligible.</p>
+            }
+          </div>
+        </section>
+      }
 
       <mat-form-field appearance="outline" class="search">
         <mat-icon matPrefix>search</mat-icon>
@@ -66,6 +94,16 @@ import { filterBySearch } from '../../../utils/search';
               <span class="part-rev">·  Rev {{ r.part?.revision }}</span>
             </a>
             <div class="part-desc" *ngIf="r.part?.description">{{ r.part!.description }}</div>
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="type">
+          <th mat-header-cell *matHeaderCellDef>Type</th>
+          <td mat-cell *matCellDef="let r">
+            <span class="type-chip" [class.assembly]="r.isAssembly">
+              <mat-icon>{{ r.isAssembly ? 'account_tree' : 'view_in_ar' }}</mat-icon>
+              {{ r.isAssembly ? 'Assembly' : 'Part' }}
+            </span>
           </td>
         </ng-container>
 
@@ -112,9 +150,9 @@ import { filterBySearch } from '../../../utils/search';
                 <mat-icon>history</mat-icon> Show history
               </a>
               <a mat-stroked-button
-                 [routerLink]="['/parts', r.partID, 'cad', 'editor']"
-                 [queryParams]="{ revisionID: r.latestRevisionID }"
-                 matTooltip="Open the latest revision in the CAD editor">
+                 [routerLink]="r.isAssembly ? ['/parts', r.partID, 'assembly', 'editor'] : ['/parts', r.partID, 'cad', 'editor']"
+                 [queryParams]="r.isAssembly ? null : { revisionID: r.latestRevisionID }"
+                 [matTooltip]="r.isAssembly ? 'Open in the assembly editor' : 'Open the latest revision in the CAD editor'">
                 <mat-icon>open_in_new</mat-icon> Open
               </a>
             </div>
@@ -152,10 +190,22 @@ import { filterBySearch } from '../../../utils/search';
     .released-pill { display: inline-flex; align-items: center; gap: 4px; color: #2e7d32; font-weight: 500; }
     .released-pill mat-icon { font-size: 16px; width: 16px; height: 16px; }
     .muted { opacity: 0.4; }
+    .type-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; background: #e8eaf0; color: #2a2a3a; }
+    .type-chip mat-icon { font-size: 16px; width: 16px; height: 16px; }
+    .type-chip.assembly { background: #e3f2fd; color: #1565c0; }
+    .picker { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin-bottom: 16px; }
+    .picker .hint { margin: 0 0 .5rem; }
+    .picker-search { width: 320px; max-width: 100%; }
+    .part-list { display: flex; flex-direction: column; max-height: 280px; overflow: auto; }
+    .part-row { justify-content: flex-start; }
+    .sku { color: #888; margin-left: .5rem; font-size: .85em; }
+    .has { margin-left: auto; font-size: .72em; color: #2e7d32; background: #e8f5e9; padding: 1px 6px; border-radius: 8px; }
+    .empty-parts { color: #888; padding: .5rem; }
   `],
 })
 export class CadLandingComponent implements OnInit {
   private cadApi = inject(CadModelService);
+  private assemblyApi = inject(AssemblyService);
   private auth = inject(AuthService);
   private errors = inject(ErrorNotificationService);
   private router = inject(Router);
@@ -164,7 +214,18 @@ export class CadLandingComponent implements OnInit {
   loading = signal<boolean>(true);
   searchTerm = signal<string>('');
 
-  displayedColumns = ['part', 'latest', 'released', 'count', 'updated', 'actions'];
+  // "New assembly" picker — Assembly-category parts eligible to start one.
+  showPicker = signal(false);
+  eligibleParts = signal<EligiblePart[]>([]);
+  partSearch = signal('');
+  filteredParts = computed(() => {
+    const q = this.partSearch().trim().toLowerCase();
+    if (!q) return this.eligibleParts();
+    return this.eligibleParts().filter((p) =>
+      `${p.part?.name || ''} ${p.part?.revision || ''}`.toLowerCase().includes(q));
+  });
+
+  displayedColumns = ['part', 'type', 'latest', 'released', 'count', 'updated', 'actions'];
 
   filtered = computed(() => {
     const q = this.searchTerm().trim();
@@ -176,10 +237,30 @@ export class CadLandingComponent implements OnInit {
       next: rs => { this.rows.set(rs); this.loading.set(false); },
       error: err => { this.errors.showError(err?.error?.error || 'Failed to load CAD landing'); this.loading.set(false); },
     });
+    this.assemblyApi.eligibleParts().subscribe({
+      next: rows => this.eligibleParts.set(rows),
+      error: () => {},
+    });
   }
 
   openLatest(row: PartWithCadSummary) {
+    if (row.isAssembly) {
+      this.router.navigate(['/parts', row.partID, 'assembly', 'editor']);
+      return;
+    }
     if (!row.latestRevisionID) return;
     this.router.navigate(['/parts', row.partID, 'cad', 'editor'], { queryParams: { revisionID: row.latestRevisionID } });
+  }
+
+  startAssembly(partID: number) {
+    const existing = this.eligibleParts().find(p => p.partID === partID);
+    if (existing?.hasAssembly) {
+      this.router.navigate(['/parts', partID, 'assembly', 'editor']);
+      return;
+    }
+    this.assemblyApi.createForPart(partID).subscribe({
+      next: () => this.router.navigate(['/parts', partID, 'assembly', 'editor']),
+      error: e => this.errors.showError(e?.error?.error || 'Failed to create assembly'),
+    });
   }
 }

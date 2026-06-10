@@ -44,6 +44,8 @@ router.post('/:id/cherry-pick', checkToken, checkPermission('cad', 'write'), con
 router.post('/:id/rebase', checkToken, checkPermission('cad', 'write'), controller.rebaseBranch);
 router.post('/:id/reconcile', checkToken, checkPermission('cad', 'write'), controller.reconcileBranch);
 router.post('/:id/reconcile/preview', checkToken, checkPermission('cad', 'read'), controller.reconcilePreview);
+// Change LIST a merge would consider (assembly rows; empty for part models).
+router.get('/:id/reconcile/preview', checkToken, checkPermission('cad', 'read'), controller.reconcileChanges);
 
 // VCS Phase 4: review workflow (transition permissions enforced by the engine).
 router.get('/:id/workflow', checkToken, checkPermission('cad', 'read'), controller.getWorkflow);

@@ -8,7 +8,11 @@ const cadGraphService = require('../../../services/vcs/cadGraphService');
 const workflowEngine = require('../../../services/vcs/workflowEngine');
 const vcsService = require('../../../services/vcs/vcsService');
 const cadFreezeService = require('../../../services/vcs/cadFreezeService');
-const { cadDeserialize } = require('../../../services/vcs/cadSerializer');
+const { cadSerialize, cadDeserialize } = require('../../../services/vcs/cadSerializer');
+const assemblyVcsService = require('../../../services/vcs/assemblyVcsService');
+const assemblyBranchService = require('../../../services/vcs/assemblyBranchService');
+const assemblyFreezeService = require('../../../services/vcs/assemblyFreezeService');
+const { assemblySerialize } = require('../../../services/vcs/assemblySerializer');
 const partRevisionService = require('../../../services/partRevisionService');
 const RestError = require('../../../util/RestError');
 const { KernelDisconnected, KernelRpcError, getDefaultClient } = require('../../../services/cadKernelClient');
@@ -16,6 +20,49 @@ const { KernelDisconnected, KernelRpcError, getDefaultClient } = require('../../
 const INITIAL_FEATURE_TREE = { features: [{ id: 'f1', type: 'origin' }], nextFeatureSeq: 2 };
 const INITIAL_SKETCH_DOC = { sketches: {}, nextSketchSeq: 1 };
 const INITIAL_EQUATIONS = { entries: {} };
+
+// ── unified-table kind dispatch ───────────────────────────────────────────────
+// Assemblies live in DesignCADModels (isAssembly=true). The VCS machinery is
+// written once and bound per document kind; each handler stays one code path by
+// pulling its services from the row's binding. repoType stays 'assembly' for
+// assembly rows (the serializers differ), so existing repos/workflow keys hold.
+const cadBinding = {
+  vcs: cadVcsService,
+  branch: cadBranchService,
+  freeze: cadFreezeService,
+  repoFor: (model, d) => cadVcsService.repoForModel(model, d),
+  // Content columns cloned onto a new revision / production row.
+  cloneContent: (m) => ({
+    featureTree: m.featureTree, sketchDoc: m.sketchDoc,
+    equations: m.equations || { entries: {} }, defaultView: m.defaultView || null,
+  }),
+  reconcileSel: (body) => ({ featureIds: (body && body.featureIds) || [], sketchIds: (body && body.sketchIds) || [] }),
+  workingDiffBinding: null, // cadDiffService.workingDiff's default IS the CAD binding
+  thumbnails: true,
+};
+const assemblyBinding = {
+  vcs: assemblyVcsService,
+  branch: assemblyBranchService,
+  freeze: assemblyFreezeService,
+  repoFor: (model, d) => assemblyVcsService.repoForAssembly(model, d),
+  cloneContent: (m) => ({ isAssembly: true, assemblyDoc: m.assemblyDoc, defaultView: m.defaultView || null }),
+  reconcileSel: (body) => ({ instanceIds: (body && body.instanceIds) || [], mateIds: (body && body.mateIds) || [] }),
+  workingDiffBinding: {
+    repoFor: (model, d) => assemblyVcsService.repoForAssembly(model, d),
+    serialize: assemblySerialize,
+    docOf: (m) => assemblyVcsService.docOf(m),
+  },
+  thumbnails: false,
+};
+const bindingFor = (model) => (model.isAssembly ? assemblyBinding : cadBinding);
+
+// CAD-content-only endpoints (feature-tree regen, cherry-pick, 3D diff, …) make
+// no sense for an assembly row; guard them with a uniform 422.
+function rejectAssembly(model, res, what) {
+  if (!model.isAssembly) return false;
+  res.status(422).json({ error: `${what} is not supported for assemblies — use the assembly endpoints` });
+  return true;
+}
 
 // Flatten a regen result to its FINAL renderable geometry. Each feature reports
 // its target body's CUMULATIVE state, so keeping every feature would overlay the
@@ -98,7 +145,7 @@ function activeWhere(extra = {}) {
 // Augment a model with `released`: true when a write-once release tag named for
 // the part's current revision exists (release tags are named by Parts.revision).
 async function withReleaseFlag(model) {
-  const repo = await cadVcsService.repoForModel(model);
+  const repo = await bindingFor(model).repoFor(model);
   // Revision numbers come from the Parts table (single source of truth —
   // advanced only by a dev release or a manual new revision), via the same
   // helper the draft branch name uses, so the badge and the branch name agree
@@ -137,10 +184,11 @@ async function exportRelease(req, res, format) {
   const part = model.part || await db.Part.findByPk(model.partID);
   const revision = part && part.revision;
   try {
-    const repo = await cadVcsService.repoForModel(model);
+    const binding = bindingFor(model);
+    const repo = await binding.repoFor(model);
     const ref = revision ? await vcsService.getRef(repo, String(revision)) : null;
     if (!ref) return res.status(409).json({ error: 'This revision has not been released yet' });
-    const geo = await cadFreezeService.geometryForCommit(repo, model, ref.targetHash, {});
+    const geo = await binding.freeze.geometryForCommit(repo, model, ref.targetHash, {});
     const breps = (geo.bodies || []).filter((b) => b.brep).map((b) => b.brep);
     if (!breps.length) return res.status(409).json({ error: 'Released revision has no body geometry' });
     const pn = String(part?.sku || part?.name || `part-${model.partID}`);
@@ -183,7 +231,7 @@ function isLockedForEdit(model) {
 // can each be in review at once, and `main` keeps its own production-approval
 // cycle. The engine key is "<lineage-root>:<branchName>".
 async function workflowRepo(model) {
-  const repo = await cadVcsService.repoForModel(model);
+  const repo = await bindingFor(model).repoFor(model);
   return { repoType: repo.repoType, repoId: `${repo.repoId}:${model.branchName || 'main'}` };
 }
 
@@ -195,6 +243,7 @@ async function workflowRepo(model) {
 // NOTE: not transactional across the Part mint + VCS release (house style); the
 // write-once tag guards against a double release.
 async function releaseBranchToMain(model, userId, opts = {}) {
+  const binding = bindingFor(model);
   const branchName = model.branchName;
   if (!branchName || branchName === 'main') {
     throw new RestError('Only a draft branch can be released to main', 409);
@@ -202,7 +251,7 @@ async function releaseBranchToMain(model, userId, opts = {}) {
   if (model.dirty || !model.baseCommitHash) {
     throw new RestError('Check in the branch before releasing it', 409);
   }
-  const repo = await cadVcsService.repoForModel(model);
+  const repo = await binding.repoFor(model);
   const mainRef = await vcsService.getRef(repo, 'main');
   const branchRef = await vcsService.getRef(repo, branchName);
   if (mainRef && branchRef) {
@@ -222,7 +271,7 @@ async function releaseBranchToMain(model, userId, opts = {}) {
   // ancestry check above, so main stays in the new commit's ancestry too.)
   const branchHead = branchRef ? branchRef.targetHash : (model.baseCommitHash || null);
   model.branchName = 'main';
-  const { commitHash, tag } = await cadVcsService.release(
+  const { commitHash, tag } = await binding.vcs.release(
     model, userId, newPart.revision,
     { ...opts, parents: branchHead ? [branchHead] : undefined },
   );
@@ -240,16 +289,20 @@ module.exports = {
       const rows = await db.DesignCADModel.findAll({
         where: { activeFlag: true },
         order: [['updatedAt', 'DESC']],
-        include: [{ model: db.Part, as: 'part', attributes: ['id', 'name', 'revision', 'description'] }],
+        include: [{ model: db.Part, as: 'part', attributes: ['id', 'name', 'revision', 'description', 'imageFileID'] }],
       });
       const out = [];
       for (const m of rows) {
-        const repo = await cadVcsService.repoForModel(m);
+        const repo = await bindingFor(m).repoFor(m);
         const tags = await vcsService.listRefs(repo, 'tag');
         const partRev = m.part ? m.part.revision : null;
         out.push({
           partID: m.partID,
-          part: m.part ? { id: m.part.id, name: m.part.name, revision: m.part.revision, description: m.part.description } : null,
+          part: m.part ? { id: m.part.id, name: m.part.name, revision: m.part.revision, description: m.part.description, imageFileID: m.part.imageFileID } : null,
+          // Unified landing: assemblies are design rows too (Type column + the
+          // assembly editor as the open target).
+          isAssembly: !!m.isAssembly,
+          instanceCount: m.isAssembly ? ((m.assemblyDoc && m.assemblyDoc.instances) || []).length : undefined,
           revisionCount: tags.length,
           latestRevisionID: m.id,
           latestRevision: partRev,
@@ -305,6 +358,14 @@ module.exports = {
     if (!part) {
       return res.status(404).json({ error: `Part ${partID} does not exist` });
     }
+    // Assembly-category parts get assembly designs (created via the assembly
+    // endpoints) — steer away before the unique index would block them anyway.
+    if (part.partCategoryID) {
+      const category = await db.PartCategory.findByPk(part.partCategoryID);
+      if (category && category.name === 'Assembly') {
+        return res.status(422).json({ error: 'This part is in the Assembly category — create an assembly instead (POST /api/design/assembly/by-part/:partID)' });
+      }
+    }
 
     const conflict = await db.DesignCADModel.findOne({ where: activeWhere({ partID }) });
     if (conflict) {
@@ -354,6 +415,7 @@ module.exports = {
     const id = Number(req.params.id);
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
+    if (rejectAssembly(model, res, 'Feature-tree update')) return undefined;
 
     // `main` is protected — edits happen on a draft branch and reach main only
     // via submit → approve → release.
@@ -442,7 +504,7 @@ module.exports = {
       const part = model.part || await db.Part.findByPk(model.partID);
       const revision = part && part.revision;
       if (!revision) return res.status(400).json({ error: `Part for CAD model ${id} has no revision to release as` });
-      const { commitHash, tag } = await cadVcsService.release(model, req.user.id, revision, {});
+      const { commitHash, tag } = await bindingFor(model).vcs.release(model, req.user.id, revision, {});
       await workflowEngine.setState(wf, 'draft', req.user.id);
       await recordHistory(model.id, req.user.id, 'released', null, { revision: tag, commitHash });
       return res.json({ commitHash, revision: tag, model: await withReleaseFlag(model) });
@@ -460,6 +522,7 @@ module.exports = {
     const id = Number(req.params.id);
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
+    if (rejectAssembly(model, res, 'Development release')) return undefined;
     try {
       const { commitHash, tag } = await cadVcsService.devRelease(model, req.user.id, {});
       await recordHistory(model.id, req.user.id, 'dev_released', null, { revision: tag, commitHash });
@@ -489,8 +552,7 @@ module.exports = {
         const newPart = await partRevisionService.createNewRevision(part, req.user.id, { transaction });
         return db.DesignCADModel.create({
           name: model.name, partID: newPart.id,
-          featureTree: model.featureTree, sketchDoc: model.sketchDoc,
-          equations: model.equations || { entries: {} }, defaultView: model.defaultView || null,
+          ...bindingFor(model).cloneContent(model),
           branchName: model.branchName || 'main', baseCommitHash: model.baseCommitHash || null,
           dirty: false, releaseLocked: false, lockedByUserID: null,
           createdByUserID: req.user.id, activeFlag: true,
@@ -521,7 +583,7 @@ module.exports = {
     const part = await db.Part.findByPk(model.partID);
     if (!part) return res.status(400).json({ error: 'Part not found for this model' });
     try {
-      const repo = await cadVcsService.repoForModel(model);
+      const repo = await bindingFor(model).repoFor(model);
       if (!model.releaseLocked) {
         return res.status(409).json({ error: 'Create a development release before promoting to production' });
       }
@@ -535,8 +597,7 @@ module.exports = {
         const prodPart = await partRevisionService.releaseToProduction(part, req.user.id, { transaction });
         const prodModel = await db.DesignCADModel.create({
           name: model.name, partID: prodPart.id,
-          featureTree: model.featureTree, sketchDoc: model.sketchDoc,
-          equations: model.equations || { entries: {} }, defaultView: model.defaultView || null,
+          ...bindingFor(model).cloneContent(model),
           branchName: model.branchName || 'main', baseCommitHash: releaseCommit,
           dirty: false, releaseLocked: true, lockedByUserID: null,
           createdByUserID: req.user.id, activeFlag: true,
@@ -579,7 +640,7 @@ module.exports = {
       return res.status(423).json({ error: 'The main branch is protected — create or switch to a draft branch to make changes' });
     }
     try {
-      await cadVcsService.checkout(model, req.user.id, {});
+      await bindingFor(model).vcs.checkout(model, req.user.id, {});
       return res.json(await withReleaseFlag(model));
     } catch (err) {
       return res.status(err.statusCode || 500).json({ error: err.message });
@@ -592,14 +653,16 @@ module.exports = {
     if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
     const message = (req.body && req.body.message) || '';
     const thumbnail = req.body && req.body.thumbnail;
+    const binding = bindingFor(model);
     try {
-      const { commitHash } = await cadVcsService.checkin(model, req.user.id, message);
+      const { commitHash } = await binding.vcs.checkin(model, req.user.id, message);
       // Best-effort: a missing/invalid thumbnail must not fail the check-in.
-      if (thumbnail) {
+      // (Assemblies don't capture thumbnails — binding.thumbnails gates it.)
+      if (thumbnail && binding.thumbnails) {
         try { await cadVcsService.storeThumbnail(model, commitHash, thumbnail); } catch { /* ignore */ }
       }
       // Check-in releases the lock — the next edit requires a fresh check-out.
-      await cadVcsService.releaseLock(model, req.user.id);
+      await binding.vcs.releaseLock(model, req.user.id);
       return res.json({ commitHash, model: await withReleaseFlag(model) });
     } catch (err) {
       return res.status(err.statusCode || 500).json({ error: err.message });
@@ -613,7 +676,7 @@ module.exports = {
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
     try {
-      await cadVcsService.undoCheckout(model, req.user.id);
+      await bindingFor(model).vcs.undoCheckout(model, req.user.id);
       return res.json(await withReleaseFlag(model));
     } catch (err) {
       return res.status(err.statusCode || 500).json({ error: err.message });
@@ -626,7 +689,7 @@ module.exports = {
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
     try {
-      await cadVcsService.releaseLock(model, req.user.id, { force: true });
+      await bindingFor(model).vcs.releaseLock(model, req.user.id, { force: true });
       return res.json(await withReleaseFlag(model));
     } catch (err) {
       return res.status(err.statusCode || 500).json({ error: err.message });
@@ -638,7 +701,7 @@ module.exports = {
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
     try {
-      return res.json(await cadVcsService.history(model));
+      return res.json(await bindingFor(model).vcs.history(model));
     } catch (err) {
       return res.status(500).json({ error: `Failed to fetch CAD commit log: ${err.message}` });
     }
@@ -650,7 +713,8 @@ module.exports = {
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
     try {
-      return res.json(await cadGraphService.buildGraph(model));
+      const repo = await bindingFor(model).repoFor(model);
+      return res.json(await cadGraphService.buildGraphForRepo(repo, model.baseCommitHash, db));
     } catch (err) {
       return res.status(500).json({ error: `Failed to build CAD version graph: ${err.message}` });
     }
@@ -661,7 +725,7 @@ module.exports = {
   async listBranches(req, res) {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
-    try { return res.json(await cadBranchService.listBranches(model)); }
+    try { return res.json(await bindingFor(model).branch.listBranches(model)); }
     catch (err) { return res.status(500).json({ error: err.message }); }
   },
 
@@ -670,7 +734,7 @@ module.exports = {
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     const { name, fromCommit } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Branch name is required' });
-    try { return res.json(await cadBranchService.createBranch(model, name, { fromCommit }, req.user.id)); }
+    try { return res.json(await bindingFor(model).branch.createBranch(model, name, { fromCommit }, req.user.id)); }
     catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
   },
 
@@ -679,7 +743,7 @@ module.exports = {
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     const { name } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Branch name is required' });
-    try { await cadBranchService.switchBranch(model, name, req.user.id); return res.json(await withReleaseFlag(model)); }
+    try { await bindingFor(model).branch.switchBranch(model, name, req.user.id); return res.json(await withReleaseFlag(model)); }
     catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
   },
 
@@ -687,28 +751,41 @@ module.exports = {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     const name = req.params.name || (req.body && req.body.name);
-    try { return res.json(await cadBranchService.archiveBranch(model, name)); }
+    try { return res.json(await bindingFor(model).branch.archiveBranch(model, name)); }
     catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
   },
 
   async rebaseBranch(req, res) {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    if (rejectAssembly(model, res, 'Rebase')) return undefined;
     try {
       await cadBranchService.rebaseBranch(model, req.user.id);
       return res.json(await withReleaseFlag(await fetchActiveModel(model.id)));
     } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
   },
 
-  // Merge main into the current branch, applying the selected branch features.
+  // Merge main into the current branch, applying the selected branch changes
+  // (features+sketches for part models; instances+mates for assemblies).
   async reconcileBranch(req, res) {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
-    const featureIds = (req.body && req.body.featureIds) || [];
-    const sketchIds = (req.body && req.body.sketchIds) || [];
+    const binding = bindingFor(model);
     try {
-      await cadBranchService.reconcileBranch(model, { featureIds, sketchIds }, req.user.id);
+      await binding.branch.reconcileBranch(model, binding.reconcileSel(req.body), req.user.id);
       return res.json(await withReleaseFlag(await fetchActiveModel(model.id)));
+    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+  },
+
+  // The CHANGE LIST a merge would consider — main vs the current branch.
+  // Assembly counterpart of the merge picker's feature list. GET (the 3D POST
+  // preview below is part-CAD-only).
+  async reconcileChanges(req, res) {
+    const model = await fetchActiveModel(Number(req.params.id));
+    if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    if (!model.isAssembly) return res.json({ changes: [] }); // part-CAD merge picker derives its list from commit diffs
+    try {
+      return res.json({ changes: await assemblyBranchService.reconcileChanges(model, db) });
     } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
   },
 
@@ -717,6 +794,7 @@ module.exports = {
   async reconcilePreview(req, res) {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    if (rejectAssembly(model, res, '3D merge preview')) return undefined;
     const featureIds = (req.body && req.body.featureIds) || [];
     const sketchIds = (req.body && req.body.sketchIds) || [];
     const branch = (req.body && req.body.branch) || model.branchName;
@@ -740,6 +818,7 @@ module.exports = {
   async cherryPick(req, res) {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    if (rejectAssembly(model, res, 'Cherry-pick')) return undefined;
     const { sourceCommit, featureId } = req.body || {};
     if (!sourceCommit || !featureId) return res.status(400).json({ error: 'sourceCommit and featureId are required' });
     try { const r = await cadBranchService.cherryPick(model, sourceCommit, featureId, req.user.id); return res.json(r.model); }
@@ -752,7 +831,7 @@ module.exports = {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     try {
-      const repo = await cadVcsService.repoForModel(model);
+      const repo = await bindingFor(model).repoFor(model);
       return res.json(await cadDiffService.commitDiff(repo, req.params.a, req.params.b));
     } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
   },
@@ -760,6 +839,7 @@ module.exports = {
   async getBodyDiff3D(req, res) {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    if (rejectAssembly(model, res, '3D body diff')) return undefined;
     try {
       return res.json(await cadDiffService.bodyDiff3D(model, req.params.a, req.params.b, {}));
     } catch (err) {
@@ -773,6 +853,7 @@ module.exports = {
   async getCommitGeometry(req, res) {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    if (rejectAssembly(model, res, 'Commit geometry preview')) return undefined;
     try {
       const repo = await cadVcsService.repoForModel(model);
       const geo = await cadDiffService.regenCommitGeometry(repo, model, req.params.hash, {});
@@ -790,6 +871,7 @@ module.exports = {
   async getCommitDoc(req, res) {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    if (rejectAssembly(model, res, 'Commit document reconstruction')) return undefined;
     try {
       const repo = await cadVcsService.repoForModel(model);
       const commit = await vcsService.getCommit(repo, req.params.hash, db);
@@ -827,7 +909,7 @@ module.exports = {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     try {
-      return res.json(await cadDiffService.workingDiff(model));
+      return res.json(await cadDiffService.workingDiff(model, undefined, bindingFor(model).workingDiffBinding));
     } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
   },
 
@@ -836,6 +918,7 @@ module.exports = {
   async getFaceDiff(req, res) {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
+    if (rejectAssembly(model, res, 'Face diff')) return undefined;
     try {
       const diff = await cadDiffService.faceNameDiff(model, req.params.a, req.params.b, {});
       return res.json(diff);
@@ -925,6 +1008,7 @@ module.exports = {
     if (!id) return res.status(400).json({ error: 'invalid model id' });
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: 'CAD model not found' });
+    if (rejectAssembly(model, res, 'Feature-tree regeneration')) return undefined;
     // `#{partRevision}` text = the rev being worked on: a draft branch's derived
     // display rev (highest released + 1), or the released revision on main —
     // matching the editor's badge + preview so the engraved rev is consistent.
@@ -1003,6 +1087,7 @@ module.exports = {
     if (!id) return res.status(400).json({ error: 'invalid model id' });
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: 'CAD model not found' });
+    if (rejectAssembly(model, res, 'Live STEP export')) return undefined; // assemblies export via /api/design/assembly/:id/export/*
     // Optional ?bodyIds=a,b,c to export only a subset of bodies.
     const bodyIds = typeof req.query.bodyIds === 'string' && req.query.bodyIds.trim()
       ? req.query.bodyIds.split(',').map(s => s.trim()).filter(Boolean)

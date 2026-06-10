@@ -3,8 +3,8 @@ const controller = require('./controller');
 const checkToken = require('../../../middleware/checkToken.js');
 const checkPermission = require('../../../middleware/checkPermission');
 
-// Assemblies reuse the `cad` permission resource.
-router.get('/parts-with-assembly', checkToken, checkPermission('cad', 'read'), controller.listPartsWithAssembly);
+// Assemblies reuse the `cad` permission resource. Domain-only routes — all VCS
+// operations (checkout/branch/workflow/release/diff) live on the cad-model API.
 router.get('/eligible-parts', checkToken, checkPermission('cad', 'read'), controller.listEligibleParts);
 router.get('/by-part/:partID/active', checkToken, checkPermission('cad', 'read'), controller.getActiveByPart);
 router.post('/by-part/:partID', checkToken, checkPermission('cad', 'write'), controller.createForPart);
@@ -47,34 +47,5 @@ router.get('/:id/export/step', checkToken, checkPermission('cad', 'read'), contr
 router.get('/:id/export/stl', checkToken, checkPermission('cad', 'read'), controller.exportStl);
 
 router.get('/:id/history', checkToken, checkPermission('cad', 'read'), controller.getHistory);
-
-// Version control: checkout (lock), check-in (commit), undo, force-unlock, log.
-router.post('/:id/checkout', checkToken, checkPermission('cad', 'write'), controller.checkout);
-router.post('/:id/checkin', checkToken, checkPermission('cad', 'write'), controller.checkin);
-router.post('/:id/undo-checkout', checkToken, checkPermission('cad', 'write'), controller.undoCheckout);
-router.post('/:id/force-unlock', checkToken, checkPermission('cad', 'approve'), controller.forceUnlock);
-router.get('/:id/commits', checkToken, checkPermission('cad', 'read'), controller.getCommits);
-router.get('/:id/graph', checkToken, checkPermission('cad', 'read'), controller.getGraph);
-
-// Branches (shared vcsBranchOps).
-router.get('/:id/branches', checkToken, checkPermission('cad', 'read'), controller.listBranches);
-router.post('/:id/branches', checkToken, checkPermission('cad', 'write'), controller.createBranch);
-router.post('/:id/switch-branch', checkToken, checkPermission('cad', 'write'), controller.switchBranch);
-router.delete('/:id/branches/:name', checkToken, checkPermission('cad', 'write'), controller.archiveBranch);
-
-// Review workflow (shared workflowEngine, per-branch key).
-router.get('/:id/workflow', checkToken, checkPermission('cad', 'read'), controller.getWorkflow);
-router.post('/:id/workflow', checkToken, checkPermission('cad', 'read'), controller.transitionWorkflow);
-
-// Release a draft branch onto main + frozen released geometry download.
-router.post('/:id/release', checkToken, checkPermission('cad', 'write'), controller.release);
-router.post('/:id/production-release', checkToken, checkPermission('cad', 'approve'), controller.productionRelease);
-router.get('/:id/release/step', checkToken, checkPermission('cad', 'read'), controller.exportReleaseStep);
-router.get('/:id/release/stl', checkToken, checkPermission('cad', 'read'), controller.exportReleaseStl);
-
-// Compare (structural diff) + merge (reconcile main into the branch).
-router.get('/:id/commits/:a/diff/:b', checkToken, checkPermission('cad', 'read'), controller.getCommitDiff);
-router.get('/:id/reconcile/preview', checkToken, checkPermission('cad', 'read'), controller.reconcilePreview);
-router.post('/:id/reconcile', checkToken, checkPermission('cad', 'write'), controller.reconcile);
 
 module.exports = router;

@@ -22,11 +22,12 @@ describe('subassembly nesting (REQ 763)', () => {
 
   it('rejects a cyclic nesting (A contains B contains A)', async () => {
     // Fake db: part 1 (parent) contains part 2, which contains part 1 → a cycle.
+    // Assemblies live in the unified DesignCADModels table (isAssembly rows).
     const assemblyByPart = {
-      1: { partID: 1, assemblyDoc: { instances: [{ instanceId: 'pi', partID: 2 }] } },
-      2: { partID: 2, assemblyDoc: { instances: [{ instanceId: 'x', partID: 1 }] } },
+      1: { partID: 1, isAssembly: true, assemblyDoc: { instances: [{ instanceId: 'pi', partID: 2 }] } },
+      2: { partID: 2, isAssembly: true, assemblyDoc: { instances: [{ instanceId: 'x', partID: 1 }] } },
     };
-    const db = { DesignAssembly: { findOne: async ({ where }) => assemblyByPart[where.partID] || null } };
+    const db = { DesignCADModel: { findOne: async ({ where }) => assemblyByPart[where.partID] || null } };
 
     await expect(svc.assertAcyclic(assemblyByPart[1], db)).rejects.toThrow(/circular/i);
   });

@@ -35,14 +35,14 @@ describe('assemblySerializer round-trip (REQ — VCS binding)', () => {
   });
 });
 
-describe('Assembly version control (REQ 750 VCS)', () => {
+describe('Assembly version control (REQ 750 VCS — unified cad-model surface)', () => {
   it('seeds an initial commit on create', async () => {
     const auth = await authenticatedRequest();
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
     expect(asm.body.baseCommitHash).toBeTruthy();
 
-    const commits = await auth.get(`/api/design/assembly/${asm.body.id}/commits`);
+    const commits = await auth.get(`/api/design/cad-model/${asm.body.id}/commits`);
     expect(commits.status).toBe(200);
     expect(commits.body.length).toBe(1);
   });
@@ -55,21 +55,27 @@ describe('Assembly version control (REQ 750 VCS)', () => {
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
     const id = asm.body.id;
 
-    const co = await auth.post(`/api/design/assembly/${id}/checkout`).send({});
+    // `main` is protected on the unified surface — work on a draft branch.
+    await auth.post(`/api/design/cad-model/${id}/branches`).send({ name: 'draft/01' });
+    await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'draft/01' });
+
+    const co = await auth.post(`/api/design/cad-model/${id}/checkout`).send({});
     expect(co.status).toBe(200);
     expect(co.body.lockedByUserID).toBe(auth.user.id);
 
     await auth.post(`/api/design/assembly/${id}/instances`).send({ partID: c1.id });
-    const ci = await auth.post(`/api/design/assembly/${id}/checkin`).send({ message: 'add comp1' });
+    const ci = await auth.post(`/api/design/cad-model/${id}/checkin`).send({ message: 'add comp1' });
     expect(ci.status).toBe(200);
     expect(ci.body.commitHash).toBeTruthy();
 
-    const commits = await auth.get(`/api/design/assembly/${id}/commits`);
+    const commits = await auth.get(`/api/design/cad-model/${id}/commits`);
     expect(commits.body.length).toBe(2); // initial + checkin
 
-    // Add a second component then undo — it should roll back to the checked-in state.
+    // Check-in released the lock; check out again, add a second component, then
+    // undo — it should roll back to the checked-in state.
+    await auth.post(`/api/design/cad-model/${id}/checkout`).send({});
     await auth.post(`/api/design/assembly/${id}/instances`).send({ partID: c2.id });
-    const undo = await auth.post(`/api/design/assembly/${id}/undo-checkout`).send({});
+    const undo = await auth.post(`/api/design/cad-model/${id}/undo-checkout`).send({});
     expect(undo.status).toBe(200);
     expect(undo.body.assemblyDoc.instances).toHaveLength(1); // comp2 discarded
     expect(undo.body.lockedByUserID).toBeNull();
@@ -79,7 +85,7 @@ describe('Assembly version control (REQ 750 VCS)', () => {
     const auth = await authenticatedRequest();
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
-    const res = await auth.post(`/api/design/assembly/${asm.body.id}/checkin`).send({ message: 'x' });
+    const res = await auth.post(`/api/design/cad-model/${asm.body.id}/checkin`).send({ message: 'x' });
     expect(res.status).toBe(423);
   });
 });

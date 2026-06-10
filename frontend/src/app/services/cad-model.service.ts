@@ -213,9 +213,20 @@ export class CadModelService {
     return this.http.post<CadModel>(`${this.apiUrl}/${id}/rebase`, {});
   }
 
-  /** Merge main into the current branch, applying the selected branch features + sketches. */
-  reconcile(id: number, featureIds: string[], sketchIds: string[] = []): Observable<CadModel> {
-    return this.http.post<CadModel>(`${this.apiUrl}/${id}/reconcile`, { featureIds, sketchIds });
+  /** Merge main into the current branch, applying the selected branch changes —
+   * features + sketches for part CAD, or instances + mates for assemblies. */
+  reconcile(
+    id: number,
+    sel: string[] | { featureIds?: string[]; sketchIds?: string[]; instanceIds?: string[]; mateIds?: string[] },
+    sketchIds: string[] = [],
+  ): Observable<CadModel> {
+    const body = Array.isArray(sel) ? { featureIds: sel, sketchIds } : sel;
+    return this.http.post<CadModel>(`${this.apiUrl}/${id}/reconcile`, body);
+  }
+
+  /** The branch's changes vs main (assembly merge picker): instance/mate ids. */
+  reconcileChanges(id: number): Observable<{ changes: Array<{ kind: string; id: string }> }> {
+    return this.http.get<{ changes: Array<{ kind: string; id: string }> }>(`${this.apiUrl}/${id}/reconcile/preview`);
   }
 
   /** Geometry of the hypothetical merge result (main + selected branch features +

@@ -150,8 +150,8 @@ export class AssemblyEditController {
     this.partID.set(id);
     this.loading.set(true);
     this.cadApi.listPartsWithCad().subscribe({ next: (r) => this.partsWithCad.set(r), error: () => {} });
-    this.assemblyApi.getActiveByPart(id).subscribe({
-      next: (a) => { this.assembly.set(a); this.loading.set(false); this.regenerate(); },
+    this.cadApi.getActiveByPart(id).subscribe({
+      next: (m) => { this.assembly.set(m.isAssembly ? (m as Assembly) : null); this.loading.set(false); this.regenerate(); },
       error: (e) => {
         this.loading.set(false);
         if (e?.status !== 404) this.errors.showError(e?.error?.error || 'Failed to load assembly');
@@ -402,34 +402,6 @@ export class AssemblyEditController {
   }
   interferenceCount(): number { return (this.interferencePairs() || []).filter((p) => p.interfering !== false).length; }
   instName(id: string): string { return this.partName(this.instanceOf(id)?.partID ?? 0); }
-
-  // ── version control ─────────────────────────────────────────────────────────
-  checkout() {
-    const a = this.assembly();
-    if (!a) return;
-    this.assemblyApi.checkout(a.id).subscribe({
-      next: (asm) => this.assembly.set(asm),
-      error: (e) => this.errors.showError(e?.error?.error || 'Failed to check out'),
-    });
-  }
-  checkin() {
-    const a = this.assembly();
-    if (!a) return;
-    const message = window.prompt('Check-in message:', '') ?? '';
-    this.assemblyApi.checkin(a.id, message).subscribe({
-      next: (res) => this.assembly.set(res.model),
-      error: (e) => this.errors.showError(e?.error?.error || 'Failed to check in'),
-    });
-  }
-  undoCheckout() {
-    const a = this.assembly();
-    if (!a) return;
-    if (!window.confirm('Discard all changes since check-out?')) return;
-    this.assemblyApi.undoCheckout(a.id).subscribe({
-      next: (asm) => { this.assembly.set(asm); this.regenerate(); },
-      error: (e) => this.errors.showError(e?.error?.error || 'Failed to undo checkout'),
-    });
-  }
 
   exportStep() {
     const a = this.assembly();

@@ -1,4 +1,5 @@
 const { authenticatedRequest, createTestPart, createTestUser } = require('../../helpers');
+const db = require('../../../models');
 
 describe('Assembly CRUD (REQ 750)', () => {
   it('creates an assembly for an existing part', async () => {
@@ -24,6 +25,29 @@ describe('Assembly CRUD (REQ 750)', () => {
 
     const res = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
     expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already has a CAD model or assembly/i);
+  });
+
+  it('rejects creating a CAD model for an Assembly-category part (422 category guard)', async () => {
+    const auth = await authenticatedRequest();
+    const part = await createTestPart({ partCategoryID: 4 }); // Assembly category
+    const res = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({});
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/create an assembly instead/i);
+  });
+
+  it('rejects creating an assembly for a part that already has a CAD model (409)', async () => {
+    const auth = await authenticatedRequest();
+    const part = await createTestPart({ partCategoryID: 1 });
+    const cad = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({});
+    expect(cad.status).toBe(201);
+    // Flip the part into the Assembly category so the request reaches the
+    // one-design-row-per-part conflict check (not the category guard).
+    await db.Part.update({ partCategoryID: 4 }, { where: { id: part.id } });
+
+    const res = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already has a CAD model or assembly/i);
   });
 
   it('returns 404 for a non-existent part', async () => {
@@ -73,6 +97,11 @@ describe('Assembly CRUD (REQ 750)', () => {
     const part = await createTestPart({ partCategoryID: 4 });
     const created = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
 
+    // History rows live in DesignCADModelHistory, served by the same route.
+    const before = await auth.get(`/api/design/assembly/${created.body.id}/history`);
+    expect(before.status).toBe(200);
+    expect(before.body.some((h) => h.changeType === 'created' && h.cadModelID === created.body.id)).toBe(true);
+
     const del = await auth.delete(`/api/design/assembly/${created.body.id}`);
     expect(del.status).toBe(204);
 
@@ -85,14 +114,17 @@ describe('Assembly CRUD (REQ 750)', () => {
     expect(history.status).toBe(404);
   });
 
-  it('appears in the parts-with-assembly landing list', async () => {
+  it('appears in the unified parts-with-cad landing list flagged as an assembly', async () => {
     const auth = await authenticatedRequest();
     const part = await createTestPart({ partCategoryID: 4 });
     await auth.post(`/api/design/assembly/by-part/${part.id}`).send({ name: 'Landing Asm' });
 
-    const list = await auth.get('/api/design/assembly/parts-with-assembly');
+    const list = await auth.get('/api/design/cad-model/parts-with-cad');
     expect(list.status).toBe(200);
-    expect(list.body.some((a) => a.partID === part.id)).toBe(true);
+    const row = list.body.find((a) => a.partID === part.id);
+    expect(row).toBeDefined();
+    expect(row.isAssembly).toBe(true);
+    expect(row.instanceCount).toBe(0);
   });
 
   it('requires cad.read to fetch (403 without permission)', async () => {

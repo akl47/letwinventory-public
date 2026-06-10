@@ -134,14 +134,20 @@ async function commitDiff(repo, commitHashA, commitHashB, db) {
 
 /** Diff the live working copy against its base commit (the last check-in) — the
  * uncommitted changes. Serializes the working doc to a tree (deduped objects,
- * same work as check-in minus the commit) and tree-diffs it against the base. */
-async function workingDiff(model, db) {
-  const repo = await repoForModel(model, db);
-  const workTree = await cadSerialize(repo, {
-    featureTree: model.featureTree,
-    sketchDoc: model.sketchDoc,
-    equations: model.equations || { entries: {} },
-  }, db);
+ * same work as check-in minus the commit) and tree-diffs it against the base.
+ * Document-agnostic via an optional `binding = { repoFor, serialize, docOf }`
+ * (defaults = CAD); the assembly binding passes its own trio, and
+ * attachEntryDetail already renders instance:/mate: entries. */
+async function workingDiff(model, db, binding = null) {
+  const repoFor = (binding && binding.repoFor) || repoForModel;
+  const serialize = (binding && binding.serialize) || cadSerialize;
+  const docOf = (binding && binding.docOf) || ((m) => ({
+    featureTree: m.featureTree,
+    sketchDoc: m.sketchDoc,
+    equations: m.equations || { entries: {} },
+  }));
+  const repo = await repoFor(model, db);
+  const workTree = await serialize(repo, docOf(model), db);
   const base = model.baseCommitHash ? await vcs.getCommit(repo, model.baseCommitHash, db) : null;
   const entries = await attachEntryDetail(repo, await treeDiff(repo, base && base.treeHash, workTree, db), db);
   return { baseCommitHash: model.baseCommitHash || null, entries };

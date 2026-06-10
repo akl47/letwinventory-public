@@ -216,7 +216,6 @@ afterEach(async () => {
     // keeps the cleanup explicit + insulates against accidental ordering
     // flips in future edits.
     'DesignBRepCache', 'DesignCADModelHistory', 'DesignCADModel',
-    'DesignAssemblyHistory', 'DesignAssembly',
     'DesignFeatureHistory', 'DesignFeature',
     'RequirementHistory', 'DesignRequirement', 'RequirementCategory',
     'HarnessRevisionHistory', 'WireHarness', 'WireEnd',

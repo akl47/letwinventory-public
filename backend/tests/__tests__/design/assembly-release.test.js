@@ -7,10 +7,10 @@ describe('Assembly release (shared release/freeze parity)', () => {
     const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
     const id = asm.body.id;
 
-    await auth.post(`/api/design/assembly/${id}/branches`).send({ name: 'draft/01' });
-    await auth.post(`/api/design/assembly/${id}/switch-branch`).send({ name: 'draft/01' });
+    await auth.post(`/api/design/cad-model/${id}/branches`).send({ name: 'draft/01' });
+    await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'draft/01' });
 
-    const rel = await auth.post(`/api/design/assembly/${id}/release`).send({});
+    const rel = await auth.post(`/api/design/cad-model/${id}/release`).send({});
     expect(rel.status).toBe(200);
     expect(rel.body.revision).toBe('01');
     expect(rel.body.model.branchName).toBe('main');
@@ -22,7 +22,7 @@ describe('Assembly release (shared release/freeze parity)', () => {
     const auth = await authenticatedRequest();
     const part = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
-    const rel = await auth.post(`/api/design/assembly/${asm.body.id}/release`).send({});
+    const rel = await auth.post(`/api/design/cad-model/${asm.body.id}/release`).send({});
     expect(rel.status).toBe(409);
   });
 
@@ -30,7 +30,7 @@ describe('Assembly release (shared release/freeze parity)', () => {
     const auth = await authenticatedRequest();
     const part = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
-    const res = await auth.get(`/api/design/assembly/${asm.body.id}/release/step`);
+    const res = await auth.get(`/api/design/cad-model/${asm.body.id}/release/step`);
     expect(res.status).toBe(409);
   });
 });

@@ -18,7 +18,7 @@ import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import { CadModelService } from '../../../services/cad-model.service';
 import { InventoryService } from '../../../services/inventory.service';
 import { Part } from '../../../models/part.model';
-import { CadModel, CadCommit, CadBranch, CadCommitDiff, CadWorkflow, CadDefaultView, CadCommitGeometry } from '../../../models/cad-model.model';
+import { CadModel, CadCommit, CadBranch, CadCommitDiff, CadWorkflow, CadDefaultView, CadCommitGeometry, PartWithCadSummary } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { CadStreamService, type CadStreamEvent } from '../../../services/cad-stream.service';
@@ -52,13 +52,14 @@ import { circularTransforms, linearTransforms } from '../../../cad/lib/pattern';
 import { inferLineEnd, inferHoverOnCurve } from '../../../cad/lib/inference';
 import { allCurveIntersections, angleInArcSweep } from '../../../cad/lib/geometry';
 import { findPoint as findPt } from '../../../cad/lib/types';
+import { buildCrossPartExternalRef, type CrossPartFallback } from '../../../cad/lib/crossPartRef';
 import { computeFilletGeometry, computeFilletLineArcGeometry, computeChamferGeometry } from '../../../cad/lib/sketchEditOps';
 import { chooseTwoPointDimType, twoPointDimValue } from '../../../cad/lib/dimensions';
 import { type EquationDoc, resolveEquations, evalExpression, setEquation, removeEquation } from '../../../cad/lib/equations';
 import { DimInputComponent } from '../dim-input/dim-input.component';
 import { CadEquationsPanelComponent } from '../cad-equations-panel/cad-equations-panel.component';
 import { AssemblyEditController } from '../assembly-editor/assembly-edit.controller';
-import { AssemblyService } from '../../../services/assembly.service';
+import type { Assembly } from '../../../cad/lib/assembly.types';
 
 /** Snap kinds. Drives the viewer's snap-indicator glyph: square for
  * endpoint (existing point), triangle for midpoint, X for intersection,
@@ -121,6 +122,14 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   *ngIf="assemblyMode()"
                   [class.active]="activeTab() === 'assembly'"
                   (click)="setActiveTab('assembly')">Assembly</button>
+          <button class="tab" data-testid="tab-visualize"
+                  *ngIf="assemblyMode()"
+                  [class.active]="activeTab() === 'visualize'"
+                  (click)="setActiveTab('visualize')">Visualize</button>
+          <button class="tab" data-testid="tab-analyze"
+                  *ngIf="assemblyMode()"
+                  [class.active]="activeTab() === 'analyze'"
+                  (click)="setActiveTab('analyze')">Analyze</button>
         </div>
         <div class="ribbon-content">
           <!-- File tab: version control + release (Phase 1-4). -->
@@ -553,6 +562,17 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <div class="ribbon-divider"></div>
             <div class="ribbon-group">
               <div class="ribbon-group-row">
+                <button class="ribbon-button" (click)="asm.exportStep()" matTooltip="Export STEP"><mat-icon>category</mat-icon><span class="ribbon-label">STEP</span></button>
+                <button class="ribbon-button" (click)="asm.exportStl()" matTooltip="Export STL"><mat-icon>view_in_ar</mat-icon><span class="ribbon-label">STL</span></button>
+              </div>
+              <div class="ribbon-group-label">Export</div>
+            </div>
+          </div>
+
+          <!-- Visualize ribbon (assembly) -->
+          <div class="ribbon-pane" [hidden]="activeTab() !== 'visualize'" *ngIf="assemblyMode()">
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
                 <button class="ribbon-button" (click)="asm.autoExplode()" matTooltip="Auto exploded view">
                   <mat-icon>open_in_full</mat-icon><span class="ribbon-label">Explode</span>
                 </button>
@@ -565,7 +585,10 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               </div>
               <div class="ribbon-group-label">Visualize</div>
             </div>
-            <div class="ribbon-divider"></div>
+          </div>
+
+          <!-- Analyze ribbon (assembly) -->
+          <div class="ribbon-pane" [hidden]="activeTab() !== 'analyze'" *ngIf="assemblyMode()">
             <div class="ribbon-group">
               <div class="ribbon-group-row">
                 <button class="ribbon-button" [disabled]="asm.analysisBusy()" (click)="asm.checkInterference()" matTooltip="Detect interfering components">
@@ -582,14 +605,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 </button>
               </div>
               <div class="ribbon-group-label">Analyze</div>
-            </div>
-            <div class="ribbon-divider"></div>
-            <div class="ribbon-group">
-              <div class="ribbon-group-row">
-                <button class="ribbon-button" (click)="asm.exportStep()" matTooltip="Export STEP"><mat-icon>category</mat-icon><span class="ribbon-label">STEP</span></button>
-                <button class="ribbon-button" (click)="asm.exportStl()" matTooltip="Export STL"><mat-icon>view_in_ar</mat-icon><span class="ribbon-label">STL</span></button>
-              </div>
-              <div class="ribbon-group-label">Export</div>
             </div>
           </div>
         </div>
@@ -619,7 +634,10 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <input class="asm-input" [ngModel]="asm.partSearch()" (ngModelChange)="asm.partSearch.set($event)" placeholder="Search parts with CAD" />
                 <div class="asm-scroll">
                   @for (p of asm.filteredParts(); track p.partID) {
-                    <button class="asm-row" (click)="asm.insert(p.partID)"><mat-icon>memory</mat-icon> {{ p.part?.name }}</button>
+                    <button class="asm-row" (click)="asm.insert(p.partID)">
+                      <span class="asm-row-line"><mat-icon>memory</mat-icon> {{ p.part?.name }}</span>
+                      @if (partThumb(p)) { <img class="asm-part-thumb" [src]="partThumb(p)" alt="" loading="lazy" /> }
+                    </button>
                   }
                   @if (asm.filteredParts().length === 0) { <div class="asm-hint">No parts with CAD models.</div> }
                 </div>
@@ -3485,7 +3503,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <button class="btn" data-testid="exit-sketch" (click)="onExitSketch()">Exit sketch</button>
             </div>
 
-            <div class="quick-start" *ngIf="mode() === 'idle' && activeSketchId() === null && featureTree().features.length === 1 && sketchCount() === 0">
+            <div class="quick-start" *ngIf="!assemblyMode() && mode() === 'idle' && activeSketchId() === null && featureTree().features.length === 1 && sketchCount() === 0">
               <h3>To get started</h3>
               <ol>
                 <li>Click <strong>Sketch</strong> on the Features ribbon, then click a datum plane</li>
@@ -3547,7 +3565,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   </ul>
                   <div class="vcs-branch-actions">
                     <button class="btn" (click)="onCreateBranch()">+ New branch</button>
-                    <button class="btn" (click)="onCherryPick()">Cherry-pick…</button>
+                    <button class="btn" *ngIf="!assemblyMode()" (click)="onCherryPick()">Cherry-pick…</button>
                   </div>
                 </div>
                 <div class="vcs-commits-panel" data-testid="vcs-compare-panel" *ngIf="showCompare()">
@@ -3573,7 +3591,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                         [class.diff-modified]="e.status==='modified'">
                       <span class="vcs-commit-msg">{{ e.name }}</span>
                       <span class="vcs-commit-hash">{{ e.status }}</span>
-                      <button class="vcs-mini" *ngIf="e.name.startsWith('feature:') && (e.status==='added' || e.status==='modified')"
+                      <button class="vcs-mini" *ngIf="!assemblyMode() && e.name.startsWith('feature:') && (e.status==='added' || e.status==='modified')"
                               (click)="cherryPickEntry(e.name)">cherry-pick</button>
                     </li>
                   </ul>
@@ -4070,8 +4088,12 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .asm-x { background: none; border: none; color: #aaa; cursor: pointer; font-size: 14px; }
     .asm-input, .asm-section select.asm-input { width: 100%; background: rgba(255,255,255,0.08); color: #ddd; border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 3px 6px; font-size: 12px; margin-bottom: 4px; }
     .asm-scroll { max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; }
-    .asm-row { display: flex; align-items: center; gap: 6px; background: none; border: none; color: #ddd; padding: 4px; cursor: pointer; text-align: left; font-size: 12px; }
+    .asm-row { display: flex; flex-direction: column; align-items: stretch; gap: 4px; background: none; border: none; color: #ddd; padding: 4px; cursor: pointer; text-align: left; font-size: 12px; width: 100%; }
     .asm-row:hover { background: rgba(255,255,255,0.07); }
+    .asm-row-line { display: flex; align-items: center; gap: 6px; }
+    /* Part image preview, revealed on hover of the insert-picker row. */
+    .asm-part-thumb { display: none; max-width: 100%; max-height: 120px; object-fit: contain; margin-top: 2px; border-radius: 3px; background: #1b1b1b; border: 1px solid #3a3a3a; }
+    .asm-row:hover .asm-part-thumb { display: block; }
     .asm-row mat-icon, .asm-mi, .asm-pin { font-size: 16px; width: 16px; height: 16px; }
     .asm-tree { list-style: none; margin: 0 0 4px; padding: 0; }
     .asm-tree li { display: flex; align-items: center; gap: 4px; padding: 2px 2px; border-radius: 4px; cursor: pointer; }
@@ -4121,18 +4143,22 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // the viewer renders the composed assembly geometry. All assembly state/ops
   // live in the injected controller.
   asm = inject(AssemblyEditController);
-  assemblyApi = inject(AssemblyService);
   assemblyMode = signal<boolean>(false);
   private _asmVcsLoaded = false;
 
-  // Refresh the editor + asm state after an assembly VCS action.
-  private refreshAssembly(updated: any) {
-    this.asm.assembly.set(updated);
-    this.model.set(updated);
-    this.loadCommits();
-    this.loadWorkflow();
-    this.loadBranches();
-    this.asm.regenerate();
+  // Apply an updated model coming back from a (unified) VCS call. In assembly
+  // mode the assembly signal is the source of truth — the constructor's mirror
+  // effect syncs `model()` from it — and the composed geometry is re-fetched.
+  // In part-CAD mode, `bootstrap` reloads the whole editor doc (branch switch,
+  // undo checkout, release) while `set` just refreshes the model row.
+  private applyModelUpdate(m: CadModel, mode: 'set' | 'bootstrap' = 'set'): void {
+    if (this.assemblyMode()) {
+      this.asm.assembly.set(m as unknown as Assembly);
+      this.asm.regenerate();
+      return;
+    }
+    if (mode === 'bootstrap') this.bootstrap(m);
+    else this.model.set(m);
   }
 
   model = signal<CadModel | null>(null);
@@ -4555,7 +4581,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   pendingExtrude = signal<boolean>(false);
   // REQ 616 — ribbon tab. Auto-switches to 'sketch' when activeSketchId becomes
   // non-null and back to 'features' when it clears; user can manually override.
-  activeTab = signal<'file' | 'features' | 'sketch' | 'assembly'>('features');
+  activeTab = signal<'file' | 'features' | 'sketch' | 'assembly' | 'visualize' | 'analyze'>('features');
   // REQ 619 — display mode for the 3D viewer (session state, not persisted).
   displayMode = signal<DisplayMode>('visible-edges');
   // REQ 623 — feature multi-select. Updated by viewer's featureClick event.
@@ -6171,7 +6197,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   // REQ 616 — manual tab switch from the ribbon. Independent of activeSketchId.
-  setActiveTab(t: 'file' | 'features' | 'sketch' | 'assembly') { this.activeTab.set(t); }
+  setActiveTab(t: 'file' | 'features' | 'sketch' | 'assembly' | 'visualize' | 'analyze') { this.activeTab.set(t); }
+
+  /** File-data URL for an insert-picker part's image, or null when it has none.
+   * Shown as a hover preview in the assembly insert sidebar. */
+  partThumb(p: PartWithCadSummary): string | null {
+    const fid = p.part?.imageFileID;
+    return fid != null ? `${environment.apiUrl}/files/${fid}/data` : null;
+  }
 
   // REQ 623 — feature click from the 3D viewer. Tracks the last clicked face
   // for REQ 625 (sketch on a flat face) but defers selection-set updates to
@@ -10320,10 +10353,31 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         {
           id, type: 'on-edge',
           targets: [{ entityId }],
-          externalRef: { featureId, edgeId },
+          externalRef: { scope: 'local', featureId, edgeId },
         },
       ],
     };
+  }
+
+  /** Cross-part Convert Entities (REQ 775): attach an on-edge constraint linking a
+   * sketch entity to ANOTHER component's edge, picked in the assembly. `scopedId`
+   * is the composed-geometry id `instanceId::edgeId`; `sourcePartId` is that
+   * instance's Part. The relative transform is resolved live from the active
+   * assembly at regen (Phase B.5); standalone regen uses the cached snapshot.
+   * Returns the state unchanged if not in an assembly or the pick isn't
+   * cross-instance. This is the integration point for the in-context pick flow. */
+  tagCrossPartEdge(state: SketchState, entityId: string, scopedId: string, sourcePartId: number, fallback?: CrossPartFallback): SketchState {
+    const asm = this.asm.assembly();
+    if (!asm) return state;
+    const externalRef = buildCrossPartExternalRef({
+      scopedId, sourcePartId,
+      definingAssemblyId: asm.id,
+      definingAssemblyRepoId: String(asm.id),
+      fallback,
+    });
+    if (!externalRef) return state; // same-part pick — caller should use _tagProjected
+    const id = `on-edge-xp-${entityId}-${Date.now()}`;
+    return { ...state, constraints: [...state.constraints, { id, type: 'on-edge', targets: [{ entityId }], externalRef }] };
   }
 
   /** Detect "closed circular polyline lying on (or near) the sketch
@@ -10425,9 +10479,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const projectedPairs: Array<{ entity: typeof sketch.state.entities[number]; edgeId: string }> = [];
       for (const c of sketch.state.constraints) {
         if (c.type !== 'on-edge' || !c.externalRef) continue;
+        // Cross-part refs are resolved by the in-context resolver, not this
+        // intra-part edge-index re-projection. Narrows to the local variant.
+        if (c.externalRef.scope === 'cross-part') continue;
+        const edgeId = c.externalRef.edgeId;
         for (const t of c.targets) {
           const e = entitiesById.get(t.entityId);
-          if (e) projectedPairs.push({ entity: e, edgeId: c.externalRef.edgeId });
+          if (e) projectedPairs.push({ entity: e, edgeId });
         }
       }
       if (projectedPairs.length === 0) {
@@ -12322,15 +12380,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!window.confirm(
       'Promote to a production release?\n\nThis creates a letter revision with the '
       + 'same geometry, locks the source, and requires approval.')) return;
-    if (this.assemblyMode()) {
-      this.assemblyApi.productionRelease(m.id).subscribe({
-        next: res => this.router.navigate(['/parts', res.model.partID, 'assembly', 'editor']),
-        error: e => this.errors.showError(e?.error?.error || 'Production release failed'),
-      });
-      return;
-    }
     this.cadApi.productionRelease(m.id).subscribe({
-      next: res => this.router.navigate(['/parts', res.model.partID, 'cad', 'editor'], { queryParams: { revisionID: res.prodModelID } }),
+      next: res => {
+        if (this.assemblyMode()) this.router.navigate(['/parts', res.model.partID, 'assembly', 'editor']);
+        else this.router.navigate(['/parts', res.model.partID, 'cad', 'editor'], { queryParams: { revisionID: res.prodModelID } });
+      },
       error: err => this.errors.showError(err?.error?.error || 'Production release failed'),
     });
   }
@@ -12343,8 +12397,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   downloadReleaseStep() {
     const m = this.model(); if (!m) return;
-    const obs = this.assemblyMode() ? this.assemblyApi.releaseStep(m.id) : this.cadApi.exportReleaseStep(m.id);
-    obs.subscribe({
+    this.cadApi.exportReleaseStep(m.id).subscribe({
       next: step => this._downloadBlob(new Blob([step], { type: 'application/step' }), `${this._releaseFileBase()}.step`),
       error: err => this.errors.showError(err?.error?.error || 'STEP download failed'),
     });
@@ -12352,8 +12405,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   downloadReleaseStl() {
     const m = this.model(); if (!m) return;
-    const obs = this.assemblyMode() ? this.assemblyApi.releaseStl(m.id) : this.cadApi.exportReleaseStl(m.id);
-    obs.subscribe({
+    this.cadApi.exportReleaseStl(m.id).subscribe({
       next: blob => this._downloadBlob(blob, `${this._releaseFileBase()}.stl`),
       error: err => this.errors.showError(err?.error?.error || 'STL download failed'),
     });
@@ -12363,14 +12415,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onCheckout() {
     const m = this.model(); if (!m) return;
-    if (this.assemblyMode()) {
-      if (this.onMainBranch()) { this.onCreateBranch(); return; }
-      this.assemblyApi.checkout(m.id).subscribe({
-        next: u => this.refreshAssembly(u),
-        error: e => this.errors.showError(e?.error?.error || 'Checkout failed'),
-      });
-      return;
-    }
     // main is protected — there is nothing to "check out" on it. Editing means
     // branching a new draft off main, which onCreateBranch does (create + switch
     // + checkout + open).
@@ -12380,8 +12424,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         // Checking out means editing the live working copy — never stay in a
         // historical (?commit=) view, which forces read-only and persists
         // across a refresh. Drop the param + reload the live doc.
-        if (this.route.snapshot.queryParamMap.get('commit')) { this.exitCommitView(); return; }
-        this.model.set(updated);
+        if (!this.assemblyMode() && this.route.snapshot.queryParamMap.get('commit')) { this.exitCommitView(); return; }
+        this.applyModelUpdate(updated);
       },
       error: err => this.errors.showError(err?.error?.error || 'Checkout failed'),
     });
@@ -12407,14 +12451,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onCheckin() {
     const m = this.model(); if (!m) return;
-    if (this.assemblyMode()) {
-      const msg = window.prompt('Check-in message:', '') ?? '';
-      this.assemblyApi.checkin(m.id, msg).subscribe({
-        next: r => this.refreshAssembly(r.model),
-        error: e => this.errors.showError(e?.error?.error || 'Check-in failed'),
-      });
-      return;
-    }
     // Dialog shows the uncommitted changes (working copy vs last check-in) and
     // collects a message; returns null on cancel.
     this.dialog.open(CadCheckinDialogComponent, { data: { modelId: m.id }, width: '460px' })
@@ -12422,9 +12458,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         if (!result) return;
         // Capture a low-res image of the model from its default view so the
         // version history can show this commit instantly (REQ 710). Best-effort.
+        // (The backend ignores thumbnails for assemblies.)
         const thumbnail = this.viewerRef()?.captureThumbnail() ?? null;
         this.cadApi.checkin(m.id, result.message, thumbnail).subscribe({
-          next: res => { this.model.set(res.model); this.loadCommits(); },
+          next: res => { this.applyModelUpdate(res.model); this.loadCommits(); },
           error: err => this.errors.showError(err?.error?.error || 'Check-in failed'),
         });
       });
@@ -12452,25 +12489,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       );
       if (!ok) return;
     }
-    if (this.assemblyMode()) {
-      this.assemblyApi.undoCheckout(m.id).subscribe({
-        next: u => this.refreshAssembly(u),
-        error: e => this.errors.showError(e?.error?.error || 'Undo checkout failed'),
-      });
-      return;
-    }
     this.cadApi.undoCheckout(m.id).subscribe({
-      next: updated => { this.bootstrap(updated); this.loadCommits(); this.loadWorkflow(); },
+      next: updated => { this.applyModelUpdate(updated, 'bootstrap'); this.loadCommits(); this.loadWorkflow(); },
       error: err => this.errors.showError(err?.error?.error || 'Undo checkout failed'),
     });
   }
 
   loadCommits() {
     const m = this.model(); if (!m) return;
-    if (this.assemblyMode()) {
-      this.assemblyApi.getCommits(m.id).subscribe({ next: list => this.commits.set(list), error: () => this.commits.set([]) });
-      return;
-    }
     this.cadApi.getCommits(m.id).subscribe({
       next: list => this.commits.set(list),
       error: () => this.commits.set([]),
@@ -12501,10 +12527,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   loadBranches() {
     const m = this.model(); if (!m) return;
-    if (this.assemblyMode()) {
-      this.assemblyApi.listBranches(m.id).subscribe({ next: list => this.branches.set(list), error: () => this.branches.set([]) });
-      return;
-    }
     this.cadApi.listBranches(m.id).subscribe({
       next: list => this.branches.set(list),
       error: () => this.branches.set([]),
@@ -12516,20 +12538,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // Switching to the new branch loads its head doc and discards the working
     // copy — refuse if there are uncommitted edits.
     if (this.isDirty()) { this.errors.showError('Check in your changes before branching'); return; }
-    if (this.assemblyMode()) {
-      const bn = window.prompt('New branch name:', ''); if (!bn) return;
-      this.assemblyApi.createBranch(m.id, bn).subscribe({
-        next: () => this.assemblyApi.switchBranch(m.id, bn).subscribe({
-          next: () => this.assemblyApi.checkout(m.id).subscribe({
-            next: u => { this.refreshAssembly(u); this.showBranches.set(false); },
-            error: e => this.errors.showError(e?.error?.error || 'Checkout after branch failed'),
-          }),
-          error: e => this.errors.showError(e?.error?.error || 'Switch to new branch failed'),
-        }),
-        error: e => this.errors.showError(e?.error?.error || 'Create branch failed'),
-      });
-      return;
-    }
     const name = window.prompt('New branch name:', '');
     if (!name) return;
     // Create the branch, switch the working copy onto it, then check it out so
@@ -12538,14 +12546,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       next: () => this.cadApi.switchBranch(m.id, name).subscribe({
         next: switched => this.cadApi.checkout(m.id).subscribe({
           next: updated => {
-            this.bootstrap(updated);
+            this.applyModelUpdate(updated, 'bootstrap');
             this.loadCommits(); this.loadWorkflow();
             this.showBranches.set(false);
             this.errors.showSuccess(`Created and switched to branch "${name}"`);
           },
           // Branch + switch already applied; the working copy is on the new
           // branch even if acquiring the lock failed — degrade to a warning.
-          error: err => { this.bootstrap(switched); this.loadBranches(); this.showBranches.set(false); this.errors.showError(err?.error?.error || `On branch "${name}" but checkout failed`); },
+          error: err => { this.applyModelUpdate(switched, 'bootstrap'); this.loadBranches(); this.showBranches.set(false); this.errors.showError(err?.error?.error || `On branch "${name}" but checkout failed`); },
         }),
         error: err => this.errors.showError(err?.error?.error || 'Switch to new branch failed'),
       }),
@@ -12555,25 +12563,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onSwitchBranch(name: string) {
     const m = this.model(); if (!m || name === this.currentBranch()) return;
-    if (this.assemblyMode()) {
-      this.assemblyApi.switchBranch(m.id, name).subscribe({
-        next: u => { this.refreshAssembly(u); this.showBranches.set(false); },
-        error: e => this.errors.showError(e?.error?.error || 'Switch branch failed'),
-      });
-      return;
-    }
     this.cadApi.switchBranch(m.id, name).subscribe({
-      next: updated => { this.bootstrap(updated); this.showBranches.set(false); },
+      next: updated => { this.applyModelUpdate(updated, 'bootstrap'); this.showBranches.set(false); },
       error: err => this.errors.showError(err?.error?.error || 'Switch branch failed'),
     });
   }
 
   onArchiveBranch(name: string) {
     const m = this.model(); if (!m) return;
-    if (this.assemblyMode()) {
-      this.assemblyApi.archiveBranch(m.id, name).subscribe({ next: () => this.loadBranches(), error: e => this.errors.showError(e?.error?.error || 'Archive branch failed') });
-      return;
-    }
     this.cadApi.archiveBranch(m.id, name).subscribe({
       next: () => this.loadBranches(),
       error: err => this.errors.showError(err?.error?.error || 'Archive branch failed'),
@@ -12599,8 +12596,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   runDiff() {
     const m = this.model(); const a = this.diffA(); const b = this.diffB();
     if (!m || !a || !b) return;
-    const obs = this.assemblyMode() ? this.assemblyApi.commitDiff(m.id, a, b) : this.cadApi.commitDiff(m.id, a, b);
-    obs.subscribe({
+    this.cadApi.commitDiff(m.id, a, b).subscribe({
       next: r => this.diffResult.set(r),
       error: err => this.errors.showError(err?.error?.error || 'Diff failed'),
     });
@@ -12621,10 +12617,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   loadWorkflow() {
     const m = this.model(); if (!m) return;
-    if (this.assemblyMode()) {
-      this.assemblyApi.getWorkflow(m.id).subscribe({ next: w => this.workflow.set(w), error: () => this.workflow.set(null) });
-      return;
-    }
     this.cadApi.getWorkflow(m.id).subscribe({
       next: w => this.workflow.set(w),
       error: () => this.workflow.set(null),
@@ -12633,17 +12625,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onWorkflowAction(action: string) {
     const m = this.model(); if (!m) return;
-    if (this.assemblyMode()) {
-      this.assemblyApi.transitionWorkflow(m.id, action).subscribe({
-        next: w => { this.workflow.set({ state: w.state, actions: w.actions }); if (w.model) this.asm.assembly.set(w.model); },
-        error: e => this.errors.showError(e?.error?.error || `Workflow ${action} failed`),
-      });
-      return;
-    }
     this.cadApi.transitionWorkflow(m.id, action).subscribe({
       next: (w: any) => {
         this.workflow.set({ state: w.state, actions: w.actions });
-        if (w.model) this.model.set(w.model);
+        if (w.model) this.applyModelUpdate(w.model);
       },
       error: err => this.errors.showError(err?.error?.error || `Workflow ${action} failed`),
     });
@@ -12653,16 +12638,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // branch). The model flips to the protected main line.
   onReleaseToMain() {
     const m = this.model(); if (!m) return;
-    if (this.assemblyMode()) {
-      this.assemblyApi.release(m.id).subscribe({
-        next: r => { this.refreshAssembly(r.model); this.errors.showSuccess(`Released as Rev ${r.revision} on main`); },
-        error: e => this.errors.showError(e?.error?.error || 'Release failed'),
-      });
-      return;
-    }
     this.cadApi.release(m.id).subscribe({
       next: (r: any) => {
-        if (r.model) { this.bootstrap(r.model); this.loadCommits(); this.loadBranches(); }
+        if (r.model) { this.applyModelUpdate(r.model, 'bootstrap'); this.loadCommits(); this.loadBranches(); }
         this.loadWorkflow();
         this.errors.showSuccess(`Released as Rev ${r.revision} on main`);
       },
@@ -12677,12 +12655,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const m = this.model(); if (!m) return;
       // Merge main's latest in, keeping all of this branch's component/mate
       // changes (one-click; per-item selection is the version-history tool).
-      this.assemblyApi.reconcilePreview(m.id).subscribe({
+      this.cadApi.reconcileChanges(m.id).subscribe({
         next: ({ changes }) => {
           const instanceIds = changes.filter(c => c.kind === 'instance').map(c => c.id);
           const mateIds = changes.filter(c => c.kind === 'mate').map(c => c.id);
-          this.assemblyApi.reconcile(m.id, { instanceIds, mateIds }).subscribe({
-            next: u => { this.refreshAssembly(u); this.errors.showSuccess('Merged main into this branch'); },
+          this.cadApi.reconcile(m.id, { instanceIds, mateIds }).subscribe({
+            next: u => {
+              this.applyModelUpdate(u);
+              this.loadCommits(); this.loadBranches(); this.loadWorkflow();
+              this.errors.showSuccess('Merged main into this branch');
+            },
             error: e => this.errors.showError(e?.error?.error || 'Merge failed'),
           });
         },
