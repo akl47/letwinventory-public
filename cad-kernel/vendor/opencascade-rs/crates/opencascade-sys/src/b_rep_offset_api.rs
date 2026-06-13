@@ -1,6 +1,6 @@
 // Cache-bust marker: cxx's build.rs only invalidates on .rs source mod
 // time, not .hxx changes. Touching this file forces a rebuild when the
-// paired b_rep_offset_api.hxx changes. v8.
+// paired b_rep_offset_api.hxx changes. v13 — inner-offset prefer sharp join.
 pub use inner::*;
 
 #[cxx::bridge]
@@ -83,6 +83,21 @@ mod inner {
         pub fn try_offset_solid_inward(
             shape: &TopoDS_Shape,
             thickness: f64,
+            tolerance: f64,
+        ) -> Result<UniquePtr<TopoDS_Shape>>;
+
+        // Stage-0 "simple" shell (tried before the join pipeline):
+        // remove the closing faces to form an open shell, then
+        // BRepOffset_MakeSimpleOffset + BuildSolidFlag on it. A local
+        // face-offset-and-sew with NO global surface-surface
+        // intersection — faster and more robust than MakeThickSolidByJoin,
+        // but it doesn't resolve self-intersection, so the result is
+        // validity-gated and the caller falls back on failure. `offset`
+        // is signed (negative = inward), matching the join path.
+        pub fn try_simple_offset_shell(
+            shape: &TopoDS_Shape,
+            closing_faces: &TopTools_ListOfShape,
+            offset: f64,
             tolerance: f64,
         ) -> Result<UniquePtr<TopoDS_Shape>>;
 

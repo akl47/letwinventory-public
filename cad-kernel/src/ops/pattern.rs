@@ -108,7 +108,7 @@ pub fn build(params: &BuildPatternParams) -> Result<BuildPatternResult> {
 /// gp_Trsf construction + BRepBuilderAPI_Transform internally —
 /// see `vendor/opencascade-rs/.../shape.rs` `translate_xyz`,
 /// `rotate_around`, `mirror_plane`.
-fn apply_transform(source: &opencascade::primitives::Shape, t: &PatternTransform) -> opencascade::primitives::Shape {
+pub(crate) fn apply_transform(source: &opencascade::primitives::Shape, t: &PatternTransform) -> opencascade::primitives::Shape {
     match t {
         PatternTransform::Translate { dx, dy, dz } => source.translate_xyz(*dx, *dy, *dz),
         PatternTransform::Rotate { origin, direction, angle_rad } => {

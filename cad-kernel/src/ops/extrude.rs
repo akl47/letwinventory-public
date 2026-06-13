@@ -28,6 +28,14 @@ use crate::protocol::{
 const DEFAULT_CHORD_TOLERANCE: f64 = 0.05;
 
 pub fn build(params: &BuildExtrudeParams) -> Result<BuildExtrudeResult> {
+    // "Up To Body" / "Up To Next" end conditions: terminate the extrude against
+    // one (body) or all (next) upstream bodies so the end conforms to a real
+    // surface. Distinct enough from the blind/dir-2 prism path to live in its
+    // own builder.
+    let has_until_breps = params.until_breps.as_ref().map_or(false, |v| !v.is_empty());
+    if params.until_brep.is_some() || has_until_breps {
+        return build_up_to_body(params);
+    }
     let plane_normal = dvec3(params.plane.normal[0], params.plane.normal[1], params.plane.normal[2]);
 
     // Resolve direction 2's signed magnitude up front, so we can fold it
@@ -79,6 +87,161 @@ pub fn build(params: &BuildExtrudeParams) -> Result<BuildExtrudeResult> {
     let topology = extract_topology(&shape);
     let faces_out = tessellate_and_name(&shape, plane_origin, plane_normal, d1_signed, &params.feature_id, Some(&topology))?;
     let brep_bytes = serialize_brep(&shape);
+
+    Ok(BuildExtrudeResult {
+        brep_bytes: BASE64.encode(&brep_bytes),
+        faces: faces_out,
+        topology,
+    })
+}
+
+/// "Up To Body" / "Up To Next" extrude: extrude the profile along the plane
+/// normal (in the `flipped` direction, starting from `start_offset`) far enough
+/// to reach the target(s), subtract them, and keep the start-adjacent solid
+/// piece. With one target (`untilBrep`) this is "Up To Body"; with all upstream
+/// bodies (`untilBreps`) it is "Up To Next" — the kept piece caps at whichever
+/// body the profile reaches FIRST. The end face conforms to the body's real
+/// surface (curved/angled supported). Errors when no target is in the extrude
+/// direction or the profile doesn't fully land on one.
+fn build_up_to_body(params: &BuildExtrudeParams) -> Result<BuildExtrudeResult> {
+    // Collect all targets: the single body (Up To Body) and/or every upstream
+    // body (Up To Next). Both are subtracted; the start-adjacent piece caps at
+    // the nearest.
+    let mut targets: Vec<Shape> = Vec::new();
+    if let Some(b64) = params.until_brep.as_ref() {
+        targets.push(
+            crate::ops::shape_io::deserialize_brep_from_base64(b64)
+                .context("up-to: decode target body BREP")?,
+        );
+    }
+    if let Some(list) = params.until_breps.as_ref() {
+        for (i, b64) in list.iter().enumerate() {
+            targets.push(
+                crate::ops::shape_io::deserialize_brep_from_base64(b64)
+                    .with_context(|| format!("up-to: decode upstream body BREP #{i}"))?,
+            );
+        }
+    }
+    if targets.is_empty() {
+        return Err(anyhow!("up-to: no target body provided"));
+    }
+
+    let plane_normal =
+        dvec3(params.plane.normal[0], params.plane.normal[1], params.plane.normal[2]).normalize();
+    // Extrude direction along the normal, reversed when `flipped`. The user's
+    // Reverse toggle picks which side the target body is on.
+    let dir_sign = if params.flipped { -1.0 } else { 1.0 };
+    let dir = plane_normal * dir_sign;
+
+    // Start plane = sketch plane translated by start_offset along the normal.
+    let start_origin =
+        dvec3(params.plane.origin[0], params.plane.origin[1], params.plane.origin[2])
+            + plane_normal * params.start_offset;
+    let mut start_plane = params.plane.clone();
+    start_plane.origin = [start_origin.x, start_origin.y, start_origin.z];
+    let workplane = build_workplane(&start_plane);
+
+    // Direction sanity check: at least one target must lie on the extrude side.
+    // Vertices only bound the SIGN here — magnitude is NOT used to size the
+    // prism (a curved far surface, e.g. a D-profile arc, can reach past every
+    // vertex), so this stays correct for curved targets.
+    let mut d_far_hint = f64::MIN;
+    for t in &targets {
+        for v in &extract_topology(t).vertices {
+            let p = dvec3(v.position[0], v.position[1], v.position[2]) - start_origin;
+            d_far_hint = d_far_hint.max(p.dot(dir));
+        }
+    }
+    if d_far_hint <= 1e-6 {
+        return Err(anyhow!(
+            "Up to Body/Next: no target body lies in the extrude direction. Try Reverse."
+        ));
+    }
+
+    // Build a through-all prism (the codebase's "infinity" extent) and let the
+    // boolean subtract cap it at the body's REAL surface — so the end conforms
+    // exactly regardless of curvature, with no reliance on the body's bounds.
+    // Subtracting EVERY target means the kept start-side piece caps at the
+    // nearest one (this is what makes "Up To Next" stop at the first surface).
+    const THROUGH_ALL_LEN: f64 = 1.0e4;
+    let prism: Shape = build_prism(&workplane, &params.profile, &params.holes, dir * THROUGH_ALL_LEN)?;
+    let mut cut: Shape = prism;
+    for t in &targets {
+        cut = cut.subtract(t).shape;
+    }
+
+    // Keep the solid piece(s) adjacent to the start plane (min projection ≈ 0).
+    // The piece beyond the body (and any inside-body gap) is dropped — its near
+    // end sits at the body's far surface, far from the start.
+    let tol = 1.0e-3;
+    let mut kept: Vec<Shape> = Vec::new();
+    for solid in cut.solids() {
+        let sh: Shape = solid.into();
+        let topo = extract_topology(&sh);
+        let mut min_proj = f64::MAX;
+        for v in &topo.vertices {
+            let p = dvec3(v.position[0], v.position[1], v.position[2]) - start_origin;
+            min_proj = min_proj.min(p.dot(dir));
+        }
+        if min_proj <= tol {
+            kept.push(sh);
+        }
+    }
+    if kept.is_empty() {
+        return Err(anyhow!(
+            "Up to Body: could not build a solid up to the target body. Re-pick the target."
+        ));
+    }
+    let mut result = kept.remove(0);
+    for s in &kept {
+        result = result.union(s).shape;
+    }
+
+    // Guard: a kept piece still running the full through-all length means the
+    // boolean never capped it — the profile missed the body, or only partly
+    // covers it (the uncovered part leaves a full-length sliver). Reject so the
+    // user fixes the profile/target instead of getting a 10 m spike. Computed on
+    // the up-to piece ALONE, before any Direction-2 material is added.
+    let mut max_proj = f64::MIN;
+    for v in &extract_topology(&result).vertices {
+        let p = dvec3(v.position[0], v.position[1], v.position[2]) - start_origin;
+        max_proj = max_proj.max(p.dot(dir));
+    }
+    if max_proj > THROUGH_ALL_LEN - 1.0 {
+        return Err(anyhow!(
+            "Up to Body: the profile does not fully land on the target body. \
+             The whole profile must lie within the body's footprint along the extrude direction."
+        ));
+    }
+
+    // Direction 2 (optional): a blind / through-all prism growing the OPPOSITE
+    // way from the up-to direction, unioned in. Direction 2 itself is never an
+    // up-to condition (the UI doesn't offer it), so it's always a fixed length.
+    // The shared start-plane face becomes internal after the union.
+    if let Some(d2) = &params.direction2 {
+        const THROUGH_ALL_FALLBACK: f64 = 1.0e4;
+        let d2_mag = if d2.kind == "throughAll" { THROUGH_ALL_FALLBACK } else { d2.distance };
+        if d2_mag.abs() > 1e-9 {
+            let d2_prism = build_prism(&workplane, &params.profile, &params.holes, dir * (-d2_mag))?;
+            result = result.union(&d2_prism).shape;
+        }
+    }
+
+    let topology = extract_topology(&result);
+    let plane_origin = dvec3(params.plane.origin[0], params.plane.origin[1], params.plane.origin[2]);
+    // Naming references the original sketch-plane origin + a signed extent so
+    // the start cap classifies consistently with blind extrudes. Use the actual
+    // capped extent (max_proj), not the through-all length.
+    let signed_distance = dir_sign * max_proj;
+    let faces_out = tessellate_and_name(
+        &result,
+        plane_origin,
+        plane_normal,
+        signed_distance,
+        &params.feature_id,
+        Some(&topology),
+    )?;
+    let brep_bytes = serialize_brep(&result);
 
     Ok(BuildExtrudeResult {
         brep_bytes: BASE64.encode(&brep_bytes),
@@ -195,20 +358,14 @@ pub fn build_profile_face(workplane: &Workplane, profile: &[ProfileEdge]) -> Res
         return build_bezier_profile_face(workplane, profile);
     }
 
-    // Chord polygon — vertex per edge's start. Used for the orientation/area
-    // check and the validate_polygon defensive guards. With arcs in the loop
-    // this is an approximation, but a fine one for determining the loop's
-    // winding (the arcs deviate from the chord by O(radius - radius·cos(half-sweep)),
-    // never enough to flip the sign of the signed area).
-    let mut polygon: Vec<(f64, f64)> = profile.iter().map(|e| match e {
-        ProfileEdge::Line { start, .. } => (start.x, start.y),
-        ProfileEdge::Arc  { start, .. } => (start.x, start.y),
-        ProfileEdge::Bezier { points } => (points[0].x, points[0].y),
-        ProfileEdge::Circle { .. } => unreachable!("rejected above"),
-    }).collect();
+    // Orientation polygon (one vertex per edge start + each arc's midpoint) —
+    // used only for the winding/area test and the validate_polygon guards; the
+    // wire itself is built from the true edges below.
+    let mut polygon = orientation_polygon(profile);
     if polygon.len() < 3 {
         return Err(anyhow!(
-            "profile must have at least 3 edges to form a closed polygon, got {}",
+            "profile must have at least 3 edges to form a closed polygon \
+             (or 2 with a curved edge), got {} vertices",
             polygon.len()
         ));
     }
@@ -553,6 +710,44 @@ fn dedup_consecutive(points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     out
 }
 
+/// Orientation polygon for a profile loop: one vertex per edge start, PLUS each
+/// arc's midpoint. Used only for the winding/area test and the validate_polygon
+/// defensive guards — the wire is built from the true edges, arcs included.
+///
+/// The arc midpoint matters for two reasons: (1) it makes a 2-edge loop with a
+/// curved side — a semicircle arc + its diameter line (a D-shape), or two arcs
+/// forming a lens — yield ≥3 vertices and a non-zero area, so it clears the
+/// "≥3 vertices" guard instead of collapsing to a degenerate 2-point chord;
+/// (2) it captures the arc's bulge so the signed area faithfully reflects the
+/// loop's winding. Two straight lines between the same endpoints still collapse
+/// to 2 vertices (zero area) and are correctly rejected. A real arc's midpoint
+/// sits far enough off its chord that the collinear guard (COLLINEAR_TOL = 1e-9)
+/// never trips, so filleted/slotted profiles are unaffected.
+fn orientation_polygon(profile: &[ProfileEdge]) -> Vec<(f64, f64)> {
+    let mut polygon: Vec<(f64, f64)> = Vec::with_capacity(profile.len() * 2);
+    for e in profile {
+        match e {
+            ProfileEdge::Line { start, .. } => polygon.push((start.x, start.y)),
+            ProfileEdge::Arc { start, center, radius, start_angle, end_angle, ccw, .. } => {
+                polygon.push((start.x, start.y));
+                // Midpoint angle in the arc's own rotational sense (matches the
+                // sweep normalisation used by the edge walk in build_profile_face).
+                let mut sweep = end_angle - start_angle;
+                if *ccw {
+                    while sweep <= 0.0 { sweep += std::f64::consts::TAU; }
+                } else {
+                    while sweep >= 0.0 { sweep -= std::f64::consts::TAU; }
+                }
+                let mid = start_angle + sweep / 2.0;
+                polygon.push((center.x + radius * mid.cos(), center.y + radius * mid.sin()));
+            }
+            ProfileEdge::Bezier { points } => polygon.push((points[0].x, points[0].y)),
+            ProfileEdge::Circle { .. } => {} // a lone circle never reaches here (len==1 fast path)
+        }
+    }
+    polygon
+}
+
 /// Shoelace formula. Positive == CCW, negative == CW. Zero for degenerate.
 fn signed_polygon_area(points: &[(f64, f64)]) -> f64 {
     let n = points.len();
@@ -836,5 +1031,71 @@ mod tests {
     fn validate_accepts_ccw_rectangle() {
         let ok = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (0.0, 5.0)];
         assert!(validate_polygon(&ok).is_ok());
+    }
+
+    fn pt(x: f64, y: f64) -> Point2 { Point2 { x, y } }
+
+    #[test]
+    fn orientation_polygon_adds_arc_midpoint_for_semicircle_plus_line() {
+        use std::f64::consts::PI;
+        // Semicircle arc over the top from (10,0) ccw to (-10,0), closed by the
+        // diameter line back to (10,0). Two edges — but a real closed region.
+        let profile = vec![
+            ProfileEdge::Arc {
+                center: pt(0.0, 0.0), radius: 10.0,
+                start_angle: 0.0, end_angle: PI, ccw: true,
+                start: pt(10.0, 0.0), end: pt(-10.0, 0.0),
+            },
+            ProfileEdge::Line { start: pt(-10.0, 0.0), end: pt(10.0, 0.0) },
+        ];
+        let poly = orientation_polygon(&profile);
+        // arc.start + arc.mid + line.start = 3 vertices, midpoint at the top.
+        assert_eq!(poly.len(), 3);
+        assert!((poly[1].0 - 0.0).abs() < 1e-9 && (poly[1].1 - 10.0).abs() < 1e-9);
+        assert!(signed_polygon_area(&poly).abs() > MIN_POLY_AREA);
+        assert!(validate_polygon(&poly).is_ok());
+    }
+
+    #[test]
+    fn orientation_polygon_two_arcs_form_a_lens() {
+        // Two arcs sharing endpoints (-6,0) and (6,0), bulging opposite ways
+        // (centers at (0,∓8), r=10). Angles computed from the geometry so the
+        // start field and start_angle agree; midpoints land at (0,±2).
+        let r = 10.0_f64;
+        // Upper lobe: center (0,-8); P1=(-6,0) at atan2(8,-6), P2=(6,0) at atan2(8,6).
+        let a_s = (8.0_f64).atan2(-6.0);
+        let a_e = (8.0_f64).atan2(6.0);
+        // Lower lobe: center (0,8); P2=(6,0) at atan2(-8,6), P1=(-6,0) at atan2(-8,-6).
+        let b_s = (-8.0_f64).atan2(6.0);
+        let b_e = (-8.0_f64).atan2(-6.0);
+        let profile = vec![
+            ProfileEdge::Arc {
+                center: pt(0.0, -8.0), radius: r,
+                start_angle: a_s, end_angle: a_e, ccw: false,
+                start: pt(-6.0, 0.0), end: pt(6.0, 0.0),
+            },
+            ProfileEdge::Arc {
+                center: pt(0.0, 8.0), radius: r,
+                start_angle: b_s, end_angle: b_e, ccw: false,
+                start: pt(6.0, 0.0), end: pt(-6.0, 0.0),
+            },
+        ];
+        let poly = orientation_polygon(&profile);
+        // Each arc contributes start + midpoint = 4 vertices (a diamond).
+        assert_eq!(poly.len(), 4);
+        assert!((poly[1].0).abs() < 1e-9 && (poly[1].1 - 2.0).abs() < 1e-9);
+        assert!((poly[3].0).abs() < 1e-9 && (poly[3].1 + 2.0).abs() < 1e-9);
+        assert!(validate_polygon(&poly).is_ok());
+    }
+
+    #[test]
+    fn orientation_polygon_two_straight_lines_stay_degenerate() {
+        // Two lines retracing the same edge enclose zero area — must stay at 2
+        // vertices so build_profile_face's "< 3" guard rejects them.
+        let profile = vec![
+            ProfileEdge::Line { start: pt(0.0, 0.0), end: pt(10.0, 0.0) },
+            ProfileEdge::Line { start: pt(10.0, 0.0), end: pt(0.0, 0.0) },
+        ];
+        assert_eq!(orientation_polygon(&profile).len(), 2);
     }
 }

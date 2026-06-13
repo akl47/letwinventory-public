@@ -134,7 +134,11 @@ struct HandlerError {
 async fn run_handler(method: &str, params: Value) -> Result<Value, HandlerError> {
     debug!(method, "dispatching");
     match method {
-        "ping" => Ok(json!({ "ok": true })),
+        "ping" => Ok(json!({
+            "ok": true,
+            "build": crate::KERNEL_BUILD,
+            "namingSchemaVersion": crate::NAMING_SCHEMA_VERSION,
+        })),
         "buildExtrude" => {
             let params: crate::protocol::BuildExtrudeParams =
                 serde_json::from_value(params).map_err(|e| HandlerError {
@@ -234,6 +238,33 @@ async fn run_handler(method: &str, params: Value) -> Result<Value, HandlerError>
                         message: format!("internal panic: {msg}"),
                         data: None,
                     })
+                }
+            }
+        }
+        "bodyVolume" => {
+            let params: crate::protocol::BodyVolumeParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::shape_io::body_volume(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "bodyVolume failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "bodyVolume panicked");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: format!("internal panic: {msg}"), data: None })
                 }
             }
         }
@@ -353,6 +384,68 @@ async fn run_handler(method: &str, params: Value) -> Result<Value, HandlerError>
                 Err(panic) => {
                     let msg = panic_message(&panic);
                     error!(error = %msg, "buildPattern panicked");
+                    Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    })
+                }
+            }
+        }
+        "buildFeaturePattern" => {
+            let params: crate::protocol::BuildFeaturePatternParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::feature_pattern::build(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "buildFeaturePattern failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "buildFeaturePattern panicked");
+                    Err(HandlerError {
+                        code: INTERNAL_ERROR,
+                        message: format!("internal panic: {msg}"),
+                        data: None,
+                    })
+                }
+            }
+        }
+        "buildToolPattern" => {
+            let params: crate::protocol::BuildToolPatternParams =
+                serde_json::from_value(params).map_err(|e| HandlerError {
+                    code: INVALID_PARAMS,
+                    message: e.to_string(),
+                    data: None,
+                })?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ops::feature_pattern::build_tool_pattern(&params)
+            }));
+            match outcome {
+                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                }),
+                Ok(Err(e)) => {
+                    error!(error = %e, "buildToolPattern failed");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
+                }
+                Err(panic) => {
+                    let msg = panic_message(&panic);
+                    error!(error = %msg, "buildToolPattern panicked");
                     Err(HandlerError {
                         code: INTERNAL_ERROR,
                         message: format!("internal panic: {msg}"),

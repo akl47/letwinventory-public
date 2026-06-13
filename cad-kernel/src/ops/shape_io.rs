@@ -219,6 +219,27 @@ pub fn decompose_into_solids(shape: &Shape, feature_id: &str) -> Result<Vec<Soli
     Ok(parts)
 }
 
+/// Exact volume + center of mass for a body BRep via OCCT's volume integral
+/// over the analytic faces. Used by the editor footer so the displayed
+/// volume matches the true geometry — the mesh-triangle integral the
+/// frontend would otherwise use under-counts curved faces by the chord
+/// error. A compound of multiple solids sums correctly (GProp accumulates).
+pub fn body_volume(
+    params: &crate::protocol::BodyVolumeParams,
+) -> Result<crate::protocol::BodyVolumeResult> {
+    let shape = deserialize_brep_from_base64(&params.a_brep)
+        .context("bodyVolume: decoding BREP")?;
+    // EXACT analytic integral — NOT the triangulation-based volume_centroid,
+    // whose chord approximation of curved faces under-counts the true volume.
+    // (rebuild marker v2 — force cargo to recompile this TU; a prior Docker
+    // build skipped it via the mtime cache footgun and shipped the mesh path.)
+    let (volume, c) = shape.volume_centroid_exact();
+    Ok(crate::protocol::BodyVolumeResult {
+        volume,
+        centroid: [c.x, c.y, c.z],
+    })
+}
+
 /// Extract vertex + edge topology from a shape with deduped vertex
 /// positions. Same algorithm as `extrude::extract_topology` but lifted
 /// out so booleans + future ops can reuse it. Seam edges (the parametric

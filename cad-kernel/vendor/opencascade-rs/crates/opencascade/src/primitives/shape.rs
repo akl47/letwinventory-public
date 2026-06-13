@@ -2,8 +2,8 @@ use crate::{
     mesh::{Mesh, Mesher},
     primitives::{
         make_axis_1, make_axis_2, make_dir, make_point, make_point2d, make_vec, BooleanShape,
-        Compound, Edge, EdgeIterator, Face, FaceIterator, ShapeType, Shell, Solid, SolidIterator,
-        Vertex, Wire,
+        Compound, Edge, EdgeIterator, Face, FaceIterator, FaceSurface, ShapeType, Shell, Solid,
+        SolidIterator, Vertex, Wire,
     },
     Error,
 };
@@ -298,6 +298,24 @@ impl Shape {
         Self { inner }
     }
 
+    /// Group `shapes` into a single TopoDS_Compound with NO boolean — purely
+    /// topological. Feeding many tool solids to ONE boolean op (e.g.
+    /// `body.union(&Shape::compound_of(copies))`) lets OCCT resolve every seam
+    /// in a single pass; folding them in one-at-a-time re-tolerances the whole
+    /// body per instance and accumulates fuzzy sliver loss at coincident faces,
+    /// which under-reports volume. The empty case yields an empty compound.
+    pub fn compound_of<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
+        let mut compound = ffi::topo_ds::TopoDS_Compound_new();
+        let builder = ffi::b_rep::BRep_Builder_new();
+        let topods_builder = ffi::b_rep::BRep_Builder_upcast_to_topods_builder(&builder);
+        topods_builder.MakeCompound(compound.pin_mut());
+        let mut inner = ffi::topo_ds::TopoDS_Compound_as_shape(compound);
+        for s in shapes {
+            topods_builder.Add(inner.pin_mut(), &s.inner);
+        }
+        Self { inner }
+    }
+
     /// Make a box with one corner at corner_1, and the opposite corner
     /// at corner_2.
     pub fn box_from_corners(corner_1: DVec3, corner_2: DVec3) -> Self {
@@ -532,6 +550,34 @@ impl Shape {
             closing_faces.pin_mut().Append(face_shape);
         }
 
+        // ── Stage 0: simple (Parasolid-style) local offset ───────────
+        // A face-offset-and-sew that skips the global surface-surface
+        // intersection MakeThickSolidByJoin runs — faster, and succeeds on
+        // bodies the join offset can't handle. It doesn't resolve self-
+        // intersection, so it's validity-gated in C++; on failure we fall
+        // through to the join pipeline below.
+        eprintln!("[shell] stage0 simple offset: offset={:.6}, tol={:.6}", offset, tolerance);
+        match ffi::b_rep_offset_api::try_simple_offset_shell(
+            &self.inner,
+            closing_faces.as_ref().unwrap(),
+            offset,
+            tolerance,
+        ) {
+            Ok(shape) => {
+                // MakeSimpleOffset leaves spurious seam/imprint edges — faces
+                // come back split with extra boundary edges (and coincident
+                // imprints where the wall meets a region thinner than the
+                // offset). UnifySameDomain merges the coplanar pieces and drops
+                // the redundant edges, the same cleanup Stage 2 already runs.
+                eprintln!("[shell] stage0 simple offset SUCCESS (unifying same-domain faces)");
+                let cleaned = Self::from_shape(shape.as_ref().unwrap()).clean();
+                return Ok(cleaned);
+            }
+            Err(e) => {
+                eprintln!("[shell] stage0 simple offset failed, falling to stage1: {}", e);
+            }
+        }
+
         // ── Stage 1: direct MakeThickSolid retry chain ───────────────
         let attempts: [(ffi::geom_abs::GeomAbs_JoinType, f64); 4] = [
             (ffi::geom_abs::GeomAbs_JoinType::GeomAbs_Intersection, tolerance),
@@ -576,115 +622,333 @@ impl Shape {
 
         eprintln!("[shell] stage1 EXHAUSTED, falling to stage2 subtraction pipeline");
 
-        // ── Stage 2: subtraction pipeline ────────────────────────────
+        // ── Stage 2: conforming-punch offset pipeline ────────────────
+        // Build the cavity explicitly instead of offsetting the whole
+        // body. The whole-body inward offset is what OCCT cannot do
+        // when ANY region of the body is thinner than 2x the wall —
+        // the offset surfaces cross there and the operation returns
+        // null/invalid (Intersection join) or invents rolled-corner
+        // cylinder faces (Arc join). Steps:
+        //   1. PUNCH: extrude each picked face through the body and
+        //      intersect with the body — the conforming column of
+        //      material behind each opening. It stops at the body's
+        //      far boundary and follows curved walls exactly.
+        //   2. EXTEND: re-extrude every punch face that lies in a
+        //      picked face's plane OUTWARD. Without this the inward
+        //      offset would put a wall across the opening (and leave a
+        //      thickness-sized lip at edges where a picked face meets
+        //      a retained face).
+        //   3. OFFSET: shrink the extended punch inward by t via the
+        //      existing Intersection-first retry chain. The punch is a
+        //      simple solid with no thin regions, so the sharp join
+        //      succeeds where the whole-body offset could not.
+        //   4. SUBTRACT + CLEAN: body − cavity, then UnifySameDomain
+        //      merges coplanar faces (e.g. the cavity floor into a
+        //      coplanar retained face) and drops redundant edges.
+        // Regions thinner than the wall never enter the punch, so they
+        // stay solid — the Parasolid/SolidWorks/Onshape behaviour.
         let thickness = offset.abs();
-        eprintln!("[shell] stage2 defeature: max_radius={:.6}", thickness);
-        let defeatured = ffi::b_rep_offset_api::try_remove_small_fillets(
-            &self.inner,
-            thickness,
-        ).map_err(|e| {
-            eprintln!("[shell] stage2 defeature FAILED: {}", e);
-            format!("shell failed (direct: {stage1_err}; defeature: {e})")
-        })?;
-        eprintln!("[shell] stage2 defeature OK");
 
-        eprintln!("[shell] stage2 inner offset: thickness={:.6}, tol={:.6}", thickness, tolerance);
-        let inner_solid_raw = ffi::b_rep_offset_api::try_offset_solid_inward(
-            defeatured.as_ref().unwrap(),
-            thickness,
-            tolerance,
-        ).map_err(|e| {
-            eprintln!("[shell] stage2 inner offset FAILED: {}", e);
-            format!("shell failed (direct: {stage1_err}; inner offset: {e})")
-        })?;
-        eprintln!("[shell] stage2 inner offset OK");
-        let mut inner = Self::from_shape(inner_solid_raw.as_ref().unwrap());
+        // Through-all prism length: comfortably beyond the body.
+        let mut cmin = [f64::INFINITY; 3];
+        let mut cmax = [f64::NEG_INFINITY; 3];
+        for f in self.faces() {
+            let c = f.center_of_mass();
+            for (i, v) in [c.x, c.y, c.z].into_iter().enumerate() {
+                if v < cmin[i] { cmin[i] = v; }
+                if v > cmax[i] { cmax[i] = v; }
+            }
+        }
+        let through_all = 3.0
+            * ((cmax[0] - cmin[0]).powi(2)
+                + (cmax[1] - cmin[1]).powi(2)
+                + (cmax[2] - cmin[2]).powi(2))
+            .sqrt()
+            .max(1.0)
+            + 100.0;
 
-        // The punch-through prism must have the INNER CAVITY's cross-
-        // section, NOT the picked face's outer-body cross-section. If
-        // we extrude the picked face directly, the prism is the size
-        // of the WHOLE outer body's face — when subtracted, it
-        // removes the wall material around the cavity too, leaving
-        // the body's bottom (or whichever side) completely missing
-        // for the prism's height. Visually that reads as "the shell
-        // is shifted down by thickness".
-        //
-        // Correct geometry: prism cross-section = inner cavity's
-        // matching face. We find that face by walking inner_solid's
-        // faces and picking the one whose outward normal aligns with
-        // the picked face's normal AND whose centroid is roughly the
-        // picked centroid shifted INWARD by `thickness`. Extruding
-        // that inner face along its outward normal by
-        // (thickness + 1mm) extends the cavity through the picked
-        // face, opening a hole exactly the size of the cavity.
-        const PUNCH_OVERSHOOT_MM: f64 = 1.0;
-        let prism_len = thickness + PUNCH_OVERSHOOT_MM;
-        // Snapshot inner solid's faces ONCE before the union loop —
-        // each iteration's union mutates `inner` so we can't iterate
-        // its faces inside the loop.
-        let inner_faces: Vec<Face> = inner.faces().collect();
-        eprintln!("[shell] stage2 inner_solid has {} faces for matching", inner_faces.len());
+        // 1. Conforming punch.
+        let mut punch_acc: Option<Self> = None;
         for (i, face) in picked.iter().enumerate() {
+            let f = face.as_ref();
+            let c = f.center_of_mass();
+            let n = f.normal_at(c);
+            let dir = glam::dvec3(-n.x * through_all, -n.y * through_all, -n.z * through_all);
+            let raw: Self = f.extrude(dir).into();
+            eprintln!(
+                "[shell] stage2 punch {}: centroid=({:.3},{:.3},{:.3}) normal=({:.3},{:.3},{:.3}) len={:.1}",
+                i, c.x, c.y, c.z, n.x, n.y, n.z, through_all,
+            );
+            punch_acc = Some(match punch_acc {
+                None => raw,
+                Some(p) => p.union(&raw).into(),
+            });
+        }
+        let punch_raw = punch_acc.ok_or_else(|| "shell: no faces picked".to_string())?;
+        // clean(): the ∩ leaves seam edges splitting the punch's surfaces
+        // into coplanar/cosurface fragments (e.g. a D-prism comes back with
+        // 6 faces instead of 4). MakeOffsetShape nulls on seam-split
+        // surfaces, so unify them before going further.
+        let punch: Self = Into::<Self>::into(self.intersect(&punch_raw)).clean();
+        let punch_faces: Vec<Face> = punch.faces().collect();
+        eprintln!("[shell] stage2 conforming punch: {} faces", punch_faces.len());
+        if punch_faces.is_empty() {
+            return Err(format!(
+                "shell failed (direct: {stage1_err}; punch: picked faces do not bound any body material)"
+            ));
+        }
+
+        // 2. Extend through the openings — SEQUENTIALLY. Each pick's pass
+        // re-collects coplanar faces from the GROWING solid, so pick 2's
+        // stub also extrudes over pick 1's stub-top. Without that, two
+        // stubs whose source faces share an edge (adjacent removed faces)
+        // touch only along a line — a non-manifold union that nulls
+        // MakeOffsetShape — and the wrap-around corner stays closed.
+        let stub_len = thickness * 2.0 + 2.0;
+        let mut punch_ext: Option<Self> = None;
+        let mut stub_count = 0usize;
+        for face in &picked {
             let f = face.as_ref();
             let pc = f.center_of_mass();
             let pn = f.normal_at(pc);
-            // Expected inner face centroid: picked centroid shifted
-            // INWARD by thickness (i.e. opposite the outward normal).
-            let expected = glam::dvec3(
-                pc.x - pn.x * thickness,
-                pc.y - pn.y * thickness,
-                pc.z - pn.z * thickness,
-            );
-            // Find best-matching inner face: normal aligned (dot > 0.9)
-            // AND smallest distance from expected centroid.
-            let mut best_idx: Option<usize> = None;
-            let mut best_dist = f64::MAX;
-            for (j, inner_face) in inner_faces.iter().enumerate() {
-                let ic = inner_face.center_of_mass();
-                let in_n = inner_face.normal_at(ic);
-                let dot = in_n.x * pn.x + in_n.y * pn.y + in_n.z * pn.z;
-                if dot < 0.9 { continue; }
-                let dx = ic.x - expected.x;
-                let dy = ic.y - expected.y;
-                let dz = ic.z - expected.z;
-                let d = (dx*dx + dy*dy + dz*dz).sqrt();
-                if d < best_dist {
-                    best_dist = d;
-                    best_idx = Some(j);
-                }
+            let current_faces: Vec<Face> = match &punch_ext {
+                None => punch.faces().collect(),
+                Some(p) => p.faces().collect(),
+            };
+            let mut stubs_this: Vec<Self> = Vec::new();
+            for pf in &current_faces {
+                let fc = pf.center_of_mass();
+                let fnm = pf.normal_at(fc);
+                let dot = fnm.x * pn.x + fnm.y * pn.y + fnm.z * pn.z;
+                if dot < 0.999 { continue; }
+                // Same plane: centroid offset along the normal ~ 0.
+                let d = (fc.x - pc.x) * pn.x + (fc.y - pc.y) * pn.y + (fc.z - pc.z) * pn.z;
+                if d.abs() > 1.0e-4 { continue; }
+                let dir = glam::dvec3(pn.x * stub_len, pn.y * stub_len, pn.z * stub_len);
+                stubs_this.push(pf.extrude(dir).into());
             }
-            let idx = best_idx.ok_or_else(|| format!(
-                "stage2: no matching inner face for picked face {} (normal=({:.3},{:.3},{:.3}))",
-                i, pn.x, pn.y, pn.z,
-            ))?;
-            let inner_face = &inner_faces[idx];
-            let ic = inner_face.center_of_mass();
-            let in_n = inner_face.normal_at(ic);
-            eprintln!(
-                "[shell] stage2 prism {}: picked_centroid=({:.3},{:.3},{:.3}) picked_normal=({:.3},{:.3},{:.3}) matched_inner_centroid=({:.3},{:.3},{:.3}) dist={:.3}",
-                i, pc.x, pc.y, pc.z, pn.x, pn.y, pn.z, ic.x, ic.y, ic.z, best_dist,
-            );
-            // Extrude the inner face along ITS outward normal — that's
-            // outward from the cavity, which is OPPOSITE the original
-            // body's outward normal at this location. So the prism
-            // grows toward (and through) the picked outer face.
-            let dir = glam::dvec3(in_n.x * prism_len, in_n.y * prism_len, in_n.z * prism_len);
-            let prism: Self = inner_face.extrude(dir).into();
-            eprintln!("[shell] stage2 prism {} extruded from inner face, calling union", i);
-            inner = inner.union(&prism).into();
-            eprintln!("[shell] stage2 prism {} union OK", i);
+            for stub in &stubs_this {
+                let grown: Self = match punch_ext.take() {
+                    None => punch.union(stub).into(),
+                    Some(p) => p.union(stub).into(),
+                };
+                punch_ext = Some(grown);
+                stub_count += 1;
+            }
+        }
+        eprintln!("[shell] stage2 extended punch with {} opening stub(s)", stub_count);
+        if stub_count == 0 {
+            return Err(format!(
+                "shell failed (direct: {stage1_err}; punch: no punch face lies in a picked face's plane — re-pick the open faces)"
+            ));
+        }
+        // Same rationale as the post-∩ clean: stub unions imprint seam
+        // edges along the opening boundaries that derail the offset.
+        let punch_ext = punch_ext.expect("stub_count > 0 implies punch_ext").clean();
+        eprintln!("[shell] stage2 punch_ext cleaned: {} faces", punch_ext.faces().count());
+
+        // 3. Build the cavity. PRIMARY route: per-face WALL-SLAB
+        // subtraction — fully boolean, no surface offsetting at all.
+        // For each retained boundary face of the punch, subtract the
+        // wall material that face owes:
+        //   plane    → the face extruded INWARD by t (a prism);
+        //   cylinder → the concentric tube between R−t and R (material
+        //              inside) or R and R+t (a hole wall), built from two
+        //              cylinder solids.
+        // Faces coplanar with a pick get NO slab — the cavity stays flush
+        // with the opening. This produces the MITERED sharp-corner cavity
+        // (the Intersection-join semantics) by construction and sidesteps
+        // MakeOffsetShape entirely — which matters because OCCT's offset
+        // returns null on solids with tangent plane↔cylinder junctions
+        // (e.g. a D-shaped profile, where the flat side meets the curve
+        // tangentially). Falls back to the offset routes below when a
+        // punch face is neither planar nor cylindrical.
+        let punch_wall_faces: Vec<Face> = punch.faces().collect();
+        let mut slab_cavity: Option<Self> = None;
+        let mut slab_unsupported: Option<String> = None;
+        for pf in &punch_wall_faces {
+            let fc = pf.center_of_mass();
+            let fnm = pf.normal_at(fc);
+            // Opening face? (coplanar with a pick) → no wall slab.
+            let mut is_opening = false;
+            for face in &picked {
+                let p = face.as_ref();
+                let pc = p.center_of_mass();
+                let pn = p.normal_at(pc);
+                let dot = fnm.x * pn.x + fnm.y * pn.y + fnm.z * pn.z;
+                if dot < 0.999 { continue; }
+                let d = (fc.x - pc.x) * pn.x + (fc.y - pc.y) * pn.y + (fc.z - pc.z) * pn.z;
+                if d.abs() < 1.0e-4 { is_opening = true; break; }
+            }
+            if is_opening { continue; }
+            let slab: Self = match pf.surface_kind() {
+                Some(FaceSurface::Plane { .. }) => {
+                    // Prism into the solid: the outward normal negated.
+                    let dir = glam::dvec3(-fnm.x * thickness, -fnm.y * thickness, -fnm.z * thickness);
+                    pf.extrude(dir).into()
+                }
+                Some(FaceSurface::Cylinder { origin, axis, radius }) => {
+                    let a = axis.normalize();
+                    // Convex (material inside the cylinder) when the face's
+                    // outward normal points away from the axis at the
+                    // centroid; a hole wall points toward it.
+                    let to_c = glam::dvec3(fc.x - origin.x, fc.y - origin.y, fc.z - origin.z);
+                    let radial = to_c - a * to_c.dot(a);
+                    let convex = radial.dot(glam::dvec3(fnm.x, fnm.y, fnm.z)) > 0.0;
+                    let (r_out, r_in) = if convex {
+                        (radius + thickness * 0.5, radius - thickness)
+                    } else {
+                        (radius + thickness, radius - thickness * 0.5)
+                    };
+                    // Workplane perpendicular to the axis, centered well
+                    // below the punch; cylinders span 'through_all'.
+                    let seed = if a.x.abs() < 0.9 { glam::dvec3(1.0, 0.0, 0.0) } else { glam::dvec3(0.0, 1.0, 0.0) };
+                    let xdir = (seed - a * seed.dot(a)).normalize();
+                    let base = glam::dvec3(origin.x, origin.y, origin.z) - a * (through_all * 0.5);
+                    let mut wp = crate::workplane::Workplane::new(xdir, a);
+                    wp.set_translation(base);
+                    let outer_wire = wp.circle(0.0, 0.0, r_out);
+                    let outer: Self = Face::from_wire(&outer_wire).extrude(a * through_all).into();
+                    if r_in > 1.0e-6 {
+                        let inner_wire = wp.circle(0.0, 0.0, r_in);
+                        let inner: Self = Face::from_wire(&inner_wire).extrude(a * through_all).into();
+                        outer.subtract(&inner).into()
+                    } else {
+                        outer // wall consumes the whole cylinder
+                    }
+                }
+                _ => {
+                    slab_unsupported = Some(format!(
+                        "punch face at ({:.2},{:.2},{:.2}) is neither planar nor cylindrical",
+                        fc.x, fc.y, fc.z,
+                    ));
+                    break;
+                }
+            };
+            slab_cavity = Some(match slab_cavity.take() {
+                None => punch.subtract(&slab).into(),
+                Some(c) => c.subtract(&slab).into(),
+            });
         }
 
-        let inner_face_count = inner.faces().count();
-        eprintln!("[shell] stage2 inner_with_openings face_count={}, calling subtract", inner_face_count);
-        let result: Self = self.subtract(&inner).into();
+        if slab_unsupported.is_none() {
+            if let Some(cav0) = slab_cavity {
+                // Extend the cavity OUT through the openings (sequentially,
+                // same corner logic as the punch stubs) so the final
+                // subtract cuts with clean overshoot instead of coincident
+                // faces, then carve.
+                let mut cav = cav0.clean();
+                eprintln!("[shell] stage2 slab cavity: {} faces", cav.faces().count());
+                for face in &picked {
+                    let f = face.as_ref();
+                    let pc = f.center_of_mass();
+                    let pn = f.normal_at(pc);
+                    let cav_faces: Vec<Face> = cav.faces().collect();
+                    let mut prisms: Vec<Self> = Vec::new();
+                    for cf in &cav_faces {
+                        let fc = cf.center_of_mass();
+                        let fnm = cf.normal_at(fc);
+                        let dot = fnm.x * pn.x + fnm.y * pn.y + fnm.z * pn.z;
+                        if dot < 0.999 { continue; }
+                        let d = (fc.x - pc.x) * pn.x + (fc.y - pc.y) * pn.y + (fc.z - pc.z) * pn.z;
+                        if d.abs() > 1.0e-4 { continue; }
+                        let dir = glam::dvec3(pn.x * stub_len, pn.y * stub_len, pn.z * stub_len);
+                        prisms.push(cf.extrude(dir).into());
+                    }
+                    for p in &prisms {
+                        cav = cav.union(p).into();
+                    }
+                }
+                let cav = cav.clean();
+                let result: Self = self.subtract(&cav).into();
+                let post = result.faces().count();
+                let cleaned = result.clean();
+                eprintln!(
+                    "[shell] stage2 slab route done — orig={} post_subtract={} final={} — RETURNING SUCCESS",
+                    orig_face_count, post, cleaned.faces().count(),
+                );
+                return Ok(cleaned);
+            }
+        } else {
+            eprintln!(
+                "[shell] stage2 slab route unavailable ({}), falling to offset routes",
+                slab_unsupported.as_deref().unwrap_or("?"),
+            );
+        }
+
+        // Fallback offset routes:
+        //   3a. offset the stub-extended punch — openings come out flush in
+        //       one step;
+        //   3b. if 3a's offset fails (stub geometry adds tangent junctions
+        //       OCCT may refuse), offset the BARE punch — the same shape
+        //       class as the body itself, OCCT's best case — and then open
+        //       the cavity by extruding its inner-wall faces (the faces
+        //       parallel to each pick at plane-distance ≈ thickness),
+        //       sequentially so wrap-around corners between adjacent
+        //       openings get covered.
+        eprintln!("[shell] stage2 cavity offset (3a, stubbed): thickness={:.6}, tol={:.6}", thickness, tolerance);
+        let cavity: Self = match ffi::b_rep_offset_api::try_offset_solid_inward(
+            &punch_ext.inner,
+            thickness,
+            tolerance,
+        ) {
+            Ok(raw) => {
+                let c = Self::from_shape(raw.as_ref().unwrap());
+                eprintln!("[shell] stage2 3a OK ({} faces)", c.faces().count());
+                c
+            }
+            Err(e3a) => {
+                eprintln!("[shell] stage2 3a failed ({}), trying 3b bare-punch offset", e3a);
+                let raw = ffi::b_rep_offset_api::try_offset_solid_inward(
+                    &punch.inner,
+                    thickness,
+                    tolerance,
+                ).map_err(|e| {
+                    eprintln!("[shell] stage2 3b offset FAILED: {}", e);
+                    format!("shell failed (direct: {stage1_err}; cavity offset: {e})")
+                })?;
+                let mut cav = Self::from_shape(raw.as_ref().unwrap());
+                eprintln!("[shell] stage2 3b bare cavity OK ({} faces)", cav.faces().count());
+                // Open the cavity: for each pick, extrude the cavity faces
+                // whose outward normal matches the pick and which sit one
+                // wall-thickness inside the pick plane.
+                let open_len = thickness * 2.0 + 2.0;
+                for face in &picked {
+                    let f = face.as_ref();
+                    let pc = f.center_of_mass();
+                    let pn = f.normal_at(pc);
+                    let cav_faces: Vec<Face> = cav.faces().collect();
+                    let mut prisms: Vec<Self> = Vec::new();
+                    for cf in &cav_faces {
+                        let fc = cf.center_of_mass();
+                        let fnm = cf.normal_at(fc);
+                        let dot = fnm.x * pn.x + fnm.y * pn.y + fnm.z * pn.z;
+                        if dot < 0.999 { continue; }
+                        // Inner wall: thickness inside the pick plane (some
+                        // slack — the wall sits at exactly `thickness` but
+                        // tolerate offset wobble).
+                        let d = (pc.x - fc.x) * pn.x + (pc.y - fc.y) * pn.y + (pc.z - fc.z) * pn.z;
+                        if (d - thickness).abs() > thickness * 0.5 { continue; }
+                        let dir = glam::dvec3(pn.x * open_len, pn.y * open_len, pn.z * open_len);
+                        prisms.push(cf.extrude(dir).into());
+                    }
+                    eprintln!("[shell] stage2 3b opening pick: {} prism(s)", prisms.len());
+                    for p in &prisms {
+                        cav = cav.union(p).into();
+                    }
+                }
+                cav.clean()
+            }
+        };
+
+        // 4. Carve + clean.
+        let result: Self = self.subtract(&cavity).into();
         let post_subtract_count = result.faces().count();
-        eprintln!("[shell] stage2 subtract OK, post_subtract face_count={}, calling clean", post_subtract_count);
         let cleaned = result.clean();
         let final_count = cleaned.faces().count();
         eprintln!(
-            "[shell] stage2 clean OK — orig={} inner={} post_subtract={} final={} — RETURNING SUCCESS",
-            orig_face_count, inner_face_count, post_subtract_count, final_count,
+            "[shell] stage2 done — orig={} post_subtract={} final={} — RETURNING SUCCESS",
+            orig_face_count, post_subtract_count, final_count,
         );
         Ok(cleaned)
     }
@@ -956,6 +1220,22 @@ impl Shape {
         BooleanShape { shape, new_edges }
     }
 
+    /// Like `union`, but with OCCT's GlueShift boolean mode: it tells the BOP
+    /// that any coincident faces are EXACT shifted/mirrored copies, so they're
+    /// glued rather than run through a fuzzy face-face intersection that shaves
+    /// thin slivers (and under-reports volume) at pattern/mirror seams. The
+    /// two-shape constructor builds without glue, so we SetGlue then re-Build —
+    /// a second pass, but feature regen is not a hot path. Returns the shape
+    /// directly (callers here don't need the section edges).
+    #[must_use]
+    pub fn union_glued(&self, other: &Shape) -> Shape {
+        let mut fuse = ffi::b_rep_algo_api::BRepAlgoAPI_Fuse_new(&self.inner, &other.inner);
+        fuse.pin_mut()
+            .SetGlue(ffi::bop_algo::BOPAlgo_GlueEnum::BOPAlgo_GlueShift);
+        fuse.pin_mut().Build(&ffi::message::Message_ProgressRange_new());
+        Self::from_shape(fuse.pin_mut().Shape())
+    }
+
     #[must_use]
     pub fn intersect(&self, other: &Shape) -> BooleanShape {
         let mut fuse_operation =
@@ -1068,6 +1348,27 @@ impl Shape {
             /* only_closed = */ false,
             /* skip_shared = */ false,
             /* use_triangulation = */ true,
+        );
+        let volume = props.Mass();
+        let centroid_pnt = ffi::g_prop::GProp_GProps_CentreOfMass(&props);
+        let c = dvec3(centroid_pnt.X(), centroid_pnt.Y(), centroid_pnt.Z());
+        (volume, c)
+    }
+
+    /// EXACT volume + centroid: integrates the analytic faces (Gauss
+    /// quadrature over the true surfaces) rather than the triangulation, so
+    /// curved bodies report their true volume instead of the chord-
+    /// approximated mesh volume `volume_centroid` returns. Slower — use for
+    /// final reporting (mass properties), not hot per-frame paths.
+    pub fn volume_centroid_exact(&self) -> (f64, DVec3) {
+        // rebuild marker v2 — see cad-kernel ops/shape_io.rs body_volume.
+        let mut props = ffi::g_prop::GProps_new();
+        ffi::b_rep_g_prop::BRepGProp::VolumeProperties(
+            &self.inner,
+            props.pin_mut(),
+            /* only_closed = */ false,
+            /* skip_shared = */ false,
+            /* use_triangulation = */ false,
         );
         let volume = props.Mass();
         let centroid_pnt = ffi::g_prop::GProp_GProps_CentreOfMass(&props);

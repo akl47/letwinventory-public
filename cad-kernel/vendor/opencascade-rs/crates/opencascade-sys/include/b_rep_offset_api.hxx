@@ -3,9 +3,12 @@
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepOffset_MakeSimpleOffset.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
+#include <BRepAlgoAPI_Check.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Law_Function.hxx>
 #include <TopTools_ListOfShape.hxx>
@@ -15,8 +18,11 @@
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Edge.hxx>
+#include <TopoDS_Shell.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_MapOfShape.hxx>
+#include <TCollection_AsciiString.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Torus.hxx>
 #include <bindings_common.hxx>
@@ -163,6 +169,80 @@ inline std::unique_ptr<TopoDS_Shape> try_remove_small_fillets(
 // subtraction-pipeline fallback in Shape::shell to build the inner
 // cavity that gets subtracted from the original body, preserving the
 // original outer fillets in the result.
+// ONE inward-offset attempt with a specific join type + tolerance. The whole
+// MakeOffsetShape lifetime — PerformByJoin, Shape(), AND the destructor — sits
+// inside the try block so an OCCT Standard_Failure from any of them becomes a
+// std::runtime_error instead of tripping std::terminate across the bridge.
+inline std::unique_ptr<TopoDS_Shape> offset_inward_once(
+    const TopoDS_Shape& shape,
+    double thickness,
+    double tolerance,
+    GeomAbs_JoinType join,
+    bool intersection) {
+  try {
+    BRepOffsetAPI_MakeOffsetShape mos;
+    mos.PerformByJoin(
+      shape,
+      -thickness,                                 // negative = inward
+      tolerance,
+      BRepOffset_Skin,
+      intersection ? Standard_True : Standard_False, // complete intersection:
+                                                  // ON lets OCCT trim crossing
+                                                  // offset faces so a region
+                                                  // thinner than 2x the offset
+                                                  // self-trims to empty (vanishes
+                                                  // from the void) instead of
+                                                  // returning a null shape
+      Standard_False,                             // self_intersection
+      join,                                       // join type (Arc | Intersection)
+      Standard_True);                             // RemoveInternalEdges
+    if (!mos.IsDone()) {
+      throw std::runtime_error(
+        "operation did not complete (body's narrowest dimension may be "
+        "smaller than 2x thickness)");
+    }
+    const TopoDS_Shape& result = mos.Shape();
+    // Guard NULL *before* constructing BRepCheck_Analyzer. The analyzer's
+    // ctor throws OCCT's cryptic internal "BRepCheck_Analyzer::Init() - NULL
+    // shape" Standard_Failure on a null shape — useless to the user. A null
+    // result here means OCCT silently gave up: the inward offset
+    // self-intersects at this join type / tolerance.
+    if (result.IsNull()) {
+      throw std::runtime_error(
+        "OCCT produced a null shape (offset self-intersects at this join type)");
+    }
+    int n_solids = 0, n_faces = 0;
+    for (TopExp_Explorer e(result, TopAbs_SOLID); e.More(); e.Next()) n_solids++;
+    for (TopExp_Explorer e(result, TopAbs_FACE); e.More(); e.Next()) n_faces++;
+    // If the offset produces just a surface shell (no closed solid), the
+    // subsequent boolean subtract silently no-ops and the user sees an
+    // "unshelled" result — reject it here so the next attempt runs.
+    if (n_solids == 0) {
+      throw std::runtime_error(
+        "result has no solid (open offset surface, not a closed solid)");
+    }
+    BRepCheck_Analyzer chk(result);
+    if (!chk.IsValid()) {
+      throw std::runtime_error("result fails geometric validity check");
+    }
+    std::fprintf(stderr,
+      "[shell:cpp] offset_inward_once OK: solids=%d faces=%d\n", n_solids, n_faces);
+    std::fflush(stderr);
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(result));
+  } catch (const Standard_Failure& e) {
+    throw std::runtime_error(
+      std::string(e.GetMessageString() ? e.GetMessageString() : "(no message)"));
+  }
+}
+
+// Inward solid offset with a retry chain. Two dimensions matter:
+//   • complete-intersection flag: ON makes OCCT trim crossing offset faces, so
+//     a region thinner than 2x the offset self-trims to EMPTY (vanishes from
+//     the void) instead of returning null — this is what lets the subtraction
+//     pipeline leave thin regions solid. We try it ON first, since OFF returns
+//     a null shape on exactly those bodies.
+//   • join type x tolerance: Arc is "most forgiving for concave corners";
+//     loose tolerance gives OCCT slack when the tight pass collapses a patch.
 inline std::unique_ptr<TopoDS_Shape> try_offset_solid_inward(
     const TopoDS_Shape& shape,
     double thickness,
@@ -171,56 +251,144 @@ inline std::unique_ptr<TopoDS_Shape> try_offset_solid_inward(
     "[shell:cpp] try_offset_solid_inward: thickness=%.6f tol=%.6f\n",
     thickness, tolerance);
   std::fflush(stderr);
-  try {
-    BRepOffsetAPI_MakeOffsetShape mos;
-    mos.PerformByJoin(
-      shape,
-      -thickness,                                 // negative = inward
-      tolerance,
-      BRepOffset_Skin,
-      Standard_False,                             // intersection
-      Standard_False,                             // self_intersection
-      GeomAbs_Intersection,                       // join type
-      Standard_True);                             // RemoveInternalEdges
-    if (!mos.IsDone()) {
-      throw std::runtime_error(
-        "Inner offset: operation did not complete. The body's "
-        "narrowest dimension may be smaller than 2x thickness.");
+  double loose = thickness * 0.1;
+  if (loose < tolerance) loose = tolerance;
+  struct Attempt { GeomAbs_JoinType join; double tol; bool inter; const char* name; };
+  // Intersection join FIRST: it miters offset faces into SHARP corners, so a
+  // prismatic body keeps its flat faces and no cylindrical "rolled corner"
+  // faces are invented. Arc join (which rolls every corner with a fillet of
+  // radius = offset, multiplying faces and edges) is only a fallback for when
+  // the sharp miter can't be computed. The intersection flag (3rd column) is
+  // what lets either join survive a thin region that self-trims to empty.
+  const Attempt attempts[] = {
+    {GeomAbs_Intersection, tolerance, true,  "inter/Intersection/tight"},
+    {GeomAbs_Intersection, loose,     true,  "inter/Intersection/loose"},
+    {GeomAbs_Intersection, tolerance, false, "Intersection/tight"},
+    {GeomAbs_Arc,          tolerance, true,  "inter/Arc/tight"},
+    {GeomAbs_Arc,          loose,     true,  "inter/Arc/loose"},
+    {GeomAbs_Arc,          tolerance, false, "Arc/tight"},
+  };
+  std::string last_err = "(none)";
+  for (const auto& a : attempts) {
+    try {
+      auto out = offset_inward_once(shape, thickness, a.tol, a.join, a.inter);
+      std::fprintf(stderr, "[shell:cpp] inner offset attempt %s SUCCESS\n", a.name);
+      std::fflush(stderr);
+      return out;
+    } catch (const std::exception& e) {
+      last_err = e.what();
+      std::fprintf(stderr,
+        "[shell:cpp] inner offset attempt %s err: %s\n", a.name, last_err.c_str());
+      std::fflush(stderr);
     }
-    const TopoDS_Shape& result = mos.Shape();
-    // Diagnostic: count solids + faces in the result. If the offset
-    // produces just a surface shell (no closed solid), the subsequent
-    // boolean subtract will silently no-op against the original body
-    // and the user sees an "unshelled" result. BRepCheck_Analyzer
-    // tells us whether the shape is geometrically valid.
-    int n_solids = 0, n_faces = 0;
-    for (TopExp_Explorer e(result, TopAbs_SOLID); e.More(); e.Next()) n_solids++;
-    for (TopExp_Explorer e(result, TopAbs_FACE); e.More(); e.Next()) n_faces++;
-    BRepCheck_Analyzer chk(result);
-    bool valid = chk.IsValid();
+  }
+  throw std::runtime_error(std::string("Inner offset: ") + last_err);
+}
+
+// ── Stage 0: simple (Parasolid-style) shell ──────────────────────────
+// Remove the picked faces to form an open shell, then offset that shell
+// with BRepOffset_MakeSimpleOffset + BuildSolidFlag — a LOCAL face-
+// offset-and-sew that SKIPS the global surface-surface intersection pass
+// MakeThickSolidByJoin runs (BRepOffset_Inter3d). That pass is both the
+// slow part and the fragile part (a single bad offset-face pair fails the
+// whole op), so the simple offset is markedly faster AND succeeds on
+// geometry the join offset chokes on — the same algorithmic split that
+// makes Parasolid (SolidWorks / Onshape) quick and robust here.
+//
+// Caveat: MakeSimpleOffset does NOT resolve self-intersection, so a
+// deeply concave region offset past its local concave radius yields a
+// self-overlapping solid. We therefore gate the result through
+// BRepCheck_Analyzer and let the Rust caller fall back to the join
+// pipeline when it comes back invalid.
+inline std::unique_ptr<TopoDS_Shape> try_simple_offset_shell(
+    const TopoDS_Shape& shape,
+    const TopTools_ListOfShape& closing_faces,
+    double offset,
+    double tolerance) {
+  std::fprintf(stderr,
+    "[shell:cpp] try_simple_offset_shell: offset=%.6f tol=%.6f\n",
+    offset, tolerance);
+  std::fflush(stderr);
+  try {
+    // Picked faces to remove, matched by IsSame (orientation-independent:
+    // TopTools_MapOfShape hashes on TShape + Location, not orientation).
+    TopTools_MapOfShape remove_set;
+    for (TopTools_ListIteratorOfListOfShape it(closing_faces); it.More(); it.Next()) {
+      remove_set.Add(it.Value());
+    }
+    // Open shell = every body face EXCEPT the removed ones, each kept with
+    // its in-solid orientation so the offset travels the right way.
+    BRep_Builder builder;
+    TopoDS_Shell open_shell;
+    builder.MakeShell(open_shell);
+    int kept = 0, removed = 0;
+    for (TopExp_Explorer e(shape, TopAbs_FACE); e.More(); e.Next()) {
+      if (remove_set.Contains(e.Current())) { removed++; continue; }
+      builder.Add(open_shell, TopoDS::Face(e.Current()));
+      kept++;
+    }
     std::fprintf(stderr,
-      "[shell:cpp] try_offset_solid_inward result: solids=%d faces=%d IsValid=%d\n",
-      n_solids, n_faces, valid ? 1 : 0);
+      "[shell:cpp] simple offset: kept=%d removed=%d\n", kept, removed);
     std::fflush(stderr);
+    if (kept == 0) {
+      throw std::runtime_error("no faces remain after removing the picked faces");
+    }
+    if (removed == 0) {
+      throw std::runtime_error("none of the picked faces matched a face on the body");
+    }
+
+    BRepOffset_MakeSimpleOffset mso;
+    mso.Initialize(open_shell, offset);   // signed: negative = inward
+    mso.SetBuildSolidFlag(Standard_True); // close the wall into a solid
+    mso.SetTolerance(tolerance);
+    mso.Perform();
+    if (!mso.IsDone()) {
+      TCollection_AsciiString msg = mso.GetErrorMessage();
+      throw std::runtime_error(
+        std::string("did not complete: ") +
+        (msg.Length() ? msg.ToCString() : "(no message)"));
+    }
+    const TopoDS_Shape& result = mso.GetResultShape();
+    if (result.IsNull()) {
+      throw std::runtime_error("produced a null shape");
+    }
+    int n_solids = 0;
+    for (TopExp_Explorer e(result, TopAbs_SOLID); e.More(); e.Next()) n_solids++;
     if (n_solids == 0) {
       throw std::runtime_error(
-        "Inner offset: result has no solid (got a surface shell only). "
-        "BRepOffset_Skin mode produced an open offset surface instead of "
-        "a closed solid — the body geometry may not support uniform "
-        "inward offset at this thickness.");
+        "produced no solid (BuildSolidFlag could not close the wall)");
     }
-    if (!valid) {
+    // MakeSimpleOffset skips self-intersection handling — validity is NOT
+    // guaranteed. This gate is what lets the caller fall back to the join
+    // pipeline on concave bodies the simple offset overlaps.
+    BRepCheck_Analyzer chk(result);
+    if (!chk.IsValid()) {
       throw std::runtime_error(
-        "Inner offset: result fails geometric validity check.");
+        "result fails geometric validity check (likely self-intersection "
+        "on a concave region at this thickness)");
     }
+    // BRepCheck_Analyzer validates each face/edge but NOT global self-
+    // interference. The degenerate thin-wall case — where the requested wall
+    // exceeds ~half a thin region's local thickness, so its two inner offset
+    // surfaces collapse onto (or cross) the outer faces — produces coincident
+    // / overlapping faces that pass the per-face check yet render as z-fighting
+    // plus imprinted edges. A self-interference check catches that so the
+    // caller falls through to the subtraction pipeline, which leaves regions
+    // thinner than the wall solid (the Parasolid/Onshape behaviour). bTestSE is
+    // off (small edges are legitimate here); bTestSI on is the part we want.
+    BRepAlgoAPI_Check si_check(result, Standard_False, Standard_True);
+    if (!si_check.IsValid()) {
+      throw std::runtime_error(
+        "result self-intersects — the wall is thicker than a thin region of "
+        "the body can hold, so the offset surfaces overlap (needs the "
+        "leave-thin-regions-solid subtraction path)");
+    }
+    std::fprintf(stderr, "[shell:cpp] simple offset OK (no self-interference): solids=%d\n", n_solids);
+    std::fflush(stderr);
     return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(result));
   } catch (const Standard_Failure& e) {
-    throw std::runtime_error(std::string("Inner offset: ") +
+    throw std::runtime_error(std::string("simple offset: ") +
       (e.GetMessageString() ? e.GetMessageString() : "(no message)"));
-  } catch (const std::exception&) {
-    throw;
-  } catch (...) {
-    throw std::runtime_error("Inner offset: unknown C++ exception");
   }
 }
 

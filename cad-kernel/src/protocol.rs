@@ -146,6 +146,20 @@ pub struct BuildExtrudeParams {
     /// body. Mirrors SolidWorks' Direction 2.
     #[serde(default, rename = "direction2")]
     pub direction2: Option<BuildExtrudeDirection2>,
+    /// Optional "Up To Body" target — a base64 BREP of the body the
+    /// extrude should terminate against. When present, `distance` /
+    /// `direction2` are ignored: the profile is extruded along the plane
+    /// normal (in the `flipped` direction, from `start_offset`) far enough
+    /// to reach the body, then the body is subtracted and the start-side
+    /// piece kept, so the end face conforms to the body's real surface.
+    #[serde(default, rename = "untilBrep")]
+    pub until_brep: Option<String>,
+    /// Optional "Up To Next" targets — base64 BREPs of EVERY upstream body.
+    /// Same semantics as `until_brep` but all targets are subtracted, so the
+    /// kept start-side piece caps at whichever body surface the profile reaches
+    /// FIRST. Combined with `until_brep` (both are subtracted if present).
+    #[serde(default, rename = "untilBreps")]
+    pub until_breps: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -460,6 +474,46 @@ pub struct BuildPatternParams {
 
 fn default_true() -> bool { true }
 
+/// `buildFeaturePattern` — repeat a seed feature's geometry delta (computed from
+/// the body state before/after the seed) at N transformed instances. Returns the
+/// same shape as `buildPattern` so the backend composer is indifferent.
+#[derive(Debug, Deserialize)]
+pub struct BuildFeaturePatternParams {
+    #[serde(rename = "featureId", default = "default_feature_id")]
+    pub feature_id: String,
+    /// Body BREP just BEFORE the seed feature. Absent/empty for a body-seeding
+    /// feature (nothing was removed).
+    #[serde(rename = "beforeBrep", default)]
+    pub before_brep: Option<String>,
+    /// Body BREP just AFTER the seed feature.
+    #[serde(rename = "afterBrep")]
+    pub after_brep: String,
+    /// The current body to apply the patterned delta into.
+    #[serde(rename = "bodyBrep")]
+    pub body_brep: String,
+    /// One transform per copy (the N−1 instances; the source is already in body).
+    pub transforms: Vec<PatternTransform>,
+}
+
+/// `buildToolPattern` — true feature pattern for a tool-based seed: transform
+/// the seed's tool solid at each instance and fuse/cut it into the body.
+#[derive(Debug, Deserialize)]
+pub struct BuildToolPatternParams {
+    #[serde(rename = "featureId", default = "default_feature_id")]
+    pub feature_id: String,
+    /// The current body to apply the patterned tool into.
+    #[serde(rename = "bodyBrep")]
+    pub body_brep: String,
+    /// The seed feature's tool solid (the prism/revolve/sweep/loft it built).
+    #[serde(rename = "toolBrep")]
+    pub tool_brep: String,
+    /// One transform per copy (the N−1 instances; the source is already in body).
+    pub transforms: Vec<PatternTransform>,
+    /// true = additive seed (fuse the tool); false = cut seed (subtract it).
+    #[serde(default)]
+    pub fuse: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct BuildPatternResult {
     #[serde(rename = "brepBytes")]
@@ -610,6 +664,26 @@ pub struct BuildSweepResult {
     pub brep_bytes: String,
     pub faces: Vec<FaceMesh>,
     pub topology: Topology,
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// bodyVolume — exact mass properties (OCCT GProp) for a single body BRep
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct BodyVolumeParams {
+    /// Base64-encoded BREP of the body to measure.
+    #[serde(rename = "aBrep")]
+    pub a_brep: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BodyVolumeResult {
+    /// Exact solid volume in mm³ (OCCT volume integral over the analytic
+    /// faces — NOT a mesh approximation).
+    pub volume: f64,
+    /// Center of mass (world space).
+    pub centroid: [f64; 3],
 }
 
 // ────────────────────────────────────────────────────────────────────────────

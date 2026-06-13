@@ -81,7 +81,30 @@ mod server;
 ///     material around cavity). Now matches inner cavity's
 ///     corresponding face and extrudes from THAT, so the prism has
 ///     the cavity's smaller cross-section.
-pub const NAMING_SCHEMA_VERSION: u32 = 20;
+/// 21: shell Stage 0 (simple offset) now runs UnifySameDomain on its
+///     result — MakeSimpleOffset left spurious seam/imprint edges
+///     (faces split with extra boundary edges). Pre-bump cache rows
+///     hold the un-cleaned geometry; bump forces re-dispatch.
+/// 22: shell Stage 0 now rejects self-intersecting results (BRepAlgoAPI_Check
+///     bTestSI) — the degenerate thin-wall case (wall > ~half a thin
+///     region's thickness) produced coincident faces that flickered. Now
+///     it falls through to the subtraction pipeline (leaves thin regions
+///     solid). Bump invalidates the cached degenerate geometry.
+/// 23: shell Stage 2 rewired to the conforming-punch pipeline: punch =
+///     picked-face prisms ∩ body (cleaned); cavity built PRIMARILY by
+///     per-face wall-slab subtraction (plane → inward prism, cylinder →
+///     concentric tube) — fully boolean, sharp mitered corners, no
+///     MakeOffsetShape (which nulls on tangent plane↔cylinder junctions
+///     like a D-profile); offset routes retained as fallback for other
+///     surface kinds. Replaces the whole-body inner offset whose
+///     Arc-join fallback invented rolled-corner cylinder faces and
+///     whose punch prisms left imprint edges.
+pub const NAMING_SCHEMA_VERSION: u32 = 29;
+
+/// Human-readable kernel build marker, returned by the `ping` RPC and shown in
+/// the editor footer next to the frontend's `text-NN` marker. Bump on every
+/// kernel change so a rebuild can be confirmed from the UI.
+pub const KERNEL_BUILD: &str = "k-3";
 
 /// Default bind address. Override with `CAD_KERNEL_ADDR`. We default to
 /// `0.0.0.0` because the standard dev setup runs the Node backend in Docker,

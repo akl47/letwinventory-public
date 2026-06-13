@@ -146,33 +146,57 @@ fn match_picked_faces(
 
     let mut out = Vec::with_capacity(picks.len());
     for (pick_idx, pick) in picks.iter().enumerate() {
-        let mut best: Option<(usize, f64)> = None;
+        // The stored ref's `centroid` is the user's CLICK POINT, not the
+        // face's centroid — on a long face they can be tens of mm apart, so
+        // raw centroid-distance matching false-negatives. Match in two
+        // passes instead:
+        //   1. ON-SURFACE: faces whose normal aligns with the pick AND whose
+        //      plane contains the pick point (|(pick − centroid) · n| small —
+        //      exact for planar faces, a near-zero radial offset for the
+        //      curved-face case). Among those, nearest centroid wins (it
+        //      disambiguates coplanar faces).
+        //   2. FALLBACK: legacy nearest-centroid scoring with the original
+        //      tolerance, for refs whose normals drifted (e.g. an upstream
+        //      tweak rotated the face slightly).
+        let mut best_on_surface: Option<(usize, f64)> = None;
+        let mut best_legacy: Option<(usize, f64)> = None;
         for (i, face) in body_faces.iter().enumerate() {
             let c = face.center_of_mass();
-            let dx = c.x - pick.centroid[0];
-            let dy = c.y - pick.centroid[1];
-            let dz = c.z - pick.centroid[2];
+            let dx = pick.centroid[0] - c.x;
+            let dy = pick.centroid[1] - c.y;
+            let dz = pick.centroid[2] - c.z;
             let d = (dx * dx + dy * dy + dz * dz).sqrt();
-            // Tie-break by normal alignment when centroids are within
-            // tolerance — two parallel faces of a thin plate can share
-            // an XY centroid; the normal direction breaks the tie.
             let normal = face.normal_at(c);
             let dot = normal.x * pick.normal[0] + normal.y * pick.normal[1] + normal.z * pick.normal[2];
-            // Score: distance penalty + small normal-misalignment bump
-            // when distance is ambiguous. Lower is better.
+            // Pass 1: normal aligned + pick point on the face's plane.
+            if dot > 0.9 {
+                let plane_dist = (dx * normal.x + dy * normal.y + dz * normal.z).abs();
+                if plane_dist < pos_tol {
+                    match best_on_surface {
+                        None => best_on_surface = Some((i, d)),
+                        Some((_, prev)) if d < prev => best_on_surface = Some((i, d)),
+                        _ => {}
+                    }
+                }
+            }
+            // Pass 2 candidate: legacy score.
             let score = d - 0.1 * dot.max(0.0);
-            match best {
-                None => best = Some((i, score)),
-                Some((_, prev)) if score < prev => best = Some((i, score)),
+            match best_legacy {
+                None => best_legacy = Some((i, score)),
+                Some((_, prev)) if score < prev => best_legacy = Some((i, score)),
                 _ => {}
             }
         }
-        let (idx, dist) = best.ok_or_else(|| anyhow!(
+        if let Some((idx, _)) = best_on_surface {
+            out.push(idx);
+            continue;
+        }
+        let (idx, dist) = best_legacy.ok_or_else(|| anyhow!(
             "buildShell: no body faces to match against (empty face list?)"
         ))?;
         if dist > pos_tol {
             return Err(anyhow!(
-                "buildShell: picked face {} (centroid {:?}) has no match within {} mm \
+                "buildShell: picked face {} (pick point {:?}) has no match within {} mm \
                  in the body — closest face is {} mm away. The body may have changed \
                  shape upstream; re-pick the face.",
                 pick_idx, pick.centroid, pos_tol, dist,

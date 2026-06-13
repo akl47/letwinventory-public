@@ -5,6 +5,7 @@ pub mod boolean;
 pub mod edge_blend;
 pub mod export;
 pub mod extrude;
+pub mod feature_pattern;
 pub mod pattern;
 pub mod revolve;
 pub mod shape_io;
