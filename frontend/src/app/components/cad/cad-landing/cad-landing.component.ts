@@ -9,6 +9,8 @@ import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatDialog, MatDialogModule } from '@angular/material/dialog';
+import { CadNewPartDialogComponent } from '../cad-new-part-dialog/cad-new-part-dialog.component';
 import { CadModelService } from '../../../services/cad-model.service';
 import { AssemblyService } from '../../../services/assembly.service';
 import { PartWithCadSummary } from '../../../models/cad-model.model';
@@ -23,7 +25,7 @@ import { filterBySearch } from '../../../utils/search';
   imports: [
     CommonModule, RouterLink, FormsModule,
     MatButtonModule, MatIconModule, MatTableModule,
-    MatFormFieldModule, MatInputModule, MatProgressSpinnerModule, MatTooltipModule,
+    MatFormFieldModule, MatInputModule, MatProgressSpinnerModule, MatTooltipModule, MatDialogModule,
   ],
   template: `
     <div class="cad-landing" data-testid="cad-landing">
@@ -31,16 +33,16 @@ import { filterBySearch } from '../../../utils/search';
         <mat-icon class="page-icon">view_in_ar</mat-icon>
         <h2>CAD Models</h2>
         <span class="spacer"></span>
-        <button mat-stroked-button (click)="showPicker.set(!showPicker())"
-                matTooltip="Start an assembly from an Assembly-category part.">
+        <button mat-stroked-button (click)="newPart('assembly')"
+                matTooltip="Create a new assembly part and open it.">
           <mat-icon>account_tree</mat-icon>
           New assembly
         </button>
-        <a mat-flat-button color="primary" routerLink="/parts/new"
-           matTooltip="Create a new part, then return here to attach a CAD model.">
+        <button mat-flat-button color="primary" (click)="newPart('part')"
+                matTooltip="Create a new CAD part and open it.">
           <mat-icon>add</mat-icon>
           New Part
-        </a>
+        </button>
       </header>
 
       @if (showPicker()) {
@@ -209,6 +211,13 @@ export class CadLandingComponent implements OnInit {
   private auth = inject(AuthService);
   private errors = inject(ErrorNotificationService);
   private router = inject(Router);
+  private dialog = inject(MatDialog);
+
+  /** Open the reduced new-part dialog (CAD part or assembly), then refresh on
+   * close in case the user cancels navigation. */
+  newPart(mode: 'part' | 'assembly') {
+    this.dialog.open(CadNewPartDialogComponent, { data: { mode }, autoFocus: false });
+  }
 
   rows = signal<PartWithCadSummary[]>([]);
   loading = signal<boolean>(true);

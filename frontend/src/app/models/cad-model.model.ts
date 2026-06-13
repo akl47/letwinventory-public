@@ -148,6 +148,10 @@ export interface CadCommit {
 export interface PartWithCadSummary {
   partID: number;
   part: { id: number; name: string; revision: string; description: string | null; imageFileID?: number | null } | null;
+  /** VCS-derived revision the editor shows (highest released on main, highest+1
+   * on a draft branch). Use this for the part-number label so it matches the
+   * editor badge instead of the raw Parts.revision. */
+  displayRevision?: string | null;
   revisionCount: number;
   latestRevisionID: number | null;
   latestRevision: string | null;

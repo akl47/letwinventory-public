@@ -51,12 +51,14 @@ import type {
   CircleEntity, ArcEntity,
 } from '../../../cad/lib/types';
 import { findPoint, isProjectedEntity } from '../../../cad/lib/types';
-import { tessellateCircle, tessellateArc, tessellateEllipse, tessellateSpline, tessellateEntity, DEFAULT_CHORD_TOLERANCE } from '../../../cad/lib/tessellator';
+import { tessellateCircle, tessellateArc, tessellateEllipse, tessellateSpline, tessellateEntity } from '../../../cad/lib/tessellator';
 import { dimensionRenders, type DimensionRender } from '../../../cad/lib/dimensions';
 import { formatNumber, fromMm, unitSymbol, type Unit } from '../../../cad/lib/units';
 import { constraintIconsForEntity, type ConstraintIcon, type ConstraintIconGroup } from '../../../cad/lib/constraintIcons';
 import { tryGlyphLoopsForText, onFontReady, applyTextTransform } from '../../../cad/lib/textGlyphs';
 import { singleLineStrokesForText } from '../../../cad/lib/singleLineFont';
+import { exceedsDragThreshold, screenDeltaToWorld } from '../../../cad/lib/assemblyDrag';
+import type { InContextOverlay, OverlayEdge, OverlayFace, OverlayVertex } from '../../../cad/lib/inContextOverlay';
 
 // REQ 629 — drawing preview overlay. Each item is a transient shape rendered
 // on top of the active sketch while the user is mid-gesture. The cad-editor
@@ -66,7 +68,7 @@ export type SketchPreview =
   | { kind: 'circle'; center: { x: number; y: number }; radius: number }
   | { kind: 'arc'; center: { x: number; y: number }; start: { x: number; y: number }; end: { x: number; y: number }; radius: number; ccw: boolean }
   | { kind: 'point-marker'; x: number; y: number; style: 'cursor' | 'pending' }
-  | { kind: 'snap-indicator'; x: number; y: number; snapKind?: 'endpoint' | 'midpoint' | 'intersection' | 'quadrant' }
+  | { kind: 'snap-indicator'; x: number; y: number; snapKind?: 'endpoint' | 'midpoint' | 'intersection' | 'quadrant' | 'on-edge' }
   // Edit-tool hover preview: shows what Trim/Extend would do under the
   // cursor without mutating state. `mode: 'remove'` renders solid red
   // (segment that would be cut away); `mode: 'add'` renders dashed red
@@ -159,6 +161,18 @@ export interface HolePreview {
   countersink?: { diameter: number; depth: number };
 }
 
+// Zoom-adaptive sketch rendering. The viewer's orthographic frustum half-height
+// equals `orbitDistance`, so on-screen size = worldSize / orbitDistance (× a
+// viewport constant). Sizing geometry as `orbitDistance × fraction` therefore
+// keeps a CONSTANT on-screen appearance regardless of zoom. Fractions are
+// calibrated to match the old fixed sizes at the default orbitDistance (180).
+const POINT_SCREEN_FRAC = 1.1 / 180;       // ≈ unselected sketch-point radius
+const POINT_SCREEN_FRAC_SEL = 1.6 / 180;   // ≈ selected sketch-point radius
+const CHORD_SCREEN_FRAC = 0.05 / 180;      // ≈ curve chord tolerance
+const MIN_CHORD_TOL = 0.003;               // floor so segment count stays bounded
+const DIM_ARROW_LEN_FRAC = 3 / 180;        // dimension arrowhead length (constant on-screen)
+const DIM_ARROW_WIDTH_FRAC = 1 / 180;      // dimension arrowhead half-width
+
 @Component({
   selector: 'app-cad-viewer',
   standalone: true,
@@ -175,6 +189,20 @@ export interface HolePreview {
           <mat-icon>refresh</mat-icon> Reload 3D view
         </button>
       </div>
+      <!-- 3D pick debug (mirrors the sketch editor's bottom-right overlay).
+           Hidden in sketch mode — the 2D overlay owns that corner there. -->
+      @if (activeSketchId() === null && pickDebug(); as dp) {
+        <div class="pick-debug" data-testid="viewer-pick-debug">
+          <div class="pick-debug-row">mode <b>{{ dp.modes }}</b> · depth cap {{ dp.cap }}</div>
+          <div class="pick-debug-row">hover: <b>{{ hoveredEdgeId() || (hovered() ? shortPickLabelPublic(hovered()!) : '—') }}</b></div>
+          <div class="pick-debug-sep">near cursor ({{ dp.items.length }}):</div>
+          @for (it of dp.items; track $index) {
+            <div class="pick-debug-item" [class.win]="it.winner">
+              {{ it.kind }} · {{ it.label }} · d={{ it.dist }}
+            </div>
+          }
+        </div>
+      }
       <div #cubeMount class="nav-cube" data-testid="nav-cube"
            (pointerdown)="onCubePointerDown($event)"
            (pointermove)="onCubePointerMove($event)"
@@ -257,6 +285,20 @@ export interface HolePreview {
     .rot-btn { position: absolute; top: 4px; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
                padding: 0; background: none; border: none; color: #c4c8d8; cursor: pointer; opacity: 0.85; }
     .rot-btn:hover { color: #fff; opacity: 1; }
+    /* 3D pick-debug overlay — bottom-right, same palette as the sketch
+       editor's pick debug. pointer-events: none so it never eats picks. */
+    .pick-debug {
+      position: absolute; right: 8px; bottom: 64px; z-index: 5;
+      background: rgba(20, 20, 32, 0.88); border: 1px solid #3a3a52;
+      border-radius: 4px; padding: 6px 8px;
+      font: 10px/1.5 monospace; color: #9aa5b4;
+      pointer-events: none; max-width: 320px;
+    }
+    .pick-debug-row { white-space: nowrap; }
+    .pick-debug-row b { color: #ffcc80; }
+    .pick-debug-sep { margin-top: 3px; color: #6a7383; }
+    .pick-debug-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pick-debug-item.win { color: #80cbc4; font-weight: 600; }
     .rot-btn svg { width: 36px; height: 36px; display: block; filter: drop-shadow(0 0 2px rgba(0,0,0,0.7)); }
     .rot-ccw { right: 138px; }
     .rot-cw  { right: 52px; }
@@ -295,6 +337,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private hoveredCubeSlot: number | null = null;
 
   geometry = input<ModelGeometry | null>(null);
+  /** CAD-790 in-context editing: ghost geometry of the OTHER assembly components
+   * (read-only reference), drawn in the edited part's local frame. */
+  referenceGeometry = input<InContextOverlay | null>(null);
   /** Section view: a clipping plane (model space). Null = no section. */
   sectionPlane = input<{ normal: [number, number, number]; point: [number, number, number] } | null>(null);
   selected = input<string | null>(null);
@@ -335,6 +380,20 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     >;
   } | null>(null);
   hovered = signal<string | null>(null);
+
+  /** 3D pick-debug overlay state (mirrors the sketch editor's bottom-right
+   * pick debug): every raycast candidate near the cursor — all face hits in
+   * depth order, edge hits within the zoom-adaptive threshold, datum hits,
+   * the armed pick modes, and the depth cap. Rebuilt per pointermove; the
+   * template renders it only outside sketch mode. */
+  pickDebug = signal<{
+    modes: string;
+    cap: string;
+    items: Array<{ kind: string; label: string; dist: string; winner: boolean }>;
+  } | null>(null);
+  /** Cheap change key so identical frames skip the signal write (avoids a
+   * change-detection storm while the cursor rests). */
+  private lastPickDebugKey = '';
   /** Edge id under cursor while edgePickMode is active. Used by
    * Convert Entities to highlight the candidate edge before the user
    * commits with a click. Tracked separately from `hovered` (which
@@ -358,6 +417,13 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     clientX: number;
     clientY: number;
   }>();
+  // CAD-782/783 — assembly component drag. When `assemblyDrag` is on, a left
+  // press on a draggable component (instanceId in `draggableInstanceIds`)
+  // translates that component in the view plane instead of orbiting; on release
+  // the accumulated world-space delta is emitted for the editor to commit + resolve.
+  assemblyDrag = input<boolean>(false);
+  draggableInstanceIds = input<Set<string>>(new Set());
+  instanceDragEnd = output<{ instanceId: string; delta: [number, number, number] }>();
   loading = input<boolean>(false);
   loadProgress = input<string>('');
   // REQ 615: sketch overlays in the 3D scene.
@@ -419,7 +485,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // intersection). The parent component wires these into the sketch tool logic.
   sketchClick = output<{ x: number; y: number; shiftKey: boolean; tolerance: number; pointTolerance: number }>();
   sketchPointerDown = output<{ x: number; y: number; tolerance: number; pointTolerance: number }>();
-  sketchPointerMove = output<{ x: number; y: number }>();
+  sketchPointerMove = output<{ x: number; y: number; pointTolerance?: number }>();
   sketchPointerUp = output<{ x: number; y: number }>();
   /** Fired when the user clicks (without dragging) a dimension annotation. */
   dimensionLabelClicked = output<string>();
@@ -539,6 +605,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // surface "why is this edge there?" info without leaving the canvas.
   edgePickMode = input<boolean>(false);
   edgePicked = output<{ edgeId: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]]; polylineLength: number }>();
+  /** Cross-part Convert Entities (in-context): the user picked ANOTHER
+   * component's edge / face / vertex in the reference overlay. The editor
+   * projects it into the active sketch with a cross-part external reference. */
+  crossPartEdgePicked = output<OverlayEdge>();
+  crossPartFacePicked = output<OverlayFace>();
+  crossPartVertexPicked = output<OverlayVertex>();
 
   // Live "ghost" preview of an in-progress Extrude / Cut Extrude / Revolve
   // before the user commits. `kind` controls the tint (additive = green,
@@ -579,6 +651,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private sketchGroup!: THREE.Group;
   private faceMeshes = new Map<string, THREE.Mesh>();
   private datumMeshes = new Map<string, THREE.Object3D>();
+  // Datum plane labels (CSS2D) tracked for per-frame occlusion culling — CSS2D
+  // labels ignore WebGL depth, so they'd otherwise show through solid parts.
+  private datumLabels: CSS2DObject[] = [];
+  private occlusionRaycaster = new THREE.Raycaster();
   // REQ 619 — edge overlays. Two backends share this map:
   //   - New kernel (topology has polyline data): one entry per BRep edge,
   //     `THREE.Line` rendering the analytic curve sampling.
@@ -592,6 +668,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     hiddenDashed: THREE.Line | THREE.LineSegments;
   }>();
   private edgeGroup!: THREE.Group;
+  // CAD-790 — ghost reference geometry of the other components when editing
+  // a part in the context of an assembly.
+  private referenceGroup!: THREE.Group;
+  private referenceMeshes: THREE.Object3D[] = [];
   // REQ 631 — selected sketch lines use Line2 with a real pixel linewidth.
   // Shared across all selected entities; resolution updated on canvas resize.
   // syncSketches' disposal loop skips this so it survives across rebuilds.
@@ -693,10 +773,21 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // a visible notice instead of a silent blank viewport.
   webglUnavailable = signal(false);
   private didNavDrag = false;   // suppress click-select after a left-drag navigate
+  // CAD-782 assembly component drag. A press on a draggable component becomes a
+  // candidate; it engages as a drag only once the pointer passes the threshold,
+  // so a press-and-release still selects.
+  private dragCandidate: { instanceId: string; startX: number; startY: number } | null = null;
+  private dragActiveInstanceId: string | null = null;
   private orbitTheta = Math.PI / 4;
   private orbitPhi = Math.PI / 4;
   private orbitTarget = new THREE.Vector3(0, 0, 0);
   private orbitDistance = 180;
+  /** Bumped when zoom (orbitDistance) changes enough to warrant re-tessellating
+   * sketch curves at the new view scale. The sketch-overlay effect tracks it so
+   * circles/arcs stay smooth at any zoom. Throttled (not per wheel tick). */
+  private viewEpoch = signal(0);
+  /** orbitDistance at the last viewEpoch bump — used to throttle rebuilds. */
+  private viewEpochDistance = 180;
   // When non-null, updateCamera positions along this vector instead of
   // through orbitTheta/orbitPhi spherical coords. Set by orientToPlane
   // when the user enters a sketch; cleared by restoreCameraUp on exit.
@@ -715,6 +806,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const g = this.geometry();
       if (this.scene && g) this.syncGeometry(g);
+    });
+    // CAD-790 — ghost reference geometry (in-context editing).
+    effect(() => {
+      const ref = this.referenceGeometry();
+      if (this.scene) this.syncReference(ref);
     });
     // Section view (REQ 766) — a single global clipping plane on the renderer.
     effect(() => {
@@ -753,6 +849,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       // smartDimPreview tracked so the Smart Dim cursor preview re-renders
       // on every cursor move during the in-progress pick.
       void this.smartDimPreview();
+      // viewEpoch tracked so curves re-tessellate (smooth) when zoom changes.
+      void this.viewEpoch();
       if (this.scene) this.syncSketches(doc, active, selected, axisId);
     });
     // REQ 619 — apply display-mode toggles to existing face + edge meshes.
@@ -1144,6 +1242,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.scene.add(this.featurePreviewGroup);
     this.edgeGroup = new THREE.Group();
     this.scene.add(this.edgeGroup);
+    this.referenceGroup = new THREE.Group();
+    this.scene.add(this.referenceGroup);
+    this.syncReference(this.referenceGeometry());
 
     // Input handlers.
     const canvas = this.renderer.domElement;
@@ -1192,6 +1293,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const animate = () => {
       this.rafHandle = requestAnimationFrame(animate);
       this.renderer.render(this.scene, this.camera);
+      this.updateLabelOcclusion();
       this.labelRenderer.render(this.scene, this.camera);
       if (this.cubeRenderer && this.cubeScene && this.cubeCamera && this.cubeMesh) {
         // Cube rotation = inverse of main camera's rotation, so the face
@@ -1266,6 +1368,38 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // change rescales the frustum to match. Zoom wheel mutates orbitDistance
     // then re-enters here, so this single hook keeps projection in sync.
     if (this.camera.isOrthographicCamera) this.updateOrthoFrustum();
+    // Keep sketch points a constant on-screen size, and re-tessellate curves
+    // when the zoom changed enough to matter.
+    this._scaleSketchPoints();
+    this._maybeBumpViewEpoch();
+  }
+
+  /** Chord tolerance for sketch curve tessellation at the current zoom: smaller
+   * (more segments) when zoomed in, so circles/arcs always look smooth. */
+  private sketchChordTol(): number {
+    return Math.max(MIN_CHORD_TOL, this.orbitDistance * CHORD_SCREEN_FRAC);
+  }
+
+  /** Scale every sketch-entity point sphere to a constant on-screen size for the
+   * current zoom (they're built at unit radius + tagged with a screen frac). */
+  private _scaleSketchPoints(): void {
+    if (!this.sketchGroup) return;
+    this.sketchGroup.traverse((o) => {
+      const frac = (o.userData as { sketchPointFrac?: number }).sketchPointFrac;
+      if (frac) o.scale.setScalar(Math.max(0.05, this.orbitDistance * frac));
+    });
+  }
+
+  /** Bump viewEpoch when zoom changed enough (±~25%) to re-tessellate curves at
+   * the new scale. Throttled so a zoom gesture rebuilds the overlay only a few
+   * times, not per wheel tick. */
+  private _maybeBumpViewEpoch(): void {
+    const base = this.viewEpochDistance || this.orbitDistance;
+    const ratio = this.orbitDistance / base;
+    if (ratio > 1.25 || ratio < 0.8) {
+      this.viewEpochDistance = this.orbitDistance;
+      this.viewEpoch.update((v) => v + 1);
+    }
   }
 
   /** Rotate the view 90° about the look axis (in-plane roll), animated. `sign`
@@ -1802,6 +1936,23 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       else if (ev.ctrlKey || ev.metaKey) this.zoomDragging = true;
       else this.orbiting = true;
     } else if (ev.button === 0 && !inSketch) {
+      // CAD-782: in assembly mode, a left press on a draggable component arms a
+      // drag candidate (it translates the component) instead of orbiting. A
+      // press on a NON-draggable component just selects (no orbit) — only a
+      // press on empty space falls through to orbit the camera.
+      if (this.assemblyDrag()) {
+        this.updatePointer(ev);
+        const id = this.pickFeatureInfo(ev).featureId;
+        if (id) {
+          if (this.draggableInstanceIds().has(id)) {
+            this.dragCandidate = { instanceId: id, startX: ev.clientX, startY: ev.clientY };
+            (ev.target as Element).setPointerCapture?.(ev.pointerId);
+          }
+          // Pressed on a component (draggable or not): don't orbit. onClick
+          // still fires for selection.
+          return;
+        }
+      }
       // Left-drag navigates per the active nav-mode button; a click (no drag)
       // still falls through to onClick for selection.
       const m = this.navMode();
@@ -1824,6 +1975,26 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const dy = ev.clientY - this.lastPointer.y;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
     if ((this.orbiting || this.panning || this.zoomDragging) && (dx || dy)) this.didNavDrag = true;
+    // CAD-782: assembly component drag takes priority over the nav gestures
+    // (which are never armed while a drag candidate is active).
+    if (this.dragCandidate) {
+      const cand = this.dragCandidate;
+      const totalDx = ev.clientX - cand.startX;
+      const totalDy = ev.clientY - cand.startY;
+      if (this.dragActiveInstanceId || exceedsDragThreshold(totalDx, totalDy)) {
+        if (!this.dragActiveInstanceId) {
+          this.dragActiveInstanceId = cand.instanceId;
+          // Edges aren't tagged per instance, so suppress the whole edge layer
+          // during the drag to avoid a ghost outline trailing the moved faces;
+          // it's restored from the regen rebuild on release.
+          this.edgeGroup.visible = false;
+          this.didNavDrag = true; // suppress the trailing click-select
+        }
+        const delta = this.dragWorldDelta(totalDx, totalDy);
+        this.offsetDraggedInstance(delta);
+      }
+      return;
+    }
     if (this.orbiting) {
       // Free orbit is a world-Y-up turntable. Reset the up here so orbiting
       // away from a canonical pole view (Top/Bottom, which set a horizontal
@@ -1861,7 +2032,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         this.updateHover();
       }
       const p = this.toSketchCoords(ev);
-      if (p) this.zone.run(() => this.sketchPointerMove.emit(p));
+      if (p) {
+        const pointTolerance = this.pixelsToSketchUnits(this.POINT_PICK_PX);
+        this.zone.run(() => this.sketchPointerMove.emit({ ...p, pointTolerance }));
+      }
     } else {
       this.updatePointer(ev);
       this.updateHover();
@@ -1869,6 +2043,25 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   };
 
   private onPointerUp = (ev: PointerEvent) => {
+    // CAD-783: finish an assembly component drag — emit the final world delta
+    // for the editor to persist + re-solve. A candidate that never engaged a
+    // drag (press-release under threshold) falls through to onClick for select.
+    if (this.dragCandidate) {
+      const cand = this.dragCandidate;
+      const activeId = this.dragActiveInstanceId;
+      this.dragCandidate = null;
+      this.dragActiveInstanceId = null;
+      (ev.target as Element).releasePointerCapture?.(ev.pointerId);
+      if (activeId) {
+        const delta = this.dragWorldDelta(ev.clientX - cand.startX, ev.clientY - cand.startY);
+        // Optimistic hold: keep the dragged faces at the drop position (their
+        // live mesh offset) and keep the stale edge layer hidden until the
+        // regen result arrives — syncGeometry rebuilds both with the solved
+        // placement and restores edge visibility.
+        this.zone.run(() => this.instanceDragEnd.emit({ instanceId: activeId, delta }));
+      }
+      return;
+    }
     if (this.activeSketchId() !== null && ev.button === 0) {
       const p = this.toSketchCoords(ev);
       if (p) this.zone.run(() => this.sketchPointerUp.emit(p));
@@ -1923,6 +2116,34 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     return { x: offset.dot(xAxis), y: offset.dot(yAxis) };
   }
 
+  /** CAD-782: total screen-pixel delta since drag start → world translation in
+   * the camera view plane, using the camera's right/up basis at the current
+   * orbit distance (units-per-pixel = visible world height / canvas height). */
+  private dragWorldDelta(totalDx: number, totalDy: number): [number, number, number] {
+    const unitsPerPixel = this.pixelsToSketchUnits(1);
+    const m = this.camera.matrix;
+    const right = new THREE.Vector3().setFromMatrixColumn(m, 0).normalize();
+    const up = new THREE.Vector3().setFromMatrixColumn(m, 1).normalize();
+    return screenDeltaToWorld(
+      totalDx, totalDy,
+      [right.x, right.y, right.z], [up.x, up.y, up.z],
+      unitsPerPixel,
+    );
+  }
+
+  /** CAD-782: live-offset every face mesh of the dragged component by `delta`
+   * (world units). Faces carry `userData.featureId === instanceId` in assembly
+   * mode. Pass [0,0,0] to clear before the regen rebuild on release. */
+  private offsetDraggedInstance(delta: [number, number, number]): void {
+    const id = this.dragActiveInstanceId;
+    if (!id) return;
+    for (const mesh of this.faceMeshes.values()) {
+      if ((mesh.userData as { featureId?: string | null }).featureId === id) {
+        mesh.position.set(delta[0], delta[1], delta[2]);
+      }
+    }
+  }
+
   private onWheel = (ev: WheelEvent) => {
     ev.preventDefault();
     const factor = ev.deltaY > 0 ? 1.1 : 1 / 1.1;
@@ -1965,44 +2186,63 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // body's geometry while the sketch is active.
     if (this.activeSketchId() !== null) {
       this.updatePointer(ev);
-      // Edge-pick under sketch — used by Convert Entities to project a
-      // body edge onto the sketch plane.
+      // Cross-part Convert Entities (in-context): a reference VERTEX is a small
+      // target — check it first so aiming at one wins over the edge behind it.
+      if (this.edgePickMode()) {
+        const cpv = this._pickReferenceVertex();
+        if (cpv) { this.zone.run(() => this.crossPartVertexPicked.emit(cpv)); return; }
+      }
+      // Edge-pick under sketch — Convert Entities projects a body edge (local)
+      // or another component's edge (cross-part) onto the sketch plane.
       if (this.edgePickMode()) {
         const prevThreshold = this.raycaster.params.Line?.threshold ?? 1;
         this.raycaster.setFromCamera(this.pointer, this.camera);
-        this.raycaster.params.Line = { threshold: 3 };
+        this.raycaster.params.Line = { threshold: this.pixelsToSketchUnits(this.PICK_PX) };  // zoom-adaptive: constant on-screen edge-pick zone
         const candidates: THREE.Object3D[] = [];
         for (const set of this.faceEdges.values()) {
           if ((set.front.userData as { edgeId?: string }).edgeId) candidates.push(set.front);
         }
+        if (this.referenceGroup) {
+          for (const o of this.referenceGroup.children) {
+            if ((o.userData as { overlayEdge?: OverlayEdge }).overlayEdge) candidates.push(o);
+          }
+        }
         const hits = this.raycaster.intersectObjects(candidates, false);
         this.raycaster.params.Line = { threshold: prevThreshold };
         if (hits.length > 0) {
-          const ud = hits[0].object.userData as { edgeRecord?: { edgeId: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]]; polylineLength: number } };
-          if (ud.edgeRecord) {
-            this.zone.run(() => this.edgePicked.emit(ud.edgeRecord!));
-            return;
-          }
+          const ud = hits[0].object.userData as {
+            edgeRecord?: { edgeId: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]]; polylineLength: number };
+            overlayEdge?: OverlayEdge;
+          };
+          if (ud.overlayEdge) { this.zone.run(() => this.crossPartEdgePicked.emit(ud.overlayEdge!)); return; }
+          if (ud.edgeRecord) { this.zone.run(() => this.edgePicked.emit(ud.edgeRecord!)); return; }
         }
         // Edge picker armed but no hit — fall through to sketch click
         // so the user can still draw / select on the sketch plane.
       }
-      // Face-pick under sketch — likewise for Convert Entities on a
-      // face (projects all its boundary edges).
+      // Face-pick under sketch — projects all of a face's boundary edges
+      // (local) or another component's face's boundary (cross-part).
       if (this.facePickMode()) {
         this.raycaster.setFromCamera(this.pointer, this.camera);
-        const hits = this.raycaster.intersectObjects(this.faceGroup.children, false);
+        const faceCandidates: THREE.Object3D[] = [...this.faceGroup.children];
+        if (this.referenceGroup) {
+          for (const o of this.referenceGroup.children) {
+            if ((o.userData as { overlayFace?: OverlayFace }).overlayFace) faceCandidates.push(o);
+          }
+        }
+        const hits = this.raycaster.intersectObjects(faceCandidates, false);
         if (hits.length > 0) {
           const hit = hits[0];
-          const fid = (hit.object.userData as { faceId?: string }).faceId;
-          if (fid) {
+          const ud = hit.object.userData as { faceId?: string; overlayFace?: OverlayFace };
+          if (ud.overlayFace) { this.zone.run(() => this.crossPartFacePicked.emit(ud.overlayFace!)); return; }
+          if (ud.faceId) {
             const p = hit.point;
             const n = hit.face?.normal
               ? hit.face.normal.clone().transformDirection((hit.object as THREE.Object3D).matrixWorld).normalize()
               : new THREE.Vector3(0, 0, 1);
             this.zone.run(() => {
-              this.facePicked.emit(fid);
-              this.facePickedAt.emit({ faceId: fid, point: [p.x, p.y, p.z], normal: [n.x, n.y, n.z] });
+              this.facePicked.emit(ud.faceId!);
+              this.facePickedAt.emit({ faceId: ud.faceId!, point: [p.x, p.y, p.z], normal: [n.x, n.y, n.z] });
             });
             return;
           }
@@ -2056,7 +2296,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (this.edgePickMode()) {
       const prevThreshold = this.raycaster.params.Line?.threshold ?? 1;
       this.raycaster.setFromCamera(this.pointer, this.camera);
-      this.raycaster.params.Line = { threshold: 3 };
+      this.raycaster.params.Line = { threshold: this.pixelsToSketchUnits(this.PICK_PX) };  // zoom-adaptive: constant on-screen edge-pick zone
       const candidates: THREE.Object3D[] = [];
       for (const set of this.faceEdges.values()) {
         if ((set.front.userData as { edgeId?: string }).edgeId) candidates.push(set.front);
@@ -2082,6 +2322,22 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (this.facePickMode()) {
       this.raycaster.setFromCamera(this.pointer, this.camera);
       const hits = this.raycaster.intersectObjects(this.faceGroup.children, false);
+      // Datum picking: a component datum plane/axis/origin can also be a mate
+      // reference (emitted as a face-style `instanceId::datumId` ref).
+      const datumHits = this.datumGroup ? this.raycaster.intersectObjects(this.datumGroup.children, true) : [];
+      const faceD = hits.length ? hits[0].distance : Infinity;
+      const datumD = datumHits.length ? datumHits[0].distance : Infinity;
+      if (datumHits.length && datumD <= faceD) {
+        const ref = this.componentDatumFaceRef(this.datumIdOfObject(datumHits[0].object));
+        if (ref) {
+          const p = datumHits[0].point;
+          this.zone.run(() => {
+            this.facePicked.emit(ref);
+            this.facePickedAt.emit({ faceId: ref, point: [p.x, p.y, p.z], normal: [0, 0, 1] });
+          });
+          return;
+        }
+      }
       if (hits.length > 0) {
         const hit = hits[0];
         const fid = (hit.object.userData as { faceId?: string }).faceId;
@@ -2160,6 +2416,22 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     };
   }
 
+  /** Walk up to the datum id stored on a datum mesh/group (axes wrap the line
+   * in a group; planes carry it on the mesh). */
+  private datumIdOfObject(obj: THREE.Object3D | undefined): string | null {
+    let o: THREE.Object3D | null | undefined = obj;
+    while (o) { const id = (o.userData as { datumId?: string }).datumId; if (id) return id; o = o.parent; }
+    return null;
+  }
+  /** Convert a COMPONENT datum id (`inst:<instanceId>:<datumId>`) into a
+   * face-style scoped mate reference (`<instanceId>::<datumId>`). The assembly's
+   * own origin datums (no `inst:` prefix) aren't mateable instances → null. */
+  private componentDatumFaceRef(datumId: string | null): string | null {
+    if (!datumId) return null;
+    const m = /^inst:([^:]+):(.+)$/.exec(datumId);
+    return m ? `${m[1]}::${m[2]}` : null;
+  }
+
   private updatePointer(ev: MouseEvent) {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
@@ -2173,7 +2445,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private _updateEdgeHover(): void {
     const prevThreshold = this.raycaster.params.Line?.threshold ?? 1;
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    this.raycaster.params.Line = { threshold: 3 };
+    this.raycaster.params.Line = { threshold: this.pixelsToSketchUnits(this.PICK_PX) };  // zoom-adaptive: constant on-screen edge-pick zone
     const candidates: THREE.Object3D[] = [];
     for (const set of this.faceEdges.values()) {
       if ((set.front.userData as { edgeId?: string }).edgeId) candidates.push(set.front);
@@ -2217,6 +2489,88 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     return null;
   }
 
+  /** Template-callable wrapper for the hover row of the debug overlay. */
+  shortPickLabelPublic(id: string): string {
+    return this._shortPickLabel(id);
+  }
+
+  /** Short human label for a pick id: face persistent-name JSON collapses to
+   * `f3p1v6l122 top` / `f… #4`; datum / edge ids pass through (truncated). */
+  private _shortPickLabel(id: string): string {
+    if (id.startsWith('datum:')) return id;
+    try {
+      const o = JSON.parse(id) as { feature_id?: string; role?: string; sub_index?: number };
+      const feat = (o.feature_id || '?').split('#')[0];
+      const role = o.role === 'cap_top' ? 'top' : o.role === 'cap_bottom' ? 'bottom' : (o.role || '');
+      const sub = o.role === 'side' && o.sub_index !== undefined ? ` #${o.sub_index}` : '';
+      return `${feat} ${role}${sub}`;
+    } catch {
+      return id.length > 28 ? `${id.slice(0, 28)}…` : id;
+    }
+  }
+
+  /** Build the 3D pick-debug payload from this pointermove's raycasts: all
+   * face hits (depth order, nearest = the would-be winner), edge hits within
+   * the zoom-adaptive threshold (capped at depthCap, like the real edge
+   * hover), datum hits, and a vertex hit when vertex picking is armed.
+   * Runs with raycaster.far already set to depthCap by the caller. */
+  private _updatePickDebug(
+    faceHits: THREE.Intersection[],
+    frontFaceDist: number,
+    depthCap: number,
+  ): void {
+    const items: Array<{ kind: string; label: string; dist: string; winner: boolean }> = [];
+    // Faces — uncapped hits the caller already computed; everything after the
+    // first is what the cursor is "near but behind".
+    faceHits.slice(0, 8).forEach((h, i) => {
+      const id = (h.object.userData as { faceId?: string }).faceId;
+      if (!id) return;
+      items.push({ kind: 'face', label: this._shortPickLabel(id), dist: h.distance.toFixed(1), winner: i === 0 });
+    });
+    // Edges within the pick threshold (same params as _updateEdgeHover).
+    const prevThreshold = this.raycaster.params.Line?.threshold ?? 1;
+    this.raycaster.params.Line = { threshold: this.pixelsToSketchUnits(this.PICK_PX) };
+    const edgeCandidates: THREE.Object3D[] = [];
+    for (const set of this.faceEdges.values()) {
+      if ((set.front.userData as { edgeId?: string }).edgeId) edgeCandidates.push(set.front);
+    }
+    const edgeHits = this.raycaster.intersectObjects(edgeCandidates, false);
+    this.raycaster.params.Line = { threshold: prevThreshold };
+    edgeHits.slice(0, 4).forEach((h, i) => {
+      const id = (h.object.userData as { edgeId?: string }).edgeId;
+      if (!id) return;
+      items.push({ kind: 'edge', label: id, dist: h.distance.toFixed(1), winner: i === 0 && this.edgePickMode() });
+    });
+    // Datums (always raycast — they only win when faces miss).
+    const datumHits = this.raycaster.intersectObjects(this.datumGroup.children, true);
+    if (datumHits.length > 0) {
+      let obj: THREE.Object3D | null = datumHits[0].object;
+      while (obj && !(obj.userData as { datumId?: string }).datumId) obj = obj.parent;
+      if (obj) {
+        items.push({
+          kind: 'datum',
+          label: String((obj.userData as { datumId?: string }).datumId),
+          dist: datumHits[0].distance.toFixed(1),
+          winner: faceHits.length === 0,
+        });
+      }
+    }
+    if (this.vertexPickMode()) {
+      const vid = this.pickVertex();
+      if (vid) items.push({ kind: 'vertex', label: vid, dist: '—', winner: true });
+    }
+    const modes = [
+      this.vertexPickMode() ? 'vertex' : '',
+      this.edgePickMode() ? 'edge' : '',
+      this.facePickMode() ? 'face' : '',
+    ].filter(Boolean).join('+') || 'select';
+    const cap = frontFaceDist === Infinity ? '∞' : `${frontFaceDist.toFixed(1)} (+${(depthCap - frontFaceDist).toFixed(1)})`;
+    const key = `${modes}|${cap}|${items.map(i => `${i.kind}:${i.label}:${i.dist}:${i.winner}`).join(',')}`;
+    if (key === this.lastPickDebugKey) return;
+    this.lastPickDebugKey = key;
+    this.pickDebug.set({ modes, cap, items });
+  }
+
   private updateHover() {
     // Compute the nearest front-face hit distance ONCE per pointermove.
     // Used as a depth cap for vertex / edge raycasts so picks on the
@@ -2234,6 +2588,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const prevFar = this.raycaster.far;
     this.raycaster.far = depthCap;
     try {
+      // Debug overlay: collect EVERY candidate near the cursor before the
+      // mode branches below pick a single winner (their early returns would
+      // otherwise skip it).
+      this._updatePickDebug(faceHits, frontFaceDist, depthCap);
       // Vertex pick runs FIRST when armed. If a vertex marker is in
       // front of (or on) the nearest face, it wins.
       if (this.vertexPickMode()) {
@@ -2352,7 +2710,32 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       });
     }
     this.datumMeshes.clear();
+    this.datumLabels = [];
     for (const d of datums) this.addDatum(d);
+  }
+
+  /** Hide datum plane labels that sit behind solid geometry. CSS2D labels are
+   * a DOM overlay with no depth test, so without this they read through parts.
+   * Orthographic camera → cast a ray along the view direction through each
+   * label and hide it when a face is in front of it. */
+  private updateLabelOcclusion() {
+    const labels = this.datumLabels;
+    if (labels.length === 0) return;
+    const faces = this.faceGroup.children;
+    if (faces.length === 0) { for (const l of labels) l.visible = true; return; }
+    const forward = new THREE.Vector3();
+    this.camera.getWorldDirection(forward);
+    const BIG = 100000;
+    const p = new THREE.Vector3();
+    const origin = new THREE.Vector3();
+    for (const label of labels) {
+      label.getWorldPosition(p);
+      origin.copy(p).addScaledVector(forward, -BIG);
+      this.occlusionRaycaster.set(origin, forward);
+      const hits = this.occlusionRaycaster.intersectObjects(faces, false);
+      // A hit closer than the label (distance < BIG) sits in front → occluded.
+      label.visible = !(hits.length > 0 && hits[0].distance < BIG - 1);
+    }
   }
 
   private addDatum(d: DatumElement) {
@@ -2439,6 +2822,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const labelObj = new CSS2DObject(labelEl);
       labelObj.position.set(-38, 38, 0); // top-left corner of the 80×80 quad (plane-local)
       mesh.add(labelObj);
+      this.datumLabels.push(labelObj);
       this.datumGroup.add(mesh);
       this.datumMeshes.set(d.id, mesh);
     }
@@ -2454,9 +2838,92 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     }
   }
 
+  /** CAD-790 — render the other components as translucent ghosts in the edited
+   * part's frame. Meshes carry `userData.instanceId` + scoped ids so a
+   * cross-part Convert-Entities pick can report which component was clicked. */
+  /** Raycast the reference-vertex Points cloud (cross-part Convert). Returns
+   * the hit OverlayVertex, or null. The pointer must already be updated. */
+  private _pickReferenceVertex(): OverlayVertex | null {
+    if (!this.referenceGroup) return null;
+    const cloud = this.referenceGroup.children.find(
+      (o) => (o.userData as { overlayVertices?: OverlayVertex[] }).overlayVertices,
+    ) as THREE.Points | undefined;
+    if (!cloud) return null;
+    const prev = this.raycaster.params.Points?.threshold ?? 1;
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    this.raycaster.params.Points = { threshold: 4 };
+    const hits = this.raycaster.intersectObject(cloud, false);
+    this.raycaster.params.Points = { threshold: prev };
+    if (!hits.length || hits[0].index == null) return null;
+    return (cloud.userData as { overlayVertices: OverlayVertex[] }).overlayVertices[hits[0].index] ?? null;
+  }
+
+  private syncReference(ref: InContextOverlay | null) {
+    if (!this.referenceGroup) return;
+    for (const o of this.referenceMeshes) {
+      this.referenceGroup.remove(o);
+      o.traverse((c) => {
+        const m = (c as THREE.Mesh).material as THREE.Material | undefined;
+        if (m) (Array.isArray(m) ? m : [m]).forEach((x) => x.dispose());
+        const g = (c as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+        if (g) g.dispose();
+      });
+    }
+    this.referenceMeshes = [];
+    if (!ref) return;
+    for (const f of ref.faces) {
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(f.positions, 3));
+      geom.setAttribute('normal', new THREE.BufferAttribute(f.normals, 3));
+      geom.setIndex(new THREE.BufferAttribute(f.indices, 1));
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0x6f7a8a, metalness: 0.05, roughness: 0.85,
+        transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      // `overlayFace` carries the full source descriptor so a cross-part
+      // Convert pick can enumerate the face's boundary edges in the editor.
+      mesh.userData = { reference: true, instanceId: f.instanceId, faceId: f.faceId, overlayFace: f };
+      this.referenceGroup.add(mesh);
+      this.referenceMeshes.push(mesh);
+    }
+    for (const e of ref.edges) {
+      const pts = e.polyline.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
+      if (pts.length < 2) continue;
+      const geom = new THREE.BufferGeometry().setFromPoints(pts);
+      const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0x8a96a6, transparent: true, opacity: 0.55 }));
+      line.userData = {
+        reference: true, instanceId: e.instanceId, overlayEdge: e,
+        edgeRecord: { edgeId: e.id, isStraight: e.isStraight, endpoints: [e.polyline[0], e.polyline[e.polyline.length - 1]], polylineLength: e.polyline.length },
+      };
+      this.referenceGroup.add(line);
+      this.referenceMeshes.push(line);
+    }
+    if (ref.vertices.length) {
+      // One Points cloud for all reference vertices; the hit index maps back to
+      // the overlay vertex (carried on the cloud's userData) for cross-part
+      // vertex Convert.
+      const arr = new Float32Array(ref.vertices.length * 3);
+      for (let i = 0; i < ref.vertices.length; i++) {
+        arr[i * 3] = ref.vertices[i].position[0];
+        arr[i * 3 + 1] = ref.vertices[i].position[1];
+        arr[i * 3 + 2] = ref.vertices[i].position[2];
+      }
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+      const pts = new THREE.Points(geom, new THREE.PointsMaterial({ color: 0x8a96a6, size: 5, sizeAttenuation: false, transparent: true, opacity: 0.7 }));
+      pts.userData = { reference: true, overlayVertices: ref.vertices };
+      this.referenceGroup.add(pts);
+      this.referenceMeshes.push(pts);
+    }
+  }
+
   private syncGeometry(g: ModelGeometry) {
     // Datums driven by visibility settings on the model.
     this.syncDatums(g.datums);
+    // Re-show the edge layer (hidden during an assembly component drag — the
+    // rebuild below repopulates it at the solved positions).
+    this.edgeGroup.visible = true;
     // Clear and rebuild face + edge meshes (face IDs reshuffle on every regen).
     for (const mesh of this.faceMeshes.values()) {
       this.faceGroup.remove(mesh);
@@ -2717,17 +3184,19 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       case 'line':
         return this.makePreviewLine([project(item.start), project(item.end)], previewColor);
       case 'circle': {
-        const pts = tessellateCircle(item.center, item.radius, DEFAULT_CHORD_TOLERANCE);
+        const pts = tessellateCircle(item.center, item.radius, this.sketchChordTol());
         return this.makePreviewLine(pts.map(project), previewColor);
       }
       case 'arc': {
         const startAngle = Math.atan2(item.start.y - item.center.y, item.start.x - item.center.x);
         const endAngle = Math.atan2(item.end.y - item.center.y, item.end.x - item.center.x);
-        const pts = tessellateArc(item.center, item.radius, startAngle, endAngle, item.ccw, DEFAULT_CHORD_TOLERANCE);
+        const pts = tessellateArc(item.center, item.radius, startAngle, endAngle, item.ccw, this.sketchChordTol());
         return this.makePreviewLine(pts.map(project), previewColor);
       }
       case 'point-marker': {
-        const geom = new THREE.SphereGeometry(item.style === 'cursor' ? 0.9 : 1.3, 12, 8);
+        // Adaptive size → constant on-screen (this preview rebuilds on cursor move).
+        const baseR = (item.style === 'cursor' ? 0.9 : 1.3) * (this.orbitDistance / 180);
+        const geom = new THREE.SphereGeometry(Math.max(0.02, baseR), 12, 8);
         const mat = new THREE.MeshBasicMaterial({
           color: item.style === 'cursor' ? 0xffffff : previewColor,
           depthTest: false,
@@ -2740,10 +3209,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       case 'snap-indicator': {
         // Distinct glyph per snap kind so the user can read WHY they
         // snapped: square = endpoint, triangle = midpoint, X = intersection,
-        // diamond = quadrant. Older callers without a snapKind get the
-        // default endpoint square. All drawn at the same scale, in yellow,
-        // sized in sketch units so they grow / shrink with the camera.
-        const r = 2.5;
+        // diamond = quadrant, ring = on-edge. Drawn at a CONSTANT on-screen
+        // size (the preview rebuilds on cursor move, so adaptive build size
+        // keeps it steady regardless of zoom).
+        const r = 2.5 * (this.orbitDistance / 180);
         const yellow = 0xffeb3b;
         const kind = item.snapKind ?? 'endpoint';
         const pts: Array<{ x: number; y: number }> = [];
@@ -2777,6 +3246,16 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
             { x: item.x - r, y: item.y },
             { x: item.x,     y: item.y + r },
           );
+          return this.makePreviewLine(pts.map(project), yellow, true);
+        }
+        if (kind === 'on-edge') {
+          // Ring (small circle) — "coincident with a model edge". Distinct from
+          // the point-snap glyphs so the user reads it as an on-edge inference.
+          const SEG = 16;
+          for (let i = 0; i <= SEG; i++) {
+            const a = (i / SEG) * Math.PI * 2;
+            pts.push({ x: item.x + r * Math.cos(a), y: item.y + r * Math.sin(a) });
+          }
           return this.makePreviewLine(pts.map(project), yellow, true);
         }
         // intersection — render as an X (two crossed line segments).
@@ -3670,14 +4149,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   }
 
   /** Build a small filled triangular arrowhead at `tip`, pointing away
-   * from `from`. Two-sided so it reads from either camera side. Sketch-
-   * unit sized so it scales with zoom — small enough not to dominate
-   * unless the user is zoomed close. */
+   * from `from`. Two-sided so it reads from either camera side. Sized
+   * from orbitDistance so the arrowhead stays a CONSTANT on-screen size
+   * at any zoom (the overlay rebuilds on viewEpoch zoom steps), matching
+   * the sketch points / origin marker / hover hints. */
   private makeDimArrowhead(
     sketch: Sketch, tip: { x: number; y: number }, from: { x: number; y: number }, color: number,
   ): THREE.Mesh {
-    const ARROW_LEN = 3;
-    const ARROW_HALF_WIDTH = 1;
+    const ARROW_LEN = this.orbitDistance * DIM_ARROW_LEN_FRAC;
+    const ARROW_HALF_WIDTH = this.orbitDistance * DIM_ARROW_WIDTH_FRAC;
     const dx = tip.x - from.x, dy = tip.y - from.y;
     const len = Math.hypot(dx, dy);
     // Direction from `from` to `tip` (the arrow's forward axis in 2D).
@@ -3957,38 +4437,40 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   }
 
   private buildSketchOriginMarker(sketch: Sketch): THREE.Group {
+    // The group is positioned AT the origin with LOCAL-coord children, so
+    // scaling it (for constant on-screen size) scales about the marker centre
+    // rather than translating it. Tagged so _scaleSketchPoints keeps it a
+    // constant screen size at any zoom (frac 1/180 = "keep default size").
     const markerGroup = new THREE.Group();
-    const origin = new THREE.Vector3(...sketch.plane.origin);
+    markerGroup.position.set(...sketch.plane.origin);
     const xAxis = new THREE.Vector3(...sketch.plane.xAxis);
     const yAxis = new THREE.Vector3(...sketch.plane.yAxis);
     const AXIS_LEN = 20;
+    const zero = new THREE.Vector3(0, 0, 0);
 
     const sphere = new THREE.Mesh(
       new THREE.SphereGeometry(0.9, 12, 8),
       new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }),
     );
-    sphere.position.copy(origin);
     sphere.renderOrder = 3;
     markerGroup.add(sphere);
 
-    const xEnd = origin.clone().addScaledVector(xAxis, AXIS_LEN);
-    const xGeom = new THREE.BufferGeometry().setFromPoints([origin.clone(), xEnd]);
     const xLine = new THREE.Line(
-      xGeom,
+      new THREE.BufferGeometry().setFromPoints([zero.clone(), xAxis.clone().multiplyScalar(AXIS_LEN)]),
       new THREE.LineBasicMaterial({ color: 0xe53935, depthTest: false }),
     );
     xLine.renderOrder = 3;
     markerGroup.add(xLine);
 
-    const yEnd = origin.clone().addScaledVector(yAxis, AXIS_LEN);
-    const yGeom = new THREE.BufferGeometry().setFromPoints([origin.clone(), yEnd]);
     const yLine = new THREE.Line(
-      yGeom,
+      new THREE.BufferGeometry().setFromPoints([zero.clone(), yAxis.clone().multiplyScalar(AXIS_LEN)]),
       new THREE.LineBasicMaterial({ color: 0x43a047, depthTest: false }),
     );
     yLine.renderOrder = 3;
     markerGroup.add(yLine);
 
+    markerGroup.userData = { sketchPointFrac: 1 / 180 };
+    markerGroup.scale.setScalar(Math.max(0.05, this.orbitDistance / 180));
     return markerGroup;
   }
 
@@ -4047,7 +4529,6 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         // Fully-determined points in the active sketch fill green to
         // match the line/curve "fully constrained" coloring — gives an
         // at-a-glance view of which corner points still carry free DOFs.
-        const r = selected ? 1.6 : 1.1;
         const isDeterminedNow = isActive && dof !== 'over' && determined.has(e.id);
         const fillColor = selected
           ? 0xffb74d
@@ -4056,11 +4537,16 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
             : isDeterminedNow
               ? 0x4caf50
               : 0xffffff;
-        const geom = new THREE.SphereGeometry(r, 12, 8);
+        // Built at unit radius; `_scaleSketchPoints()` (run on every camera
+        // change) scales it so it stays a CONSTANT on-screen size regardless of
+        // zoom. The per-point screen fraction encodes the selected-vs-not size.
+        const geom = new THREE.SphereGeometry(1, 12, 8);
         const fillMat = new THREE.MeshBasicMaterial({ color: fillColor, depthTest: false });
         const mesh = new THREE.Mesh(geom, fillMat);
         mesh.position.copy(project(e));
         mesh.renderOrder = 4;
+        mesh.userData = { sketchPointFrac: selected ? POINT_SCREEN_FRAC_SEL : POINT_SCREEN_FRAC };
+        mesh.scale.setScalar(Math.max(0.05, this.orbitDistance * (mesh.userData as { sketchPointFrac: number }).sketchPointFrac));
         return mesh;
       }
       case 'line': {
@@ -4076,7 +4562,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       case 'circle': {
         const c = findPoint(sketch.state, e.centerId);
         if (!c) return null;
-        const pts2D = tessellateCircle({ x: c.x, y: c.y }, (e as CircleEntity).radius, DEFAULT_CHORD_TOLERANCE);
+        const pts2D = tessellateCircle({ x: c.x, y: c.y }, (e as CircleEntity).radius, this.sketchChordTol());
         const pts3 = pts2D.map(project);
         return selected
           ? this.makeThickSketchLine(pts3)
@@ -4092,7 +4578,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         const endAngle = Math.atan2(f.y - c.y, f.x - c.x);
         const pts2D = tessellateArc(
           { x: c.x, y: c.y }, arc.radius, startAngle, endAngle, arc.ccw,
-          DEFAULT_CHORD_TOLERANCE,
+          this.sketchChordTol(),
         );
         const pts3 = pts2D.map(project);
         return selected
@@ -4104,7 +4590,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         const m = findPoint(sketch.state, e.majorAxisEndId);
         if (!c || !m) return null;
         const pts2D = tessellateEllipse(
-          { x: c.x, y: c.y }, { x: m.x, y: m.y }, e.minorRadius, DEFAULT_CHORD_TOLERANCE,
+          { x: c.x, y: c.y }, { x: m.x, y: m.y }, e.minorRadius, this.sketchChordTol(),
         );
         const pts3 = pts2D.map(project);
         return selected
@@ -4119,7 +4605,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         const pts2D = tessellateSpline(
           ctrlPts.map(p => ({ x: p.x, y: p.y })),
           e.degree,
-          DEFAULT_CHORD_TOLERANCE,
+          this.sketchChordTol(),
         );
         const pts3 = pts2D.map(project);
         return selected
@@ -4130,7 +4616,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       case 'equation': {
         // Batch 6 — use the shared tessellator (returns [] for
         // unsupported conic types or invalid expressions).
-        const pts2D = tessellateEntity(sketch.state, e, DEFAULT_CHORD_TOLERANCE);
+        const pts2D = tessellateEntity(sketch.state, e, this.sketchChordTol());
         if (pts2D.length < 2) return null;
         const pts3 = pts2D.map(project);
         return selected ? this.makeThickSketchLine(pts3) : this.makeLineSegments(pts3, color, dashed);

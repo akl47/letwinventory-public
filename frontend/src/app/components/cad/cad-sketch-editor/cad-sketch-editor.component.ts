@@ -8,9 +8,10 @@ import { DomSanitizer } from '@angular/platform-browser';
 import { registerCadIcons } from '../cad-icons';
 import type {
   SketchDocument, SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity, SketchEntity,
-  ConstraintType,
+  ConstraintType, ReferenceCandidate, ExternalRef,
 } from '../../../cad/lib/types';
-import { pointsOf, linesOf, findPoint } from '../../../cad/lib/types';
+import { pointsOf, linesOf, findPoint, onEdgeLookupKey } from '../../../cad/lib/types';
+import { nearestCandidateHit, externalRefForCandidate, parseCandidateId, closestPointOnSegment } from '../../../cad/lib/externalSnap';
 import {
   addPoint, addLine, addCircle, addCircleByPoint, addArc, addArcByPoints, addConstraint, movePoint, deletePrimitive, emptySketchState,
   addRectangleCorners, addRectangleCenter, addRectangle3PtCorner, addRectangle3PtCenter, addParallelogram,
@@ -21,7 +22,7 @@ import {
 } from '../../../cad/lib/store';
 import { solveSketch, solveSketchAfterAdd } from '../../../cad/lib/solver';
 import { extractClosedLoops } from '../../../cad/lib/profile';
-import { pickEntity } from '../../../cad/lib/picking';
+import { pickEntity, distanceToEntity } from '../../../cad/lib/picking';
 import { inferLineEnd, type InferenceResult, type PendingConstraint } from '../../../cad/lib/inference';
 import { findEntity, isProjectedEntity } from '../../../cad/lib/types';
 import { previewDimension, chooseTwoPointDimType, twoPointDimValue, type DimensionRender } from '../../../cad/lib/dimensions';
@@ -65,6 +66,12 @@ type PendingPoint = {
    * tying it to that curve — SolidWorks-style "click on a line with a
    * tool drops a coincident-on-curve point". */
   onCurveId?: string;
+  /** Set when the click snapped onto a MODEL vertex / straight-edge
+   * projection (a ReferenceCandidate). The placing tool attaches an
+   * `on-edge` constraint carrying this ref to the point it creates, so the
+   * point references the model geometry without Convert Entities. Mutually
+   * exclusive with `pointId` / `onCurveId` (a real-geometry snap wins). */
+  externalRef?: ExternalRef;
 };
 
 interface ConstraintSpec {
@@ -112,10 +119,12 @@ const CONSTRAINT_SPECS: ConstraintSpec[] = [
       const hasLineOrCurve = es.some(e => isLineEntity(e) || isCurveEntity(e));
       return hasPoint && hasLineOrCurve;
     } },
+  // A single line (the line is horizontal) OR two points (the points share a
+  // y — SolidWorks-style point-pair horizontal alignment).
   { type: 'horizontal', label: 'Horizontal', icon: 'cad-horizontal',
-    predicate: es => es.length === 1 && isLineEntity(es[0]) },
+    predicate: es => (es.length === 1 && isLineEntity(es[0])) || (es.length === 2 && es.every(isPointEntity)) },
   { type: 'vertical', label: 'Vertical', icon: 'cad-vertical',
-    predicate: es => es.length === 1 && isLineEntity(es[0]) },
+    predicate: es => (es.length === 1 && isLineEntity(es[0])) || (es.length === 2 && es.every(isPointEntity)) },
   // Distance has moved exclusively to Smart Dim — point↔point distance is
   // its primary case (single click → place → type). Leaving a duplicate
   // button on the constraint toolbar caused users to pick the wrong path.
@@ -486,7 +495,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
       <button *ngFor="let spec of constraintSpecs"
               class="ribbon-button compact"
               [attr.data-testid]="'constraint-' + spec.type"
-              [disabled]="readonly() || !spec.predicate(selectedEntities())"
+              [disabled]="readonly() || !constraintEnabled(spec)"
               (click)="applyConstraint(spec)"
               [matTooltip]="spec.label">
         <mat-icon [svgIcon]="spec.icon"></mat-icon>
@@ -531,6 +540,20 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
          it when Mirror is active). State + commit/cancel methods live on
          this component and are wired through the #sketchEditor template
          ref. -->
+    @if (debugPick(); as dp) {
+      <div class="pick-debug">
+        <div class="pick-debug-row">cursor ({{ dp.raw.x | number:'1.2-2' }}, {{ dp.raw.y | number:'1.2-2' }}) → round ({{ dp.rounded.x }}, {{ dp.rounded.y }})</div>
+        <div class="pick-debug-row">tol curve={{ dp.tol | number:'1.2-2' }} · point={{ dp.ptol | number:'1.2-2' }}</div>
+        <div class="pick-debug-row">raw pick: <b>{{ dp.rawWinner }}</b></div>
+        <div class="pick-debug-row" [class.mismatch]="dp.rawWinner !== dp.roundWinner">click pick: <b>{{ dp.roundWinner }}</b></div>
+        <div class="pick-debug-sep">in range ({{ dp.items.length }}):</div>
+        @for (it of dp.items; track it.id) {
+          <div class="pick-debug-item" [class.out]="!it.within">
+            {{ it.kind }} {{ it.id.slice(0,10) }} — d={{ it.d | number:'1.2-2' }}{{ it.within ? '' : ' (out)' }}
+          </div>
+        }
+      </div>
+    }
   `,
   styles: [`
     /* Sketch toolbar lives inside the parent ribbon's ribbon-pane — the
@@ -538,6 +561,21 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
        ribbon-button class because component view encapsulation prevents shared
        CSS from reaching this template. */
     .sketch-toolbar { display: flex; align-items: stretch; gap: 4px; width: 100%; min-width: max-content; }
+    /* DEBUG pick-radius overlay — fixed bottom-right of the viewport,
+       raised clear of the editor footer. */
+    .pick-debug {
+      position: fixed; bottom: 64px; right: 12px; z-index: 1000;
+      background: rgba(15, 18, 24, 0.92); color: #cfd8dc;
+      font: 11px/1.45 monospace; padding: 8px 10px; border-radius: 6px;
+      border: 1px solid #37474f; max-width: 320px; pointer-events: none;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+    }
+    .pick-debug-row { white-space: nowrap; }
+    .pick-debug-row b { color: #fff; }
+    .pick-debug-row.mismatch b { color: #ff7043; }   /* raw vs click pick differ */
+    .pick-debug-sep { margin-top: 4px; opacity: 0.6; }
+    .pick-debug-item { white-space: nowrap; color: #80cbc4; }
+    .pick-debug-item.out { color: #78909c; opacity: 0.7; }
     .ribbon-divider { width: 1px; align-self: stretch; background: #444; margin: 8px 6px; flex-shrink: 0; }
     .status { font-size: 11px; opacity: 0.7; font-family: monospace; align-self: center; padding: 0 6px; white-space: nowrap; }
     .spacer { flex: 1; }
@@ -615,6 +653,11 @@ export class CadSketchEditorComponent implements OnDestroy {
   sketchId = input<string>('');
   doc = input<SketchDocument>({ sketches: {}, nextSketchSeq: 1 });
   readonly = input<boolean>(false);
+  /** Live 2D projections of model vertices/straight edges onto the active
+   * sketch plane (computed by cad-editor from the current topology). Used as
+   * implicit snap targets so a placed point can reference model geometry
+   * without Convert Entities (SolidWorks-style inference). */
+  candidates = input<ReferenceCandidate[]>([]);
   sketchChanged = output<SketchState>();
   exitSketch = output<void>();
   extrudeRequested = output<void>();
@@ -638,6 +681,33 @@ export class CadSketchEditorComponent implements OnDestroy {
   readonly transformTools = TRANSFORM_TOOLS;
 
   tool = signal<Tool>('select');
+  /** DEBUG: what the cursor's pick "sphere of influence" contains. Shows every
+   * sketch entity within the pick tolerance (with its distance), plus what
+   * pickEntity returns at the RAW cursor coords (what drag/hover uses) vs the
+   * ROUNDED integer coords (what a Select click uses) — so a divergence between
+   * the two is visible directly. */
+  debugPick = signal<{
+    raw: { x: number; y: number };
+    rounded: { x: number; y: number };
+    tol: number; ptol: number;
+    rawWinner: string | null;
+    roundWinner: string | null;
+    items: Array<{ id: string; kind: string; d: number; within: boolean }>;
+  } | null>(null);
+  /** True when the active tool DRAWS geometry (places points): primitives,
+   * circles/arcs, shapes. Used to gate the external-edge snap inference so it
+   * only appears while drawing — in Select mode the user picks model edges to
+   * relate to instead. */
+  isDrawingTool = computed<boolean>(() => {
+    const t = this.tool();
+    return PRIMITIVE_TOOL_SET.has(t) || CIRCLE_TOOL_SET.has(t) || SHAPE_TOOL_SET.has(t);
+  });
+  /** SolidWorks/OnShape-style: a MODEL edge picked in the viewer while in
+   * Select mode, held as a relation target alongside the sketch `selected`
+   * set. With a single sketch point also selected, Coincident makes that point
+   * ride the edge (an on-edge external reference). The id is the topology
+   * edgeId. */
+  selectedExternalEdgeId = signal<string | null>(null);
   /** Last-used tool per group. The split-button shows this variant's icon /
    * label and clicking the main button activates it. Updated by `setTool`
    * whenever a group member is activated (whether via the main button or
@@ -781,7 +851,7 @@ export class CadSketchEditorComponent implements OnDestroy {
   /** Per-entity determinacy. Drives the viewer's green/blue coloring on
    * an entity-by-entity basis (SW-style) instead of one monolithic flag
    * for the whole sketch. */
-  determinedEntities = computed<Set<string>>(() => analyzeDeterminacy(this.state()));
+  determinedEntities = computed<Set<string>>(() => analyzeDeterminacy(this.state(), this._externalEdgeLines()));
 
   // Selected entities resolved in click order. Constraint predicates run on this.
   selectedEntities = computed<SketchEntity[]>(() => {
@@ -1004,6 +1074,29 @@ export class CadSketchEditorComponent implements OnDestroy {
     // Register custom CAD icons once for the whole component tree.
     // Idempotent — safe across HMR + test setup.
     registerCadIcons(inject(MatIconRegistry), inject(DomSanitizer));
+    // Refresh the solver DOF when the projected edge geometry for edge-ride
+    // points becomes available (candidates load on regen) or changes. Without
+    // this, a sketch whose on-edge points were last solved before its
+    // candidates loaded keeps a stale, over-pinned DOF — e.g. falsely reads
+    // "fully constrained" when its endpoints can still slide along their edges.
+    // Only re-solves when there are edge-ref points whose edge is now known.
+    effect(() => {
+      const edges = this._externalEdgeLines();  // dep: re-fire when candidates change
+      untracked(() => {
+        const st = this.state();
+        const hasEdgeRide = st.constraints.some(c =>
+          c.type === 'on-edge' && c.externalRef && c.externalRef.scope !== 'cross-part'
+          && !!c.externalRef.edgeId && edges.has(c.externalRef.edgeId)
+          && c.targets.some(t => st.entities.find(e => e.id === t.entityId)?.kind === 'point'));
+        if (!hasEdgeRide) return;
+        const gen = this.latestCommitId;  // a real commit during the probe supersedes us
+        solveSketch(st, { externalEdges: edges }).then(r => {
+          if (this.latestCommitId !== gen) return;
+          this.solveStatus.set(r.status);
+          this.solverDof.set(r.dof);
+        });
+      });
+    });
     effect(() => {
       const tool = this.tool();
       // Everything inside `untracked` runs without registering the read
@@ -1085,6 +1178,9 @@ export class CadSketchEditorComponent implements OnDestroy {
 
   setTool(t: Tool) {
     this.tool.set(t);
+    // A selected model edge is a Select-mode relation target; leaving Select
+    // drops it so it can't linger into a drawing gesture.
+    if (t !== 'select') this.selectedExternalEdgeId.set(null);
     // Update last-used so the corresponding split-button main shows the
     // freshly-activated variant the next time the user opens that group.
     if (PRIMITIVE_TOOL_SET.has(t)) this.lastPrimitiveTool.set(t);
@@ -1092,6 +1188,26 @@ export class CadSketchEditorComponent implements OnDestroy {
     else if (SHAPE_TOOL_SET.has(t)) this.lastShapeTool.set(t);
     else if (EDIT_TOOL_SET.has(t)) this.lastEditTool.set(t);
     else if (TRANSFORM_TOOL_SET.has(t)) this.lastTransformTool.set(t);
+  }
+
+  /** Toggle a model edge as the Select-mode relation target (called by
+   * cad-editor when an edge is picked in the viewer while sketching in Select
+   * mode). Clicking the same edge again clears it. */
+  toggleExternalEdge(edgeId: string): void {
+    this.selectedExternalEdgeId.set(this.selectedExternalEdgeId() === edgeId ? null : edgeId);
+  }
+
+  /** Externally toggle an entity in the selection set. The cad-editor calls
+   * this when a clicked 3D body edge auto-converts into a projected sketch
+   * entity in select mode — joining the selection ADDITIVELY (like
+   * shift-click) so circle + projected edge → Concentric works without
+   * keyboard gymnastics. Re-clicking the same edge deselects it. Sets in
+   * signals need replacement, not mutation. */
+  selectEntityExternal(id: string): void {
+    const next = new Set(this.selected());
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    this.selected.set(next);
   }
 
   /** True when the currently-active tool belongs to the given split-button
@@ -1323,17 +1439,92 @@ export class CadSketchEditorComponent implements OnDestroy {
   private lastPickTolerance = 3;
   private lastPointPickTolerance = 5;
 
+  /** Phase 2: map of edge lookup key → its current 2D projection on the sketch
+   * plane, built from the live `candidates`. The key is the topology edgeId for
+   * a local model edge, or the cross-part stable id for ANOTHER component's
+   * edge (in-context). Passed to the solver so a point riding an edge is
+   * constrained ON the projected line (slides) instead of pinned. Empty → the
+   * solver falls back to v1 pin behavior. */
+  private _externalEdgeLines(): Map<string, [{ x: number; y: number }, { x: number; y: number }]> {
+    const out = new Map<string, [{ x: number; y: number }, { x: number; y: number }]>();
+    for (const c of this.candidates()) {
+      if (c.kind !== 'edge' || c.points.length < 2) continue;
+      const key = c.crossPart ? c.crossPart.stableId : parseCandidateId(c.id)?.topoId;
+      if (key) out.set(key, [c.points[0], c.points[1]]);
+    }
+    return out;
+  }
+
+  /** The projected edge line a point rides (phase 2), or null. Handles both
+   * local model edges and cross-part edges via `onEdgeLookupKey`. */
+  private _edgeRideLine(state: SketchState, id: string): [{ x: number; y: number }, { x: number; y: number }] | null {
+    const edgeLines = this._externalEdgeLines();
+    if (edgeLines.size === 0) return null;
+    for (const c of state.constraints) {
+      if (c.type !== 'on-edge' || !c.externalRef) continue;
+      if (!c.targets.some(t => t.entityId === id)) continue;
+      const key = onEdgeLookupKey(c.externalRef);
+      const line = key ? edgeLines.get(key) : undefined;
+      if (line) return line;
+    }
+    return null;
+  }
+
+  /** If `id` rides a model edge, clamp (x,y) onto that edge's projection so a
+   * drag slides ALONG the edge and stays consistent with the solver's
+   * point_on_line. Otherwise returns (x,y) unchanged. */
+  private _slideToEdge(state: SketchState, id: string, x: number, y: number): { x: number; y: number } {
+    const line = this._edgeRideLine(state, id);
+    return line ? closestPointOnSegment(line[0], line[1], { x, y }) : { x, y };
+  }
+
+  /** DEBUG (bottom-right overlay): compute what's in the cursor's pick radius. */
+  private _updateDebugPick(p: { x: number; y: number }) {
+    const state = this.state();
+    const tol = this.lastPickTolerance;
+    const ptol = this.lastPointPickTolerance;
+    const maxTol = Math.max(tol, ptol);
+    const items = state.entities
+      .map(e => ({ id: e.id, kind: e.kind, d: distanceToEntity(state, e, p) }))
+      .filter(it => Number.isFinite(it.d) && it.d <= maxTol + 0.5)
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 8)
+      .map(it => ({ ...it, within: it.kind === 'point' ? it.d <= ptol : it.d <= tol }));
+    const rounded = { x: Math.round(p.x), y: Math.round(p.y) };
+    const rawWin = pickEntity(state, p, tol, ptol);
+    const roundWin = pickEntity(state, rounded, tol, ptol);
+    this.debugPick.set({
+      raw: { x: p.x, y: p.y }, rounded, tol, ptol,
+      rawWinner: rawWin ? `${rawWin.kind}:${rawWin.id.slice(0, 10)}` : 'none',
+      roundWinner: roundWin ? `${roundWin.kind}:${roundWin.id.slice(0, 10)}` : 'none',
+      items,
+    });
+  }
+
   handleSketchClick(p: { x: number; y: number; shiftKey: boolean; tolerance?: number; pointTolerance?: number }) {
     if (this.readonly()) return;
     if (this.didDrag) { this.didDrag = false; return; }
     if (p.tolerance !== undefined) this.lastPickTolerance = p.tolerance;
     if (p.pointTolerance !== undefined) this.lastPointPickTolerance = p.pointTolerance;
+    // Drawing tools snap NEW geometry to integer coords (x, y). Tools that
+    // PICK existing geometry must use the RAW cursor (rx, ry) — rounding the
+    // pick point makes entities at non-integer coords (e.g. a line at y=13.5)
+    // unselectable, because every rounded click lands ≥0.5 units off them.
     const x = Math.round(p.x);
     const y = Math.round(p.y);
+    const rx = p.x, ry = p.y;
     const tool = this.tool();
     switch (tool) {
-      case 'select':      this.handleSelectClick(x, y, p.shiftKey); break;
-      case 'point':       this.commit(addPoint(this.state(), x, y).state); break;
+      case 'select':      this.handleSelectClick(rx, ry, p.shiftKey); break;
+      case 'point': {
+        const snap = this._snapClickToPoint(x, y);
+        const r = addPoint(this.state(), snap.x, snap.y);
+        let s = r.state;
+        if (snap.onCurveId) s = addConstraint(s, 'coincident', [r.id, snap.onCurveId]).state;
+        if (snap.externalRef) s = this._addOnEdge(s, r.id, snap.externalRef);
+        this.commit(s);
+        break;
+      }
       case 'line':           this.handleLineClick(x, y, 'normal'); break;
       case 'centerline':     this.handleLineClick(x, y, 'construction'); break;
       case 'midpoint-line':  this.handleLineClick(x, y, 'midpoint'); break;
@@ -1363,15 +1554,16 @@ export class CadSketchEditorComponent implements OnDestroy {
       case 'picture':         this.handlePictureClick(x, y); break;
       case 'circle-perimeter': this.handleCirclePerimeterClick(x, y); break;
       case 'tangent-arc': this.handleTangentArcClick(x, y); break;
-      case 'smart-dim':   this.handleSmartDimClick(x, y, p.shiftKey); break;
-      case 'trim':        this.handleTrimClick(x, y); break;
-      case 'extend':      this.handleExtendClick(x, y); break;
-      case 'split':       this.handleSplitClick(x, y); break;
-      case 'jog':         this.handleJogClick(x, y); break;
-      case 'offset':      this.handleOffsetClick(x, y); break;
-      case 'mirror':      this.handleMirrorClick(x, y); break;
-      case 'fillet':      this.handleFilletClick(x, y); break;
-      case 'chamfer':     this.handleChamferClick(x, y); break;
+      // Pick-existing-geometry tools: RAW cursor (see note above).
+      case 'smart-dim':   this.handleSmartDimClick(rx, ry, p.shiftKey); break;
+      case 'trim':        this.handleTrimClick(rx, ry); break;
+      case 'extend':      this.handleExtendClick(rx, ry); break;
+      case 'split':       this.handleSplitClick(rx, ry); break;
+      case 'jog':         this.handleJogClick(rx, ry); break;
+      case 'offset':      this.handleOffsetClick(rx, ry); break;
+      case 'mirror':      this.handleMirrorClick(rx, ry); break;
+      case 'fillet':      this.handleFilletClick(rx, ry); break;
+      case 'chamfer':     this.handleChamferClick(rx, ry); break;
       case 'move':              this.handleMoveClick(x, y); break;
       case 'copy':              this.handleCopyClick(x, y); break;
       case 'rotate':            this.handleRotateClick(x, y); break;
@@ -1449,6 +1641,7 @@ export class CadSketchEditorComponent implements OnDestroy {
   private _projectedAnchorPoints(state: SketchState): Set<string> {
     const out = new Set<string>();
     const entityById = new Map(state.entities.map(en => [en.id, en] as const));
+    const edgeLines = this._externalEdgeLines();
     for (const c of state.constraints) {
       if (c.type !== 'on-edge') continue;
       for (const t of c.targets) {
@@ -1457,7 +1650,14 @@ export class CadSketchEditorComponent implements OnDestroy {
         if (e.kind === 'line') { out.add(e.startId); out.add(e.endId); }
         else if (e.kind === 'circle') { out.add(e.centerId); }
         else if (e.kind === 'arc') { out.add(e.centerId); out.add(e.startId); out.add(e.endId); }
-        else if (e.kind === 'point') { out.add(e.id); }
+        else if (e.kind === 'point') {
+          // Phase 2: a point riding a model edge (edgeId with a live projection)
+          // SLIDES along it — keep it draggable. A vertex-pinned point, or an
+          // edge ref with no current projection, stays a fixed anchor.
+          const ref = c.externalRef && c.externalRef.scope !== 'cross-part' ? c.externalRef : null;
+          const slides = !!(ref && ref.edgeId && edgeLines.has(ref.edgeId));
+          if (!slides) out.add(e.id);
+        }
       }
     }
     return out;
@@ -1500,6 +1700,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     // status bar. We use the (already-snapped) `p` so the readout matches
     // what the user perceives as their cursor position, not the raw mouse.
     this.cursor.set(p);
+    this._updateDebugPick(p);
     const drag = this.dragState();
     if (drag) {
       const dx = p.x - drag.startCursor.x;
@@ -1520,7 +1721,8 @@ export class CadSketchEditorComponent implements OnDestroy {
       // rest of the sketch slowly migrates around them.
       let next = this.state();
       for (const { id, origX, origY } of drag.points) {
-        next = movePoint(next, id, origX + dx, origY + dy);
+        const q = this._slideToEdge(next, id, origX + dx, origY + dy);
+        next = movePoint(next, id, q.x, q.y);
       }
       this.liveSolveDuringDrag(next);
       return;
@@ -1549,7 +1751,15 @@ export class CadSketchEditorComponent implements OnDestroy {
       // clean integer coordinates.
       let next = this.state();
       for (const { id, origX, origY } of drag.points) {
-        next = movePoint(next, id, Math.round(origX + dx), Math.round(origY + dy));
+        // Edge-ride points commit at their projected position (no rounding —
+        // rounding would nudge them off the edge); others snap to integers.
+        const line = this._edgeRideLine(next, id);
+        if (line) {
+          const q = closestPointOnSegment(line[0], line[1], { x: origX + dx, y: origY + dy });
+          next = movePoint(next, id, q.x, q.y);
+        } else {
+          next = movePoint(next, id, Math.round(origX + dx), Math.round(origY + dy));
+        }
       }
       this.commit(next);
       return;
@@ -1600,9 +1810,9 @@ export class CadSketchEditorComponent implements OnDestroy {
       // Pin curve radii so circles / arcs can't grow or shrink to satisfy
       // constraints during the drag. The user is just translating the
       // anchor; resizing should require an explicit dimension edit.
-      result = await solveSketch(state, { movablePoints: movable, pinAllRadii: true });
+      result = await solveSketch(state, { movablePoints: movable, pinAllRadii: true, externalEdges: this._externalEdgeLines() });
     } else {
-      result = await solveSketch(state);
+      result = await solveSketch(state, { externalEdges: this._externalEdgeLines() });
     }
     if (id !== this.dragSolveGen) return;
     // Only emit when the solver accepted the drag. When it fails (e.g.,
@@ -1646,7 +1856,9 @@ export class CadSketchEditorComponent implements OnDestroy {
   private handleSelectClick(x: number, y: number, additive: boolean) {
     const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
     if (!picked) {
-      if (!additive) this.selected.set(new Set());
+      // Empty-space click clears the whole selection, including any model-edge
+      // relation target (unless shift-extending).
+      if (!additive) { this.selected.set(new Set()); this.selectedExternalEdgeId.set(null); }
       return;
     }
     const next = new Set(additive ? this.selected() : []);
@@ -1688,21 +1900,22 @@ export class CadSketchEditorComponent implements OnDestroy {
       if (snap.onCurveId) {
         s = addConstraint(s, 'coincident', [r.id, snap.onCurveId]).state;
       }
+      if (snap.externalRef) s = this._addOnEdge(s, r.id, snap.externalRef);
       this.commit(s);
       this.draftLineStart.set(r.id);
       return;
     }
 
-    // Prefer snap-to-existing-point over inference: an exact point match
-    // dominates any line/horizontal/on-curve inference (which only matter
-    // when the cursor is in open space).
+    // Concrete-geometry snap (existing point / curve / MODEL edge·vertex) wins
+    // over inference, which only matters in open space. `_snapClickToPoint`
+    // resolves all three uniformly; only when it finds nothing do we infer
+    // horizontal / vertical / polar / alignment from the start point.
     const startPt = findPoint(this.state(), start);
-    let snapped = { x, y };
+    const snap = this._snapClickToPoint(x, y);
+    let snapped = { x: snap.x, y: snap.y };
     let pendings: PendingConstraint[] = [];
-    const nearby = this.findNearbyPoint(x, y);
-    if (nearby) {
-      snapped = { x: nearby.x, y: nearby.y };
-    } else if (startPt) {
+    const snappedToGeometry = !!(snap.pointId || snap.onCurveId || snap.externalRef);
+    if (!snappedToGeometry && startPt) {
       const inf = inferLineEnd(this.state(), startPt, { x, y });
       snapped = inf.snapped;
       // Apply EVERY inference constraint the hover fired — e.g. when
@@ -1725,18 +1938,14 @@ export class CadSketchEditorComponent implements OnDestroy {
 
     let s = this.state();
     // Always create a fresh endpoint. When the snap landed on an existing
-    // point, pin the fresh endpoint to it via coincident; otherwise just
-    // place it at the snapped position.
+    // point / curve, pin it via coincident; on a model edge·vertex, attach
+    // the on-edge external reference; otherwise just place it.
     const endRes = addPoint(s, snapped.x, snapped.y);
     s = endRes.state;
     const endId = endRes.id;
-    if (nearby) {
-      s = addConstraint(s, 'coincident', [endId, nearby.id]).state;
-      // Snapping onto an existing point dominates inference (horizontal/
-      // vertical/on-line) — drop the pending constraints so we don't
-      // over-constrain.
-      pendings = [];
-    }
+    if (snap.pointId) s = addConstraint(s, 'coincident', [endId, snap.pointId]).state;
+    else if (snap.onCurveId) s = addConstraint(s, 'coincident', [endId, snap.onCurveId]).state;
+    if (snap.externalRef) s = this._addOnEdge(s, endId, snap.externalRef);
     const ln = addLine(s, start, endId, { construction: mode === 'construction' });
     s = ln.state;
     for (const p of pendings) s = applyPendingConstraint(s, ln.id, p);
@@ -1757,7 +1966,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     // end the chain. Otherwise continue from the just-placed endpoint so
     // the user can keep walking a polyline. Midpoint Line is a single-
     // segment tool (chains don't add useful midpoint geometry).
-    this.draftLineStart.set(nearby || mode === 'midpoint' ? null : endId);
+    this.draftLineStart.set(snap.pointId || mode === 'midpoint' ? null : endId);
   }
 
   private handleCircleClick(x: number, y: number) {
@@ -1783,13 +1992,15 @@ export class CadSketchEditorComponent implements OnDestroy {
       const r = addCircle(s, center.x, center.y, radius);
       s = r.state; circleId = r.id;
       // SW-style: clicking ON a curve drops the center as a point and
-      // pins it with coincident-on-curve. We need the center point's
-      // id, which addCircle synthesised; find it via the new circle
-      // entity's centerId.
-      if (center.onCurveId) {
+      // pins it with coincident-on-curve, or — when snapped to a model
+      // edge·vertex — an on-edge external reference. We need the center
+      // point's id, which addCircle synthesised; find it via the new
+      // circle entity's centerId.
+      if (center.onCurveId || center.externalRef) {
         const newCircle = s.entities.find(e => e.id === circleId);
         if (newCircle && newCircle.kind === 'circle') {
-          s = addConstraint(s, 'coincident', [newCircle.centerId, center.onCurveId]).state;
+          if (center.onCurveId) s = addConstraint(s, 'coincident', [newCircle.centerId, center.onCurveId]).state;
+          if (center.externalRef) s = this._addOnEdge(s, newCircle.centerId, center.externalRef);
         }
       }
     }
@@ -1837,15 +2048,17 @@ export class CadSketchEditorComponent implements OnDestroy {
     // arc_rules in the solver reconciles the radius if the snapped
     // end isn't exactly |start - center| away from the center.
     if (center.pointId || start.pointId || end.pointId
-        || center.onCurveId || start.onCurveId || end.onCurveId) {
+        || center.onCurveId || start.onCurveId || end.onCurveId
+        || center.externalRef || start.externalRef || end.externalRef) {
       let s = this.state();
       const ensurePointId = (pp: PendingPoint): string => {
         if (pp.pointId) return pp.pointId;
         const r = addPoint(s, pp.x, pp.y);
         s = r.state;
-        // SW-style: clicking ON a curve drops a coincident-on-curve
-        // anchor. Works the same for sketched and converted curves.
+        // SW-style: clicking ON a curve drops a coincident-on-curve anchor;
+        // on a model edge·vertex, an on-edge external reference.
         if (pp.onCurveId) s = addConstraint(s, 'coincident', [r.id, pp.onCurveId]).state;
+        if (pp.externalRef) s = this._addOnEdge(s, r.id, pp.externalRef);
         return r.id;
       };
       const centerId = ensurePointId(center);
@@ -1874,12 +2087,36 @@ export class CadSketchEditorComponent implements OnDestroy {
       // sub-pixel offset.
       return { x: picked.x, y: picked.y, pointId: picked.id };
     }
+    // Implicit external reference (SolidWorks inference): snap onto the
+    // projection of a model vertex / straight edge. A vertex outranks an
+    // existing sketch curve (snapping to an endpoint is usually intended);
+    // an edge ranks below a sketch curve. The snapped point carries the
+    // externalRef so the placing tool attaches the on-edge constraint to the
+    // point it creates — uniform across every tool/click, no commit-time map.
+    const cands = this.candidates();
+    const candHit = cands.length
+      ? nearestCandidateHit(cands, { x, y }, this.lastPointPickTolerance)
+      : null;
+    const takeCandidate = (): PendingPoint => {
+      const ref = externalRefForCandidate(candHit!.candidate) ?? undefined;
+      return { x: candHit!.x, y: candHit!.y, externalRef: ref };
+    };
+    if (candHit?.kind === 'vertex') return takeCandidate();
     // Curve hit (sketched or converted line/arc/circle) — project the
     // click onto the curve and remember which curve we hit. The
     // entity commit then anchors the new point to it via coincident.
     const onCurve = this._projectClickOntoCurve(picked, x, y);
     if (onCurve) return onCurve;
+    if (candHit) return takeCandidate();  // edge candidate (below sketch curves)
     return { x, y };
+  }
+
+  /** Append an `on-edge` constraint tying a sketch entity (a placed point, or
+   * a line being related to a model edge) to a model edge/vertex. The single
+   * place external references are created from snapping or Select-mode picks. */
+  private _addOnEdge(state: SketchState, entityId: string, externalRef: ExternalRef): SketchState {
+    const id = `on-edge-${entityId}-${this.latestCommitId}`;
+    return { ...state, constraints: [...state.constraints, { id, type: 'on-edge', targets: [{ entityId }], externalRef }] };
   }
 
   /** Project a click onto a picked curve and return a PendingPoint
@@ -2002,7 +2239,17 @@ export class CadSketchEditorComponent implements OnDestroy {
    */
   private handleSmartDimClick(x: number, y: number, _shiftKey: boolean) {
     const sel = this.selectedEntities();
-    const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
+    let picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
+    // Smart-dim TO a projected model edge: with no sketch entity under the
+    // cursor, convert the nearest projected (straight) edge into an on-edge
+    // sketch line and dimension to that — SolidWorks-style. Reuses an
+    // already-converted line for the same edge so repeated dims don't spawn
+    // duplicates. Placement clicks land in empty space (away from body edges),
+    // so this doesn't hijack them.
+    if (!picked) {
+      const conv = this._convertCandidateEdgeForDim(x, y);
+      if (conv) picked = conv;
+    }
 
     // If we already have a valid pick set, this click is the placement —
     // unless the click landed on an entity that EXTENDS the existing
@@ -2031,6 +2278,52 @@ export class CadSketchEditorComponent implements OnDestroy {
     }
     // Picked entity doesn't compose with the current pick — restart with it.
     this.selected.set(new Set([picked.id]));
+  }
+
+  /** Smart-dim helper: convert the projected (straight) model edge nearest the
+   * cursor into a sketch line tied to it by an `on-edge` constraint, so it can
+   * be dimensioned like any other line. Returns the converted line entity (or
+   * the already-converted one — repeated dims to the same edge reuse it), or
+   * null when no edge candidate is in range. Commits the new geometry. */
+  private _convertCandidateEdgeForDim(x: number, y: number): SketchEntity | null {
+    const cands = this.candidates();
+    if (!cands.length) return null;
+    const hit = nearestCandidateHit(cands, { x, y }, this.lastPickTolerance);
+    if (!hit || hit.kind !== 'edge') return null;
+    const ref = externalRefForCandidate(hit.candidate);
+    if (!ref) return null;
+    const existing = this._existingOnEdgeLine(this.state(), ref);
+    if (existing) return existing;
+    const a = hit.candidate.points[0];
+    const b = hit.candidate.points[1];
+    if (!a || !b) return null;
+    let s = this.state();
+    const pa = addPoint(s, a.x, a.y); s = pa.state;
+    const pb = addPoint(s, b.x, b.y); s = pb.state;
+    const ln = addLine(s, pa.id, pb.id); s = ln.state;
+    s = this._addOnEdge(s, ln.id, ref);
+    // Read the entity from the state we built — commit() emits to the parent
+    // and the new doc round-trips back through the `state` input only on the
+    // next change-detection pass, so this.state() isn't updated yet.
+    const entity = findEntity(s, ln.id) ?? null;
+    this.commit(s);
+    return entity;
+  }
+
+  /** Find an existing sketch line already converted from the same model edge
+   * (an `on-edge` constraint pointing at the same local edge id), so smart-dim
+   * doesn't create a duplicate line each time it dimensions that edge. */
+  private _existingOnEdgeLine(state: SketchState, ref: ExternalRef): SketchEntity | null {
+    if (ref.scope === 'cross-part' || !ref.edgeId) return null;
+    for (const c of state.constraints) {
+      if (c.type !== 'on-edge') continue;
+      const r = c.externalRef;
+      if (r && r.scope !== 'cross-part' && r.edgeId === ref.edgeId) {
+        const e = findEntity(state, c.targets[0]?.entityId ?? '');
+        if (e && e.kind === 'line') return e;
+      }
+    }
+    return null;
   }
 
   // ─── edit tools (Trim / Extend / Split / Offset) ─────────────────────
@@ -2684,7 +2977,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     }
     const id = ++this.latestCommitId;
     this.sketchChanged.emit(next);
-    const result = await solveSketch(next, { movablePoints });
+    const result = await solveSketch(next, { movablePoints, externalEdges: this._externalEdgeLines() });
     if (id !== this.latestCommitId) return;
     this.solveStatus.set(result.status);
     this.solverDof.set(result.dof);
@@ -2693,7 +2986,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     } else {
       // Fallback: retry without pinning. Some constraint sets genuinely
       // need pre-existing geometry to move (rare for chamfer).
-      const fallback = await solveSketch(next);
+      const fallback = await solveSketch(next, { externalEdges: this._externalEdgeLines() });
       if (id !== this.latestCommitId) return;
       this.solveStatus.set(fallback.status);
       this.solverDof.set(fallback.dof);
@@ -3067,7 +3360,7 @@ export class CadSketchEditorComponent implements OnDestroy {
   private async commitAfterAdd(state: SketchState, newConstraintId: string) {
     const id = ++this.latestCommitId;
     this.sketchChanged.emit(state);
-    const result = await solveSketchAfterAdd(state, newConstraintId);
+    const result = await solveSketchAfterAdd(state, newConstraintId, this._externalEdgeLines());
     if (id !== this.latestCommitId) return;
     this.solveStatus.set(result.status);
     if (result.status === 'ok') this.sketchChanged.emit(result.state);
@@ -3077,7 +3370,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     // so we run a second UNPINNED solve purely to read out the true DOF —
     // otherwise the status bar / green-stroke flips to "fully constrained"
     // on almost any new constraint.
-    const probe = await solveSketch(result.state);
+    const probe = await solveSketch(result.state, { externalEdges: this._externalEdgeLines() });
     if (id !== this.latestCommitId) return;
     this.solverDof.set(probe.dof);
   }
@@ -3156,6 +3449,13 @@ export class CadSketchEditorComponent implements OnDestroy {
   applyConstraint(spec: ConstraintSpec) {
     if (this.readonly()) return;
     const entities = this.selectedEntities();
+    // SolidWorks/OnShape: Coincident with a selected MODEL edge makes the
+    // chosen sketch point ride that edge — an on-edge external reference,
+    // not a normal sketch coincident. Handled before the entity predicate
+    // since the second operand (the edge) isn't a sketch entity.
+    if (spec.type === 'coincident' && this.selectedExternalEdgeId() && this._applyCoincidentToEdge(entities)) {
+      return;
+    }
     if (!spec.predicate(entities)) return;
     // One-shot actions short-circuit the persisted-constraint path.
     // Merge Points collapses the second-picked point into the first;
@@ -3190,6 +3490,38 @@ export class CadSketchEditorComponent implements OnDestroy {
     const { state: next, constraint } = addConstraint(this.state(), spec.type, ordered, value);
     this.commitAfterAdd(next, constraint.id);
     this.selected.set(new Set());
+  }
+
+  /** Whether the current selection can take the given constraint. Mirrors the
+   * spec predicate, plus the Coincident-to-model-edge case (one sketch point or
+   * line + a selected model edge) which the entity-only predicate can't see. */
+  constraintEnabled(spec: ConstraintSpec): boolean {
+    const entities = this.selectedEntities();
+    if (spec.predicate(entities)) return true;
+    if (spec.type === 'coincident' && this.selectedExternalEdgeId()) {
+      return entities.length === 1 && (entities[0].kind === 'point' || entities[0].kind === 'line');
+    }
+    return false;
+  }
+
+  /** Create an on-edge constraint tying the single selected sketch entity to
+   * the selected model edge. A point then rides the edge (phase 2); a line is
+   * projected onto the edge (collinear, like Convert Entities applied
+   * retroactively). Returns false when the selection isn't exactly one point or
+   * line. */
+  private _applyCoincidentToEdge(entities: SketchEntity[]): boolean {
+    const edgeId = this.selectedExternalEdgeId();
+    if (!edgeId) return false;
+    if (entities.length !== 1) return false;
+    const e = entities[0];
+    if (e.kind !== 'point' && e.kind !== 'line') return false;
+    const featureId = edgeId.split('/')[0] ?? '';
+    const next = this._addOnEdge(this.state(), e.id, { scope: 'local', featureId, edgeId });
+    const id = next.constraints[next.constraints.length - 1].id;
+    this.commitAfterAdd(next, id);
+    this.selected.set(new Set());
+    this.selectedExternalEdgeId.set(null);
+    return true;
   }
 
   private findNearbyPoint(x: number, y: number): PointEntity | undefined {
@@ -3589,7 +3921,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-104');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-178');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);
@@ -3785,7 +4117,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     }
     const id = ++this.latestCommitId;
     this.sketchChanged.emit(next);
-    const result = await solveSketch(next);
+    const result = await solveSketch(next, { externalEdges: this._externalEdgeLines() });
     if (id !== this.latestCommitId) return;
     this.solveStatus.set(result.status);
     this.solverDof.set(result.dof);
@@ -3815,7 +4147,13 @@ function extendsSmartDim(picked: SketchEntity, sel: SketchEntity[]): boolean {
     if (e.kind === 'line'  && picked.kind === 'line')  return true;
     if (e.kind === 'point' && picked.kind === 'line')  return true;
     if (e.kind === 'line'  && picked.kind === 'point') return true;
-    // Curves are single-pick — adding more isn't a Smart Dim case we handle.
+    // A second CONCENTRIC circle/arc extends a curve pick into a
+    // radial-distance dimension (the gap between the two radii).
+    const isCurve = (x: SketchEntity) => x.kind === 'circle' || x.kind === 'arc';
+    if (isCurve(e) && isCurve(picked) && e.id !== picked.id
+        && (e as CircleEntity | ArcEntity).centerId === (picked as CircleEntity | ArcEntity).centerId) {
+      return true;
+    }
     return false;
   }
   return false;  // 2 picks already = full set
@@ -3829,7 +4167,11 @@ function canPlaceDimension(sel: SketchEntity[]): boolean {
   if (sel.length === 2) {
     const points = sel.filter(e => e.kind === 'point').length;
     const lines = sel.filter(e => e.kind === 'line').length;
-    return points + lines === 2;
+    if (points + lines === 2) return true;
+    // Two concentric circles/arcs (radial-distance). resolveSmartDim
+    // re-checks concentricity and returns null for non-concentric pairs.
+    const curves = sel.filter(e => e.kind === 'circle' || e.kind === 'arc').length;
+    return curves === 2;
   }
   return false;
 }
@@ -3846,9 +4188,25 @@ function resolveSmartDim(
     if (!a || !b) return null;
     return { type: 'distance', targets: [line.startId, line.endId], value: Math.hypot(b.x - a.x, b.y - a.y) };
   }
-  if (sel.length === 1 && (sel[0].kind === 'circle' || sel[0].kind === 'arc')) {
-    const e = sel[0] as CircleEntity | ArcEntity;
+  // A whole circle dimensions by DIAMETER (SolidWorks default); a partial arc
+  // dimensions by RADIUS.
+  if (sel.length === 1 && sel[0].kind === 'circle') {
+    const e = sel[0] as CircleEntity;
+    return { type: 'diameter', targets: [e.id], value: e.radius * 2 };
+  }
+  if (sel.length === 1 && sel[0].kind === 'arc') {
+    const e = sel[0] as ArcEntity;
     return { type: 'radius', targets: [e.id], value: e.radius };
+  }
+  // Two CONCENTRIC circles/arcs → dimension the radial gap (r_outer −
+  // r_inner). Targets are [inner, outer] so the driven difference is
+  // positive. Non-concentric pairs aren't a Smart Dim case → null.
+  if (sel.length === 2 && sel.every(e => e.kind === 'circle' || e.kind === 'arc')) {
+    const [a, b] = sel as Array<CircleEntity | ArcEntity>;
+    if (a.centerId !== b.centerId) return null;
+    const inner = a.radius <= b.radius ? a : b;
+    const outer = a.radius <= b.radius ? b : a;
+    return { type: 'radial-distance', targets: [inner.id, outer.id], value: Math.abs(outer.radius - inner.radius) };
   }
   if (sel.length === 2 && sel.every(e => e.kind === 'point')) {
     const [p1, p2] = sel as PointEntity[];

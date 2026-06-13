@@ -17,7 +17,17 @@ export type FeatureTreeAction =
   | { action: 'delete-sketch'; sketchId: string }
   | { action: 'toggle-sketch-visibility'; sketchId: string }
   | { action: 'rename-sketch'; sketchId: string }
+  | { action: 'change-sketch-host'; sketchId: string }
   | { action: 'toggle-cosmetic-threads-visibility' };
+
+/** Generic row event emitted when the panel renders externally-supplied nodes
+ * (e.g. the assembly tree). The host owns selection/visibility/expand/context
+ * semantics — the panel just reports which node + how it was interacted with. */
+export interface ExternalTreeEvent {
+  type: 'select' | 'expand' | 'visibility' | 'context';
+  node: TreeNode;
+  ev?: MouseEvent;
+}
 
 // REQ 626 — feature selection event from a left-click on a feature row.
 // Carries the modifier keys so the parent decides multi-select policy.
@@ -36,7 +46,7 @@ export interface SketchSelectEvent {
   ctrlKey: boolean;
 }
 
-interface TreeNode {
+export interface TreeNode {
   /** Unique within the tree; used for expansion tracking. */
   key: string;
   kind: 'feature' | 'sketch' | 'datum' | 'rollback-bar' | 'cosmetic-threads-group';
@@ -50,6 +60,8 @@ interface TreeNode {
   visible?: boolean;
   visibilityToggleable?: boolean;
   selectable: boolean;          // highlighted as clickable in current mode
+  /** External-nodes mode: explicit selection highlight (the host owns selection). */
+  selected?: boolean;
   /** Position in the feature tree for features. Used by the rollback
    * bar to grey out features past its cutoff. */
   featureIndex?: number;
@@ -66,13 +78,14 @@ interface TreeNode {
 @Component({
   selector: 'app-cad-feature-tree-panel',
   standalone: true,
+  host: { '[class.embedded]': 'externalNodes() !== null' },
   imports: [CommonModule, MatIconModule, MatTooltipModule, MatMenuModule],
   template: `
     <div class="panel">
       <div class="section features-section">
         <header class="panel-header">
-          <mat-icon>account_tree</mat-icon>
-          <span>Feature Tree</span>
+          <mat-icon>{{ headerIcon() }}</mat-icon>
+          <span>{{ headerTitle() }}</span>
         </header>
         <ul class="tree" #treeList>
         <li *ngFor="let n of nodes()"
@@ -88,9 +101,10 @@ interface TreeNode {
             [class.rolled-back]="n.rolledBack"
             [class.suppressed]="n.suppressed"
             [class.rollback-bar]="n.kind === 'rollback-bar'"
-            [class.drag-target-above]="dragTargetIndex() !== null && n.featureIndex === dragTargetIndex()"
+            [class.drag-target-above]="(dragTargetIndex() !== null && n.featureIndex === dragTargetIndex()) || (featureDropIndex() !== null && n.featureIndex === featureDropIndex())"
+            [class.dragging-feature]="dragFeatureIndex() !== null && n.featureIndex === dragFeatureIndex()"
             [class.selected]="isRowSelected(n)"
-            (mousedown)="n.kind === 'rollback-bar' ? onRollbackDragStart($event) : null"
+            (mousedown)="onRowMouseDown($event, n)"
             (click)="onRowClick(n, $event)"
             (contextmenu)="onRowContextMenu($event, n)">
           <span class="chevron" *ngIf="n.expandable" (click)="toggleExpand(n, $event)">
@@ -104,6 +118,11 @@ interface TreeNode {
             <mat-icon class="error-indicator"
                       [matTooltip]="featureErrors().get(n.feature.id) || ''"
                       [attr.data-testid]="featureErrorTestId(n)">error</mat-icon>
+          </ng-container>
+          <ng-container *ngIf="n.kind === 'sketch' && n.sketchId && danglingSketchIds().has(n.sketchId)">
+            <mat-icon class="dangling-indicator"
+                      matTooltip="Reference face missing — this sketch's host face was deleted. Right-click → Change reference face."
+                      [attr.data-testid]="'sketch-dangling-' + n.sketchId">link_off</mat-icon>
           </ng-container>
           <button class="visibility-toggle"
                   *ngIf="n.visibilityToggleable"
@@ -120,7 +139,7 @@ interface TreeNode {
       <!-- Bodies section. Lists every body in the part (1 per additive
            feature with merge=false, plus a default body for merge=true
            additive chains). Each row has a visibility toggle. -->
-      <div class="section bodies-section">
+      <div class="section bodies-section" *ngIf="showBodies()">
         <header class="panel-header">
           <mat-icon>category</mat-icon>
           <span>Bodies</span>
@@ -224,9 +243,25 @@ interface TreeNode {
                       (click)="emitAction({ action: 'delete-feature', featureId: n.feature.id })">
                 <mat-icon>delete</mat-icon> Delete{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
               </button>
+              <!-- Debug: the internal feature id (hash) — what regen errors,
+                   topology ids (featureId/eN), and externalRefs reference. -->
+              <button *ngIf="scope.count === 1"
+                      mat-menu-item data-testid="ctx-copy-feature-id"
+                      (click)="copyToClipboard(n.feature.id)">
+                <mat-icon>content_copy</mat-icon> Copy feature name
+              </button>
             </ng-container>
             <!-- Sketch menu — same pattern. -->
             <ng-container *ngIf="scope.kind === 'sketch' && n.sketchId">
+              <!-- Reference plane/face the sketch is hosted on (info + re-pick). -->
+              <div *ngIf="scope.count === 1" class="ctx-info" data-testid="ctx-sketch-host">
+                <mat-icon>filter_none</mat-icon> Reference: {{ sketchHostLabel(n.sketchId) }}
+              </div>
+              <button *ngIf="scope.count === 1"
+                      mat-menu-item data-testid="ctx-change-sketch-host"
+                      (click)="emitAction({ action: 'change-sketch-host', sketchId: n.sketchId })">
+                <mat-icon>swap_horiz</mat-icon> Change reference face…
+              </button>
               <button *ngIf="scope.count === 1"
                       mat-menu-item data-testid="ctx-edit-sketch"
                       (click)="emitAction({ action: 'edit-sketch', sketchId: n.sketchId })">
@@ -246,6 +281,12 @@ interface TreeNode {
                       (click)="emitAction({ action: 'delete-sketch', sketchId: n.sketchId })">
                 <mat-icon>delete</mat-icon> Delete sketch{{ scope.count > 1 ? 'es (' + scope.count + ')' : '' }}
               </button>
+              <!-- Debug: the internal sketch id (hash). -->
+              <button *ngIf="scope.count === 1"
+                      mat-menu-item data-testid="ctx-copy-sketch-id"
+                      (click)="copyToClipboard(n.sketchId)">
+                <mat-icon>content_copy</mat-icon> Copy sketch name
+              </button>
             </ng-container>
           </ng-container>
         </ng-container>
@@ -258,6 +299,13 @@ interface TreeNode {
        last row (visibility-toggle button gets cut off). Pin the host to a
        real flex column with its parent's full height. */
     :host { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+    /* Embedded (external-nodes) mode: flow with the host's other content instead
+       of filling 100% height. */
+    :host(.embedded) { display: block; height: auto; min-height: 0; }
+    :host(.embedded) .panel { flex: 0 0 auto; }
+    :host(.embedded) .section { flex: 0 0 auto; overflow: visible; }
+    :host(.embedded) .section .tree { flex: 0 0 auto; overflow: visible; }
+    :host(.embedded) .panel-header { padding: 8px 12px; }
     .panel { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
     /* Two equal-height sections stacked vertically. Each section scrolls its
        own list independently so a long feature tree doesn't push bodies
@@ -281,6 +329,7 @@ interface TreeNode {
     .row.selected.depth-1 { background: rgba(255, 183, 77, 0.12); }
     .hidden-indicator { font-size: 14px; width: 14px; height: 14px; opacity: 0.55; }
     .error-indicator { font-size: 16px; width: 16px; height: 16px; color: #ef5350; flex-shrink: 0; }
+    .dangling-indicator { font-size: 16px; width: 16px; height: 16px; color: #ffa726; flex-shrink: 0; cursor: help; }
     .menu-anchor { position: fixed; width: 0; height: 0; }
     .chevron { display: inline-flex; align-items: center; width: 18px; cursor: pointer; opacity: 0.7; }
     .chevron mat-icon { font-size: 18px; width: 18px; height: 18px; }
@@ -288,6 +337,8 @@ interface TreeNode {
     .chevron-spacer { display: inline-block; width: 18px; }
     .kind-icon { font-size: 18px; width: 18px; height: 18px; }
     .kind-icon.origin { color: #ffeb3b; }
+    .kind-icon.part { color: #90a4ae; }
+    .kind-icon.mate { color: #42a5f5; }
     .kind-icon.extrude { color: #4caf50; }
     .kind-icon.sketch { color: #42a5f5; }
     .kind-icon.datum-point { color: #fff; }
@@ -297,8 +348,10 @@ interface TreeNode {
     .kind-icon.datum-plane-xy { color: #1e88e5; }
     .kind-icon.datum-plane-yz { color: #e53935; }
     .kind-icon.datum-plane-xz { color: #43a047; }
-    .label { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dbg-id { flex: 1 0 auto; margin-left: 4px; font-family: ui-monospace, monospace; font-size: 10px; opacity: 0.45; }
+    .ctx-info { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 11px; opacity: 0.65; cursor: default; }
+    .ctx-info mat-icon { font-size: 16px; width: 16px; height: 16px; }
     .visibility-toggle { border: none; background: none; cursor: pointer; opacity: 0.55; padding: 2px; display: inline-flex; align-items: center; justify-content: center; color: inherit; }
     .visibility-toggle:hover { opacity: 1; }
     .visibility-toggle mat-icon { font-size: 16px; width: 16px; height: 16px; }
@@ -331,6 +384,8 @@ interface TreeNode {
     .row.drag-target-above {
       box-shadow: inset 0 2px 0 0 #ffc107;
     }
+    /* Feature being dragged to reorder — dimmed so the gold drop line reads. */
+    .row.dragging-feature { opacity: 0.45; background: rgba(255, 193, 7, 0.08); }
     .row.rolled-back .label,
     .row.rolled-back .kind-icon {
       opacity: 0.4;
@@ -350,6 +405,15 @@ export class CadFeatureTreePanelComponent {
   features = input<Feature[]>([]);
   doc = input<SketchDocument | null>(null);
   selectableSketches = input<boolean>(false);
+  // ── External-nodes mode (e.g. assembly tree) ────────────────────────
+  /** When non-null, the panel renders THESE nodes verbatim instead of building
+   * them from `features`, and routes row interactions to `externalEvent`. */
+  externalNodes = input<TreeNode[] | null>(null);
+  headerTitle = input<string>('Feature Tree');
+  headerIcon = input<string>('account_tree');
+  showBodies = input<boolean>(true);
+  /** Generic row interaction, emitted only in external-nodes mode. */
+  externalEvent = output<ExternalTreeEvent>();
   // Map of featureId → friendly error message. Features in this map render
   // with a red error icon + tooltip so the user can identify which feature
   // failed during the last regenerate. Empty map = no errors.
@@ -368,6 +432,9 @@ export class CadFeatureTreePanelComponent {
   featureSelect = output<FeatureSelectEvent>();
   /** Set of selected sketch ids — parallel to `selectedFeatures`. */
   selectedSketches = input<Set<string>>(new Set());
+  /** Sketch ids whose host face the kernel reports as missing (deleted, not
+   * re-tagged) — flagged with a warning indicator on the sketch row. */
+  danglingSketchIds = input<Set<string>>(new Set());
 
   // ── Bodies panel inputs / outputs ───────────────────────────────────
   /** Body roster surfaced in the bottom half of the panel. Editor
@@ -391,6 +458,10 @@ export class CadFeatureTreePanelComponent {
   /** User asked to roll back to before feature at this index. Editor
    * sets its own rollbackBeforeIndex in response. */
   rollbackChanged = output<number | null>();
+  /** Drag-reorder (feature 2): a feature row dragged to a new slot. `fromIndex`
+   * and `toIndex` are array indices in featureTree.features; `toIndex` is the
+   * index to land BEFORE (features.length = move to the end). */
+  reorderFeature = output<{ fromIndex: number; toIndex: number }>();
   // REQ 665 — Cosmetic threads group state.
   cosmeticThreadsCount = input<number>(0);
   cosmeticThreadsVisible = input<boolean>(true);
@@ -450,6 +521,15 @@ export class CadFeatureTreePanelComponent {
     queueMicrotask(() => this.bodyMenuTrigger?.openMenu());
   }
 
+  /** Debug helper — copy an internal id (feature/sketch hash) to the
+   * clipboard. These ids are what regen errors, topology ids, and
+   * externalRefs reference, so being able to grab one from the tree makes
+   * bug reports precise. */
+  copyToClipboard(text: string | undefined): void {
+    if (!text) return;
+    void navigator.clipboard?.writeText(text);
+  }
+
   // What the context menu will act on, given the right-clicked node and the
   // current selection. Mirrors the OS-file-manager rule: if the right-clicked
   // item is part of the current selection, the action targets the whole
@@ -487,6 +567,8 @@ export class CadFeatureTreePanelComponent {
   });
 
   nodes = computed<TreeNode[]>(() => {
+    const ext = this.externalNodes();
+    if (ext) return ext;
     const out: TreeNode[] = [];
     const features = this.features();
     const doc = this.doc();
@@ -1074,6 +1156,26 @@ export class CadFeatureTreePanelComponent {
     return hostId;
   }
 
+  /** Human-readable reference (host) of a sketch — the datum name or a short
+   * face label — shown in the sketch context menu. */
+  sketchHostLabel(sketchId: string): string {
+    const sk = this.doc()?.sketches[sketchId];
+    if (!sk || !sk.hostId) return '—';
+    const missing = this.danglingSketchIds().has(sketchId) ? ' (missing)' : '';
+    const hostId = sk.hostId;
+    if (hostId.startsWith('datum:')) return hostId.substring('datum:'.length).replace(/_/g, ' ') + missing;
+    if (hostId.startsWith('face:')) {
+      try {
+        const o = JSON.parse(hostId.substring('face:'.length)) as { feature_id?: string; role?: string; sub_index?: number };
+        const feat = (o.feature_id || '?').split('#')[0];
+        const role = o.role === 'cap_top' ? 'top' : o.role === 'cap_bottom' ? 'bottom' : (o.role || 'face');
+        const sub = o.role === 'side' && o.sub_index !== undefined ? ` #${o.sub_index}` : '';
+        return `Face ${feat} ${role}${sub}${missing}`;
+      } catch { return 'Face' + missing; }
+    }
+    return hostId + missing;
+  }
+
   rowTestId(n: TreeNode): string {
     if (n.kind === 'feature') return 'feature-tree-row';
     if (n.kind === 'sketch') return 'sketch-tree-row';
@@ -1083,6 +1185,7 @@ export class CadFeatureTreePanelComponent {
 
   toggleExpand(n: TreeNode, ev?: MouseEvent) {
     ev?.stopPropagation();
+    if (this.externalNodes()) { this.externalEvent.emit({ type: 'expand', node: n, ev }); return; }
     const key = n.kind === 'feature' && n.feature?.type === 'origin' ? 'origin-children' : n.key;
     this.expanded.update(set => {
       const next = new Set(set);
@@ -1092,6 +1195,15 @@ export class CadFeatureTreePanelComponent {
   }
 
   onRowClick(n: TreeNode, ev: MouseEvent) {
+    // A just-completed feature drag fires a trailing click — swallow it so the
+    // reorder doesn't also select the row.
+    if (this._suppressNextRowClick) { this._suppressNextRowClick = false; return; }
+    // External-nodes mode: selectable rows select; expandable rows toggle.
+    if (this.externalNodes()) {
+      if (n.selectable) this.externalEvent.emit({ type: 'select', node: n, ev });
+      else if (n.expandable) this.externalEvent.emit({ type: 'expand', node: n, ev });
+      return;
+    }
     // Sketch row:
     //   - in pick-extrude-target mode (`selectable=true`), emit sketchSelected
     //     so the editor knows which sketch to use as the extrude target
@@ -1132,6 +1244,7 @@ export class CadFeatureTreePanelComponent {
   }
 
   isRowSelected(n: TreeNode): boolean {
+    if (this.externalNodes()) return n.selected === true;
     if (n.kind === 'feature' && n.feature) {
       return this.selectedFeatures().has(n.feature.id);
     }
@@ -1149,6 +1262,7 @@ export class CadFeatureTreePanelComponent {
 
   onVisibilityToggleClick(n: TreeNode, ev: MouseEvent) {
     ev.stopPropagation();
+    if (this.externalNodes()) { this.externalEvent.emit({ type: 'visibility', node: n, ev }); return; }
     if (n.kind === 'datum' && n.datumId) {
       this.visibilityToggled.emit(n.datumId);
     } else if (n.kind === 'sketch' && n.sketchId) {
@@ -1225,7 +1339,88 @@ export class CadFeatureTreePanelComponent {
     return null;
   }
 
+  // ── Feature drag-reorder (feature 2) ─────────────────────────────────
+  // A feature row can be dragged to a new slot. dragFeatureIndex = the row
+  // being dragged; featureDropIndex = where it would land (insert BEFORE that
+  // featureIndex; the past-end sentinel renders no indicator). Engages only
+  // after the cursor moves past a small threshold so plain clicks still
+  // select. Origin is pinned; the assembly (external-nodes) tree opts out.
+  dragFeatureIndex = signal<number | null>(null);
+  featureDropIndex = signal<number | null>(null);
+  private featureDragCandidate: { index: number; startY: number } | null = null;
+  private featureDragMove?: (ev: MouseEvent) => void;
+  private featureDragUp?: (ev: MouseEvent) => void;
+  private _suppressNextRowClick = false;
+
+  onRowMouseDown(ev: MouseEvent, n: TreeNode): void {
+    if (n.kind === 'rollback-bar') { this.onRollbackDragStart(ev); return; }
+    if (n.kind === 'feature') this.onFeatureDragStart(ev, n);
+  }
+
+  private onFeatureDragStart(ev: MouseEvent, n: TreeNode): void {
+    if (ev.button !== 0) return;
+    if (this.externalNodes() !== null) return;        // assembly tree: no reorder
+    if (n.featureIndex === undefined) return;
+    if (n.feature?.type === 'origin') return;          // origin is pinned at index 0
+    this.featureDragCandidate = { index: n.featureIndex, startY: ev.clientY };
+
+    this.featureDragMove = (mv: MouseEvent) => {
+      const cand = this.featureDragCandidate;
+      if (!cand) return;
+      if (this.dragFeatureIndex() === null) {
+        if (Math.abs(mv.clientY - cand.startY) < 4) return;  // threshold → engage drag
+        this.dragFeatureIndex.set(cand.index);
+      }
+      this.featureDropIndex.set(this._hitTestFeatureDrop(mv.clientY));
+    };
+    this.featureDragUp = () => {
+      const from = this.dragFeatureIndex();
+      const to = this.featureDropIndex();
+      this._endFeatureDrag();
+      if (from === null) return;                       // never moved → fall through to click
+      this._suppressNextRowClick = true;               // a real drag — don't also select
+      // No-op drops: same slot, or the gap immediately after the dragged row.
+      if (to !== null && to !== from && to !== from + 1) {
+        this.reorderFeature.emit({ fromIndex: from, toIndex: to });
+      }
+    };
+    document.addEventListener('mousemove', this.featureDragMove);
+    document.addEventListener('mouseup', this.featureDragUp);
+  }
+
+  private _endFeatureDrag(): void {
+    if (this.featureDragMove) document.removeEventListener('mousemove', this.featureDragMove);
+    if (this.featureDragUp) document.removeEventListener('mouseup', this.featureDragUp);
+    this.featureDragMove = undefined;
+    this.featureDragUp = undefined;
+    this.featureDragCandidate = null;
+    this.dragFeatureIndex.set(null);
+    this.featureDropIndex.set(null);
+  }
+
+  /** Cursor Y → the featureIndex the dragged row should land BEFORE. Mirrors
+   * the rollback hit-test but returns a past-end sentinel (max featureIndex + 1)
+   * for "drop at the end" instead of null. */
+  private _hitTestFeatureDrop(cursorY: number): number | null {
+    const list = this.treeList?.nativeElement;
+    if (!list) return null;
+    const rows = Array.from(list.querySelectorAll<HTMLLIElement>('li.row'));
+    let maxIndex = 0;
+    for (const row of rows) {
+      if (!row.classList.contains('depth-0')) continue;
+      const fi = row.dataset['featureIndex'];
+      if (fi === undefined || fi === '') continue;
+      const idx = Number(fi);
+      maxIndex = Math.max(maxIndex, idx);
+      const r = row.getBoundingClientRect();
+      if (cursorY < r.top + r.height / 2) return idx;
+    }
+    return maxIndex + 1;  // past the last feature → end
+  }
+
   onRowContextMenu(ev: MouseEvent, n: TreeNode) {
+    // External-nodes mode: the host owns the context menu.
+    if (this.externalNodes()) { ev.preventDefault(); this.externalEvent.emit({ type: 'context', node: n, ev }); return; }
     // Origin features and datum rows have no context menu — fall through to the
     // browser's native menu so power users can copy/inspect.
     if (n.kind === 'datum') return;

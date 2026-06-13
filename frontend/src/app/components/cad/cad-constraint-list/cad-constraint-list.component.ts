@@ -40,7 +40,8 @@ const ICON: Record<ConstraintType, string> = {
   'point-line-distance': 'cad-point-line-distance',
   'arc-length': 'cad-arc-length',
   'chord-distance': 'cad-chord-distance',
-  'on-edge': 'cad-convert',
+  'radial-distance': 'cad-radius',
+  'on-edge': 'cad-on-edge',
 };
 
 const LABEL: Record<ConstraintType, string> = {
@@ -66,6 +67,7 @@ const LABEL: Record<ConstraintType, string> = {
   'point-line-distance': 'Pt-line dist',
   'arc-length': 'Arc length',
   'chord-distance': 'Chord',
+  'radial-distance': 'Radial gap',
   'on-edge': 'On Edge',
 };
 
@@ -102,6 +104,7 @@ interface ConstraintRow {
         <li *ngFor="let r of rows(); trackBy: trackById"
             class="row"
             [class.selected]="r.id === selectedId()"
+            [class.related]="relatedIds().has(r.id)"
             [attr.data-testid]="'constraint-row-' + r.id"
             (click)="onSelectRow(r)">
           <mat-icon class="row-icon" [svgIcon]="r.icon"></mat-icon>
@@ -137,6 +140,10 @@ interface ConstraintRow {
     .row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); cursor: pointer; border-left: 3px solid transparent; }
     .row:hover { background: rgba(255, 255, 255, 0.04); }
     .row.selected { background: rgba(66, 165, 245, 0.18); border-left-color: #42a5f5; }
+    /* A constraint touching the currently-selected sketch entity — amber so it
+       reads distinctly from the blue clicked-constraint highlight. */
+    .row.related { background: rgba(255, 193, 7, 0.12); border-left-color: #ffc107; }
+    .row.related.selected { background: rgba(66, 165, 245, 0.2); }
     .row-icon { font-size: 18px; width: 18px; height: 18px; opacity: 0.85; flex-shrink: 0; }
     .row-body { display: flex; flex-direction: column; flex: 1; min-width: 0; }
     .row-label { font-weight: 500; }
@@ -156,6 +163,10 @@ export class CadConstraintListComponent {
   /** Currently-selected constraint id — when set, the matching row in this
    * panel gets a blue highlight bar. Parent owns selection state. */
   selectedId = input<string | null>(null);
+  /** Currently-selected sketch ENTITY ids. Any constraint that targets one of
+   * them is highlighted (amber) so the user sees, at a glance, every relation
+   * on the geometry they just clicked. */
+  selectedEntityIds = input<Set<string>>(new Set());
 
   remove = output<string>();
   edit = output<{ id: string; value: number; unit: Unit | null }>();
@@ -199,6 +210,17 @@ export class CadConstraintListComponent {
         raw: c,
       };
     });
+  });
+
+  /** Ids of the rows whose constraint targets any selected sketch entity. */
+  relatedIds = computed<Set<string>>(() => {
+    const sel = this.selectedEntityIds();
+    const out = new Set<string>();
+    if (sel.size === 0) return out;
+    for (const r of this.rows()) {
+      if (r.raw.targets.some(t => sel.has(t.entityId))) out.add(r.id);
+    }
+    return out;
   });
 
   trackById = (_: number, r: ConstraintRow) => r.id;

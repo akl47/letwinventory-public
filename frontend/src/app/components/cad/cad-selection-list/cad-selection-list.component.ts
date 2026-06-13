@@ -15,6 +15,13 @@ export interface SelectionRow {
   icon?: string;
   /** Optional per-row tooltip. */
   tooltip?: string;
+  /** Optional dimmed second line under the label (e.g. coordinates or an
+   * entity description). Renders nothing when omitted. */
+  detail?: string;
+  /** Optional secondary per-row action button (rendered before the remove
+   * X). Clicking it emits the row id via the host's `rowAction` output —
+   * e.g. "flip this curve to the other side" in the Offset tool. */
+  action?: { icon: string; tooltip?: string };
 }
 
 /** SolidWorks-style selection-box component. Renders a labelled panel
@@ -49,7 +56,18 @@ export interface SelectionRow {
             *ngFor="let row of rows(); let i = index"
             [attr.data-testid]="testid() ? testid() + '-row-' + i : null">
           <mat-icon class="entity-row-icon">{{ row.icon || 'radio_button_unchecked' }}</mat-icon>
-          <span class="entity-row-label">{{ row.label }}</span>
+          <span class="entity-row-text">
+            <span class="entity-row-label">{{ row.label }}</span>
+            <span class="entity-row-detail" *ngIf="row.detail">{{ row.detail }}</span>
+          </span>
+          <button class="entity-row-action"
+                  type="button"
+                  *ngIf="row.action as act"
+                  [attr.data-testid]="testid() ? testid() + '-action-' + i : null"
+                  [matTooltip]="act.tooltip || ''"
+                  (click)="rowAction.emit(row.id)">
+            <mat-icon>{{ act.icon }}</mat-icon>
+          </button>
           <button class="entity-row-remove"
                   type="button"
                   [attr.data-testid]="testid() ? testid() + '-remove-' + i : null"
@@ -118,7 +136,9 @@ export interface SelectionRow {
       min-height: 18px;
     }
     .entity-row-icon { font-size: 14px; width: 14px; height: 14px; opacity: 0.85; flex-shrink: 0; }
-    .entity-row-label { flex: 1; font-size: 12px; color: #ddd; line-height: 1.15; min-width: 0; }
+    .entity-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .entity-row-label { font-size: 12px; color: #ddd; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; }
+    .entity-row-detail { font-size: 10px; color: #888; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; }
     .entity-row-remove {
       width: 14px; height: 14px; padding: 0; flex-shrink: 0;
       display: inline-flex; align-items: center; justify-content: center;
@@ -127,6 +147,14 @@ export interface SelectionRow {
     }
     .entity-row-remove:hover { background: rgba(255,255,255,0.12); color: #fff; }
     .entity-row-remove mat-icon { font-size: 12px; width: 12px; height: 12px; line-height: 12px; }
+    .entity-row-action {
+      width: 14px; height: 14px; padding: 0; flex-shrink: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: transparent; border: none; border-radius: 2px;
+      color: #aaa; cursor: pointer; line-height: 1;
+    }
+    .entity-row-action:hover { background: rgba(255,255,255,0.12); color: #fff; }
+    .entity-row-action mat-icon { font-size: 12px; width: 12px; height: 12px; line-height: 12px; }
   `],
 })
 export class CadSelectionListComponent {
@@ -148,6 +176,9 @@ export class CadSelectionListComponent {
 
   /** Emits the row's `id` when its X button is clicked. */
   remove = output<string>();
+  /** Emits the row's `id` when its optional secondary `action` button is
+   * clicked. Only rows that define `action` render the button. */
+  rowAction = output<string>();
   /** Emits when the header "Clear all" button is clicked. The button
    * renders only when `rows.length > 0`. Host is responsible for
    * actually clearing whatever underlying state feeds `rows`. */

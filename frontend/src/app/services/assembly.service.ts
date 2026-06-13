@@ -4,7 +4,7 @@ import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
   Assembly, AssemblyInstance, AssemblyRegenResponse, BomLine, Placement, Mate, MateType, MateRef, EligiblePart,
-  AssemblyPattern, PatternKind, ExplodeConfig, DisplayState, MassProperties, InterferencePair,
+  AssemblyPattern, PatternKind, DisplayState, MassProperties, InterferencePair,
 } from '../cad/lib/assembly.types';
 
 @Injectable({ providedIn: 'root' })
@@ -33,12 +33,12 @@ export class AssemblyService {
     return this.http.delete<void>(`${this.apiUrl}/${id}`);
   }
 
-  insertInstance(id: number, body: { partID: number; placement?: Placement; grounded?: boolean }):
+  insertInstance(id: number, body: { partID: number; placement?: Placement; grounded?: boolean; originMate?: boolean; branch?: string }):
     Observable<{ instance: AssemblyInstance; assembly: Assembly }> {
     return this.http.post<{ instance: AssemblyInstance; assembly: Assembly }>(`${this.apiUrl}/${id}/instances`, body);
   }
 
-  updateInstance(id: number, instanceId: string, patch: Partial<Pick<AssemblyInstance, 'placement' | 'grounded' | 'suppressed' | 'visible'>>):
+  updateInstance(id: number, instanceId: string, patch: Partial<Pick<AssemblyInstance, 'placement' | 'grounded' | 'suppressed' | 'visible'>> & { branch?: string | null; configurationId?: string | null }):
     Observable<{ instance: AssemblyInstance; assembly: Assembly }> {
     return this.http.put<{ instance: AssemblyInstance; assembly: Assembly }>(`${this.apiUrl}/${id}/instances/${instanceId}`, patch);
   }
@@ -65,16 +65,15 @@ export class AssemblyService {
     return this.http.post<{ mate: Mate; assembly: Assembly }>(`${this.apiUrl}/${id}/mates`, body);
   }
 
+  updateMate(
+    id: number, mateId: string,
+    body: { type?: string; a?: { instanceId: string; faceId: string }; b?: { instanceId: string; faceId: string }; value?: number; flip?: boolean },
+  ): Observable<Assembly> {
+    return this.http.put<Assembly>(`${this.apiUrl}/${id}/mates/${mateId}`, body);
+  }
+
   removeMate(id: number, mateId: string): Observable<Assembly> {
     return this.http.delete<Assembly>(`${this.apiUrl}/${id}/mates/${mateId}`);
-  }
-
-  autoExplode(id: number, spread = 1.5): Observable<{ explode: ExplodeConfig; assembly: Assembly }> {
-    return this.http.post<{ explode: ExplodeConfig; assembly: Assembly }>(`${this.apiUrl}/${id}/explode/auto`, { spread });
-  }
-
-  setExplode(id: number, factor: number): Observable<{ explode: ExplodeConfig; assembly: Assembly }> {
-    return this.http.put<{ explode: ExplodeConfig; assembly: Assembly }>(`${this.apiUrl}/${id}/explode`, { factor });
   }
 
   saveDisplayState(id: number, name: string): Observable<{ state: DisplayState; assembly: Assembly }> {

@@ -30,8 +30,10 @@ export interface RegenerateResponse {
     cached: boolean;
   }>;
   /** Body roster in creation order. New for multi-body. */
-  bodies?: Array<{ id: string; name: string | null }>;
+  bodies?: Array<{ id: string; name: string | null; volume?: number }>;
   errors: string[];
+  /** Running cad-kernel build marker (from its `ping`). Shown in the footer. */
+  kernelBuild?: string | null;
 }
 
 @Injectable({ providedIn: 'root' })

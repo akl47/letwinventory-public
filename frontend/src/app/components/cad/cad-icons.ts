@@ -163,6 +163,8 @@ const ICONS: Record<string, string> = {
   'cad-dynamic-mirror': `<path d="M3 6 L 3 18 L 9 12 Z"/><line x1="12" y1="3" x2="12" y2="21" stroke-dasharray="3 2"/><path d="M21 6 L 21 18 L 15 12 Z"/><polyline points="13,5 14,4 13,3"/>`,
   // Convert entities: arrow projecting one shape onto another plane.
   'cad-convert': `<rect x="3" y="14" width="8" height="6"/><line x1="11" y1="14" x2="17" y2="8"/><polyline points="15,7 17,8 16,10"/><line x1="14" y1="4" x2="20" y2="4" stroke-dasharray="2 2"/>`,
+  // On-edge relation: a point riding a model edge.
+  'cad-on-edge': `<line x1="4" y1="17" x2="20" y2="7"/>${dot(12, 12, 2.4)}`,
 
   // ─── transforms ────────────────────────────────────────────────────────
   // Move: 4-direction arrow cross.
