@@ -102,8 +102,8 @@ describe('assemblyRegenService.assemblyBom (REQ 753)', () => {
       },
     };
     expect(svc.assemblyBom(assembly)).toEqual([
-      { partID: 2, quantity: 2 },
-      { partID: 3, quantity: 1 },
+      { partID: 2, quantity: 2, configurationId: null },
+      { partID: 3, quantity: 1, configurationId: null },
     ]);
   });
 
@@ -111,6 +111,6 @@ describe('assemblyRegenService.assemblyBom (REQ 753)', () => {
     const assembly = {
       assemblyDoc: { instances: [{ instanceId: 'i1', partID: 2 }, { instanceId: 'i2', partID: 2, suppressed: true }] },
     };
-    expect(svc.assemblyBom(assembly)).toEqual([{ partID: 2, quantity: 1 }]);
+    expect(svc.assemblyBom(assembly)).toEqual([{ partID: 2, quantity: 1, configurationId: null }]);
   });
 });

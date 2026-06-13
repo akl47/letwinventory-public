@@ -59,6 +59,9 @@ describe('Assembly production release + compare + merge (full parity)', () => {
     const part = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
     const id = asm.body.id;
+    // Creation auto-lands on draft/01; switch to the protected main line, where
+    // "merge main into main" is rejected and the change list is empty.
+    await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'main' });
     const merge = await auth.post(`/api/design/cad-model/${id}/reconcile`).send({});
     expect(merge.status).toBe(409);
     const preview = await auth.get(`/api/design/cad-model/${id}/reconcile/preview`);

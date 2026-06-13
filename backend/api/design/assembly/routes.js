@@ -22,6 +22,7 @@ router.put('/:id/instances/:instanceId/replace', checkToken, checkPermission('ca
 
 // Mates.
 router.post('/:id/mates', checkToken, checkPermission('cad', 'write'), controller.addMate);
+router.put('/:id/mates/:mateId', checkToken, checkPermission('cad', 'write'), controller.updateMate);
 router.delete('/:id/mates/:mateId', checkToken, checkPermission('cad', 'write'), controller.removeMate);
 
 // Component patterns (linear / circular / mirror).

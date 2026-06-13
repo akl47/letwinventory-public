@@ -18,10 +18,14 @@ describe('Assembly release (shared release/freeze parity)', () => {
     expect(rel.body.model.displayRevision).toBe('01');
   });
 
-  it('rejects releasing on main (no draft branch)', async () => {
+  it('rejects releasing on main (protected line)', async () => {
     const auth = await authenticatedRequest();
     const part = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
+    // Creation auto-lands on draft/01; switch back to the protected main line,
+    // where self-service release is rejected (production-letter release there
+    // is approval-gated, not available on a fresh unapproved assembly).
+    await auth.post(`/api/design/cad-model/${asm.body.id}/switch-branch`).send({ name: 'main' });
     const rel = await auth.post(`/api/design/cad-model/${asm.body.id}/release`).send({});
     expect(rel.status).toBe(409);
   });

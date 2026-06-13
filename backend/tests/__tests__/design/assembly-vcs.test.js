@@ -12,7 +12,7 @@ describe('assemblySerializer round-trip (REQ — VCS binding)', () => {
   it('serializes and reconstructs an identical assembly document', async () => {
     const repo = { repoType: 'assembly', repoId: 'rt-test' };
     const doc = {
-      nextInstanceSeq: 3, nextMateSeq: 2,
+      nextInstanceSeq: 3, nextMateSeq: 2, nextPatternSeq: 2, nextDisplayStateSeq: 2,
       instances: [
         { instanceId: 'i1', partID: 5, grounded: true, placement: { translate: [0, 0, 0], quaternion: [0, 0, 0, 1] } },
         { instanceId: 'i2', partID: 6, placement: { translate: [1, 2, 3], quaternion: [0, 0, 0, 1] } },
@@ -20,6 +20,12 @@ describe('assemblySerializer round-trip (REQ — VCS binding)', () => {
       mates: [
         { mateId: 'm1', id: 'm1', type: 'coincident', a: { instanceId: 'i1', faceId: 'f0' }, b: { instanceId: 'i2', faceId: 'f1' } },
       ],
+      // Doc-level fields beyond instances/mates must survive the round-trip
+      // via the meta passthrough (else patterns / explode / display states are
+      // silently dropped on every checkin / branch switch).
+      patterns: [{ patternId: 'p1', kind: 'linear', seedInstanceIds: ['i1'], count: 3 }],
+      explode: { offsets: { i2: [5, 0, 0] }, factor: 1 },
+      displayStates: [{ id: 'ds1', name: 'Default', hidden: [] }],
     };
     const tree = await assemblySerialize(repo, doc, db);
     const back = await assemblyDeserialize(repo, tree, db);

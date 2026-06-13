@@ -75,6 +75,9 @@ function worldAxis(pose, g) {
     radius: g.radius || 0,
   };
 }
+function worldPoint(pose, g) {
+  return vadd(qRotate(pose.quaternion, g.origin), pose.translate);
+}
 const perpComponent = (delta, d) => vsub(delta, vscale(d, vdot(delta, d)));
 
 const lockTargets = new Map();
@@ -82,12 +85,23 @@ const lockTargets = new Map();
 function mateResiduals(mate, poseA, poseB) {
   switch (mate.type) {
     case 'coincident': {
+      // Origin-point pair → coincident points (3 residuals).
+      if (mate.a.geom.kind === 'point' && mate.b.geom.kind === 'point') {
+        const a = worldPoint(poseA, mate.a.geom); const b = worldPoint(poseB, mate.b.geom);
+        return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+      }
       const pa = worldPlane(poseA, mate.a.geom); const pb = worldPlane(poseB, mate.b.geom);
       const orient = mate.flip ? vsub(pa.normal, pb.normal) : vadd(pa.normal, pb.normal);
       const sep = vdot(pa.normal, vsub(pb.origin, pa.origin));
       return [orient[0], orient[1], orient[2], sep];
     }
     case 'distance': {
+      // Origin-point pair → Euclidean distance equals the value.
+      if (mate.a.geom.kind === 'point' && mate.b.geom.kind === 'point') {
+        const a = worldPoint(poseA, mate.a.geom); const b = worldPoint(poseB, mate.b.geom);
+        const d = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        return [d - (mate.value || 0)];
+      }
       const pa = worldPlane(poseA, mate.a.geom); const pb = worldPlane(poseB, mate.b.geom);
       const orient = mate.flip ? vsub(pa.normal, pb.normal) : vadd(pa.normal, pb.normal);
       const sep = vdot(pa.normal, vsub(pb.origin, pa.origin)) - (mate.value || 0);
@@ -184,7 +198,58 @@ const norm2 = (v) => Math.sqrt(v.reduce((s, x) => s + x * x, 0));
  *   in the instance LOCAL frame.
  * @returns { poses:{[id]:{translate,quaternion}}, converged, residualNorm, dof, state, iterations }
  */
+/**
+ * Solve a set of mates, auto-correcting flip-induced non-convergence.
+ *
+ * A coincident/distance/tangent mate's `flip` selects a normal ALIGNMENT
+ * (normals same vs opposite). For a single mate either alignment is
+ * satisfiable, but a combination across several mates can imply a REFLECTION
+ * (improper rotation) rather than a rigid pose — then no pose satisfies them
+ * and the solve reports `over` even though the mates are individually fine
+ * (the user's symptom: "over-constrained until I flipped a mate's face").
+ *
+ * When the initial solve doesn't converge, we greedily toggle each flip-able
+ * mate's flip, keeping any toggle that reduces the residual, to recover a
+ * consistent set. The chosen flips are returned in `resolvedFlips` so callers
+ * can persist the correction. If nothing converges, the assembly is genuinely
+ * over-constrained and the best (still-`over`) result is returned unchanged.
+ */
 function solveMates(instances, mates, opts = {}) {
+  let best = solveOnce(instances, mates, opts);
+  best.resolvedFlips = {};
+  for (const m of mates) if (!m.suppressed) best.resolvedFlips[m.id] = !!m.flip;
+  if (best.converged) return best;
+
+  const FLIP_TYPES = new Set(['coincident', 'distance', 'tangent']);
+  const flipIdx = mates
+    .map((m, i) => (!m.suppressed && FLIP_TYPES.has(m.type) ? i : -1))
+    .filter((i) => i >= 0);
+  if (flipIdx.length === 0) return best;
+
+  const working = mates.map((m) => ({ ...m }));
+  const goodEnough = Math.max((opts.tolerance || 1e-7) * 10, 1e-5);
+  let improved = true;
+  let guard = 0;
+  while (improved && !best.converged && guard++ <= flipIdx.length) {
+    improved = false;
+    for (const i of flipIdx) {
+      working[i].flip = !working[i].flip;
+      const trial = solveOnce(instances, working, opts);
+      if (trial.residualNorm < best.residualNorm - 1e-9) {
+        best = trial;
+        improved = true;
+      } else {
+        working[i].flip = !working[i].flip; // revert — toggle didn't help
+      }
+      if (best.residualNorm < goodEnough) break;
+    }
+  }
+  best.resolvedFlips = {};
+  for (const m of working) if (!m.suppressed) best.resolvedFlips[m.id] = !!m.flip;
+  return best;
+}
+
+function solveOnce(instances, mates, opts = {}) {
   const maxIterations = opts.maxIterations || 80;
   const tolerance = opts.tolerance || 1e-7;
 

@@ -33,7 +33,19 @@ async function assemblySerialize(repo, assemblyDoc, db) {
   const meta = {
     instanceOrder: instances.map((i) => i.instanceId),
     mateOrder: mates.map(mateKey),
-    docMeta: { nextInstanceSeq: doc.nextInstanceSeq, nextMateSeq: doc.nextMateSeq },
+    // docMeta carries every doc-level field that isn't an instance/mate blob so
+    // patterns / explode state / display states survive the VCS round-trip
+    // (checkin → branch switch → checkout). Without this passthrough they'd be
+    // silently dropped on every version op. Mirrors cadSerializer's meta.
+    docMeta: {
+      nextInstanceSeq: doc.nextInstanceSeq,
+      nextMateSeq: doc.nextMateSeq,
+      nextPatternSeq: doc.nextPatternSeq,
+      nextDisplayStateSeq: doc.nextDisplayStateSeq,
+      patterns: doc.patterns,
+      explode: doc.explode,
+      displayStates: doc.displayStates,
+    },
   };
   entries.push({ name: 'meta', kind: 'blob', hash: await vcs.writeBlob(repo, meta, db) });
 
@@ -70,8 +82,13 @@ async function assemblyDeserialize(repo, treeHash, db) {
   return {
     nextInstanceSeq: docMeta.nextInstanceSeq != null ? docMeta.nextInstanceSeq : instances.length + 1,
     nextMateSeq: docMeta.nextMateSeq != null ? docMeta.nextMateSeq : mates.length + 1,
+    nextPatternSeq: docMeta.nextPatternSeq != null ? docMeta.nextPatternSeq : 1,
+    nextDisplayStateSeq: docMeta.nextDisplayStateSeq != null ? docMeta.nextDisplayStateSeq : 1,
     instances,
     mates,
+    patterns: docMeta.patterns || [],
+    explode: docMeta.explode || { offsets: {}, factor: 1 },
+    displayStates: docMeta.displayStates || [],
   };
 }
 

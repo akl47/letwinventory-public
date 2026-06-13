@@ -10,10 +10,14 @@
 // regenerates (or, later, reuses frozen geometry for) each referenced part's CAD
 // model.
 
+const { Op } = require('sequelize');
 const cadRegenService = require('./cadRegenService');
+const cadVcsService = require('./vcs/cadVcsService');
+const vcsService = require('./vcs/vcsService');
+const { cadDeserialize } = require('./vcs/cadSerializer');
 const mateSolver = require('./assemblyMateSolver');
 const { relativePlacement, transformPoint } = require('./cadTransform');
-const { resolveEdgeRef } = require('./cadExternalRef');
+const { resolveEdgeRef, resolveVertexRef } = require('./cadExternalRef');
 
 const IDENTITY_PLACEMENT = { translate: [0, 0, 0], quaternion: [0, 0, 0, 1] };
 
@@ -156,6 +160,87 @@ function flattenChildGeometry(regen) {
   return { faces, vertices, edges, bodies };
 }
 
+// All Parts ids in a revision lineage (walk up to the root, then BFS down).
+// Mirrors the cad-model controller's lineagePartIds so component resolution
+// keeps working after a release moves the part's design to a new Parts row.
+async function lineagePartIds(partID, db) {
+  let part = await db.Part.findByPk(partID);
+  if (!part) return [partID];
+  const seen = new Set();
+  while (part.previousRevisionID && !seen.has(part.id)) {
+    seen.add(part.id);
+    const prev = await db.Part.findByPk(part.previousRevisionID);
+    if (!prev) break;
+    part = prev;
+  }
+  const all = new Set([part.id]);
+  let frontier = [part.id];
+  while (frontier.length) {
+    const kids = await db.Part.findAll({ where: { previousRevisionID: frontier }, attributes: ['id'] });
+    frontier = kids.map((k) => k.id).filter((id) => !all.has(id));
+    frontier.forEach((id) => all.add(id));
+  }
+  return [...all];
+}
+
+// REQ 788 — decide WHAT state of a component's part design an instance resolves:
+//   - no tracked branch (legacy) or the tracked branch IS the part's checked-out
+//     branch → the live working copy ({ source: 'working' });
+//   - any other tracked branch → that branch's head commit, with the doc
+//     materialized from the VCS ({ source: 'commit', commitHash, doc });
+//   - tracked branch gone (released → archived) → fall back to main
+//     (fellBack: true, reported by the caller).
+// The part row is found across the revision lineage so a released part keeps
+// resolving. Exported separately from the kernel wiring so it's unit-testable.
+async function resolveChildSource(instance, db) {
+  const partInclude = { model: db.Part, as: 'part', attributes: ['id', 'name', 'sku', 'manufacturerPN', 'revision'] };
+  let row = await db.DesignCADModel.findOne({
+    where: { partID: instance.partID, activeFlag: true }, include: [partInclude],
+  });
+  if (!row) {
+    const ids = await lineagePartIds(instance.partID, db);
+    row = await db.DesignCADModel.findOne({
+      where: { partID: { [Op.in]: ids }, activeFlag: true }, include: [partInclude],
+    });
+  }
+  if (!row) {
+    const err = new Error(`Component part ${instance.partID} has no design (CAD or assembly) to resolve`);
+    err.statusCode = 422;
+    throw err;
+  }
+  const tracked = instance.ref && instance.ref.branch;
+  if (!tracked || row.isAssembly) return { row, source: 'working' };
+  if (tracked === (row.branchName || 'main')) return { row, source: 'working' };
+  const repo = await cadVcsService.repoForModel(row, db);
+  let branch = tracked;
+  let fellBack = false;
+  let ref = await vcsService.getRef(repo, branch, db);
+  if (!ref) { branch = 'main'; fellBack = true; ref = await vcsService.getRef(repo, 'main', db); }
+  // No commits at all (repo never seeded) — degrade to the working copy.
+  if (!ref) return { row, source: 'working', fellBack: true, branch: row.branchName || 'main' };
+  const commit = await vcsService.getCommit(repo, ref.targetHash, db);
+  const doc = await cadDeserialize(repo, commit.treeHash, db);
+  return { row, source: 'commit', branch, fellBack, commitHash: ref.targetHash, doc };
+}
+
+// Resolved-child-geometry cache. An assembly regen re-resolves EVERY component;
+// a drag or mate edit only changes placements, so unchanged leaf parts can skip
+// the kernel feature replay entirely. Keyed by the child row's id + updatedAt
+// (any save bumps it) + the engraved __partRevision; consumers (Phase C
+// transforms, cross-part edge reads) copy rather than mutate, so entries are
+// safe to share. Skipped when a live externalRefResolver is in play (those
+// regens depend on OTHER parts' current geometry). Leaf parts only — a nested
+// assembly's row doesn't change when its own children do.
+const CHILD_GEO_CACHE = new Map();
+const CHILD_GEO_CACHE_MAX = 16;
+function childGeoCachePut(key, value) {
+  if (CHILD_GEO_CACHE.has(key)) CHILD_GEO_CACHE.delete(key);
+  CHILD_GEO_CACHE.set(key, value);
+  while (CHILD_GEO_CACHE.size > CHILD_GEO_CACHE_MAX) {
+    CHILD_GEO_CACHE.delete(CHILD_GEO_CACHE.keys().next().value);
+  }
+}
+
 // Default resolver: produce a component's child geometry. Assemblies live in the
 // unified DesignCADModels table; the row's `isAssembly` flag dispatches between
 // recursive assembly regen (REQ 763, one rigid child) and part-CAD regen. The
@@ -163,11 +248,13 @@ function flattenChildGeometry(regen) {
 // stale kinds (e.g. a part later converted between kinds).
 function defaultResolveChild({ db, kernelClient }) {
   return async (instance, assembly, resolveOpts = {}) => {
-    const row = await db.DesignCADModel.findOne({ where: { partID: instance.partID, activeFlag: true } });
-    if (!row) {
-      const err = new Error(`Component part ${instance.partID} has no design (CAD or assembly) to resolve`);
-      err.statusCode = 422;
-      throw err;
+    // REQ 788 — pick the source state: live working copy or a tracked branch's
+    // head commit. The Part is included so `#{partName}`/`#{partNumber}`/…
+    // sketch text variables resolve during regen.
+    const src = await resolveChildSource(instance, db);
+    const row = src.row;
+    if (src.fellBack && resolveOpts.warn) {
+      resolveOpts.warn(`Instance ${instance.instanceId}: tracked branch "${instance.ref && instance.ref.branch}" no longer exists — using ${src.branch}`);
     }
     if (row.isAssembly) {
       const sub = await regenerateAssembly(row, { db, kernelClient });
@@ -175,11 +262,50 @@ function defaultResolveChild({ db, kernelClient }) {
       // treat the whole thing as one rigid child (its body ids stay sub-scoped).
       return { faces: sub.faces, vertices: sub.vertices, edges: sub.edges, bodies: sub.bodies };
     }
+    // `#{partRevision}` = the rev being worked on — a draft branch's derived
+    // display rev (highest released + 1), or the released revision on main —
+    // matching what the part editor bakes (cad-model regenerate handler).
+    const onMainBranch = src.source === 'commit'
+      ? src.branch === 'main'
+      : (row.branchName || 'main') === 'main';
+    const partRevision = onMainBranch
+      ? (row.part && row.part.revision) || ''
+      : await cadVcsService.derivedDraftRev(row, db);
+
+    // Per-instance configuration (REQ: configurations) — the instance may pin
+    // a child-part configuration; undefined = the child's own active config.
+    const configurationId = instance.configurationId || null;
+
+    if (src.source === 'commit') {
+      // Branch-head doc materialized from the VCS — immutable, so cache by hash
+      // (+ configuration: the same commit yields different geometry per config).
+      const cacheKey = `commit:${row.id}:${src.commitHash}:${configurationId || ''}`;
+      if (CHILD_GEO_CACHE.has(cacheKey)) return CHILD_GEO_CACHE.get(cacheKey);
+      const modelLike = {
+        id: row.id,
+        featureTree: src.doc.featureTree,
+        sketchDoc: src.doc.sketchDoc,
+        equations: src.doc.equations,
+        part: row.part,
+        __partRevision: partRevision,
+      };
+      const regen = await cadRegenService.regenerateModel(modelLike, { kernelClient, db, includeBodyBreps: true, configurationId });
+      const flat = flattenChildGeometry(regen);
+      childGeoCachePut(cacheKey, flat);
+      return flat;
+    }
+
+    row.__partRevision = partRevision;
+    const cacheable = !resolveOpts.externalRefResolver;
+    const cacheKey = `${row.id}:${row.updatedAt ? new Date(row.updatedAt).getTime() : 0}:${row.__partRevision}:${configurationId || ''}`;
+    if (cacheable && CHILD_GEO_CACHE.has(cacheKey)) return CHILD_GEO_CACHE.get(cacheKey);
     const regen = await cadRegenService.regenerateModel(row, {
-      kernelClient, db, includeBodyBreps: true,
+      kernelClient, db, includeBodyBreps: true, configurationId,
       externalRefResolver: resolveOpts.externalRefResolver, // live cross-part edges (Phase B.5)
     });
-    return flattenChildGeometry(regen);
+    const flat = flattenChildGeometry(regen);
+    if (cacheable) childGeoCachePut(cacheKey, flat);
+    return flat;
   };
 }
 
@@ -295,14 +421,25 @@ function makeCrossPartResolver({ dependentId, childGeoById, poses, backEdges }) 
     const sourceGeo = childGeoById.get(sId);
     const poseD = poses[dependentId], poseS = poses[sId];
     if (!sourceGeo || !poseD || !poseS) return null;
-    const m = resolveEdgeRef(sourceGeo.bodies || [], externalRef.sourceGeomRef || {}, externalRef.fallback);
+    const rel = relativePlacement(poseD, poseS); // S-local → D-local
+    const geomRef = externalRef.sourceGeomRef || {};
+    const fallback = externalRef.fallback;
+    // VERTEX ref (cross-part Convert on a vertex): resolve the point and return
+    // it as a degenerate edge (both endpoints equal) so the shared point-on-edge
+    // re-projection pins the sketch point to it.
+    if (geomRef.vertexId || (fallback && fallback.kind === 'vertex')) {
+      const v = resolveVertexRef(sourceGeo.bodies || [], geomRef, fallback);
+      if (!v) return null;
+      const p = transformPoint(rel, v.position);
+      return { polyline: [p, p], isStraight: true };
+    }
+    const m = resolveEdgeRef(sourceGeo.bodies || [], geomRef, fallback);
     if (!m) return null;
     const edge = m.edge;
     const poly = edge.polyline && edge.polyline.length >= 2
       ? edge.polyline
       : (edge.endpoints && edge.endpoints.length === 2 ? edge.endpoints : null);
     if (!poly) return null;
-    const rel = relativePlacement(poseD, poseS); // S-local → D-local
     return { polyline: poly.map((p) => transformPoint(rel, p)), isStraight: edge.isStraight };
   };
 }
@@ -323,7 +460,10 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
   const resolver = resolveChild || defaultResolveChild({ db, kernelClient });
   const doc = assembly.assemblyDoc || {};
   const instances = (doc.instances || []).filter((i) => !i.suppressed);
-  const mates = (doc.mates || []).filter((m) => !m.suppressed);
+  // Origin mates carry no face-pair geometry — they fix a component to the
+  // assembly origin via its grounded flag + identity placement, so they're
+  // excluded from the solver's residual set.
+  const mates = (doc.mates || []).filter((m) => !m.suppressed && m.type !== 'origin');
 
   const composed = {
     faces: [], vertices: [], edges: [], bodies: [], instances: [], errors: [], constraintState: null,
@@ -333,7 +473,9 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
   const childGeoById = new Map();
   for (const inst of instances) {
     try {
-      childGeoById.set(inst.instanceId, await resolver(inst, assembly));
+      childGeoById.set(inst.instanceId, await resolver(inst, assembly, {
+        warn: (m) => composed.errors.push(m),
+      }));
     } catch (err) {
       composed.errors.push(`Instance ${inst.instanceId} (part ${inst.partID}): ${err.message}`);
     }
@@ -348,6 +490,17 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
     composed.constraintState = {
       state: solved.state, dof: solved.dof, converged: solved.converged, residualNorm: solved.residualNorm,
     };
+    // Surface any auto-corrected mate flips (the solver recovered a consistent
+    // alignment) so the caller can persist them — keeps the stored flip in sync
+    // with the rendered geometry and the mate-edit checkbox.
+    if (solved.resolvedFlips) {
+      const corrections = [];
+      for (const mate of mates) {
+        const resolved = solved.resolvedFlips[mate.id];
+        if (resolved !== undefined && !!mate.flip !== !!resolved) corrections.push({ mateId: mate.id, flip: !!resolved });
+      }
+      if (corrections.length) composed.flipCorrections = corrections;
+    }
   } else {
     poses = {};
     for (const inst of instances) { const { t, q } = placementOf(inst); poses[inst.instanceId] = { translate: t, quaternion: q }; }
@@ -370,7 +523,14 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
   if (refsByInstance.size) {
     const { nodes, edges } = buildCrossPartDepGraph(instances, refsByInstance);
     const { order, backEdges } = topoOrderWithCycles(nodes, edges);
-    const ambiguous = composed.constraintState && composed.constraintState.state && composed.constraintState.state !== 'fully';
+    // Only an UNDER-constrained assembly makes a cross-part reference
+    // ambiguous: the source instance still has free DOF, so its solved pose
+    // (and thus the geometry the reference projects) isn't uniquely defined.
+    // An OVER-constrained assembly has redundant/conflicting mates but the
+    // pose is still determined, so the reference resolves deterministically —
+    // flagging it as ambiguous was a false positive (over-constraint is
+    // surfaced separately via the assembly's constraint state).
+    const ambiguous = composed.constraintState && composed.constraintState.state === 'under';
     for (const instanceId of order) {
       const deps = edges.get(instanceId);
       if (!deps || !deps.size) continue; // not a dependent
@@ -524,6 +684,18 @@ function faceSurfaceMap(childGeo) {
   return map;
 }
 
+// Canonical solver geometry for a component's origin datums, in its LOCAL frame
+// (REQ: mate against planes/origins). Keyed by datum id.
+const DATUM_GEOM = {
+  origin: { kind: 'point', origin: [0, 0, 0] },
+  x_axis: { kind: 'axis', origin: [0, 0, 0], direction: [1, 0, 0], radius: 0 },
+  y_axis: { kind: 'axis', origin: [0, 0, 0], direction: [0, 1, 0], radius: 0 },
+  z_axis: { kind: 'axis', origin: [0, 0, 0], direction: [0, 0, 1], radius: 0 },
+  xy_plane: { kind: 'plane', origin: [0, 0, 0], normal: [0, 0, 1] },
+  yz_plane: { kind: 'plane', origin: [0, 0, 0], normal: [1, 0, 0] },
+  xz_plane: { kind: 'plane', origin: [0, 0, 0], normal: [0, 1, 0] },
+};
+
 // Convert a kernel surface classification into a solver mate-geometry.
 function surfaceToGeom(surface) {
   if (!surface) return null;
@@ -554,6 +726,10 @@ function solveAssemblyMates(instances, mates, childGeoById, errors) {
   const resolveRef = (ref) => {
     const m = surfacesByInstance.get(ref.instanceId);
     if (!m) return { error: `mate references unknown instance ${ref.instanceId}` };
+    // Datum references (origin point / axis / plane) have canonical geometry in
+    // the component's LOCAL frame — no kernel surface lookup needed.
+    const datum = DATUM_GEOM[ref.faceId];
+    if (datum) return { geom: { ...datum } };
     const surface = m.get(ref.faceId);
     if (!surface) return { error: `mate references face ${ref.faceId} with no analytic surface on instance ${ref.instanceId}` };
     const geom = surfaceToGeom(surface);
@@ -590,13 +766,17 @@ function solveAssemblyMates(instances, mates, childGeoById, errors) {
 function assemblyBom(assembly) {
   const doc = assembly.assemblyDoc || {};
   const order = [];
-  const byPart = new Map();
+  const byKey = new Map();
   for (const inst of doc.instances || []) {
     if (inst.suppressed) continue;
-    if (!byPart.has(inst.partID)) { byPart.set(inst.partID, 0); order.push(inst.partID); }
-    byPart.set(inst.partID, byPart.get(inst.partID) + 1);
+    // Different configurations of the same part are different BOM line items
+    // (a Short bracket isn't interchangeable with a Long one).
+    const configurationId = inst.configurationId || null;
+    const key = `${inst.partID}:${configurationId || ''}`;
+    if (!byKey.has(key)) { byKey.set(key, { partID: inst.partID, configurationId, quantity: 0 }); order.push(key); }
+    byKey.get(key).quantity += 1;
   }
-  return order.map((partID) => ({ partID, quantity: byPart.get(partID) }));
+  return order.map((key) => byKey.get(key));
 }
 
 module.exports = {
@@ -605,6 +785,7 @@ module.exports = {
   assertAcyclic,
   flattenChildGeometry,
   defaultResolveChild,
+  resolveChildSource,
   // cross-part in-context helpers (REQ 772/776/777) — exported for unit tests
   crossPartRefsOf,
   buildCrossPartDepGraph,

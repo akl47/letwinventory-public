@@ -86,3 +86,38 @@ describe('assemblyMateSolver.solveMates (REQ 755-757)', () => {
     expect(r.state).toBe('fully');
   });
 });
+
+describe('auto-flip rescue (REQ 802)', () => {
+  // Three orthogonal coincident plane mates between a grounded part and a free
+  // one. With every flip at its default (false → anti-aligned normals), the
+  // three constraints together demand R = diag(-1,-1,-1) — a REFLECTION, not a
+  // rotation (det -1) — so no rigid pose satisfies them: the solver reports
+  // 'over'. The auto-flip search must toggle an odd number of flips so the
+  // target becomes a proper rotation (det +1) and the solve converges.
+  const mateP = (id, n) => ({
+    id, type: 'coincident',
+    a: { instanceId: 'free', geom: { kind: 'plane', origin: [0, 0, 0], normal: n } },
+    b: { instanceId: 'gnd', geom: { kind: 'plane', origin: [0, 0, 0], normal: n } },
+    flip: false,
+  });
+  const insts = () => [inst('gnd', [0, 0, 0], true), inst('free', [5, 5, 5])];
+
+  it('recovers a consistent flip set and converges (default flips imply a reflection)', () => {
+    const mates = [mateP('m1', [0, 0, 1]), mateP('m2', [1, 0, 0]), mateP('m3', [0, 1, 0])];
+    const r = solveMates(insts(), mates);
+    expect(r.converged).toBe(true);
+    expect(r.state).toBe('fully');
+    // det(+1) over 3 axes ⇒ an ODD number of mates end up aligned (flip=true).
+    const flippedTrue = Object.values(r.resolvedFlips).filter(Boolean).length;
+    expect(flippedTrue % 2).toBe(1);
+  });
+
+  it('leaves an already-consistent flip set untouched (no spurious toggling)', () => {
+    // All aligned (flip=true) ⇒ R = identity ⇒ det +1 ⇒ converges immediately.
+    const mates = [mateP('m1', [0, 0, 1]), mateP('m2', [1, 0, 0]), mateP('m3', [0, 1, 0])]
+      .map((m) => ({ ...m, flip: true }));
+    const r = solveMates(insts(), mates);
+    expect(r.converged).toBe(true);
+    expect(r.resolvedFlips).toEqual({ m1: true, m2: true, m3: true });
+  });
+});

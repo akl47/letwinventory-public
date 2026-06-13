@@ -22,20 +22,22 @@ describe('Unified cad-model VCS surface dispatches per kind (assembly rows)', ()
     const auth = await authenticatedRequest();
     const id = await makeAssembly(auth);
 
+    // Creation already seeds main + auto-creates draft/01 and lands on it.
     const list0 = await auth.get(`/api/design/cad-model/${id}/branches`);
     expect(list0.status).toBe(200);
     expect(list0.body.some((b) => b.name === 'main')).toBe(true);
+    expect(list0.body.some((b) => b.name === 'draft/01')).toBe(true);
 
-    const create = await auth.post(`/api/design/cad-model/${id}/branches`).send({ name: 'draft/01' });
+    const create = await auth.post(`/api/design/cad-model/${id}/branches`).send({ name: 'draft/02' });
     expect(create.status).toBe(200);
-    expect(create.body.name).toBe('draft/01');
+    expect(create.body.name).toBe('draft/02');
 
     const list1 = await auth.get(`/api/design/cad-model/${id}/branches`);
-    expect(list1.body.map((b) => b.name).sort()).toEqual(['draft/01', 'main']);
+    expect(list1.body.map((b) => b.name).sort()).toEqual(['draft/01', 'draft/02', 'main']);
 
-    const sw = await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'draft/01' });
+    const sw = await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'draft/02' });
     expect(sw.status).toBe(200);
-    expect(sw.body.branchName).toBe('draft/01');
+    expect(sw.body.branchName).toBe('draft/02');
     // On a draft branch the derived display revision is the next numeric.
     expect(sw.body.displayRevision).toBe('01');
   });

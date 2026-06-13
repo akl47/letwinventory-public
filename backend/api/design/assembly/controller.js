@@ -10,6 +10,7 @@ const db = require('../../../models');
 const assemblyRegenService = require('../../../services/assemblyRegenService');
 const assemblyAnalysisService = require('../../../services/assemblyAnalysisService');
 const assemblyVcsService = require('../../../services/vcs/assemblyVcsService');
+const assemblyBranchService = require('../../../services/vcs/assemblyBranchService');
 const cadVcsService = require('../../../services/vcs/cadVcsService');
 const vcsService = require('../../../services/vcs/vcsService');
 const cadRegenService = require('../../../services/cadRegenService');
@@ -68,6 +69,25 @@ function sanitizePlacement(p) {
   const t = Array.isArray(p.translate) && p.translate.length === 3 ? p.translate.map(Number) : [0, 0, 0];
   const q = Array.isArray(p.quaternion) && p.quaternion.length === 4 ? p.quaternion.map(Number) : [0, 0, 0, 1];
   return { translate: t, quaternion: q };
+}
+
+// Push an "origin" mate (a component fixed to the assembly origin) onto the doc
+// and ground that instance at identity. The solver skips origin mates; the
+// grounded flag + identity placement hold the component at the assembly origin.
+// Returns the new mateId.
+function pushOriginMate(doc, instanceId) {
+  doc.mates = doc.mates || [];
+  const mateId = `m${doc.nextMateSeq || (doc.mates.length + 1)}`;
+  doc.mates.push({
+    mateId, id: mateId, type: 'origin',
+    a: { instanceId, faceId: '' },
+    b: { instanceId: '', faceId: '' },
+    suppressed: false,
+  });
+  doc.nextMateSeq = (doc.nextMateSeq || doc.mates.length) + 1;
+  const inst = (doc.instances || []).find((i) => i.instanceId === instanceId);
+  if (inst) { inst.grounded = true; inst.placement = { ...IDENTITY_PLACEMENT }; }
+  return mateId;
 }
 
 module.exports = {
@@ -135,8 +155,15 @@ module.exports = {
       });
       await recordHistory(assembly.id, req.user.id, 'created', null, { partID });
       // Seed the VCS repo (initial commit on main) so the assembly has version
-      // history from creation. Best-effort: a failure here shouldn't block create.
-      try { await assemblyVcsService.seedMain(assembly, req.user.id); } catch (_) { /* seeded lazily on first checkin */ }
+      // history from creation, then auto-create the first draft branch and land
+      // on it — `main` is protected, so the user always edits on a draft branch
+      // (mirrors CAD createForPart). Best-effort: failures shouldn't block create.
+      try {
+        const mainHead = await assemblyVcsService.seedMain(assembly, req.user.id);
+        const draftName = 'draft/01';
+        await assemblyBranchService.createBranch(assembly, draftName, mainHead ? { fromCommit: mainHead } : {}, req.user.id);
+        await assemblyBranchService.switchBranch(assembly, draftName, req.user.id);
+      } catch (_) { /* seeded lazily on first checkin */ }
       return res.status(201).json(await fetchActive(assembly.id));
     } catch (err) {
       return res.status(500).json({ error: `Failed to create assembly: ${err.message}` });
@@ -207,19 +234,35 @@ module.exports = {
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
       doc.instances = doc.instances || [];
       const instanceId = `i${doc.nextInstanceSeq || (doc.instances.length + 1)}`;
+      // `originMate` (explicit) drives both grounding and a real origin mate.
+      // Without it we keep legacy behavior (first component auto-grounded, no
+      // mate) so existing callers/tests are unaffected.
+      let wantOriginMate = false;
+      let grounded;
+      if (req.body.originMate !== undefined) {
+        wantOriginMate = !!req.body.originMate;
+        grounded = wantOriginMate;
+      } else {
+        grounded = req.body.grounded !== undefined ? !!req.body.grounded : doc.instances.length === 0;
+      }
       const instance = {
         instanceId,
         partID,
-        ref: { kind: childRow.isAssembly ? 'assembly' : 'cad' },
+        // REQ 788 — `branch` tracks which line of the part this instance
+        // consumes (latest of that branch); absent = legacy live working copy.
+        ref: {
+          kind: childRow.isAssembly ? 'assembly' : 'cad',
+          ...(req.body.branch ? { branch: String(req.body.branch) } : {}),
+        },
         pinnedCommitHash: null,
-        // First component is auto-grounded (SolidWorks "fixed first part").
-        grounded: req.body.grounded !== undefined ? !!req.body.grounded : doc.instances.length === 0,
-        placement: sanitizePlacement(req.body.placement),
+        grounded,
+        placement: wantOriginMate ? { ...IDENTITY_PLACEMENT } : sanitizePlacement(req.body.placement),
         suppressed: false,
         visible: true,
       };
       doc.instances.push(instance);
       doc.nextInstanceSeq = (doc.nextInstanceSeq || doc.instances.length) + 1;
+      if (wantOriginMate) pushOriginMate(doc, instanceId);
 
       // Reject a self/cyclic reference before persisting.
       await assemblyRegenService.assertAcyclic({ partID: assembly.partID, assemblyDoc: doc }, db);
@@ -245,6 +288,18 @@ module.exports = {
       if (req.body.grounded !== undefined) inst.grounded = !!req.body.grounded;
       if (req.body.suppressed !== undefined) inst.suppressed = !!req.body.suppressed;
       if (req.body.visible !== undefined) inst.visible = !!req.body.visible;
+      // REQ 788 — change (or clear) the tracked branch.
+      if (req.body.branch !== undefined) {
+        inst.ref = { kind: 'cad', ...(inst.ref || {}) };
+        if (req.body.branch) inst.ref.branch = String(req.body.branch);
+        else delete inst.ref.branch;
+      }
+      // Configurations — pin (or clear) the child part configuration this
+      // instance resolves at. Empty/null = the child's own active config.
+      if (req.body.configurationId !== undefined) {
+        if (req.body.configurationId) inst.configurationId = String(req.body.configurationId);
+        else delete inst.configurationId;
+      }
 
       await assembly.update({ assemblyDoc: doc, dirty: true });
       await recordHistory(assembly.id, req.user.id, 'instance_updated', null, { instanceId: inst.instanceId });
@@ -353,16 +408,32 @@ module.exports = {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
       const { type, a, b, value, flip } = req.body || {};
-      const MATE_TYPES = ['coincident', 'concentric', 'parallel', 'perpendicular', 'distance', 'angle', 'tangent', 'lock'];
+      const MATE_TYPES = ['coincident', 'concentric', 'parallel', 'perpendicular', 'distance', 'angle', 'tangent', 'lock', 'origin'];
       if (!MATE_TYPES.includes(type)) return res.status(400).json({ error: `Unknown mate type "${type}"` });
-      if (!a || !b || !a.instanceId || !b.instanceId || !a.faceId || !b.faceId) {
-        return res.status(400).json({ error: 'Mate requires a and b, each with instanceId and faceId' });
-      }
-      if (a.instanceId === b.instanceId) return res.status(400).json({ error: 'A mate must reference two distinct instances' });
 
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
       doc.instances = doc.instances || [];
       const has = (id) => doc.instances.some((i) => i.instanceId === id);
+
+      // Origin mate: a single component fixed to the assembly origin (no faces,
+      // no second instance).
+      if (type === 'origin') {
+        if (!a || !a.instanceId) return res.status(400).json({ error: 'Origin mate requires a.instanceId' });
+        if (!has(a.instanceId)) return res.status(404).json({ error: `Instance ${a.instanceId} not found` });
+        if ((doc.mates || []).some((m) => m.type === 'origin' && m.a && m.a.instanceId === a.instanceId)) {
+          return res.status(409).json({ error: 'Component is already mated to the assembly origin' });
+        }
+        const mateId = pushOriginMate(doc, a.instanceId);
+        await assembly.update({ assemblyDoc: doc, dirty: true });
+        await recordHistory(assembly.id, req.user.id, 'mate_added', null, { mateId, type });
+        const mate = (doc.mates || []).find((m) => m.mateId === mateId);
+        return res.status(201).json({ mate, assembly: await fetchActive(assembly.id) });
+      }
+
+      if (!a || !b || !a.instanceId || !b.instanceId || !a.faceId || !b.faceId) {
+        return res.status(400).json({ error: 'Mate requires a and b, each with instanceId and faceId' });
+      }
+      if (a.instanceId === b.instanceId) return res.status(400).json({ error: 'A mate must reference two distinct instances' });
       if (!has(a.instanceId)) return res.status(404).json({ error: `Instance ${a.instanceId} not found` });
       if (!has(b.instanceId)) return res.status(404).json({ error: `Instance ${b.instanceId} not found` });
 
@@ -395,14 +466,60 @@ module.exports = {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
+      const removed = (doc.mates || []).find((m) => (m.mateId || m.id) === req.params.mateId);
       const before = (doc.mates || []).length;
       doc.mates = (doc.mates || []).filter((m) => (m.mateId || m.id) !== req.params.mateId);
       if (doc.mates.length === before) return res.status(404).json({ error: `Mate ${req.params.mateId} not found` });
+      // Removing an origin mate frees its component (un-grounds it) so it can be
+      // dragged or mated elsewhere.
+      if (removed && removed.type === 'origin' && removed.a) {
+        const inst = (doc.instances || []).find((i) => i.instanceId === removed.a.instanceId);
+        if (inst) inst.grounded = false;
+      }
       await assembly.update({ assemblyDoc: doc, dirty: true });
       await recordHistory(assembly.id, req.user.id, 'mate_removed', null, { mateId: req.params.mateId });
       return res.json(await fetchActive(assembly.id));
     } catch (err) {
       return res.status(500).json({ error: `Failed to remove mate: ${err.message}` });
+    }
+  },
+
+  // PUT /:id/mates/:mateId — edit a mate. Accepts value/flip (quick edit) and
+  // optionally type + the two surface refs (a/b), so re-opening a mate in the
+  // full sidebar can change everything in place.
+  async updateMate(req, res) {
+    try {
+      const assembly = await fetchActive(Number(req.params.id));
+      if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
+      const mate = (doc.mates || []).find((m) => (m.mateId || m.id) === req.params.mateId);
+      if (!mate) return res.status(404).json({ error: `Mate ${req.params.mateId} not found` });
+      const { type, a, b } = req.body || {};
+      if (type !== undefined) {
+        const MATE_TYPES = ['coincident', 'concentric', 'parallel', 'perpendicular', 'distance', 'angle', 'tangent', 'lock', 'origin'];
+        if (!MATE_TYPES.includes(type)) return res.status(400).json({ error: `Unknown mate type "${type}"` });
+        mate.type = type;
+      }
+      // Re-targeting the surfaces (full edit). Validated like addMate.
+      if (a !== undefined || b !== undefined) {
+        const newA = a || mate.a; const newB = b || mate.b;
+        if (!newA || !newB || !newA.instanceId || !newB.instanceId || !newA.faceId || !newB.faceId) {
+          return res.status(400).json({ error: 'Mate requires a and b, each with instanceId and faceId' });
+        }
+        if (newA.instanceId === newB.instanceId) return res.status(400).json({ error: 'A mate must reference two distinct instances' });
+        const has = (id) => (doc.instances || []).some((i) => i.instanceId === id);
+        if (!has(newA.instanceId)) return res.status(404).json({ error: `Instance ${newA.instanceId} not found` });
+        if (!has(newB.instanceId)) return res.status(404).json({ error: `Instance ${newB.instanceId} not found` });
+        mate.a = { instanceId: newA.instanceId, faceId: newA.faceId };
+        mate.b = { instanceId: newB.instanceId, faceId: newB.faceId };
+      }
+      if (req.body.value !== undefined) mate.value = Number(req.body.value);
+      if (req.body.flip !== undefined) mate.flip = !!req.body.flip;
+      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await recordHistory(assembly.id, req.user.id, 'mate_updated', null, { mateId: mate.mateId || mate.id });
+      return res.json(await fetchActive(assembly.id));
+    } catch (err) {
+      return res.status(500).json({ error: `Failed to update mate: ${err.message}` });
     }
   },
 
@@ -527,6 +644,12 @@ module.exports = {
           const inst = (doc.instances || []).find((i) => i.instanceId === ci.instanceId);
           if (inst && JSON.stringify(inst.placement) !== JSON.stringify(ci.placement)) { inst.placement = ci.placement; changed = true; }
         }
+        // Persist auto-corrected mate flips so the stored doc + the mate-edit
+        // checkbox match the rendered (solved) geometry.
+        for (const corr of composed.flipCorrections || []) {
+          const mate = (doc.mates || []).find((m) => (m.mateId || m.id) === corr.mateId);
+          if (mate && !!mate.flip !== corr.flip) { mate.flip = corr.flip; changed = true; }
+        }
         if (changed) await assembly.update({ assemblyDoc: doc });
       }
       // Strip BReps from the wire payload — the viewer only needs meshes.
@@ -605,6 +728,8 @@ module.exports = {
         item: i + 1,
         partID: l.partID,
         quantity: l.quantity,
+        // Per-instance child configuration (null = the child's active config).
+        configurationId: l.configurationId || null,
         part: byId.get(l.partID) || null,
       })));
     } catch (err) {
