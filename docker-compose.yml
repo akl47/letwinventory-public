@@ -40,6 +40,11 @@ services:
   letwinventory-frontend:
     build:
       context: ./frontend
+    # Raise the Angular dev-server (esbuild watcher) heap ceiling — the default
+    # ~4 GB gets exhausted over very long hot-reload sessions, OOM-killing the
+    # container (exit 139). 8 GB gives ample headroom.
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=8192
     volumes:
       - /app/node_modules
       - ./frontend:/app
