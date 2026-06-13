@@ -115,4 +115,41 @@ function resolveFaceRef(bodies, geomRef, fallback, opts = {}) {
   return null;
 }
 
-module.exports = { resolveEdgeRef, resolveFaceRef };
+/**
+ * Resolve a source VERTEX against the current bodies.
+ * @returns {{position:[number,number,number], bodyId, exact:boolean}|null}
+ */
+function resolveVertexRef(bodies, geomRef, fallback, opts = {}) {
+  const posTol = opts.posTol != null ? opts.posTol : POS_TOL;
+  const wantId = geomRef && geomRef.vertexId;
+
+  // 1. exact id
+  if (wantId) {
+    for (const body of bodies || []) {
+      for (const v of (body.topology && body.topology.vertices) || []) {
+        if (v.id === wantId && Array.isArray(v.position)) {
+          return { position: v.position, bodyId: body.bodyId, exact: true };
+        }
+      }
+    }
+  }
+  // 2. fallback by closest position. Vertices live in topology.vertices; some
+  // body shapes only expose them as bare coordinate arrays.
+  if (fallback && fallback.kind === 'vertex' && Array.isArray(fallback.position)) {
+    const want = fallback.position;
+    let best = null, bestCost = Infinity;
+    for (const body of bodies || []) {
+      const verts = (body.topology && body.topology.vertices) || [];
+      for (const v of verts) {
+        const p = Array.isArray(v) ? v : v.position;
+        if (!Array.isArray(p)) continue;
+        const cost = dist(p, want);
+        if (cost < bestCost) { bestCost = cost; best = { position: p, bodyId: body.bodyId, exact: false }; }
+      }
+    }
+    if (best && bestCost <= posTol) return best;
+  }
+  return null;
+}
+
+module.exports = { resolveEdgeRef, resolveFaceRef, resolveVertexRef };

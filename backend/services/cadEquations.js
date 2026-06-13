@@ -134,19 +134,57 @@ function _targetValue(equations, values, errors, key) {
   return undefined;
 }
 
+/** Resolve the configuration a regen should apply: an explicit
+ * `configurationId` option wins (assembly per-instance selection),
+ * otherwise the document's activeConfigurationId. Returns null for the
+ * implicit base/Default (no overrides). Configurations live on the
+ * featureTree doc (REQ: configurations) so they ride VCS commits via the
+ * serializer's featureTreeMeta passthrough. */
+function _activeConfiguration(featureTree, configurationId) {
+  const configs = Array.isArray(featureTree.configurations) ? featureTree.configurations : [];
+  if (configs.length === 0) return null;
+  const wanted = configurationId !== undefined && configurationId !== null
+    ? configurationId
+    : featureTree.activeConfigurationId;
+  if (!wanted) return null;
+  return configs.find(c => c && c.id === wanted) || null;
+}
+
 /** Walk the model's featureTree + sketchDoc, applying any equation
  * matching a numeric parameter's target key. Returns a NEW tree + doc
  * with the resolved values written in (shallow-clones where mutation
  * happens). Equation errors that match a target key surface in the
  * returned `equationErrors` array, formatted with the parameter path
- * so the user can tell which feature failed. */
-function applyEquationsToModel(model) {
-  const equations = model.equations || { entries: {} };
+ * so the user can tell which feature failed.
+ *
+ * `opts.configurationId` selects a configuration explicitly (assembly
+ * per-instance); otherwise the doc's active configuration applies. A
+ * configuration's `values` override equation entries as literal numbers
+ * BEFORE resolution (so expressions referencing overridden globals pick
+ * up the config value), and its `suppressed` map overrides per-feature
+ * suppression flags. */
+function applyEquationsToModel(model, opts = {}) {
+  const baseEquations = model.equations || { entries: {} };
+  const featureTree = model.featureTree || { features: [] };
+  const sketchDoc = model.sketchDoc || { sketches: {} };
+
+  const config = _activeConfiguration(featureTree, opts.configurationId);
+  let equations = baseEquations;
+  if (config && config.values && Object.keys(config.values).length > 0) {
+    const entries = { ...(baseEquations.entries || {}) };
+    for (const [key, value] of Object.entries(config.values)) {
+      if (typeof value !== 'number' || !isFinite(value)) continue;
+      // Literal-number expression: replaces (or creates) the entry, so
+      // both the variable itself and everything referencing it resolve
+      // against the configuration's value.
+      entries[key] = { expression: String(value) };
+    }
+    equations = { entries };
+  }
   const { values, errors } = resolveEquations(equations);
 
   const equationErrors = [];
-  const featureTree = model.featureTree || { features: [] };
-  const sketchDoc = model.sketchDoc || { sketches: {} };
+  const configSuppressed = (config && config.suppressed) || null;
 
   // Track which equation entry keys we actually CONSUMED so we can
   // surface only errors for keys that drive something. Pure globals
@@ -157,6 +195,12 @@ function applyEquationsToModel(model) {
   const resolvedFeatures = featureTree.features.map(f => {
     if (!f || f.type === 'origin') return f;
     const next = { ...f };
+
+    // Configuration suppression override — explicit true/false wins over
+    // the feature's own flag; absent keys inherit the base state.
+    if (configSuppressed && typeof configSuppressed[next.id] === 'boolean') {
+      next.suppressed = configSuppressed[next.id];
+    }
 
     // ExtrudeFeature / CutExtrudeFeature: distance.
     if (typeof next.distance === 'number') {

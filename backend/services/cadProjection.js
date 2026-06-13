@@ -37,10 +37,15 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
   // every body's topology. Edge ids are globally unique after the
   // per-body topology scoping done in cadRegenService.
   const edgeIndex = new Map();
+  const vertexIndex = new Map();
   for (const body of (bodies || [])) {
     const edges = (body.topology && body.topology.edges) || [];
     for (const e of edges) {
       edgeIndex.set(e.id, e);
+    }
+    const verts = (body.topology && body.topology.vertices) || [];
+    for (const v of verts) {
+      vertexIndex.set(v.id, v);
     }
   }
   // Cross-part in-context references (REQ 770/775): each cross-part on-edge
@@ -50,7 +55,7 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
   // the projection below is byte-identical to the intra-part path.
   const externalEdges = _normalizeExternalEdges(opts.externalEdges);
   for (const [cid, geo] of externalEdges) edgeIndex.set(`cp:${cid}`, geo);
-  if (edgeIndex.size === 0) return sketchDoc;
+  if (edgeIndex.size === 0 && vertexIndex.size === 0) return sketchDoc;
 
   let docChanged = false;
   const nextSketches = {};
@@ -76,10 +81,13 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
       // Unresolved cross-part ref (no resolver + no snapshot, or matcher missed)
       // → leave the entity at its last coords; the editor surfaces it as broken.
       if (c.externalRef.scope === 'cross-part' && !edgeIndex.has(key)) continue;
+      // Implicit vertex reference (REQ 793): a single point pinned to a model
+      // vertex's projection — no edge involved.
+      const vertexId = c.externalRef.scope === 'cross-part' ? undefined : c.externalRef.vertexId;
       for (const t of (c.targets || [])) {
         const e = entitiesById.get(t.entityId);
         if (e) {
-          projectedPairs.push({ entity: e, edgeId: key });
+          projectedPairs.push({ entity: e, edgeId: key, vertexId });
           seenTargets.add(e.id);
         }
       }
@@ -121,7 +129,30 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
       newEntities[idx] = { ...cur, x, y };
       sketchChanged = true;
     };
-    for (const { entity: pe, edgeId } of projectedPairs) {
+    for (const { entity: pe, edgeId, vertexId } of projectedPairs) {
+      // Implicit point references (REQ 792–794): a single sketch point glued
+      // to a model vertex (pin to its projection) or riding a model edge
+      // (project onto the edge line, preserving where it currently sits).
+      if (pe.kind === 'point' && vertexId) {
+        const v = vertexIndex.get(vertexId);
+        if (v && Array.isArray(v.position)) {
+          const q = _projectFrom3D(sketch.plane, v.position);
+          updatePoint(pe.id, q.x, q.y);
+        } else if (debug) {
+          console.log(`[cad-projection] sketch=${sid} point=${pe.id} source vertex ${vertexId} not in topology — skipped`);
+        }
+        continue;
+      }
+      if (pe.kind === 'point' && edgeId) {
+        const e = edgeIndex.get(edgeId);
+        if (e && e.isStraight) {
+          const a = _projectFrom3D(sketch.plane, e.endpoints[0]);
+          const b = _projectFrom3D(sketch.plane, e.endpoints[1]);
+          const q = _closestPointOnSegment(a, b, pe);
+          updatePoint(pe.id, q.x, q.y);
+        }
+        continue;
+      }
       const src = edgeIndex.get(edgeId);
       if (!src) {
         if (debug) console.log(`[cad-projection] sketch=${sid} entity=${pe.id} source edge ${edgeId} not in topology — skipped`);
@@ -220,6 +251,18 @@ function _projectFrom3D(plane, world) {
     x: rx * plane.xAxis[0] + ry * plane.xAxis[1] + rz * plane.xAxis[2],
     y: rx * plane.yAxis[0] + ry * plane.yAxis[1] + rz * plane.yAxis[2],
   };
+}
+
+/** Closest point on segment [a,b] to p (clamped to the segment). Used to keep
+ * a point that rides a model edge on the edge's projection. */
+function _closestPointOnSegment(a, b, p) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12) return { x: a.x, y: a.y };
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return { x: a.x + t * dx, y: a.y + t * dy };
 }
 
 /** Closed circular polyline → center + radius. Returns null when the

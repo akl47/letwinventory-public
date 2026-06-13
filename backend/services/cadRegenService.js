@@ -102,7 +102,22 @@ const { applyProjectionToSketchDoc } = require('./cadProjection');
 //    the picked face to the inner cavity's corresponding face by
 //    normal alignment + centroid distance, and extrudes from THAT
 //    face so the prism has the cavity's smaller cross-section.
-const NAMING_VERSION = 20;  // matches NAMING_SCHEMA_VERSION in cad-kernel/src/main.rs — bump together with kernel
+// 21: shell Stage 0 (simple offset) now runs UnifySameDomain on its
+//    result — MakeSimpleOffset left spurious seam/imprint edges (faces
+//    came back split with extra boundary edges, e.g. 8–10 edges on a
+//    plate face). Pre-bump cache rows hold the un-cleaned geometry;
+//    bumping forces every shell to re-dispatch through the kernel.
+// 22: shell Stage 0 now rejects self-intersecting results (the degenerate
+//    thin-wall case — wall > ~half a thin region's local thickness —
+//    produced coincident flickering faces). Falls through to the
+//    subtraction pipeline that leaves thin regions solid. Bump
+//    invalidates the cached degenerate geometry.
+// 23: shell Stage 2 rewired to the conforming-punch pipeline with
+//    wall-slab cavity construction (fully boolean; sharp corners by
+//    construction; thin regions stay solid; no rolled-corner cylinder
+//    faces, no punch-prism imprint edges, no MakeOffsetShape on the
+//    primary path).
+const NAMING_VERSION = 29;  // matches NAMING_SCHEMA_VERSION in cad-kernel/src/main.rs — bump together with kernel
 
 // Sentinel distance for Through All. Picked to comfortably exceed any
 // reasonable model dimension without overflowing OCCT's tolerance
@@ -191,7 +206,7 @@ function _buildExternalEdges(sketchDoc, externalRefResolver) {
   return out;
 }
 
-async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollbackBeforeIndex, includeBodyBreps, externalRefResolver } = {}) {
+async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollbackBeforeIndex, includeBodyBreps, externalRefResolver, configurationId } = {}) {
   const client = kernelClient || cadKernelClient.getDefaultClient();
   const dbClient = db || global.db;
   // Resolve any equations BEFORE we hash params / dispatch features.
@@ -199,8 +214,10 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
   // parameter overwritten with the resolved value, plus an array of
   // equation errors that we fold into the regen response. Hashing is
   // unchanged (it sees the resolved numbers) so cache invalidation is
-  // automatic per-feature.
-  const { featureTree, sketchDoc, equationErrors } = applyEquationsToModel(model);
+  // automatic per-feature. Configuration overrides (variable values +
+  // suppression) apply inside the same call — `configurationId` selects
+  // one explicitly (assembly per-instance); default = the doc's active.
+  const { featureTree, sketchDoc, equationErrors } = applyEquationsToModel(model, { configurationId });
   // Resolver for `#{var}` placeholders in sketch text (part number / revision
   // / equation globals). Mirrors the frontend `textVariables` computed so the
   // committed glyph geometry matches the editor preview. Stashed on the model
@@ -226,6 +243,8 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
 
   const results = [];
   const errors = [];
+  let danglingSketchIds = [];
+  let sketchHostFaces = {};
   // Seed errors with any equation resolution failures so the user sees
   // cycles / parse errors in the regen response toast as well as in
   // the equations panel.
@@ -294,8 +313,28 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
   /** @type {Array<{ id: string, brep: string, paramHash: string, faces: Array, topology: object }>} */
   const bodies = [];
 
+  // Per-feature geometry snapshots: the affected body's BREP just before and
+  // after each feature. Feature-mode patterns/mirrors read a seed's
+  // before/after to derive the material it added/removed (see
+  // _dispatchFeaturePattern). Captured one iteration late — at the TOP of the
+  // next feature's turn `bodies` already reflects the previous feature's result
+  // — plus once after the loop for the last feature.
+  /** @type {Map<string, { bodyId: string|null, before: string, after: string }>} */
+  const featureSnapshots = new Map();
+  // Per-feature TOOL solid (the un-composed prism), for true feature patterns.
+  /** @type {Map<string, { brep: string, type: string }>} */
+  const featureTools = new Map();
+  let _snapPrev = null; // { featureId, bodiesBefore: Map<id, brep> }
+  const _captureSnapPrev = () => {
+    if (_snapPrev) _captureFeatureSnapshot(_snapPrev.featureId, bodies, _snapPrev.bodiesBefore, featureSnapshots);
+  };
+
   for (let featureIdx = 0; featureIdx < featureTree.features.length; featureIdx++) {
     const feature = featureTree.features[featureIdx];
+    // Record the PREVIOUS feature's after-state (bodies now holds its result),
+    // then stash this feature's before-state for capture next turn.
+    _captureSnapPrev();
+    _snapPrev = { featureId: feature.id, bodiesBefore: new Map(bodies.map(b => [b.id, b.brep])) };
     if (feature.type === 'origin') continue;
     if (feature.suppressed === true) {
       console.log(`[cadRegen] skipping ${feature.id} (suppressed)`);
@@ -447,7 +486,11 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
     // compose path.
     if (feature.type === 'mirror' || feature.type === 'linearPattern' || feature.type === 'circularPattern') {
       try {
-        await _dispatchPattern(feature, bodies, model, client, dbClient, results, emit, vertexMap, faceMap);
+        if (feature.seedKind === 'features') {
+          await _dispatchFeaturePattern(feature, bodies, model, client, dbClient, results, emit, vertexMap, faceMap, featureSnapshots, featureTools);
+        } else {
+          await _dispatchPattern(feature, bodies, model, client, dbClient, results, emit, vertexMap, faceMap);
+        }
       } catch (err) {
         console.error(`[cadRegen] ${feature.id} pattern failed:`, err);
         const result = {
@@ -473,7 +516,16 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
       // therefore see source-edge-tracked coordinates rather than
       // whatever was persisted on disk. Per-iteration (cheap; sketches
       // with no projections pass through by reference).
-      const resolvedSketchDoc = applyProjectionToSketchDoc(sketchDoc, bodies, { externalEdges });
+      const projectedSketchDoc = applyProjectionToSketchDoc(sketchDoc, bodies, { externalEdges });
+      // Face-hosted sketch tracking: a sketch placed on an upstream feature's
+      // face (hostId 'face:<persistentFaceId>') must follow that face when the
+      // upstream feature changes shape — e.g. raising an extrude's height moves
+      // its cap-top, and a sketch on it should ride along. We only persist the
+      // plane at creation time, so re-derive it here from the host face's
+      // CURRENT geometry (faceMap, populated as prior features regenerated).
+      // Datum-hosted sketches keep their fixed plane. Clone on change only —
+      // applyProjectionToSketchDoc may return the stored doc by reference.
+      const resolvedSketchDoc = _applyHostFacePlanes(projectedSketchDoc, faceMap);
       // Detailed sketch dump for CAD_DEBUG=1. Logs the resolved
       // sketch state the kernel will see — entities (kind, id,
       // coords), constraints (type, targets, values, on-edge
@@ -495,8 +547,13 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
       } else if (feature.type === 'loft') {
         prism = await _regenerateLoft(feature, resolvedSketchDoc, model, client, dbClient);
       } else {
-        prism = await _regenerateExtrude(feature, resolvedSketchDoc, model, client, dbClient, vertexMap, faceMap);
+        prism = await _regenerateExtrude(feature, resolvedSketchDoc, model, client, dbClient, vertexMap, faceMap, bodies);
       }
+      // Stash this feature's TOOL solid (the un-composed prism/revolve/sweep/
+      // loft) so a downstream feature-mode pattern/mirror with this as a seed
+      // can re-run the real boolean at each instance (true feature pattern),
+      // instead of copying a geometry delta. REQ 822 (hybrid).
+      if (prism && prism.prismBrep) featureTools.set(feature.id, { brep: prism.prismBrep, type: feature.type });
 
       // Stage 2: figure out which bodies this feature targets and compose.
       const isAdditive = feature.type === 'extrude' || feature.type === 'revolve' || feature.type === 'sweep' || feature.type === 'loft';
@@ -504,19 +561,36 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
       const wantsMerge = feature.merge !== false;  // default true
 
       // Multi-body seed: an additive feature that is NOT merging into an
-      // existing body and has multiple disjoint regions seeds ONE body per
-      // region (SolidWorks/Onshape behaviour — e.g. each extruded letter is
-      // its own body). Disjoint regions can't fuse into a single connected
-      // solid anyway, so this is the correct decomposition. Merging into an
-      // existing body, cuts, and single-region extrudes fall through to the
-      // normal single-prism compose below.
+      // existing body and has multiple regions seeds new bodies. With Merge
+      // result ON, the regions were fused and we seed one body per RESULTING
+      // SOLID — touching regions (e.g. a boundary-with-holes plus its plug
+      // regions) merge into one body; genuinely disjoint regions (extruded
+      // letters) stay separate, exactly like SolidWorks/Onshape. With merge
+      // OFF (or when the fuse decomposition is unavailable), each region
+      // seeds its own body. Merging into an existing body, cuts, and
+      // single-region extrudes fall through to the normal compose below.
       const seedingNewBody = isAdditive && (bodies.length === 0 || !wantsMerge);
       if (seedingNewBody && Array.isArray(prism.regions) && prism.regions.length > 1) {
-        console.log(`[cadRegen] ${feature.id} SEED ${prism.regions.length} bodies (one per region)`);
-        for (let k = 0; k < prism.regions.length; k++) {
-          const rg = prism.regions[k];
+        const useFused = wantsMerge && Array.isArray(prism.fusedSolids) && prism.fusedSolids.length > 0;
+        // Largest solid keeps the feature id (same "primary" convention as
+        // the cut-split path) so body identity is stable across regens.
+        const seedSolids = useFused
+          ? [...prism.fusedSolids].sort((a, b) => (b.volume || 0) - (a.volume || 0))
+          : null;
+        const seeds = useFused
+          ? seedSolids.map((s, k) => ({
+              brep: s.brepBytes,
+              faces: s.faces || [],
+              topology: s.topology || { vertices: [], edges: [] },
+              paramHash: _hashParams({ feature: prism.featureParamHash, solid: k }),
+              cached: prism.cached,
+            }))
+          : prism.regions;
+        console.log(`[cadRegen] ${feature.id} SEED ${seeds.length} bodies (one per ${useFused ? 'fused solid' : 'region'})`);
+        for (let k = 0; k < seeds.length; k++) {
+          const rg = seeds[k];
           // Body 0 keeps the feature id (stable identity for the "primary"
-          // body); extra regions get suffixed ids so topology/face maps stay
+          // body); extra seeds get suffixed ids so topology/face maps stay
           // unique across bodies.
           const bodyId = k === 0 ? feature.id : `${feature.id}#body${k}`;
           const body = {
@@ -834,16 +908,67 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
       emit(result);
     }
   }
+  // Capture the LAST feature's after-snapshot now the loop is done.
+  _captureSnapPrev();
+
+  // Dangling host-face check: a face-hosted sketch whose reference face no
+  // longer exists (its creating feature was deleted/changed) silently falls
+  // back to a nearby/baked plane in _resolveHostFacePlane. Surface that as a
+  // warning so the user re-picks the reference instead of getting a quietly
+  // misplaced sketch. Only USED sketches (referenced by a live feature) warn.
+  {
+    const usedSketchIds = new Set();
+    for (const f of featureTree.features) {
+      if (f && f.suppressed !== true && f.sketchId) usedSketchIds.add(f.sketchId);
+    }
+    const dangling = _danglingHostFaceWarnings(sketchDoc, faceMap, usedSketchIds);
+    for (const w of dangling.warnings) errors.push(w);
+    danglingSketchIds = dangling.sketchIds;
+    sketchHostFaces = dangling.resolved;
+  }
+
+  // Exact OCCT volume per body. The editor footer shows this instead of
+  // integrating the tessellated mesh (the chord approximation of curved
+  // faces under-counts the true volume). Computed from each body's FINAL
+  // BRep so it's uniform across every op (extrude / boolean / shell / …)
+  // and cache-agnostic. Non-fatal: a failure just leaves volume undefined,
+  // and the frontend omits that body from the total (no mesh fallback).
+  if (client) {
+    for (const b of bodies) {
+      if (!b.brep) continue;
+      try {
+        const mp = await client.call('bodyVolume', {
+          aBrep: Buffer.isBuffer(b.brep) ? b.brep.toString('base64') : b.brep,
+        });
+        if (mp && Number.isFinite(mp.volume)) b.volume = mp.volume;
+      } catch (err) {
+        console.warn(`[cadRegen] bodyVolume failed for ${b.id}: ${err.message || err}`);
+      }
+    }
+  }
+
+  // Kernel build marker — surfaced in the editor footer next to the frontend's
+  // text-NN marker so the running kernel binary can be confirmed after a
+  // rebuild. Best-effort + cheap; never fails the regen.
+  let kernelBuild = null;
+  if (client) {
+    try {
+      const pong = await client.call('ping');
+      if (pong && typeof pong.build === 'string') kernelBuild = pong.build;
+    } catch { /* non-fatal */ }
+  }
 
   // Emit the body roster so the frontend can list them in the Bodies
   // panel. Order = creation order (= regen order of root features).
   // `brep` (base64) only included when requested (e.g. STEP export) — it's
   // large and the normal regen response doesn't need it.
   const bodyList = bodies.map(b => (
-    includeBodyBreps ? { id: b.id, name: null, brep: b.brep } : { id: b.id, name: null }
+    includeBodyBreps
+      ? { id: b.id, name: null, brep: b.brep, volume: b.volume }
+      : { id: b.id, name: null, volume: b.volume }
   ));
 
-  return { features: results, errors, bodies: bodyList };
+  return { features: results, errors, bodies: bodyList, kernelBuild, danglingSketchIds, sketchHostFaces };
 }
 
 /** Regenerate the model and export its bodies as a single STEP file (text).
@@ -1014,7 +1139,7 @@ function _dumpSketchForDebug(feature, sketchDocBefore, sketchDocAfter) {
   console.log(`[cad-sketch] feature=${feature.id}\n` + JSON.stringify(summary, null, 2));
 }
 
-async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, vertexMap, faceMap) {
+async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, vertexMap, faceMap, bodies = []) {
   const sketch = sketchDoc.sketches[feature.sketchId];
   if (!sketch) throw new Error(`sketch ${feature.sketchId} not found in sketchDoc`);
 
@@ -1047,6 +1172,52 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
 
   const endCondition = feature.endCondition || { kind: 'blind' };
 
+  // "Up To Body": resolve the target body by its STABLE id (resolved on the
+  // frontend at pick time) so we can hand its BREP to the kernel, which
+  // subtracts it and keeps the start-side piece (conforming end face). The
+  // body must already exist at this point in the feature tree — features
+  // process in order. Note the target may be the very body this feature merges
+  // into (a rib growing up to a wall): that's fine, because at this point the
+  // body holds only its UPSTREAM geometry, before this feature's contribution.
+  const toBase64 = (brep) => (Buffer.isBuffer(brep) ? brep.toString('base64') : brep);
+  let untilBrep = null;
+  let untilBreps = null;
+  let untilBodyKey = null;
+  if (endCondition.kind === 'upToBody') {
+    const bodyId = endCondition.bodyId;
+    if (!bodyId) {
+      throw new Error(
+        'Up to Body: no target body selected (legacy reference). Re-open this feature and ' +
+        're-pick the target body.'
+      );
+    }
+    const targetBody = (bodies || []).find(b => b.id === bodyId);
+    if (!targetBody || !targetBody.brep) {
+      throw new Error(
+        `Up to Body: target body '${bodyId}' is not available at this point in the feature ` +
+        `tree. Pick a body that already exists before this feature — you can't terminate on a ` +
+        `body this feature (or a later one) creates.`
+      );
+    }
+    untilBrep = toBase64(targetBody.brep);
+    // Cache key over the target's identity + geometry state so the extrude
+    // re-runs when the body it lands on moves or changes shape.
+    untilBodyKey = { id: targetBody.id, hash: targetBody.paramHash || '' };
+  } else if (endCondition.kind === 'upToNext') {
+    // "Up To Next": hand the kernel EVERY upstream body; it subtracts them all
+    // and caps at whichever the profile reaches first. No body pick needed.
+    const withBrep = (bodies || []).filter(b => b && b.brep);
+    if (withBrep.length === 0) {
+      throw new Error(
+        'Up to Next: there is no existing body in the extrude path. Add a body first, or use a ' +
+        'Blind / Through All end condition.'
+      );
+    }
+    untilBreps = withBrep.map(b => toBase64(b.brep));
+    // Cache key over all upstream bodies' identity + geometry state.
+    untilBodyKey = { next: withBrep.map(b => ({ id: b.id, hash: b.paramHash || '' })) };
+  }
+
   for (const ri of regionIndices) {
     if (ri < 0 || ri >= regions.length) {
       throw new Error(`region index ${ri} out of range (have ${regions.length})`);
@@ -1077,6 +1248,7 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
       regionIndex: ri,
       startOffset,
       direction2,
+      untilBody: untilBodyKey,
     });
     const upstreamHash = '';  // per-region prism has no upstream dependency
 
@@ -1120,6 +1292,12 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
       distance: dispatch.distance,
       flipped: dispatch.flipped,
       startOffset,
+      // Up To Body / Up To Next ignore the Direction-1 distance — the kernel
+      // sizes + caps that prism against the body BREP(s). Direction 2 (always a
+      // fixed-length blind/through-all prism) is still sent and unioned in by
+      // the kernel, so a "Up To … + Direction 2 Blind" extrude builds both.
+      ...(untilBrep ? { untilBrep } : {}),
+      ...(untilBreps ? { untilBreps } : {}),
       ...(direction2 ? { direction2 } : {}),
     });
 
@@ -1146,6 +1324,11 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
   // cumulative compose has something to fuse / cut against. For N > 1
   // we sequentially fuse the region BReps into one via buildBoolean.
   let prismBrep = regionBreps[0] || '';
+  // The FINAL fuse's per-solid decomposition. Touching regions (e.g. a
+  // boundary-with-holes region plus its "plug" regions) merge into one
+  // solid; genuinely disjoint regions stay separate. The seed path uses
+  // this to make one body per SOLID (merge on) instead of one per region.
+  let fusedSolids = null;
   for (let i = 1; i < regionBreps.length; i++) {
     const fused = await client.call('buildBoolean', {
       featureId: `${feature.id}#fuse${i}`,
@@ -1154,6 +1337,7 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
       bBrep: regionBreps[i],
     });
     prismBrep = fused.brepBytes;
+    fusedSolids = Array.isArray(fused.solids) && fused.solids.length > 0 ? fused.solids : null;
   }
   const featureParamHash = _hashParams({ regions: regionParamHashes });
 
@@ -1166,6 +1350,7 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
     // Per-region results so the additive seed path can make one body per
     // disjoint region. Already scoped by `${feature.id}#${ri}`.
     regions: regionResults,
+    fusedSolids,
   };
 }
 
@@ -2041,6 +2226,145 @@ async function _dispatchPattern(feature, bodies, model, client, dbClient, result
   }
 }
 
+/** Record the body a feature created or changed (by BREP delta) so feature-mode
+ * patterns can later read the seed's before/after material. Picks the
+ * feature's own-id body if it changed, else the first new body, else the first
+ * changed body. No change (datum / suppressed) → a null-body snapshot. */
+function _captureFeatureSnapshot(featureId, bodies, bodiesBefore, snapshots) {
+  const changed = (b) => {
+    const prev = bodiesBefore.get(b.id);
+    return prev === undefined || prev !== b.brep;
+  };
+  let target = bodies.find(b => (b.id === featureId || b.id.startsWith(`${featureId}#`)) && changed(b));
+  if (!target) target = bodies.find(b => bodiesBefore.get(b.id) === undefined);      // new body
+  if (!target) target = bodies.find(b => { const p = bodiesBefore.get(b.id); return p !== undefined && p !== b.brep; });
+  if (!target) {
+    snapshots.set(featureId, { bodyId: null, before: '', after: '' });
+    return;
+  }
+  snapshots.set(featureId, {
+    bodyId: target.id,
+    before: bodiesBefore.get(target.id) || '',
+    after: target.brep || '',
+  });
+}
+
+/** Dispatch a FEATURE-mode pattern / mirror (REQ 822). Instead of copying a
+ * finished body, it re-applies each seed feature's geometry delta (the material
+ * it added/removed, from the before/after snapshot) at every pattern instance —
+ * so a patterned cut cuts N times, a patterned boss adds N times, a mirrored
+ * fillet reflects the rounded edge. Correct for ALL feature types via the
+ * delta; the kernel `buildFeaturePattern` does the per-instance carve/fill. */
+/** Feature types whose pattern instances can be built EXACTLY by re-running the
+ * seed's tool boolean at each transform (true feature pattern). Everything else
+ * (hole, fillet, chamfer, shell, nested patterns) uses the geometry-delta path,
+ * matching SolidWorks (which also geometry-patterns fillets/chamfers/shells). */
+const TOOL_PATTERN_TYPES = new Set(['extrude', 'cutExtrude', 'revolve', 'cutRevolve', 'sweep', 'cutSweep', 'loft']);
+
+async function _dispatchFeaturePattern(feature, bodies, model, client, dbClient, results, emit, vertexMap, faceMap, featureSnapshots, featureTools = new Map()) {
+  const seedIds = Array.isArray(feature.seedFeatureIds) ? feature.seedFeatureIds : [];
+  if (seedIds.length === 0) {
+    throw new Error(`${feature.type}: no seed features selected. Pick at least one feature to pattern.`);
+  }
+  const transforms = _computePatternTransforms(feature);
+  const emitNoop = () => {
+    const r = { featureId: feature.id, bodyId: null, faces: [], topology: { vertices: [], edges: [] }, cached: true };
+    results.push(r); emit(r);
+  };
+  if (transforms.length === 0) { emitNoop(); return; }  // count 1 — no copies
+
+  const indexBody = (b) => {
+    for (const v of b.topology.vertices || []) vertexMap.set(v.id, v.position);
+    for (const f of b.faces || []) { const p = _faceRepresentativePlane(f); if (p) faceMap.set(f.faceId, p); }
+  };
+
+  let appliedAny = false;
+  // Process seeds in tree order; each re-applies its delta to the running body.
+  for (const seedId of seedIds) {
+    const snap = featureSnapshots.get(seedId);
+    if (!snap) {
+      throw new Error(`${feature.type}: seed feature '${seedId}' was not found upstream. Seeds must come before the pattern in the feature tree.`);
+    }
+    if (!snap.bodyId || !snap.after) continue;  // seed made no geometry change
+    const targetBody = bodies.find(b => b.id === snap.bodyId);
+    if (!targetBody || !targetBody.brep) {
+      throw new Error(`${feature.type}: the body modified by seed '${seedId}' is no longer available to pattern.`);
+    }
+
+    // Tool path (EXACT) when the seed is a tool-based feature AND we captured
+    // its tool solid this regen; else the geometry-delta path (fillet/chamfer/
+    // shell/nested-pattern seeds, or a missing tool).
+    const seedTool = featureTools.get(seedId);
+    const useTool = !!(seedTool && TOOL_PATTERN_TYPES.has(seedTool.type) && seedTool.brep);
+    const fuse = useTool && !seedTool.type.startsWith('cut');
+
+    const paramHash = _hashParams({
+      op: feature.type, transforms, seedId,
+      mode: useTool ? 'tool' : 'delta',
+      ...(useTool
+        ? { tool: _hashParams({ t: seedTool.brep }), fuse }
+        : { before: snap.before ? _hashParams({ b: snap.before }) : '', after: _hashParams({ a: snap.after }) }),
+      bodyId: targetBody.id, upstream: targetBody.paramHash || '',
+    });
+    const cacheKey = `${feature.id}#fpattern#${seedId}#${targetBody.id}`;
+    const upstreamHash = targetBody.paramHash || '';
+    const cached = await dbClient.DesignBRepCache.findOne({
+      where: { cadModelID: model.id, featureID: cacheKey, paramHash, upstreamHash, namingVersion: NAMING_VERSION },
+    });
+    let brep, faces, topology, cachedFlag;
+    if (cached) {
+      cached.lastAccessedAt = new Date(); await cached.save();
+      brep = Buffer.isBuffer(cached.brepBytes) ? cached.brepBytes.toString('base64') : Buffer.from(cached.brepBytes || '').toString('base64');
+      faces = cached.tessellatedFaces.faces || [];
+      topology = cached.tessellatedFaces.topology || { vertices: [], edges: [] };
+      cachedFlag = true;
+    } else {
+      const rpc = useTool
+        ? await client.call('buildToolPattern', {
+            featureId: `${feature.id}#tool${seedId}`,
+            bodyBrep: targetBody.brep,
+            toolBrep: seedTool.brep,
+            transforms,
+            fuse,
+          })
+        : await client.call('buildFeaturePattern', {
+            featureId: `${feature.id}#seed${seedId}`,
+            ...(snap.before ? { beforeBrep: snap.before } : {}),
+            afterBrep: snap.after,
+            bodyBrep: targetBody.brep,
+            transforms,
+          });
+      await dbClient.DesignBRepCache.upsert({
+        cadModelID: model.id, featureID: cacheKey, paramHash, upstreamHash,
+        brepBytes: Buffer.from(rpc.brepBytes || '', 'base64'),
+        tessellatedFaces: { faces: rpc.faces || [], topology: rpc.topology || { vertices: [], edges: [] }, solids: rpc.solids || [] },
+        namingVersion: NAMING_VERSION, lastAccessedAt: new Date(),
+      });
+      brep = rpc.brepBytes;
+      faces = rpc.faces || [];
+      topology = rpc.topology || { vertices: [], edges: [] };
+      cachedFlag = false;
+    }
+    if (!brep) {
+      throw new Error(`${feature.type}: seed '${seedId}' produced no geometry — the pattern instances may overlap destructively.`);
+    }
+    // Keep the seed's body as ONE body — feature-pattern/mirror instances belong
+    // to the seed's body even when geometrically disjoint (no body fan-out;
+    // that's the body-mode behavior). The whole result BREP (a compound when
+    // disjoint) replaces the body in place, preserving its id for downstream.
+    targetBody.brep = brep;
+    targetBody.faces = _scopeFaceBoundaryEdges(faces, targetBody.id);
+    targetBody.topology = _scopeTopology(topology, targetBody.id);
+    targetBody.centroid = _approxCentroidFromFaces(targetBody.faces);
+    targetBody.paramHash = paramHash;
+    indexBody(targetBody);
+    const r = { featureId: feature.id, bodyId: targetBody.id, faces: targetBody.faces, topology: targetBody.topology, cached: cachedFlag, bodyParamHash: targetBody.paramHash };
+    results.push(r); emit(r);
+    appliedAny = true;
+  }
+  if (!appliedAny) emitNoop();
+}
+
 /** Dispatch a Combine feature — boolean op (Fuse / Cut / Common)
  * between a target body and one or more tool bodies. The target
  * keeps its id (downstream features that reference it still find
@@ -2826,6 +3150,122 @@ function _faceRepresentativePlane(face) {
   };
 }
 
+/**
+ * Re-derive a face-hosted sketch's plane from its host face's CURRENT
+ * geometry. Returns the SAME plane object when nothing changes (datum host,
+ * or no resolvable host face) so callers can detect "changed" by identity.
+ *
+ * A host face that moved by an upstream edit shifts ALONG ITS NORMAL (a height
+ * change) far more often than it rotates, and its in-plane orientation
+ * (xAxis/yAxis) is unchanged in that case. faceMap only carries each face's
+ * centroid + normal (not a full basis), so we keep the baked xAxis/yAxis/normal
+ * and only re-project the baked origin onto the current face plane. That snaps
+ * the sketch onto the moved face while preserving the 2D layout drawn on it.
+ *
+ * Resolution: exact persistent-faceId lookup first; if the id was re-tagged by
+ * an upstream topology change, fall back to the parallel face nearest the baked
+ * origin (the host was on/at the baked origin at creation time).
+ */
+function _resolveHostFacePlane(sketch, faceMap) {
+  const plane = sketch && sketch.plane;
+  if (!plane || !sketch.hostId || !sketch.hostId.startsWith('face:')) return plane;
+  const faceId = sketch.hostId.slice('face:'.length);
+  let rep = faceMap.get(faceId);
+  if (!rep) {
+    // Geometric fallback — parallel face whose plane is nearest the baked origin.
+    let best = null, bestDist = Infinity;
+    for (const cand of faceMap.values()) {
+      if (!cand || !cand.normal || !cand.centroid) continue;
+      const dot = cand.normal[0] * plane.normal[0] + cand.normal[1] * plane.normal[1] + cand.normal[2] * plane.normal[2];
+      if (Math.abs(dot) < 0.999) continue;
+      const dist = Math.abs(
+        (plane.origin[0] - cand.centroid[0]) * plane.normal[0] +
+        (plane.origin[1] - cand.centroid[1]) * plane.normal[1] +
+        (plane.origin[2] - cand.centroid[2]) * plane.normal[2]);
+      if (dist < bestDist) { bestDist = dist; best = cand; }
+    }
+    rep = best;
+  }
+  if (!rep || !rep.centroid) return plane;
+  // Project the baked origin onto the current face plane along the sketch normal.
+  const n = plane.normal;
+  const o = plane.origin;
+  const c = rep.centroid;
+  const d = (o[0] - c[0]) * n[0] + (o[1] - c[1]) * n[1] + (o[2] - c[2]) * n[2];
+  if (Math.abs(d) < 1.0e-9) return plane; // already on the face — no change
+  return { ...plane, origin: [o[0] - d * n[0], o[1] - d * n[1], o[2] - d * n[2]] };
+}
+
+/** Warn for USED face-hosted sketches whose reference face is gone. A face is
+ * "gone" when its exact persistent id isn't in the final faceMap AND there's no
+ * coincident parallel face at the sketch's baked plane (within tol). A
+ * coincident match means the face was merely re-tagged (same geometry) — that
+ * tracks silently; a far/absent match means the host feature was deleted or
+ * moved, so the sketch is on a fallback plane and the user should re-pick. */
+function _danglingHostFaceWarnings(sketchDoc, faceMap, usedSketchIds) {
+  const warnings = [];
+  const sketchIds = [];
+  // sketchId → current geometry faceId the host resolves to (for the 3D
+  // highlight). Only populated for sketches whose host face is still present.
+  const resolved = {};
+  // No geometry to compare against (empty model, or rolled back before any
+  // solid) ⇒ we can't conclude a host face is "missing" vs just not-yet-built.
+  // Mirror _applyHostFacePlanes's guard and report nothing.
+  if (!sketchDoc || !sketchDoc.sketches || !faceMap || faceMap.size === 0) return { warnings, sketchIds, resolved };
+  // Resolution + dangling detection runs for EVERY face-hosted sketch so the
+  // editor can highlight (or flag) any sketch the user inspects. Only the
+  // toast warning is gated to USED sketches — an unused sketch on a fallback
+  // plane is harmless noise, but the user still wants to see its row flagged.
+  for (const [sid, sk] of Object.entries(sketchDoc.sketches)) {
+    if (!sk || !sk.hostId || !sk.hostId.startsWith('face:')) continue;
+    const faceId = sk.hostId.slice('face:'.length);
+    if (faceMap.has(faceId)) { resolved[sid] = faceId; continue; }  // exact reference face still present
+    const plane = sk.plane;
+    if (!plane || !plane.normal || !plane.origin) continue;
+    // The host's structured name rarely matches a faceMap key verbatim, so
+    // resolve to the nearest coincident parallel face (same heuristic
+    // _resolveHostFacePlane uses to place the sketch). Capture its KEY so the
+    // editor can highlight it. A far/absent match ⇒ the host is gone.
+    let bestDist = Infinity, bestId = null;
+    for (const [candId, cand] of faceMap.entries()) {
+      if (!cand || !cand.normal || !cand.centroid) continue;
+      const dot = cand.normal[0] * plane.normal[0] + cand.normal[1] * plane.normal[1] + cand.normal[2] * plane.normal[2];
+      if (Math.abs(dot) < 0.999) continue;  // not parallel
+      const dist = Math.abs(
+        (plane.origin[0] - cand.centroid[0]) * plane.normal[0] +
+        (plane.origin[1] - cand.centroid[1]) * plane.normal[1] +
+        (plane.origin[2] - cand.centroid[2]) * plane.normal[2]);
+      if (dist < bestDist) { bestDist = dist; bestId = candId; }
+    }
+    if (bestDist > 1.0e-3) {
+      sketchIds.push(sid);
+      if (usedSketchIds.has(sid)) {
+        warnings.push(`Sketch "${sk.name || sid}" lost its reference face (its host feature was deleted or changed). It's now on a fallback plane — re-pick the sketch's reference face (right-click the sketch → Change reference face).`);
+      }
+    } else if (bestId) {
+      resolved[sid] = bestId;
+    }
+  }
+  return { warnings, sketchIds, resolved };
+}
+
+/**
+ * Apply {@link _resolveHostFacePlane} to every sketch in a doc. Clones only the
+ * sketches whose plane actually moved (and the doc) so the stored model is
+ * never mutated; returns the input doc unchanged when nothing moved.
+ */
+function _applyHostFacePlanes(sketchDoc, faceMap) {
+  if (!sketchDoc || !sketchDoc.sketches || !faceMap || faceMap.size === 0) return sketchDoc;
+  let changed = false;
+  const next = {};
+  for (const [sid, sk] of Object.entries(sketchDoc.sketches)) {
+    const np = _resolveHostFacePlane(sk, faceMap);
+    if (sk && np !== sk.plane) { next[sid] = { ...sk, plane: np }; changed = true; }
+    else { next[sid] = sk; }
+  }
+  return changed ? { ...sketchDoc, sketches: next } : sketchDoc;
+}
+
 /** Pre-seed the regen-wide vertex map with sketch points. Each visible
  * sketch contributes one entry per Point entity, projected to world
  * coords through the sketch plane. Ids match the frontend's
@@ -3130,7 +3570,11 @@ function _resolveEndConditionDispatch(endCondition, plane, feature, vertexMap, f
       return { plane, distance: Math.abs(total), flipped: total < 0 };
     }
     case 'upToBody':
-      throw new Error(`extrude end condition '${endCondition.kind}' is not implemented yet`);
+    case 'upToNext':
+      // Distance is determined by the kernel from the target body BREP(s) (sent
+      // as `untilBrep` / `untilBreps`); only the workplane + direction matter
+      // here. `flipped` is the user's Reverse toggle, picking which side to grow.
+      return { plane, distance: 0, flipped: baseFlipped };
     default:
       throw new Error(`unknown extrude end condition: ${JSON.stringify(endCondition)}`);
   }
@@ -3219,4 +3663,5 @@ module.exports = {
   exportModelStl,
   NAMING_VERSION,
   _buildExternalEdges, // exported for unit tests (REQ 770/773)
+  _danglingHostFaceWarnings, // exported for unit tests (host-face resolution / dangling detection)
 };

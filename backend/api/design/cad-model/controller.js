@@ -296,9 +296,22 @@ module.exports = {
         const repo = await bindingFor(m).repoFor(m);
         const tags = await vcsService.listRefs(repo, 'tag');
         const partRev = m.part ? m.part.revision : null;
+        // Display revision = the same VCS-derived revision the editor shows: on
+        // `main` the highest released numeric; on a draft branch the next number
+        // (highest + 1). Reuses the tags already fetched, so consumers (e.g. the
+        // assembly tree) show the same revision as the editor badge.
+        const highestReleased = tags
+          .map((t) => t.name)
+          .filter((n) => /^\d+$/.test(n))
+          .reduce((max, n) => Math.max(max, Number(n)), 0);
+        const onMain = (m.branchName || 'main') === 'main';
+        const displayRevision = onMain
+          ? (highestReleased > 0 ? cadVcsService.padNumeric(highestReleased) : partRev)
+          : cadVcsService.padNumeric(highestReleased + 1);
         out.push({
           partID: m.partID,
           part: m.part ? { id: m.part.id, name: m.part.name, revision: m.part.revision, description: m.part.description, imageFileID: m.part.imageFileID } : null,
+          displayRevision,
           // Unified landing: assemblies are design rows too (Type column + the
           // assembly editor as the open target).
           isAssembly: !!m.isAssembly,

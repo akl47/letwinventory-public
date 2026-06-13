@@ -191,7 +191,13 @@ function extractClosedLoop(state) {
   }
 
   if (segments.length === 0) return { loop: null, error: 'sketch has no lines or arcs (empty profile)' };
-  if (segments.length < 3) return { loop: null, error: 'closed profile requires at least 3 segments' };
+  // ≥3 straight segments enclose a region; 2 straight lines only retrace one
+  // edge (zero area). But 2 segments DO close a real region when at least one
+  // is curved: a semicircle + its diameter line (D-shape), or two arcs (lens).
+  const arcCount = segments.filter(s => s.kind === 'arc').length;
+  if (segments.length < 2 || (segments.length === 2 && arcCount === 0)) {
+    return { loop: null, error: 'closed profile requires at least 3 segments, or 2 with a curved (arc) edge' };
+  }
 
   const adj = buildSegmentAdjacency(segments);
   for (const [pid, incident] of adj) {

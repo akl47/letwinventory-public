@@ -62,6 +62,10 @@ describe('POST /api/design/cad-model/:id/regenerate (REQ 700)', () => {
       calls: [],
       response: null,
       call: jest.fn().mockImplementation(function (method, params) {
+        // `ping` is an infrastructure probe (kernel build marker) fired once
+        // per regen, not a geometry op — exclude it from the recorded calls so
+        // the kernel-call-count assertions below stay focused on build* ops.
+        if (method === 'ping') return Promise.resolve({ ok: true, build: 'test' });
         this.calls.push({ method, params });
         if (this.response) return Promise.resolve(this.response);
         return Promise.resolve(fakeKernelResponse(params.featureId));

@@ -126,6 +126,38 @@ describe('cadProfile.extractClosedLoop (server port)', () => {
     expect(error).toBeFalsy();
     expect(loop.length).toBe(4);
   });
+
+  it('accepts a two-segment loop: semicircle arc + diameter line', () => {
+    const state = {
+      entities: [
+        { kind: 'point', id: 'c', x: 0, y: 0 },
+        { kind: 'point', id: 'a', x: 10, y: 0 },
+        { kind: 'point', id: 'b', x: -10, y: 0 },
+        { kind: 'arc', id: 'arc1', centerId: 'c', startId: 'a', endId: 'b', radius: 10, ccw: true },
+        { kind: 'line', id: 'l1', startId: 'b', endId: 'a' },
+      ],
+      constraints: [],
+    };
+    const { loop, error } = extractClosedLoop(state);
+    expect(error).toBeFalsy();
+    expect(loop).not.toBeNull();
+    expect(loop.length).toBe(2);
+  });
+
+  it('rejects two straight lines between the same points (zero area)', () => {
+    const state = {
+      entities: [
+        { kind: 'point', id: 'p1', x: 0, y: 0 },
+        { kind: 'point', id: 'p2', x: 10, y: 0 },
+        { kind: 'line', id: 'l1', startId: 'p1', endId: 'p2' },
+        { kind: 'line', id: 'l2', startId: 'p2', endId: 'p1' },
+      ],
+      constraints: [],
+    };
+    const { loop, error } = extractClosedLoop(state);
+    expect(loop).toBeNull();
+    expect(error).toBeTruthy();
+  });
 });
 
 describe('cadProfile.extractClosedLoops (multi-component)', () => {
