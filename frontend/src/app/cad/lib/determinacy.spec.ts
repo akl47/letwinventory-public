@@ -241,3 +241,90 @@ describe('analyzeDeterminacy', () => {
     expect(analyzeDeterminacy(s).has(b.id)).toBe(false);
   });
 });
+
+describe('analyzeDeterminacy — edge-ref on-edge points (REQ 794)', () => {
+  // A point glued to model edge 'f/e' via on-edge. externalEdges supplies the
+  // edge's projection (horizontal line y=50). With it the point RIDES the edge
+  // (1 DOF along it) → not fully determined; without it the point is pinned.
+  const ptOnEdge = () => ({
+    entities: [{ kind: 'point' as const, id: 'p', x: 10, y: 50 }],
+    constraints: [{
+      id: 'oe', type: 'on-edge' as const, targets: [{ entityId: 'p' }],
+      externalRef: { scope: 'local' as const, featureId: 'f', edgeId: 'f/e' },
+    }],
+  });
+  const edges = new Map([['f/e', [{ x: -50, y: 50 }, { x: 50, y: 50 }] as const]]);
+
+  it('rides the edge (NOT fully determined) when the projected edge is supplied', () => {
+    expect(analyzeDeterminacy(ptOnEdge(), edges).has('p')).toBe(false);
+  });
+
+  it('falls back to pinned (determined) when no projected edge is supplied', () => {
+    expect(analyzeDeterminacy(ptOnEdge()).has('p')).toBe(true);
+  });
+
+  it('s4w5u4a391 repro: vertical line with both endpoints riding edges is NOT fully constrained', () => {
+    const state = {
+      entities: [
+        { kind: 'point' as const, id: 'p1', x: -46.25, y: 50 },
+        { kind: 'point' as const, id: 'p2', x: -46.25, y: -50 },
+        { kind: 'line' as const, id: 'l3', startId: 'p1', endId: 'p2' },
+      ],
+      constraints: [
+        { id: 'oe1', type: 'on-edge' as const, targets: [{ entityId: 'p1' }], externalRef: { scope: 'local' as const, featureId: 'f', edgeId: 'f/e2' } },
+        { id: 'v', type: 'vertical' as const, targets: [{ entityId: 'l3' }] },
+        { id: 'oe2', type: 'on-edge' as const, targets: [{ entityId: 'p2' }], externalRef: { scope: 'local' as const, featureId: 'f', edgeId: 'f/e31' } },
+      ],
+    };
+    const e = new Map([
+      ['f/e2',  [{ x: -50, y: 50 },  { x: 50, y: 50 }] as const],
+      ['f/e31', [{ x: -50, y: -50 }, { x: 50, y: -50 }] as const],
+    ]);
+    const det = analyzeDeterminacy(state, e);
+    // The line can still slide left/right (common x is free) → endpoints and
+    // the line are NOT fully determined.
+    expect(det.has('p1')).toBe(false);
+    expect(det.has('p2')).toBe(false);
+    expect(det.has('l3')).toBe(false);
+  });
+});
+
+describe('analyzeDeterminacy — cross-part edge-ride points (in-context)', () => {
+  it('a point riding a cross-part edge is NOT fully determined when its projection is supplied', () => {
+    const state = {
+      entities: [{ kind: 'point' as const, id: 'p', x: 3, y: 5 }],
+      constraints: [{
+        id: 'oe', type: 'on-edge' as const, targets: [{ entityId: 'p' }],
+        externalRef: {
+          scope: 'cross-part' as const, definingAssemblyId: 7, definingAssemblyRepoId: '7',
+          sourceInstanceId: 'i2', sourcePartId: 99,
+          sourceGeomRef: { featureId: '', edgeId: 'cpe:i2:abc' },
+          fallback: { kind: 'edge' as const, start: [0, 0, 0] as [number, number, number], end: [10, 0, 0] as [number, number, number] },
+        },
+      }],
+    };
+    const edges = new Map([['cpe:i2:abc', [{ x: 0, y: 5 }, { x: 10, y: 5 }] as const]]);
+    expect(analyzeDeterminacy(state, edges).has('p')).toBe(false);
+  });
+});
+
+describe('analyzeDeterminacy — point-pair horizontal/vertical', () => {
+  it('a fixed point + horizontal + horizontal-distance fully determines the other point', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    s = addConstraint(s, 'fixed', [a.id]).state;
+    const b = addPoint(s, 5, 3); s = b.state;
+    s = addConstraint(s, 'horizontal', [a.id, b.id]).state;        // b.y = a.y
+    s = addConstraint(s, 'horizontal-distance', [a.id, b.id], 5).state; // b.x fixed
+    expect(analyzeDeterminacy(s).has(b.id)).toBe(true);
+  });
+
+  it('horizontal alone leaves the other point under-determined (x free)', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    s = addConstraint(s, 'fixed', [a.id]).state;
+    const b = addPoint(s, 5, 3); s = b.state;
+    s = addConstraint(s, 'horizontal', [a.id, b.id]).state;
+    expect(analyzeDeterminacy(s).has(b.id)).toBe(false);
+  });
+});

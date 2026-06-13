@@ -473,12 +473,16 @@ export function extractClosedLoop(state: SketchState): ProfileResult {
   if (segments.length === 0) {
     return { loop: null, error: 'sketch has no lines or arcs (empty profile)' };
   }
-  if (segments.length < 3) {
-    return { loop: null, error: 'closed profile requires at least 3 segments' };
+  // A closed loop needs ≥3 segments when they're all straight (2 lines only
+  // ever retrace the same edge — zero area). But 2 segments CLOSE a real region
+  // when at least one is curved: a semicircle + its diameter line (D-shape), or
+  // two arcs (lens). Only reject < 2, or exactly 2 straight lines.
+  if (segments.length < 2 || (segments.length === 2 && arcs.length === 0)) {
+    return { loop: null, error: 'closed profile requires at least 3 segments, or 2 with a curved (arc) edge' };
   }
   // Statistics in the error messages stay focused on lines vs arcs so
   // user-facing errors still read naturally for the common rectangle case.
-  void lines; void arcs;
+  void lines;
 
   const adj = buildSegmentAdjacency(segments);
   for (const [pointId, incident] of adj) {

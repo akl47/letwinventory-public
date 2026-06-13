@@ -2,6 +2,7 @@ import type {
   SketchState, SketchEntity, SketchConstraint,
   LineEntity, CircleEntity, ArcEntity,
 } from './types';
+import { onEdgeLookupKey } from './types';
 import { ORIGIN_POINT_ID } from './store';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -31,16 +32,33 @@ import { ORIGIN_POINT_ID } from './store';
 // the whole analysis runs in well under a millisecond.
 // ────────────────────────────────────────────────────────────────────────────
 
+/** 2D projection of a referenced model edge (its two endpoints on the sketch
+ * plane), keyed by topology edgeId. A point with an edge-ref `on-edge`
+ * constraint rides that line (1 DOF) rather than being pinned. Same shape the
+ * solver consumes via `SolveOptions.externalEdges`. */
+export type ExternalEdgeMap = Map<string, readonly [{ x: number; y: number }, { x: number; y: number }]>;
+
 /** Run determinacy analysis on the given sketch. Returns the set of entity
  * IDs (points, lines, circles, arcs) that are fully determined by the
- * current constraint graph. */
-export function analyzeDeterminacy(state: SketchState): Set<string> {
+ * current constraint graph. `externalEdges` supplies the projected lines for
+ * edge-ref `on-edge` points so they count as 1-DOF (ride the edge) instead of
+ * fully pinned; omit it (the default) and such points fall back to pinned. */
+export function analyzeDeterminacy(state: SketchState, externalEdges: ExternalEdgeMap = new Map()): Set<string> {
   try {
-    return analyzeExact(state);
+    return analyzeExact(state, externalEdges);
   } catch (err) {
     console.warn('analyzeDeterminacy: exact analyzer failed, falling back to heuristic:', err);
     return analyzeHeuristic(state);
   }
+}
+
+/** The projected edge line for an edge-ref `on-edge` constraint, or null when
+ * it's a vertex ref, a cross-part ref, or the edge isn't in `externalEdges`. */
+function edgeLineForConstraint(c: SketchConstraint, externalEdges: ExternalEdgeMap)
+  : readonly [{ x: number; y: number }, { x: number; y: number }] | null {
+  const key = onEdgeLookupKey(c.externalRef);  // local edgeId OR cross-part stable id
+  if (!key) return null;
+  return externalEdges.get(key) ?? null;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -51,7 +69,7 @@ type ParamKind = 'x' | 'y' | 'radius';
 interface FreeParam { entityId: string; kind: ParamKind; baseValue: number; }
 type EntityIndex = Map<string, { x?: number; y?: number; radius?: number }>;
 
-function analyzeExact(state: SketchState): Set<string> {
+function analyzeExact(state: SketchState, externalEdges: ExternalEdgeMap): Set<string> {
   const entById = new Map<string, SketchEntity>();
   for (const e of state.entities) entById.set(e.id, e);
 
@@ -76,6 +94,12 @@ function analyzeExact(state: SketchState): Set<string> {
   const entityById = new Map(state.entities.map(en => [en.id, en] as const));
   for (const c of state.constraints) {
     if (c.type !== 'on-edge') continue;
+    // A standalone point with a KNOWN edge projection rides the edge (1 DOF):
+    // it is NOT pinned here; a point-on-line residual (added in
+    // evalAllResiduals) removes exactly its perpendicular DOF. Converted
+    // line/circle/arc entities, vertex refs, and edge refs with no available
+    // projection stay fully pinned (their coords come straight from the edge).
+    const ridesEdge = !!edgeLineForConstraint(c, externalEdges);
     for (const t of c.targets) {
       const e = entityById.get(t.entityId);
       if (!e) continue;
@@ -90,7 +114,7 @@ function analyzeExact(state: SketchState): Set<string> {
         preFixed.add(`${e.startId}:x`);  preFixed.add(`${e.startId}:y`);
         preFixed.add(`${e.endId}:x`);    preFixed.add(`${e.endId}:y`);
         preFixed.add(`${e.id}:radius`);
-      } else if (e.kind === 'point') {
+      } else if (e.kind === 'point' && !ridesEdge) {
         preFixed.add(`${e.id}:x`); preFixed.add(`${e.id}:y`);
       }
     }
@@ -120,7 +144,7 @@ function analyzeExact(state: SketchState): Set<string> {
   const values = params.map(p => p.baseValue);
 
   // Evaluate every constraint's residuals at the current values.
-  const baseResiduals = evalAllResiduals(state, entById, values, index);
+  const baseResiduals = evalAllResiduals(state, entById, values, index, externalEdges);
   const M = baseResiduals.length;
   const N = params.length;
 
@@ -137,7 +161,7 @@ function analyzeExact(state: SketchState): Set<string> {
       const orig = values[i];
       const h = EPS * (Math.abs(orig) + 1);
       values[i] = orig + h;
-      const perturbed = evalAllResiduals(state, entById, values, index);
+      const perturbed = evalAllResiduals(state, entById, values, index, externalEdges);
       for (let j = 0; j < M; j++) {
         J[j][i] = (perturbed[j] - baseResiduals[j]) / h;
       }
@@ -196,9 +220,28 @@ function rollUpToEntities(state: SketchState, determinedParams: Set<string>): Se
 
 function evalAllResiduals(
   state: SketchState, entById: Map<string, SketchEntity>,
-  values: number[], index: EntityIndex,
+  values: number[], index: EntityIndex, externalEdges: ExternalEdgeMap,
 ): number[] {
   const out: number[] = [];
+  // Edge-ref `on-edge` points: a point riding a model edge is constrained to
+  // the edge's projected line — 1 residual = signed perpendicular distance to
+  // that (fixed) line, removing the perpendicular DOF and leaving the slide
+  // DOF. Mirrors the solver's point_on_line for the same point.
+  for (const c of state.constraints) {
+    if (c.type !== 'on-edge' || c.driven) continue;
+    const line = edgeLineForConstraint(c, externalEdges);
+    if (!line) continue;
+    const [A, B] = line;
+    const dx = B.x - A.x, dy = B.y - A.y;
+    const len = Math.hypot(dx, dy) || 1;
+    for (const t of c.targets) {
+      const e = entById.get(t.entityId);
+      if (e?.kind !== 'point') continue;
+      const Px = paramX(state, entById, values, index, e.id);
+      const Py = paramY(state, entById, values, index, e.id);
+      out.push(((Px - A.x) * dy - (Py - A.y) * dx) / len);
+    }
+  }
   // Intrinsic arc invariants (mirrors the solver's arc_rules primitive):
   // every arc's start and end MUST lie on the circle of radius R around
   // the arc's center. Without these residuals, the analyzer treats
@@ -274,9 +317,11 @@ function appendResiduals(
 
     case 'horizontal':
       if (e0?.kind === 'line') out.push(py(e0.startId) - py(e0.endId));
+      else if (e0?.kind === 'point' && e1?.kind === 'point') out.push(py(e0.id) - py(e1.id));
       return;
     case 'vertical':
       if (e0?.kind === 'line') out.push(px(e0.startId) - px(e0.endId));
+      else if (e0?.kind === 'point' && e1?.kind === 'point') out.push(px(e0.id) - px(e1.id));
       return;
 
     case 'distance': {
@@ -421,6 +466,13 @@ function appendResiduals(
     case 'diameter':
       if ((e0?.kind === 'circle' || e0?.kind === 'arc') && c.value !== undefined) {
         out.push(2 * pr(e0.id) - c.value);
+      }
+      return;
+    case 'radial-distance':
+      // Targets [inner, outer]: outer.radius − inner.radius = value.
+      if ((e0?.kind === 'circle' || e0?.kind === 'arc')
+          && (e1?.kind === 'circle' || e1?.kind === 'arc') && c.value !== undefined) {
+        out.push(pr(e1.id) - pr(e0.id) - c.value);
       }
       return;
     case 'angle': {
@@ -672,7 +724,9 @@ function analyzeHeuristic(state: SketchState): Set<string> {
   while (rChanged && rIt < 50) {
     rChanged = false; rIt++;
     for (const c of state.constraints) {
-      if (c.type !== 'equal' && c.type !== 'coradial') continue;
+      // equal / coradial / radial-distance all relate two radii, so a
+      // dimensioned radius on one side fixes the other.
+      if (c.type !== 'equal' && c.type !== 'coradial' && c.type !== 'radial-distance') continue;
       const a = c.targets[0]?.entityId, b = c.targets[1]?.entityId;
       if (!a || !b) continue;
       const ea = entById.get(a), eb = entById.get(b);

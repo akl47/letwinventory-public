@@ -702,3 +702,105 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
     expect(res.dof).toBe(0);  // entire sketch fully constrained
   });
 });
+
+describe('point riding a model edge (REQ 794 / phase 2)', () => {
+  // A free point linked to model edge 'f1/e0' by an on-edge constraint.
+  // externalEdges supplies that edge's projection: horizontal line y=5, x∈[0,10].
+  const edgeRefState = (px: number, py: number): SketchState => ({
+    entities: [pt('p', px, py)],
+    constraints: [{
+      id: 'oe', type: 'on-edge', targets: [{ entityId: 'p' }],
+      externalRef: { scope: 'local', featureId: 'f1', edgeId: 'f1/e0' },
+    }],
+  });
+  const edges = new Map<string, [{ x: number; y: number }, { x: number; y: number }]>([
+    ['f1/e0', [{ x: 0, y: 5 }, { x: 10, y: 5 }]],
+  ]);
+
+  it('pulls an off-edge point onto the projected edge line', async () => {
+    const res = await solveSketch(edgeRefState(3, 2), { externalEdges: edges });
+    expect(res.status).toBe('ok');
+    const p = findPoint(res.state, 'p')!;
+    expect(p.y).toBeCloseTo(5, 6);   // now lies on the edge line y=5
+  });
+
+  it('leaves the point with 1 DOF — it slides along the edge', async () => {
+    const res = await solveSketch(edgeRefState(3, 5), { externalEdges: edges });
+    expect(res.status).toBe('ok');
+    expect(res.dof).toBe(1);
+  });
+
+  it('falls back to v1 pinning when no projected edge is supplied (0 DOF, stays put)', async () => {
+    const res = await solveSketch(edgeRefState(3, 2));  // externalEdges omitted
+    const p = findPoint(res.state, 'p')!;
+    expect([p.x, p.y]).toEqual([3, 2]);
+    expect(res.dof).toBe(0);
+  });
+});
+
+describe('point riding a CROSS-PART edge (in-context)', () => {
+  // A point glued to ANOTHER component's edge via a cross-part on-edge ref.
+  // externalEdges is keyed by the ref's stable id (sourceGeomRef.edgeId), the
+  // same key onEdgeLookupKey derives — so it must slide just like a local edge.
+  const crossState = (px: number, py: number): SketchState => ({
+    entities: [pt('p', px, py)],
+    constraints: [{
+      id: 'oe', type: 'on-edge', targets: [{ entityId: 'p' }],
+      externalRef: {
+        scope: 'cross-part', definingAssemblyId: 7, definingAssemblyRepoId: '7',
+        sourceInstanceId: 'i2', sourcePartId: 99,
+        sourceGeomRef: { featureId: '', edgeId: 'cpe:i2:abc' },
+        fallback: { kind: 'edge', start: [0, 0, 0], end: [10, 0, 0] },
+      },
+    }],
+  });
+  const edges = new Map<string, [{ x: number; y: number }, { x: number; y: number }]>([
+    ['cpe:i2:abc', [{ x: 0, y: 5 }, { x: 10, y: 5 }]],
+  ]);
+
+  it('pulls onto the cross-part edge line and leaves 1 DOF (slides)', async () => {
+    const r = await solveSketch(crossState(3, 2), { externalEdges: edges });
+    expect(r.status).toBe('ok');
+    expect(findPoint(r.state, 'p')!.y).toBeCloseTo(5, 6);
+    expect(r.dof).toBe(1);
+  });
+
+  it('falls back to pinned when the cross-part edge projection is absent', async () => {
+    const r = await solveSketch(crossState(3, 2));
+    expect([findPoint(r.state, 'p')!.x, findPoint(r.state, 'p')!.y]).toEqual([3, 2]);
+    expect(r.dof).toBe(0);
+  });
+});
+
+describe('horizontal / vertical between two points', () => {
+  it('horizontal makes the two points share a y', async () => {
+    const state: SketchState = {
+      entities: [pt('a', 0, 0), pt('b', 5, 3)],
+      constraints: [c('fix', 'fixed', ['a']), c('h', 'horizontal', ['a', 'b'])],
+    };
+    const r = await solveSketch(state);
+    expect(r.status).toBe('ok');
+    expect(findPoint(r.state, 'b')!.y).toBeCloseTo(0, 6);
+    expect(findPoint(r.state, 'b')!.x).toBeCloseTo(5, 6);  // x untouched (still free)
+  });
+
+  it('vertical makes the two points share an x', async () => {
+    const state: SketchState = {
+      entities: [pt('a', 0, 0), pt('b', 5, 3)],
+      constraints: [c('fix', 'fixed', ['a']), c('v', 'vertical', ['a', 'b'])],
+    };
+    const r = await solveSketch(state);
+    expect(r.status).toBe('ok');
+    expect(findPoint(r.state, 'b')!.x).toBeCloseTo(0, 6);
+  });
+
+  it('still treats a single-line horizontal as a line constraint', async () => {
+    const state: SketchState = {
+      entities: [pt('a', 0, 0), pt('b', 10, 4), ln('l', 'a', 'b')],
+      constraints: [c('fix', 'fixed', ['a']), c('h', 'horizontal', ['l'])],
+    };
+    const r = await solveSketch(state);
+    expect(r.status).toBe('ok');
+    expect(findPoint(r.state, 'b')!.y).toBeCloseTo(0, 6);
+  });
+});

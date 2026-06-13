@@ -272,6 +272,42 @@ describe('Profile extraction (CAD-038, REQ 560, REQ 617)', () => {
     });
   });
 
+  describe('two-segment closed loops with a curved edge', () => {
+    it('accepts a semicircle arc + diameter line (D-shape)', () => {
+      // Arc over the top from (10,0) to (-10,0), closed by the diameter line.
+      const state: SketchState = {
+        entities: [
+          { kind: 'point', id: 'c', x: 0, y: 0 },
+          { kind: 'point', id: 'a', x: 10, y: 0 },
+          { kind: 'point', id: 'b', x: -10, y: 0 },
+          { kind: 'arc', id: 'arc1', centerId: 'c', startId: 'a', endId: 'b', radius: 10, ccw: true },
+          { kind: 'line', id: 'l1', startId: 'b', endId: 'a' },
+        ],
+        constraints: [],
+      };
+      const { loop, error } = extractClosedLoop(state);
+      expect(error).toBeFalsy();
+      expect(loop).not.toBeNull();
+      expect(loop!.length).toBe(2);
+      expect(loop!.map((e) => e.kind).sort()).toEqual(['arc', 'line']);
+    });
+
+    it('rejects two straight lines between the same points (zero area)', () => {
+      const state: SketchState = {
+        entities: [
+          { kind: 'point', id: 'p1', x: 0, y: 0 },
+          { kind: 'point', id: 'p2', x: 10, y: 0 },
+          { kind: 'line', id: 'l1', startId: 'p1', endId: 'p2' },
+          { kind: 'line', id: 'l2', startId: 'p2', endId: 'p1' },
+        ],
+        constraints: [],
+      };
+      const { loop, error } = extractClosedLoop(state);
+      expect(loop).toBeNull();
+      expect(error).toBeTruthy();
+    });
+  });
+
   describe('extractClosedLoops — multiple disjoint loops (REQ 620)', () => {
     it('returns two loops for two disjoint circles', () => {
       const state: SketchState = {

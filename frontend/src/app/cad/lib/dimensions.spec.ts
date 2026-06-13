@@ -77,6 +77,25 @@ describe('dimensionRenders', () => {
     expect(render.extensionLines).toEqual([]);
   });
 
+  it('radial-distance render leaders from the inner radius to the outer radius', () => {
+    const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+    const inner: CircleEntity = { kind: 'circle', id: 'i', centerId: 'c', radius: 4 };
+    const outer: CircleEntity = { kind: 'circle', id: 'o', centerId: 'c', radius: 7 };
+    const rd: SketchConstraint = {
+      id: 'crd', type: 'radial-distance',
+      targets: [{ entityId: 'i' }, { entityId: 'o' }], value: 3,
+      placement: { x: 12, y: 0 },  // along +x
+    };
+    const [render] = dimensionRenders(state(c, inner, outer, rd));
+    expect(render.text).toBe('ΔR 3 mm');
+    // Dimension line spans the gap: inner edge (4,0) → outer edge (7,0).
+    expect(render.dimensionLine![0]).toEqual({ x: 4, y: 0 });
+    expect(render.dimensionLine![1]).toEqual({ x: 7, y: 0 });
+    // Extension from the outer edge out to the placed label.
+    expect(render.extensionLines[0][0]).toEqual({ x: 7, y: 0 });
+    expect(render.extensionLines[0][1]).toEqual({ x: 12, y: 0 });
+  });
+
   it('uses a sensible default placement when constraint.placement is missing', () => {
     const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 0 };
     const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: 0 };
@@ -172,5 +191,33 @@ describe('point-line-distance render — parallel-lines case', () => {
     expect(d0.x).toBeCloseTo(5);
     expect(d1.x).toBeCloseTo(5);
     expect(Math.abs(d0.y - d1.y)).toBeCloseTo(10);
+  });
+});
+
+describe('point-line-distance render — non-parallel case (leader lines)', () => {
+  it('offsets along the line so witness + dim lines are NOT collinear', () => {
+    // Line l along x-axis (y=0); point p above it at (4, 6) → perp distance 6.
+    const la: PointEntity = { kind: 'point', id: 'la', x: 0, y: 0 };
+    const lb: PointEntity = { kind: 'point', id: 'lb', x: 10, y: 0 };
+    const p: PointEntity = { kind: 'point', id: 'p', x: 4, y: 6 };
+    const l: LineEntity = { kind: 'line', id: 'l', startId: 'la', endId: 'lb' };
+    const r = previewDimension(
+      state(la, lb, p, l), 'point-line-distance', ['p', 'l'], 6, { x: 12, y: 3 },
+    );
+    expect(r).not.toBeNull();
+    const [d0, d1] = r!.dimensionLine!;
+    // Dim line spans the perpendicular gap (Δy = 6), i.e. it is vertical.
+    expect(Math.abs(d1.y - d0.y)).toBeCloseTo(6, 6);
+    expect(Math.abs(d1.x - d0.x)).toBeCloseTo(0, 6);
+    // Foot is at (4,0); placement (12,3) → along = (12-4)=8 → dim line at x=12.
+    expect(d0.x).toBeCloseTo(12, 6);
+    // Witness lines run ALONG the line (horizontal), not collapsed onto the dim line.
+    const [[wp0, wp1], [wf0, wf1]] = r!.extensionLines;
+    expect(wp0).toMatchObject({ x: 4, y: 6 });   // from the point
+    expect(wp1.x).toBeCloseTo(12, 6);            // out to the dim line
+    expect(wp1.y).toBeCloseTo(6, 6);             // still at the point's level (horizontal witness)
+    expect(wf0).toMatchObject({ x: 4, y: 0 });   // from the foot on the line
+    expect(wf1.x).toBeCloseTo(12, 6);
+    expect(wf1.y).toBeCloseTo(0, 6);
   });
 });

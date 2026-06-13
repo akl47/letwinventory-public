@@ -136,6 +136,10 @@ export function extrudePreview(p: ExtrudePreviewParams): PreviewMesh | null {
 function resolveExtent(distance: number, kind: ExtrudeEndCondition['kind']): number | null {
   const THROUGH_ALL_PREVIEW = 1e4;
   if (kind === 'throughAll') return THROUGH_ALL_PREVIEW;
+  // Up To Body / Up To Next's true extent is only known to the kernel (it
+  // conforms to the target body). Preview a long prism so the user sees the
+  // direction; the real body-conforming end appears on commit.
+  if (kind === 'upToBody' || kind === 'upToNext') return THROUGH_ALL_PREVIEW;
   if (!isFinite(distance) || Math.abs(distance) < 1e-6) return null;
   if (kind === 'midPlane') return distance / 2;
   return distance;

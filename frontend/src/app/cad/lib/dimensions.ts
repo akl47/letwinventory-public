@@ -80,7 +80,7 @@ export interface DimensionRender {
 const DIMENSIONAL_TYPES = new Set<ConstraintType>([
   'distance', 'radius', 'diameter', 'angle',
   'horizontal-distance', 'vertical-distance', 'point-line-distance', 'arc-length',
-  'chord-distance',
+  'chord-distance', 'radial-distance',
 ]);
 
 /** Default offset (in sketch units) used when a constraint has no
@@ -113,6 +113,7 @@ export function formatDimensionText(
     case 'point-line-distance': return '⊥ ' + num;
     case 'arc-length': return '~ ' + num;
     case 'chord-distance': return '— ' + num;
+    case 'radial-distance': return 'ΔR ' + num;
     default: return num;
   }
 }
@@ -192,6 +193,14 @@ function computeRender(
       const e = findEntity(state, targetIds[0]);
       if (!e || (e.kind !== 'circle' && e.kind !== 'arc')) return null;
       return diameterRender(constraintId, text, state, e as CircleEntity | ArcEntity, placement);
+    }
+    case 'radial-distance': {
+      const inner = findEntity(state, targetIds[0]);
+      const outer = findEntity(state, targetIds[1]);
+      const ok = (x: SketchEntity | undefined): x is CircleEntity | ArcEntity =>
+        !!x && (x.kind === 'circle' || x.kind === 'arc');
+      if (!ok(inner) || !ok(outer)) return null;
+      return radialDistanceRender(constraintId, text, state, inner, outer, placement);
     }
     case 'angle': {
       const a = findEntity(state, targetIds[0]);
@@ -309,6 +318,32 @@ function distanceRender(
  * toward the placement) out to the label anchor (slightly past the edge).
  * No witness lines — radius is conventionally drawn as a single leader.
  */
+/** Radial gap between two concentric circles/arcs: a leader from the inner
+ * radius to the outer radius along the placement direction, with extension
+ * arcs implied by the two edges. Targets are [inner, outer]. */
+function radialDistanceRender(
+  constraintId: string, text: string,
+  state: SketchState, inner: CircleEntity | ArcEntity, outer: CircleEntity | ArcEntity,
+  placement: { x: number; y: number } | undefined,
+): DimensionRender | null {
+  const c = findPoint(state, inner.centerId);
+  if (!c) return null;
+  const rIn = Math.min(inner.radius, outer.radius);
+  const rOut = Math.max(inner.radius, outer.radius);
+  const target = placement ?? { x: c.x + rOut + DEFAULT_OFFSET, y: c.y };
+  const dx = target.x - c.x, dy = target.y - c.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const innerEdge = { x: c.x + ux * rIn, y: c.y + uy * rIn };
+  const outerEdge = { x: c.x + ux * rOut, y: c.y + uy * rOut };
+  return {
+    constraintId, text,
+    labelAnchor: target,
+    dimensionLine: [innerEdge, outerEdge],
+    extensionLines: [[outerEdge, target]],
+  };
+}
+
 function radiusRender(
   constraintId: string, text: string,
   state: SketchState, e: CircleEntity | ArcEntity,
@@ -420,7 +455,6 @@ function pointLineDistanceRender(
   const len = Math.hypot(dx, dy);
   if (len < 1e-9) return null;
   const ux = dx / len, uy = dy / len;
-  const nx = -uy, ny = ux;
   const t = ((p.x - a.x) * ux + (p.y - a.y) * uy);
   const foot = { x: a.x + ux * t, y: a.y + uy * t };
 
@@ -431,11 +465,17 @@ function pointLineDistanceRender(
     if (r) return r;
   }
 
-  const offset = placement
-    ? (placement.x - foot.x) * nx + (placement.y - foot.y) * ny
+  // Slide the dimension along the LINE direction (u), not the normal (n).
+  // The measured gap p→foot is already along n, so offsetting along n would
+  // put p, foot, and the dim line all on the same line — collapsing the
+  // witness lines onto the dim line. Offsetting along u instead places the
+  // perpendicular dim line off to the side, with witness lines running
+  // parallel to the target line out to it (standard point-line dimension).
+  const along = placement
+    ? (placement.x - foot.x) * ux + (placement.y - foot.y) * uy
     : DEFAULT_OFFSET;
-  const pProj = { x: p.x + nx * offset, y: p.y + ny * offset };
-  const fProj = { x: foot.x + nx * offset, y: foot.y + ny * offset };
+  const pProj = { x: p.x + ux * along, y: p.y + uy * along };
+  const fProj = { x: foot.x + ux * along, y: foot.y + uy * along };
   return {
     constraintId, text,
     labelAnchor: { x: (pProj.x + fProj.x) / 2, y: (pProj.y + fProj.y) / 2 },

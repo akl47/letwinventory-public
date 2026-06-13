@@ -15,7 +15,7 @@ export function emptyDocument(): SketchDocument {
   return { sketches: {}, nextSketchSeq: 1 };
 }
 
-function projectTopologyToCandidates(plane: Plane3, topology: ModelTopology | null): ReferenceCandidate[] {
+export function projectTopologyToCandidates(plane: Plane3, topology: ModelTopology | null): ReferenceCandidate[] {
   if (!topology) return [];
   const candidates: ReferenceCandidate[] = [];
   for (const v of topology.vertices) {

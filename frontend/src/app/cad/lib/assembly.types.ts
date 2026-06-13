@@ -9,8 +9,15 @@ export interface Placement {
 export interface AssemblyInstance {
   instanceId: string;
   partID: number;
-  ref?: { kind: 'cad' | 'assembly' };
+  /** `branch` (REQ 788): which line of the part this instance tracks — resolution
+   * uses the latest of that branch (live working copy when it's the part's
+   * checked-out branch). Absent = legacy "live working copy" behavior. */
+  ref?: { kind: 'cad' | 'assembly'; branch?: string };
+  /** Set at assembly check-in (REQ 789): the tracked branch's head commit. */
   pinnedCommitHash?: string | null;
+  /** Child-part configuration this instance resolves at. Absent = the
+   * child's own active configuration. */
+  configurationId?: string;
   grounded?: boolean;
   placement: Placement;
   suppressed?: boolean;
@@ -19,7 +26,9 @@ export interface AssemblyInstance {
 
 export type MateType =
   | 'coincident' | 'concentric' | 'parallel' | 'perpendicular'
-  | 'distance' | 'angle' | 'tangent' | 'lock';
+  | 'distance' | 'angle' | 'tangent' | 'lock'
+  // A single component fixed to the assembly origin (no faces / second instance).
+  | 'origin';
 
 export interface MateRef { instanceId: string; faceId: string; }
 
@@ -57,11 +66,6 @@ export interface AssemblyPattern {
   suppressed?: boolean;
 }
 
-export interface ExplodeConfig {
-  offsets: Record<string, [number, number, number]>;
-  factor: number;
-}
-
 export interface DisplayState {
   id: string;
   name: string;
@@ -76,7 +80,6 @@ export interface AssemblyDoc {
   instances: AssemblyInstance[];
   mates: Mate[];
   patterns?: AssemblyPattern[];
-  explode?: ExplodeConfig;
   displayStates?: DisplayState[];
 }
 
@@ -132,10 +135,12 @@ export function validMateTypes(kindA: string | undefined, kindB: string | undefi
   const planar = kindA === 'plane' && kindB === 'plane';
   const cyl = kindA === 'cylinder' && kindB === 'cylinder';
   const mixed = (kindA === 'cylinder' && kindB === 'plane') || (kindA === 'plane' && kindB === 'cylinder');
+  const points = kindA === 'point' && kindB === 'point';
   const types: MateType[] = [];
   if (planar) types.push('coincident', 'parallel', 'perpendicular', 'distance', 'angle');
   if (cyl) types.push('concentric');
   if (mixed) types.push('tangent');
+  if (points) types.push('coincident', 'distance'); // origin-point pairs
   types.push('lock'); // always available
   return types;
 }

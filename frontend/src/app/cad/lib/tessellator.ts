@@ -28,7 +28,9 @@ export function segmentsForCircle(radius: number, chordTolerance: number): numbe
   // Clamp ratio into the safe acos domain to avoid NaN from FP noise.
   const safe = Math.min(0.999999, Math.max(-1, ratio));
   const n = Math.ceil(Math.PI / Math.acos(safe));
-  return Math.max(3, n);
+  // Upper cap so a very small (zoom-adaptive) tolerance on a large radius
+  // can't request thousands of segments. 512 is visually smooth at any zoom.
+  return Math.max(3, Math.min(512, n));
 }
 
 export function segmentsForArc(radius: number, sweepAbs: number, chordTolerance: number): number {

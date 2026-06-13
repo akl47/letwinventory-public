@@ -3,7 +3,7 @@ import type { SketchPrimitive, SketchParam } from '../vendor/planegcs';
 import type {
   SketchState, SketchConstraint, SketchEntity, CircleEntity, ArcEntity,
 } from './types';
-import { pointsOf, linesOf, findEntity, findPoint } from './types';
+import { pointsOf, linesOf, findEntity, findPoint, onEdgeLookupKey } from './types';
 import { ORIGIN_POINT_ID } from './store';
 
 export type SolveStatus_ = 'ok' | 'inconsistent';
@@ -147,9 +147,15 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
       return [];
     }
     case 'horizontal':
-      return [{ id: c.id, type: 'horizontal_l', l_id: tid(0) }];
+      // A line target → the line is horizontal; two points → the points share
+      // a y (point-pair horizontal alignment).
+      return at(0)?.kind === 'line'
+        ? [{ id: c.id, type: 'horizontal_l', l_id: tid(0) }]
+        : [{ id: c.id, type: 'horizontal_pp', p1_id: tid(0), p2_id: tid(1) }];
     case 'vertical':
-      return [{ id: c.id, type: 'vertical_l', l_id: tid(0) }];
+      return at(0)?.kind === 'line'
+        ? [{ id: c.id, type: 'vertical_l', l_id: tid(0) }]
+        : [{ id: c.id, type: 'vertical_pp', p1_id: tid(0), p2_id: tid(1) }];
     case 'distance':
       return [{ id: c.id, type: 'p2p_distance', p1_id: tid(0), p2_id: tid(1), distance: c.value ?? 0 }];
     case 'perpendicular':
@@ -244,6 +250,21 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
       if (a.kind === 'circle') return [{ id: c.id, type: 'circle_diameter', c_id: a.id, diameter: c.value ?? 0 }];
       if (a.kind === 'arc')    return [{ id: c.id, type: 'arc_diameter',    a_id: a.id, diameter: c.value ?? 0 }];
       return [];
+    }
+    case 'radial-distance': {
+      // Targets: [inner, outer] concentric circles/arcs. Drives
+      // outer.radius − inner.radius = value via PlaneGCS `difference`
+      // (param2 − param1 = difference). 'radius' is a valid geom param
+      // for both circles and arcs (geom_params.SketchGeometryProperty).
+      const inner = at(0), outer = at(1);
+      const ok = (e: SketchEntity | undefined) => !!e && (e.kind === 'circle' || e.kind === 'arc');
+      if (!ok(inner) || !ok(outer)) return [];
+      return [{
+        id: c.id, type: 'difference',
+        param1: { o_id: inner!.id, prop: 'radius' },
+        param2: { o_id: outer!.id, prop: 'radius' },
+        difference: c.value ?? 0,
+      }];
     }
     case 'angle': {
       // Targets: [lineA, lineB]. Drives the angle between two lines to
@@ -444,10 +465,18 @@ export interface SolveOptions {
    * constraints. Used during live drag so attached geometry doesn't
    * resize while the user is just moving a center. */
   pinAllRadii?: boolean;
+  /** Phase 2 (REQ 794): live 2D projections of referenced model edges, keyed
+   * by topology edgeId. When a sketch point's on-edge constraint names an
+   * edge present here, the point is constrained ON that edge line (1 DOF —
+   * slides) via synthetic fixed reference points + `point_on_line_ppp`,
+   * instead of being pinned. Vertex refs and edges absent here keep the v1
+   * pin behavior. */
+  externalEdges?: Map<string, [{ x: number; y: number }, { x: number; y: number }]>;
 }
 
 function isSolveOptions(x: unknown): x is SolveOptions {
-  return !!x && typeof x === 'object' && ('movablePoints' in (x as object) || 'pinAllRadii' in (x as object));
+  return !!x && typeof x === 'object'
+    && ('movablePoints' in (x as object) || 'pinAllRadii' in (x as object) || 'externalEdges' in (x as object));
 }
 
 export async function solveSketch(
@@ -506,6 +535,26 @@ export async function solveSketch(
     if (!extraFixed) extraFixed = new Set<string>();
     extraFixed.add(pointId);
   };
+  // Phase 2 (REQ 794): a single point riding a model edge is constrained ON
+  // the live-projected edge (1 DOF, slides) rather than pinned. Collect those
+  // points first so the pin pass below skips them; the point_on_line helper
+  // geometry is appended after buildPrimitives.
+  interface EdgeRidePoint { pointId: string; cid: string; line: [{ x: number; y: number }, { x: number; y: number }]; }
+  const edgeRidePoints: EdgeRidePoint[] = [];
+  for (const c of state.constraints) {
+    if (c.type !== 'on-edge' || !c.externalRef) continue;
+    // Local model edge → key by topology edgeId; cross-part (another
+    // component, in-context) → key by the ref's stable id. Either way the
+    // live 2D projection is supplied in opts.externalEdges.
+    const key = onEdgeLookupKey(c.externalRef);
+    const line = key ? opts.externalEdges?.get(key) : undefined;
+    if (!line) continue;
+    for (const t of c.targets) {
+      const e = entityByIdSolver.get(t.entityId);
+      if (e && e.kind === 'point') edgeRidePoints.push({ pointId: e.id, cid: c.id, line });
+    }
+  }
+  const ridePointIds = new Set(edgeRidePoints.map(r => r.pointId));
   for (const c of state.constraints) {
     if (c.type !== 'on-edge') continue;
     for (const t of c.targets) {
@@ -514,11 +563,22 @@ export async function solveSketch(
       if (e.kind === 'line') { pinPoint(e.startId); pinPoint(e.endId); }
       else if (e.kind === 'circle') { pinPoint(e.centerId); }
       else if (e.kind === 'arc') { pinPoint(e.centerId); pinPoint(e.startId); pinPoint(e.endId); }
-      else if (e.kind === 'point') { pinPoint(e.id); }
+      else if (e.kind === 'point') { if (!ridePointIds.has(e.id)) pinPoint(e.id); }
     }
   }
 
   const { primitives } = buildPrimitives(state, extraFixed, opts.pinAllRadii ?? false);
+  // Synthetic point-on-edge geometry: two fixed reference points at the
+  // projected edge endpoints + a point_on_line_ppp tying the sketch point to
+  // that line. These ids never collide with entity ids and readBack ignores
+  // them (it only reads entities), so no visible geometry is created.
+  for (const r of edgeRidePoints) {
+    const a = `_extrefA_${r.cid}`;
+    const b = `_extrefB_${r.cid}`;
+    primitives.push({ id: a, type: 'point', x: r.line[0].x, y: r.line[0].y, fixed: true });
+    primitives.push({ id: b, type: 'point', x: r.line[1].x, y: r.line[1].y, fixed: true });
+    primitives.push({ id: `_extrefC_${r.cid}`, type: 'point_on_line_ppp', p_id: r.pointId, lp1_id: a, lp2_id: b });
+  }
   try {
     wrapper.push_primitives_and_params(primitives);
   } catch (e) {
@@ -554,13 +614,14 @@ export async function solveSketch(
  */
 export async function solveSketchAfterAdd(
   state: SketchState, newConstraintId: string,
+  externalEdges?: SolveOptions['externalEdges'],
 ): Promise<SolveResult> {
   const newC = state.constraints.find(c => c.id === newConstraintId);
-  if (!newC) return solveSketch(state);
+  if (!newC) return solveSketch(state, { externalEdges });
   const movable = movablePointsForNewConstraint(state, newC);
-  const first = await solveSketch(state, { movablePoints: movable });
+  const first = await solveSketch(state, { movablePoints: movable, externalEdges });
   if (first.status === 'ok') return first;
-  return solveSketch(state);
+  return solveSketch(state, { externalEdges });
 }
 
 /**

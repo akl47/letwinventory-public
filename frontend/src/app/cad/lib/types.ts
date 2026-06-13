@@ -230,6 +230,7 @@ export type ConstraintType =
   | 'point-line-distance'    // dimensional — driven perpendicular distance from point to line
   | 'arc-length'             // dimensional — driven arc length
   | 'chord-distance'         // dimensional — driven straight-line distance between an arc's endpoints
+  | 'radial-distance'        // dimensional — driven radial gap between two concentric circles/arcs (r_outer − r_inner). targets [inner, outer]
   // `on-edge` is the SolidWorks "Convert Entities" link constraint — it
   // pins a sketch entity (line / arc / circle) onto the projection of a
   // 3D body edge identified by `externalRef`. The entity itself is a
@@ -252,10 +253,14 @@ export type ConstraintType =
 export type ExternalRef =
   | {
       scope?: 'local';
-      /** Feature whose featureId-namespaced topology owns the source edge. */
+      /** Feature whose featureId-namespaced topology owns the source edge/vertex. */
       featureId: string;
-      /** Topology edge id (kernel-assigned, namespaced by body). */
-      edgeId: string;
+      /** Topology edge id (kernel-assigned, namespaced by body). Present for an
+       * edge reference (Convert Entities, or a sketch point riding the edge). */
+      edgeId?: string;
+      /** Topology vertex id. Present for a vertex reference — a single sketch
+       * point pinned to the projection of a model vertex (no edge involved). */
+      vertexId?: string;
     }
   | {
       scope: 'cross-part';
@@ -268,12 +273,13 @@ export type ExternalRef =
       /** The source Part's id (resolver convenience + impact analysis). */
       sourcePartId: number;
       /** The geometry on the source part being projected. */
-      sourceGeomRef: { featureId: string; edgeId?: string; faceId?: string };
+      sourceGeomRef: { featureId: string; edgeId?: string; faceId?: string; vertexId?: string };
       /** Fallback geometry (in the SOURCE part's local frame) used to
        * re-resolve `sourceGeomRef` when the source topology renumbers. */
       fallback?:
         | { kind: 'edge'; start: [number, number, number]; end: [number, number, number] }
-        | { kind: 'face'; centroid: [number, number, number]; normal: [number, number, number]; surfaceKind: string };
+        | { kind: 'face'; centroid: [number, number, number]; normal: [number, number, number]; surfaceKind: string }
+        | { kind: 'vertex'; position: [number, number, number] };
       /** The source part's commit, pinned at the dependent part's check-in so
        * historical/released revisions reproduce exactly. Null in the working copy. */
       pinnedSourceCommit?: string | null;
@@ -287,6 +293,17 @@ export type ExternalRef =
         stale?: boolean;
       };
     };
+
+/** The key under which an `on-edge` constraint's referenced edge is found in
+ * an `externalEdges` map (solver / determinacy / projection): the topology
+ * edgeId for a local ref, or the synthetic stable id stored in
+ * `sourceGeomRef.edgeId` for a cross-part ref. Null when there's no edge ref
+ * (e.g. a vertex ref). Shared so solver and determinacy stay in lockstep. */
+export function onEdgeLookupKey(ref: ExternalRef | undefined): string | null {
+  if (!ref) return null;
+  if (ref.scope === 'cross-part') return ref.sourceGeomRef?.edgeId ?? null;
+  return ref.edgeId ?? null;
+}
 
 export interface SketchConstraint {
   id: string;
@@ -405,6 +422,22 @@ export interface ReferenceCandidate {
   kind: 'vertex' | 'edge';
   // For vertex: a 2D point. For edge: two 2D endpoints.
   points: Array<{ x: number; y: number }>;
+  /** Present when this candidate is ANOTHER component's edge, projected into
+   * the host part's sketch plane while editing in-context. Carries everything
+   * needed to build a cross-part on-edge ExternalRef (resolved by the backend
+   * via the fallback endpoint geometry) and to key the edge's live projection
+   * for the solver / determinacy. */
+  crossPart?: {
+    definingAssemblyId: number;
+    definingAssemblyRepoId: string;
+    sourceInstanceId: string;
+    sourcePartId: number;
+    /** Edge endpoints in the source part's local frame (resolver fallback). */
+    sourceStart: [number, number, number];
+    sourceEnd: [number, number, number];
+    /** Stable id stored on the ref + used as the externalEdges lookup key. */
+    stableId: string;
+  };
 }
 
 export interface Sketch {
@@ -491,7 +524,27 @@ export type ExtrudeEndCondition =
       offset: number;
       fallbackPlane?: { origin: [number, number, number]; normal: [number, number, number] };
     }
-  | { kind: 'upToBody'; featureId: string };
+  | {
+      /** Extrude up to a target BODY: the end face conforms to the body's
+       * real surface (curved/angled supported), via the kernel's
+       * prism-until-body op. The user picks any face of the target body in the
+       * viewer; `bodyId` is the owning body resolved at pick time (stable
+       * across regens and face re-tagging — a raw faceId is not, because a
+       * face this very feature contributes won't exist yet at its own regen).
+       * The backend matches `bodyId` against the live body list and hands that
+       * body's BREP to the kernel. `faceId` is kept only for the editor's
+       * re-pick indicator. */
+      kind: 'upToBody';
+      bodyId: string;
+      faceId?: string;
+    }
+  | {
+      /** Extrude up to the NEXT body encountered along the direction — no
+       * target pick. The backend hands the kernel every upstream body; the
+       * kernel subtracts them all and caps the result at whichever surface the
+       * profile reaches first. The end conforms to that real surface. */
+      kind: 'upToNext';
+    };
 
 /** SolidWorks-style start condition. Decides WHERE the extrude profile
  * begins along the plane normal. Missing == { kind: 'sketchPlane' } for
@@ -917,11 +970,21 @@ export interface MirrorFeatureFeature {
   planeSnapshot: Plane3;
   /** Default true — fuse the mirror copy with the source body. */
   mergeWithSource?: boolean;
+  /** What the operation repeats. 'bodies' (default, back-compat) reflects the
+   * most-recent body. 'features' re-applies each seed feature's add/cut at the
+   * mirrored location (SolidWorks-style). REQ 822. */
+  seedKind?: PatternSeedKind;
+  /** Seed feature ids when `seedKind === 'features'`. */
+  seedFeatureIds?: FeatureId[];
   visible?: boolean;
   suppressed?: boolean;
   name?: string;
   createdAt?: number;
 }
+
+/** What a pattern/mirror operation repeats — whole bodies, or the geometric
+ * effect of selected upstream features (SolidWorks-style). REQ 822. */
+export type PatternSeedKind = 'bodies' | 'features';
 
 /** One direction of a Linear Pattern. */
 export interface LinearPatternDirection {
@@ -942,6 +1005,9 @@ export interface LinearPatternFeature {
   /** Optional second direction. Omit for a 1D pattern. */
   direction2?: LinearPatternDirection;
   mergeWithSource?: boolean;
+  /** See MirrorFeatureFeature.seedKind. REQ 822. */
+  seedKind?: PatternSeedKind;
+  seedFeatureIds?: FeatureId[];
   visible?: boolean;
   suppressed?: boolean;
   name?: string;
@@ -963,6 +1029,9 @@ export interface CircularPatternFeature {
   angleDeg: number;
   flipped?: boolean;
   mergeWithSource?: boolean;
+  /** See MirrorFeatureFeature.seedKind. REQ 822. */
+  seedKind?: PatternSeedKind;
+  seedFeatureIds?: FeatureId[];
   visible?: boolean;
   suppressed?: boolean;
   name?: string;
@@ -1151,6 +1220,24 @@ export type Feature =
   | MirrorBodyFeature
   | MoveCopyBodyFeature;
 
+/** A named part configuration (SolidWorks/Onshape-style). Overrides global
+ * equation-variable values and per-feature suppression; the regen resolves
+ * equations with the active configuration's values applied. Stored on the
+ * FeatureTree doc so it rides VCS commits via the serializer's
+ * featureTreeMeta passthrough — no schema/migration needed. Value keys are
+ * equation-entry keys (today: global variable names; the same map accepts
+ * target keys like `feature.<id>.distance` if direct-dimension columns are
+ * added later). */
+export interface CadConfiguration {
+  id: string;
+  name: string;
+  /** Equation-entry overrides: key → literal numeric value. */
+  values?: Record<string, number>;
+  /** Per-feature suppression overrides: featureId → suppressed. Absent
+   * keys inherit the feature's own flag. */
+  suppressed?: Record<string, boolean>;
+}
+
 export interface FeatureTree {
   features: Feature[];
   nextFeatureSeq: number;
@@ -1159,6 +1246,11 @@ export interface FeatureTree {
    * are stored on the individual constraint. Defaults to 'mm' when unset
    * (legacy models). */
   defaultUnit?: 'mm' | 'um' | 'in';
+  /** Named configurations of this part. Absent/empty = single implicit
+   * Default (today's behavior). */
+  configurations?: CadConfiguration[];
+  /** Which configuration regen applies. Absent = base document (Default). */
+  activeConfigurationId?: string;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
