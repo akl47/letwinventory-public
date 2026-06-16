@@ -270,7 +270,7 @@ export function pickEntity(
   state: SketchState, p: Point2, tolerance: number,
   pointTolerance: number = tolerance,
 ): SketchEntity | null {
-  // Pass 1 — point preference within pointTolerance.
+  // Pass 1 — nearest point within pointTolerance.
   let bestPoint: SketchEntity | null = null;
   let bestPointDist = Infinity;
   for (const e of state.entities) {
@@ -279,17 +279,18 @@ export function pickEntity(
     if (d > pointTolerance) continue;
     if (d < bestPointDist) { bestPoint = e; bestPointDist = d; }
   }
-  if (bestPoint) return bestPoint;
 
-  // Pass 2 — nearest within tolerance, but RANK DOMINATES so a curve/line
-  // always wins over a text/picture it overlaps. Text/picture bounding boxes
-  // return distance 0 across their whole interior, so a distance-first rule
-  // would let them "absorb" every click and make the border construction lines
-  // (and centerline) unselectable. Distance only breaks ties within a rank.
+  // Pass 2 — nearest NON-point within tolerance, but RANK DOMINATES so a
+  // curve/line always wins over a text/picture it overlaps. Text/picture
+  // bounding boxes return distance 0 across their whole interior, so a
+  // distance-first rule would let them "absorb" every click and make the
+  // border construction lines (and centerline) unselectable. Distance only
+  // breaks ties within a rank.
   let best: SketchEntity | null = null;
   let bestDist = Infinity;
   let bestRank = Infinity;
   for (const e of state.entities) {
+    if (e.kind === 'point') continue;
     const d = distanceToEntity(state, e, p);
     if (d > tolerance) continue;
     const rank = PICK_RANK[e.kind];
@@ -298,6 +299,17 @@ export function pickEntity(
       bestDist = d;
       bestRank = rank;
     }
+  }
+
+  // Prefer the point only when it's competitive in distance with the nearest
+  // curve. A point gets a small reach bonus — endpoints are tiny targets and
+  // usually sit ON a curve, so the point tolerance is deliberately larger —
+  // but a point that's clearly FARTHER than the curve under the cursor no
+  // longer hijacks the pick (previously ANY in-tolerance point won outright,
+  // so a distant endpoint beat the arc/line the cursor was actually on).
+  if (bestPoint) {
+    const reachBonus = Math.max(0, pointTolerance - tolerance);
+    if (best === null || bestPointDist <= bestDist + reachBonus) return bestPoint;
   }
   return best;
 }

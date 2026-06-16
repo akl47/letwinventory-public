@@ -108,6 +108,21 @@ export function externalRefForCandidate(candidate: ReferenceCandidate): External
     : { scope: 'local', featureId, edgeId: parsed.topoId };
 }
 
+/** Projected 2D endpoints of every referenced model EDGE candidate, keyed by
+ * the same external-ref lookup key the solver / determinacy / dimension render
+ * consume (local edge → topoId, cross-part → stableId). */
+export function externalEdgeLinesFromCandidates(
+  candidates: ReferenceCandidate[],
+): Map<string, [{ x: number; y: number }, { x: number; y: number }]> {
+  const out = new Map<string, [{ x: number; y: number }, { x: number; y: number }]>();
+  for (const c of candidates) {
+    if (c.kind !== 'edge' || c.points.length < 2) continue;
+    const key = c.crossPart ? c.crossPart.stableId : parseCandidateId(c.id)?.topoId;
+    if (key) out.set(key, [c.points[0], c.points[1]]);
+  }
+  return out;
+}
+
 /** Closest point on segment [a,b] to p (clamped to the segment). */
 export function closestPointOnSegment(
   a: { x: number; y: number },

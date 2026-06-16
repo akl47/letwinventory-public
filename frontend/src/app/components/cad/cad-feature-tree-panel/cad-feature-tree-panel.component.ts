@@ -73,6 +73,8 @@ export interface TreeNode {
   datumId?: string;
   sketchId?: string;
   feature?: Feature;
+  /** Top-level createdAt (sketch rows) — used for drag-reorder hit-testing. */
+  createdAt?: number;
 }
 
 @Component({
@@ -91,7 +93,9 @@ export interface TreeNode {
         <li *ngFor="let n of nodes()"
             [attr.data-testid]="rowTestId(n)"
             [attr.data-feature-index]="n.featureIndex"
+            [attr.data-node-key]="n.key"
             class="row"
+            [class.dragging-sketch]="dragSketchId() !== null && n.sketchId === dragSketchId()"
             [class.depth-0]="n.depth === 0"
             [class.depth-1]="n.depth === 1"
             [class.selectable]="n.selectable"
@@ -101,7 +105,7 @@ export interface TreeNode {
             [class.rolled-back]="n.rolledBack"
             [class.suppressed]="n.suppressed"
             [class.rollback-bar]="n.kind === 'rollback-bar'"
-            [class.drag-target-above]="(dragTargetIndex() !== null && n.featureIndex === dragTargetIndex()) || (featureDropIndex() !== null && n.featureIndex === featureDropIndex())"
+            [class.drag-target-above]="(dragTargetIndex() !== null && n.featureIndex === dragTargetIndex()) || (dropBeforeKey() !== null && n.key === dropBeforeKey())"
             [class.dragging-feature]="dragFeatureIndex() !== null && n.featureIndex === dragFeatureIndex()"
             [class.selected]="isRowSelected(n)"
             (mousedown)="onRowMouseDown($event, n)"
@@ -119,7 +123,7 @@ export interface TreeNode {
                       [matTooltip]="featureErrors().get(n.feature.id) || ''"
                       [attr.data-testid]="featureErrorTestId(n)">error</mat-icon>
           </ng-container>
-          <ng-container *ngIf="n.kind === 'sketch' && n.sketchId && danglingSketchIds().has(n.sketchId)">
+          <ng-container *ngIf="n.kind === 'sketch' && n.sketchId && sketchHostMissing(n.sketchId)">
             <mat-icon class="dangling-indicator"
                       matTooltip="Reference face missing — this sketch's host face was deleted. Right-click → Change reference face."
                       [attr.data-testid]="'sketch-dangling-' + n.sketchId">link_off</mat-icon>
@@ -272,6 +276,16 @@ export interface TreeNode {
                       (click)="emitAction({ action: 'rename-sketch', sketchId: n.sketchId })">
                 <mat-icon>drive_file_rename_outline</mat-icon> Rename
               </button>
+              <button *ngIf="scope.count === 1"
+                      mat-menu-item data-testid="ctx-sketch-rollback-here"
+                      (click)="rollbackToSketch.emit(n.sketchId)">
+                <mat-icon>arrow_drop_down</mat-icon> Roll back to here
+              </button>
+              <button *ngIf="scope.count === 1 && rollbackBeforeIndex() !== null"
+                      mat-menu-item data-testid="ctx-sketch-rollback-forward"
+                      (click)="rollbackChanged.emit(null)">
+                <mat-icon>arrow_drop_up</mat-icon> Roll forward to end
+              </button>
               <button mat-menu-item data-testid="ctx-toggle-sketch-visibility"
                       (click)="emitAction({ action: 'toggle-sketch-visibility', sketchId: n.sketchId })">
                 <mat-icon>{{ scope.anyVisible ? 'visibility_off' : 'visibility' }}</mat-icon>
@@ -385,7 +399,7 @@ export interface TreeNode {
       box-shadow: inset 0 2px 0 0 #ffc107;
     }
     /* Feature being dragged to reorder — dimmed so the gold drop line reads. */
-    .row.dragging-feature { opacity: 0.45; background: rgba(255, 193, 7, 0.08); }
+    .row.dragging-feature, .row.dragging-sketch { opacity: 0.45; background: rgba(255, 193, 7, 0.08); }
     .row.rolled-back .label,
     .row.rolled-back .kind-icon {
       opacity: 0.4;
@@ -455,13 +469,23 @@ export class CadFeatureTreePanelComponent {
   /** Index of the feature the rollback bar sits BEFORE. null = no
    * rollback (bar at the end). Driven by the editor. */
   rollbackBeforeIndex = input<number | null>(null);
+  /** The createdAt the bar sits before — lets the bar render before a SKETCH
+   * (which has no feature index), treating sketches like features. null = no
+   * rollback. Editor derives it from the rollback anchor. */
+  rollbackBeforeCreatedAt = input<number | null>(null);
   /** User asked to roll back to before feature at this index. Editor
    * sets its own rollbackBeforeIndex in response. */
   rollbackChanged = output<number | null>();
+  /** User asked to roll back to before this sketch. */
+  rollbackToSketch = output<string>();
   /** Drag-reorder (feature 2): a feature row dragged to a new slot. `fromIndex`
    * and `toIndex` are array indices in featureTree.features; `toIndex` is the
-   * index to land BEFORE (features.length = move to the end). */
-  reorderFeature = output<{ fromIndex: number; toIndex: number }>();
+   * index to land BEFORE (features.length = move to the end). `createdAt` is the
+   * exact display position (so a feature can land between sketches). */
+  reorderFeature = output<{ fromIndex: number; toIndex: number; createdAt: number }>();
+  /** Drag-reorder a sketch row — sketches are ordered by createdAt, so we emit
+   * the new createdAt to stamp (midpoint of the drop neighbors). */
+  reorderSketch = output<{ sketchId: string; createdAt: number }>();
   // REQ 665 — Cosmetic threads group state.
   cosmeticThreadsCount = input<number>(0);
   cosmeticThreadsVisible = input<boolean>(true);
@@ -620,27 +644,33 @@ export class CadFeatureTreePanelComponent {
     }
     topLevel.sort((a, b) => a.createdAt - b.createdAt);
 
+    // Rollback bar sits before the first top-level row (feature OR sketch)
+    // whose createdAt reaches the bar threshold — so it can land before a
+    // sketch, treating sketches like features. The threshold is the editor's
+    // createdAt anchor; the feature regen cutoff (rollbackBeforeIndex) is the
+    // matching index.
+    const barCa = this.rollbackBeforeCreatedAt();
+    let barInserted = false;
+    const maybeBar = (itemCa: number) => {
+      if (barInserted || barCa === null || itemCa < barCa) return;
+      barInserted = true;
+      out.push({
+        key: '__rollback_bar__',
+        kind: 'rollback-bar',
+        label: 'Rolled back to here',
+        iconName: 'arrow_drop_down',
+        iconClass: 'rollback',
+        depth: 0,
+        expandable: false,
+        expanded: false,
+        selectable: false,
+      });
+    };
+
     for (const item of topLevel) {
+      maybeBar(item.createdAt);
       if (item.kind === 'feature') {
-        const idx = item.index;
-        // Rollback bar — sits BEFORE the feature at this index. Index
-        // is the feature's position in featureTree.features (not the
-        // display order), so the bar gates the regen pipeline the same
-        // way regardless of chronological reordering.
-        if (rollback !== null && idx === rollback) {
-          out.push({
-            key: '__rollback_bar__',
-            kind: 'rollback-bar',
-            label: 'Rolled back to here',
-            iconName: 'arrow_drop_down',
-            iconClass: 'rollback',
-            depth: 0,
-            expandable: false,
-            expanded: false,
-            selectable: false,
-          });
-        }
-        this._appendFeatureNodes(item.feature, idx, rollback, expanded, doc, sketchesUsed, out);
+        this._appendFeatureNodes(item.feature, item.index, rollback, expanded, doc, sketchesUsed, out);
       } else {
         const s = item.sketch;
         const defaultSketchLabel = `${s.id} — ${this.hostLabel(s.hostId)}`;
@@ -657,6 +687,9 @@ export class CadFeatureTreePanelComponent {
           visible: s.visible !== false,
           visibilityToggleable: true,
           sketchId: s.id,
+          createdAt: item.createdAt,
+          // Greyed below the bar, like features.
+          rolledBack: barCa !== null && item.createdAt >= barCa,
         });
       }
     }
@@ -1161,19 +1194,28 @@ export class CadFeatureTreePanelComponent {
   sketchHostLabel(sketchId: string): string {
     const sk = this.doc()?.sketches[sketchId];
     if (!sk || !sk.hostId) return '—';
-    const missing = this.danglingSketchIds().has(sketchId) ? ' (missing)' : '';
     const hostId = sk.hostId;
-    if (hostId.startsWith('datum:')) return hostId.substring('datum:'.length).replace(/_/g, ' ') + missing;
+    if (hostId.startsWith('datum:')) return hostId.substring('datum:'.length).replace(/_/g, ' ');
     if (hostId.startsWith('face:')) {
+      const missing = this.sketchHostMissing(sketchId) ? ' (missing)' : '';
       try {
         const o = JSON.parse(hostId.substring('face:'.length)) as { feature_id?: string; role?: string; sub_index?: number };
         const feat = (o.feature_id || '?').split('#')[0];
-        const role = o.role === 'cap_top' ? 'top' : o.role === 'cap_bottom' ? 'bottom' : (o.role || 'face');
+        const role = o.role === 'cap_top' || o.role === 'cap-top' ? 'top'
+          : o.role === 'cap_bottom' || o.role === 'cap-bottom' ? 'bottom'
+          : (o.role || 'face');
         const sub = o.role === 'side' && o.sub_index !== undefined ? ` #${o.sub_index}` : '';
         return `Face ${feat} ${role}${sub}${missing}`;
       } catch { return 'Face' + missing; }
     }
-    return hostId + missing;
+    return hostId;
+  }
+
+  /** A sketch's face host is "missing" — the host editor computes the
+   * authoritative set (kernel dangling + geometry feature-base check) and
+   * passes it via `danglingSketchIds`. */
+  sketchHostMissing(sketchId: string): boolean {
+    return this.danglingSketchIds().has(sketchId);
   }
 
   rowTestId(n: TreeNode): string {
@@ -1347,6 +1389,7 @@ export class CadFeatureTreePanelComponent {
   // select. Origin is pinned; the assembly (external-nodes) tree opts out.
   dragFeatureIndex = signal<number | null>(null);
   featureDropIndex = signal<number | null>(null);
+  private _featureDropCreatedAt = 0;
   private featureDragCandidate: { index: number; startY: number } | null = null;
   private featureDragMove?: (ev: MouseEvent) => void;
   private featureDragUp?: (ev: MouseEvent) => void;
@@ -1355,6 +1398,98 @@ export class CadFeatureTreePanelComponent {
   onRowMouseDown(ev: MouseEvent, n: TreeNode): void {
     if (n.kind === 'rollback-bar') { this.onRollbackDragStart(ev); return; }
     if (n.kind === 'feature') this.onFeatureDragStart(ev, n);
+    else if (n.kind === 'sketch' && n.sketchId && n.depth === 0) this.onSketchDragStart(ev, n);
+  }
+
+  // Drag-reorder a top-level sketch row. Sketches are ordered by createdAt, so
+  // a drop computes a target createdAt (midpoint of the neighbouring rows) and
+  // the host re-stamps it. dragSketchId = the row being dragged; dropBeforeKey
+  // = the row any drag would land before (shared with the feature drag).
+  dragSketchId = signal<string | null>(null);
+  dropBeforeKey = signal<string | null>(null);
+  private sketchDragCandidate: { sketchId: string; startY: number } | null = null;
+  private sketchDragMove?: (ev: MouseEvent) => void;
+  private sketchDragUp?: (ev: MouseEvent) => void;
+
+  private onSketchDragStart(ev: MouseEvent, n: TreeNode): void {
+    if (ev.button !== 0) return;
+    if (this.externalNodes() !== null) return;
+    const sketchId = n.sketchId!;
+    this.sketchDragCandidate = { sketchId, startY: ev.clientY };
+
+    this.sketchDragMove = (mv: MouseEvent) => {
+      const cand = this.sketchDragCandidate;
+      if (!cand) return;
+      if (this.dragSketchId() === null) {
+        if (Math.abs(mv.clientY - cand.startY) < 4) return;  // threshold → engage drag
+        this.dragSketchId.set(cand.sketchId);
+      }
+      this.dropBeforeKey.set(this._hitTestDrop(mv.clientY).beforeKey);
+    };
+    this.sketchDragUp = (up: MouseEvent) => {
+      const sid = this.dragSketchId();
+      const drop = this._hitTestDrop(up.clientY);
+      this._endSketchDrag();
+      if (sid === null) return;                  // never moved → fall through to click
+      this._suppressNextRowClick = true;
+      this.reorderSketch.emit({ sketchId: sid, createdAt: drop.createdAt });
+    };
+    document.addEventListener('mousemove', this.sketchDragMove);
+    document.addEventListener('mouseup', this.sketchDragUp);
+  }
+
+  private _endSketchDrag(): void {
+    if (this.sketchDragMove) document.removeEventListener('mousemove', this.sketchDragMove);
+    if (this.sketchDragUp) document.removeEventListener('mouseup', this.sketchDragUp);
+    this.sketchDragMove = undefined;
+    this.sketchDragUp = undefined;
+    this.sketchDragCandidate = null;
+    this.dragSketchId.set(null);
+    this.dropBeforeKey.set(null);
+  }
+
+  /** Cursor Y → unified drop target over ALL top-level rows (features +
+   * sketches), createdAt-sorted. Returns the row to land BEFORE (`beforeKey`,
+   * null = end), the `createdAt` to stamp a dragged sketch with (midpoint of
+   * the neighbours), and the `featureIndex` a dragged feature should land
+   * before (count of feature rows above the drop). The ORIGIN is never a valid
+   * "before" target, so nothing can be dropped before it. Each row's createdAt
+   * comes straight from the model (feature → data-feature-index, sketch →
+   * data-node-key → doc.sketches), so both kinds are valid drop neighbours. */
+  private _hitTestDrop(cursorY: number): { beforeKey: string | null; createdAt: number; featureIndex: number } {
+    const list = this.treeList?.nativeElement;
+    const features = this.features();
+    const doc = this.doc();
+    const rows: { el: HTMLLIElement; key: string | null; ca: number; isOrigin: boolean; isFeature: boolean }[] = [];
+    if (list) {
+      for (const el of Array.from(list.querySelectorAll<HTMLLIElement>('li.row.depth-0'))) {
+        const fi = el.dataset['featureIndex'];
+        let ca: number | null = null;
+        let isFeature = false;
+        let isOrigin = false;
+        if (fi !== undefined && fi !== '') {
+          const f = features[Number(fi)];
+          if (f) { ca = f.createdAt ?? (f.type === 'origin' ? 0 : Number(fi) + 1); isFeature = true; isOrigin = f.type === 'origin'; }
+        } else {
+          const key = el.dataset['nodeKey'];
+          const sk = key && doc ? doc.sketches[key] : null;
+          if (sk) ca = sk.createdAt ?? 0;
+        }
+        if (ca !== null) rows.push({ el, key: el.dataset['nodeKey'] ?? null, ca, isOrigin, isFeature });
+      }
+    }
+    let prevCa = 0;
+    let featuresBefore = 0;
+    for (const r of rows) {
+      const rect = r.el.getBoundingClientRect();
+      // The origin is pinned first: never a "drop before" target.
+      if (!r.isOrigin && cursorY < rect.top + rect.height / 2) {
+        return { beforeKey: r.key, createdAt: (prevCa + r.ca) / 2, featureIndex: featuresBefore };
+      }
+      prevCa = r.ca;
+      if (r.isFeature) featuresBefore++;
+    }
+    return { beforeKey: null, createdAt: prevCa + 1, featureIndex: featuresBefore };  // past the end
   }
 
   private onFeatureDragStart(ev: MouseEvent, n: TreeNode): void {
@@ -1371,18 +1506,21 @@ export class CadFeatureTreePanelComponent {
         if (Math.abs(mv.clientY - cand.startY) < 4) return;  // threshold → engage drag
         this.dragFeatureIndex.set(cand.index);
       }
-      this.featureDropIndex.set(this._hitTestFeatureDrop(mv.clientY));
+      // Unified hit-test so a feature can land between sketches too (not just
+      // between features), and never before the origin.
+      const h = this._hitTestDrop(mv.clientY);
+      this.dropBeforeKey.set(h.beforeKey);
+      this.featureDropIndex.set(h.featureIndex);
+      this._featureDropCreatedAt = h.createdAt;
     };
     this.featureDragUp = () => {
       const from = this.dragFeatureIndex();
       const to = this.featureDropIndex();
+      const ca = this._featureDropCreatedAt;
       this._endFeatureDrag();
       if (from === null) return;                       // never moved → fall through to click
       this._suppressNextRowClick = true;               // a real drag — don't also select
-      // No-op drops: same slot, or the gap immediately after the dragged row.
-      if (to !== null && to !== from && to !== from + 1) {
-        this.reorderFeature.emit({ fromIndex: from, toIndex: to });
-      }
+      if (to !== null) this.reorderFeature.emit({ fromIndex: from, toIndex: to, createdAt: ca });
     };
     document.addEventListener('mousemove', this.featureDragMove);
     document.addEventListener('mouseup', this.featureDragUp);
@@ -1396,26 +1534,7 @@ export class CadFeatureTreePanelComponent {
     this.featureDragCandidate = null;
     this.dragFeatureIndex.set(null);
     this.featureDropIndex.set(null);
-  }
-
-  /** Cursor Y → the featureIndex the dragged row should land BEFORE. Mirrors
-   * the rollback hit-test but returns a past-end sentinel (max featureIndex + 1)
-   * for "drop at the end" instead of null. */
-  private _hitTestFeatureDrop(cursorY: number): number | null {
-    const list = this.treeList?.nativeElement;
-    if (!list) return null;
-    const rows = Array.from(list.querySelectorAll<HTMLLIElement>('li.row'));
-    let maxIndex = 0;
-    for (const row of rows) {
-      if (!row.classList.contains('depth-0')) continue;
-      const fi = row.dataset['featureIndex'];
-      if (fi === undefined || fi === '') continue;
-      const idx = Number(fi);
-      maxIndex = Math.max(maxIndex, idx);
-      const r = row.getBoundingClientRect();
-      if (cursorY < r.top + r.height / 2) return idx;
-    }
-    return maxIndex + 1;  // past the last feature → end
+    this.dropBeforeKey.set(null);
   }
 
   onRowContextMenu(ev: MouseEvent, n: TreeNode) {

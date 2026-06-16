@@ -242,6 +242,24 @@ function evalAllResiduals(
       out.push(((Px - A.x) * dy - (Py - A.y) * dx) / len);
     }
   }
+  // Point → model-edge DISTANCE dims (externalRef): the point's perpendicular
+  // distance to the fixed projected edge line equals `value` — 1 residual,
+  // removing the point's perpendicular DOF (mirrors the solver's p2l_distance).
+  // Driven reference dims contribute none — they only measure.
+  for (const c of state.constraints) {
+    if (c.type !== 'point-line-distance' || !c.externalRef || c.driven || c.value === undefined) continue;
+    const line = edgeLineForConstraint(c, externalEdges);
+    if (!line) continue;
+    const [A, B] = line;
+    const dx = B.x - A.x, dy = B.y - A.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const e = entById.get(c.targets[0]?.entityId);
+    if (e?.kind !== 'point') continue;
+    const Px = paramX(state, entById, values, index, e.id);
+    const Py = paramY(state, entById, values, index, e.id);
+    const d = ((Px - A.x) * dy - (Py - A.y) * dx) / len;  // signed perpendicular distance
+    out.push(Math.abs(d) - c.value);
+  }
   // Intrinsic arc invariants (mirrors the solver's arc_rules primitive):
   // every arc's start and end MUST lie on the circle of radius R around
   // the arc's center. Without these residuals, the analyzer treats

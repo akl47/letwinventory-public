@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dimensionRenders, previewDimension, formatDimensionText } from './dimensions';
+import { dimensionRenders, previewDimension, previewPointToEdgeDimension, formatDimensionText } from './dimensions';
 import type {
   SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity, SketchConstraint,
 } from './types';
@@ -219,5 +219,57 @@ describe('point-line-distance render — non-parallel case (leader lines)', () =
     expect(wf0).toMatchObject({ x: 4, y: 0 });   // from the foot on the line
     expect(wf1.x).toBeCloseTo(12, 6);
     expect(wf1.y).toBeCloseTo(0, 6);
+  });
+});
+
+describe('point-to-edge dimension (externalRef → projected model edge)', () => {
+  // Horizontal projected edge along y=0; keyed by the externalRef edgeId
+  // (= onEdgeLookupKey for a local ref).
+  const edge: [{ x: number; y: number }, { x: number; y: number }] = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
+  const edges = () => new Map([['f1/e0', edge]]);
+  const pointToEdge = (driven = false): SketchConstraint => ({
+    id: 'cpe', type: 'point-line-distance', targets: [{ entityId: 'p' }],
+    value: 6, placement: { x: 12, y: 3 }, driven,
+    externalRef: { scope: 'local', featureId: 'f1', edgeId: 'f1/e0' },
+  });
+
+  it('renders the perpendicular distance from the sketch point to the projected edge', () => {
+    const p: PointEntity = { kind: 'point', id: 'p', x: 4, y: 6 };
+    const r = dimensionRenders(state(p, pointToEdge()), 'mm', edges());
+    expect(r.length).toBe(1);
+    expect(r[0].constraintId).toBe('cpe');
+    const [d0, d1] = r[0].dimensionLine!;
+    expect(Math.abs(d1.y - d0.y)).toBeCloseTo(6, 6); // perpendicular gap to y=0
+    expect(d0.x).toBeCloseTo(12, 6);                 // placed at the cursor offset
+  });
+
+  it('renders nothing when the edge is absent from the live candidate map', () => {
+    const p: PointEntity = { kind: 'point', id: 'p', x: 4, y: 6 };
+    expect(dimensionRenders(state(p, pointToEdge()), 'mm', new Map()).length).toBe(0);
+  });
+
+  it('wraps a driven (reference) point-to-edge dim in parentheses', () => {
+    const p: PointEntity = { kind: 'point', id: 'p', x: 4, y: 6 };
+    const r = dimensionRenders(state(p, pointToEdge(true)), 'mm', edges());
+    expect(r.length).toBe(1);
+    expect(r[0].text.startsWith('(')).toBe(true);
+  });
+});
+
+describe('previewPointToEdgeDimension', () => {
+  const edge: [{ x: number; y: number }, { x: number; y: number }] = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
+
+  it('previews the perpendicular distance, dim line following the placement cursor', () => {
+    const p: PointEntity = { kind: 'point', id: 'p', x: 4, y: 6 };
+    const r = previewPointToEdgeDimension(state(p), 'p', edge, { x: 12, y: 3 });
+    expect(r).not.toBeNull();
+    const [d0, d1] = r!.dimensionLine!;
+    expect(Math.abs(d1.y - d0.y)).toBeCloseTo(6, 6);
+    expect(d0.x).toBeCloseTo(12, 6);
+    expect(r!.text).toContain('6');
+  });
+
+  it('returns null when the point id is missing', () => {
+    expect(previewPointToEdgeDimension(state(), 'nope', edge, { x: 0, y: 0 })).toBeNull();
   });
 });

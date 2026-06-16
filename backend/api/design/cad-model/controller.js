@@ -260,10 +260,20 @@ async function releaseBranchToMain(model, userId, opts = {}) {
       throw new RestError('Branch is behind main — rebase before releasing', 409);
     }
   }
-  // Mint the next numeric Part revision; tag with its authoritative number.
+  // The revision this release mints = highest released TAG + 1. When the part's
+  // current (unreleased) revision already equals that target — the FIRST release
+  // of a freshly-created part, e.g. an internal part sitting at "01" — release
+  // it IN PLACE rather than cloning a new row, so the first release is "01" not
+  // "02". Otherwise clone the next numeric revision as usual.
   const part = await db.Part.findByPk(model.partID);
-  const newPart = await partRevisionService.createNewRevision(part, userId);
-  await model.update({ partID: newPart.id });
+  const target = cadVcsService.padNumeric((await cadVcsService.highestReleasedNumeric(model)) + 1);
+  let newPart;
+  if (part.revision === target && !part.revisionLocked) {
+    newPart = part;  // first release — tag the current revision in place
+  } else {
+    newPart = await partRevisionService.createNewRevision(part, userId);
+    await model.update({ partID: newPart.id });
+  }
   // Release onto main: freeze + commit the branch doc onto main + write-once tag.
   // Parent the release commit off the BRANCH head (not main's) so the branch's
   // intermediate commits become part of main's history — git-style, rather than

@@ -1,7 +1,7 @@
 import type {
   SketchState, SketchEntity, SketchConstraint, ConstraintType,
   ConstraintTarget, PointEntity, LineEntity, CircleEntity, ArcEntity,
-  EllipseEntity, EllipticalArcEntity, SplineEntity,
+  EllipseEntity, EllipticalArcEntity, SplineEntity, ExternalRef,
 } from './types';
 import { findEntity } from './types';
 
@@ -967,6 +967,8 @@ export function addConstraint(
   targets: Array<string | ConstraintTarget>,
   value?: number,
   placement?: { x: number; y: number },
+  driven?: boolean,
+  externalRef?: ExternalRef,
 ): { state: SketchState; constraint: SketchConstraint } {
   const constraint: SketchConstraint = {
     id: nextId('c'),
@@ -975,6 +977,8 @@ export function addConstraint(
   };
   if (value !== undefined) constraint.value = value;
   if (placement !== undefined) constraint.placement = placement;
+  if (driven) constraint.driven = true;
+  if (externalRef) constraint.externalRef = externalRef;
   return {
     state: { ...state, constraints: [...state.constraints, constraint] },
     constraint,

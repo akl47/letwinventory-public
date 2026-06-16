@@ -1,4 +1,4 @@
-import { Component, inject, signal, computed, effect, untracked, OnInit, OnDestroy, HostListener, viewChild, ViewChild } from '@angular/core';
+import { Component, inject, signal, computed, effect, untracked, OnInit, OnDestroy, HostListener, viewChild, ViewChild, ElementRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
@@ -539,6 +539,11 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [sketchId]="activeSketchId() ?? ''"
               [doc]="doc()"
               [candidates]="activeSketchCandidates()"
+              [debugVisible]="debugVisible()"
+              [showInfluence]="showInfluence()"
+              (toggleInfluence)="toggleInfluence()"
+              [frontendBuild]="buildMarker"
+              [kernelBuild]="kernelBuild()"
               [readonly]="readonly() || activeSketchId() === null"
               (sketchChanged)="onSketchChanged($event)"
               (exitSketch)="onExitSketch()"
@@ -746,14 +751,17 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           [selectedFeatures]="selectedFeatures()"
           [featureErrors]="mergedFeatureErrors()"
           [selectedSketches]="selectedSketches()"
-          [danglingSketchIds]="danglingSketchIds()"
+          [danglingSketchIds]="missingHostSketchIds()"
           [bodyList]="bodies()"
           [hiddenBodyIds]="hiddenBodies()"
           [rollbackBeforeIndex]="rollbackBeforeIndex()"
+          [rollbackBeforeCreatedAt]="rollbackBeforeCreatedAt()"
           [cosmeticThreadsCount]="cosmeticThreadsTotalCount()"
           [cosmeticThreadsVisible]="cosmeticThreadsVisible()"
           (rollbackChanged)="setRollbackBeforeIndex($event)"
+          (rollbackToSketch)="rollBackBeforeSketch($event)"
           (reorderFeature)="onReorderFeature($event)"
+          (reorderSketch)="onReorderSketch($event)"
           (sketchSelected)="onTreeSketchSelected($event)"
           (sketchSelect)="onTreeSketchSelect($event)"
           (visibilityToggled)="onDatumVisibilityToggled($event)"
@@ -765,51 +773,48 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           class="feature-tree">
         </app-cad-feature-tree-panel>
 
-        <!-- Sketch Plane panel — shows which datum plane / model face the
-             active (or lone tree-selected) sketch is hosted on, using the
-             standard selection component. The host face is highlighted in
-             the viewer; "(missing)" + amber flags a dangling reference. The
-             pick button / row-remove both start a re-pick of the reference. -->
-        <cad-selection-list
-          *ngIf="inspectedSketchId()"
-          label="Sketch Plane"
-          headerIcon="dashboard"
-          testid="sketch-plane"
-          [rows]="inspectedSketchPlaneRows()"
-          [showCount]="false"
-          [active]="mode() === 'pick-sketch-host'"
-          emptyHint="No reference — pick a plane or face"
-          (remove)="changeInspectedSketchHost()"
-          (clear)="changeInspectedSketchHost()"
-          class="sketch-plane-list"
-          [hidden]="sketchEditor.tool() === 'mirror' || sketchEditor.tool() === 'fillet' || sketchEditor.tool() === 'chamfer' || sketchEntityProps() !== null">
-          <button class="btn panel-flip"
-                  data-testid="sketch-plane-pick"
-                  [class.active]="mode() === 'pick-sketch-host'"
-                  (click)="changeInspectedSketchHost()">
-            <mat-icon>swap_horiz</mat-icon>
-            {{ mode() === 'pick-sketch-host' ? 'Click a plane or face in the viewer' : 'Change reference plane/face' }}
-          </button>
-        </cad-selection-list>
+        <!-- Sketch properties rail — ONE sidebar shown only while editing a
+             sketch (activeSketchId): the host plane/face selection at the top,
+             the constraint list below. The host face is highlighted in the
+             viewer; a dangling reference reads "Reference face missing". The
+             pick button / row-remove start a re-pick. Hidden while a
+             PropertyManager tool (Mirror/Fillet/Chamfer) or the entity-props
+             panel owns the column. -->
+        <div class="sketch-rail"
+             *ngIf="activeSketchId() as sid"
+             [hidden]="sketchEditor.tool() === 'mirror' || sketchEditor.tool() === 'fillet' || sketchEditor.tool() === 'chamfer' || sketchEntityProps() !== null">
+          <cad-selection-list
+            label="Sketch Plane"
+            headerIcon="dashboard"
+            testid="sketch-plane"
+            [rows]="inspectedSketchPlaneRows()"
+            [showCount]="false"
+            [active]="mode() === 'pick-sketch-host'"
+            emptyHint="No reference — pick a plane or face"
+            (remove)="changeInspectedSketchHost()"
+            (clear)="changeInspectedSketchHost()"
+            class="sketch-plane-list">
+            <button class="btn panel-flip"
+                    data-testid="sketch-plane-pick"
+                    [class.active]="mode() === 'pick-sketch-host'"
+                    (click)="changeInspectedSketchHost()">
+              <mat-icon>swap_horiz</mat-icon>
+              {{ mode() === 'pick-sketch-host' ? 'Click a plane or face in the viewer' : 'Change reference plane/face' }}
+            </button>
+          </cad-selection-list>
 
-        <!-- Constraint list panel — only shown while editing a sketch and
-             when no PropertyManager-style tool panel (Mirror, etc.) is
-             active. Tool panels swap into this column so the user has one
-             place to look for context. -->
-        <app-cad-constraint-list
-          *ngIf="activeSketchId() as sid; else nothing"
-          [constraints]="activeSketchConstraints()"
-          [entities]="activeSketchEntities()"
-          [defaultUnit]="defaultUnit()"
-          [selectedId]="selectedConstraintId()"
-          [selectedEntityIds]="sketchEditor.selected()"
-          (remove)="onRemoveConstraint(sid, $event)"
-          (edit)="onEditConstraint(sid, $event)"
-          (select)="onConstraintListSelect($event)"
-          class="constraint-list"
-          [hidden]="sketchEditor.tool() === 'mirror' || sketchEditor.tool() === 'fillet' || sketchEditor.tool() === 'chamfer' || sketchEntityProps() !== null">
-        </app-cad-constraint-list>
-        <ng-template #nothing></ng-template>
+          <app-cad-constraint-list
+            [constraints]="activeSketchConstraints()"
+            [entities]="activeSketchEntities()"
+            [defaultUnit]="defaultUnit()"
+            [selectedId]="selectedConstraintId()"
+            [selectedEntityIds]="sketchEditor.selected()"
+            (remove)="onRemoveConstraint(sid, $event)"
+            (edit)="onEditConstraint(sid, $event)"
+            (select)="onConstraintListSelect($event)"
+            class="constraint-list">
+          </app-cad-constraint-list>
+        </div>
 
         <!-- Assembly: insert-component picker (secondary sidebar, feature-panel UX) -->
         <ng-container *ngIf="assemblyMode() && asm.showPicker()">
@@ -3501,6 +3506,12 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [activeSketchId]="activeSketchId()"
               [sketchPreview]="sketchPreview()"
               [selectedSketchEntities]="sketchEditorSelection()"
+              [hoveredSketchEntityId]="sketchEditor.hoveredEntityId()"
+              [debugVisible]="debugVisible()"
+              [showInfluence]="showInfluence()"
+              [frontendBuild]="buildMarker"
+              [kernelBuild]="kernelBuild()"
+              [sketchCandidates]="activeSketchCandidates()"
               [mirrorAxisId]="sketchEditor.mirrorAxisId()"
               [activeSketchDof]="activeSketchDof()"
               [determinedEntities]="determinedEntities()"
@@ -3591,7 +3602,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <!-- Active-sketch banner with quick exit -->
             <div class="mode-prompt" *ngIf="activeSketchId() !== null" data-testid="sketch-mode-banner">
               <mat-icon>draw</mat-icon>
-              <span class="prompt-text">Sketch mode · plane: {{ activeSketchPlaneLabel() }}</span>
+              <span class="prompt-text">Sketch mode</span>
               <button class="btn" data-testid="exit-sketch" (click)="onExitSketch()">Exit sketch</button>
             </div>
 
@@ -3707,10 +3718,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                     <mat-icon>arrow_back</mat-icon> In-context · back to assembly
                   </button>
                 }
-                <span class="footer-mode" data-testid="build-marker" matTooltip="Frontend build marker (temporary)">{{ buildMarker }}</span>
-                @if (kernelBuild(); as kb) {
-                  <span class="footer-mode" data-testid="kernel-build" matTooltip="Running cad-kernel build (from ping)">kernel {{ kb }}</span>
-                }
               </div>
 
               <span class="footer-gap"></span>
@@ -3727,19 +3734,11 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
 
               <div class="footer-group footer-group-right">
                 <button class="icon-btn footer-icon-btn"
-                        data-testid="export-stl"
-                        *ngIf="totalVolumeMm3() > 0"
-                        matTooltip="Export STL (3D print / mesh, mm)"
-                        (click)="exportStl()">
-                  <mat-icon>download</mat-icon>
-                </button>
-                <button class="icon-btn footer-icon-btn"
-                        data-testid="export-step"
-                        *ngIf="totalVolumeMm3() > 0"
-                        [disabled]="stepExporting() || !stream.connected()"
-                        matTooltip="Export STEP (CAD interchange)"
-                        (click)="exportStep()">
-                  <mat-icon>{{ stepExporting() ? 'hourglass_empty' : 'category' }}</mat-icon>
+                        data-testid="debug-toggle"
+                        [class.active-pick]="debugVisible()"
+                        matTooltip="Toggle pick-debug overlay + build markers"
+                        (click)="toggleDebug()">
+                  <mat-icon>bug_report</mat-icon>
                 </button>
                 <button class="icon-btn footer-icon-btn"
                         data-testid="filter-face"
@@ -3923,7 +3922,11 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .tab-strip-top .tab.active { border-bottom-color: #42a5f5; }
     .editor-body { display: flex; flex: 1; min-height: 0; }
     .feature-tree { width: 240px; background: #25253a; border-right: 1px solid #444; }
-    .constraint-list { width: 220px; border-right: 1px solid #444; }
+    /* Sketch properties rail — one 220px column holding the Sketch Plane
+       selection on top and the constraint list filling the rest. */
+    .sketch-rail { width: 220px; border-right: 1px solid #444; background: #2a2a3e; display: flex; flex-direction: column; min-height: 0; }
+    .sketch-rail .sketch-plane-list { flex: 0 0 auto; padding: 6px 6px 0; border-bottom: 1px solid #444; }
+    .sketch-rail .constraint-list { flex: 1 1 auto; min-height: 0; width: auto; border-right: none; }
     .viewport-wrap { flex: 1; position: relative; overflow: hidden; }
 
     /* Tool panel — same column dimensions as .constraint-list so swapping
@@ -4205,9 +4208,25 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
   `],
 })
 export class CadEditorComponent implements OnInit, OnDestroy {
-  /** Temporary build marker shown in the footer so the user can confirm which
-   * build is loaded. Bump alongside the sketch-editor text-NN marker. */
-  readonly buildMarker = 'text-178';
+  /** Temporary build marker shown in the debug overlay so the user can confirm
+   * which build is loaded. Bump alongside the sketch-editor text-NN marker. */
+  readonly buildMarker = 'text-226';
+  /** Whether the pick-debug overlay (+ build markers) is shown. Toggled from
+   * the footer bug button; persisted so the choice survives reloads. */
+  readonly debugVisible = signal<boolean>(localStorage.getItem('cadDebugVisible') === '1');
+  toggleDebug(): void {
+    const next = !this.debugVisible();
+    this.debugVisible.set(next);
+    localStorage.setItem('cadDebugVisible', next ? '1' : '0');
+  }
+  /** Sub-toggle (in the debug window) for the pick "area of influence" overlay
+   * — sketch-element / projected-edge outlines + face fills. Persisted. */
+  readonly showInfluence = signal<boolean>(localStorage.getItem('cadShowInfluence') === '1');
+  toggleInfluence(): void {
+    const next = !this.showInfluence();
+    this.showInfluence.set(next);
+    localStorage.setItem('cadShowInfluence', next ? '1' : '0');
+  }
   /** Sketch ids whose host face the kernel reports as missing (deleted, not
    * re-tagged). Drives the warning indicator on sketch rows in the tree. */
   readonly danglingSketchIds = signal<Set<string>>(new Set());
@@ -4225,6 +4244,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   referenceOverlay = signal<InContextOverlay | null>(null);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
+  private hostEl = inject(ElementRef) as ElementRef<HTMLElement>;
   private cadApi = inject(CadModelService);
   private inventory = inject(InventoryService);
   private auth = inject(AuthService);
@@ -4638,6 +4658,22 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * the rendered model). null means the bar is at the end (no rollback).
    * Transient — not persisted with the model. */
   rollbackBeforeIndex = signal<number | null>(null);
+  /** When the bar was rolled back to a SKETCH (which has no feature-array
+   * index), this holds that sketch's createdAt so the tree can place the bar
+   * right before it. null for a feature rollback / no rollback. The feature
+   * regen cutoff (rollbackBeforeIndex) is derived from it. */
+  private _rollbackSketchAnchorCa = signal<number | null>(null);
+  /** The createdAt the rollback bar sits before — a sketch's when rolled back
+   * to a sketch, otherwise the gated feature's. Drives the tree's bar position
+   * and the rolled-back greying for both features and sketches. */
+  rollbackBeforeCreatedAt = computed<number | null>(() => {
+    const skCa = this._rollbackSketchAnchorCa();
+    if (skCa !== null) return skCa;
+    const idx = this.rollbackBeforeIndex();
+    if (idx === null) return null;
+    const f = this.featureTree().features[idx];
+    return f ? (f.createdAt ?? (idx + 1)) : null;
+  });
   /** Raw last-regen feature list, kept so dragging the rollback bar can
    * re-derive perBodyGeometry locally without re-running regen. */
   private latestRegenFeatures = signal<Array<{
@@ -5997,13 +6033,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private viewerRef = viewChild<CadViewerComponent>('viewer');
   @ViewChild('ctxAnchor', { read: MatMenuTrigger }) private ctxMenuTrigger?: MatMenuTrigger;
 
-  activeSketchPlaneLabel = computed(() => {
-    const sid = this.activeSketchId();
-    const sk = sid ? this.doc().sketches[sid] : null;
-    if (!sk) return '';
-    return sk.hostId.startsWith('datum:') ? sk.hostId.substring('datum:'.length).replace('_', ' ') : sk.hostId;
-  });
-
   // ── VCS working-copy state (Phase 1) ──────────────────────────────────────
   commits = signal<CadCommit[]>([]);
   branches = signal<CadBranch[]>([]);      // Phase 2 variant branches
@@ -6174,11 +6203,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       let changed = false;
       if (target !== null && saved === undefined) {
         this._savedRollbackForEdit = untracked(() => this.rollbackBeforeIndex());
+        this._savedRollbackSketchCaForEdit = untracked(() => this._rollbackSketchAnchorCa());
+        this._rollbackSketchAnchorCa.set(null); // temp edit rollback is feature-anchored
         this.rollbackBeforeIndex.set(target);
         changed = true;
       } else if (target === null && saved !== undefined) {
         this.rollbackBeforeIndex.set(saved);
+        this._rollbackSketchAnchorCa.set(this._savedRollbackSketchCaForEdit ?? null);
         this._savedRollbackForEdit = undefined;
+        this._savedRollbackSketchCaForEdit = undefined;
         changed = true;
       } else if (target !== null && saved !== undefined) {
         const cur = untracked(() => this.rollbackBeforeIndex());
@@ -6340,8 +6373,22 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     });
   }
 
+  /** The on-screen feature/tool sidebar's Cancel button, or null. Cancel
+   * buttons carry a `*-cancel` data-testid; we click the visible one. */
+  private _visibleSidebarCancelButton(): HTMLButtonElement | null {
+    const btns = this.hostEl.nativeElement.querySelectorAll<HTMLButtonElement>('.tool-panel button[data-testid$="-cancel"]');
+    for (const b of Array.from(btns)) if (b.offsetParent !== null && !b.disabled) return b;
+    return null;
+  }
+
   @HostListener('document:keydown.escape')
   onEscape() {
+    // A FEATURE sidebar (3D, not in a sketch) → Esc = its Cancel button. (In a
+    // sketch, the sketch editor owns Esc: cancel the tool, or exit when idle.)
+    if (this.activeSketchId() === null) {
+      const cancel = this._visibleSidebarCancelButton();
+      if (cancel) { cancel.click(); return; }
+    }
     if (this.mode() !== 'idle' && this.activeSketchId() === null) {
       const wasPickPlane = this.mode() === 'pick-plane';
       this._sketchHostTarget.set(null);  // cancel any in-progress re-host
@@ -6357,6 +6404,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     // Esc also clears any dimension selection in the active sketch.
     this.selectedConstraintId.set(null);
+    // …and the highlighted 3D face/datum pick (otherwise it stays blue in the
+    // viewer after Esc, since recolor only repaints when `selected` changes).
+    if (this.selected() !== null) this.selected.set(null);
     // …and the feature/assembly-tree selection (standard "Esc deselects").
     if (this.activeSketchId() === null) {
       if (this.assemblyMode()) {
@@ -6379,6 +6429,25 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   @HostListener('document:keydown', ['$event'])
   onDocumentKeydown(ev: KeyboardEvent) {
     const target = ev.target as HTMLElement | null;
+    // Enter = press the visible feature/tool sidebar's OK/Add button (when
+    // valid). Runs BEFORE the INPUT early-return so it works while a number
+    // field is focused; only multi-line fields keep Enter as newline. Reuses
+    // each sidebar's own `disabled` gate + `(click)` commit, so an invalid form
+    // does nothing.
+    if (ev.key === 'Enter' && !ev.repeat && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey
+        && target?.tagName !== 'TEXTAREA' && !target?.isContentEditable) {
+      const all = this.hostEl.nativeElement.querySelectorAll<HTMLButtonElement>('.tool-panel .btn-primary');
+      for (const btn of Array.from(all)) {
+        // Enabled (live `disabled` property) + on-screen (offsetParent !== null
+        // ⇒ its panel isn't display:none) — only the visible sidebar fires.
+        if (!btn.disabled && btn.offsetParent !== null) {
+          ev.preventDefault();
+          btn.click();
+          break;
+        }
+      }
+      return;
+    }
     if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable) return;
     const ctrl = ev.ctrlKey || ev.metaKey;
     if (ctrl && (ev.key === 'z' || ev.key === 'Z')) {
@@ -6610,6 +6679,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // REQ 626 — feature-tree row click. Shared multi-select policy with the
   // viewer click path.
   onFeatureTreeSelect(ev: FeatureSelectEvent) {
+    // Selecting in the tree supersedes a transient 3D face pick — clear it so a
+    // previously-clicked face doesn't stay highlighted blue in the viewer.
+    if (this.selected() !== null) this.selected.set(null);
     this.applyFeatureSelection(ev.featureId, ev.shiftKey, ev.ctrlKey);
   }
 
@@ -6672,19 +6744,41 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   onViewerSketchPointerDown(p: { x: number; y: number; tolerance: number; pointTolerance: number }) {
     this.sketchEditorRef()?.handleSketchPointerDown(p);
   }
-  onViewerSketchPointerMove(p: { x: number; y: number; pointTolerance?: number }) {
+  onViewerSketchPointerMove(p: { x: number; y: number; tolerance?: number; pointTolerance?: number; edgeTolerance?: number }) {
     const editor = this.sketchEditorRef();
     // No snap during a drag — would tug the dragged point onto every vertex.
     if (editor?.isDragging()) {
       this.sketchCursor.set(p);
       this.snapTargetPoint.set(null);
       editor.handleSketchPointerMove(p);
+      this._arbitrateSketchHover(editor);
       return;
     }
     const { snapped, target } = this.snapToPoint(p, p.pointTolerance);
     this.sketchCursor.set(snapped);
     this.snapTargetPoint.set(target);
-    editor?.handleSketchPointerMove(snapped);
+    editor?.handleSketchPointerMove({ ...snapped, tolerance: p.tolerance, pointTolerance: p.pointTolerance, edgeTolerance: p.edgeTolerance });
+    if (editor) this._arbitrateSketchHover(editor);
+  }
+
+  /** Same pointer event, after the editor computed its sketch hover: pick the
+   * single closest target so exactly one thing highlights.
+   *   - sketch entity wins → clear the viewer's edge + face-boundary hover
+   *     (only the cyan sketch entity shows).
+   *   - a projected edge wins → highlight that ONE edge (drops the face's whole
+   *     boundary loop) — this is what makes Smart Dimension show a single edge.
+   *   - neither → clear any stale edge but keep the face-boundary (cursor is
+   *     over a face interior). */
+  private _arbitrateSketchHover(editor: CadSketchEditorComponent): void {
+    const viewer = this.viewerRef();
+    if (!viewer) return;
+    if (editor.sketchHoverWins()) {
+      viewer.clearProjectedEdgeHover();
+    } else if (editor.hoveredProjectedEdgeId()) {
+      viewer.highlightSketchEdge(editor.hoveredProjectedEdgeId()!);
+    } else {
+      viewer.clearSketchEdgeOnly();
+    }
   }
   onViewerSketchPointerUp(p: { x: number; y: number }) {
     this.sketchEditorRef()?.handleSketchPointerUp(p);
@@ -7413,6 +7507,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const at = tree.features[cutoff].createdAt ?? (cutoff + 1);
     const stamped = { ...feature, createdAt: (before + at) / 2 } as import('../../../cad/lib/types').Feature;
     const features = [...tree.features.slice(0, cutoff), stamped, ...tree.features.slice(cutoff)];
+    this._rollbackSketchAnchorCa.set(null);    // bar now anchors to the new feature
     this.rollbackBeforeIndex.set(cutoff + 1);  // new feature is now active
     return { ...tree, features, nextFeatureSeq: seq + 1 };
   }
@@ -7512,6 +7607,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // a sketch clears any feature selection so the two selection modes don't
   // conflict; shift/ctrl extend the selection within sketches.
   onTreeSketchSelect(ev: SketchSelectEvent) {
+    // Selecting in the tree supersedes a transient 3D face pick — clear it.
+    if (this.selected() !== null) this.selected.set(null);
     const next = new Set(this.selectedSketches());
     if (ev.shiftKey || ev.ctrlKey) {
       if (next.has(ev.sketchId)) next.delete(ev.sketchId);
@@ -9471,44 +9568,86 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     return out;
   });
 
-  /** Sketches whose host plane/face we surface (highlight + the Sketch Plane
-   * panel): every sketch selected in the tree, plus the one being edited. */
+  /** Sketches whose host face we highlight in the viewer. We DON'T highlight
+   * while editing the sketch (the reference-face fill is distracting and the
+   * Sketch Plane panel already names it) — only when inspecting a sketch via
+   * the tree. */
   sketchesToInspect = computed<Set<string>>(() => {
-    const s = new Set(this.selectedSketches());
-    const active = this.activeSketchId();
-    if (active) s.add(active);
-    return s;
+    if (this.activeSketchId() !== null) return new Set<string>();
+    return new Set(this.selectedSketches());
   });
 
-  /** The single sketch to show in the Sketch Plane panel: the one being
-   * edited, else the lone tree-selected sketch (null when 0 or 2+). */
-  inspectedSketchId = computed<string | null>(() => {
-    const active = this.activeSketchId();
-    if (active) return active;
-    const sel = this.selectedSketches();
-    return sel.size === 1 ? [...sel][0] : null;
-  });
+  /** The sketch shown in the Sketch Plane panel — the one being edited. */
+  inspectedSketchId = computed<string | null>(() => this.activeSketchId());
 
-  /** One-row selection for the active/inspected sketch's host plane or face,
-   * fed to the standard `<cad-selection-list>`. Empty when no sketch is in
-   * focus. Appends "(missing)" when the host face is dangling. */
+  /** One-row selection for the edited sketch's host plane or face, fed to the
+   * standard `<cad-selection-list>`. Shows the face's feature label, and flags
+   * "(missing)" when the host no longer exists (its feature was deleted). */
   inspectedSketchPlaneRows = computed<SelectionRow[]>(() => {
     const sid = this.inspectedSketchId();
     if (!sid) return [];
     const sk = this.doc().sketches[sid];
     if (!sk || !sk.hostId) return [];
-    const isFace = sk.hostId.startsWith('face:');
-    const missing = this.danglingSketchIds().has(sid) ? ' (missing)' : '';
+    if (sk.hostId.startsWith('datum:')) {
+      return [{
+        id: sk.hostId,
+        label: sk.hostId.substring('datum:'.length).replace(/_/g, ' '),
+        icon: 'filter_none',
+        tooltip: 'Change reference plane',
+      }];
+    }
+    const missing = this.missingHostSketchIds().has(sid);
     return [{
       id: sk.hostId,
-      label: this.hostPlaneLabel(sk.hostId) + missing,
-      icon: isFace ? 'crop_square' : 'filter_none',
-      tooltip: missing ? 'Reference face missing — click to re-pick' : 'Change reference plane/face',
+      label: this.hostPlaneLabel(sk.hostId) + (missing ? ' (missing)' : ''),
+      icon: missing ? 'link_off' : 'crop_square',
+      tooltip: missing ? 'This face no longer exists — click to re-pick' : 'Change reference face',
     }];
   });
 
-  /** Human label for a sketch hostId (`datum:xy_plane` or `face:{json}`).
-   * Mirrors the feature-tree panel's `sketchHostLabel`. */
+  /** feature_id bases (the part before '#') present in the current geometry's
+   * faces. Read from perBodyGeometry — ALL bodies, including hidden ones — so
+   * hiding a body never makes its sketches look "missing". Geometry face ids
+   * are the same JSON structure as a sketch hostId, so feature_id reads off
+   * them directly. */
+  private presentFaceFeatureBases = computed<Set<string>>(() => {
+    const out = new Set<string>();
+    for (const slot of this.perBodyGeometry().values()) {
+      for (const f of slot.faces) {
+        const id = (f as { faceId?: string }).faceId;
+        if (!id || id[0] !== '{') continue;
+        try {
+          const o = JSON.parse(id) as { feature_id?: string };
+          if (o.feature_id) out.add(String(o.feature_id).split('#')[0]);
+        } catch { /* non-JSON (legacy) face id */ }
+      }
+    }
+    return out;
+  });
+
+  /** Sketch ids whose face host no longer exists: the kernel flagged it
+   * dangling, OR — the reliable signal for a deleted feature — no current
+   * geometry face comes from the host's feature (re-tagging keeps the feature
+   * base, deletion removes it). Only judged once a regen has produced geometry
+   * (geometry() non-null), so we never false-flag before the first build. */
+  missingHostSketchIds = computed<Set<string>>(() => {
+    const out = new Set(this.danglingSketchIds());
+    if (this.geometry() !== null) {
+      const present = this.presentFaceFeatureBases();
+      for (const [sid, sk] of Object.entries(this.doc().sketches)) {
+        const host = sk?.hostId;
+        if (!host || !host.startsWith('face:')) continue;
+        try {
+          const o = JSON.parse(host.substring('face:'.length)) as { feature_id?: string };
+          const base = String(o.feature_id || '').split('#')[0];
+          if (base && !present.has(base)) out.add(sid);
+        } catch { /* legacy host id */ }
+      }
+    }
+    return out;
+  });
+
+  /** Human label for a sketch hostId (`datum:xy_plane` or `face:{json}`). */
   private hostPlaneLabel(hostId: string): string {
     if (hostId.startsWith('datum:')) return hostId.substring('datum:'.length).replace(/_/g, ' ');
     if (hostId.startsWith('face:')) {
@@ -9525,8 +9664,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     return hostId;
   }
 
-  /** Begin re-picking the inspected sketch's reference plane/face from the
-   * Sketch Plane panel. Re-uses the same pick flow as the tree context menu. */
+  /** Begin re-picking the edited sketch's reference plane/face from the Sketch
+   * Plane panel. Re-uses the same pick flow as the tree context menu. */
   changeInspectedSketchHost() {
     const sid = this.inspectedSketchId();
     if (sid) this._beginChangeSketchHost(sid);
@@ -10886,31 +11025,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.projectEdgeToActiveSketch(sid, rec);
       return;
     }
-    // Select mode: a clicked model edge becomes a CONSTRAINT/DIMENSION target
-    // (SolidWorks-style). Reuse the entity already projected from this edge if
-    // one exists; otherwise convert it now (same machinery as Convert
-    // Entities). The entity joins the sketch selection additively, so e.g.
-    // drawn circle + projected circular edge → Concentric just works.
-    // Unconvertible edges (splines/ellipses) fall back to the legacy
-    // external-edge relation slot (point-on-edge Coincident only).
+    // Select mode: a clicked model edge is referenced for a point-on-edge
+    // relation, WITHOUT projecting it into the sketch as a new (converted) line
+    // — clicking an edge used to auto-convert it, which was unwanted. Use the
+    // Convert Entities tool explicitly to project an edge into the sketch.
     if (sid && this.sketchEditorRef()?.tool() === 'select') {
-      const sketch = this.doc().sketches[sid];
-      let existing: string | null = null;
-      for (const c of sketch?.state.constraints ?? []) {
-        if (c.type !== 'on-edge') continue;
-        const r = c.externalRef;
-        if (r && r.scope !== 'cross-part' && r.edgeId === rec.edgeId) {
-          existing = c.targets[0]?.entityId ?? null;
-          if (existing) break;
-        }
-      }
-      const entityId = existing ?? this.projectEdgeToActiveSketch(sid, rec, /* silent */ true);
-      if (entityId) {
-        this.sketchEditorRef()?.selectEntityExternal(entityId);
-        return;
-      }
-      // Non-convertible edge (spline/ellipse/etc.) — silently fall back to the
-      // legacy external-edge relation slot (point-on-edge Coincident).
       this.sketchEditorRef()?.toggleExternalEdge(rec.edgeId);
       return;
     }
@@ -12117,6 +12236,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * value while editing so the restore-on-exit effect can put it back.
    * `null` (no prior bar) is a meaningful saved value. */
   private _savedRollbackForEdit: number | null | undefined = undefined;
+  private _savedRollbackSketchCaForEdit: number | null | undefined = undefined;
 
   /** Computed: which feature index the rollback bar should sit at while
    * the user is editing something. Returns null when no edit sidebar
@@ -12628,6 +12748,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * filtering to features whose tree-index < bar position, and for each
    * body keeping only the LAST surviving feature's emission. */
   setRollbackBeforeIndex(idx: number | null): void {
+    this._rollbackSketchAnchorCa.set(null); // feature/forward rollback — not a sketch anchor
     this.rollbackBeforeIndex.set(idx);
     // Cache-derived rebuild paints the new state instantly (no kernel
     // round-trip). The regen kick that follows tells the backend the
@@ -12636,6 +12757,35 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // want to repeat just because we briefly scrubbed the bar past them.
     this._rederivePerBodyFromCache();
     this.regenerate('rollback');
+  }
+
+  /** Roll the bar back to BEFORE a sketch (sketches are first-class tree items,
+   * just like features). The feature regen cutoff = the number of features that
+   * sort before the sketch by createdAt; the sketch's createdAt is remembered
+   * so the bar renders right before it. */
+  rollBackBeforeSketch(sketchId: string): void {
+    const sk = this.doc().sketches[sketchId];
+    if (!sk) return;
+    const ca = sk.createdAt ?? 0;
+    let cutoff = 0;
+    for (const f of this.featureTree().features) {
+      if ((f.createdAt ?? 0) < ca) cutoff++;
+    }
+    this._rollbackSketchAnchorCa.set(ca);
+    this.rollbackBeforeIndex.set(cutoff);
+    this._rederivePerBodyFromCache();
+    this.regenerate('rollback');
+  }
+
+  /** Drag-reorder a sketch in the tree — sketches are positioned by createdAt,
+   * so we just re-stamp it to the dropped slot (no feature array involved). */
+  onReorderSketch(ev: { sketchId: string; createdAt: number }): void {
+    if (this.readonly()) return;
+    const doc = this.doc();
+    const sk = doc.sketches[ev.sketchId];
+    if (!sk) return;
+    this.doc.set({ ...doc, sketches: { ...doc.sketches, [ev.sketchId]: { ...sk, createdAt: ev.createdAt } } });
+    this.save();
   }
 
   /** Convenience helper — opens the menu's "Roll back to here" action. */
@@ -12656,7 +12806,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * createdAt to fit its new neighbors, keeping createdAt order == array order
    * (the display + rollback invariant). Origin stays pinned at index 0. The
    * rollback bar follows whichever feature it was sitting before. */
-  onReorderFeature(ev: { fromIndex: number; toIndex: number }): void {
+  onReorderFeature(ev: { fromIndex: number; toIndex: number; createdAt: number }): void {
     if (this.readonly()) return;
     const tree = this.featureTree();
     const feats = [...tree.features];
@@ -12664,7 +12814,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     let to = ev.toIndex;
     if (from <= 0 || from >= feats.length) return;          // can't move origin
     if (to < 1) to = 1;                                      // never before origin
-    if (to === from || to === from + 1) return;             // no-op
 
     // Remember the feature the rollback bar sits before, to re-anchor it.
     const cutoff = this.rollbackBeforeIndex();
@@ -12672,15 +12821,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
     const [moved] = feats.splice(from, 1);
     const target = to > from ? to - 1 : to;                  // index shifts after removal
-    feats.splice(target, 0, moved);
-
-    // Re-stamp createdAt to sit between the new neighbors so the display
-    // (createdAt-sorted) matches the new array order.
-    const beforeCa = target > 0 ? (feats[target - 1].createdAt ?? target) : 0;
-    const afterCa = target + 1 < feats.length ? (feats[target + 1].createdAt ?? (target + 2)) : beforeCa + 2;
-    feats[target] = { ...feats[target], createdAt: (beforeCa + afterCa) / 2 } as import('../../../cad/lib/types').Feature;
+    // Stamp the EXACT drop createdAt (the display position) so the feature can
+    // land between sketches, not just between features. The array splice keeps
+    // feature-array order == feature display order; the createdAt keeps the
+    // feature's slot among the interleaved sketches.
+    feats.splice(target, 0, { ...moved, createdAt: ev.createdAt } as import('../../../cad/lib/types').Feature);
 
     this.featureTree.set({ ...tree, features: feats });
+    this._rollbackSketchAnchorCa.set(null);                  // bar re-anchors to a feature
     // Re-anchor the rollback bar before the same feature it was gating.
     if (boundaryId) {
       const newIdx = feats.findIndex(f => f.id === boundaryId);

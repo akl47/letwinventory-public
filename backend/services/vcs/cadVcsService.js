@@ -44,17 +44,19 @@ async function repoForModel(model, db) {
 /** Zero-padded 2-digit numeric revision string (matches partRevisionService). */
 function padNumeric(n) { return String(n).padStart(2, '0'); }
 
-/** Highest numeric revision in the part lineage = the max numeric
- * `Parts.revision` for this part name. The Parts table is the single source of
- * truth for revision numbers — it advances ONLY on a dev release or a manual
- * "new revision" in the part editor. (Matches `nextNumericRevision` so the
- * displayed draft rev always equals what a release will actually mint.) 0 if
- * the part has no numeric revision yet. */
+/** Highest RELEASED numeric revision in the lineage = the max numeric revision
+ * among LOCKED `Parts` rows for this name. Releasing a revision locks its Part
+ * (`revisionLocked=true`) — for both CAD and assembly — so locked rows are the
+ * released ones. A freshly-created part carries an UNLOCKED initial revision
+ * ("01" for internal parts, "00" for external) which must NOT count, otherwise
+ * the first release skips a number (internal "01" → "02"). Kind-agnostic (no
+ * repo needed, unlike tags whose repoType differs for assemblies). 0 when
+ * nothing has been released yet. */
 async function highestReleasedNumeric(model, db) {
   const D = dbOf(db);
   const part = await D.Part.findByPk(model.partID);
   if (!part) return 0;
-  const rows = await D.Part.findAll({ where: { name: part.name }, attributes: ['revision'] });
+  const rows = await D.Part.findAll({ where: { name: part.name, revisionLocked: true }, attributes: ['revision'] });
   const nums = rows.map((p) => p.revision).filter((s) => /^\d+$/.test(s)).map((s) => parseInt(s, 10));
   return nums.length ? Math.max(...nums) : 0;
 }

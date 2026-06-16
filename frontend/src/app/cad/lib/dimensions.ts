@@ -2,8 +2,12 @@ import type {
   SketchState, SketchConstraint, PointEntity, LineEntity, CircleEntity, ArcEntity,
   ConstraintType, SketchEntity,
 } from './types';
-import { findPoint, findEntity } from './types';
+import { findPoint, findEntity, onEdgeLookupKey } from './types';
 import { formatWithUnit, unitSymbol, type Unit } from './units';
+
+/** Projected 2D endpoints of referenced model edges, keyed by the edge's
+ * external-ref lookup key (same map the solver/determinacy consume). */
+export type ExternalEdgeLines = Map<string, [{ x: number; y: number }, { x: number; y: number }]>;
 
 // Re-export so existing callers that import formatNumber from this module
 // don't have to chase down the new path.
@@ -120,7 +124,9 @@ export function formatDimensionText(
 
 void unitSymbol;  // kept for re-export consumers
 
-export function dimensionRenders(state: SketchState, defaultUnit: Unit = 'mm'): DimensionRender[] {
+export function dimensionRenders(
+  state: SketchState, defaultUnit: Unit = 'mm', externalEdges?: ExternalEdgeLines,
+): DimensionRender[] {
   const out: DimensionRender[] = [];
   for (const c of state.constraints) {
     if (!DIMENSIONAL_TYPES.has(c.type) || c.value === undefined) continue;
@@ -128,7 +134,7 @@ export function dimensionRenders(state: SketchState, defaultUnit: Unit = 'mm'): 
     // enough equations for full constraint) omit `placement`. Skip
     // them — only the chain's ONE visible dim renders.
     if (c.chainId && !c.placement) continue;
-    const r = renderConstraint(state, c, defaultUnit);
+    const r = renderConstraint(state, c, defaultUnit, externalEdges);
     if (r) out.push(r);
   }
   return out;
@@ -150,7 +156,21 @@ export function previewDimension(
   return computeRender(state, '__preview__', type, targetIds, value, placement, undefined, defaultUnit);
 }
 
-function renderConstraint(state: SketchState, c: SketchConstraint, defaultUnit: Unit): DimensionRender | null {
+function renderConstraint(
+  state: SketchState, c: SketchConstraint, defaultUnit: Unit, externalEdges?: ExternalEdgeLines,
+): DimensionRender | null {
+  // Point → model-edge distance: the "line" is a referenced model edge (no
+  // sketch entity). Draw to its projected segment.
+  if (c.type === 'point-line-distance' && c.externalRef) {
+    const key = onEdgeLookupKey(c.externalRef);
+    const line = key ? externalEdges?.get(key) : undefined;
+    const p = findPoint(state, c.targets[0]?.entityId);
+    if (!line || !p || c.value === undefined) return null;
+    const text = formatDimensionText(c.type, c.value, c.unit, defaultUnit);
+    const r = pointToSegmentDimRender(c.id, text, p, line[0], line[1], c.placement);
+    if (!r) return null;
+    return c.driven ? { ...r, text: `(${r.text})` } : r;
+  }
   const r = computeRender(
     state, c.id, c.type, c.targets.map(t => t.entityId), c.value!, c.placement, c.unit, defaultUnit,
   );
@@ -443,6 +463,55 @@ function angleRender(
  *      for line-to-line — dim line PERPENDICULAR to the two lines at
  *      the user's chosen "along" position, with extension lines running
  *      ALONG each source line out to the dim line. */
+/** Point → arbitrary 2D segment perpendicular-distance render. Same geometry as
+ * pointLineDistanceRender but takes the segment endpoints directly (used for a
+ * dimension to a referenced model edge, which has no sketch LineEntity). */
+/**
+ * Live PREVIEW render for a point/line → projected-edge dimension (between the
+ * operand picks and the placement click). `pointId` is the sketch point (or a
+ * line's start endpoint); `edge` is the projected edge's 2D segment; the value
+ * is the measured perpendicular distance. Mirrors the committed render so the
+ * preview matches the result.
+ */
+export function previewPointToEdgeDimension(
+  state: SketchState,
+  pointId: string,
+  edge: [{ x: number; y: number }, { x: number; y: number }],
+  placement: { x: number; y: number },
+  defaultUnit: Unit = 'mm',
+): DimensionRender | null {
+  const p = findPoint(state, pointId);
+  if (!p) return null;
+  const [a, b] = edge;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const value = Math.abs(((p.x - a.x) * dy - (p.y - a.y) * dx) / len);
+  const text = formatDimensionText('point-line-distance', value, undefined, defaultUnit);
+  return pointToSegmentDimRender('__preview__', text, p, a, b, placement);
+}
+
+function pointToSegmentDimRender(
+  constraintId: string, text: string,
+  p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number },
+  placement: { x: number; y: number } | undefined,
+): DimensionRender | null {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) return null;
+  const ux = dx / len, uy = dy / len;
+  const t = (p.x - a.x) * ux + (p.y - a.y) * uy;
+  const foot = { x: a.x + ux * t, y: a.y + uy * t };
+  const along = placement ? (placement.x - foot.x) * ux + (placement.y - foot.y) * uy : DEFAULT_OFFSET;
+  const pProj = { x: p.x + ux * along, y: p.y + uy * along };
+  const fProj = { x: foot.x + ux * along, y: foot.y + uy * along };
+  return {
+    constraintId, text,
+    labelAnchor: { x: (pProj.x + fProj.x) / 2, y: (pProj.y + fProj.y) / 2 },
+    dimensionLine: [pProj, fProj],
+    extensionLines: [[{ x: p.x, y: p.y }, pProj], [foot, fProj]],
+  };
+}
+
 function pointLineDistanceRender(
   constraintId: string, text: string,
   state: SketchState, p: PointEntity, l: LineEntity,

@@ -327,6 +327,10 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
     case 'point-line-distance': {
       // Targets: [point, line]. Driven perpendicular distance. PlaneGCS
       // takes signed distance; we feed the absolute value the user typed.
+      // EXTERNAL-EDGE variant (externalRef set, single point target): the
+      // "line" is a model edge with no sketch entity — built as synthetic
+      // fixed geometry in solve() (see edgeDistanceDims). Skip here.
+      if (c.externalRef) return [];
       const p = at(0), l = at(1);
       if (!p || !l || l.kind !== 'line') return [];
       return [{ id: c.id, type: 'p2l_distance', p_id: p.id, l_id: l.id, distance: c.value ?? 0 }];
@@ -554,6 +558,20 @@ export async function solveSketch(
       if (e && e.kind === 'point') edgeRidePoints.push({ pointId: e.id, cid: c.id, line });
     }
   }
+  // Point-to-model-edge DISTANCE dimensions (externalRef, single point target).
+  // Same idea as edgeRidePoints: the model edge has no sketch entity, so we
+  // build synthetic fixed reference points at its projected endpoints + a
+  // synthetic line + a p2l_distance from the sketch point to that line.
+  interface EdgeDistDim { pointId: string; cid: string; line: [{ x: number; y: number }, { x: number; y: number }]; distance: number; driven: boolean; }
+  const edgeDistanceDims: EdgeDistDim[] = [];
+  for (const c of state.constraints) {
+    if (c.type !== 'point-line-distance' || !c.externalRef) continue;
+    const key = onEdgeLookupKey(c.externalRef);
+    const line = key ? opts.externalEdges?.get(key) : undefined;
+    if (!line) continue;
+    const e = entityByIdSolver.get(c.targets[0]?.entityId);
+    if (e && e.kind === 'point') edgeDistanceDims.push({ pointId: e.id, cid: c.id, line, distance: c.value ?? 0, driven: !!c.driven });
+  }
   const ridePointIds = new Set(edgeRidePoints.map(r => r.pointId));
   for (const c of state.constraints) {
     if (c.type !== 'on-edge') continue;
@@ -578,6 +596,17 @@ export async function solveSketch(
     primitives.push({ id: a, type: 'point', x: r.line[0].x, y: r.line[0].y, fixed: true });
     primitives.push({ id: b, type: 'point', x: r.line[1].x, y: r.line[1].y, fixed: true });
     primitives.push({ id: `_extrefC_${r.cid}`, type: 'point_on_line_ppp', p_id: r.pointId, lp1_id: a, lp2_id: b });
+  }
+  // Point-to-edge distance dims: fixed endpoints + synthetic line + p2l_distance.
+  // Driven (reference) dims measure only — skip the constraint, keep the synthetic
+  // geometry out entirely so they never affect the solve.
+  for (const r of edgeDistanceDims) {
+    if (r.driven) continue;
+    const a = `_distA_${r.cid}`, b = `_distB_${r.cid}`, ln = `_distL_${r.cid}`;
+    primitives.push({ id: a, type: 'point', x: r.line[0].x, y: r.line[0].y, fixed: true });
+    primitives.push({ id: b, type: 'point', x: r.line[1].x, y: r.line[1].y, fixed: true });
+    primitives.push({ id: ln, type: 'line', p1_id: a, p2_id: b });
+    primitives.push({ id: `_distC_${r.cid}`, type: 'p2l_distance', p_id: r.pointId, l_id: ln, distance: r.distance });
   }
   try {
     wrapper.push_primitives_and_params(primitives);

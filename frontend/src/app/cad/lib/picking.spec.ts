@@ -114,6 +114,29 @@ describe('picking: parametric closest-point-on-entity (REQ 564)', () => {
       expect(picked?.id).toBe('p');
     });
 
+    it('a far in-tolerance point no longer hijacks a curve under the cursor', () => {
+      // Real app tolerances: curve 5, point 8 → point reach bonus = 3. Cursor is
+      // ON the line (distance 0); the point is 4 units away — within the larger
+      // point tolerance (8) but beyond the reach bonus. The line must win.
+      // (Regression: point-preference used to be an unconditional early return,
+      // so any in-tolerance point beat the curve the cursor was actually on.)
+      const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 0 };
+      const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: 0 };
+      const line: LineEntity = { kind: 'line', id: 'line', startId: 'a', endId: 'b' };
+      const far: PointEntity = { kind: 'point', id: 'far', x: 5, y: 4 };
+      expect(pickEntity(state(a, b, line, far), { x: 5, y: 0 }, 5, 8)?.id).toBe('line');
+    });
+
+    it('a point within the reach bonus still wins over a closer curve', () => {
+      const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 0 };
+      const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: 0 };
+      const line: LineEntity = { kind: 'line', id: 'line', startId: 'a', endId: 'b' };
+      const near: PointEntity = { kind: 'point', id: 'near', x: 5, y: 2 };
+      // Cursor ON the line (dist 0); the point is 2 units away ≤ reach bonus (3),
+      // so endpoint-snapping still feels right — the point wins.
+      expect(pickEntity(state(a, b, line, near), { x: 5, y: 0 }, 5, 8)?.id).toBe('near');
+    });
+
     it('picks ellipses near their boundary', () => {
       const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
       const m: PointEntity = { kind: 'point', id: 'm', x: 10, y: 0 };
