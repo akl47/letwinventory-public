@@ -1265,7 +1265,10 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
   // side is already solid contribute via Direction-2 with no standalone prism.
   // Single-region selections keep their original per-region scope (stable cache).
   let buildRegions = [];
-  if (regionIndices.length > 1) {
+  // Only MERGE profiles when the feature fuses (merge result ON). With merge
+  // OFF each region must seed its OWN body (one-body-per-region), so we keep
+  // them separate and let the per-region path below build a prism each.
+  if (regionIndices.length > 1 && feature.merge !== false) {
     const merged = extractMergedRegions(
       sketch.state || { entities: [], constraints: [] }, regionIndices, model.__textResolver,
     );

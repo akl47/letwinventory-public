@@ -10,7 +10,8 @@ const cadKernelClient = require('../../../services/cadKernelClient');
 const XY_PLANE = { origin: [0, 0, 0], xAxis: [1, 0, 0], yAxis: [0, 1, 0], normal: [0, 0, 1] };
 
 // Two concentric circles → region 0 = inner disc, region 1 = ring-with-hole.
-// Extruding BOTH with merge fuses them into a single solid cylinder.
+// These TOUCH (share the inner circle), so with merge ON the profiles merge
+// into one connected boundary → a single solid cylinder (one body).
 function concentricCirclesSketch(sketchId) {
   return {
     id: sketchId, hostId: 'datum:xy_plane', plane: XY_PLANE,
@@ -20,6 +21,24 @@ function concentricCirclesSketch(sketchId) {
         { kind: 'circle', id: 'c1', centerId: 'pc1', radius: 10 },
         { kind: 'point', id: 'pc2', x: 0, y: 0 },
         { kind: 'circle', id: 'c2', centerId: 'pc2', radius: 20 },
+      ],
+      constraints: [],
+    },
+    candidates: [],
+  };
+}
+
+// Two well-separated circles → two DISJOINT regions. With merge ON they build a
+// prism per group and fuse; a disjoint fuse keeps two solids → two bodies.
+function disjointCirclesSketch(sketchId) {
+  return {
+    id: sketchId, hostId: 'datum:xy_plane', plane: XY_PLANE,
+    state: {
+      entities: [
+        { kind: 'point', id: 'pa', x: 0, y: 0 },
+        { kind: 'circle', id: 'ca', centerId: 'pa', radius: 5 },
+        { kind: 'point', id: 'pb', x: 100, y: 0 },
+        { kind: 'circle', id: 'cb', centerId: 'pb', radius: 5 },
       ],
       constraints: [],
     },
@@ -64,7 +83,7 @@ function makeStub(fuseSolidCount) {
   return stub;
 }
 
-async function regenWith({ merge, fuseSolidCount }) {
+async function regenWith({ merge, fuseSolidCount, disjoint = false }) {
   const stub = makeStub(fuseSolidCount);
   jest.spyOn(cadKernelClient, 'getDefaultClient').mockReturnValue(stub);
   const auth = await authenticatedRequest();
@@ -79,7 +98,7 @@ async function regenWith({ merge, fuseSolidCount }) {
     ],
     nextFeatureSeq: 3,
   };
-  const doc = { sketches: { s1: concentricCirclesSketch('s1') }, nextSketchSeq: 2 };
+  const doc = { sketches: { s1: (disjoint ? disjointCirclesSketch : concentricCirclesSketch)('s1') }, nextSketchSeq: 2 };
   await auth.put(`/api/design/cad-model/${modelId}`).send({ featureTree: tree, sketchDoc: doc });
   const res = await auth.post(`/api/design/cad-model/${modelId}/regenerate`);
   expect(res.status).toBe(200);
@@ -96,7 +115,7 @@ describe('multi-region extrude seeding × Merge result', () => {
   });
 
   it('merge ON + genuinely disjoint regions (fuse yields 2 solids) → two bodies', async () => {
-    const body = await regenWith({ merge: true, fuseSolidCount: 2 });
+    const body = await regenWith({ merge: true, fuseSolidCount: 2, disjoint: true });
     expect(body.bodies.map(b => b.id).sort()).toEqual(['f2', 'f2#body1']);
   });
 
