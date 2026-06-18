@@ -104,7 +104,7 @@ pub const NAMING_SCHEMA_VERSION: u32 = 29;
 /// Human-readable kernel build marker, returned by the `ping` RPC and shown in
 /// the editor footer next to the frontend's `text-NN` marker. Bump on every
 /// kernel change so a rebuild can be confirmed from the UI.
-pub const KERNEL_BUILD: &str = "k-3";
+pub const KERNEL_BUILD: &str = "k-5";
 
 /// Default bind address. Override with `CAD_KERNEL_ADDR`. We default to
 /// `0.0.0.0` because the standard dev setup runs the Node backend in Docker,
@@ -127,6 +127,12 @@ async fn main() -> Result<()> {
     // least leave a diagnosable log line so we know which call to wrap
     // in try_construct_unique next.
     opencascade::install_terminate_handler();
+
+    // Watchdog: force a process restart if any handler hangs (an uncancellable
+    // OCCT infinite loop) past CAD_KERNEL_OP_TIMEOUT_MS, so one bad operation
+    // can't wedge the kernel forever — the supervisor restarts and the
+    // in-flight RPC fails with an error instead of hanging.
+    server::start_watchdog();
 
     let bind_addr = std::env::var("CAD_KERNEL_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
     info!(addr = %bind_addr, "starting cad-kernel");

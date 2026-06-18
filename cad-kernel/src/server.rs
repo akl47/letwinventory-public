@@ -23,6 +23,78 @@ use crate::protocol::{
 };
 use crate::REQUEST_COUNT;
 
+// ───────── Operation watchdog ───────────────────────────────────────────────
+//
+// A hung OCCT call (an infinite-loop boolean / mesh that never returns) can't
+// be cancelled from Rust, so it wedges the request loop forever — and Docker's
+// `restart: unless-stopped` only fires on process EXIT, which a hang never
+// reaches. This watchdog force-exits the process if any handler runs longer
+// than CAD_KERNEL_OP_TIMEOUT_MS, so the supervisor restarts a clean kernel and
+// the in-flight RPC fails with a disconnect (surfaced as an error by the
+// backend) instead of hanging the whole service indefinitely. Rust panics are
+// already caught in run_handler and C++ aborts already exit→restart; this
+// closes the remaining HANG gap.
+use std::sync::atomic::AtomicU64;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// 0 = idle, else the unix-millis deadline the in-flight handler must finish by.
+static OP_DEADLINE_MS: AtomicU64 = AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+fn op_timeout_ms() -> u64 {
+    std::env::var("CAD_KERNEL_OP_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(60_000)
+}
+
+/// Start the background watchdog thread. Call once at startup.
+pub fn start_watchdog() {
+    std::thread::Builder::new()
+        .name("op-watchdog".to_string())
+        .spawn(|| loop {
+            std::thread::sleep(Duration::from_millis(1000));
+            let deadline = OP_DEADLINE_MS.load(Ordering::Relaxed);
+            if deadline != 0 && now_ms() > deadline {
+                // eprintln (not tracing) so it flushes even if the async runtime
+                // is starved by the blocking call. Non-zero exit → Docker
+                // `restart: unless-stopped` brings up a fresh kernel.
+                eprintln!(
+                    "[watchdog] a kernel handler ran past {} ms with no result — \
+                     aborting process for supervisor restart",
+                    op_timeout_ms()
+                );
+                std::process::exit(13);
+            }
+        })
+        .expect("spawn op-watchdog thread");
+}
+
+/// RAII: arm the watchdog deadline for one handler call, clear it on drop.
+/// Assumes effectively-serial requests (the backend shares ONE connection);
+/// the CAS-clear avoids a finishing op clearing another's deadline if two ever
+/// overlap on separate connections.
+struct OpGuard {
+    deadline: u64,
+}
+impl OpGuard {
+    fn arm() -> Self {
+        let deadline = now_ms() + op_timeout_ms();
+        OP_DEADLINE_MS.store(deadline, Ordering::Relaxed);
+        OpGuard { deadline }
+    }
+}
+impl Drop for OpGuard {
+    fn drop(&mut self) {
+        let _ =
+            OP_DEADLINE_MS.compare_exchange(self.deadline, 0, Ordering::Relaxed, Ordering::Relaxed);
+    }
+}
+
 pub async fn serve(bind_addr: &str) -> Result<()> {
     let listener =
         TcpListener::bind(bind_addr).await.with_context(|| format!("bind {bind_addr}"))?;
@@ -101,7 +173,12 @@ async fn dispatch(line: &str) -> Option<String> {
         )));
     }
 
-    let result = run_handler(&req.method, req.params).await;
+    // Arm the watchdog for the duration of this handler so a hung OCCT call
+    // can't wedge the kernel forever (see start_watchdog).
+    let result = {
+        let _op_guard = OpGuard::arm();
+        run_handler(&req.method, req.params).await
+    };
 
     if is_notification {
         return None;

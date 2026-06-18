@@ -227,6 +227,14 @@ fn build_up_to_body(params: &BuildExtrudeParams) -> Result<BuildExtrudeResult> {
         }
     }
 
+    // Heal the up-to result before naming: merge coplanar / co-cylindrical
+    // faces and drop the redundant seam edges the through-all subtraction +
+    // Direction-2 union leave behind. The other result-producing ops
+    // (buildBoolean, buildToolPattern) already clean(); this path didn't, so
+    // its prism carried spurious seam + degenerate edges that ALSO replicated
+    // through feature patterns. clean() preserves geometry/extent, so the
+    // max_proj-based naming below stays valid.
+    let result = result.clean();
     let topology = extract_topology(&result);
     let plane_origin = dvec3(params.plane.origin[0], params.plane.origin[1], params.plane.origin[2]);
     // Naming references the original sketch-plane origin + a signed extent so
@@ -242,6 +250,16 @@ fn build_up_to_body(params: &BuildExtrudeParams) -> Result<BuildExtrudeResult> {
         Some(&topology),
     )?;
     let brep_bytes = serialize_brep(&result);
+    // Mirror the sibling result-producing ops (boolean/sweep/pattern): a
+    // degenerate up-to result can serialize to empty bytes, which must surface
+    // as an error rather than be stored/encoded as a "successful" empty BRep.
+    if brep_bytes.is_empty() {
+        return Err(anyhow!(
+            "Up to Body: result BRep serialization returned empty bytes — the \
+             capped solid is degenerate (the profile may not reach the target \
+             in this direction). Re-pick the target or drop this region."
+        ));
+    }
 
     Ok(BuildExtrudeResult {
         brep_bytes: BASE64.encode(&brep_bytes),
