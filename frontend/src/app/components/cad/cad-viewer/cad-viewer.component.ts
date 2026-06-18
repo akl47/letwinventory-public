@@ -69,7 +69,7 @@ export type SketchPreview =
   | { kind: 'circle'; center: { x: number; y: number }; radius: number }
   | { kind: 'arc'; center: { x: number; y: number }; start: { x: number; y: number }; end: { x: number; y: number }; radius: number; ccw: boolean }
   | { kind: 'point-marker'; x: number; y: number; style: 'cursor' | 'pending' }
-  | { kind: 'snap-indicator'; x: number; y: number; snapKind?: 'endpoint' | 'midpoint' | 'intersection' | 'quadrant' | 'on-edge' }
+  | { kind: 'snap-indicator'; x: number; y: number; snapKind?: 'endpoint' | 'midpoint' | 'intersection' | 'quadrant' | 'on-edge' | 'center' }
   // Edit-tool hover preview: shows what Trim/Extend would do under the
   // cursor without mutating state. `mode: 'remove'` renders solid red
   // (segment that would be cut away); `mode: 'add'` renders dashed red
@@ -241,6 +241,14 @@ const DIM_ARROW_WIDTH_FRAC = 1 / 180;      // dimension arrowhead half-width
                 (click)="setNav('zoom')"><mat-icon>zoom_in</mat-icon></button>
         <button type="button" class="vc-btn" title="Zoom to fit" aria-label="Zoom to fit" data-testid="zoom-to-fit"
                 (click)="zoomToFit()"><mat-icon>fit_screen</mat-icon></button>
+        <button type="button" class="vc-btn" [disabled]="!normalToPlane()" data-testid="normal-to-view"
+                title="Normal to selected face / plane" aria-label="Normal to selection"
+                (click)="onNormalToClick()">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="9" width="11" height="11" rx="1"/><path d="M14 10l7-7"/><path d="M16 3h5v5"/>
+          </svg>
+        </button>
         <span class="vc-sep"></span>
         <button type="button" class="vc-btn" title="Default view" aria-label="Default view"
                 (click)="applyDefaultView()">
@@ -285,6 +293,8 @@ const DIM_ARROW_WIDTH_FRAC = 1 / 180;      // dimension arrowhead half-width
               background: rgba(42,42,58,0.92); border: 1px solid #3a3a4a; border-radius: 4px; color: #cfd2e0; cursor: pointer; }
     .vc-btn:hover { background: #34344a; color: #fff; border-color: #4a4a5e; }
     .vc-btn.on { background: #1976d2; border-color: #1976d2; color: #fff; }
+    .vc-btn:disabled { opacity: .35; cursor: default; }
+    .vc-btn:disabled:hover { background: rgba(42,42,58,0.92); color: #cfd2e0; border-color: #3a3a4a; }
     .vc-btn mat-icon { font-size: 16px; width: 16px; height: 16px; line-height: 16px; }
     .vc-sep { width: 1px; height: 18px; background: #3a3a4a; margin: 0 2px; }
     /* Roll-arc arrows at the cube's top corners (cube: top 12px, 103px square,
@@ -352,6 +362,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   /** Section view: a clipping plane (model space). Null = no section. */
   sectionPlane = input<{ normal: [number, number, number]; point: [number, number, number] } | null>(null);
   selected = input<string | null>(null);
+  /** Plane the "Normal to" view button orients to — the selected flat face's
+   * or datum plane's plane, supplied by the editor. Null disables the button. */
+  normalToPlane = input<import('../../../cad/lib/types').Plane3 | null>(null);
   selectedFeatures = input<Set<string>>(new Set());
   /** Currently-picked face ids in an active picker (Measure /
    * Fillet / Chamfer). Renders these in a sticky picked-color so the
@@ -632,6 +645,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // (id, isStraight flag, endpoints, polyline length) so the editor can
   // surface "why is this edge there?" info without leaving the canvas.
   edgePickMode = input<boolean>(false);
+  /** When true, a click that lands on a projected model edge defers to the
+   * sketch click instead of picking the edge — set by the editor when a SKETCH
+   * entity is the current hover winner (Select mode), so clicking a sketch line
+   * drawn on an edge selects the LINE, matching what's highlighted. Convert
+   * Entities leaves this false (it always wants the edge). */
+  preferSketchOverEdgePick = input<boolean>(false);
   edgePicked = output<{ edgeId: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]]; polylineLength: number }>();
   /** Cross-part Convert Entities (in-context): the user picked ANOTHER
    * component's edge / face / vertex in the reference overlay. The editor
@@ -1095,6 +1114,25 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // and sketch-X to disagree on planes whose yAxis isn't world-Y (XZ, YZ,
   // tilted face hosts). The visible symptom is "horizontal" looking
   // vertical and vice versa when drawing on those planes.
+  /** Public: orient head-on to a specific plane right now. Used by the sketch
+   * "Flip normal" action so the head-on view follows the reversed normal
+   * immediately, without waiting for the sketchDoc input to propagate. Keeps
+   * the sketch-mode head-on lock (the caller is editing the active sketch). */
+  orientToPlaneNow(plane: import('../../../cad/lib/types').Plane3) {
+    if (this.scene) this.orientToPlane(plane);
+  }
+
+  /** Nav-group "Normal to" button. Orient the camera head-on to the selected
+   * face/plane (supplied by the editor), then release the head-on lock so the
+   * user can orbit away — a one-shot reorientation, not sketch-mode lock. */
+  onNormalToClick() {
+    const plane = this.normalToPlane();
+    if (!plane) return;
+    const prevLock = this.sketchPlaneNormal;
+    this.orientToPlane(plane);
+    this.sketchPlaneNormal = prevLock;
+  }
+
   private orientToPlane(plane: import('../../../cad/lib/types').Plane3) {
     const len = Math.hypot(plane.normal[0], plane.normal[1], plane.normal[2]) || 1;
     const ux = plane.normal[0] / len;
@@ -2237,10 +2275,20 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const normal = new THREE.Vector3(...sketch.plane.normal).normalize();
     const origin = new THREE.Vector3(...sketch.plane.origin);
-    const plane = new THREE.Plane(normal, -normal.dot(origin));
-    const target = new THREE.Vector3();
-    if (!this.raycaster.ray.intersectPlane(plane, target)) return null;
-    const offset = target.sub(origin);
+    const ray = this.raycaster.ray;
+    const denom = ray.direction.dot(normal);
+    // Only a ray exactly parallel to the plane (a truly edge-on view) cannot
+    // project. Otherwise intersect the INFINITE line and allow t<0: this is an
+    // orthographic camera with a symmetric -5000/+5000 clip range, so it
+    // renders the sketch on BOTH sides of the camera position. Zooming in can
+    // drift the camera onto the far side of the sketch plane (plane "behind"
+    // the ray origin) — the sketch is still visible and editable, so picking
+    // must still map. THREE.Ray.intersectPlane rejects t<0 (correct for a
+    // perspective pick, wrong for a parallel projection onto an unbounded
+    // plane); that rejection was the "cursor freezes when zoomed in" bug.
+    if (Math.abs(denom) < 1e-9) return null;
+    const t = origin.clone().sub(ray.origin).dot(normal) / denom;
+    const offset = ray.origin.clone().addScaledVector(ray.direction, t).sub(origin);
     const xAxis = new THREE.Vector3(...sketch.plane.xAxis);
     const yAxis = new THREE.Vector3(...sketch.plane.yAxis);
     return { x: offset.dot(xAxis), y: offset.dot(yAxis) };
@@ -2361,7 +2409,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         }
         const hits = this.raycaster.intersectObjects(candidates, false);
         this.raycaster.params.Line = { threshold: prevThreshold };
-        if (hits.length > 0) {
+        // Defer to the sketch click when a sketch entity is the hover winner —
+        // selecting a line drawn ON an edge must select the line, matching the
+        // highlight (Select mode). Convert leaves preferSketchOverEdgePick false.
+        if (hits.length > 0 && !this.preferSketchOverEdgePick()) {
           const ud = hits[0].object.userData as {
             edgeRecord?: { edgeId: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]]; polylineLength: number };
             overlayEdge?: OverlayEdge;
@@ -2648,9 +2699,32 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     return null;
   }
 
+  /** Raycast face meshes ignoring material side. Body faces render `FrontSide`
+   * (back-face culling, to stop interior walls bleeding through at
+   * silhouettes), but OCCT up-to / boolean results occasionally emit a
+   * reversed-orientation face — which the FrontSide raycaster then SKIPS, so a
+   * hover falls through to the face BEHIND the one the user can see. We flip
+   * each face material to DoubleSide for the (CPU) raycast only and restore it
+   * immediately, so the GPU never renders double-sided (no bleed-through). */
+  private intersectFacesBothSides(objects: THREE.Object3D[]): THREE.Intersection[] {
+    const saved: Array<[THREE.Material, THREE.Side]> = [];
+    for (const o of objects) {
+      const mat = (o as THREE.Mesh).material as THREE.Material | undefined;
+      if (mat && (mat as { side?: THREE.Side }).side !== undefined) {
+        saved.push([mat, mat.side]);
+        mat.side = THREE.DoubleSide;
+      }
+    }
+    try {
+      return this.raycaster.intersectObjects(objects, false);
+    } finally {
+      for (const [mat, side] of saved) mat.side = side;
+    }
+  }
+
   private pickEntity(): string | null {
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const faceHits = this.raycaster.intersectObjects(this.faceGroup.children, false);
+    const faceHits = this.intersectFacesBothSides(this.faceGroup.children);
     if (faceHits.length > 0) {
       const obj = faceHits[0].object;
       const id = (obj.userData as any).faceId;
@@ -2755,6 +2829,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // return) get rejected. Without this cap, hovering over the front
     // of a cube would sometimes highlight an edge on the far side.
     this.raycaster.setFromCamera(this.pointer, this.camera);
+    // Single-sided here ON PURPOSE: this hit feeds the depth cap and the
+    // sketch-mode face-hover (which highlights a model face's boundary-edge
+    // LOOP). Both want only VISIBLE front faces — a double-sided hit would
+    // catch back faces behind the sketch plane and light up loops everywhere.
+    // 3D-view face SELECTION still uses the double-sided pickEntity below to
+    // catch reversed-orientation faces.
     const faceHits = this.raycaster.intersectObjects(this.faceGroup.children, false);
     const frontFaceDist = faceHits.length > 0 ? faceHits[0].distance : Infinity;
     // Small additive bias so picks visually AT the front edge still
@@ -3452,6 +3532,28 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
             pts.push({ x: item.x + r * Math.cos(a), y: item.y + r * Math.sin(a) });
           }
           return this.makePreviewLine(pts.map(project), yellow, true);
+        }
+        if (kind === 'center') {
+          // Concentric arc-center inference (REQ 830): a ring with a crosshair
+          // through it — reads as "snap to this arc/circle center" (concentric /
+          // coincident-to-center), distinct from the plain on-edge ring.
+          const group = new THREE.Group();
+          const ring: Array<{ x: number; y: number }> = [];
+          const SEG = 16;
+          for (let i = 0; i <= SEG; i++) {
+            const a = (i / SEG) * Math.PI * 2;
+            ring.push({ x: item.x + r * Math.cos(a), y: item.y + r * Math.sin(a) });
+          }
+          group.add(this.makePreviewLine(ring.map(project), yellow, true));
+          group.add(this.makePreviewLine(
+            [project({ x: item.x - r * 1.4, y: item.y }), project({ x: item.x + r * 1.4, y: item.y })],
+            yellow, true,
+          ));
+          group.add(this.makePreviewLine(
+            [project({ x: item.x, y: item.y - r * 1.4 }), project({ x: item.x, y: item.y + r * 1.4 })],
+            yellow, true,
+          ));
+          return group;
         }
         // intersection — render as an X (two crossed line segments).
         const group = new THREE.Group();

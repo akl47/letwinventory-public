@@ -44,13 +44,13 @@ import { newFeatureId } from '../../../cad/lib/ids';
 import { emptyDocument, createSketch, updateSketchState, deleteSketch, setSketchVisibility, setSketchName, projectTopologyToCandidates } from '../../../cad/lib/document';
 import { sizeOptions as holeSizeOptionsFor, defaultSizeFor as holeDefaultSizeFor, holeSpec, type HoleStandard, type HoleSizeKey } from '../../../cad/lib/holeSpecs';
 import { removeConstraint, setConstraintValue, addPoint, addLine, addCircle, addCircleByPoint, addArc, addArcByPoints, updateTextEntity, updatePictureEntity, updateEquationCurveEntity, rotateTextBox, ORIGIN_POINT_ID } from '../../../cad/lib/store';
-import { solveSketchAfterAdd, solveSketch } from '../../../cad/lib/solver';
+import { solveSketch } from '../../../cad/lib/solver';
 import { parseUserValue, type Unit } from '../../../cad/lib/units';
 import { migrateSketchDocument, migrateFeatureTree } from '../../../cad/lib/migration';
 import { friendlyError } from '../../../cad/lib/errorMessages';
 import { planeForDatum, buildOriginDatums, computeDatumPlane, computeDatumAxis, computeDatumPoint, resolvePlaneRef } from '../../../cad/lib/datum';
 import { circularTransforms, linearTransforms } from '../../../cad/lib/pattern';
-import { inferLineEnd, inferHoverOnCurve } from '../../../cad/lib/inference';
+import { inferLineEnd, inferHoverOnCurve, inferAlignment } from '../../../cad/lib/inference';
 import { allCurveIntersections, angleInArcSweep } from '../../../cad/lib/geometry';
 import { findPoint as findPt } from '../../../cad/lib/types';
 import { buildCrossPartExternalRef, type CrossPartFallback } from '../../../cad/lib/crossPartRef';
@@ -68,7 +68,7 @@ import { buildInContextOverlay, type InContextOverlay, type OverlayEdge, type Ov
 /** Snap kinds. Drives the viewer's snap-indicator glyph: square for
  * endpoint (existing point), triangle for midpoint, X for intersection,
  * diamond for quadrant. */
-type SnapKind = 'endpoint' | 'midpoint' | 'intersection' | 'quadrant' | 'on-edge';
+type SnapKind = 'endpoint' | 'midpoint' | 'intersection' | 'quadrant' | 'on-edge' | 'center';
 import { extractRegions, tessellateProfileLoop, topLevelRegionIndices } from '../../../cad/lib/profile';
 import { makeVarResolver, type TextResolver } from '../../../cad/lib/textGlyphs';
 import { buildBinaryStl } from '../../../cad/lib/stlExport';
@@ -758,6 +758,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           [rollbackBeforeCreatedAt]="rollbackBeforeCreatedAt()"
           [cosmeticThreadsCount]="cosmeticThreadsTotalCount()"
           [cosmeticThreadsVisible]="cosmeticThreadsVisible()"
+          [debugVisible]="debugVisible()"
           (rollbackChanged)="setRollbackBeforeIndex($event)"
           (rollbackToSketch)="rollBackBeforeSketch($event)"
           (reorderFeature)="onReorderFeature($event)"
@@ -800,6 +801,13 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                     (click)="changeInspectedSketchHost()">
               <mat-icon>swap_horiz</mat-icon>
               {{ mode() === 'pick-sketch-host' ? 'Click a plane or face in the viewer' : 'Change reference plane/face' }}
+            </button>
+            <button class="btn panel-flip"
+                    data-testid="sketch-plane-flip"
+                    matTooltip="Reverse the sketch normal (flips the normal-to view side and default extrude direction)"
+                    (click)="flipInspectedSketchNormal()">
+              <mat-icon>swap_vert</mat-icon>
+              Flip normal
             </button>
           </cad-selection-list>
 
@@ -3493,6 +3501,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [geometry]="displayedGeometry()"
               [referenceGeometry]="referenceOverlay()"
               [selected]="selected()"
+              [normalToPlane]="normalToPlane()"
               [selectedFeatures]="viewerSelectedFeatures()"
               [sectionPlane]="assemblyMode() ? asm.sectionPlane() : null"
               [pickedFaceIds]="assemblyMode() ? asm.pickedFaceIds() : pickedFaceIdsForViewer()"
@@ -3537,6 +3546,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [axisCandidates]="axisCandidates3D()"
               [selectedAxisId]="revolveAxisLineId()"
               [edgePickMode]="edgePickActive()"
+              [preferSketchOverEdgePick]="sketchEntityClickWins()"
               [featurePreview]="featurePreview()"
               [edgeBlendPreview]="edgeBlendPreviewSig()"
               [datumPlanePreview]="datumPlanePreview()"
@@ -4210,7 +4220,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
 export class CadEditorComponent implements OnInit, OnDestroy {
   /** Temporary build marker shown in the debug overlay so the user can confirm
    * which build is loaded. Bump alongside the sketch-editor text-NN marker. */
-  readonly buildMarker = 'text-226';
+  readonly buildMarker = 'text-281';
   /** Whether the pick-debug overlay (+ build markers) is shown. Toggled from
    * the footer bug button; persisted so the choice survives reloads. */
   readonly debugVisible = signal<boolean>(localStorage.getItem('cadDebugVisible') === '1');
@@ -4408,6 +4418,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     return out;
   }
   selected = signal<string | null>(null);
+  /** Plane targeted by the viewer's "Normal to" view button: the selected flat
+   * face's or datum plane's plane, else null (button disabled). */
+  normalToPlane = computed<Plane3 | null>(() => {
+    const sel = this.selected();
+    if (!sel) return null;
+    if (sel.startsWith('datum:')) return this._resolveDatumPlane(sel);
+    return this.faceToPlane(sel);
+  });
   fullscreen = signal<boolean>(false);
   partID = signal<number | null>(null);
   geometry = signal<ModelGeometry | null>(null);
@@ -4649,6 +4667,27 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       ta.select();
       try { document.execCommand('copy'); showCopied(); }
       finally { document.body.removeChild(ta); }
+    }
+  }
+
+  /** Copy the currently-visible pick-debug overlay's text to the clipboard.
+   * Bound to Alt+C while the debug overlay is shown — saves manually
+   * transcribing the overlay's pick/hover diagnostics. Grabs whichever
+   * `.pick-debug` element is on screen (the sketch editor's in sketch mode, the
+   * viewer's in 3D). */
+  copyDebugOverlay(): void {
+    const nodes = this.hostEl.nativeElement.querySelectorAll<HTMLElement>('.pick-debug');
+    const el = Array.from(nodes).find(n => n.offsetParent !== null) ?? nodes[0] ?? null;
+    const text = el ? (el.innerText || el.textContent || '').replace(/[ \t]+\n/g, '\n').trim() : '';
+    if (!text) return;
+    const ok = () => this.errors.showError('Copied debug overlay to clipboard');
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(ok, () => this.errors.showError('Could not copy to clipboard (browser denied access).'));
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); ok(); } finally { document.body.removeChild(ta); }
     }
   }
 
@@ -5867,6 +5906,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // snap target was within range). snapTargetPoint is the un-snapped world
   // location of the snap target — used to render the snap-ring indicator.
   sketchCursor = signal<{ x: number; y: number } | null>(null);
+  // Zoom-adaptive point pick tolerance (sketch units, constant on-screen) from
+  // the viewer's last pointer event. The H/V alignment preview uses it so its
+  // influence band matches the on-screen point marker size (REQ 827).
+  sketchPointTolerance = signal<number>(8);
   snapTargetPoint = signal<{ x: number; y: number; kind: SnapKind } | null>(null);
   // REQ 631 — mirror the sketch-editor's selection set into a computed so the
   // 3D viewer can react to changes (sketch-editor.selected is a signal accessed
@@ -6448,6 +6491,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       }
       return;
     }
+    // Debug aid: Alt+C copies the visible pick-debug overlay's text to the
+    // clipboard (only while the debug overlay is shown). Placed before the
+    // INPUT early-return so it works even with a dimension field focused.
+    if (ev.altKey && (ev.key === 'c' || ev.key === 'C') && this.debugVisible()) {
+      ev.preventDefault();
+      this.copyDebugOverlay();
+      return;
+    }
     if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable) return;
     const ctrl = ev.ctrlKey || ev.metaKey;
     if (ctrl && (ev.key === 'z' || ev.key === 'Z')) {
@@ -6746,6 +6797,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
   onViewerSketchPointerMove(p: { x: number; y: number; tolerance?: number; pointTolerance?: number; edgeTolerance?: number }) {
     const editor = this.sketchEditorRef();
+    if (p.pointTolerance !== undefined) this.sketchPointTolerance.set(p.pointTolerance);
     // No snap during a drag — would tug the dragged point onto every vertex.
     if (editor?.isDragging()) {
       this.sketchCursor.set(p);
@@ -6754,7 +6806,20 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this._arbitrateSketchHover(editor);
       return;
     }
-    const { snapped, target } = this.snapToPoint(p, p.pointTolerance);
+    // Guard the snap pass: its point-placing-tool branches (midpoint / curve
+    // quadrants / projected-edge candidates) must never abort the whole
+    // pointer-move — a throw here would freeze the cursor, debug readout and
+    // hover (they update inside handleSketchPointerMove, which runs AFTER this).
+    // Degrade to the raw cursor and log so the root cause is visible.
+    let snapped: { x: number; y: number } = p;
+    let target: { x: number; y: number; kind: SnapKind } | null = null;
+    try {
+      const r = this.snapToPoint(p, p.pointTolerance);
+      snapped = r.snapped;
+      target = r.target;
+    } catch (err) {
+      console.error('[sketch-snap] snapToPoint threw — falling back to raw cursor', err);
+    }
     this.sketchCursor.set(snapped);
     this.snapTargetPoint.set(target);
     editor?.handleSketchPointerMove({ ...snapped, tolerance: p.tolerance, pointTolerance: p.pointTolerance, edgeTolerance: p.edgeTolerance });
@@ -6816,29 +6881,41 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     let bestRank = 0;  // 1 = virtual hit, 2 = real hit (real beats virtual)
     let bestDist = Infinity;
 
-    const consider = (q: { x: number; y: number }, kind: SnapKind, real: boolean) => {
-      const radius = real ? REAL_RADIUS : VIRTUAL_RADIUS;
+    // Three-tier priority: real points (endpoints / vertices / origin) beat
+    // feature points (midpoint / quadrant / intersection), which beat the
+    // generic on-edge slide point. So a line's midpoint that happens to sit ON
+    // a projected edge still wins the snap, instead of the edge's (closer)
+    // slide point silently swallowing it. Within a tier, the closer point wins.
+    const RANK: Record<SnapKind, number> = { endpoint: 3, center: 3, midpoint: 2, quadrant: 2, intersection: 2, 'on-edge': 1 };
+    const consider = (q: { x: number; y: number }, kind: SnapKind) => {
+      const rank = RANK[kind];
+      const radius = rank === 3 ? REAL_RADIUS : VIRTUAL_RADIUS;
       const d = Math.hypot(q.x - p.x, q.y - p.y);
       if (d > radius) return;
-      const rank = real ? 2 : 1;
-      if (rank < bestRank) return;                   // never overtake a real with a virtual
+      if (rank < bestRank) return;                   // never overtake a higher tier
       if (rank === bestRank && d >= bestDist) return;
       best = { x: q.x, y: q.y, kind };
       bestRank = rank;
       bestDist = d;
     };
 
-    consider({ x: 0, y: 0 }, 'endpoint', true);
+    consider({ x: 0, y: 0 }, 'endpoint');
     for (const e of sketch.state.entities) {
-      if (e.kind === 'point') consider({ x: e.x, y: e.y }, 'endpoint', true);
+      if (e.kind === 'point') consider({ x: e.x, y: e.y }, 'endpoint');
     }
-    // Midpoints of every non-construction line.
-    for (const e of sketch.state.entities) {
-      if (e.kind !== 'line' || e.construction) continue;
-      const a = findPt(sketch.state, e.startId);
-      const b = findPt(sketch.state, e.endId);
-      if (!a || !b) continue;
-      consider({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, 'midpoint', false);
+    // Midpoints of every non-construction line — only while a tool that PLACES
+    // a point is active (drawing + transform tools), since the midpoint snap
+    // exists to anchor a point being created/placed. In Select / pure-pick
+    // tools it's just noise (you don't pick a virtual midpoint), so it's
+    // suppressed there.
+    if (this.sketchEditorRef()?.placesPoint()) {
+      for (const e of sketch.state.entities) {
+        if (e.kind !== 'line' || e.construction) continue;
+        const a = findPt(sketch.state, e.startId);
+        const b = findPt(sketch.state, e.endId);
+        if (!a || !b) continue;
+        consider({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, 'midpoint');
+      }
     }
     // Curve quadrants — for arcs, drop quadrants outside the sweep.
     for (const e of sketch.state.entities) {
@@ -6860,15 +6937,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           const ea = Math.atan2(ep.y - c.y, ep.x - c.x);
           for (const q of quads) {
             const ang = Math.atan2(q.y - c.y, q.x - c.x);
-            if (angleInArcSweep(ang, sa, ea, e.ccw)) consider(q, 'quadrant', false);
+            if (angleInArcSweep(ang, sa, ea, e.ccw)) consider(q, 'quadrant');
           }
         } else {
-          for (const q of quads) consider(q, 'quadrant', false);
+          for (const q of quads) consider(q, 'quadrant');
         }
       }
     }
     // Curve-curve intersections (line-line / line-circle / line-arc / circle-circle …).
-    for (const xi of allCurveIntersections(sketch.state)) consider(xi, 'intersection', false);
+    for (const xi of allCurveIntersections(sketch.state)) consider(xi, 'intersection');
     // External reference candidates (REQ 792–794): projected model vertices
     // snap as real points; straight edges snap onto the closest point of their
     // projection. Only while a DRAWING tool is active — in Select mode the
@@ -6878,9 +6955,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       for (const cand of this.activeSketchCandidates()) {
         if (cand.kind === 'vertex') {
           const v = cand.points[0];
-          if (v) consider(v, 'endpoint', true);
-        } else if (cand.points.length >= 2) {
-          consider(closestPointOnSegment(cand.points[0], cand.points[1], p), 'on-edge', false);
+          if (v) consider(v, 'endpoint');
+        } else if (cand.kind === 'center') {
+          // Projected arc/circle center (REQ 830) — a strong point snap so the
+          // user gets the concentric/coincident-to-center inference dot.
+          const v = cand.points[0];
+          if (v) consider(v, 'center');
+        } else if (cand.points.length === 2) {
+          // Straight edges only — see nearestCandidateHit: snapping onto a
+          // curved edge's chord would create a wrong on-edge ref (REQ 830–832).
+          consider(closestPointOnSegment(cand.points[0], cand.points[1], p), 'on-edge');
         }
       }
     }
@@ -6893,6 +6977,22 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // REQ 629 — rubber-band drawing preview. Reads the live tool + draft state
   // from the sketch-editor and combines with the snapped cursor + snap target
   // to produce the overlay-renderable preview items.
+  /** Push the horizontal/vertical alignment inference hint (badge + dashed
+   * guide back to the reference) into the sketch overlay preview, mirroring
+   * what `_snapClickToPoint` will commit on click (REQ 827). No-op when
+   * nothing aligns to an armed reference (the origin, or a hovered point). */
+  private pushAlignmentPreview(items: SketchPreview[], state: SketchState, cursor: { x: number; y: number }): void {
+    const editor = this.sketchEditorRef();
+    if (!editor) return;
+    const align = inferAlignment(state, cursor, editor.armedRefs(), { tol: this.sketchPointTolerance() });
+    if (!align.refs.length) return;
+    items.push({ kind: 'snap-indicator', x: align.snapped.x, y: align.snapped.y });
+    for (let i = 0; i < align.hints.length; i++) {
+      items.push({ kind: 'inference-badge', x: align.snapped.x + 3, y: align.snapped.y + 3 + i * 2.5, label: align.hints[i] });
+    }
+    for (const g of align.guides) items.push({ kind: 'alignment-guide', start: g.from, end: g.to });
+  }
+
   sketchPreview = computed<SketchPreview[]>(() => {
     const editor = this.sketchEditorRef();
     const sid = this.activeSketchId();
@@ -7130,21 +7230,35 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       return items;
     }
 
-    if (tool === 'line') {
+    if (tool === 'point') {
+      // Standalone point tool: only the H/V alignment hint applies (a single
+      // point has no rubber-band geometry of its own).
+      this.pushAlignmentPreview(items, sketch.state, cursor);
+    } else if (tool === 'line') {
       const startId = editor.draftLineStart();
       if (startId) {
         const startEntity = sketch.state.entities.find(e => e.id === startId);
         if (startEntity?.kind === 'point') {
+          const startP = { x: startEntity.x, y: startEntity.y };
+          // Armed-ref H/V alignment (origin / hovered point) takes precedence
+          // over inferLineEnd's orient-to-start, mirroring the commit path in
+          // handleLineClick so the preview matches what gets created.
+          const align = inferAlignment(sketch.state, cursor, editor.armedRefs(), { tol: this.sketchPointTolerance() });
+          if (align.refs.length) {
+            items.push({ kind: 'line', start: startP, end: align.snapped });
+            this.pushAlignmentPreview(items, sketch.state, cursor);
+            return items;
+          }
           // Apply inference so the live preview shows the same horizontal/
           // vertical/on-line snap the user will get on click commit. Adds an
           // extension indicator (snap-indicator ring) at the snapped point
           // when an inference fired so the user can see why the line locked.
           const inf = inferLineEnd(
             sketch.state,
-            { x: startEntity.x, y: startEntity.y },
+            startP,
             cursor,
           );
-          items.push({ kind: 'line', start: { x: startEntity.x, y: startEntity.y }, end: inf.snapped });
+          items.push({ kind: 'line', start: startP, end: inf.snapped });
           // Stack every applicable relation as its own badge — a
           // hover on a vertical converted line produces ['on line',
           // 'vertical'], for example. Falls back to the single
@@ -7192,6 +7306,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
               label: hover.hints[i],
             });
           }
+        } else {
+          // Open space: H/V alignment hint to an armed reference.
+          this.pushAlignmentPreview(items, sketch.state, cursor);
         }
       }
     } else if (tool === 'circle') {
@@ -7219,6 +7336,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
               label: hover.hints[i],
             });
           }
+        } else {
+          // Open space: H/V alignment hint for the circle center.
+          this.pushAlignmentPreview(items, sketch.state, cursor);
         }
       }
     } else if (tool === 'arc') {
@@ -7244,6 +7364,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
               label: hover.hints[i],
             });
           }
+        } else {
+          // Open space: H/V alignment hint for the arc center.
+          this.pushAlignmentPreview(items, sketch.state, cursor);
         }
       }
       if (center && start) {
@@ -7626,13 +7749,22 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const newFeatures = tree.features.map(f => {
       if (f.type !== 'origin') return f;
       const vis = { ...defaultDatumVisibility(), ...(f.visibility ?? {}) };
-      vis[datumId] = !(vis[datumId] !== false);
+      if (datumId === 'origin-all') {
+        // Origin row toggle: if any datum is shown, hide them all; else show all.
+        const next = !Object.keys(vis).some(k => vis[k] !== false);
+        for (const k of Object.keys(vis)) vis[k] = next;
+      } else {
+        vis[datumId] = !(vis[datumId] !== false);
+      }
       return { ...f, visibility: vis };
     });
     this.featureTree.set({ ...tree, features: newFeatures });
     // Datum visibility is a view preference, not geometry — allow toggling even
-    // on a locked (not-checked-out) part; just don't persist when locked.
-    if (!this.readonly()) this.save();
+    // on a locked (not-checked-out) part; just don't persist when locked. Save
+    // with skipRegen: the datum overlay updates via the fast-path effect
+    // (REQ 700), so the save MUST NOT fire its end-of-save regenerate('save').
+    // Applies to the per-datum eyes and the Origin-row "toggle all" case.
+    if (!this.readonly()) this.save({ skipRegen: true });
   }
 
   /** Resolve a `datum:<id>` to its Plane3 — origin datum or a user datum plane
@@ -7658,6 +7790,33 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!sk) return;
     const candidates = projectTopologyToCandidates(plane, this.geometry()?.topology ?? null);
     this.doc.set({ ...doc, sketches: { ...doc.sketches, [sketchId]: { ...sk, hostId, plane, candidates } } });
+    this.save();
+  }
+
+  /** Flip the inspected sketch's plane normal (reference-selection action).
+   * Negates the normal AND the in-plane X axis so the basis stays right-handed
+   * (xAxis × yAxis === normal). Reverses the Normal-to view side and the
+   * default extrude direction out of the sketch. Geometry already drawn mirrors
+   * across the sketch's vertical (Y) axis, so this is cleanest on an empty
+   * sketch. Re-projects snapping candidates from the flipped plane. */
+  flipInspectedSketchNormal() {
+    const sid = this.inspectedSketchId();
+    if (!sid) return;
+    const doc = this.doc();
+    const sk = doc.sketches[sid];
+    if (!sk) return;
+    const p = sk.plane;
+    const flipped: Plane3 = {
+      origin: p.origin,
+      xAxis: [-p.xAxis[0], -p.xAxis[1], -p.xAxis[2]],
+      yAxis: p.yAxis,
+      normal: [-p.normal[0], -p.normal[1], -p.normal[2]],
+    };
+    const candidates = projectTopologyToCandidates(flipped, this.geometry()?.topology ?? null);
+    this.doc.set({ ...doc, sketches: { ...doc.sketches, [sid]: { ...sk, plane: flipped, candidates } } });
+    // Follow the reversed normal immediately (pass the plane directly so we
+    // don't wait for the sketchDoc input to propagate to the viewer).
+    if (this.activeSketchId() === sid) this.viewerRef()?.orientToPlaneNow(flipped);
     this.save();
   }
 
@@ -9605,47 +9764,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }];
   });
 
-  /** feature_id bases (the part before '#') present in the current geometry's
-   * faces. Read from perBodyGeometry — ALL bodies, including hidden ones — so
-   * hiding a body never makes its sketches look "missing". Geometry face ids
-   * are the same JSON structure as a sketch hostId, so feature_id reads off
-   * them directly. */
-  private presentFaceFeatureBases = computed<Set<string>>(() => {
-    const out = new Set<string>();
-    for (const slot of this.perBodyGeometry().values()) {
-      for (const f of slot.faces) {
-        const id = (f as { faceId?: string }).faceId;
-        if (!id || id[0] !== '{') continue;
-        try {
-          const o = JSON.parse(id) as { feature_id?: string };
-          if (o.feature_id) out.add(String(o.feature_id).split('#')[0]);
-        } catch { /* non-JSON (legacy) face id */ }
-      }
-    }
-    return out;
-  });
-
-  /** Sketch ids whose face host no longer exists: the kernel flagged it
-   * dangling, OR — the reliable signal for a deleted feature — no current
-   * geometry face comes from the host's feature (re-tagging keeps the feature
-   * base, deletion removes it). Only judged once a regen has produced geometry
-   * (geometry() non-null), so we never false-flag before the first build. */
-  missingHostSketchIds = computed<Set<string>>(() => {
-    const out = new Set(this.danglingSketchIds());
-    if (this.geometry() !== null) {
-      const present = this.presentFaceFeatureBases();
-      for (const [sid, sk] of Object.entries(this.doc().sketches)) {
-        const host = sk?.hostId;
-        if (!host || !host.startsWith('face:')) continue;
-        try {
-          const o = JSON.parse(host.substring('face:'.length)) as { feature_id?: string };
-          const base = String(o.feature_id || '').split('#')[0];
-          if (base && !present.has(base)) out.add(sid);
-        } catch { /* legacy host id */ }
-      }
-    }
-    return out;
-  });
+  /** Sketch ids whose face host no longer exists. This mirrors the backend's
+   * `danglingSketchIds` verbatim — the backend is authoritative because it
+   * resolves each host face against the CUMULATIVE faceMap (every face id ever
+   * produced during regen) plus a coincident-parallel geometric fallback.
+   *
+   * We do NOT re-derive this on the frontend from the final geometry. A
+   * tempting heuristic — "the host feature's id base must appear among the
+   * current faces" — is wrong: every fuse/merge re-tags the WHOLE resulting
+   * body's faces under the composing feature's id, so an earlier feature's
+   * base disappears from the final geometry even though its face physically
+   * persists. That heuristic false-flagged every face-hosted sketch on any
+   * multi-feature merged body. */
+  missingHostSketchIds = computed<Set<string>>(() => new Set(this.danglingSketchIds()));
 
   /** Human label for a sketch hostId (`datum:xy_plane` or `face:{json}`). */
   private hostPlaneLabel(hostId: string): string {
@@ -10998,6 +11129,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // see cad-viewer) so projected edges no longer shadow nearby sketch
     // points/entities when zoomed in.
     return tool === 'convert-entities' || tool === 'select';
+  });
+
+  /** In Select mode, when a SKETCH entity is the current hover winner, a click
+   * should select that entity rather than picking an overlapping projected edge
+   * as a relation target — keeps the click consistent with what's highlighted.
+   * Convert Entities is excluded (it always wants the edge). */
+  readonly sketchEntityClickWins = computed<boolean>(() => {
+    const ed = this.sketchEditorRef();
+    return !!ed && ed.tool() === 'select' && ed.sketchHoverWins();
   });
 
   /** Face-pick on top of the existing dim-picker case. While Convert
@@ -13202,11 +13342,20 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         }),
       };
     }
-    const result = await solveSketchAfterAdd(updated, ev.id);
-    const final = result.status === 'ok' ? result.state : updated;
-    this.doc.set(updateSketchState(this.doc(), sid, final));
     this.editingDimensionId.set(null);
-    this.save();
+    // Re-solve through the sketch editor's guarded, warm-started full solve —
+    // the SAME path the constraint-list value edit and the sketch tools use.
+    // The old `solveSketchAfterAdd` call here collapsed the geometry to a
+    // degenerate config (its pinned pass returns a degenerate "ok" for an
+    // under-determined dimension), which is what flattened rectangles when a
+    // dimension value was changed in the viewer.
+    const editor = this.sketchEditorRef();
+    if (editor && this.activeSketchId() === sid) {
+      editor.resolveAndEmit(updated);
+    } else {
+      this.doc.set(updateSketchState(this.doc(), sid, updated));
+      this.save();
+    }
   }
 
   /** Esc or click-outside in the inline editor — just clear the editing
@@ -13351,8 +13500,18 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         constraints: next.constraints.map(c => c.id === ev.id ? { ...c, unit: newUnit } : c),
       };
     }
-    this.doc.set(updateSketchState(this.doc(), sketchId, next));
-    this.save();
+    // For the ACTIVE sketch, re-solve so the geometry actually moves to satisfy
+    // the new value — the constraint-list edit path doesn't go through the
+    // in-sketch commit/solve, so a bare doc.set would change the number without
+    // re-solving (the dimension would appear to "do nothing"). commit() emits
+    // the solved state, which onSketchChanged folds back into the doc + saves.
+    const editor = this.sketchEditorRef();
+    if (editor && this.activeSketchId() === sketchId) {
+      editor.resolveAndEmit(next);
+    } else {
+      this.doc.set(updateSketchState(this.doc(), sketchId, next));
+      this.save();
+    }
   }
 
   /** Apply `#{name}` substitution against the current `textVariables`

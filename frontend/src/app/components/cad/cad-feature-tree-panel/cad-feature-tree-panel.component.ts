@@ -117,7 +117,7 @@ export interface TreeNode {
           <span class="chevron-spacer" *ngIf="!n.expandable && n.kind !== 'rollback-bar'"></span>
           <mat-icon class="kind-icon" [ngClass]="n.iconClass">{{ n.iconName }}</mat-icon>
           <span class="label">{{ n.label }}</span>
-          <span class="dbg-id" *ngIf="dbgId(n)">({{ dbgId(n) }})</span>
+          <span class="dbg-id" *ngIf="debugVisible() && dbgId(n)">({{ dbgId(n) }})</span>
           <ng-container *ngIf="n.kind === 'feature' && n.feature && featureErrors().has(n.feature.id)">
             <mat-icon class="error-indicator"
                       [matTooltip]="featureErrors().get(n.feature.id) || ''"
@@ -248,8 +248,9 @@ export interface TreeNode {
                 <mat-icon>delete</mat-icon> Delete{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
               </button>
               <!-- Debug: the internal feature id (hash) — what regen errors,
-                   topology ids (featureId/eN), and externalRefs reference. -->
-              <button *ngIf="scope.count === 1"
+                   topology ids (featureId/eN), and externalRefs reference.
+                   Only shown in debug mode (footer bug toggle). -->
+              <button *ngIf="scope.count === 1 && debugVisible()"
                       mat-menu-item data-testid="ctx-copy-feature-id"
                       (click)="copyToClipboard(n.feature.id)">
                 <mat-icon>content_copy</mat-icon> Copy feature name
@@ -295,8 +296,8 @@ export interface TreeNode {
                       (click)="emitAction({ action: 'delete-sketch', sketchId: n.sketchId })">
                 <mat-icon>delete</mat-icon> Delete sketch{{ scope.count > 1 ? 'es (' + scope.count + ')' : '' }}
               </button>
-              <!-- Debug: the internal sketch id (hash). -->
-              <button *ngIf="scope.count === 1"
+              <!-- Debug: the internal sketch id (hash). Only in debug mode. -->
+              <button *ngIf="scope.count === 1 && debugVisible()"
                       mat-menu-item data-testid="ctx-copy-sketch-id"
                       (click)="copyToClipboard(n.sketchId)">
                 <mat-icon>content_copy</mat-icon> Copy sketch name
@@ -426,6 +427,9 @@ export class CadFeatureTreePanelComponent {
   headerTitle = input<string>('Feature Tree');
   headerIcon = input<string>('account_tree');
   showBodies = input<boolean>(true);
+  /** Debug mode (footer bug toggle). Gates developer-only context-menu items
+   * — the "Copy feature/sketch name" entries that surface the internal id. */
+  debugVisible = input<boolean>(false);
   /** Generic row interaction, emitted only in external-nodes mode. */
   externalEvent = output<ExternalTreeEvent>();
   // Map of featureId → friendly error message. Features in this map render
@@ -729,6 +733,10 @@ export class CadFeatureTreePanelComponent {
     const isRolledBack = rollback !== null && idx >= rollback;
     if (f.type === 'origin') {
         const isOpen = expanded.has('origin-children');
+        const vis = { ...defaultDatumVisibility(), ...((f as OriginFeature).visibility ?? {}) };
+        // The Origin's show/hide toggles ALL its datums together; the row reads
+        // as "visible" when any datum is shown (matching the per-datum eyes).
+        const anyDatumVisible = Object.keys(vis).some(k => vis[k] !== false);
         out.push({
           key: f.id,
           kind: 'feature',
@@ -739,12 +747,13 @@ export class CadFeatureTreePanelComponent {
           expandable: true,
           expanded: isOpen,
           selectable: false,
+          visible: anyDatumVisible,
+          visibilityToggleable: true,
           featureIndex: idx,
           rolledBack: isRolledBack,
           feature: f,
         });
         if (isOpen) {
-          const vis = { ...defaultDatumVisibility(), ...((f as OriginFeature).visibility ?? {}) };
           out.push(this.datumNode('origin', 'Origin point', 'fiber_manual_record', 'datum-point', vis));
           out.push(this.datumNode('x_axis', 'X axis', 'east', 'datum-axis-x', vis));
           out.push(this.datumNode('y_axis', 'Y axis', 'north', 'datum-axis-y', vis));
@@ -973,7 +982,9 @@ export class CadFeatureTreePanelComponent {
           expanded: false,
           selectable: true,
           visible: pf.visible !== false,
-          visibilityToggleable: true,
+          // Mirror + Linear Pattern have no show/hide (hiding the derived copies
+          // is confusing — use Suppress instead). Circular Pattern keeps it.
+          visibilityToggleable: f.type === 'circularPattern',
           featureIndex: idx,
           rolledBack: isRolledBack,
           suppressed: pf.suppressed === true,
@@ -1310,11 +1321,12 @@ export class CadFeatureTreePanelComponent {
     } else if (n.kind === 'sketch' && n.sketchId) {
       this.actionRequested.emit({ action: 'toggle-sketch-visibility', sketchId: n.sketchId });
     } else if (n.kind === 'feature' && n.feature) {
-      // Feature rows — datums (axis / point / plane), patterns,
-      // mirrors, fillets, etc. All route through toggle-feature-
-      // visibility; the editor's `toggleFeatureVisibility` flips the
-      // feature's `visible` field and triggers a regen that
-      // re-derives geometry without the hidden datum / body.
+      // Origin has no single `visible` field — its show/hide flips ALL its
+      // datums together, routed through the datum channel with a sentinel id.
+      if (n.feature.type === 'origin') { this.visibilityToggled.emit('origin-all'); return; }
+      // Other feature rows — patterns, fillets, bodies, etc. Route through
+      // toggle-feature-visibility; the editor's `toggleFeatureVisibility` flips
+      // the feature's `visible` field and regens without the hidden geometry.
       this.actionRequested.emit({ action: 'toggle-feature-visibility', featureId: n.feature.id });
     } else if (n.kind === 'cosmetic-threads-group') {
       this.actionRequested.emit({ action: 'toggle-cosmetic-threads-visibility' });
