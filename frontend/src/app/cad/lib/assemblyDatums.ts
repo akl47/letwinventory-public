@@ -13,7 +13,7 @@ import { buildOriginDatums, planeForDatum } from './datum';
 import { transformPoint, transformDir } from './placementMath';
 
 // A datum plus the optional sidecars the viewer reads to place it off-origin.
-type PlacedDatum = DatumElement & {
+export type PlacedDatum = DatumElement & {
   /** Display name for the corner label (e.g. "Bracket-01 - XY plane"). */
   name?: string;
   position?: [number, number, number];
@@ -49,7 +49,7 @@ export function assemblyOriginDatums(visibility: Record<string, boolean>): Datum
 /** A component's seven origin datums transformed into assembly space by its
  * placement, ids prefixed (e.g. `inst:<id>:xy_plane`). Carry sidecars so the
  * viewer draws them at the placed position/orientation. */
-export function placedOriginDatums(placement: Placement, idPrefix: string, namePrefix?: string): DatumElement[] {
+export function placedOriginDatums(placement: Placement, idPrefix: string, namePrefix?: string): PlacedDatum[] {
   const origin = transformPoint(placement, [0, 0, 0]);
   const out: PlacedDatum[] = [];
   for (const base of buildOriginDatums()) {
