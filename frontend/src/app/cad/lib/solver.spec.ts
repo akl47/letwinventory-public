@@ -63,6 +63,30 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
     expect(pointsOf(res.state)[0].y).toBeCloseTo(4);
   });
 
+  it('solves (does not throw) with a single-target concentric center reference (REQ 831/832 regression)', async () => {
+    // A circle made concentric to a projected model edge is a SINGLE-target
+    // `concentric` carrying a sub:'center' externalRef. This once crashed
+    // translateConstraint (c.targets[1] undefined), aborting every solve on the
+    // sketch — so editing any dimension there silently did nothing.
+    const state: SketchState = {
+      entities: [
+        pt('cen', 5, 5), circle('circ', 'cen', 3),
+        pt('p1', 0, 0), pt('p2', 10, 0), ln('seg', 'p1', 'p2'),
+      ],
+      constraints: [
+        { id: 'cc', type: 'concentric', targets: [{ entityId: 'cen' }],
+          externalRef: { scope: 'local', featureId: 'f1', edgeId: 'f1/e0', sub: 'center' } },
+        c('d', 'distance', ['p1', 'p2'], 8),
+      ],
+    };
+    const res = await solveSketch(state);
+    expect(res.status).toBe('ok');
+    // The center stays pinned by the center ref (frozen at its snapped coords).
+    const cen = pointsOf(res.state).find(p => p.id === 'cen')!;
+    expect(cen.x).toBeCloseTo(5);
+    expect(cen.y).toBeCloseTo(5);
+  });
+
   it('coincident: drives two points to the same location', async () => {
     const state: SketchState = {
       entities: [pt('p1', 0, 0), pt('p2', 5, 5)],

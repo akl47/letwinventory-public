@@ -2,7 +2,7 @@ import type {
   SketchState, SketchEntity, SketchConstraint,
   LineEntity, CircleEntity, ArcEntity,
 } from './types';
-import { onEdgeLookupKey } from './types';
+import { onEdgeLookupKey, isCenterExternalRef } from './types';
 import { ORIGIN_POINT_ID } from './store';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -56,6 +56,9 @@ export function analyzeDeterminacy(state: SketchState, externalEdges: ExternalEd
  * it's a vertex ref, a cross-part ref, or the edge isn't in `externalEdges`. */
 function edgeLineForConstraint(c: SketchConstraint, externalEdges: ExternalEdgeMap)
   : readonly [{ x: number; y: number }, { x: number; y: number }] | null {
+  // Center reference (REQ 832): pins to the projected edge center, not the edge
+  // line — it does NOT ride (the point is fully fixed, 0 DOF). Never a line.
+  if (c.externalRef && c.externalRef.scope !== 'cross-part' && c.externalRef.sub === 'center') return null;
   const key = onEdgeLookupKey(c.externalRef);  // local edgeId OR cross-part stable id
   if (!key) return null;
   return externalEdges.get(key) ?? null;
@@ -100,6 +103,11 @@ function analyzeExact(state: SketchState, externalEdges: ExternalEdgeMap): Set<s
     // line/circle/arc entities, vertex refs, and edge refs with no available
     // projection stay fully pinned (their coords come straight from the edge).
     const ridesEdge = !!edgeLineForConstraint(c, externalEdges);
+    // Legacy on-edge+sub:center: pins ONLY the center point, not the radius
+    // (matches the solver, which only pins centerId for these — keeps the two
+    // analyzers in lockstep). New-style center refs use concentric/coincident
+    // and never reach this on-edge loop.
+    const centerRef = isCenterExternalRef(c.externalRef);
     for (const t of c.targets) {
       const e = entityById.get(t.entityId);
       if (!e) continue;
@@ -108,16 +116,30 @@ function analyzeExact(state: SketchState, externalEdges: ExternalEdgeMap): Set<s
         preFixed.add(`${e.endId}:x`);   preFixed.add(`${e.endId}:y`);
       } else if (e.kind === 'circle') {
         preFixed.add(`${e.centerId}:x`); preFixed.add(`${e.centerId}:y`);
-        preFixed.add(`${e.id}:radius`);
+        if (!centerRef) preFixed.add(`${e.id}:radius`);
       } else if (e.kind === 'arc') {
         preFixed.add(`${e.centerId}:x`); preFixed.add(`${e.centerId}:y`);
-        preFixed.add(`${e.startId}:x`);  preFixed.add(`${e.startId}:y`);
-        preFixed.add(`${e.endId}:x`);    preFixed.add(`${e.endId}:y`);
-        preFixed.add(`${e.id}:radius`);
+        if (!centerRef) {
+          preFixed.add(`${e.startId}:x`);  preFixed.add(`${e.startId}:y`);
+          preFixed.add(`${e.endId}:x`);    preFixed.add(`${e.endId}:y`);
+          preFixed.add(`${e.id}:radius`);
+        }
       } else if (e.kind === 'point' && !ridesEdge) {
         preFixed.add(`${e.id}:x`); preFixed.add(`${e.id}:y`);
       }
     }
+  }
+  // Center references (REQ 832): a concentric/coincident (or legacy on-edge)
+  // constraint with a local externalRef sub:'center' pins the target's center
+  // point — 0 translational DOF. Its residual is a no-op (single target), so
+  // determinacy must account for the pin here. Type-agnostic on `sub`.
+  for (const c of state.constraints) {
+    const r = c.externalRef;
+    if (!r || r.scope === 'cross-part' || r.sub !== 'center') continue;
+    const e = entityById.get(c.targets[0]?.entityId);
+    if (!e) continue;
+    if (e.kind === 'point') { preFixed.add(`${e.id}:x`); preFixed.add(`${e.id}:y`); }
+    else if (e.kind === 'circle' || e.kind === 'arc') { preFixed.add(`${e.centerId}:x`); preFixed.add(`${e.centerId}:y`); }
   }
 
   // Build the free-param vector.

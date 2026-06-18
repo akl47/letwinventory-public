@@ -119,6 +119,27 @@ export function splitAtIntersections(state: SketchState): SketchState {
     }
   }
 
+  // Vertex-on-curve (T-junction) splits. A planar arrangement must also split
+  // a curve wherever another edge's ENDPOINT lands on its interior — not only
+  // at curve↔curve crossings. Otherwise a face boundary that both traces the
+  // curve AND has a vertex sitting on it is pinched (self-touching), which
+  // OCCT BRepMesh rejects. Real case: a rectangle corner constrained
+  // coincident onto an arc. Reuse the curve's EXISTING endpoint id (no new
+  // arr_pt_) so the split piece shares the vertex and the graph is connected.
+  const vertexIds = new Set<string>();
+  for (const c of curves) {
+    if (c.kind === 'line' || c.kind === 'arc') { vertexIds.add(c.startId); vertexIds.add(c.endId); }
+  }
+  for (const c of curves) {
+    const ownIds = c.kind === 'circle' ? new Set<string>() : new Set([c.startId, c.endId]);
+    for (const vid of vertexIds) {
+      if (ownIds.has(vid)) continue;
+      const v = findPoint(state, vid);
+      if (!v || !pointLiesOnCurveInterior(c, v)) continue;
+      hits.get(c.id)!.push({ pointId: vid, param: paramOnCurve(c, v) });
+    }
+  }
+
   // Output: original points + new intersection points + construction entities +
   // split sub-entities (or originals if untouched).
   const out: SketchEntity[] = [];
@@ -360,6 +381,31 @@ function paramOnCurve(c: Curve, p: Pt): number {
     return ((p.x - c.a.x) * dx + (p.y - c.a.y) * dy) / len2;
   }
   return Math.atan2(p.y - c.center.y, p.x - c.center.x);
+}
+
+// True iff vertex `v` lies ON curve `c`'s interior (not at an endpoint).
+// Used for T-junction splitting. Unlike isInteriorHit (which assumes the
+// point is already on the curve and only checks parametric interior-ness),
+// this verifies the point is GEOMETRICALLY on the curve first.
+function pointLiesOnCurveInterior(c: Curve, v: Pt): boolean {
+  if (c.kind === 'line') {
+    const dx = c.b.x - c.a.x, dy = c.b.y - c.a.y;
+    const len2 = dx * dx + dy * dy;
+    if (len2 < EPS) return false;
+    const t = ((v.x - c.a.x) * dx + (v.y - c.a.y) * dy) / len2;
+    if (t <= EPS || t >= 1 - EPS) return false;
+    const px = c.a.x + t * dx, py = c.a.y + t * dy;
+    return Math.hypot(v.x - px, v.y - py) < POINT_TOL * 10;
+  }
+  const dr = Math.abs(Math.hypot(v.x - c.center.x, v.y - c.center.y) - c.radius);
+  if (dr >= POINT_TOL * 10) return false;
+  if (c.kind === 'arc') {
+    const ang = Math.atan2(v.y - c.center.y, v.x - c.center.x);
+    if (!angleInArcSweep(ang, c.startAngle, c.endAngle, c.ccw)) return false;
+    if (Math.hypot(v.x - c.startPt.x, v.y - c.startPt.y) < POINT_TOL) return false;
+    if (Math.hypot(v.x - c.endPt.x, v.y - c.endPt.y) < POINT_TOL) return false;
+  }
+  return true;
 }
 
 function isInteriorHit(c: Curve, p: Pt): boolean {

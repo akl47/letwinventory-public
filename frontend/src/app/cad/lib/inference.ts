@@ -190,6 +190,107 @@ export function inferLineEnd(
   return raw(cursor);
 }
 
+/** Reserved id for the synthetic sketch origin (mirrors store.ORIGIN_POINT_ID).
+ * Duplicated as a literal here to keep this engine free of a store import. */
+const ORIGIN_REF_ID = 'origin';
+
+/** One inferred horizontal/vertical relation between the point being placed
+ * and a reference point. `horizontal` ⇒ the two points share a Y (a horizontal
+ * line joins them); `vertical` ⇒ they share an X. */
+export interface AlignmentRef {
+  refId: string;
+  type: 'horizontal' | 'vertical';
+}
+
+export interface AlignmentResult {
+  /** Cursor after snapping onto the inferred alignment line(s). */
+  snapped: { x: number; y: number };
+  /** The relations to create — 0, 1, or 2 entries (at most one H + one V,
+   * possibly against different references). Empty when nothing aligned. */
+  refs: AlignmentRef[];
+  /** Badge labels ('horizontal' / 'vertical') for the snap hint. */
+  hints: string[];
+  /** Dashed guide lines from each reference point to the snapped cursor. */
+  guides: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }>;
+}
+
+/**
+ * Infer horizontal/vertical alignment of the point being placed against a set
+ * of *armed* reference points (OnShape/SolidWorks "pick up a reference"). The
+ * origin (id 'origin', always at (0,0)) is implicitly armed; the caller adds
+ * any sketch point the cursor has hovered during the gesture.
+ *
+ * Unlike `inferLineEnd` (which orients the new line relative to its own start),
+ * this produces point-to-point relations to external references, so it works
+ * for the FIRST click of any tool and for the standalone point tool.
+ *
+ * Picks the single closest vertical alignment and the single closest horizontal
+ * alignment independently, so a point can lock onto one ref's vertical AND a
+ * different ref's horizontal at once. If one reference would satisfy both axes
+ * (cursor sitting on the point), only the nearer axis is kept — that is
+ * coincident territory, not a redundant H+V pair to the same point.
+ */
+export function inferAlignment(
+  state: SketchState,
+  cursor: { x: number; y: number },
+  armedRefIds: Iterable<string>,
+  opts?: { excludeIds?: Iterable<string>; tol?: number },
+): AlignmentResult {
+  const tol = opts?.tol ?? ALIGN_TOL;
+  const exclude = new Set(opts?.excludeIds ?? []);
+
+  // The origin is always a candidate; union it with the caller's armed set.
+  const refIds = new Set<string>(armedRefIds);
+  refIds.add(ORIGIN_REF_ID);
+
+  const coordsOf = (id: string): { x: number; y: number } | null => {
+    if (id === ORIGIN_REF_ID) {
+      const p = findPoint(state, ORIGIN_REF_ID);
+      return p ? { x: p.x, y: p.y } : { x: 0, y: 0 };
+    }
+    const p = findPoint(state, id);
+    return p ? { x: p.x, y: p.y } : null;
+  };
+
+  let bestV: { refId: string; ref: { x: number; y: number }; dist: number } | null = null;
+  let bestH: { refId: string; ref: { x: number; y: number }; dist: number } | null = null;
+  for (const id of refIds) {
+    if (exclude.has(id)) continue;
+    const ref = coordsOf(id);
+    if (!ref) continue;
+    const dx = Math.abs(cursor.x - ref.x);
+    const dy = Math.abs(cursor.y - ref.y);
+    if (dx < tol && (!bestV || dx < bestV.dist)) bestV = { refId: id, ref, dist: dx };
+    if (dy < tol && (!bestH || dy < bestH.dist)) bestH = { refId: id, ref, dist: dy };
+  }
+
+  // A single ref satisfying both axes means the cursor is on that point —
+  // keep only the closer axis (the other is coincident, handled elsewhere).
+  if (bestV && bestH && bestV.refId === bestH.refId) {
+    if (bestV.dist <= bestH.dist) bestH = null;
+    else bestV = null;
+  }
+
+  const snapped = { x: cursor.x, y: cursor.y };
+  const refs: AlignmentRef[] = [];
+  const hints: string[] = [];
+  const guides: AlignmentResult['guides'] = [];
+  if (bestV) {
+    snapped.x = bestV.ref.x;
+    refs.push({ refId: bestV.refId, type: 'vertical' });
+    hints.push('vertical');
+  }
+  if (bestH) {
+    snapped.y = bestH.ref.y;
+    refs.push({ refId: bestH.refId, type: 'horizontal' });
+    hints.push('horizontal');
+  }
+  if (bestV) guides.push({ from: { x: bestV.ref.x, y: bestV.ref.y }, to: { x: snapped.x, y: snapped.y } });
+  if (bestH) guides.push({ from: { x: bestH.ref.x, y: bestH.ref.y }, to: { x: snapped.x, y: snapped.y } });
+
+  return { snapped, refs, hints, guides };
+}
+
 function polarSnap(
   start: { x: number; y: number }, cursor: { x: number; y: number },
 ): InferenceResult | null {

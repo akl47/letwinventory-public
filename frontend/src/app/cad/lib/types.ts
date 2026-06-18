@@ -261,6 +261,12 @@ export type ExternalRef =
       /** Topology vertex id. Present for a vertex reference — a single sketch
        * point pinned to the projection of a model vertex (no edge involved). */
       vertexId?: string;
+      /** Sub-element of the referenced `edgeId`. `'center'` (REQ 830–832) pins
+       * the target point to the projected CENTER of a circular/arc model edge —
+       * concentric for a circle/arc placed by its center, coincident-to-center
+       * for a standalone point. Re-derived from the edge's polyline each regen.
+       * Absent → the point rides the edge line (the existing on-edge behavior). */
+      sub?: 'center';
     }
   | {
       scope: 'cross-part';
@@ -303,6 +309,14 @@ export function onEdgeLookupKey(ref: ExternalRef | undefined): string | null {
   if (!ref) return null;
   if (ref.scope === 'cross-part') return ref.sourceGeomRef?.edgeId ?? null;
   return ref.edgeId ?? null;
+}
+
+/** True when the ref is a local arc/circle CENTER reference (REQ 831/832): a
+ * `concentric` / `coincident` (or legacy `on-edge`) constraint that pins its
+ * target point to the projected edge center. Narrows the union so callers can
+ * branch without re-checking `scope`. */
+export function isCenterExternalRef(ref: ExternalRef | undefined): boolean {
+  return !!ref && ref.scope !== 'cross-part' && ref.sub === 'center';
 }
 
 export interface SketchConstraint {
@@ -419,8 +433,9 @@ export type HostId = string; // e.g. 'face:0' or 'datum:xy_plane'
 
 export interface ReferenceCandidate {
   id: string;
-  kind: 'vertex' | 'edge';
-  // For vertex: a 2D point. For edge: two 2D endpoints.
+  kind: 'vertex' | 'edge' | 'center';
+  // For vertex/center: a single 2D point. For edge: a 2D polyline (≥2 points;
+  // a straight edge is its two endpoints, a curved edge its projected samples).
   points: Array<{ x: number; y: number }>;
   /** Present when this candidate is ANOTHER component's edge, projected into
    * the host part's sketch plane while editing in-context. Carries everything

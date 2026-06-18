@@ -132,6 +132,19 @@ function distanceToPolyline(samples: Array<{ x: number; y: number }>, p: Point2)
   return min;
 }
 
+/** Rough on-plane "length" of an entity, used only to break hover/pick ties
+ * between OVERLAPPING same-rank entities (prefer the shorter one). Lines get
+ * their exact length; circles/arcs a circumference proxy; everything else is
+ * unbounded (no preference). */
+function entitySpan(state: SketchState, e: SketchEntity): number {
+  switch (e.kind) {
+    case 'line': { const a = pt(state, e.startId), b = pt(state, e.endId); return a && b ? Math.hypot(b.x - a.x, b.y - a.y) : Infinity; }
+    case 'circle': return 2 * Math.PI * e.radius;
+    case 'arc': return Math.PI * e.radius;
+    default: return Infinity;
+  }
+}
+
 export function distanceToEntity(state: SketchState, entity: SketchEntity, p: Point2): number {
   switch (entity.kind) {
     case 'point': return distanceToPoint(state, entity, p);
@@ -286,19 +299,35 @@ export function pickEntity(
   // distance-first rule would let them "absorb" every click and make the
   // border construction lines (and centerline) unselectable. Distance only
   // breaks ties within a rank.
-  let best: SketchEntity | null = null;
-  let bestDist = Infinity;
+  // When two same-rank entities are at (nearly) the same distance — i.e. they
+  // OVERLAP under the cursor, like a short line lying on a longer collinear one
+  // — prefer the SHORTER one. A near-tie is judged within `TIE` (true overlaps
+  // share an exact distance; the band also covers slight non-collinearity).
+  const TIE = Math.max(0.01, tolerance * 0.2);
+  // Two passes so the pick is independent of entity order. Pass 1: the best
+  // (lowest) rank present within tolerance and the NEAREST distance at that
+  // rank. Pass 2: among that rank's entities within TIE of the nearest (i.e.
+  // overlapping under the cursor), the SHORTEST wins — a short segment lying on
+  // a longer collinear one is preferred. (The previous single-pass compare-to-
+  // current-best was order-dependent and could keep a strictly-farther entity.)
   let bestRank = Infinity;
+  let bestDist = Infinity;
   for (const e of state.entities) {
     if (e.kind === 'point') continue;
     const d = distanceToEntity(state, e, p);
     if (d > tolerance) continue;
     const rank = PICK_RANK[e.kind];
-    if (rank < bestRank || (rank === bestRank && d < bestDist - 1e-9)) {
-      best = e;
-      bestDist = d;
-      bestRank = rank;
-    }
+    if (rank < bestRank) { bestRank = rank; bestDist = d; }
+    else if (rank === bestRank && d < bestDist) bestDist = d;
+  }
+  let best: SketchEntity | null = null;
+  let bestSpan = Infinity;
+  for (const e of state.entities) {
+    if (e.kind === 'point' || PICK_RANK[e.kind] !== bestRank) continue;
+    const d = distanceToEntity(state, e, p);
+    if (d > tolerance || d > bestDist + TIE) continue;
+    const span = entitySpan(state, e);
+    if (best === null || span < bestSpan - 1e-9) { best = e; bestSpan = span; }
   }
 
   // Prefer the point only when it's competitive in distance with the nearest

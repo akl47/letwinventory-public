@@ -3,7 +3,7 @@ import type { SketchPrimitive, SketchParam } from '../vendor/planegcs';
 import type {
   SketchState, SketchConstraint, SketchEntity, CircleEntity, ArcEntity,
 } from './types';
-import { pointsOf, linesOf, findEntity, findPoint, onEdgeLookupKey } from './types';
+import { pointsOf, linesOf, findEntity, findPoint, onEdgeLookupKey, isCenterExternalRef } from './types';
 import { ORIGIN_POINT_ID } from './store';
 
 export type SolveStatus_ = 'ok' | 'inconsistent';
@@ -90,7 +90,16 @@ function isAnchorPoint(state: SketchState, pointId: string): boolean {
 }
 
 function translateConstraint(state: SketchState, c: SketchConstraint): SketchPrimitive[] {
-  const tid = (i: number) => c.targets[i].entityId;
+  // A center reference (REQ 831/832) is a concentric/coincident constraint with
+  // a SINGLE target + a sub:'center' externalRef. The target point is pinned at
+  // the projected edge center elsewhere (solveSketch's center-ref pass); emit no
+  // GCS primitive here — and short-circuit before any 2nd-target indexing.
+  if (isCenterExternalRef(c.externalRef)) return [];
+  // Null-safe target access: a constraint may legitimately carry fewer targets
+  // than its type's two-target cases expect (e.g. an external single-target
+  // ref). Return '' for a missing slot so findEntity yields undefined and the
+  // per-case `if (!a || !b) return []` guards handle it instead of throwing.
+  const tid = (i: number) => c.targets[i]?.entityId ?? '';
   const at = (i: number) => findEntity(state, tid(i));
   switch (c.type) {
     case 'fixed':
@@ -374,7 +383,9 @@ function buildPrimitives(
   // Construction geometry is NO LONGER pinned: it's purely a visual mode
   // (dashed reference) and the user can drag it freely. Matches SW.
   for (const c of state.constraints) {
-    if (c.type === 'fixed') fixedIds.add(c.targets[0].entityId);
+    // Guard the target slot: a malformed/legacy `fixed` with empty targets must
+    // not throw and abort the whole solve (determinacy already guards this).
+    if (c.type === 'fixed' && c.targets[0]) fixedIds.add(c.targets[0].entityId);
   }
   for (const p of pointsOf(state)) {
     if (p.id === ORIGIN_POINT_ID) fixedIds.add(p.id);
@@ -547,6 +558,10 @@ export async function solveSketch(
   const edgeRidePoints: EdgeRidePoint[] = [];
   for (const c of state.constraints) {
     if (c.type !== 'on-edge' || !c.externalRef) continue;
+    // Center reference (REQ 832): the target point pins to the projected edge
+    // CENTER, not the edge line. Skip the edge-ride path so it falls through to
+    // the pin pass below (frozen at the snapped center; regen re-derives it).
+    if (c.externalRef.scope !== 'cross-part' && c.externalRef.sub === 'center') continue;
     // Local model edge → key by topology edgeId; cross-part (another
     // component, in-context) → key by the ref's stable id. Either way the
     // live 2D projection is supplied in opts.externalEdges.
@@ -583,6 +598,20 @@ export async function solveSketch(
       else if (e.kind === 'arc') { pinPoint(e.centerId); pinPoint(e.startId); pinPoint(e.endId); }
       else if (e.kind === 'point') { if (!ridePointIds.has(e.id)) pinPoint(e.id); }
     }
+  }
+  // Center references (REQ 831/832): a `concentric` (circle/arc) or `coincident`
+  // (point) constraint that carries a local externalRef with sub:'center' pins
+  // the target's center point at the projected edge center. translateConstraint
+  // emits no primitive for these single-target constraints, so the pin is what
+  // fixes them (frozen at the snapped center; regen re-derives the coords).
+  // Type-agnostic on `sub` so legacy on-edge+sub:center docs pin identically.
+  for (const c of state.constraints) {
+    const r = c.externalRef;
+    if (!r || r.scope === 'cross-part' || r.sub !== 'center') continue;
+    const e = entityByIdSolver.get(c.targets[0]?.entityId);
+    if (!e) continue;
+    if (e.kind === 'point') pinPoint(e.id);
+    else if (e.kind === 'circle' || e.kind === 'arc') pinPoint(e.centerId);
   }
 
   const { primitives } = buildPrimitives(state, extraFixed, opts.pinAllRadii ?? false);

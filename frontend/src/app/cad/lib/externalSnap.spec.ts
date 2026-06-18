@@ -146,3 +146,34 @@ describe('cross-part ref builders (Convert Entities)', () => {
     expect(onEdgeLookupKey(ref)).toBeNull();
   });
 });
+
+describe('arc/circle center references (REQ 830–832)', () => {
+  it('parses a center candidate id', () => {
+    expect(parseCandidateId('cand-c-f1/e0')).toEqual({ kind: 'center', topoId: 'f1/e0' });
+  });
+
+  it('builds a center ref as an edge ref carrying sub:center', () => {
+    const cand: ReferenceCandidate = { id: 'cand-c-f1/e0', kind: 'center', points: [{ x: 5, y: 7 }] };
+    expect(externalRefForCandidate(cand)).toEqual({ scope: 'local', featureId: 'f1', edgeId: 'f1/e0', sub: 'center' });
+  });
+
+  it('onEdgeLookupKey returns the edgeId for a center ref (the solver skips its ride path via sub:center)', () => {
+    const ref = externalRefForCandidate({ id: 'cand-c-f1/e0', kind: 'center', points: [{ x: 0, y: 0 }] })!;
+    expect(onEdgeLookupKey(ref)).toBe('f1/e0');
+  });
+
+  it('nearestCandidateHit returns a center hit and prefers it over an edge', () => {
+    const cands: ReferenceCandidate[] = [
+      { id: 'cand-c-f1/e0', kind: 'center', points: [{ x: 5, y: 5 }] },
+      { id: 'cand-e-f1/e1', kind: 'edge', points: [{ x: 5, y: 4 }, { x: 9, y: 4 }] },
+    ];
+    const hit = nearestCandidateHit(cands, { x: 5.2, y: 4.6 }, 2);
+    expect(hit?.kind).toBe('center');
+    expect(hit?.candidateId).toBe('cand-c-f1/e0');
+  });
+
+  it('nearestCandidateHit returns null when the center is out of tolerance', () => {
+    const cands: ReferenceCandidate[] = [{ id: 'cand-c-f1/e0', kind: 'center', points: [{ x: 5, y: 5 }] }];
+    expect(nearestCandidateHit(cands, { x: 50, y: 50 }, 2)).toBeNull();
+  });
+});

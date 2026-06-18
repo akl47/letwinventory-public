@@ -347,6 +347,23 @@ function splitLineKeepingOnly(
     c.targets.some(t => t.entityId === line.id)
     && (isDirectionConstraint(c.type) || c.type === 'on-edge'),
   );
+  // Passenger points: points coincident-ON the original line (riding it) that
+  // aren't the trim endpoints. Each still lies on whichever kept sub-segment
+  // covers its parameter, so its coincident must be re-attached there — else
+  // deletePrimitive drops the constraint and the point floats free (the bug:
+  // trimming a line silently un-constrains a point that was sitting on it).
+  // A passenger whose parameter falls in the removed middle was genuinely cut
+  // away; we let its constraint go.
+  const passengers: Array<{ pointId: string; t: number }> = [];
+  for (const c of state.constraints) {
+    if (c.type !== 'coincident') continue;
+    const ids = c.targets.map(t => t.entityId);
+    if (!ids.includes(line.id)) continue;
+    const otherId = ids.find(id => id !== line.id);
+    const pt = otherId ? findPoint(state, otherId) : null;
+    if (!pt) continue;
+    passengers.push({ pointId: pt.id, t: projectOntoSegment(a, b, pt).t });
+  }
   let s = deletePrimitive(state, line.id);
   const newIds: string[] = [];
   const segDebug: Array<{ t0: number; t1: number; newId: string; pa: Pt; pb: Pt; pin0: string | null; pin1: string | null; paReused: boolean; pbReused: boolean }> = [];
@@ -375,9 +392,36 @@ function splitLineKeepingOnly(
     if (seg.pin1 && !alreadyCoincidentWith(s, pbRes.id, seg.pin1)) {
       s = addConstraint(s, 'coincident', [pbRes.id, seg.pin1]).state;
     }
+    // Re-attach passenger points that fall within this kept sub-segment's
+    // parameter range. Skip those reused AS this segment's endpoints (they're
+    // structurally part of the line already) and any already coincident.
+    for (const pass of passengers) {
+      if (pass.t < seg.t0 - EPS || pass.t > seg.t1 + EPS) continue;
+      if (pass.pointId === paRes.id || pass.pointId === pbRes.id) continue;
+      if (alreadyCoincidentWith(s, pass.pointId, lr.id)) continue;
+      s = addConstraint(s, 'coincident', [pass.pointId, lr.id]).state;
+    }
     segDebug.push({ t0: seg.t0, t1: seg.t1, newId: lr.id, pa: p0, pb: p1, pin0: seg.pin0, pin1: seg.pin1, paReused: paRes.existed, pbReused: pbRes.existed });
   }
   s = inheritConstraintsOntoMultiple(s, line.id, newIds, inheritedConstraints);
+  // Preserve axis orientation. The original line may be horizontal/vertical
+  // WITHOUT carrying a line-level relation — e.g. it's kept level only because
+  // its endpoints are each constrained horizontal to some reference. Trimming
+  // mints NEW interior endpoints with no such constraint, so each sub-segment
+  // could swing off-axis. When the source line is axis-aligned at trim time,
+  // give every sub-segment an explicit horizontal/vertical relation (matching
+  // SolidWorks), unless inheritance already supplied one.
+  const ORIENT_TOL = 1e-6;
+  const wasHorizontal = Math.abs(a.y - b.y) < ORIENT_TOL && Math.abs(a.x - b.x) > ORIENT_TOL;
+  const wasVertical = Math.abs(a.x - b.x) < ORIENT_TOL && Math.abs(a.y - b.y) > ORIENT_TOL;
+  if (wasHorizontal || wasVertical) {
+    for (const id of newIds) {
+      const hasOrient = s.constraints.some(c =>
+        (c.type === 'horizontal' || c.type === 'vertical') && c.targets.some(t => t.entityId === id));
+      if (hasOrient) continue;
+      s = addConstraint(s, wasHorizontal ? 'horizontal' : 'vertical', [id]).state;
+    }
+  }
   // Diagnostic dump for "trim still broken on converted line". Enable
   // with `window.__cadDebug = true`; silent otherwise. Logs the
   // inherited constraints (incl. on-edge externalRef), each kept

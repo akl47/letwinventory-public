@@ -395,7 +395,7 @@ export function addArc(
 /** Axis-aligned rectangle from two opposite corners. */
 export function addRectangleCorners(
   state: SketchState, x1: number, y1: number, x2: number, y2: number,
-): { state: SketchState; ids: string[] } {
+): { state: SketchState; ids: string[]; corners: Array<{ id: string; x: number; y: number }> } {
   const xmin = Math.min(x1, x2), xmax = Math.max(x1, x2);
   const ymin = Math.min(y1, y2), ymax = Math.max(y1, y2);
   let s = state;
@@ -421,7 +421,16 @@ export function addRectangleCorners(
   s = addConstraint(s, 'perpendicular', [l1.id, l2.id]).state;
   s = addConstraint(s, 'parallel', [l1.id, l3.id]).state;
   s = addConstraint(s, 'parallel', [l2.id, l4.id]).state;
-  return { state: s, ids: [l1.id, l2.id, l3.id, l4.id] };
+  return {
+    state: s,
+    ids: [l1.id, l2.id, l3.id, l4.id],
+    corners: [
+      { id: r1.id, x: xmin, y: ymin },
+      { id: r2.id, x: xmax, y: ymin },
+      { id: r3.id, x: xmax, y: ymax },
+      { id: r4.id, x: xmin, y: ymax },
+    ],
+  };
 }
 
 /**

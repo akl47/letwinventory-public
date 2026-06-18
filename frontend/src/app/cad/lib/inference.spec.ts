@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { inferLineEnd } from './inference';
+import { inferLineEnd, inferAlignment, ALIGN_TOL } from './inference';
 import type { SketchState, PointEntity, LineEntity } from './types';
 
 const empty: SketchState = { entities: [], constraints: [] };
@@ -86,5 +86,86 @@ describe('inferLineEnd', () => {
     expect(r.snapped.x).toBeCloseTo(20);
     expect(r.snapped.y).toBeCloseTo(12);
     expect(r.guides![0].from).toEqual({ x: 20, y: 0 });
+  });
+});
+
+describe('inferAlignment', () => {
+  // The synthetic origin lives at (0,0) on every sketch plane. The engine
+  // resolves it from its reserved id even when it isn't materialised as an
+  // entity in the passed state.
+  const remote = (id: string, x: number, y: number): PointEntity => ({ kind: 'point', id, x, y });
+
+  it('always arms the origin: a point near the origin`s vertical gets a vertical constraint to it', () => {
+    // Cursor x within ALIGN_TOL of 0 (the origin`s x) → vertical (shared-x).
+    const r = inferAlignment(empty, { x: 0.4, y: 30 }, []);
+    expect(r.refs).toEqual([{ refId: 'origin', type: 'vertical' }]);
+    expect(r.snapped).toEqual({ x: 0, y: 30 });
+    expect(r.hints).toContain('vertical');
+    expect(r.guides[0].from).toEqual({ x: 0, y: 0 });
+  });
+
+  it('aligns horizontally (shared-y) to the origin', () => {
+    const r = inferAlignment(empty, { x: 30, y: -0.5 }, []);
+    expect(r.refs).toEqual([{ refId: 'origin', type: 'horizontal' }]);
+    expect(r.snapped).toEqual({ x: 30, y: 0 });
+    expect(r.hints).toContain('horizontal');
+  });
+
+  it('does NOT align to a point that has not been armed (hover-to-arm)', () => {
+    const state: SketchState = { entities: [remote('p1', 25, 0)], constraints: [] };
+    // Cursor lined up with p1`s vertical, but p1 isn`t armed → no fire
+    // (origin is far away in x, so nothing fires at all).
+    const r = inferAlignment(state, { x: 25.3, y: 40 }, []);
+    expect(r.refs).toEqual([]);
+    expect(r.snapped).toEqual({ x: 25.3, y: 40 });
+    expect(r.hints).toEqual([]);
+  });
+
+  it('aligns to a point once it is armed', () => {
+    const state: SketchState = { entities: [remote('p1', 25, 0)], constraints: [] };
+    const r = inferAlignment(state, { x: 25.3, y: 40 }, ['p1']);
+    expect(r.refs).toEqual([{ refId: 'p1', type: 'vertical' }]);
+    expect(r.snapped).toEqual({ x: 25, y: 40 });
+    expect(r.guides[0].from).toEqual({ x: 25, y: 0 });
+  });
+
+  it('infers a simultaneous horizontal + vertical against two different refs (fully locking the point)', () => {
+    // pV at x=10 (vertical ref), pH at y=20 (horizontal ref). Cursor near both.
+    const state: SketchState = {
+      entities: [remote('pV', 10, -5), remote('pH', -5, 20)],
+      constraints: [],
+    };
+    const r = inferAlignment(state, { x: 10.4, y: 19.6 }, ['pV', 'pH']);
+    expect(r.snapped).toEqual({ x: 10, y: 20 });
+    expect(r.refs).toEqual(
+      expect.arrayContaining([
+        { refId: 'pV', type: 'vertical' },
+        { refId: 'pH', type: 'horizontal' },
+      ]),
+    );
+    expect(r.refs.length).toBe(2);
+    expect(r.hints).toEqual(expect.arrayContaining(['vertical', 'horizontal']));
+    expect(r.guides.length).toBe(2);
+  });
+
+  it('does not fire outside the alignment tolerance', () => {
+    const r = inferAlignment(empty, { x: ALIGN_TOL + 0.5, y: ALIGN_TOL + 0.5 }, []);
+    expect(r.refs).toEqual([]);
+    expect(r.snapped).toEqual({ x: ALIGN_TOL + 0.5, y: ALIGN_TOL + 0.5 });
+  });
+
+  it('keeps only the closer axis when a single ref would satisfy both H and V (avoids a degenerate double-constraint)', () => {
+    // Cursor near the origin in BOTH axes — that is "on" the origin, which is
+    // coincident territory, not a pair of H+V relations to the same point.
+    const r = inferAlignment(empty, { x: 0.3, y: 0.8 }, []);
+    expect(r.refs.length).toBe(1);
+    // dx (0.3) < dy (0.8) → vertical (shared-x) is the closer alignment.
+    expect(r.refs[0]).toEqual({ refId: 'origin', type: 'vertical' });
+  });
+
+  it('excludes ids passed in opts.excludeIds (e.g. the gesture`s own anchor)', () => {
+    const state: SketchState = { entities: [remote('p1', 25, 0)], constraints: [] };
+    const r = inferAlignment(state, { x: 25.3, y: 40 }, ['p1'], { excludeIds: ['p1'] });
+    expect(r.refs).toEqual([]);
   });
 });

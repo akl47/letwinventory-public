@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   emptyDocument, createSketch, updateSketchState, findSketchByHost, promoteVertex, promoteEdge,
-  deleteSketch, setSketchVisibility,
+  deleteSketch, setSketchVisibility, circleCenterFromProjected,
 } from './document';
 import { emptySketchState, ORIGIN_POINT_ID } from './store';
 import type { ModelTopology, Plane3, SketchState } from './types';
@@ -82,6 +82,59 @@ describe('Sketch document (CAD-022, CAD-023, CAD-026, CAD-028, CAD-030)', () => 
     it('produces no candidates when topology is null (datum-plane sketch)', () => {
       const { doc, sketchId } = createSketch(emptyDocument(), 'datum:xy_plane', XY_PLANE, null);
       expect(doc.sketches[sketchId].candidates.length).toBe(0);
+    });
+
+    it('exposes the center of a projected circular edge as a center candidate (REQ 830)', () => {
+      // A full circle edge (closed polyline) centered at (5, 7) radius 3 on XY.
+      const n = 24;
+      const polyline: Array<[number, number, number]> = [];
+      for (let i = 0; i <= n; i++) {
+        const a = (i / n) * 2 * Math.PI;
+        polyline.push([5 + 3 * Math.cos(a), 7 + 3 * Math.sin(a), 0]);
+      }
+      const topo: ModelTopology = {
+        vertices: [],
+        edges: [{ id: 'f1/e0', isStraight: false, endpoints: [[8, 7, 0], [8, 7, 0]], polyline }],
+      };
+      const { doc, sketchId } = createSketch(emptyDocument(), 'face:0', XY_PLANE, topo);
+      const centers = doc.sketches[sketchId].candidates.filter(c => c.kind === 'center');
+      expect(centers.length).toBe(1);
+      expect(centers[0].id).toBe('cand-c-f1/e0');
+      expect(centers[0].points[0].x).toBeCloseTo(5, 6);
+      expect(centers[0].points[0].y).toBeCloseTo(7, 6);
+    });
+
+    it('emits no center candidate for a straight edge', () => {
+      const { doc, sketchId } = createSketch(emptyDocument(), 'face:0', XY_PLANE, BOX_TOPOLOGY);
+      expect(doc.sketches[sketchId].candidates.filter(c => c.kind === 'center').length).toBe(0);
+    });
+  });
+
+  describe('circleCenterFromProjected (REQ 830)', () => {
+    it('returns the centroid of a closed circular loop', () => {
+      const n = 16; const pts: Array<{ x: number; y: number }> = [];
+      for (let i = 0; i <= n; i++) { const a = (i / n) * 2 * Math.PI; pts.push({ x: 2 + 5 * Math.cos(a), y: -1 + 5 * Math.sin(a) }); }
+      const c = circleCenterFromProjected(pts);
+      expect(c!.x).toBeCloseTo(2, 6);
+      expect(c!.y).toBeCloseTo(-1, 6);
+    });
+
+    it('returns the circumcenter of an open arc', () => {
+      const n = 12; const pts: Array<{ x: number; y: number }> = [];
+      for (let i = 0; i <= n; i++) { const a = (i / n) * (Math.PI / 2); pts.push({ x: 4 * Math.cos(a), y: 4 * Math.sin(a) }); }
+      const c = circleCenterFromProjected(pts);
+      expect(c!.x).toBeCloseTo(0, 4);
+      expect(c!.y).toBeCloseTo(0, 4);
+    });
+
+    it('returns null for a straight (collinear) polyline', () => {
+      expect(circleCenterFromProjected([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 }])).toBeNull();
+    });
+
+    it('returns null for a non-circular (elliptical) sample', () => {
+      const n = 16; const pts: Array<{ x: number; y: number }> = [];
+      for (let i = 0; i <= n; i++) { const a = (i / n) * 2 * Math.PI; pts.push({ x: 6 * Math.cos(a), y: 2 * Math.sin(a) }); }
+      expect(circleCenterFromProjected(pts)).toBeNull();
     });
   });
 

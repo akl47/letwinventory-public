@@ -21,6 +21,18 @@ describe('analyzeDeterminacy', () => {
     expect(analyzeDeterminacy(s).has(p.id)).toBe(false);
   });
 
+  it('marks a point pinned to an arc/circle center (sub:center) as determined — 0 DOF (REQ 832)', () => {
+    let s = emptySketchState();
+    const p = addPoint(s, 5, 7); s = p.state;
+    // An on-edge constraint with a center sub-element pins (does NOT ride): no
+    // externalEdges line is needed, and the point is fully determined.
+    s = { ...s, constraints: [...s.constraints, {
+      id: 'cc1', type: 'concentric', targets: [{ entityId: p.id }],
+      externalRef: { scope: 'local', featureId: 'f1', edgeId: 'f1/e0', sub: 'center' },
+    }] };
+    expect(analyzeDeterminacy(s).has(p.id)).toBe(true);
+  });
+
   it('propagates determinacy through `coincident` between two points', () => {
     let s = emptySketchState();
     const fixed = addPoint(s, 0, 0); s = fixed.state;
