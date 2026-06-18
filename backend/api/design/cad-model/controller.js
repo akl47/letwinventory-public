@@ -14,6 +14,7 @@ const assemblyBranchService = require('../../../services/vcs/assemblyBranchServi
 const assemblyFreezeService = require('../../../services/vcs/assemblyFreezeService');
 const { assemblySerialize } = require('../../../services/vcs/assemblySerializer');
 const partRevisionService = require('../../../services/partRevisionService');
+const { logSketchDiff } = require('../../../services/cadSketchDebug');
 const RestError = require('../../../util/RestError');
 const { KernelDisconnected, KernelRpcError, getDefaultClient } = require('../../../services/cadKernelClient');
 
@@ -473,6 +474,17 @@ module.exports = {
     }
 
     try {
+      // Diagnostic: log exactly which sketch entities/constraints changed in
+      // this save (debounced ~500ms per edit burst). Quiet unless a sketch
+      // actually changed; disable with CAD_SKETCH_DEBUG=0.
+      if (patch.sketchDoc !== undefined) {
+        logSketchDiff({
+          modelId: model.id,
+          userId: req.user.id,
+          prevDoc: previousSnapshot.sketchDoc,
+          nextDoc: patch.sketchDoc,
+        });
+      }
       await model.update(patch);
       await recordHistory(model.id, req.user.id, 'updated', previousSnapshot, {
         featureTree: model.featureTree,

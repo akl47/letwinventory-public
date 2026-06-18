@@ -74,7 +74,12 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
     const projectedPairs = [];
     const seenTargets = new Set();
     for (const c of (sketch.state.constraints || [])) {
-      if (c.type !== 'on-edge' || !c.externalRef) continue;
+      if (!c.externalRef) continue;
+      // A center reference (REQ 831/832) is a `concentric` / `coincident` (or
+      // legacy `on-edge`) constraint carrying a local externalRef sub:'center'.
+      // Accept those alongside the regular on-edge converts/refs.
+      const isCenterRef = c.externalRef.scope !== 'cross-part' && c.externalRef.sub === 'center';
+      if (c.type !== 'on-edge' && !isCenterRef) continue;
       // Cross-part refs project against the resolver-supplied edge (keyed by
       // constraint id); intra-part refs project against a source body edge by id.
       const key = c.externalRef.scope === 'cross-part' ? `cp:${c.id}` : c.externalRef.edgeId;
@@ -84,10 +89,13 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
       // Implicit vertex reference (REQ 793): a single point pinned to a model
       // vertex's projection — no edge involved.
       const vertexId = c.externalRef.scope === 'cross-part' ? undefined : c.externalRef.vertexId;
+      // `sub: 'center'` (REQ 832) pins the target point to the referenced
+      // circular edge's projected CENTER rather than riding the edge line.
+      const sub = c.externalRef.scope === 'cross-part' ? undefined : c.externalRef.sub;
       for (const t of (c.targets || [])) {
         const e = entitiesById.get(t.entityId);
         if (e) {
-          projectedPairs.push({ entity: e, edgeId: key, vertexId });
+          projectedPairs.push({ entity: e, edgeId: key, vertexId, sub });
           seenTargets.add(e.id);
         }
       }
@@ -110,6 +118,9 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
     const isPointPinned = (pointId) => {
       for (const c of (sketch.state.constraints || [])) {
         if (c.type !== 'coincident' && c.type !== 'fixed' && c.type !== 'midpoint') continue;
+        // A center reference (coincident-to-center, REQ 832) is what DRIVES the
+        // point's re-projection — it must not count as a user pin that blocks it.
+        if (c.externalRef && c.externalRef.scope !== 'cross-part' && c.externalRef.sub === 'center') continue;
         for (const t of (c.targets || [])) {
           if (t.entityId === pointId) return true;
         }
@@ -129,7 +140,20 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
       newEntities[idx] = { ...cur, x, y };
       sketchChanged = true;
     };
-    for (const { entity: pe, edgeId, vertexId } of projectedPairs) {
+    for (const { entity: pe, edgeId, vertexId, sub } of projectedPairs) {
+      // Center reference (REQ 832): pin the target point to the projected CENTER
+      // of a circular/arc model edge — concentric (circle/arc center point) or
+      // coincident-to-center (standalone point). Re-derived each regen so the
+      // relation tracks the model arc as it moves / resizes. Must come BEFORE
+      // the generic edge branch (a circular edge isn't straight, so that branch
+      // would otherwise skip it and the point would never track the model).
+      if (pe.kind === 'point' && sub === 'center' && edgeId) {
+        const e = edgeIndex.get(edgeId);
+        const ctr = e && Array.isArray(e.polyline) ? _centerFromPolyline(e.polyline, sketch.plane) : null;
+        if (ctr) updatePoint(pe.id, ctr.cx, ctr.cy);
+        else if (debug) console.log(`[cad-projection] sketch=${sid} point=${pe.id} center ref edge ${edgeId} not circular/absent — skipped`);
+        continue;
+      }
       // Implicit point references (REQ 792–794): a single sketch point glued
       // to a model vertex (pin to its projection) or riding a model edge
       // (project onto the edge line, preserving where it currently sits).
@@ -281,6 +305,17 @@ function _circleFromPolyline(polyline, plane) {
   const ok = pts2d.every(p => Math.abs(Math.hypot(p.x - cx, p.y - cy) - radius) < radius * 0.01 + 1e-3);
   if (!ok) return null;
   return { cx, cy, radius };
+}
+
+/** Projected center of a circular model edge — full circle (closed polyline) or
+ * arc (open). Returns { cx, cy } or null when the edge isn't circular (REQ 832,
+ * mirrors the frontend `circleCenterFromProjected`). */
+function _centerFromPolyline(polyline, plane) {
+  const circle = _circleFromPolyline(polyline, plane);
+  if (circle) return { cx: circle.cx, cy: circle.cy };
+  const arc = _arcFromPolyline(polyline, plane);
+  if (arc) return { cx: arc.cx, cy: arc.cy };
+  return null;
 }
 
 /** Open circular polyline (arc) → center + radius + endpoints + ccw.

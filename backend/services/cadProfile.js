@@ -9,6 +9,7 @@
 // PlaneGCS-backed server-side re-solving is a separate work item.
 
 const { bezierLoopsFromTextEntity } = require('./cadTextGlyphs');
+const { splitAtIntersections, extractArrangementFaces, mergeFaces } = require('./cadArrangement');
 
 /**
  * @typedef {{x:number, y:number}} Point2
@@ -23,77 +24,20 @@ const { bezierLoopsFromTextEntity } = require('./cadTextGlyphs');
  */
 
 /**
- * Merge point ids that the sketch treats as the same vertex before the
- * walker keys adjacency on them. Two sources of equivalence:
- *   (1) explicit `coincident` constraints between two points
- *   (2) two points sitting within `spatialTol` of each other (catches
- *       accidental duplicates the user hasn't constrained yet).
- *
- * The sketch editor draws every line with a fresh endpoint id and links
- * snapped clicks via a coincident constraint instead of reusing ids, so
- * a four-line square otherwise looks like 8 vertices of degree 1 to the
- * walker and is rejected as "open chain at point …".
- *
- * @param {object} state @returns {object}
- */
-function canonicalizePoints(state) {
-  const spatialTol = 1e-4;
-  const parent = new Map();
-  const find = (id) => {
-    let p = parent.get(id);
-    if (p === undefined) p = id;
-    while (parent.has(p) && parent.get(p) !== p) p = parent.get(p);
-    parent.set(id, p);
-    return p;
-  };
-  const union = (a, b) => {
-    const ra = find(a), rb = find(b);
-    if (ra !== rb) parent.set(rb, ra);
-  };
-  const pointIds = new Set();
-  for (const e of state.entities) {
-    if (e.kind === 'point') { parent.set(e.id, e.id); pointIds.add(e.id); }
-  }
-  for (const c of (state.constraints || [])) {
-    if (c.type !== 'coincident' || !c.targets || c.targets.length !== 2) continue;
-    const a = c.targets[0] && c.targets[0].entityId;
-    const b = c.targets[1] && c.targets[1].entityId;
-    if (a && b && pointIds.has(a) && pointIds.has(b)) union(a, b);
-  }
-  const KEY = Math.round(1 / spatialTol);
-  const bucketRep = new Map();
-  for (const e of state.entities) {
-    if (e.kind !== 'point') continue;
-    const key = `${Math.round(e.x * KEY)}/${Math.round(e.y * KEY)}`;
-    const existing = bucketRep.get(key);
-    if (existing) union(existing, e.id);
-    else bucketRep.set(key, e.id);
-  }
-  let anyMerged = false;
-  for (const id of pointIds) { if (find(id) !== id) { anyMerged = true; break; } }
-  if (!anyMerged) return state;
-
-  const rewrite = (id) => pointIds.has(id) ? find(id) : id;
-  const rewritten = state.entities.map(e => {
-    if (e.kind === 'line') return { ...e, startId: rewrite(e.startId), endId: rewrite(e.endId) };
-    if (e.kind === 'circle') return { ...e, centerId: rewrite(e.centerId) };
-    if (e.kind === 'arc') return { ...e, centerId: rewrite(e.centerId), startId: rewrite(e.startId), endId: rewrite(e.endId) };
-    return e;
-  });
-  return { entities: rewritten, constraints: state.constraints || [] };
-}
-
-/**
  * @param {object} state sketch state ({entities, constraints}) from sketchDoc
  * @param {(raw:string)=>string} [resolve] expands `#{var}` placeholders in text
  * @returns {ProfilesResult}
  */
 function extractClosedLoops(state, resolve = (s) => s) {
-  state = canonicalizePoints(state);
   /** @type {ProfileLoop[]} */
   const loops = [];
   /** @type {string[]} */
   const errors = [];
+  // Per-loop provenance, parallel to `loops`. `face` carries the arrangement
+  // half-edge cycle so multiple selected regions can be merged into one
+  // profile (see extractMergedRegions). Extra return field — back-compatible.
+  /** @type {Array<{kind:string, face?:object}>} */
+  const sources = [];
 
   // Text glyphs contribute closed loops via the Roboto glyph engine (mirrors
   // the frontend `profile.ts` text branch). Emitted FIRST — same order as the
@@ -111,66 +55,213 @@ function extractClosedLoops(state, resolve = (s) => s) {
       /** @type {ProfileLoop} */
       const edges = contour.map((seg) => ({ kind: 'bezier', points: seg.points }));
       loops.push(edges);
+      sources.push({ kind: 'text' });
     }
   }
 
-  // Each non-construction circle is its own component (a closed loop on its
-  // own — same fast path REQ 612 added on the frontend).
-  for (const e of state.entities) {
+  // PLANAR ARRANGEMENT (must mirror `profile.ts` exactly so region indices and
+  // ordering match the frontend extrude preview — see cadArrangement.js).
+  //
+  // First: split every non-construction curve at every intersection. This
+  // turns "circle + line through it" into "two arcs + three line segments",
+  // wiring intersection points into the topology so the arrangement walker can
+  // discover every bounded region — not just connected-component loops.
+  const split = splitAtIntersections(state);
+
+  // Each non-construction circle that survived splitting (had fewer than 2
+  // crossings) is its own standalone loop. A circle with 2+ intersections has
+  // already been converted to arcs the face walker picks up below.
+  for (const e of split.entities) {
     if (e.kind !== 'circle' || e.construction) continue;
-    const center = findPoint(state, e.centerId);
+    const center = findPoint(split, e.centerId);
     if (!center) { errors.push(`circle ${e.id}: center point not found`); continue; }
     loops.push([{ kind: 'circle', center: { x: center.x, y: center.y }, radius: e.radius }]);
+    sources.push({ kind: 'circle' });
   }
 
-  // Segment components (lines + arcs): BFS through shared endpoints so a
-  // filleted-rectangle chain (line → arc → line → arc → …) lands in a
-  // single component. Without arcs in the adjacency, a filleted rectangle
-  // gets split into 4 single-line components that each fail the
-  // ≥3-segments check downstream.
-  const segments = segmentsOf(state);
-  const adj = buildSegmentAdjacency(segments);
-  const segById = new Map(segments.map(s => [s.id, s]));
-  const visited = new Set();
-  for (const startSeg of segments) {
-    if (visited.has(startSeg.id)) continue;
-    const componentIds = new Set([startSeg.id]);
-    const componentPointIds = new Set([startSeg.startId, startSeg.endId]);
-    const queue = [startSeg.id];
-    while (queue.length > 0) {
-      const sid = queue.shift();
-      const seg = segById.get(sid);
-      for (const pid of [seg.startId, seg.endId]) {
-        for (const adjSid of adj.get(pid) || []) {
-          if (componentIds.has(adjSid)) continue;
-          componentIds.add(adjSid);
-          queue.push(adjSid);
-          const adjSeg = segById.get(adjSid);
-          componentPointIds.add(adjSeg.startId);
-          componentPointIds.add(adjSeg.endId);
-        }
-      }
-    }
-    for (const sid of componentIds) visited.add(sid);
-    // Arcs also reference a centre point — include it in the sub-state so
-    // extractClosedLoop can compute the arc's angles.
-    for (const id of componentIds) {
-      const e = findEntityById(state, id);
-      if (e && e.kind === 'arc') componentPointIds.add(e.centerId);
-    }
-    const subState = {
-      entities: state.entities.filter(e =>
-        (e.kind === 'point' && componentPointIds.has(e.id)) ||
-        componentIds.has(e.id),
-      ),
-      constraints: [],
-    };
-    const sub = extractClosedLoop(subState);
-    if (sub.loop) loops.push(sub.loop);
-    else if (sub.error) errors.push(sub.error);
+  // Run the DCEL face walker over the split state, keeping only bounded faces
+  // (positive signed area). The unbounded outer face has negative/zero area
+  // and is discarded; sub-2-edge or near-zero-area faces are collinear
+  // artefacts of folding dangling chains into the outer traversal.
+  const faces = extractArrangementFaces(split);
+  const AREA_EPS = 1e-6;
+  for (const f of faces) {
+    if (f.edges.length < 2) continue;
+    if (f.signedArea <= AREA_EPS) continue;
+    const loop = faceToProfileLoop(f, split);
+    if (loop.length > 0) { loops.push(loop); sources.push({ kind: 'face', face: f }); }
   }
 
-  return { loops, errors };
+  return { loops, errors, sources, split };
+}
+
+/**
+ * Convert a DCEL face's half-edge boundary into a ProfileLoop the extrude
+ * kernel expects. Mirrors `faceToProfileLoop` in `profile.ts`. Each line
+ * half-edge → one LineProfileEdge; each arc half-edge → one ArcProfileEdge
+ * (using the per-half-edge angles/sense `buildHalfEdges` already computed).
+ *
+ * @param {{edges:Array<object>}} face
+ * @param {object} state post-split sketch state
+ * @returns {ProfileLoop}
+ */
+function faceToProfileLoop(face, state) {
+  /** @type {ProfileEdge[]} */
+  const out = [];
+  for (const e of face.edges) {
+    if (e.kind === 'line' && e.from && e.to) {
+      out.push({ kind: 'line', start: { x: e.from.x, y: e.from.y }, end: { x: e.to.x, y: e.to.y } });
+    } else if (e.kind === 'arc' && e.arcCenter && e.arcRadius !== undefined
+               && e.arcStartAngle !== undefined && e.arcEndAngle !== undefined
+               && e.arcCcw !== undefined) {
+      const from = findPoint(state, e.fromId);
+      const to = findPoint(state, e.toId);
+      if (!from || !to) continue;
+      out.push({
+        kind: 'arc',
+        center: { x: e.arcCenter.x, y: e.arcCenter.y },
+        radius: e.arcRadius,
+        startAngle: e.arcStartAngle,
+        endAngle: e.arcEndAngle,
+        ccw: e.arcCcw,
+        start: { x: from.x, y: from.y },
+        end: { x: to.x, y: to.y },
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Merge the SELECTED regions into combined profile(s) for one extrude.
+ * Adjacent arrangement tiles (regions sharing an edge) are unioned into a
+ * single outer loop — so the kernel extrudes one connected solid instead of
+ * separate edge-touching prisms that hang OCCT's fuse. Standalone loops
+ * (circles / text) in the selection pass through unmerged. Disjoint groups
+ * stay separate regions (still one body per disjoint piece downstream).
+ *
+ * This also makes a region whose "Up to" side is already solid behave
+ * correctly with no special-casing: as part of a larger merged profile, the
+ * up-to subtraction simply yields nothing where it's inside the body, while
+ * Direction-2 fills it — no separate prism, no fuse.
+ *
+ * @param {object} state @param {number[]} regionIndices @param {Function} [resolve]
+ * @returns {{ regions: ProfileRegion[], errors: string[] }}
+ */
+/**
+ * Clean up a merged loop where dropping shared edges left redundant joins:
+ *   - consecutive COLLINEAR lines → one line (kernel rejects collinear corners)
+ *   - consecutive CO-CIRCULAR arcs (same circle, sense, continuous) → one arc;
+ *     a closed run of them collapses to a single `circle` edge.
+ * Without the arc case, a circle split into N arc tiles stays N arcs and the
+ * extruded face carries N spurious seam edges. Only same-direction/continuous
+ * joins merge; genuine corners are kept.
+ * @param {ProfileLoop} loop @returns {ProfileLoop}
+ */
+function simplifyMergedLoop(loop) {
+  if (!Array.isArray(loop) || loop.length < 2) return loop;
+  const TOL = 1e-6;
+  const collinearLines = (a, b) => {
+    if (a.kind !== 'line' || b.kind !== 'line') return false;
+    const ax = a.end.x - a.start.x, ay = a.end.y - a.start.y;
+    const bx = b.end.x - b.start.x, by = b.end.y - b.start.y;
+    const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+    if (la < 1e-9 || lb < 1e-9) return false;
+    const cross = ax * by - ay * bx, dot = ax * bx + ay * by;
+    return Math.abs(cross) / (la * lb) < TOL && dot > 0
+      && Math.hypot(a.end.x - b.start.x, a.end.y - b.start.y) < 1e-6;
+  };
+  const coCircularArcs = (a, b) => (
+    a.kind === 'arc' && b.kind === 'arc' && a.ccw === b.ccw
+    && Math.hypot(a.center.x - b.center.x, a.center.y - b.center.y) < 1e-6
+    && Math.abs(a.radius - b.radius) < 1e-6
+    && Math.hypot(a.end.x - b.start.x, a.end.y - b.start.y) < 1e-6
+  );
+  const mergeArcs = (a, b) => ({
+    kind: 'arc', center: a.center, radius: a.radius, ccw: a.ccw,
+    start: a.start, end: b.end,
+    startAngle: Math.atan2(a.start.y - a.center.y, a.start.x - a.center.x),
+    endAngle: Math.atan2(b.end.y - a.center.y, b.end.x - a.center.x),
+  });
+  const out = [];
+  for (const e of loop) {
+    const prev = out[out.length - 1];
+    if (prev && collinearLines(prev, e)) {
+      out[out.length - 1] = { kind: 'line', start: prev.start, end: e.end };
+    } else if (prev && coCircularArcs(prev, e)) {
+      out[out.length - 1] = mergeArcs(prev, e);
+    } else {
+      out.push({ ...e });
+    }
+  }
+  // Wrap-around: last and first edges can also be a mergeable pair.
+  if (out.length >= 2) {
+    const last = out[out.length - 1], first = out[0];
+    if (collinearLines(last, first)) {
+      out.pop();
+      out[0] = { kind: 'line', start: last.start, end: first.end };
+    } else if (coCircularArcs(last, first)) {
+      out.pop();
+      out[0] = mergeArcs(last, first);
+    }
+  }
+  // A single arc that closes on itself is a full circle → emit a clean circle
+  // (cylindrical face, no seam) rather than a 360° arc.
+  if (out.length === 1 && out[0].kind === 'arc'
+      && Math.hypot(out[0].start.x - out[0].end.x, out[0].start.y - out[0].end.y) < 1e-6) {
+    return [{ kind: 'circle', center: out[0].center, radius: out[0].radius }];
+  }
+  return out;
+}
+
+function extractMergedRegions(state, regionIndices, resolve = (s) => s) {
+  const { loops, errors, sources, split } = extractClosedLoops(state, resolve);
+  const sel = (regionIndices || []).filter(i => Number.isInteger(i) && i >= 0 && i < loops.length);
+  if (sel.length === 0) return { regions: [], errors };
+
+  // Split the selection into mergeable arrangement faces vs standalone loops.
+  const faceSel = [];
+  const standaloneLoops = [];
+  for (const i of sel) {
+    const src = sources[i];
+    if (src && src.kind === 'face' && src.face) faceSel.push(src.face);
+    else standaloneLoops.push(loops[i]);
+  }
+
+  const resultLoops = [...standaloneLoops];
+  if (faceSel.length > 0) {
+    for (const merged of mergeFaces(faceSel)) {
+      const loop = simplifyMergedLoop(faceToProfileLoop(merged, split));
+      if (loop.length > 0) resultLoops.push(loop);
+    }
+  }
+  if (resultLoops.length === 0) return { regions: [], errors };
+
+  // Pair outer loops with their contained holes (same containment test as
+  // extractRegions). Only top-level loops become regions to extrude; contained
+  // loops are attached as holes.
+  const polys = resultLoops.map(l => tessellateProfileLoopJS(l));
+  /** @type {Set<number>[]} */
+  const insideOf = resultLoops.map(() => new Set());
+  for (let i = 0; i < resultLoops.length; i++) {
+    for (let j = 0; j < resultLoops.length; j++) {
+      if (i !== j && loopContains(polys[i], polys[j])) insideOf[i].add(j);
+    }
+  }
+  const parent = resultLoops.map((_, i) => {
+    let best = null, bestDepth = -1;
+    for (const j of insideOf[i]) { const d = insideOf[j].size; if (d > bestDepth) { best = j; bestDepth = d; } }
+    return best;
+  });
+  /** @type {ProfileRegion[]} */
+  const regions = [];
+  for (let i = 0; i < resultLoops.length; i++) {
+    if (insideOf[i].size > 0) continue;  // a hole of some other loop — not its own region
+    const holes = [];
+    for (let c = 0; c < resultLoops.length; c++) if (parent[c] === i) holes.push(resultLoops[c]);
+    regions.push({ outer: resultLoops[i], holes });
+  }
+  return { regions, errors };
 }
 
 /**
@@ -277,14 +368,16 @@ function extractClosedLoop(state) {
 function extractRegions(state, resolve = (s) => s) {
   const { loops, errors } = extractClosedLoops(state, resolve);
   const polys = loops.map(l => tessellateProfileLoopJS(l));
+  // Containment matrix: insideOf[i] = every j such that loop i is strictly
+  // inside loop j. Mirrors `loopContains` in profile.ts — every vertex of i
+  // must lie inside j (loops are non-self-intersecting, so this implies full
+  // containment). Keeps hole-nesting identical to the frontend.
   /** @type {Set<number>[]} */
   const insideOf = loops.map(() => new Set());
   for (let i = 0; i < loops.length; i++) {
-    const sample = interiorSample(polys[i]);
-    if (!sample) continue;
     for (let j = 0; j < loops.length; j++) {
       if (i === j) continue;
-      if (pointInPolygon(sample, polys[j])) insideOf[i].add(j);
+      if (loopContains(polys[i], polys[j])) insideOf[i].add(j);
     }
   }
   // Parent of i = container j whose own ancestry is deepest (= direct parent).
@@ -399,27 +492,23 @@ function pointInPolygon(p, poly) {
   return inside;
 }
 
-function interiorSample(poly) {
-  if (!poly || poly.length < 3) return null;
-  // Pick a vertex and nudge it slightly toward the centroid. This
-  // gives a point near the polygon's BOUNDARY (distinct from the
-  // centroid) so two concentric loops produce different samples
-  // — without this, two concentric circles both sample at the
-  // shared centre, point-in-polygon reports each "inside" the
-  // other, and parent detection emits duplicate annulus regions
-  // instead of an annulus + inner disk. The 1% nudge stays well
-  // inside the polygon for any convex shape (circles, rectangles)
-  // and for most non-pathological non-convex shapes too.
+/**
+ * True iff every vertex of `inner` lies strictly inside `outer`. Loops from
+ * extractClosedLoops are non-self-intersecting, so vertex containment implies
+ * full containment. Each test point is nudged a hair toward the inner loop's
+ * centroid to disambiguate when two loops share a vertex. Mirrors
+ * `loopContains` in profile.ts.
+ */
+function loopContains(inner, outer) {
+  if (inner.length === 0 || outer.length < 3) return false;
   let sx = 0, sy = 0;
-  for (const p of poly) { sx += p.x; sy += p.y; }
-  const centroid = { x: sx / poly.length, y: sy / poly.length };
-  const v0 = poly[0];
-  const candidate = { x: v0.x + (centroid.x - v0.x) * 0.01, y: v0.y + (centroid.y - v0.y) * 0.01 };
-  if (pointInPolygon(candidate, poly)) return candidate;
-  // Defensive fallback: try the centroid (works for any convex
-  // polygon even when the vertex-offset somehow misses).
-  if (pointInPolygon(centroid, poly)) return centroid;
-  return null;
+  for (const p of inner) { sx += p.x; sy += p.y; }
+  const cx = sx / inner.length, cy = sy / inner.length;
+  for (const p of inner) {
+    const test = { x: p.x + (cx - p.x) * 1e-3, y: p.y + (cy - p.y) * 1e-3 };
+    if (!pointInPolygon(test, outer)) return false;
+  }
+  return true;
 }
 
 /** @param {object} state @returns {ProfileSegment[]} */
@@ -460,4 +549,5 @@ module.exports = {
   extractClosedLoop,
   extractClosedLoops,
   extractRegions,
+  extractMergedRegions,
 };

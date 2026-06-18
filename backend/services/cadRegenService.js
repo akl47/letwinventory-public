@@ -26,7 +26,7 @@ const crypto = require('crypto');
 // `jest.spyOn(cadKernelClient, 'getDefaultClient')` — a destructured binding
 // captures the original function and the spy would never take effect.
 const cadKernelClient = require('./cadKernelClient');
-const { extractRegions } = require('./cadProfile');
+const { extractRegions, extractMergedRegions } = require('./cadProfile');
 const { applyEquationsToModel, resolveEquations } = require('./cadEquations');
 const { applyProjectionToSketchDoc } = require('./cadProjection');
 
@@ -328,6 +328,15 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
   const _captureSnapPrev = () => {
     if (_snapPrev) _captureFeatureSnapshot(_snapPrev.featureId, bodies, _snapPrev.bodiesBefore, featureSnapshots);
   };
+  // Frozen projected 2D state per sketch, captured at the sketch's FIRST
+  // consuming feature. A sketch's external (on-edge / projected) refs must
+  // resolve at the sketch's position in history — NOT be re-evaluated against
+  // newer geometry when a LATER feature reuses the same sketch. Edge topology
+  // ids (`<body>/eN`) are positional and reshuffle as the body accumulates
+  // features, so re-projecting a reused sketch at a later position can latch
+  // onto a different physical edge and corrupt it. Freezing at first use keeps
+  // every consumer seeing the same geometry. Keyed by sketchId → state.
+  const _frozenSketchStates = new Map();
 
   for (let featureIdx = 0; featureIdx < featureTree.features.length; featureIdx++) {
     const feature = featureTree.features[featureIdx];
@@ -516,7 +525,27 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
       // therefore see source-edge-tracked coordinates rather than
       // whatever was persisted on disk. Per-iteration (cheap; sketches
       // with no projections pass through by reference).
-      const projectedSketchDoc = applyProjectionToSketchDoc(sketchDoc, bodies, { externalEdges });
+      let projectedSketchDoc = applyProjectionToSketchDoc(sketchDoc, bodies, { externalEdges });
+      // Freeze the consumed sketch's projected 2D state at its FIRST consumer
+      // (see _frozenSketchStates above). Later features reusing the same sketch
+      // get the frozen state, so an external ref isn't re-evaluated against
+      // newer geometry than existed when the sketch was created/first used.
+      // Only the 2D entity state is frozen — host-face PLANE tracking below
+      // still runs live so a sketch on a moving face follows it.
+      if (feature.sketchId && projectedSketchDoc.sketches[feature.sketchId]) {
+        const frozen = _frozenSketchStates.get(feature.sketchId);
+        if (frozen) {
+          projectedSketchDoc = {
+            ...projectedSketchDoc,
+            sketches: {
+              ...projectedSketchDoc.sketches,
+              [feature.sketchId]: { ...projectedSketchDoc.sketches[feature.sketchId], state: frozen },
+            },
+          };
+        } else {
+          _frozenSketchStates.set(feature.sketchId, projectedSketchDoc.sketches[feature.sketchId].state);
+        }
+      }
       // Face-hosted sketch tracking: a sketch placed on an upstream feature's
       // face (hostId 'face:<persistentFaceId>') must follow that face when the
       // upstream feature changes shape — e.g. raising an extrude's height moves
@@ -554,6 +583,11 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
       // can re-run the real boolean at each instance (true feature pattern),
       // instead of copying a geometry delta. REQ 822 (hybrid).
       if (prism && prism.prismBrep) featureTools.set(feature.id, { brep: prism.prismBrep, type: feature.type });
+      // Surface any non-fatal per-region skips (e.g. a region the kernel
+      // couldn't build) as warnings without failing the feature.
+      if (prism && Array.isArray(prism.warnings) && prism.warnings.length) {
+        for (const w of prism.warnings) errors.push(`feature ${feature.id}: ${w}`);
+      }
 
       // Stage 2: figure out which bodies this feature targets and compose.
       const isAdditive = feature.type === 'extrude' || feature.type === 'revolve' || feature.type === 'sweep' || feature.type === 'loft';
@@ -1168,6 +1202,13 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
   // per disjoint region (e.g. one body per letter of extruded text) instead
   // of fusing them all into one. Each carries its own scoped faces/topology.
   const regionResults = [];
+  // Per-region failures (out-of-range index, or a region the kernel can't
+  // build — e.g. a pinched/self-touching arrangement face that BRepMesh
+  // rejects) are isolated here: the bad region is skipped with a warning and
+  // the remaining regions still build, instead of failing the whole feature
+  // and cascading (broken body → "Up to" failures downstream → face-hosted
+  // sketches reporting their host gone). Surfaced via the returned `warnings`.
+  const regionWarnings = [];
   let allCached = true;
 
   const endCondition = feature.endCondition || { kind: 'blind' };
@@ -1218,11 +1259,30 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
     untilBodyKey = { next: withBrep.map(b => ({ id: b.id, hash: b.paramHash || '' })) };
   }
 
-  for (const ri of regionIndices) {
-    if (ri < 0 || ri >= regions.length) {
-      throw new Error(`region index ${ri} out of range (have ${regions.length})`);
+  // When 2+ regions are selected, merge adjacent ones into a single combined
+  // profile so the kernel extrudes one connected solid per group — separate
+  // edge-touching prisms hang OCCT's fuse. This also lets a region whose Up-to
+  // side is already solid contribute via Direction-2 with no standalone prism.
+  // Single-region selections keep their original per-region scope (stable cache).
+  let buildRegions = [];
+  if (regionIndices.length > 1) {
+    const merged = extractMergedRegions(
+      sketch.state || { entities: [], constraints: [] }, regionIndices, model.__textResolver,
+    );
+    buildRegions = merged.regions.map((r, k) => ({ region: r, scopeKey: `m${k}` }));
+  }
+  if (buildRegions.length === 0) {
+    for (const idx of regionIndices) {
+      if (idx < 0 || idx >= regions.length) {
+        regionWarnings.push(`region index ${idx} out of range (have ${regions.length}) — skipped`);
+        continue;
+      }
+      buildRegions.push({ region: regions[idx], scopeKey: String(idx) });
     }
-    const region = regions[ri];
+  }
+
+  for (const { region, scopeKey } of buildRegions) {
+    const ri = scopeKey;  // cache/scope key: original index, or `m<k>` for a merged group
     // Resolve end condition → concrete (plane, distance, flipped) kernel
     // inputs. Mid Plane / Through All translate at this layer so the
     // kernel keeps a single-distance API.
@@ -1284,22 +1344,31 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
     }
 
     allCached = false;
-    const rpc = await client.call('buildExtrude', {
-      featureId: scope,
-      profile: region.outer,
-      holes: region.holes,
-      plane: dispatch.plane,
-      distance: dispatch.distance,
-      flipped: dispatch.flipped,
-      startOffset,
-      // Up To Body / Up To Next ignore the Direction-1 distance — the kernel
-      // sizes + caps that prism against the body BREP(s). Direction 2 (always a
-      // fixed-length blind/through-all prism) is still sent and unioned in by
-      // the kernel, so a "Up To … + Direction 2 Blind" extrude builds both.
-      ...(untilBrep ? { untilBrep } : {}),
-      ...(untilBreps ? { untilBreps } : {}),
-      ...(direction2 ? { direction2 } : {}),
-    });
+    let rpc;
+    try {
+      rpc = await client.call('buildExtrude', {
+        featureId: scope,
+        profile: region.outer,
+        holes: region.holes,
+        plane: dispatch.plane,
+        distance: dispatch.distance,
+        flipped: dispatch.flipped,
+        startOffset,
+        // Up To Body / Up To Next ignore the Direction-1 distance — the kernel
+        // sizes + caps that prism against the body BREP(s). Direction 2 (always a
+        // fixed-length blind/through-all prism) is still sent and unioned in by
+        // the kernel, so a "Up To … + Direction 2 Blind" extrude builds both.
+        ...(untilBrep ? { untilBrep } : {}),
+        ...(untilBreps ? { untilBreps } : {}),
+        ...(direction2 ? { direction2 } : {}),
+      });
+    } catch (err) {
+      // Isolate a region the kernel can't build (e.g. a pinched/self-touching
+      // arrangement face → "BRepMesh failed on a face"). Skip it with a
+      // warning so the other regions still build and nothing cascades.
+      regionWarnings.push(`region ${ri}: ${err.message}`);
+      continue;
+    }
 
     await dbClient.DesignBRepCache.upsert({
       cadModelID: model.id,
@@ -1318,6 +1387,16 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
     mergedTopology.edges.push(...scopedTopo.edges);
     regionBreps.push(rpc.brepBytes || '');
     regionResults.push({ ri, brep: rpc.brepBytes || '', faces: scopedFaces, topology: scopedTopo, paramHash, cached: false });
+  }
+
+  // Every selected region failed (or was out of range) — there is no geometry
+  // to compose. Fail the feature with the collected reasons rather than
+  // returning an empty prism (which would silently drop the feature).
+  if (regionBreps.length === 0) {
+    throw new Error(
+      `extrude produced no buildable regions` +
+      (regionWarnings.length ? `: ${regionWarnings.join('; ')}` : ''),
+    );
   }
 
   // Multi-region features need a single BRep at the feature level so the
@@ -1351,6 +1430,8 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
     // disjoint region. Already scoped by `${feature.id}#${ri}`.
     regions: regionResults,
     fusedSolids,
+    // Non-fatal per-region skips (surfaced to the user as warnings).
+    warnings: regionWarnings,
   };
 }
 
