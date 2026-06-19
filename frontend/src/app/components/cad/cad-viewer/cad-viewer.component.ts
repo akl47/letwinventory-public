@@ -59,6 +59,11 @@ import { constraintIconsForEntity, type ConstraintIcon, type ConstraintIconGroup
 import { tryGlyphLoopsForText, onFontReady, applyTextTransform } from '../../../cad/lib/textGlyphs';
 import { singleLineStrokesForText } from '../../../cad/lib/singleLineFont';
 import { exceedsDragThreshold, screenDeltaToWorld } from '../../../cad/lib/assemblyDrag';
+import { WORLD_UP as WORLD_UP_AXIS, orbitDir, dirToOrbit } from '../../../cad/lib/viewAxis';
+
+/** World up-axis for the 3D VIEW convention (Z-up, right-handed), as a Three
+ *  vector for `camera.up.copy(...)`. View/camera only — NOT a geometry normal. */
+const WORLD_UP = new THREE.Vector3(...WORLD_UP_AXIS);
 import type { InContextOverlay, OverlayEdge, OverlayFace, OverlayVertex } from '../../../cad/lib/inContextOverlay';
 
 // REQ 629 — drawing preview overlay. Each item is a transient shape rendered
@@ -1159,19 +1164,19 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // basis right-handed, not point anywhere meaningful on screen). The
     // camera stays on the +normal side, so the sketch is NON-mirrored;
     // changing only `up` rotates the view in-plane and cannot affect
-    // handedness. (worldUp = [0,1,0] → worldUp·N = uy.)
-    let upx = -uy * ux;
-    let upy = 1 - uy * uy;
-    let upz = -uy * uz;
+    // handedness. (worldUp = [0,0,1] → worldUp·N = uz.)
+    let upx = -uz * ux;
+    let upy = -uz * uy;
+    let upz = 1 - uz * uz;
     let upLen = Math.hypot(upx, upy, upz);
     if (upLen < 1e-6) {
-      // Near-horizontal plane (normal ≈ ±Y): world-up projects to ~0. Use a
-      // stable horizontal convention — Top (+Y) → -Z up, Bottom (-Y) → +Z up.
-      const sz = uy >= 0 ? -1 : 1;
-      const sDotN = sz * uz;
+      // Near-horizontal plane (normal ≈ ±Z): world-up projects to ~0. Use a
+      // stable horizontal convention — Top (+Z) → -Y up, Bottom (-Z) → +Y up.
+      const sy = uz >= 0 ? -1 : 1;
+      const sDotN = sy * uy;
       upx = -sDotN * ux;
-      upy = -sDotN * uy;
-      upz = sz - sDotN * uz;
+      upy = sy - sDotN * uy;
+      upz = -sDotN * uz;
       upLen = Math.hypot(upx, upy, upz) || 1;
     }
     this.camera.up.set(upx / upLen, upy / upLen, upz / upLen);
@@ -1179,9 +1184,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // Keep orbit theta/phi consistent with the new position so the
     // user's first drag rotates from this orientation rather than
     // snapping back to whatever the old orbit state implied.
-    this.orbitPhi = Math.max(0.05, Math.min(Math.PI - 0.05, Math.acos(uy)));
+    this.orbitPhi = Math.max(0.05, Math.min(Math.PI - 0.05, Math.acos(uz)));
     const sinPhi = Math.sin(this.orbitPhi);
-    this.orbitTheta = sinPhi > 1e-6 ? Math.atan2(uz, ux) : 0;
+    this.orbitTheta = sinPhi > 1e-6 ? Math.atan2(uy, ux) : 0;
     if (this.camera.isOrthographicCamera) this.updateOrthoFrustum();
   }
 
@@ -1200,9 +1205,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // it to 0.05 rad off (≈2.9°), which otherwise leaves the view slightly
     // tilted instead of perfectly normal.
     const phi = this.orbitPhi;
-    if (phi < 0.1) { this.orbitPhi = 0; this.camera?.up.set(0, 0, -1); }
-    else if (phi > Math.PI - 0.1) { this.orbitPhi = Math.PI; this.camera?.up.set(0, 0, 1); }
-    else this.camera?.up.set(0, 1, 0);
+    if (phi < 0.1) { this.orbitPhi = 0; this.camera?.up.set(0, -1, 0); }            // Top (+Z look-down) → -Y up
+    else if (phi > Math.PI - 0.1) { this.orbitPhi = Math.PI; this.camera?.up.set(0, 1, 0); }  // Bottom (-Z look-up) → +Y up
+    else this.camera?.up.copy(WORLD_UP);
     this.updateCamera();
   }
 
@@ -1288,6 +1293,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       // can, since parallel rays don't degenerate at depth 0.)
       -5000, 5000,
     );
+    this.camera.up.copy(WORLD_UP);  // Z-up view convention from frame 1
     this.updateCamera();
     // REQ 631 — Line2 width is computed in screen-pixel space, so the material
     // needs the current canvas resolution.
@@ -1478,9 +1484,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       y = this.orbitTarget.y + this.orbitDistance * uy;
       z = this.orbitTarget.z + this.orbitDistance * uz;
     } else {
-      x = this.orbitTarget.x + this.orbitDistance * Math.sin(this.orbitPhi) * Math.cos(this.orbitTheta);
-      y = this.orbitTarget.y + this.orbitDistance * Math.cos(this.orbitPhi);
-      z = this.orbitTarget.z + this.orbitDistance * Math.sin(this.orbitPhi) * Math.sin(this.orbitTheta);
+      const d = orbitDir(this.orbitTheta, this.orbitPhi);
+      x = this.orbitTarget.x + this.orbitDistance * d.x;
+      y = this.orbitTarget.y + this.orbitDistance * d.y;
+      z = this.orbitTarget.z + this.orbitDistance * d.z;
     }
     this.camera.position.set(x, y, z);
     this.camera.lookAt(this.orbitTarget);
@@ -1563,7 +1570,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       this.orbitDistance = v.distance;
       this.animateOrbitTo(v.theta, v.phi, 480);
     } else {
-      this.animateOrbitTo(Math.PI / 4, Math.PI / 4, 480, this.computeFrame());
+      // Z-up isometric: φ = true iso tilt (54.7°) from +Z, θ over the front-right (+X,-Y) corner.
+      this.animateOrbitTo(-Math.PI / 4, Math.acos(1 / Math.sqrt(3)), 480, this.computeFrame());
     }
   }
 
@@ -1632,11 +1640,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const aspect = width / height;
 
     const cam = new THREE.OrthographicCamera(-half * aspect, half * aspect, half, -half, -10000, 10000);
-    cam.position.set(
-      center.x + dist * Math.sin(phi) * Math.cos(theta),
-      center.y + dist * Math.cos(phi),
-      center.z + dist * Math.sin(phi) * Math.sin(theta),
-    );
+    const td = orbitDir(theta, phi);
+    cam.position.set(center.x + dist * td.x, center.y + dist * td.y, center.z + dist * td.z);
+    // Match the live view's Z-up convention (Three's default cam up is +Y).
+    cam.up.copy(WORLD_UP);
     cam.lookAt(center);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -1711,8 +1718,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // 26 individual material slots so we can hover-highlight any single
     // region. Slot order must match the group order produced by
     // buildBeveledCubeGeometry: 6 faces (+X -X +Y -Y +Z -Z), then 12 edges,
-    // then 8 corners.
-    const labels = ['RIGHT', 'LEFT', 'TOP', 'BOTTOM', 'FRONT', 'BACK'];
+    // then 8 corners. Z-up convention: +Z=TOP, -Z=BOTTOM; FRONT=-Y (SW-style
+    // front faces the viewer), BACK=+Y; RIGHT=+X, LEFT=-X (right-handed).
+    const labels = ['RIGHT', 'LEFT', 'BACK', 'FRONT', 'TOP', 'BOTTOM'];
     const maxAniso = renderer.capabilities.getMaxAnisotropy?.() ?? 1;
     const faceTexture   = labels.map(l => this.makePlainTexture(l, '#3c4055', '#4a5070', '#e6e6e6', maxAniso));
     const edgeTexture   = this.makePlainTexture('', '#2f3245', '#2f3245', '#2f3245', maxAniso);
@@ -2012,12 +2020,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     let tz = axis(local.z, absZ);
     const len = Math.hypot(tx, ty, tz) || 1;
     tx /= len; ty /= len; tz /= len;
-    // Spherical: phi from +Y axis, theta around Y.
-    let phi = Math.acos(Math.max(-1, Math.min(1, ty)));
+    // Spherical (Z-up): phi from +Z axis, theta the azimuth in the XY plane.
+    let { theta, phi } = dirToOrbit(tx, ty, tz);
     if (phi < 0.001)           phi = 0.001;
     if (phi > Math.PI - 0.001) phi = Math.PI - 0.001;
-    const sinPhi = Math.sin(phi);
-    const theta = sinPhi > 1e-6 ? Math.atan2(tz, tx) : 0;
     return { theta, phi };
   }
 
@@ -2032,18 +2038,18 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // Optional simultaneous zoom-to-fit tween (nav-cube view selection).
     const startTarget = this.orbitTarget.clone();
     const startDist   = this.orbitDistance;
-    // Target up-vector. For non-pole targets the turntable up (world +Y) is
-    // correct. At the poles (Top/Bottom) world-Y is parallel to the look
+    // Target up-vector. For non-pole targets the turntable up (world +Z) is
+    // correct. At the poles (Top/Bottom) world-Z is parallel to the look
     // direction and gimbal-locks to an arbitrary roll — so use a fixed
     // horizontal up that yields the canonical, axis-aligned view:
-    //   Top    (phi→0) → -Z up  (FRONT/+Z points down, RIGHT/+X to the right)
-    //   Bottom (phi→π) → +Z up
+    //   Top    (phi→0) → -Y up  (looking down -Z onto the XY ground)
+    //   Bottom (phi→π) → +Y up
     const su = this.camera.up.clone();
     const tu = targetPhi < 0.01
-      ? new THREE.Vector3(0, 0, -1)
+      ? new THREE.Vector3(0, -1, 0)
       : targetPhi > Math.PI - 0.01
-        ? new THREE.Vector3(0, 0, 1)
-        : new THREE.Vector3(0, 1, 0);
+        ? new THREE.Vector3(0, 1, 0)
+        : WORLD_UP.clone();
     // Shortest-arc theta: pick whichever direction (±) is closer.
     let deltaTheta = targetTheta - startTheta;
     while (deltaTheta >  Math.PI) deltaTheta -= 2 * Math.PI;
@@ -2153,11 +2159,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       return;
     }
     if (this.orbiting) {
-      // Free orbit is a world-Y-up turntable. Reset the up here so orbiting
+      // Free orbit is a world-Z-up turntable. Reset the up here so orbiting
       // away from a canonical pole view (Top/Bottom, which set a horizontal
-      // up) re-establishes the turntable instead of orbiting about -Z/+Z.
+      // ±Y up) re-establishes the turntable instead of orbiting about -Y/+Y.
       // Skip in sketch mode, where the up is pinned to the sketch plane.
-      if (!this.sketchPlaneNormal && this.camera.up.y < 0.999) this.camera.up.set(0, 1, 0);
+      if (!this.sketchPlaneNormal && this.camera.up.z < 0.999) this.camera.up.copy(WORLD_UP);
       // Horizontal drag rotates the model the SAME direction the cursor
       // moves (drag right → model spins right). Vertical drag tilts up
       // (drag up → top of model toward camera).
