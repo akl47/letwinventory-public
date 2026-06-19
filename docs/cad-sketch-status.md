@@ -4,7 +4,7 @@ Reference checklist mapping SolidWorks's Sketch tab against this project's imple
 
 All **Tested by user** cells start as ✗ on purpose — they get flipped to ✓ only after the project owner has manually exercised the feature in the running app.
 
-_Last reviewed against commit:_ `2387669` (working tree)
+_Last reviewed against commit:_ `a712898` (working tree)
 
 ## Legend
 
@@ -53,13 +53,13 @@ These are judgement calls — recorded here so they can be challenged:
 | Spline (cubic B-spline) | ✓ | ✓ | ✗ | `store.ts:105` `addSplineByPoints`, `store.ts:391` `addSpline` |
 | Style spline (variable degree) | ✓ | ✓ | ✗ | UI tool `style-spline` prompts for degree (1-9); reuses `addSpline(state, cps, degree)` |
 | Spline on surface | ▲ | ✗ | ✗ | `SplineOnSurfaceEntity` declared with face uv control points; tessellator returns []; renderer / face-uv projection still pending |
-| Equation-driven curve | ▲ | ✗ | ✗ | `EquationCurveEntity` with `xExpr`/`yExpr` strings + [tMin..tMax]; tessellator evals via `new Function('t', ...)`; picker + viewer renderer wired; toolbar UI still pending |
+| Equation-driven curve | ✓ | ✓ | ✗ | `EquationCurveEntity` (`xExpr`/`yExpr` + [tMin..tMax]); `store.ts addEquationCurve`; UI tool `equation-curve` + `handleEquationCurveClick`; tessellator evals via `new Function('t', …)` |
 | Straight slot | ✓ | ✓ | ✗ | `store.ts:292` `addSlotStraight` |
 | Centerpoint straight slot | ✓ | ✓ | ✗ | `store.ts` `addSlotStraightCenterpoint` + UI tool `slot-centerpoint` |
 | 3-point arc slot | ✓ | ✓ | ✗ | `store.ts` `addSlotArc3Pt` + UI tool `slot-arc-3pt` |
 | Centerpoint arc slot | ✓ | ✓ | ✗ | `store.ts` `addSlotArcCenterpoint` + UI tool `slot-arc-centerpoint` |
-| Text | ▲ | ✗ | ✗ | `TextEntity` declared (anchor + text + size); no glyph extraction yet — renderer + font path tool still pending |
-| Sketch picture | ▲ | ✗ | ✗ | `PictureEntity` declared with anchor + width/height + rotation + opacity + base64 `src`; renderer (textured plane) still pending |
+| Text | ✓ | ✓ | ✗ | `store.ts addText` / `addTextBoxByCorners`; glyph outlines extracted by `textGlyphs.ts` (backend mirror `cadTextGlyphs.js`) → extrudable profiles; UI tool `text` |
+| Sketch picture | ▲ | ✗ | ✗ | `store.ts addPicture` + `PictureEntity` (anchor + size + rotation + opacity + base64 `src`); UI tool `picture` + Properties resize/rotate wired; textured-plane render in the 3D overlay still pending |
 
 ## Edit and modify tools
 
@@ -136,18 +136,24 @@ These are judgement calls — recorded here so they can be challenged:
 | Under-/over-determined detection | ✓ | ✓ | ✗ | `determinacy.ts`; `determinacy.spec.ts` |
 | Profile extraction (closed loops) | ✓ | ✓ | ✗ | `profile.ts`; `profile.spec.ts` |
 | Inference (snapping while drawing) | ✓ | ✓ | ✗ | `inference.ts`; `inference.spec.ts` |
+| H/V alignment inference (armed refs) | ✓ | ✓ | ✗ | `inference.ts` `inferAlignment` (REQ 825–827); hovering arms a reference point, dashed guide lines, auto H/V relation on placement |
+| External-reference snap (on-edge / vertex) | ✓ | ✓ | ✗ | `externalSnap.ts` (REQ 792–796); snapping a sketch point onto a projected model edge/vertex creates an `on-edge` external ref, re-projected each regen (`cadProjection.js`) |
+| Projected arc/circle center snap (concentric / coincident) | ✓ | ✓ | ✗ | `externalSnap.ts` `cand-c-` center candidates + `document.ts circleCenterFromProjected` (REQ 830–832); circle/arc center → concentric, point/line-end → coincident-to-center; hint glyph + live re-projection |
+| Curved-edge hover highlight | ✓ | ✓ | ✗ | `externalSnap.ts closestPointOnPolyline` + `document.ts` curved-edge candidates; projected arcs/circles highlight on hover (no on-edge ref to a curved chord) |
+| Dimension to projected model edge | ✓ | ✓ | ✗ | Smart-dim from a sketch point/line to a projected straight model edge (commit `bbb0515`); `point-line-distance` external ref, no Convert needed |
 
 ## Summary counts
 
-- **Sketch entities & creation tools**: 24 ✓ / 2 ▲ / 3 ✗ — **24 of 29 fully implemented** (~83%)
+- **Sketch entities & creation tools**: 25 ✓ / 4 ▲ / 0 ✗ — **25 of 29 fully implemented** (~86%)
 - **Edit & modify tools**: 18 ✓ / 0 ▲ / 1 ✗ — **18 of 19 implemented** (~95%)
 - **Geometric constraints**: 14 ✓ / 0 ▲ / 2 ✗ — **14 of 16 implemented** (~88%)
 - **Dimensions**: 10 ✓ / 0 ▲ / 2 ✗ — **10 of 12 implemented** (~83%)
-- **Special / cross-cutting**: 9 ✓ / 0 ▲ / 0 ✗ — **9 of 9 implemented** (100%)
-- **Combined**: 75 ✓ / 2 ▲ / 8 ✗ — **75 of 85 fully implemented** (~88%)
+- **Special / cross-cutting**: 14 ✓ / 0 ▲ / 0 ✗ — **14 of 14 implemented** (100%)
+- **Combined**: 81 ✓ / 4 ▲ / 5 ✗ — **81 of 90 fully implemented** (~90%)
 
 What's left:
 
-- **Heavy lifts (each = multi-session)**: text, sketch picture, intersection curve, spline-on-surface, equation-driven curve, parabola / conic full solver primitives (replace the ▲ placeholders), pierce (3D-edge projection), equal-curvature (spline G2 math), ordinate + path-length dims (new chain-style constraint semantics).
+- **Remaining ▲ (partial)**: parabola + conic (full solver primitive / hyperbola), spline-on-surface (face-uv projection), sketch picture (textured-plane render in the overlay).
+- **Heavy lifts (each = multi-session)**: intersection curve, pierce (3D-edge projection), equal-curvature (spline G2 math), ordinate + path-length dims (new chain-style constraint semantics).
 
 _Tested-by-user counts deliberately start at 0 — flip cells to ✓ as the project owner manually exercises each feature in the running app._

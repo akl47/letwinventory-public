@@ -4,6 +4,8 @@ A survey of assembly-level capabilities across the four mainstream parametric CA
 systems — SolidWorks (**SW**), Siemens NX (**NX**), Onshape, and Autodesk Fusion —
 mapped against what this app's CAD/assembly module currently implements.
 
+_Last reviewed against commit:_ `a712898` — no assembly-behavior changes since this analysis was authored; tables verified current.
+
 **Legend**
 
 | Mark | Tool columns (SW/NX/Onshape/Fusion) | This-app column |

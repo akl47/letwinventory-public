@@ -6,7 +6,7 @@ All **Tested by user** cells start as ✗ on purpose — they get flipped to ✓
 
 Companion doc: [`docs/cad-sketch-status.md`](./cad-sketch-status.md) covers 2D sketcher parity. Fillet/chamfer have their own deep-dive at [`docs/cad-fillet-chamfer-parity.md`](./cad-fillet-chamfer-parity.md); this doc summarizes the same data in one row.
 
-_Last reviewed against commit:_ `2387669` (working tree)
+_Last reviewed against commit:_ `a712898` (working tree)
 
 ## Legend
 
@@ -19,7 +19,7 @@ _Last reviewed against commit:_ `2387669` (working tree)
 
 These are judgement calls — recorded here so they can be challenged:
 
-1. **Extrude end conditions** — each kind (`blind`, `midPlane`, `throughAll`, `upToVertex`, `upToSurface`, `offsetFromSurface`, `upToBody`) gets its own row. The `ExtrudeEndCondition` union (`types.ts:323`) declares all seven; UI + kernel dispatch all but `upToBody` (▲ — type declared, dispatch not wired).
+1. **Extrude end conditions** — each kind (`blind`, `midPlane`, `throughAll`, `upToVertex`, `upToSurface`, `offsetFromSurface`, `upToBody`) gets its own row. The `ExtrudeEndCondition` union (`types.ts:323`) declares all seven and UI + kernel dispatch ALL of them — `upToBody` is wired through `cadRegenService.js` (`untilBrep`/`untilBreps`) to the kernel `build_up_to_body`.
 2. **Direction 2** counts as one row, not duplicated per end-condition kind — UI offers the same end-condition picker on both directions.
 3. **Sweep** = ✓ at the basic level (profile sketch + path sketch with `merge` toggle). Twist / orientation control / multi-section loft are tracked separately as ✗.
 4. **Fillet — constant radius** ✓ even when multi-edge with mixed per-edge values (the `EdgeRef3D.value?` override on `types.ts:574`); variable-radius (per-vertex profile) ✗ because no UI surfaces opencascade-rs's `variable_fillet_edges` wrapper.
@@ -42,7 +42,7 @@ These are judgement calls — recorded here so they can be challenged:
 | Extrude — up to vertex | ✓ | ✓ | ✗ | `types.ts:323` `kind: 'upToVertex'` + viewer vertex picker |
 | Extrude — up to surface | ✓ | ✓ | ✗ | `types.ts:323` `kind: 'upToSurface'` with `fallbackPlane` snapshot for renumber survival |
 | Extrude — offset from surface | ✓ | ✓ | ✗ | `types.ts:323` `kind: 'offsetFromSurface'` (distance + face ref) |
-| Extrude — up to body | ▲ | ✗ | ✗ | Type declared in `types.ts:323` `kind: 'upToBody'`; kernel dispatch missing (`cadRegenService.js` throws `not implemented yet`) |
+| Extrude — up to body | ✓ | ✓ | ✗ | `types.ts:323` `kind: 'upToBody'`; `cadRegenService.js` resolves the target body BRep(s) (`untilBrep`/`untilBreps`) and the kernel `build_up_to_body` caps the prism (UnifySameDomain heal + empty-BRep guard) |
 | Extrude — start condition (offset / up-to-vertex / up-to-surface / offset-from-surface) | ✓ | ✓ | ✗ | `ExtrudeStartCondition` in `types.ts:362`; UI mirrors end-condition picker |
 | Extrude — direction 2 | ✓ | ✓ | ✗ | `ExtrudeDirection` in `types.ts:388`; same end-condition union per direction |
 | Extrude — merge toggle (multi-body) | ✓ | ✓ | ✗ | `merge?: boolean` on `ExtrudeFeature` in `types.ts:393`; falsy = floating body |
@@ -54,7 +54,7 @@ These are judgement calls — recorded here so they can be challenged:
 | Sweep — twist | ✗ | ✗ | ✗ | — |
 | Sweep — orientation control (follow path / keep normal / etc.) | ✗ | ✗ | ✗ | — |
 | Cut Sweep | ✓ | ✓ | ✗ | `types.ts:556` CutSweepFeature |
-| Loft | ✗ | ✗ | ✗ | Not in Feature union; would need new kernel op + `BRepOffsetAPI_ThruSections` wrapper |
+| Loft | ✓ | ✓ | ✗ | `types.ts:1202` LoftFeature; kernel `build_loft` (`extrude.rs:276`); profile sketches lofted in section order |
 | Cut Loft | ✗ | ✗ | ✗ | — |
 | Boundary | ✗ | ✗ | ✗ | — |
 | Thicken | ✗ | ✗ | ✗ | — |
@@ -96,9 +96,9 @@ These are judgement calls — recorded here so they can be challenged:
 
 | Feature | Implemented | Automated test | Tested by user | Notes / source |
 |---|---|---|---|---|
-| Linear pattern (3D feature) | ✗ | ✗ | ✗ | Sketch-level `linearPatternEntities` exists (`sketchEditOps.ts`) but no 3D Feature variant |
-| Circular pattern (3D feature) | ✗ | ✗ | ✗ | Same — sketch-level only |
-| Mirror feature (replicate a feature about a plane) | ✗ | ✗ | ✗ | Sketch-level `mirrorEntities` exists; no 3D variant |
+| Linear pattern (3D feature) | ✓ | ✓ | ✗ | `types.ts:1016` LinearPatternFeature; kernel `feature_pattern.rs`; 1–2 directions with count/spacing (REQ 822) |
+| Circular pattern (3D feature) | ✓ | ✓ | ✗ | `types.ts:1033` CircularPatternFeature; axis + count + angle via `feature_pattern.rs` |
+| Mirror feature (replicate a feature about a plane) | ✓ | ✓ | ✗ | `types.ts:974` MirrorFeatureFeature; mirrors selected features across a datum/face plane |
 | Sketch-driven pattern (anchor instances at sketch points) | ✗ | ✗ | ✗ | — |
 | Curve-driven pattern | ✗ | ✗ | ✗ | — |
 | Table-driven pattern | ✗ | ✗ | ✗ | — |
@@ -109,9 +109,9 @@ These are judgement calls — recorded here so they can be challenged:
 | Feature | Implemented | Automated test | Tested by user | Notes / source |
 |---|---|---|---|---|
 | Multi-body (`merge: false` toggle on additive features) | ✓ | ✓ | ✗ | `merge?: boolean` on ExtrudeFeature/RevolveFeature/SweepFeature; bodies tracked in `cadRegenService.js` body roster |
-| Combine — add | ✗ | ✗ | ✗ | Kernel has `buildBoolean` op (used internally for cuts/fuses); no standalone Combine feature surfaces it |
-| Combine — subtract (between existing bodies) | ✗ | ✗ | ✗ | Same — cut-extrude operates on a sketch, not body-vs-body |
-| Combine — common (intersect) | ✗ | ✗ | ✗ | — |
+| Combine — add | ✓ | ✓ | ✗ | `CombineFeature.operation: 'add'` (body-vs-body ∪); `_dispatchCombine` → `buildBoolean` fuse |
+| Combine — subtract (between existing bodies) | ✓ | ✓ | ✗ | `operation: 'subtract'` (target − tools) |
+| Combine — common (intersect) | ✓ | ✓ | ✗ | `operation: 'common'` (target ∩ tools) |
 | Split body | ✗ | ✗ | ✗ | — |
 | Move / copy body | ✓ | ✓ | ✗ | `MoveCopyBodyFeature` in `types.ts`; `_dispatchMoveCopyBody` chains buildPattern(translate) then buildPattern(rotate) with `mergeWithSource:false` |
 | Mirror body | ✓ | ✓ | ✗ | `MirrorBodyFeature` in `types.ts`; `_dispatchMirrorBody` calls buildPattern(mirror) per body with `mergeWithSource:false`; keepOriginals toggle |
@@ -122,7 +122,7 @@ These are judgement calls — recorded here so they can be challenged:
 
 | Feature | Implemented | Automated test | Tested by user | Notes / source |
 |---|---|---|---|---|
-| Shell | ✗ | ✗ | ✗ | Needs OCCT `BRepOffsetAPI_MakeThickSolid` wrapper |
+| Shell | ✓ | ✓ | ✗ | `types.ts:1076` ShellFeature; kernel `shell.rs` (conforming-punch pipeline); `_dispatchShell` in `cadRegenService.js`, picked faces removed at a wall thickness |
 | Draft (face draft angle) | ✗ | ✗ | ✗ | Needs OCCT `BRepOffsetAPI_DraftAngle` wrapper |
 | Dome | ✗ | ✗ | ✗ | — |
 | Wrap | ✗ | ✗ | ✗ | — |
@@ -146,17 +146,17 @@ These are judgement calls — recorded here so they can be challenged:
 | Datum plane — through edge perpendicular to face | ✓ | ✓ | ✗ | `method.kind: 'lineAndPerpFace'` |
 | Datum plane — through point perpendicular to edge | ✓ | ✓ | ✗ | `method.kind: 'pointAndPerpEdge'` |
 | Datum plane — tangent to cylinder | ✓ | ✓ | ✗ | `method.kind: 'tangentCylinder'` (with `flipped?` side toggle) |
-| Datum axis — through two points | ✗ | ✗ | ✗ | No user `DatumAxisFeature` exists |
-| Datum axis — along edge | ✗ | ✗ | ✗ | — |
-| Datum axis — intersection of two planes | ✗ | ✗ | ✗ | — |
-| Datum axis — cylindrical-face axis | ✗ | ✗ | ✗ | — |
-| Datum axis — through point perpendicular to face | ✗ | ✗ | ✗ | — |
-| Datum point — on vertex | ✗ | ✗ | ✗ | No user `DatumPointFeature` exists |
-| Datum point — center of circular edge | ✗ | ✗ | ✗ | `fitCircle` from `measure.ts` would supply the math |
-| Datum point — center of face | ✗ | ✗ | ✗ | — |
-| Datum point — center of mass of body | ✗ | ✗ | ✗ | `body.centroid` computed but not surfaced as a point feature |
-| Datum point — intersection of axis with plane | ✗ | ✗ | ✗ | — |
-| Datum point — on curve at parameter | ✗ | ✗ | ✗ | — |
+| Datum axis — through two points | ✓ | ✓ | ✗ | `DatumAxisFeature` `method.kind: 'twoPoints'` (`types.ts:927`) |
+| Datum axis — along edge | ✓ | ✓ | ✗ | `method.kind: 'alongEdge'` |
+| Datum axis — intersection of two planes | ✓ | ✓ | ✗ | `method.kind: 'twoPlanesIntersection'` |
+| Datum axis — cylindrical-face axis | ✓ | ✓ | ✗ | `method.kind: 'cylindricalFaceAxis'` (+ `fallbackAxis` for renumber survival) |
+| Datum axis — through point perpendicular to face | ✓ | ✓ | ✗ | `method.kind: 'pointAndPerpFace'` |
+| Datum point — on vertex | ✓ | ✓ | ✗ | `DatumPointFeature` `method.kind: 'onVertex'` (`types.ts`) |
+| Datum point — center of circular edge | ✓ | ✓ | ✗ | `method.kind: 'centerOfCircularEdge'` |
+| Datum point — center of face | ✓ | ✓ | ✗ | `method.kind: 'centerOfFace'` (+ `fallbackPosition`) |
+| Datum point — center of mass of body | ✓ | ✓ | ✗ | `method.kind: 'centerOfMass'` (uses `body.centroid`) |
+| Datum point — intersection of axis with plane | ✗ | ✗ | ✗ | Not a `DatumPointFeature` method |
+| Datum point — on curve at parameter | ✓ | ✓ | ✗ | `method.kind: 'alongEdge'` with parameter `t` |
 | Coordinate system (user-defined LCS) | ✗ | ✗ | ✗ | Origin behaves as one; no user feature |
 
 ## Display and utilities
@@ -181,8 +181,8 @@ These are judgement calls — recorded here so they can be challenged:
 
 | Feature | Implemented | Automated test | Tested by user | Notes / source |
 |---|---|---|---|---|
-| STEP export | ✗ | ✗ | ✗ | OCCT `STEPControl_Writer` available; no FFI wrapper or download endpoint |
-| STL export | ✗ | ✗ | ✗ | Tessellated face meshes already on the frontend; just need a binary STL serializer + download |
+| STEP export | ✓ | ✓ | ✗ | Kernel `export.rs` `STEPControl_Writer`; `cad-model/controller.js` `exportStep` route + `cad-export-dialog` UI |
+| STL export | ✓ | ✓ | ✗ | Kernel `export.rs` `write_stl_with_tolerance` (binary STL); same export dialog / download path |
 | IGES export | ✗ | ✗ | ✗ | — |
 | DXF export | ✗ | ✗ | ✗ | — |
 | OBJ export | ✗ | ✗ | ✗ | — |
@@ -226,7 +226,7 @@ These are judgement calls — recorded here so they can be challenged:
 
 | Feature | Implemented | Automated test | Tested by user | Notes / source |
 |---|---|---|---|---|
-| Assembly (multi-part with mates) | ✗ | N/A | ✗ | One CAD doc = one part; no assembly infrastructure |
+| Assembly (multi-part with mates) | ✓ | ✓ | ✗ | Shipped as a separate module (`DesignAssembly` + mate solver) — out of scope for THIS part-design doc; see `cad-system/assembly-feature-gap-analysis.md` |
 | 2D drawing views | ✗ | N/A | ✗ | — |
 
 ## Special and cross-cutting
@@ -252,25 +252,24 @@ These are judgement calls — recorded here so they can be challenged:
 
 ## Summary counts
 
-- **Features (boss / cut)**: 16 ✓ / 1 ▲ / 8 ✗ — **16 of 25 implemented** (~64%)
+- **Features (boss / cut)**: 18 ✓ / 0 ▲ / 7 ✗ — **18 of 25 implemented** (~72%)
 - **Fillet and chamfer**: 9 ✓ / 0 ▲ / 9 ✗ — **9 of 18 implemented** (~50%)
-- **Patterns**: 0 ✓ / 0 ▲ / 7 ✗ — **0 of 7 implemented** (0%)
-- **Body operations**: 1 ✓ / 1 ▲ / 7 ✗ — **1 of 9 implemented** (~11%)
-- **Modifications**: 0 ✓ / 0 ▲ / 8 ✗ — **0 of 8 implemented** (0%)
-- **Reference geometry**: 11 ✓ / 0 ▲ / 12 ✗ — **11 of 23 implemented** (~48%)
+- **Patterns**: 3 ✓ / 0 ▲ / 4 ✗ — **3 of 7 implemented** (~43%)
+- **Body operations**: 4 ✓ / 1 ▲ / 4 ✗ — **4 of 9 implemented** (~44%)
+- **Modifications**: 1 ✓ / 0 ▲ / 7 ✗ — **1 of 8 implemented** (~13%)
+- **Reference geometry**: 21 ✓ / 0 ▲ / 2 ✗ — **21 of 23 implemented** (~91%)
 - **Display and utilities**: 9 ✓ / 0 ▲ / 4 ✗ — **9 of 13 implemented** (~69%)
-- **Export / interop**: 1 ✓ / 0 ▲ / 7 ✗ — **1 of 8 implemented** (~13%)
+- **Export / interop**: 3 ✓ / 0 ▲ / 5 ✗ — **3 of 8 implemented** (~38%)
 - **Sheet metal**: 0 ✓ / 0 ▲ / 11 ✗ — **out of scope**
 - **Surface modeling**: 0 ✓ / 0 ▲ / 11 ✗ — **out of scope**
 - **Assemblies / drawings**: 0 ✓ / 0 ▲ / 2 ✗ — **out of scope**
 - **Special / cross-cutting**: 13 ✓ / 0 ▲ / 2 ✗ — **13 of 15 implemented** (~87%)
-- **Combined (in-scope only)**: 60 ✓ / 2 ▲ / 56 ✗ — **60 of 118 implemented** (~51%)
+- **Combined (in-scope only)**: 81 ✓ / 1 ▲ / 36 ✗ — **81 of 118 implemented** (~69%)
 
 What's left:
 
-- **Highest leverage (each = one to a few sessions)**: linear / circular pattern, mirror feature, shell, draft, user datum axes + points (REQ 657 follow-on), STL export, hole wizard, loft.
-- **Heavy lifts (each = multi-session)**: assembly + mates, drawing views, sheet metal, surface modeling, threads, configurations / design tables, simulation.
-- **OCCT wrapper extensions needed**: variable-radius fillet, face fillet, full-round fillet, vertex chamfer, asymmetric face chamfer, shell, draft.
-- **Pure backend / no kernel work**: pattern features (transform-based), mirror feature (boolean union with reflection), user datum axes + points, STL export (mesh already on FE), section view.
+- **Highest leverage (each = one to a few sessions)**: draft, section view, variable-radius fillet, face fillet, split body, scale body. (Linear/circular pattern, mirror feature, shell, loft, user datum axes + points, STEP/STL export, combine, and hole wizard are now shipped.)
+- **Heavy lifts (each = multi-session)**: drawing views, sheet metal, surface modeling, configurations / design tables, simulation. (Assembly + mates ship in the separate assembly module — see `cad-system/assembly-feature-gap-analysis.md`.)
+- **OCCT wrapper extensions needed**: variable-radius fillet, face fillet, full-round fillet, vertex chamfer, asymmetric face chamfer, draft.
 
 _Tested-by-user counts deliberately start at 0 — flip cells to ✓ as the project owner manually exercises each feature in the running app._
