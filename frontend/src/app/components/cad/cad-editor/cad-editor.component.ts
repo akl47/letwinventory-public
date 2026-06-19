@@ -4220,7 +4220,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
 export class CadEditorComponent implements OnInit, OnDestroy {
   /** Temporary build marker shown in the debug overlay so the user can confirm
    * which build is loaded. Bump alongside the sketch-editor text-NN marker. */
-  readonly buildMarker = 'text-282';
+  readonly buildMarker = 'text-283';
   /** Whether the pick-debug overlay (+ build markers) is shown. Toggled from
    * the footer bug button; persisted so the choice survives reloads. */
   readonly debugVisible = signal<boolean>(localStorage.getItem('cadDebugVisible') === '1');

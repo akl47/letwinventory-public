@@ -246,8 +246,8 @@ const DIM_ARROW_WIDTH_FRAC = 1 / 180;      // dimension arrowhead half-width
                 (click)="setNav('zoom')"><mat-icon>zoom_in</mat-icon></button>
         <button type="button" class="vc-btn" title="Zoom to fit" aria-label="Zoom to fit" data-testid="zoom-to-fit"
                 (click)="zoomToFit()"><mat-icon>fit_screen</mat-icon></button>
-        <button type="button" class="vc-btn" [disabled]="!normalToPlane()" data-testid="normal-to-view"
-                title="Normal to selected face / plane" aria-label="Normal to selection"
+        <button type="button" class="vc-btn" [disabled]="!normalToPlane() && activeSketchId() === null" data-testid="normal-to-view"
+                [title]="activeSketchId() !== null ? 'Normal to sketch' : 'Normal to selected face / plane'" aria-label="Normal to selection"
                 (click)="onNormalToClick()">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1127,10 +1127,17 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (this.scene) this.orientToPlane(plane);
   }
 
-  /** Nav-group "Normal to" button. Orient the camera head-on to the selected
-   * face/plane (supplied by the editor), then release the head-on lock so the
-   * user can orbit away — a one-shot reorientation, not sketch-mode lock. */
+  /** Nav-group "Normal to" button. In sketch mode it returns head-on to the
+   * ACTIVE sketch's plane (re-pinning the head-on view, which the next orbit
+   * releases again). In 3D mode it orients to the selected face/plane as a
+   * one-shot reorientation (no lock) so the user can orbit away. */
   onNormalToClick() {
+    const sid = this.activeSketchId();
+    if (sid !== null) {
+      const sketch = this.sketchDoc()?.sketches[sid];
+      if (sketch) this.orientToPlane(sketch.plane);  // re-pin head-on to the sketch
+      return;
+    }
     const plane = this.normalToPlane();
     if (!plane) return;
     const prevLock = this.sketchPlaneNormal;
@@ -2159,11 +2166,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       return;
     }
     if (this.orbiting) {
+      // Orbiting in sketch mode RELEASES the head-on pin so the user can 3D-
+      // rotate freely (the "Normal to" button re-orients to the sketch normal).
+      // orbitTheta/Phi were synced to the plane normal on sketch entry, so the
+      // free-orbit continues smoothly from the head-on orientation.
+      this.sketchPlaneNormal = null;
       // Free orbit is a world-Z-up turntable. Reset the up here so orbiting
       // away from a canonical pole view (Top/Bottom, which set a horizontal
       // ±Y up) re-establishes the turntable instead of orbiting about -Y/+Y.
-      // Skip in sketch mode, where the up is pinned to the sketch plane.
-      if (!this.sketchPlaneNormal && this.camera.up.z < 0.999) this.camera.up.copy(WORLD_UP);
+      if (this.camera.up.z < 0.999) this.camera.up.copy(WORLD_UP);
       // Horizontal drag rotates the model the SAME direction the cursor
       // moves (drag right → model spins right). Vertical drag tilts up
       // (drag up → top of model toward camera).
