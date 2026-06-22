@@ -104,7 +104,7 @@ pub const NAMING_SCHEMA_VERSION: u32 = 29;
 /// Human-readable kernel build marker, returned by the `ping` RPC and shown in
 /// the editor footer next to the frontend's `text-NN` marker. Bump on every
 /// kernel change so a rebuild can be confirmed from the UI.
-pub const KERNEL_BUILD: &str = "k-5";
+pub const KERNEL_BUILD: &str = "k-14";
 
 /// Default bind address. Override with `CAD_KERNEL_ADDR`. We default to
 /// `0.0.0.0` because the standard dev setup runs the Node backend in Docker,

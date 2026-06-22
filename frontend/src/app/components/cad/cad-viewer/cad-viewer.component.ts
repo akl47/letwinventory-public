@@ -60,6 +60,7 @@ import { tryGlyphLoopsForText, onFontReady, applyTextTransform } from '../../../
 import { singleLineStrokesForText } from '../../../cad/lib/singleLineFont';
 import { exceedsDragThreshold, screenDeltaToWorld } from '../../../cad/lib/assemblyDrag';
 import { WORLD_UP as WORLD_UP_AXIS, orbitDir, dirToOrbit } from '../../../cad/lib/viewAxis';
+import { originPlaneLabel } from '../../../cad/lib/datum';
 
 /** World up-axis for the 3D VIEW convention (Z-up, right-handed), as a Three
  *  vector for `camera.up.copy(...)`. View/camera only — NOT a geometry normal. */
@@ -371,6 +372,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * or datum plane's plane, supplied by the editor. Null disables the button. */
   normalToPlane = input<import('../../../cad/lib/types').Plane3 | null>(null);
   selectedFeatures = input<Set<string>>(new Set());
+  /** Selected origin-datum ids (point / axes / planes) — highlighted in the
+   * viewer to mirror the feature-tree selection. */
+  selectedDatums = input<Set<string>>(new Set());
   /** Currently-picked face ids in an active picker (Measure /
    * Fillet / Chamfer). Renders these in a sticky picked-color so the
    * user sees what's already in the selection set, separate from the
@@ -535,6 +539,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   sketchPointerUp = output<{ x: number; y: number }>();
   /** Fired when the user clicks (without dragging) a dimension annotation. */
   dimensionLabelClicked = output<string>();
+  /** User clicked an arrow handle on a selected dimension → flip its arrowheads
+   * inside/outside (SolidWorks-style). The parent toggles `arrowsOutside`. */
+  dimensionArrowsToggled = output<string>();
   /** Inline dimension editor committed a new value (Enter / blur). Raw
    * text so the parent can parse units, magnitude, signs, etc. */
   dimensionCommitted = output<{ id: string; raw: string }>();
@@ -592,6 +599,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * fire facePicked with a BRep face id. Hover gates to faces. Mutually
    * exclusive with vertexPickMode at the editor layer. */
   facePickMode = input<boolean>(false);
+  /** Sketch-plane pick (New Sketch / change-host): the editor is waiting for
+   * the user to pick a sketch plane. Hover highlights only ACCEPTABLE targets
+   * — a flat model face or a datum PLANE (axes / points / curved faces aren't
+   * sketchable). The click still flows through the normal selection path. */
+  planePickMode = input<boolean>(false);
   /** Feature whose own faces should be EXCLUDED from face-pick hits.
    * Used when an Up-to-Surface end condition is being chosen on a
    * feature that has already produced faces (e.g. editing an existing
@@ -851,6 +863,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private orbitPhi = Math.PI / 4;
   private orbitTarget = new THREE.Vector3(0, 0, 0);
   private orbitDistance = 180;
+  /** Cleared until the first geometry sync applies the saved default view (or
+   * the Z-up iso fallback) on model load / page refresh. Guards against later
+   * regens (every edit re-syncs geometry) yanking the camera back. */
+  private _initialViewApplied = false;
   /** Bumped when zoom (orbitDistance) changes enough to warrant re-tessellating
    * sketch curves at the new view scale. The sketch-overlay effect tracks it so
    * circles/arcs stay smooth at any zoom. Throttled (not per wheel tick). */
@@ -874,7 +890,18 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   constructor() {
     effect(() => {
       const g = this.geometry();
-      if (this.scene && g) this.syncGeometry(g);
+      if (this.scene && g) {
+        this.syncGeometry(g);
+        // On first model load / page refresh, orient to the saved default view
+        // (or the Z-up isometric fallback). Once only — later regens must not
+        // pull the camera away from wherever the user has orbited to. Skipped
+        // while pinned to a sketch plane (sketch mode owns the view); the flag
+        // stays clear so it applies on the first non-sketch sync.
+        if (!this._initialViewApplied && !this.sketchPlaneNormal) {
+          this._initialViewApplied = true;
+          this.applyDefaultView();
+        }
+      }
     });
     // CAD-790 — ghost reference geometry (in-context editing).
     effect(() => {
@@ -899,6 +926,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const features = this.selectedFeatures();
       const picked = this.pickedFaceIds();
       if (this.scene) this.recolor(sel, hov, features, picked);
+    });
+    effect(() => {
+      // Re-tint origin datums on selection OR transient hover/select changes
+      // (datum meshes are built in syncDatums; this only adjusts color/opacity,
+      // no rebuild). Hover highlight drives the sketch-plane-pick affordance.
+      this.selectedDatums();
+      this.hovered();
+      this.selected();
+      if (this.scene) this.recolorDatums();
     });
     effect(() => {
       const doc = this.sketchDoc();
@@ -1177,9 +1213,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     let upz = 1 - uz * uz;
     let upLen = Math.hypot(upx, upy, upz);
     if (upLen < 1e-6) {
-      // Near-horizontal plane (normal ≈ ±Z): world-up projects to ~0. Use a
-      // stable horizontal convention — Top (+Z) → -Y up, Bottom (-Z) → +Y up.
-      const sy = uz >= 0 ? -1 : 1;
+      // Near-horizontal plane (normal ≈ ±Z): world-up projects to ~0. Use the
+      // standard convention — Top (+Z) → +Y up (so sketch +X is right and +Y
+      // is up, not rotated 180°), Bottom (-Z) → -Y up.
+      const sy = uz >= 0 ? 1 : -1;
       const sDotN = sy * uy;
       upx = -sDotN * ux;
       upy = sy - sDotN * uy;
@@ -1212,8 +1249,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // it to 0.05 rad off (≈2.9°), which otherwise leaves the view slightly
     // tilted instead of perfectly normal.
     const phi = this.orbitPhi;
-    if (phi < 0.1) { this.orbitPhi = 0; this.camera?.up.set(0, -1, 0); }            // Top (+Z look-down) → -Y up
-    else if (phi > Math.PI - 0.1) { this.orbitPhi = Math.PI; this.camera?.up.set(0, 1, 0); }  // Bottom (-Z look-up) → +Y up
+    if (phi < 0.1) { this.orbitPhi = 0; this.camera?.up.set(0, 1, 0); }             // Top (+Z look-down) → +Y up
+    else if (phi > Math.PI - 0.1) { this.orbitPhi = Math.PI; this.camera?.up.set(0, -1, 0); } // Bottom (-Z look-up) → -Y up
     else this.camera?.up.copy(WORLD_UP);
     this.updateCamera();
   }
@@ -2049,13 +2086,13 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // correct. At the poles (Top/Bottom) world-Z is parallel to the look
     // direction and gimbal-locks to an arbitrary roll — so use a fixed
     // horizontal up that yields the canonical, axis-aligned view:
-    //   Top    (phi→0) → -Y up  (looking down -Z onto the XY ground)
-    //   Bottom (phi→π) → +Y up
+    //   Top    (phi→0) → +Y up  (standard: looking down -Z, +X right, +Y up)
+    //   Bottom (phi→π) → -Y up
     const su = this.camera.up.clone();
     const tu = targetPhi < 0.01
-      ? new THREE.Vector3(0, -1, 0)
+      ? new THREE.Vector3(0, 1, 0)
       : targetPhi > Math.PI - 0.01
-        ? new THREE.Vector3(0, 1, 0)
+        ? new THREE.Vector3(0, -1, 0)
         : WORLD_UP.clone();
     // Shortest-arc theta: pick whichever direction (±) is closer.
     let deltaTheta = targetTheta - startTheta;
@@ -2171,14 +2208,21 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       // orbitTheta/Phi were synced to the plane normal on sketch entry, so the
       // free-orbit continues smoothly from the head-on orientation.
       this.sketchPlaneNormal = null;
-      // Free orbit is a world-Z-up turntable. Reset the up here so orbiting
-      // away from a canonical pole view (Top/Bottom, which set a horizontal
-      // ±Y up) re-establishes the turntable instead of orbiting about -Y/+Y.
-      if (this.camera.up.z < 0.999) this.camera.up.copy(WORLD_UP);
+      // Free orbit is a world-Z-up turntable. Re-establish +Z up when orbiting
+      // away from a canonical pole view (Top/Bottom, which set a horizontal ±Y
+      // up). GUARD against the poles: near ±Z the world-up is ~parallel to the
+      // view direction, so copying it would make `lookAt` degenerate and snap
+      // the roll to an arbitrary angle — the "view jumps when I rotate after
+      // exiting a Top/Bottom sketch" bug. Only re-establish once tilted enough.
+      if (this.camera.up.z < 0.999 && this.orbitPhi > 0.3 && this.orbitPhi < Math.PI - 0.3) {
+        this.camera.up.copy(WORLD_UP);
+      }
       // Horizontal drag rotates the model the SAME direction the cursor
       // moves (drag right → model spins right). Vertical drag tilts up
-      // (drag up → top of model toward camera).
-      this.orbitTheta += dx * 0.005;
+      // (drag up → top of model toward camera). Sign is negative under the
+      // Z-up azimuth (theta winds CCW-from-top, opposite the old Y-up frame),
+      // so `-= dx` keeps "drag right → spins right".
+      this.orbitTheta -= dx * 0.005;
       this.orbitPhi = Math.max(0.05, Math.min(Math.PI - 0.05, this.orbitPhi - dy * 0.005));
       this.updateCamera();
     } else if (this.panning) {
@@ -2367,10 +2411,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   };
 
   /** SolidWorks-style arrow-key view rotation. Plain arrow = 15°, Shift +
-   * arrow = 90°. Directions match the cube-drag convention: Right spins
-   * theta forward (model rotates right under your view), Up tilts phi up
-   * (the same way the cube-widget drag does). Skipped when focus is in
-   * a text input so typed text doesn't also rotate the model. */
+   * arrow = 90°. Directions match the viewport MMB-orbit convention (Z-up):
+   * Right rotates the view right (orbitTheta decreases, same as dragging the
+   * canvas rightward), Up tilts phi up. Skipped when focus is in a text input
+   * so typed text doesn't also rotate the model. */
   @HostListener('document:keydown', ['$event'])
   onViewerKeydown(ev: KeyboardEvent) {
     const t = ev.target as HTMLElement | null;
@@ -2379,8 +2423,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const step = ev.shiftKey ? Math.PI / 2 : Math.PI / 12;
     let dTheta = 0, dPhi = 0;
     switch (ev.key) {
-      case 'ArrowLeft':  dTheta = -step; break;
-      case 'ArrowRight': dTheta = +step; break;
+      case 'ArrowLeft':  dTheta = +step; break;
+      case 'ArrowRight': dTheta = -step; break;
       case 'ArrowUp':    dPhi   = +step; break;
       case 'ArrowDown':  dPhi   = -step; break;
       default: return;
@@ -2922,6 +2966,31 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         if (this.hovered() !== next) this.hovered.set(next);
         return;
       }
+      // Sketch-plane pick: highlight ONLY a sketchable target — the nearest
+      // flat model face or datum plane. Curved faces, datum axes, and datum
+      // points aren't valid sketch planes, so they don't highlight.
+      if (this.planePickMode()) {
+        let next: string | null = null;
+        let bestDist = Infinity;
+        if (faceHits.length > 0) {
+          const ud = faceHits[0].object.userData as { faceId?: string; isFlat?: boolean };
+          if (ud.faceId && ud.isFlat) { next = ud.faceId; bestDist = faceHits[0].distance; }
+        }
+        // Nearest datum PLANE in front of that face (datumHits are distance-sorted).
+        const datumHits = this.raycaster.intersectObjects(this.datumGroup.children, true);
+        for (const dh of datumHits) {
+          let o: THREE.Object3D | null = dh.object;
+          while (o && !(o.userData as { datumId?: string }).datumId) o = o.parent;
+          if (!o) continue;
+          const ud = o.userData as { datumId?: string; datumPlane?: boolean };
+          if (ud.datumPlane === true && dh.distance < bestDist) {
+            next = `datum:${ud.datumId}`;
+          }
+          break; // only consider the nearest datum hit
+        }
+        if (this.hovered() !== next) this.hovered.set(next);
+        return;
+      }
     } finally {
       this.raycaster.far = prevFar;
     }
@@ -3030,18 +3099,26 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     }
   }
 
+  /** Highlight color for a selected datum (point / axis / plane) in the 3D
+   *  viewer — a vivid cyan distinct from every datum base color (X red /
+   *  Y green / Z blue / user amber / origin white). */
+  private static readonly DATUM_SELECT_COLOR = 0x00e5ff;
+
   private addDatum(d: DatumElement) {
+    const selected = this.selectedDatums().has(d.id);
+    const hi = CadViewerComponent.DATUM_SELECT_COLOR;
     if (d.kind === 'point') {
       // User-defined Datum Point features (REQ 661) carry a sidecar
       // `position` to place the sphere off-origin; the origin row's
       // built-in 'origin' datum has no sidecar and draws at (0,0,0).
       const sidecar = (d as { position?: [number, number, number] }).position;
       const isUserPoint = !!sidecar;
+      const base = isUserPoint ? 0xffb74d : 0xffffff;
       const geom = new THREE.SphereGeometry(isUserPoint ? 2.2 : 1.2, 16, 16);
-      const mat = new THREE.MeshBasicMaterial({ color: isUserPoint ? 0xffb74d : 0xffffff });
+      const mat = new THREE.MeshBasicMaterial({ color: selected ? hi : base });
       const mesh = new THREE.Mesh(geom, mat);
       if (sidecar) mesh.position.set(sidecar[0], sidecar[1], sidecar[2]);
-      mesh.userData = { datumId: d.id };
+      mesh.userData = { datumId: d.id, datumBaseColor: base };
       this.datumGroup.add(mesh);
       this.datumMeshes.set(d.id, mesh);
     } else if (d.kind === 'axis' && d.direction) {
@@ -3051,10 +3128,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       // for their midpoint.
       const sidecarAxis = (d as { axis?: { origin: [number, number, number]; direction: [number, number, number] } }).axis;
       const isUserAxis = !!sidecarAxis;
-      const color = isUserAxis ? 0xffb74d
+      const base = isUserAxis ? 0xffb74d
         : d.id === 'x_axis' ? 0xe53935
         : d.id === 'y_axis' ? 0x43a047
         : 0x1e88e5;
+      const color = selected ? hi : base;
       const center = sidecarAxis
         ? new THREE.Vector3(sidecarAxis.origin[0], sidecarAxis.origin[1], sidecarAxis.origin[2])
         : new THREE.Vector3();
@@ -3066,7 +3144,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const line = new THREE.Line(geom, mat);
       const group = new THREE.Group();
       group.add(line);
-      group.userData = { datumId: d.id };
+      group.userData = { datumId: d.id, datumBaseColor: base };
       this.datumGroup.add(group);
       this.datumMeshes.set(d.id, group);
     } else if (d.kind === 'plane' && d.direction) {
@@ -3074,13 +3152,14 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       // datum planes (REQ 657) get amber so they read as "added by
       // me" vs the always-there origin set.
       const isOrigin = d.id === 'xy_plane' || d.id === 'yz_plane' || d.id === 'xz_plane';
-      const color = d.id === 'xy_plane' ? 0x1e88e5
+      const base = d.id === 'xy_plane' ? 0x1e88e5
                   : d.id === 'yz_plane' ? 0xe53935
                   : d.id === 'xz_plane' ? 0x43a047
                   : 0xffb74d;
+      const color = selected ? hi : base;
       const geom = new THREE.PlaneGeometry(80, 80);
       const mat = new THREE.MeshBasicMaterial({
-        color, transparent: true, opacity: 0.18, side: THREE.DoubleSide,
+        color, transparent: true, opacity: selected ? 0.4 : 0.18, side: THREE.DoubleSide,
         depthWrite: false,
       });
       const mesh = new THREE.Mesh(geom, mat);
@@ -3103,14 +3182,14 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
         mesh.quaternion.copy(quat);
       }
-      mesh.userData = { datumId: d.id };
+      mesh.userData = { datumId: d.id, datumBaseColor: base, datumPlane: true };
       // Small corner label with the plane name (REQ — shown only for visible
       // planes, since `datums` is already visibility-filtered upstream). Added
       // as a child of the quad so it tracks the plane's position/orientation.
       const labelEl = document.createElement('div');
       labelEl.textContent = this.datumPlaneName(d);
       labelEl.style.cssText = 'font: 600 11px ui-monospace, SFMono-Regular, monospace; opacity: 0.92; pointer-events: none; user-select: none; white-space: nowrap; text-shadow: 0 0 3px rgba(0,0,0,0.75);';
-      labelEl.style.color = '#' + color.toString(16).padStart(6, '0');
+      labelEl.style.color = '#' + base.toString(16).padStart(6, '0');
       const labelObj = new CSS2DObject(labelEl);
       labelObj.position.set(-38, 38, 0); // top-left corner of the 80×80 quad (plane-local)
       mesh.add(labelObj);
@@ -3120,14 +3199,39 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     }
   }
 
-  /** Short display name for a datum plane's corner label. */
-  private datumPlaneName(d: DatumElement): string {
-    switch (d.id) {
-      case 'xy_plane': return 'XY';
-      case 'yz_plane': return 'YZ';
-      case 'xz_plane': return 'XZ';
-      default: return (d as { name?: string }).name || 'Plane';
+  /** Re-tint datum meshes to reflect the current `selectedDatums()` without a
+   *  full rebuild — selected datums turn cyan (planes also get more opaque),
+   *  unselected restore their stored base color. Point/plane meshes carry the
+   *  material directly; an axis is a Group whose first child is the Line. */
+  /** Transient hover highlight for a datum (amber-yellow) — distinct from the
+   *  cyan tree/selection tint. Used for sketch-plane-pick hover. */
+  private static readonly DATUM_HOVER_COLOR = 0xffeb3b;
+
+  private recolorDatums() {
+    const sel = this.selectedDatums();
+    const hovered = this.hovered();
+    const transSel = this.selected();
+    const SELC = CadViewerComponent.DATUM_SELECT_COLOR;
+    const HOVC = CadViewerComponent.DATUM_HOVER_COLOR;
+    for (const [id, obj] of this.datumMeshes) {
+      const ud = obj.userData as { datumBaseColor?: number; datumPlane?: boolean };
+      if (ud.datumBaseColor === undefined) continue;
+      const fullId = `datum:${id}`;
+      const hot = hovered === fullId;
+      const on = sel.has(id) || transSel === fullId;
+      const target = obj instanceof THREE.Mesh ? obj : (obj as THREE.Group).children[0] as THREE.Line;
+      const mat = target.material as THREE.MeshBasicMaterial | THREE.LineBasicMaterial;
+      mat.color.setHex(hot ? HOVC : on ? SELC : ud.datumBaseColor);
+      if (ud.datumPlane && mat instanceof THREE.MeshBasicMaterial) {
+        mat.opacity = (hot || on) ? 0.4 : 0.18;
+      }
     }
+  }
+
+  /** Display name for a datum plane's corner label (origin planes get their
+   *  friendly Top/Front/Right name; user datums use their own name). */
+  private datumPlaneName(d: DatumElement): string {
+    return originPlaneLabel(d.id) ?? ((d as { name?: string }).name || 'Plane');
   }
 
   /** CAD-790 — render the other components as translucent ghosts in the edited
@@ -4481,12 +4585,51 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (dim.dimensionLine) {
       const [a, b] = dim.dimensionLine;
       group.add(mkLine(a, b));
-      // Arrowheads at each end, pointing OUTWARD (a's arrow points away
-      // from b along the line, and vice versa). Skip arrows in dashed
-      // preview mode since the user is still placing.
+      // Skip arrows in dashed preview mode since the user is still placing.
       if (!dashed) {
-        group.add(this.makeDimArrowhead(sketch, a, b, color));
-        group.add(this.makeDimArrowhead(sketch, b, a, color));
+        if (dim.arrowsOutside) {
+          // Exterior: arrowheads BEYOND each end pointing inward, with a short
+          // stub of the dimension line out to each arrow's base.
+          const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+          const al = this.orbitDistance * DIM_ARROW_LEN_FRAC;
+          const ux = (dx / L) * al, uy = (dy / L) * al;
+          const outA = { x: a.x - ux, y: a.y - uy };
+          const outB = { x: b.x + ux, y: b.y + uy };
+          group.add(mkLine(a, outA));
+          group.add(mkLine(b, outB));
+          group.add(this.makeDimArrowhead(sketch, a, outA, color));
+          group.add(this.makeDimArrowhead(sketch, b, outB, color));
+        } else {
+          // Interior (default): arrowheads at each end, tips at the witness lines.
+          group.add(this.makeDimArrowhead(sketch, a, b, color));
+          group.add(this.makeDimArrowhead(sketch, b, a, color));
+        }
+      }
+    }
+    // Angle dimensions render an arc between the two lines (no chord, no vertex
+    // lines). Tessellate the arc into a polyline and put tangent arrowheads at
+    // each end pointing outward.
+    if (dim.arc) {
+      const { center, radius, startAngle, endAngle } = dim.arc;
+      const SEG = Math.max(8, Math.ceil(Math.abs(endAngle - startAngle) / (Math.PI / 32)));
+      const onArc = (ang: number) => ({ x: center.x + radius * Math.cos(ang), y: center.y + radius * Math.sin(ang) });
+      const pts: THREE.Vector3[] = [];
+      for (let s = 0; s <= SEG; s++) pts.push(this.project2DTo3D(sketch, onArc(startAngle + (endAngle - startAngle) * (s / SEG))));
+      const geom = new THREE.BufferGeometry().setFromPoints(pts);
+      const mat = dashed
+        ? new THREE.LineDashedMaterial({ color, dashSize: 1.2, gapSize: 0.6, depthTest: false })
+        : new THREE.LineBasicMaterial({ color, depthTest: false });
+      const arcLine = new THREE.Line(geom, mat);
+      if (dashed) arcLine.computeLineDistances();
+      arcLine.renderOrder = 3;
+      group.add(arcLine);
+      if (!dashed) {
+        // Inside: arrow base steps INTO the span (tip points outward at each
+        // end). Outside: base steps beyond the span (tip points inward).
+        const e = (endAngle - startAngle) * 0.08;
+        const eps = dim.arrowsOutside ? -e : e;
+        group.add(this.makeDimArrowhead(sketch, onArc(startAngle), onArc(startAngle + eps), color));
+        group.add(this.makeDimArrowhead(sketch, onArc(endAngle), onArc(endAngle - eps), color));
       }
     }
     for (const ext of dim.extensionLines) group.add(mkLine(ext[0], ext[1]));
@@ -4526,6 +4669,30 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const mesh = new THREE.Mesh(geom, mat);
     mesh.renderOrder = 4;
     return mesh;
+  }
+
+  /** Build a small clickable handle (shown on a SELECTED dimension's arrow ends)
+   * that flips the arrowheads inside/outside on click (SolidWorks-style). */
+  private buildArrowHandleElement(constraintId: string): HTMLDivElement {
+    const div = document.createElement('div');
+    div.textContent = '⇄';
+    Object.assign(div.style, {
+      width: '14px', height: '14px', lineHeight: '14px', textAlign: 'center',
+      fontSize: '11px', color: '#1e1e1e', background: '#ffb74d',
+      border: '1px solid #1e1e1e', borderRadius: '50%',
+      cursor: 'pointer', userSelect: 'none', pointerEvents: 'auto',
+      transform: 'translate(-50%, -50%)',
+    });
+    div.title = 'Flip arrows inside/outside';
+    // Toggle on pointerup (not 'click'): preventDefault on pointerdown can
+    // suppress a synthetic click in some browsers. stopPropagation keeps the
+    // canvas/label from also reacting (which would deselect the dimension).
+    div.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    div.addEventListener('pointerup', (ev) => {
+      ev.stopPropagation();
+      this.zone.run(() => this.dimensionArrowsToggled.emit(constraintId));
+    });
+    return div;
   }
 
   /** Build the static, click-to-select, drag-to-reposition, dbl-click-
@@ -4680,6 +4847,24 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         const obj = new CSS2DObject(el);
         obj.position.copy(this.project2DTo3D(sketch, dim.labelAnchor));
         group.add(obj);
+        // SolidWorks-style arrow handles: when this dimension is SELECTED, place
+        // a small clickable handle at each arrow end. Clicking flips the
+        // arrowheads inside/outside via dimensionArrowsToggled.
+        if (this.selectedConstraintId() === dim.constraintId && !isEditing) {
+          const ends: Array<{ x: number; y: number }> = dim.dimensionLine
+            ? [dim.dimensionLine[0], dim.dimensionLine[1]]
+            : dim.arc
+              ? [
+                  { x: dim.arc.center.x + dim.arc.radius * Math.cos(dim.arc.startAngle), y: dim.arc.center.y + dim.arc.radius * Math.sin(dim.arc.startAngle) },
+                  { x: dim.arc.center.x + dim.arc.radius * Math.cos(dim.arc.endAngle), y: dim.arc.center.y + dim.arc.radius * Math.sin(dim.arc.endAngle) },
+                ]
+              : [];
+          for (const end of ends) {
+            const h = new CSS2DObject(this.buildArrowHandleElement(dim.constraintId));
+            h.position.copy(this.project2DTo3D(sketch, end));
+            group.add(h);
+          }
+        }
       }
       // In-progress Smart Dim preview — orange/dashed render of the
       // dimension that WOULD be committed at the current cursor.
@@ -5390,23 +5575,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       else if (ownFeatureSelected) mat.color.setHex(0xffb74d);
       else mat.color.setHex(0x8aa0c4);
     }
-    for (const [id, obj] of this.datumMeshes) {
-      const fullId = `datum:${id}`;
-      const isSel = fullId === selected;
-      // Find material on any child of the datum group.
-      obj.traverse(child => {
-        const m = (child as THREE.Mesh).material as THREE.Material | undefined;
-        if (!m) return;
-        if (m instanceof THREE.MeshBasicMaterial || m instanceof THREE.LineBasicMaterial) {
-          // Save original color, overlay selection.
-          if (isSel) {
-            (m as any).color?.setHex(0xffeb3b);
-          } else {
-            // Restore: use the rebuild path. (No-op for now; visual highlight only on hover/select pulse.)
-          }
-        }
-      });
-    }
+    // Datum coloring (selection + hover) is owned by recolorDatums(), driven by
+    // its own effect on selectedDatums/hovered/selected.
   }
 }
 

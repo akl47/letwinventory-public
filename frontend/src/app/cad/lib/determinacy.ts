@@ -139,7 +139,12 @@ function analyzeExact(state: SketchState, externalEdges: ExternalEdgeMap): Set<s
     const e = entityById.get(c.targets[0]?.entityId);
     if (!e) continue;
     if (e.kind === 'point') { preFixed.add(`${e.id}:x`); preFixed.add(`${e.id}:y`); }
-    else if (e.kind === 'circle' || e.kind === 'arc') { preFixed.add(`${e.centerId}:x`); preFixed.add(`${e.centerId}:y`); }
+    else if (e.kind === 'circle' || e.kind === 'arc') {
+      preFixed.add(`${e.centerId}:x`); preFixed.add(`${e.centerId}:y`);
+      // Coradial-to-model-edge also pins the radius (the solver adds a
+      // circle_radius/arc_radius pin); concentric/coincident leave it free.
+      if (c.type === 'coradial') preFixed.add(`${e.id}:radius`);
+    }
   }
 
   // Build the free-param vector.

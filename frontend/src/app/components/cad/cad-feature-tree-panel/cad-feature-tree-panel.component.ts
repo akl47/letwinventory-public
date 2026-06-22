@@ -6,6 +6,7 @@ import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import type { Feature, Sketch, SketchDocument, OriginFeature, ExtrudeFeature } from '../../../cad/lib/types';
 import { defaultDatumVisibility } from '../../../cad/lib/featureTree';
 import { holeSpec } from '../../../cad/lib/holeSpecs';
+import { originPlaneLabel } from '../../../cad/lib/datum';
 
 export type FeatureTreeAction =
   | { action: 'edit-feature'; featureId: string }
@@ -450,6 +451,12 @@ export class CadFeatureTreePanelComponent {
   featureSelect = output<FeatureSelectEvent>();
   /** Set of selected sketch ids — parallel to `selectedFeatures`. */
   selectedSketches = input<Set<string>>(new Set());
+  /** Set of selected origin-datum ids (origin / x_axis / … / xy_plane / …) —
+   * parallel to the feature/sketch sets so the origin's point, axes, and
+   * planes are selectable like any other tree item. */
+  selectedDatums = input<Set<string>>(new Set());
+  /** Fired on a left-click of an origin-datum row (point / axis / plane). */
+  datumSelect = output<{ datumId: string; shiftKey: boolean; ctrlKey: boolean }>();
   /** Sketch ids whose host face the kernel reports as missing (deleted, not
    * re-tagged) — flagged with a warning indicator on the sketch row. */
   danglingSketchIds = input<Set<string>>(new Set());
@@ -758,9 +765,9 @@ export class CadFeatureTreePanelComponent {
           out.push(this.datumNode('x_axis', 'X axis', 'east', 'datum-axis-x', vis));
           out.push(this.datumNode('y_axis', 'Y axis', 'north', 'datum-axis-y', vis));
           out.push(this.datumNode('z_axis', 'Z axis', 'open_in_new', 'datum-axis-z', vis));
-          out.push(this.datumNode('xy_plane', 'XY plane', 'rectangle', 'datum-plane-xy', vis));
-          out.push(this.datumNode('yz_plane', 'YZ plane', 'rectangle', 'datum-plane-yz', vis));
-          out.push(this.datumNode('xz_plane', 'XZ plane', 'rectangle', 'datum-plane-xz', vis));
+          out.push(this.datumNode('xy_plane', originPlaneLabel('xy_plane')!, 'rectangle', 'datum-plane-xy', vis));
+          out.push(this.datumNode('yz_plane', originPlaneLabel('yz_plane')!, 'rectangle', 'datum-plane-yz', vis));
+          out.push(this.datumNode('xz_plane', originPlaneLabel('xz_plane')!, 'rectangle', 'datum-plane-xz', vis));
         }
       } else if (f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve' || f.type === 'cutRevolve') {
         const ef = f as ExtrudeFeature;  // structural overlap covers all four for tree-display purposes
@@ -1186,7 +1193,9 @@ export class CadFeatureTreePanelComponent {
       expanded: false,
       visible: vis[id] !== false,
       visibilityToggleable: true,
-      selectable: false,
+      // Origin datums (point / axes / planes) are selectable like any other
+      // feature-tree row — single/ctrl/shift-range via the unified model.
+      selectable: true,
       datumId: id,
     };
   }
@@ -1196,7 +1205,10 @@ export class CadFeatureTreePanelComponent {
   }
 
   hostLabel(hostId: string): string {
-    if (hostId.startsWith('datum:')) return hostId.substring('datum:'.length).replace('_', ' ');
+    if (hostId.startsWith('datum:')) {
+      const id = hostId.substring('datum:'.length);
+      return originPlaneLabel(id) ?? id.replace(/_/g, ' ');
+    }
     return hostId;
   }
 
@@ -1206,7 +1218,10 @@ export class CadFeatureTreePanelComponent {
     const sk = this.doc()?.sketches[sketchId];
     if (!sk || !sk.hostId) return '—';
     const hostId = sk.hostId;
-    if (hostId.startsWith('datum:')) return hostId.substring('datum:'.length).replace(/_/g, ' ');
+    if (hostId.startsWith('datum:')) {
+      const id = hostId.substring('datum:'.length);
+      return originPlaneLabel(id) ?? id.replace(/_/g, ' ');
+    }
     if (hostId.startsWith('face:')) {
       const missing = this.sketchHostMissing(sketchId) ? ' (missing)' : '';
       try {
@@ -1290,10 +1305,35 @@ export class CadFeatureTreePanelComponent {
       });
       return;
     }
+    // Origin-datum row (point / axis / plane): clicking selects it (the eye
+    // button stops propagation, so this only fires for the row body). Datums
+    // join the unified selection model (shift-range / ctrl-toggle).
+    if (n.kind === 'datum' && n.datumId) {
+      this.datumSelect.emit({ datumId: n.datumId, shiftKey: ev.shiftKey, ctrlKey: ev.ctrlKey || ev.metaKey });
+      return;
+    }
     // Non-feature, non-sketch row: clicking toggles expand.
     if (n.expandable) {
       this.toggleExpand(n, ev);
     }
+  }
+
+  /** Visible selectable rows (features + sketches + origin datums) in display
+   *  order. The parent uses this for unified shift-range selection across all
+   *  three kinds. The Origin parent row, bodies, the rollback bar, and
+   *  cosmetic-thread groups are excluded. */
+  orderedSelectableRows(): Array<{ kind: 'feature' | 'sketch' | 'datum'; id: string }> {
+    const out: Array<{ kind: 'feature' | 'sketch' | 'datum'; id: string }> = [];
+    for (const n of this.nodes()) {
+      if (n.kind === 'feature' && n.feature && n.feature.type !== 'origin') {
+        out.push({ kind: 'feature', id: n.feature.id });
+      } else if (n.kind === 'sketch' && n.sketchId) {
+        out.push({ kind: 'sketch', id: n.sketchId });
+      } else if (n.kind === 'datum' && n.datumId) {
+        out.push({ kind: 'datum', id: n.datumId });
+      }
+    }
+    return out;
   }
 
   isRowSelected(n: TreeNode): boolean {
@@ -1303,6 +1343,9 @@ export class CadFeatureTreePanelComponent {
     }
     if (n.kind === 'sketch' && n.sketchId) {
       return this.selectedSketches().has(n.sketchId);
+    }
+    if (n.kind === 'datum' && n.datumId) {
+      return this.selectedDatums().has(n.datumId);
     }
     return false;
   }

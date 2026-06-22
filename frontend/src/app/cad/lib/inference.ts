@@ -1,5 +1,5 @@
 import type { SketchState, PointEntity, CircleEntity, ArcEntity, SketchEntity, ConstraintType } from './types';
-import { findPoint, pointsOf } from './types';
+import { findPoint, pointsOf, findEntity } from './types';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constraint inference engine.
@@ -155,6 +155,11 @@ export function inferLineEnd(
       hints,
     };
   }
+  // (1b) Tangent from a start point that lies ON a circle/arc: when the user
+  // draws roughly along the tangent at that point, snap the line onto the
+  // tangent ray and add a line↔curve tangent relation (SolidWorks behaviour).
+  const tan = tangentFromStart(state, start, cursor);
+  if (tan) return tan;
   // (2) and (3): orthogonality snap.
   const dx = cursor.x - start.x;
   const dy = cursor.y - start.y;
@@ -188,6 +193,54 @@ export function inferLineEnd(
   const align = alignmentSnap(state, start, cursor);
   if (align) return align;
   return raw(cursor);
+}
+
+/** When the line's START point lies on a circle/arc, infer a tangent line: snap
+ * the direction to the curve's tangent at that point (perpendicular to the
+ * radius) when the cursor is within the angle tolerance, and emit a
+ * line↔curve `tangent` relation. Returns null when start isn't on a curve or
+ * the cursor isn't near the tangent. */
+function tangentFromStart(
+  state: SketchState, start: { x: number; y: number }, cursor: { x: number; y: number },
+): InferenceResult | null {
+  // Find a sketch point coincident at `start` that lies ON a circle/arc.
+  let curve: CircleEntity | ArcEntity | null = null;
+  for (const e of state.entities) {
+    if (e.kind !== 'point') continue;
+    if (Math.hypot(e.x - start.x, e.y - start.y) > 1e-6) continue;
+    for (const c of state.constraints) {
+      if (c.type !== 'coincident') continue;
+      const ids = c.targets.map(t => t.entityId).filter((x): x is string => !!x);
+      if (!ids.includes(e.id)) continue;
+      for (const id of ids) {
+        if (id === e.id) continue;
+        const ce = findEntity(state, id);
+        if (ce && (ce.kind === 'circle' || ce.kind === 'arc')) { curve = ce; break; }
+      }
+    }
+    if (curve) break;
+  }
+  if (!curve) return null;
+  const center = findPoint(state, curve.centerId);
+  if (!center) return null;
+  const rx = start.x - center.x, ry = start.y - center.y;
+  const rlen = Math.hypot(rx, ry);
+  if (rlen < 1e-6) return null;
+  // Tangent direction = perpendicular to the radius, signed toward the cursor.
+  let tx = -ry / rlen, ty = rx / rlen;
+  const cdx = cursor.x - start.x, cdy = cursor.y - start.y;
+  const clen = Math.hypot(cdx, cdy);
+  if (clen < 1e-6) return null;
+  if (tx * cdx + ty * cdy < 0) { tx = -tx; ty = -ty; }
+  const cosang = (tx * cdx + ty * cdy) / clen;
+  if (cosang < Math.cos(ANGLE_SNAP_TOL)) return null;
+  const along = cdx * tx + cdy * ty;  // project the cursor onto the tangent ray
+  const constraint: PendingConstraint = { type: 'tangent', targets: [{ self: true }, { entityId: curve.id }] };
+  return {
+    snapped: { x: start.x + tx * along, y: start.y + ty * along },
+    constraint, constraints: [constraint],
+    hint: 'tangent', hints: ['tangent'],
+  };
 }
 
 /** Reserved id for the synthetic sketch origin (mirrors store.ORIGIN_POINT_ID).
@@ -438,16 +491,18 @@ export function inferHoverOnCurve(
   return { snapped: hit.point, hints };
 }
 
-/** Nearest non-construction line / arc / circle hit within `tol` of
- * `p`. Generalises nearestLineHit so the line tool's second-click
- * snap drops a coincident on ANY curve (including converted on-edge
- * arcs and circles), matching SolidWorks' inference behaviour. */
+/** Nearest line / arc / circle hit within `tol` of `p`. Generalises
+ * nearestLineHit so the line tool's second-click snap drops a coincident
+ * on ANY curve (including converted on-edge arcs and circles), matching
+ * SolidWorks' inference behaviour. Construction geometry snaps the same as
+ * normal geometry — in SolidWorks construction lines are full inference
+ * targets, so they're included here. */
 function nearestCurveHit(
   state: SketchState, p: { x: number; y: number }, tol: number,
 ): CurveHit | null {
   let best: CurveHit | null = null;
   for (const e of state.entities) {
-    if (e.construction || e.kind === 'point') continue;
+    if (e.kind === 'point') continue;
     let proj: { x: number; y: number } | null = null;
     if (e.kind === 'line') {
       const a = findPoint(state, e.startId);

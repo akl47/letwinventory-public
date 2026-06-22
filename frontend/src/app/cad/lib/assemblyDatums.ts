@@ -9,7 +9,7 @@
 
 import type { DatumElement } from './types';
 import type { Placement } from './assembly.types';
-import { buildOriginDatums, planeForDatum } from './datum';
+import { buildOriginDatums, planeForDatum, originPlaneLabel } from './datum';
 import { transformPoint, transformDir } from './placementMath';
 
 // A datum plus the optional sidecars the viewer reads to place it off-origin.
@@ -34,9 +34,9 @@ export const ORIGIN_DATUM_DESCRIPTORS: ReadonlyArray<{ id: string; label: string
   { id: 'x_axis', label: 'X axis', icon: 'east', iconClass: 'datum-axis-x' },
   { id: 'y_axis', label: 'Y axis', icon: 'north', iconClass: 'datum-axis-y' },
   { id: 'z_axis', label: 'Z axis', icon: 'open_in_new', iconClass: 'datum-axis-z' },
-  { id: 'xy_plane', label: 'XY plane', icon: 'rectangle', iconClass: 'datum-plane-xy' },
-  { id: 'yz_plane', label: 'YZ plane', icon: 'rectangle', iconClass: 'datum-plane-yz' },
-  { id: 'xz_plane', label: 'XZ plane', icon: 'rectangle', iconClass: 'datum-plane-xz' },
+  { id: 'xy_plane', label: originPlaneLabel('xy_plane')!, icon: 'rectangle', iconClass: 'datum-plane-xy' },
+  { id: 'yz_plane', label: originPlaneLabel('yz_plane')!, icon: 'rectangle', iconClass: 'datum-plane-yz' },
+  { id: 'xz_plane', label: originPlaneLabel('xz_plane')!, icon: 'rectangle', iconClass: 'datum-plane-xz' },
 ];
 
 /** The assembly's own origin datums at the world origin (canonical ids → rendered

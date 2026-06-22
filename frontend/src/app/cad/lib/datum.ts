@@ -13,6 +13,18 @@ export function buildOriginDatums(): DatumElement[] {
   ];
 }
 
+/** Friendly display name for an origin datum plane, named by the view it faces
+ *  in the Z-up convention: XY (normal +Z) = Top, XZ (normal +Y) = Front,
+ *  YZ (normal +X) = Right. Returns null for non-origin-plane ids. */
+export function originPlaneLabel(id: string): string | null {
+  switch (id) {
+    case 'xy_plane': return 'Top Plane (XY)';
+    case 'xz_plane': return 'Front Plane (XZ)';
+    case 'yz_plane': return 'Right Plane (YZ)';
+    default: return null;
+  }
+}
+
 export function planeForDatum(id: string): Plane3 | null {
   const O: [number, number, number] = [0, 0, 0];
   switch (id) {

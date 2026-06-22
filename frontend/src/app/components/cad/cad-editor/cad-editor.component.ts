@@ -69,6 +69,9 @@ import { buildInContextOverlay, type InContextOverlay, type OverlayEdge, type Ov
  * endpoint (existing point), triangle for midpoint, X for intersection,
  * diamond for quadrant. */
 type SnapKind = 'endpoint' | 'midpoint' | 'intersection' | 'quadrant' | 'on-edge' | 'center';
+/** Generic feature-tree selectable kinds — features, sketches, and origin datums
+ *  all share one unified selection/anchor model. */
+type TreeSelKind = 'feature' | 'sketch' | 'datum';
 import { extractRegions, tessellateProfileLoop, topLevelRegionIndices } from '../../../cad/lib/profile';
 import { makeVarResolver, type TextResolver } from '../../../cad/lib/textGlyphs';
 import { buildBinaryStl } from '../../../cad/lib/stlExport';
@@ -744,6 +747,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
         </div>
 
         <app-cad-feature-tree-panel
+          #partTree
           *ngIf="!assemblyMode()"
           [features]="featureTree().features"
           [doc]="doc()"
@@ -751,6 +755,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           [selectedFeatures]="selectedFeatures()"
           [featureErrors]="mergedFeatureErrors()"
           [selectedSketches]="selectedSketches()"
+          [selectedDatums]="selectedDatums()"
           [danglingSketchIds]="missingHostSketchIds()"
           [bodyList]="bodies()"
           [hiddenBodyIds]="hiddenBodies()"
@@ -768,6 +773,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           (visibilityToggled)="onDatumVisibilityToggled($event)"
           (actionRequested)="onTreeAction($event)"
           (featureSelect)="onFeatureTreeSelect($event)"
+          (datumSelect)="onTreeDatumSelect($event)"
           (bodyVisibilityToggled)="toggleBodyVisibility($event)"
           (bodyIsolated)="onIsolateBody($event)"
           (bodyDeleted)="onDeleteBody($event)"
@@ -1608,7 +1614,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                           [value]="extrudeEndKindDisplay()"
                           (change)="setExtrudeEndKind($any($event.target).value)">
                     <option value="blind">Blind</option>
-                    <option value="midPlane">Mid Plane</option>
+                    <option value="midPlane">Mid Plane (Symmetric)</option>
                     <option value="throughAll">Through All</option>
                     <option value="throughAllBoth" *ngIf="ctx.mode === 'cutExtrude'">Through All — Both</option>
                     <option value="upToVertex">Up to Vertex</option>
@@ -1724,6 +1730,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <option value="upToVertex">Up to Vertex</option>
                   <option value="upToSurface">Up to Surface</option>
                   <option value="offsetFromSurface">Offset from face</option>
+                  <option value="upToBody">Up to Body</option>
+                  <option value="upToNext">Up to Next</option>
                 </select>
               </div>
               <div class="sub-row"
@@ -1757,6 +1765,16 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                         (click)="beginFacePick('end2')">
                   <mat-icon>{{ extrudeDir2UpToFaceId() ? 'check_circle' : 'touch_app' }}</mat-icon>
                   {{ extrudeDir2UpToFaceId() ? 'Face picked — click to change' : 'Pick a face in the viewer' }}
+                </button>
+              </div>
+              <div class="sub-row"
+                   *ngIf="extrudeDir2Enabled() && extrudeDir2EndKind() === 'upToBody'">
+                <span class="sub-label">Target body</span>
+                <button class="btn panel-flip"
+                        data-testid="extrude-dir2-pick-body"
+                        (click)="beginFacePick('end2')">
+                  <mat-icon>{{ extrudeDir2UpToFaceId() ? 'check_circle' : 'touch_app' }}</mat-icon>
+                  {{ extrudeDir2UpToFaceId() ? 'Body picked — click to change' : 'Click a face of the target body' }}
                 </button>
               </div>
               <div class="sub-row"
@@ -3206,6 +3224,21 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   </span>
                 </div>
               </div>
+              <div class="sub-row" *ngIf="patternSeedKind() === 'features'"
+                   style="flex-direction: column; align-items: stretch; gap: 2px;">
+                <button class="btn panel-flip"
+                        data-testid="pattern-geometry"
+                        [class.active]="patternGeometryPattern()"
+                        (click)="patternGeometryPattern.set(!patternGeometryPattern())">
+                  <mat-icon>{{ patternGeometryPattern() ? 'check_box' : 'check_box_outline_blank' }}</mat-icon>
+                  Geometry pattern
+                </button>
+                <span class="panel-hint">
+                  Copies the seed's finished geometry instead of re-running its
+                  features per instance. Use when patterned instances overlap
+                  (avoids duplicate faces); instances won't re-adapt to local geometry.
+                </span>
+              </div>
             </div>
 
             <!-- Mirror: plane pick -->
@@ -3503,6 +3536,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [selected]="selected()"
               [normalToPlane]="normalToPlane()"
               [selectedFeatures]="viewerSelectedFeatures()"
+              [selectedDatums]="selectedDatums()"
               [sectionPlane]="assemblyMode() ? asm.sectionPlane() : null"
               [pickedFaceIds]="assemblyMode() ? asm.pickedFaceIds() : pickedFaceIdsForViewer()"
               [assemblyDrag]="assemblyMode()"
@@ -3541,6 +3575,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [vertexPickMode]="vertexPickMode()"
               [extraPickableVertices]="sketchPickableVertices()"
               [facePickMode]="assemblyMode() ? asm.facePickActive() : facePickActive()"
+              [planePickMode]="sketchPlanePickActive()"
               [facePickExcludeFeatureId]="extrudeSidebar()?.editingFeatureId ?? null"
               [axisPickMode]="axisPickMode()"
               [axisCandidates]="axisCandidates3D()"
@@ -3572,6 +3607,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               (sketchPointerMove)="onViewerSketchPointerMove($event)"
               (sketchPointerUp)="onViewerSketchPointerUp($event)"
               (dimensionLabelClicked)="onDimensionLabelClicked($event)"
+              (dimensionArrowsToggled)="onDimensionArrowsToggled($event)"
               (dimensionCommitted)="onDimensionCommitted($event)"
               (dimensionCanceled)="onDimensionCanceled()"
               (dimensionDragged)="onDimensionDragged($event)"
@@ -3623,7 +3659,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <li>Switch to the <strong>Sketch</strong> ribbon and draw a closed shape</li>
                 <li>Back on Features, click <strong>Extrude</strong> and pick that sketch</li>
               </ol>
-              <p class="muted">Orbit: left-drag · Pan: shift-drag · Zoom: wheel · In sketch mode: left-click sketches, right-drag orbits</p>
+              <p class="muted">Orbit: left-drag · Pan: shift-drag · Zoom: wheel · In sketch mode: left-click sketches, middle-drag orbits</p>
             </div>
 
             <!-- Floating status overlay split into two translucent pill
@@ -4141,7 +4177,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .kernel-offline-overlay .koo-sub { font-size: 13px; color: #c9c9d6; }
     .mode-prompt { position: absolute; bottom: 56px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: rgba(66, 165, 245, 0.92); color: #0a0a14; border-radius: 8px; font-weight: 500; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
     .mode-prompt .prompt-text { font-size: 13px; }
-    .quick-start { position: absolute; top: 64px; right: 16px; max-width: 320px; padding: 16px 18px; background: rgba(0,0,0,0.55); border-radius: 8px; font-size: 13px; }
+    .quick-start { position: absolute; top: 160px; right: 16px; max-width: 320px; padding: 16px 18px; background: rgba(0,0,0,0.55); border-radius: 8px; font-size: 13px; }
     .quick-start h3 { margin: 0 0 8px; font-size: 14px; }
     .quick-start ol { margin: 0; padding-left: 18px; }
     .quick-start li { margin-bottom: 4px; }
@@ -4220,7 +4256,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
 export class CadEditorComponent implements OnInit, OnDestroy {
   /** Temporary build marker shown in the debug overlay so the user can confirm
    * which build is loaded. Bump alongside the sketch-editor text-NN marker. */
-  readonly buildMarker = 'text-283';
+  readonly buildMarker = 'text-298';
   /** Whether the pick-debug overlay (+ build markers) is shown. Toggled from
    * the footer bug button; persisted so the choice survives reloads. */
   readonly debugVisible = signal<boolean>(localStorage.getItem('cadDebugVisible') === '1');
@@ -4826,10 +4862,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     return id ? new Set([id]) : new Set<string>();
   });
   selectedSketches = signal<Set<string>>(new Set());
+  /** Selected origin-datum ids (point / axes / planes) — parallel to the
+   * feature/sketch selection sets so origin components are selectable too. */
+  selectedDatums = signal<Set<string>>(new Set());
   /** Anchor for shift-range selection in the feature tree (the last feature
    * picked with a plain or ctrl click). Shift-click selects every feature
    * between this anchor and the clicked one, in display order. */
-  private _featureAnchor: string | null = null;
+  // Shift-range-select anchor — unified across features AND sketches in the
+  // feature tree (kind + id), so a range spans both kinds in display order.
+  private _selAnchor: { kind: TreeSelKind; id: string } | null = null;
 
   /** Feature ids in the tree's DISPLAY order (createdAt-sorted, origin
    * excluded), so shift-range selection matches what the user sees. Mirrors
@@ -5376,6 +5417,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * instance. */
   patternSeedKind = signal<'bodies' | 'features'>('bodies');
   patternSeedFeatureIds = signal<string[]>([]);
+  /** Geometry pattern (REQ 841): copy the seed group's finished geometry rather
+   * than re-running its booleans per instance. Only meaningful in 'features' mode.
+   * Default ON (opt out for patterns that must re-evaluate per instance). */
+  patternGeometryPattern = signal<boolean>(true);
 
   /** Upstream features eligible to be pattern/mirror seeds — the solid-modifying
    * feature types, taken from before the pattern being edited (or all, when
@@ -6074,6 +6119,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private lastSketchWasOver = false;
   private sketchEditorRef = viewChild<CadSketchEditorComponent>('sketchEditor');
   private viewerRef = viewChild<CadViewerComponent>('viewer');
+  private partTree = viewChild<CadFeatureTreePanelComponent>('partTree');
   @ViewChild('ctxAnchor', { read: MatMenuTrigger }) private ctxMenuTrigger?: MatMenuTrigger;
 
   // ── VCS working-copy state (Phase 1) ──────────────────────────────────────
@@ -6457,7 +6503,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       } else {
         if (this.selectedFeatures().size > 0) this.selectedFeatures.set(new Set());
         if (this.selectedSketches().size > 0) this.selectedSketches.set(new Set());
-        this._featureAnchor = null;
+        if (this.selectedDatums().size > 0) this.selectedDatums.set(new Set());
+        this._selAnchor = null;
       }
     }
   }
@@ -6713,7 +6760,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.lastPickedFaceId.set(ev.faceId);
     this.lastPickedFaceIsFlat.set(ev.isFlat);
     if (!ev.featureId) {
-      if (!ev.shiftKey && !ev.ctrlKey) this.selectedFeatures.set(new Set());
+      // Clicked empty 3D background — clear the whole feature-tree selection
+      // (features, sketches, datums) and the shift-range anchor. Shift/Ctrl
+      // preserve the current selection so a miss doesn't drop an in-progress
+      // multi-select.
+      if (!ev.shiftKey && !ev.ctrlKey) {
+        if (this.selectedFeatures().size > 0) this.selectedFeatures.set(new Set());
+        if (this.selectedSketches().size > 0) this.selectedSketches.set(new Set());
+        if (this.selectedDatums().size > 0) this.selectedDatums.set(new Set());
+        this._selAnchor = null;
+      }
       return;
     }
     // Plain click on a face only highlights THAT face (via the per-face
@@ -6733,35 +6789,70 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // Selecting in the tree supersedes a transient 3D face pick — clear it so a
     // previously-clicked face doesn't stay highlighted blue in the viewer.
     if (this.selected() !== null) this.selected.set(null);
-    this.applyFeatureSelection(ev.featureId, ev.shiftKey, ev.ctrlKey);
+    this.applyTreeSelection('feature', ev.featureId, ev.shiftKey, ev.ctrlKey);
   }
 
+  // 3D-viewer feature pick (shift/ctrl on a face). Feature-only range, since
+  // the viewer has no sketch rows; shares the unified anchor with the tree.
   private applyFeatureSelection(featureId: string, shift: boolean, ctrl: boolean) {
     if (ctrl) {
-      // Toggle this feature in/out, keeping the rest; move the anchor here.
       const next = new Set(this.selectedFeatures());
       if (next.has(featureId)) next.delete(featureId); else next.add(featureId);
       this.selectedFeatures.set(next);
-      this._featureAnchor = featureId;
-    } else if (shift && this._featureAnchor) {
-      // Range-select every feature between the anchor and this one (inclusive),
-      // in display order — standard file-manager shift-click. Anchor stays put.
+      this._selAnchor = { kind: 'feature', id: featureId };
+    } else if (shift && this._selAnchor?.kind === 'feature') {
       const order = this._displayedFeatureIds();
-      const i = order.indexOf(this._featureAnchor);
+      const i = order.indexOf(this._selAnchor.id);
       const j = order.indexOf(featureId);
       if (i >= 0 && j >= 0) {
         const [lo, hi] = i <= j ? [i, j] : [j, i];
         this.selectedFeatures.set(new Set(order.slice(lo, hi + 1)));
       } else {
         this.selectedFeatures.set(new Set([featureId]));
-        this._featureAnchor = featureId;
+        this._selAnchor = { kind: 'feature', id: featureId };
       }
     } else {
-      // Plain click — single select; reset the anchor.
       this.selectedFeatures.set(new Set([featureId]));
-      this._featureAnchor = featureId;
+      this._selAnchor = { kind: 'feature', id: featureId };
       this.selectedSketches.set(new Set());
     }
+  }
+
+  /** Feature-TREE selection (features AND sketches), treated as one generic
+   *  list: plain click single-selects, ctrl toggles, shift range-selects every
+   *  row between the anchor and this one in DISPLAY order — across both kinds.
+   *  Populates `selectedFeatures` + `selectedSketches` from the unified range. */
+  private applyTreeSelection(kind: TreeSelKind, id: string, shift: boolean, ctrl: boolean) {
+    const feats = new Set(this.selectedFeatures());
+    const sks = new Set(this.selectedSketches());
+    const dats = new Set(this.selectedDatums());
+    const setOf = (k: TreeSelKind) => (k === 'feature' ? feats : k === 'sketch' ? sks : dats);
+    const clearAll = () => { feats.clear(); sks.clear(); dats.clear(); };
+    if (ctrl) {
+      const s = setOf(kind);
+      if (s.has(id)) s.delete(id); else s.add(id);
+      this._selAnchor = { kind, id };
+    } else if (shift && this._selAnchor) {
+      const order = this.partTree()?.orderedSelectableRows() ?? [];
+      const i = order.findIndex(r => r.kind === this._selAnchor!.kind && r.id === this._selAnchor!.id);
+      const j = order.findIndex(r => r.kind === kind && r.id === id);
+      clearAll();
+      if (i >= 0 && j >= 0) {
+        const [lo, hi] = i <= j ? [i, j] : [j, i];
+        for (let k = lo; k <= hi; k++) setOf(order[k].kind).add(order[k].id);
+        // Anchor stays put (standard shift-click).
+      } else {
+        setOf(kind).add(id);
+        this._selAnchor = { kind, id };
+      }
+    } else {
+      clearAll();
+      setOf(kind).add(id);
+      this._selAnchor = { kind, id };
+    }
+    this.selectedFeatures.set(feats);
+    this.selectedSketches.set(sks);
+    this.selectedDatums.set(dats);
   }
 
   // REQ 623 — right-click in the viewer opens the feature context menu.
@@ -6855,10 +6946,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // Candidate set:
   //   - the synthetic sketch origin (0, 0)
   //   - every existing sketch point entity (line endpoints, circle centers…)
-  //   - midpoint of every non-construction line
-  //   - intersections between every pair of non-construction curves
-  //   - top/bottom/left/right quadrant points on every non-construction
-  //     circle and arc (quadrants outside an arc's sweep are filtered out)
+  //   - midpoint of every line (construction included — it's a snap target too)
+  //   - intersections between every pair of curves (construction included)
+  //   - top/bottom/left/right quadrant points on every circle and arc
+  //     (construction included; quadrants outside an arc's sweep are filtered)
   //
   // Real points (existing entities + origin) get a slightly tighter
   // selection radius than virtual ones (midpoint / intersection / quadrant)
@@ -6903,14 +6994,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     for (const e of sketch.state.entities) {
       if (e.kind === 'point') consider({ x: e.x, y: e.y }, 'endpoint');
     }
-    // Midpoints of every non-construction line — only while a tool that PLACES
-    // a point is active (drawing + transform tools), since the midpoint snap
-    // exists to anchor a point being created/placed. In Select / pure-pick
-    // tools it's just noise (you don't pick a virtual midpoint), so it's
-    // suppressed there.
+    // Midpoints of every line (construction lines included — they're full snap
+    // targets, like normal lines) — only while a tool that PLACES a point is
+    // active (drawing + transform tools), since the midpoint snap exists to
+    // anchor a point being created/placed. In Select / pure-pick tools it's
+    // just noise (you don't pick a virtual midpoint), so it's suppressed there.
     if (this.sketchEditorRef()?.placesPoint()) {
       for (const e of sketch.state.entities) {
-        if (e.kind !== 'line' || e.construction) continue;
+        if (e.kind !== 'line') continue;
         const a = findPt(sketch.state, e.startId);
         const b = findPt(sketch.state, e.endId);
         if (!a || !b) continue;
@@ -6918,8 +7009,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       }
     }
     // Curve quadrants — for arcs, drop quadrants outside the sweep.
+    // Construction circles/arcs included — same snap targets as normal ones.
     for (const e of sketch.state.entities) {
-      if (e.construction) continue;
       if (e.kind === 'circle' || e.kind === 'arc') {
         const c = findPt(sketch.state, e.centerId);
         if (!c) continue;
@@ -7732,16 +7823,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   onTreeSketchSelect(ev: SketchSelectEvent) {
     // Selecting in the tree supersedes a transient 3D face pick — clear it.
     if (this.selected() !== null) this.selected.set(null);
-    const next = new Set(this.selectedSketches());
-    if (ev.shiftKey || ev.ctrlKey) {
-      if (next.has(ev.sketchId)) next.delete(ev.sketchId);
-      else next.add(ev.sketchId);
-    } else {
-      next.clear();
-      next.add(ev.sketchId);
-    }
-    this.selectedSketches.set(next);
-    if (!ev.shiftKey && !ev.ctrlKey) this.selectedFeatures.set(new Set());
+    this.applyTreeSelection('sketch', ev.sketchId, ev.shiftKey, ev.ctrlKey);
+  }
+
+  // Single-click on an origin datum row (point / axis / plane) selects it,
+  // unified into the same feature-tree selection model (shift range, ctrl toggle).
+  onTreeDatumSelect(ev: { datumId: string; shiftKey: boolean; ctrlKey: boolean }) {
+    if (this.selected() !== null) this.selected.set(null);
+    this.applyTreeSelection('datum', ev.datumId, ev.shiftKey, ev.ctrlKey);
   }
 
   onDatumVisibilityToggled(datumId: string) {
@@ -9456,6 +9545,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.patternCircFlipped.set(false);
     this.patternSeedKind.set('bodies');
     this.patternSeedFeatureIds.set([]);
+    this.patternGeometryPattern.set(true);
   }
 
   cancelPatternSidebar(): void {
@@ -9543,7 +9633,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     let feature: import('../../../cad/lib/types').Feature | null = null;
     // REQ 822 — feature mode carries the seed selection; body mode omits it.
     const seedFields = this.patternSeedKind() === 'features'
-      ? { seedKind: 'features' as const, seedFeatureIds: [...this.patternSeedFeatureIds()] }
+      ? {
+          seedKind: 'features' as const,
+          seedFeatureIds: [...this.patternSeedFeatureIds()],
+          // Geometry pattern only applies to feature-mode seeds (REQ 841).
+          // Persist the explicit boolean — default is ON, so an opt-out must be
+          // written as `false` (absent is treated as ON by the backend).
+          geometryPattern: this.patternGeometryPattern(),
+        }
       : {};
 
     if (ctx.kind === 'mirror') {
@@ -10521,6 +10618,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           ? { kind: 'offsetFromSurface', faceId: fid, offset, fallbackPlane: fallback }
           : { kind: 'offsetFromSurface', faceId: fid, offset };
       }
+      case 'upToBody': {
+        // Same body-id resolution as direction 1 — store the owning body, not
+        // the faceid, so the target survives regen-time face renumbering.
+        const fid = this.extrudeDir2UpToFaceId();
+        if (!fid) return null;
+        const bodyId = this.bodyIdForFaceId(fid);
+        if (!bodyId) return null;
+        return { kind: 'upToBody', bodyId, faceId: fid };
+      }
+      case 'upToNext': return { kind: 'upToNext' };
       default: return { kind: 'blind' };
     }
   }
@@ -10568,10 +10675,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         if (!this.extrudeDir2UpToVertexId()) return false;
       } else if (d2 === 'upToSurface') {
         if (!this.extrudeDir2UpToFaceId()) return false;
+      } else if (d2 === 'upToBody') {
+        const fid = this.extrudeDir2UpToFaceId();
+        if (!fid || this.bodyIdForFaceId(fid) === null) return false;
       } else if (d2 === 'offsetFromSurface') {
         if (!this.extrudeDir2UpToFaceId()) return false;
         if (!isFinite(this.extrudeDir2OffsetFromFaceDistance())) return false;
       }
+      // 'upToNext' needs no pick — caps at the next body.
     }
     return true;
   }
@@ -10783,7 +10894,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   setExtrudeDir2EndKind(kind: ExtrudeEndCondition['kind']): void {
     this.extrudeDir2EndKind.set(kind);
     if (kind !== 'upToVertex') this.extrudeDir2UpToVertexId.set(null);
-    const facePickerKind = kind === 'upToSurface' || kind === 'offsetFromSurface';
+    const facePickerKind = kind === 'upToSurface' || kind === 'offsetFromSurface' || kind === 'upToBody';
     if (!facePickerKind) {
       this.extrudeDir2UpToFaceId.set(null);
       this.extrudeDir2UpToFaceFallback.set(null);
@@ -11144,6 +11255,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * Entities is active in a sketch the user can also click a face to
    * project its entire boundary (every edge of the face becomes a
    * projected entity in the sketch). */
+  /** True while the editor is waiting for the user to pick a sketch plane
+   *  (New Sketch or change-host). Drives the viewer's plane-pick hover
+   *  highlight (flat faces + datum planes only). */
+  sketchPlanePickActive = computed<boolean>(() =>
+    this.mode() === 'pick-plane' || this.mode() === 'pick-sketch-host');
+
   facePickActive = computed<boolean>(() => {
     if (this.facePickMode()) return true;
     // Fillet / Chamfer sidebar accepts face picks too — click a face,
@@ -11549,7 +11666,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           if (e) projectedPairs.push({ entity: e, edgeId, vertexId });
         }
       }
-      if (projectedPairs.length === 0) {
+      // Coradial-to-model-edge (REQ 830-832): a `coradial` constraint carries a
+      // local center ref (sub:'center') on a single sketch circle/arc. Unlike
+      // Convert-Entities (on-edge) the entity stays the user's own curve, so it
+      // isn't in projectedPairs — but its center + radius must still track the
+      // referenced circular edge each regen. Collect those here.
+      const coradialPairs: Array<{ entity: typeof sketch.state.entities[number]; edgeId: string }> = [];
+      for (const c of sketch.state.constraints) {
+        if (c.type !== 'coradial' || !c.externalRef) continue;
+        if (c.externalRef.scope === 'cross-part' || c.externalRef.sub !== 'center') continue;
+        const eid = c.externalRef.edgeId;
+        if (!eid) continue;
+        const e = entitiesById.get(c.targets[0]?.entityId);
+        if (e && (e.kind === 'circle' || e.kind === 'arc')) coradialPairs.push({ entity: e, edgeId: eid });
+      }
+      if (projectedPairs.length === 0 && coradialPairs.length === 0) {
         nextSketches[sid] = sketch;
         continue;
       }
@@ -11680,6 +11811,45 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           if (Math.abs(ae.radius - proj.radius) > 1e-9 || ae.ccw !== proj.ccw) {
             const idx = newEntities.findIndex(en => en.id === ae.id);
             newEntities[idx] = { ...ae, radius: proj.radius, ccw: proj.ccw };
+            sketchChanged = true;
+          }
+        }
+      }
+      // Coradial center refs: re-derive the referenced edge's center + radius
+      // and move the sketch curve onto it. The edge is a full circle (closed
+      // polyline → _circleFromPolyline) or an arc edge (open → _arcFromPolyline,
+      // whose cx/cy/radius give the underlying circle). The sketch arc keeps its
+      // own angular span — only its center + radius follow the model edge.
+      for (const { entity: pe, edgeId } of coradialPairs) {
+        const src = edgeIndex.get(edgeId);
+        if (!src || !src.polyline) continue;
+        const poly = src.polyline as Array<[number, number, number]>;
+        const fit = this._circleFromPolyline(poly, sketch.plane)
+          ?? this._arcFromPolyline(poly, sketch.plane);
+        if (!fit) continue;
+        if (pe.kind === 'circle') {
+          const ce = pe as CircleEntity;
+          updatePoint(ce.centerId, fit.cx, fit.cy);
+          if (Math.abs(ce.radius - fit.radius) > 1e-9) {
+            const idx = newEntities.findIndex(en => en.id === ce.id);
+            newEntities[idx] = { ...ce, radius: fit.radius };
+            sketchChanged = true;
+          }
+        } else if (pe.kind === 'arc') {
+          const ae = pe as import('../../../cad/lib/types').ArcEntity;
+          const c = newEntities.find((en): en is PointEntity => en.id === ae.centerId && en.kind === 'point');
+          const sp = newEntities.find((en): en is PointEntity => en.id === ae.startId && en.kind === 'point');
+          const ep = newEntities.find((en): en is PointEntity => en.id === ae.endId && en.kind === 'point');
+          if (c && sp && ep) {
+            const a0 = Math.atan2(sp.y - c.y, sp.x - c.x);
+            const a1 = Math.atan2(ep.y - c.y, ep.x - c.x);
+            updatePoint(ae.centerId, fit.cx, fit.cy);
+            updatePoint(ae.startId, fit.cx + fit.radius * Math.cos(a0), fit.cy + fit.radius * Math.sin(a0));
+            updatePoint(ae.endId, fit.cx + fit.radius * Math.cos(a1), fit.cy + fit.radius * Math.sin(a1));
+          }
+          if (Math.abs(ae.radius - fit.radius) > 1e-9) {
+            const idx = newEntities.findIndex(en => en.id === ae.id);
+            newEntities[idx] = { ...ae, radius: fit.radius };
             sketchChanged = true;
           }
         }
@@ -12229,6 +12399,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (feature.seedKind === 'features') {
       this.patternSeedKind.set('features');
       this.patternSeedFeatureIds.set([...(feature.seedFeatureIds ?? [])]);
+      // Default ON: only an explicit false unchecks it (matches the backend).
+      this.patternGeometryPattern.set(feature.geometryPattern !== false);
     }
     this.patternSidebar.set({ kind: feature.type, editingFeatureId: feature.id });
   }
@@ -12299,7 +12471,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         this.doc.set(nextDoc);
       }
       this.selectedFeatures.set(new Set());
-      this._featureAnchor = null;
+      this._selAnchor = null;
       this.save();
     });
   }
@@ -13222,6 +13394,24 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // is unambiguous (only the dim is up for deletion).
     this.selectedFeatures.set(new Set());
     this.selectedSketches.set(new Set());
+    this.selectedDatums.set(new Set());
+  }
+
+  /** Arrow handle clicked on a selected dimension → flip its arrowheads
+   * inside/outside (cosmetic; mirrors the placement-drag persist path). */
+  onDimensionArrowsToggled(constraintId: string) {
+    if (this.readonly()) return;
+    const sid = this.activeSketchId();
+    if (!sid) return;
+    const sketch = this.doc().sketches[sid];
+    if (!sketch) return;
+    const next: SketchState = {
+      ...sketch.state,
+      constraints: sketch.state.constraints.map(c =>
+        c.id === constraintId ? { ...c, arrowsOutside: !c.arrowsOutside } : c),
+    };
+    this.doc.set(updateSketchState(this.doc(), sid, next));
+    this.save();
   }
 
   /** Double-click on a dimension label — open the inline value editor. */
@@ -13375,6 +13565,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // Delete key targets only the picked constraint.
     this.selectedFeatures.set(new Set());
     this.selectedSketches.set(new Set());
+    this.selectedDatums.set(new Set());
   }
 
   /** Constraint-list row click — same selection semantics as a badge

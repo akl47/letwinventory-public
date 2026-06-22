@@ -54,13 +54,16 @@ describe('inferLineEnd', () => {
     expect(r.constraint?.type).not.toBe('coincident');
   });
 
-  it('ignores construction lines when hunting for on-line snaps', () => {
+  it('snaps onto construction lines the same as normal lines', () => {
+    // Construction geometry is a full inference target (SolidWorks behaviour):
+    // hovering near a construction line drops the same coincident-on-line snap
+    // a normal line would. Cursor (10,6) projects onto the line at (10,5).
     const a: PointEntity = { kind: 'point', id: 'a', x: -50, y: 5 };
     const b: PointEntity = { kind: 'point', id: 'b', x: 50, y: 5 };
     const l: LineEntity = { kind: 'line', id: 'l1', startId: 'a', endId: 'b', construction: true };
     const state: SketchState = { entities: [a, b, l], constraints: [] };
     const r = inferLineEnd(state, { x: 20, y: 0 }, { x: 10, y: 6 });
-    expect(r.constraint?.type).not.toBe('coincident');
+    expect(r.constraint?.type).toBe('coincident');
   });
 
   it('polar-snaps to a 30° angle and emits a guide from the start', () => {

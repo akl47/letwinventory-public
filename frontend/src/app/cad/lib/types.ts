@@ -330,6 +330,11 @@ export interface SketchConstraint {
    * chosen offset from the measured geometry. Geometric constraints
    * (coincident, perpendicular, etc.) never set this. */
   placement?: { x: number; y: number };
+  /** Dimension arrowhead style (SolidWorks-style toggle). Unset/false = arrows
+   * INSIDE the extension lines (tips at the witness lines, default). True =
+   * arrows OUTSIDE pointing in (for tight dims). Flipped via the clickable arrow
+   * handles on a selected dimension. Dimensional constraints only. */
+  arrowsOutside?: boolean;
   /** Optional per-dimension unit override (mm / um / in). When unset, the
    * dimension displays in the model's defaultUnit and bare numeric input
    * is interpreted in defaultUnit. When set, the dim shows the unit
@@ -991,6 +996,12 @@ export interface MirrorFeatureFeature {
   seedKind?: PatternSeedKind;
   /** Seed feature ids when `seedKind === 'features'`. */
   seedFeatureIds?: FeatureId[];
+  /** Geometry pattern (REQ 841): copy the seed group's finished geometry
+   * instead of re-running each seed's boolean per instance. Avoids duplicate
+   * coincident faces from re-cutting near-coincident walls (and is faster);
+   * instances don't re-evaluate end conditions / local geometry. Default ON —
+   * absent is treated as true; set false to opt back into feature pattern. */
+  geometryPattern?: boolean;
   visible?: boolean;
   suppressed?: boolean;
   name?: string;
@@ -1023,6 +1034,12 @@ export interface LinearPatternFeature {
   /** See MirrorFeatureFeature.seedKind. REQ 822. */
   seedKind?: PatternSeedKind;
   seedFeatureIds?: FeatureId[];
+  /** Geometry pattern (REQ 841): copy the seed group's finished geometry
+   * instead of re-running each seed's boolean per instance. Avoids duplicate
+   * coincident faces from re-cutting near-coincident walls (and is faster);
+   * instances don't re-evaluate end conditions / local geometry. Default ON —
+   * absent is treated as true; set false to opt back into feature pattern. */
+  geometryPattern?: boolean;
   visible?: boolean;
   suppressed?: boolean;
   name?: string;
@@ -1047,6 +1064,12 @@ export interface CircularPatternFeature {
   /** See MirrorFeatureFeature.seedKind. REQ 822. */
   seedKind?: PatternSeedKind;
   seedFeatureIds?: FeatureId[];
+  /** Geometry pattern (REQ 841): copy the seed group's finished geometry
+   * instead of re-running each seed's boolean per instance. Avoids duplicate
+   * coincident faces from re-cutting near-coincident walls (and is faster);
+   * instances don't re-evaluate end conditions / local geometry. Default ON —
+   * absent is treated as true; set false to opt back into feature pattern. */
+  geometryPattern?: boolean;
   visible?: boolean;
   suppressed?: boolean;
   name?: string;

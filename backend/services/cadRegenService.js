@@ -117,7 +117,38 @@ const { applyProjectionToSketchDoc } = require('./cadProjection');
 //    construction; thin regions stay solid; no rolled-corner cylinder
 //    faces, no punch-prism imprint edges, no MakeOffsetShape on the
 //    primary path).
-const NAMING_VERSION = 29;  // matches NAMING_SCHEMA_VERSION in cad-kernel/src/main.rs — bump together with kernel
+// 30: kernel rewritten from Rust (opencascade-rs / OCCT 7.6) to native C++
+//    on OCCT 8.0. BReps are now binary BinTools, NOT byte-compatible with
+//    the old text-BRep cache rows — feeding a v29 row to the C++ kernel's
+//    BinTools reader fails. Bump invalidates every prior cache row so the
+//    cumulative pipeline regenerates cleanly through the new kernel.
+// 31: C++ kernel tessellation fix — the port had reproduced opencascade-rs's
+//    off-by-one normal loop (dropped the last node's normal, padded with
+//    (0,0,0)). Under OCCT 8.0's node ordering that zero-normal vertex landed
+//    on visible triangles (dark/off-color artifact) AND flipped every planar
+//    face's isFlat to false (faces no longer pickable as sketch hosts). Bump
+//    invalidates the cpp-1 cache rows that hold the bad tessellation.
+// 32: tessellation normals made orientation-aware (negated on REVERSED faces)
+//    so they point outward — matches the frontend's documented contract and
+//    the orientation-aware surface.normal. Fixes sketches placed on a reversed
+//    face facing into the body. Invalidates cpp-2 cache rows (inward normals).
+// 33: topology edges deduped by identity — TopExp_Explorer visits each shared
+//    edge once per owning face, so every manifold edge was emitted twice; the
+//    duplicate had no face referencing it (boundaryEdgeIds resolve by key to the
+//    first id) and showed as a spurious pickable edge. Invalidates cpp-3 rows.
+// 34: (superseded) boolean fuzzy + SimplifyResult attempt — didn't merge the
+//    opposite-axis coaxial cylinder fragments; reverted.
+// 35: (superseded) canonicalize-cylinder-surfaces attempt — broke edge sharing,
+//    reverted.
+// 36: back to plain UnifySameDomain. Invalidates the broken v35 canonicalized
+//    cache rows.
+// 37: kernel drops the co-domain seam edge between two co-cylindrical faces.
+// 38: kernel MERGES coaxial cylinder faces (edge-preserving rebase + unify).
+// 39: volume-preservation guard on that rebase — it inverted some solids
+//    (part 586: negative volume → faces on the wrong side/missing). Now the
+//    canonicalized shape is kept only when it preserves the signed volume, else
+//    the un-canonicalized shape is used. Kernel cpp-10 deployed+verified first.
+const NAMING_VERSION = 43;  // matches NAMING_SCHEMA_VERSION in cad-kernel-cpp/src/main.cpp — bump together with kernel
 
 // Sentinel distance for Through All. Picked to comfortably exceed any
 // reasonable model dimension without overflowing OCCT's tolerance
@@ -1301,6 +1332,36 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
     const direction2 = feature.direction2
       ? _resolveDirection2(feature.direction2, sketch.plane, feature, vertexMap, faceMap)
       : null;
+    // Direction-2 "Up to Body" / "Up to Next": resolve the same target BREP(s)
+    // the kernel uses to cap dir 1, so the dir-2 prism conforms to a real body
+    // surface. upToBody → the picked body; upToNext → every upstream body. The
+    // heavy base64 is attached AFTER the hash (mirroring dir 1): the cache key
+    // uses the lightweight id+geometry-hash `dir2UntilKey` instead.
+    let dir2UntilKey = null;
+    let dir2UntilBrep = null;
+    let dir2UntilBreps = null;
+    if (direction2 && direction2.kind === 'upToBody') {
+      const targetBody = (bodies || []).find(b => b.id === direction2.bodyId);
+      if (!targetBody || !targetBody.brep) {
+        throw new Error(
+          `Direction 2 Up to Body: target body '${direction2.bodyId}' is not available at this ` +
+          `point in the feature tree. Pick a body that already exists before this feature.`
+        );
+      }
+      dir2UntilBrep = toBase64(targetBody.brep);
+      dir2UntilKey = { id: targetBody.id, hash: targetBody.paramHash || '' };
+    } else if (direction2 && direction2.kind === 'upToNext') {
+      const withBrep = (bodies || []).filter(b => b && b.brep);
+      if (withBrep.length === 0) {
+        throw new Error(
+          'Direction 2 Up to Next: there is no existing body in the extrude path. Add a body ' +
+          'first, or use a Blind / Through All end condition for direction 2.'
+        );
+      }
+      dir2UntilBreps = withBrep.map(b => toBase64(b.brep));
+      dir2UntilKey = { next: withBrep.map(b => ({ id: b.id, hash: b.paramHash || '' })) };
+    }
+    if (direction2) delete direction2.bodyId;  // not a kernel field; identity is in dir2UntilKey
     const paramHash = _hashParams({
       profile: region.outer,
       holes: region.holes,
@@ -1312,6 +1373,10 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
       startOffset,
       direction2,
       untilBody: untilBodyKey,
+      // Only fold the dir-2 up-to target into the hash when it exists, so
+      // extrudes WITHOUT a dir-2 up-to keep their original cache key (adding a
+      // `null` here would invalidate every cached extrude region).
+      ...(dir2UntilKey ? { dir2UntilBody: dir2UntilKey } : {}),
     });
     const upstreamHash = '';  // per-region prism has no upstream dependency
 
@@ -1347,6 +1412,15 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
     }
 
     allCached = false;
+    // Attach the heavy dir-2 up-to BREP(s) to the payload now (kept out of the
+    // cache key above). The kernel caps the dir-2 prism against them.
+    const direction2Payload = direction2
+      ? {
+          ...direction2,
+          ...(dir2UntilBrep ? { untilBrep: dir2UntilBrep } : {}),
+          ...(dir2UntilBreps ? { untilBreps: dir2UntilBreps } : {}),
+        }
+      : null;
     let rpc;
     try {
       rpc = await client.call('buildExtrude', {
@@ -1358,12 +1432,12 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
         flipped: dispatch.flipped,
         startOffset,
         // Up To Body / Up To Next ignore the Direction-1 distance — the kernel
-        // sizes + caps that prism against the body BREP(s). Direction 2 (always a
-        // fixed-length blind/through-all prism) is still sent and unioned in by
-        // the kernel, so a "Up To … + Direction 2 Blind" extrude builds both.
+        // sizes + caps that prism against the body BREP(s). Direction 2 is sent
+        // and unioned in by the kernel: a fixed blind/through-all prism, or — when
+        // dir 2 is itself an up-to condition — its own body-capped prism.
         ...(untilBrep ? { untilBrep } : {}),
         ...(untilBreps ? { untilBreps } : {}),
-        ...(direction2 ? { direction2 } : {}),
+        ...(direction2Payload ? { direction2: direction2Payload } : {}),
       });
     } catch (err) {
       // Isolate a region the kernel can't build (e.g. a pinched/self-touching
@@ -2345,6 +2419,58 @@ function _captureFeatureSnapshot(featureId, bodies, bodiesBefore, snapshots) {
  * matching SolidWorks (which also geometry-patterns fillets/chamfers/shells). */
 const TOOL_PATTERN_TYPES = new Set(['extrude', 'cutExtrude', 'revolve', 'cutRevolve', 'sweep', 'cutSweep', 'loft']);
 
+/** Geometry-pattern application (REQ 841): one `buildFeaturePattern` call over
+ * the seed GROUP's net delta (before-first-seed → after-last-seed), replacing
+ * the per-seed feature-pattern loop. Caches + replaces the body in place +
+ * emits, mirroring the per-seed path's bookkeeping. */
+async function _applyGeometryPattern({ feature, transforms, before, after, targetBody, model, client, dbClient, results, emit, indexBody }) {
+  const paramHash = _hashParams({
+    op: feature.type, mode: 'geometry', transforms,
+    before: before ? _hashParams({ b: before }) : '',
+    after: _hashParams({ a: after }),
+    bodyId: targetBody.id, upstream: targetBody.paramHash || '',
+  });
+  const cacheKey = `${feature.id}#gpattern#${targetBody.id}`;
+  const upstreamHash = targetBody.paramHash || '';
+  const cached = await dbClient.DesignBRepCache.findOne({
+    where: { cadModelID: model.id, featureID: cacheKey, paramHash, upstreamHash, namingVersion: NAMING_VERSION },
+  });
+  let brep, faces, topology, cachedFlag;
+  if (cached) {
+    cached.lastAccessedAt = new Date(); await cached.save();
+    brep = Buffer.isBuffer(cached.brepBytes) ? cached.brepBytes.toString('base64') : Buffer.from(cached.brepBytes || '').toString('base64');
+    faces = cached.tessellatedFaces.faces || [];
+    topology = cached.tessellatedFaces.topology || { vertices: [], edges: [] };
+    cachedFlag = true;
+  } else {
+    const rpc = await client.call('buildFeaturePattern', {
+      featureId: `${feature.id}#gpattern`,
+      ...(before ? { beforeBrep: before } : {}),
+      afterBrep: after,
+      bodyBrep: targetBody.brep,
+      transforms,
+    });
+    await dbClient.DesignBRepCache.upsert({
+      cadModelID: model.id, featureID: cacheKey, paramHash, upstreamHash,
+      brepBytes: Buffer.from(rpc.brepBytes || '', 'base64'),
+      tessellatedFaces: { faces: rpc.faces || [], topology: rpc.topology || { vertices: [], edges: [] }, solids: rpc.solids || [] },
+      namingVersion: NAMING_VERSION, lastAccessedAt: new Date(),
+    });
+    brep = rpc.brepBytes; faces = rpc.faces || []; topology = rpc.topology || { vertices: [], edges: [] }; cachedFlag = false;
+  }
+  if (!brep) {
+    throw new Error(`${feature.type}: geometry pattern produced no geometry — the instances may overlap destructively.`);
+  }
+  targetBody.brep = brep;
+  targetBody.faces = _scopeFaceBoundaryEdges(faces, targetBody.id);
+  targetBody.topology = _scopeTopology(topology, targetBody.id);
+  targetBody.centroid = _approxCentroidFromFaces(targetBody.faces);
+  targetBody.paramHash = paramHash;
+  indexBody(targetBody);
+  const r = { featureId: feature.id, bodyId: targetBody.id, faces: targetBody.faces, topology: targetBody.topology, cached: cachedFlag, bodyParamHash: targetBody.paramHash };
+  results.push(r); emit(r);
+}
+
 async function _dispatchFeaturePattern(feature, bodies, model, client, dbClient, results, emit, vertexMap, faceMap, featureSnapshots, featureTools = new Map()) {
   const seedIds = Array.isArray(feature.seedFeatureIds) ? feature.seedFeatureIds : [];
   if (seedIds.length === 0) {
@@ -2361,6 +2487,37 @@ async function _dispatchFeaturePattern(feature, bodies, model, client, dbClient,
     for (const v of b.topology.vertices || []) vertexMap.set(v.id, v.position);
     for (const f of b.faces || []) { const p = _faceRepresentativePlane(f); if (p) faceMap.set(f.faceId, p); }
   };
+
+  // GEOMETRY PATTERN (REQ 841 / SolidWorks-OnShape parity): instead of re-running
+  // each seed's boolean per instance (the feature-pattern loop below), copy the
+  // seed GROUP's finished geometry once — the body delta between the state before
+  // the FIRST seed and after the LAST seed — and fuse/cut transformed copies of
+  // that. This sidesteps duplicate coincident faces that the feature-pattern path
+  // leaves when re-cutting a wall near-coincident with patterned geometry (a
+  // rotationally-symmetric pattern), and is faster. Preconditions: every seed has
+  // a snapshot on the SAME body with a non-empty after-state; otherwise fall back
+  // to the feature-pattern loop (with a warning).
+  // Default ON: geometry pattern unless the feature explicitly opts out
+  // (geometryPattern === false). Falls back to feature pattern below when the
+  // seed group can't be geometry-patterned (multi-body / non-contiguous).
+  if (feature.geometryPattern !== false) {
+    // Seeds that actually changed a body (a failed/no-op seed — e.g. a fillet
+    // that didn't build — leaves an empty snapshot and is skipped; it's a no-op,
+    // so the surrounding before/after still bracket the real geometry change).
+    const valid = seedIds.map(id => featureSnapshots.get(id)).filter(s => s && s.bodyId && s.after);
+    const bodyIds = new Set(valid.map(s => s.bodyId));
+    const ok = valid.length >= 1 && bodyIds.size === 1;
+    const targetBody = ok ? bodies.find(b => b.id === valid[valid.length - 1].bodyId) : null;
+    if (ok && targetBody && targetBody.brep) {
+      await _applyGeometryPattern({
+        feature, transforms,
+        before: valid[0].before, after: valid[valid.length - 1].after,
+        targetBody, model, client, dbClient, results, emit, indexBody,
+      });
+      return;
+    }
+    console.warn(`[cadRegen] ${feature.id}: geometry-pattern preconditions not met (seeds must change a single shared body) — falling back to feature pattern`);
+  }
 
   let appliedAny = false;
   // Process seeds in tree order; each re-applies its delta to the running body.
@@ -3478,6 +3635,12 @@ function _resolveDirection2(direction2, plane, feature, vertexMap, faceMap) {
   const ec = direction2.endCondition || { kind: 'blind' };
   if (ec.kind === 'blind') return { distance: Number(direction2.distance) || 0, kind: 'blind' };
   if (ec.kind === 'throughAll') return { distance: 0, kind: 'throughAll' };
+  // "Up to Body" / "Up to Next": the kernel sizes + caps the dir-2 prism
+  // against body BREP(s). Distance is irrelevant here; the target BREPs are
+  // attached to the payload by the caller (which has the body list). Carry the
+  // picked bodyId through for the caller to resolve.
+  if (ec.kind === 'upToBody') return { distance: 0, kind: 'upToBody', bodyId: ec.bodyId };
+  if (ec.kind === 'upToNext') return { distance: 0, kind: 'upToNext' };
   // dir2 grows OPPOSITE direction-1. If feature.flipped=false, dir1 is
   // along +normal so dir2 is along -normal — to reach a target on the
   // -normal side, we need positive distance. signed projection along

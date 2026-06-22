@@ -126,7 +126,7 @@ describe('allCurveIntersections', () => {
     expect(pts[0].x).toBeCloseTo(5);
   });
 
-  it('skips construction geometry', () => {
+  it('includes construction geometry — it is a full snap target', () => {
     let s = emptySketchState();
     const a = addPoint(s, 0, 0); s = a.state;
     const b = addPoint(s, 10, 0); s = b.state;
@@ -134,12 +134,17 @@ describe('allCurveIntersections', () => {
     const c = addPoint(s, 5, -1); s = c.state;
     const d = addPoint(s, 5, 1); s = d.state;
     const l2 = addLine(s, c.id, d.id); s = l2.state;
-    // Mark first line as construction.
+    // Mark first line as construction — its crossing with l2 is still a
+    // snappable intersection (SolidWorks treats construction geometry as a
+    // first-class inference target).
     s = {
       ...s,
       entities: s.entities.map(e => e.id === l1.id ? { ...e, construction: true } : e),
     };
-    expect(allCurveIntersections(s)).toHaveLength(0);
+    const pts = allCurveIntersections(s);
+    expect(pts).toHaveLength(1);
+    expect(pts[0].x).toBeCloseTo(5);
+    expect(pts[0].y).toBeCloseTo(0);
   });
 
   it('finds line-circle intersections', () => {

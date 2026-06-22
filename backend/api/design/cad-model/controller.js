@@ -16,7 +16,7 @@ const { assemblySerialize } = require('../../../services/vcs/assemblySerializer'
 const partRevisionService = require('../../../services/partRevisionService');
 const { logSketchDiff } = require('../../../services/cadSketchDebug');
 const RestError = require('../../../util/RestError');
-const { KernelDisconnected, KernelRpcError, getDefaultClient } = require('../../../services/cadKernelClient');
+const { KernelDisconnected, KernelRpcError, getDefaultClient, getHeartbeatClient } = require('../../../services/cadKernelClient');
 
 const INITIAL_FEATURE_TREE = { features: [{ id: 'f1', type: 'origin' }], nextFeatureSeq: 2 };
 const INITIAL_SKETCH_DOC = { sketches: {}, nextSketchSeq: 1 };
@@ -931,7 +931,13 @@ module.exports = {
   // Always HTTP 200 — the payload IS the status.
   async kernelStatus(req, res) {
     try {
-      await getDefaultClient().call('ping', {}, { timeoutMs: 4000 });
+      // Use the DEDICATED heartbeat connection, not the shared build connection.
+      // A long synchronous build (slow clean()/boolean) parks the build
+      // connection's read loop, so a ping there would queue behind it and time
+      // out — falsely reporting "offline" while the kernel is merely busy. The
+      // heartbeat connection only carries pings, and the kernel's multi-threaded
+      // runtime answers it on a free worker, so this reflects true liveness.
+      await getHeartbeatClient().call('ping', {}, { timeoutMs: 4000 });
       return res.json({ online: true, namingVersion: cadRegenService.NAMING_VERSION });
     } catch (_err) {
       return res.json({ online: false });

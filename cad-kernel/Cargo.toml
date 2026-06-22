@@ -15,7 +15,12 @@ publish = false
 #
 # BREP serialization is OCCT-version-sensitive — treat upstream upgrades
 # as data migrations (recompute cached BRep from feature definitions).
-opencascade = { path = "vendor/opencascade-rs/crates/opencascade" }
+# default-features=false drops the `builtin` feature, which would otherwise make
+# opencascade-sys compile occt-sys's BUNDLED OCCT (7.8) from source and ignore
+# the system OCCT. We install OCCT 8.0 system-wide in the Dockerfile and link
+# against THAT, so builtin must be off (it also avoids a redundant ~hours-long
+# second OCCT build). build.rs then finds the system OCCT via find_package.
+opencascade = { path = "vendor/opencascade-rs/crates/opencascade", default-features = false }
 # Must match the version opencascade-rs pulls in (currently 0.24). Any other
 # version in our direct deps produces "expected DVec3 found DVec3" type-id
 # conflicts at compile time.
@@ -23,7 +28,7 @@ glam = "0.24"
 
 # Async runtime + Unix-domain socket server.
 tokio = { version = "1.40", features = [
-    "rt-multi-thread", "net", "io-util", "macros", "signal", "sync",
+    "rt-multi-thread", "net", "io-util", "macros", "signal", "sync", "time",
 ] }
 
 # JSON-RPC payloads.

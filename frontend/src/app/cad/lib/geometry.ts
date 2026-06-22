@@ -107,10 +107,10 @@ export function angleInArcSweep(
   }
 }
 
-/** All intersection points between every pair of non-construction curves in
- * the state. Used by snap-to-intersection and by Trim/Extend to find
- * candidate cut points. Lines are treated as bounded segments; circles as
- * full circles; arcs are filtered by sweep. */
+/** All intersection points between every pair of curves in the state
+ * (construction curves included — they're full snap targets, like normal
+ * geometry). Used by snap-to-intersection. Lines are treated as bounded
+ * segments; circles as full circles; arcs are filtered by sweep. */
 export function allCurveIntersections(state: SketchState): Pt[] {
   interface Seg { a: Pt; b: Pt; }
   interface Circ { c: Pt; r: number; isArc: false; }
@@ -118,7 +118,6 @@ export function allCurveIntersections(state: SketchState): Pt[] {
   const lines: Seg[] = [];
   const circles: Array<Circ | Arc> = [];
   for (const e of state.entities) {
-    if (e.construction) continue;
     if (e.kind === 'line') {
       const a = findPoint(state, (e as LineEntity).startId);
       const b = findPoint(state, (e as LineEntity).endId);

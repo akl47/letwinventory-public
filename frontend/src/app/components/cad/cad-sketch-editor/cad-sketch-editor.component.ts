@@ -4052,6 +4052,38 @@ export class CadSketchEditorComponent implements OnDestroy {
     // chosen sketch point ride that edge — an on-edge external reference,
     // not a normal sketch coincident. Handled before the entity predicate
     // since the second operand (the edge) isn't a sketch entity.
+    // Concentric / Coincident / Coradial: sketch circle·arc + circular MODEL
+    // edge → pin the sketch circle's center to the edge's projected center
+    // (REQ 830-832). Coradial also sets the radius to the model edge's radius.
+    if ((spec.type === 'concentric' || spec.type === 'coincident' || spec.type === 'coradial') && this.selectedExternalEdgeId()
+        && entities.length === 1 && (entities[0].kind === 'circle' || entities[0].kind === 'arc')) {
+      const edgeId = this.selectedExternalEdgeId()!;
+      const ref = this._centerRefForEdge(edgeId);
+      if (ref) {
+        let s: SketchState;
+        if (spec.type === 'coradial') {
+          // Coradial-to-model-edge: ONE constraint targeting the CIRCLE/ARC with
+          // a center ref. Snap the entity's center + radius onto the model edge
+          // NOW so the relation is satisfied immediately; _reprojectAllSketches
+          // re-derives both each regen so the radius keeps tracking the edge's
+          // size. The solver then pins center (center-ref pass) and radius
+          // (coradial-ext pass) at those synced values.
+          const id = `coradial-ext-${entities[0].id}-${this.latestCommitId}`;
+          let base = this.state();
+          const geom = this._circleGeomForEdge(edgeId);
+          if (geom) base = this._snapCurveToCircle(base, entities[0], geom);
+          s = { ...base, constraints: [...base.constraints,
+            { id, type: 'coradial', targets: [{ entityId: entities[0].id }], externalRef: ref }] };
+        } else {
+          const centerId = (entities[0] as { centerId: string }).centerId;
+          s = this._addCenterRelation(this.state(), centerId, ref, spec.type === 'coincident' ? 'coincident' : 'concentric');
+        }
+        this.commitAfterAdd(s, s.constraints[s.constraints.length - 1].id);
+        this.selected.set(new Set());
+        this.selectedExternalEdgeId.set(null);
+      }
+      return;
+    }
     if (spec.type === 'coincident' && this.selectedExternalEdgeId() && this._applyCoincidentToEdge(entities)) {
       return;
     }
@@ -4114,15 +4146,88 @@ export class CadSketchEditorComponent implements OnDestroy {
   constraintEnabled(spec: ConstraintSpec): boolean {
     const entities = this.selectedEntities();
     if (spec.predicate(entities)) return true;
-    if (spec.type === 'coincident' && this.selectedExternalEdgeId()) {
+    const edge = this.selectedExternalEdgeId();
+    // Concentric / Coincident / Coradial between a sketch circle·arc and a
+    // CIRCULAR model edge → tie the sketch circle's center to the model edge's
+    // projected center (REQ 830-832). Coradial additionally matches the radius.
+    if ((spec.type === 'concentric' || spec.type === 'coincident' || spec.type === 'coradial') && edge
+        && entities.length === 1 && (entities[0].kind === 'circle' || entities[0].kind === 'arc')) {
+      return !!this._centerRefForEdge(edge);
+    }
+    if (spec.type === 'coincident' && edge) {
       return entities.length === 1 && (entities[0].kind === 'point' || entities[0].kind === 'line');
     }
     // Point-line distance TO a selected model edge: one sketch point + the
     // edge (which isn't a sketch entity, so the predicate can't see it).
-    if (spec.type === 'point-line-distance' && this.selectedExternalEdgeId()) {
+    if (spec.type === 'point-line-distance' && edge) {
       return entities.length === 1 && entities[0].kind === 'point';
     }
     return false;
+  }
+
+  /** The center external-ref for a selected circular model edge, or null when
+   * the edge isn't circular (no projected center candidate). Lets a sketch
+   * circle be made concentric/coincident with a model circular edge. */
+  private _centerRefForEdge(edgeId: string): ExternalRef | null {
+    const center = this.candidates().find(
+      c => c.kind === 'center'
+        && (c.crossPart ? c.crossPart.stableId : parseCandidateId(c.id)?.topoId) === edgeId,
+    );
+    return center ? externalRefForCandidate(center) : null;
+  }
+
+  /** Projected center + radius of a circular model edge, read from the live
+   * candidates: the `center` candidate gives the center point, the `edge`
+   * candidate's projected samples give the radius (mean distance to center).
+   * Null when the edge isn't present as both (non-circular / no projection). */
+  private _circleGeomForEdge(edgeId: string): { cx: number; cy: number; radius: number } | null {
+    const matches = (c: ReferenceCandidate) =>
+      (c.crossPart ? c.crossPart.stableId : parseCandidateId(c.id)?.topoId) === edgeId;
+    const cands = this.candidates();
+    const center = cands.find(c => c.kind === 'center' && matches(c));
+    const edge = cands.find(c => c.kind === 'edge' && matches(c));
+    const ctr = center?.points[0];
+    if (!ctr || !edge || edge.points.length === 0) return null;
+    let sum = 0;
+    for (const p of edge.points) sum += Math.hypot(p.x - ctr.x, p.y - ctr.y);
+    const radius = sum / edge.points.length;
+    if (!(radius > 1e-6)) return null;
+    return { cx: ctr.x, cy: ctr.y, radius };
+  }
+
+  /** Move a sketch circle/arc onto the circle defined by (cx, cy, radius):
+   * center point → (cx,cy), radius → radius. For an arc, start/end points are
+   * re-placed at the new radius preserving their current angular positions so
+   * the `|center→start| == |center→end| == radius` invariant holds. */
+  private _snapCurveToCircle(
+    state: SketchState, entity: SketchEntity, geom: { cx: number; cy: number; radius: number },
+  ): SketchState {
+    const pts = new Map(
+      state.entities.filter((e): e is PointEntity => e.kind === 'point').map(p => [p.id, p]),
+    );
+    const setPt = new Map<string, { x: number; y: number }>();
+    if (entity.kind === 'circle') {
+      setPt.set(entity.centerId, { x: geom.cx, y: geom.cy });
+    } else if (entity.kind === 'arc') {
+      const c = pts.get(entity.centerId);
+      const sp = pts.get(entity.startId);
+      const ep = pts.get(entity.endId);
+      if (c && sp && ep) {
+        const a0 = Math.atan2(sp.y - c.y, sp.x - c.x);
+        const a1 = Math.atan2(ep.y - c.y, ep.x - c.x);
+        setPt.set(entity.centerId, { x: geom.cx, y: geom.cy });
+        setPt.set(entity.startId, { x: geom.cx + geom.radius * Math.cos(a0), y: geom.cy + geom.radius * Math.sin(a0) });
+        setPt.set(entity.endId, { x: geom.cx + geom.radius * Math.cos(a1), y: geom.cy + geom.radius * Math.sin(a1) });
+      }
+    } else {
+      return state;
+    }
+    const entities = state.entities.map(e => {
+      if (e.kind === 'point' && setPt.has(e.id)) return { ...e, ...setPt.get(e.id)! };
+      if (e.id === entity.id && (e.kind === 'circle' || e.kind === 'arc')) return { ...e, radius: geom.radius };
+      return e;
+    });
+    return { ...state, entities };
   }
 
   /** Create an on-edge constraint tying the single selected sketch entity to
@@ -4613,7 +4718,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-178');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-298');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);

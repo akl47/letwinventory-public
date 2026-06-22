@@ -52,6 +52,19 @@ fn op_timeout_ms() -> u64 {
         .unwrap_or(60_000)
 }
 
+/// Soft per-boolean timeout. A normal `clean()` (UnifySameDomain) finishes in
+/// well under a second; the pathological coincident-face fuse loops for minutes.
+/// When the boolean exceeds this on its blocking thread, the server abandons it
+/// and retries with `clean()` skipped so the feature still builds. Tunable via
+/// CAD_KERNEL_CLEAN_TIMEOUT_MS.
+fn clean_timeout_ms() -> u64 {
+    std::env::var("CAD_KERNEL_CLEAN_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(10_000)
+}
+
 /// Start the background watchdog thread. Call once at startup.
 pub fn start_watchdog() {
     std::thread::Builder::new()
@@ -294,29 +307,65 @@ async fn run_handler(method: &str, params: Value) -> Result<Value, HandlerError>
                     message: e.to_string(),
                     data: None,
                 })?;
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                ops::boolean::build(&params)
-            }));
-            match outcome {
-                Ok(Ok(r)) => serde_json::to_value(r).map_err(|e| HandlerError {
-                    code: INTERNAL_ERROR,
-                    message: format!("serialize result: {e}"),
-                    data: None,
-                }),
-                Ok(Err(e)) => {
+            // Run the boolean on a BLOCKING thread (not an async worker) so a
+            // slow/hung OCCT call — notably UnifySameDomain `clean()` on
+            // coincident-face fuses — can't freeze the async runtime. The kernel
+            // keeps answering pings + other requests (true liveness for the
+            // editor's heartbeat). If `clean()` blows past the soft timeout, the
+            // boolean is retried with `clean()` skipped: the un-cleaned union is
+            // valid geometry, so the feature still BUILDS rather than hanging the
+            // kernel into a watchdog kill. The abandoned clean() thread finishes
+            // in the background (or is reclaimed on restart); the backend caches
+            // the result, so this happens at most once per geometry.
+            let to = std::time::Duration::from_millis(clean_timeout_ms());
+            let p1 = params.clone();
+            let first = tokio::time::timeout(
+                to,
+                tokio::task::spawn_blocking(move || ops::boolean::build(&p1)),
+            )
+            .await;
+            let result: Result<crate::protocol::BuildBooleanResult, HandlerError> = match first {
+                Ok(Ok(Ok(r))) => Ok(r),
+                Ok(Ok(Err(e))) => {
                     error!(error = %e, "buildBoolean failed");
                     Err(HandlerError { code: INTERNAL_ERROR, message: e.to_string(), data: None })
                 }
-                Err(panic) => {
-                    let msg = panic_message(&panic);
-                    error!(error = %msg, "buildBoolean panicked");
+                Ok(Err(join_err)) => {
+                    error!(error = %join_err, "buildBoolean panicked");
+                    Err(HandlerError { code: INTERNAL_ERROR, message: format!("internal panic: {join_err}"), data: None })
+                }
+                Err(_elapsed) => {
+                    // clean() (UnifySameDomain) blew past the soft timeout — almost
+                    // always degenerate upstream geometry. We do NOT skip clean()
+                    // and return the un-cleaned union: that yields a non-manifold,
+                    // visually-unjoined result (worse than failing). Surface a clear
+                    // error instead. The kernel stays alive because the op ran on a
+                    // blocking thread (the async runtime was never frozen); the
+                    // abandoned clean() thread finishes/reclaims in the background.
+                    error!(
+                        feature_id = %params.feature_id,
+                        timeout_ms = clean_timeout_ms(),
+                        "buildBoolean clean() exceeded soft timeout — failing the feature (likely degenerate upstream geometry)",
+                    );
                     Err(HandlerError {
                         code: INTERNAL_ERROR,
-                        message: format!("internal panic: {msg}"),
+                        message: format!(
+                            "Boolean cleanup (UnifySameDomain) exceeded {}ms — the fused geometry is \
+                             degenerate (often a stale/invalid upstream body). Try regenerating from a \
+                             clean cache, or simplify the feature.",
+                            clean_timeout_ms()
+                        ),
                         data: None,
                     })
                 }
-            }
+            };
+            result.and_then(|r| {
+                serde_json::to_value(r).map_err(|e| HandlerError {
+                    code: INTERNAL_ERROR,
+                    message: format!("serialize result: {e}"),
+                    data: None,
+                })
+            })
         }
         "bodyVolume" => {
             let params: crate::protocol::BodyVolumeParams =

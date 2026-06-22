@@ -615,6 +615,20 @@ export async function solveSketch(
   }
 
   const { primitives } = buildPrimitives(state, extraFixed, opts.pinAllRadii ?? false);
+  // Coradial-to-model-edge (REQ): a `coradial` constraint carrying a local
+  // externalRef sub:'center' on a single circle/arc target. The center-ref pass
+  // above pins its center; here we also pin its RADIUS at the entity's current
+  // value. That value is kept equal to the referenced model edge's radius by
+  // _reprojectAllSketches (cad-editor), which re-derives the curve's center +
+  // radius from the source edge each regen — so the pin tracks the edge's size.
+  for (const c of state.constraints) {
+    if (c.type !== 'coradial') continue;
+    const r = c.externalRef;
+    if (!r || r.scope === 'cross-part' || r.sub !== 'center') continue;
+    const e = entityByIdSolver.get(c.targets[0]?.entityId);
+    if (e?.kind === 'circle') primitives.push({ id: `_coradrad_${c.id}`, type: 'circle_radius', c_id: e.id, radius: e.radius });
+    else if (e?.kind === 'arc') primitives.push({ id: `_coradrad_${c.id}`, type: 'arc_radius', a_id: e.id, radius: e.radius });
+  }
   // Synthetic point-on-edge geometry: two fixed reference points at the
   // projected edge endpoints + a point_on_line_ppp tying the sketch point to
   // that line. These ids never collide with entity ids and readBack ignores

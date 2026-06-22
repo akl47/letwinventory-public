@@ -80,44 +80,10 @@ impl Wire {
         Self::from_make_wire(make_wire)
     }
 
-    pub fn from_unordered_edges<T: AsRef<Edge>>(
-        unordered_edges: impl IntoIterator<Item = T>,
-        edge_connection: EdgeConnection,
-    ) -> Self {
-        let mut edges = ffi::top_tools::new_Handle_TopTools_HSequenceOfShape();
-
-        for edge in unordered_edges {
-            let edge_shape = ffi::topo_ds::cast_edge_to_shape(&edge.as_ref().inner);
-            ffi::top_tools::TopTools_HSequenceOfShape_append(edges.pin_mut(), edge_shape);
-        }
-
-        let mut wires = ffi::top_tools::new_Handle_TopTools_HSequenceOfShape();
-
-        let (tolerance, shared) = match edge_connection {
-            EdgeConnection::Exact => (0.0, true),
-            EdgeConnection::Fuzzy { tolerance } => (tolerance, false),
-        };
-
-        ffi::shape_analysis::ShapeAnalysis_FreeBounds::ConnectEdgesToWires(
-            edges.pin_mut(),
-            tolerance,
-            shared,
-            wires.pin_mut(),
-        );
-
-        let mut make_wire = ffi::b_rep_builder_api::BRepBuilderAPI_MakeWire_new();
-
-        let wire_len = ffi::top_tools::TopTools_HSequenceOfShape_length(&wires);
-
-        for index in 1..=wire_len {
-            let wire_shape = ffi::top_tools::TopTools_HSequenceOfShape_value(&wires, index);
-            let wire = ffi::topo_ds::TopoDS::Wire(wire_shape);
-
-            make_wire.pin_mut().add_wire(wire);
-        }
-
-        Self::from_make_wire(make_wire)
-    }
+    // NOTE: `from_unordered_edges` (ShapeAnalysis_FreeBounds::ConnectEdgesToWires)
+    // was removed during the OCCT 8.0 port — 8.0 changed that function's handle
+    // parameter type (derived → base) and the method had no callers. Re-add with
+    // a base/derived-converting cxx wrapper if it's ever needed.
 
     pub fn from_wires<'a>(wires: impl IntoIterator<Item = &'a Wire>) -> Self {
         let mut make_wire = ffi::b_rep_builder_api::BRepBuilderAPI_MakeWire_new();

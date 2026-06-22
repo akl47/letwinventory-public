@@ -16,16 +16,34 @@
 # which uses edition 2024, stabilized in 1.85.
 FROM rust:1.85-bookworm AS builder
 
-# OCCT 7.7.x dev headers + the cxx toolchain (cmake/clang/pkg-config)
-# required by opencascade-rs to compile the C++ bridge.
+# Build toolchain. OCCT 8.0 is NOT in Debian apt (Bookworm ships 7.6.3), so we
+# build it from source below. clang/cmake/git required; OCCT 8.0 needs C++17.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libocct-foundation-dev \
-      libocct-modeling-data-dev \
-      libocct-modeling-algorithms-dev \
-      libocct-ocaf-dev \
-      libocct-data-exchange-dev \
-      cmake clang pkg-config \
+      cmake clang pkg-config git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+
+# ---- OCCT 8.0.0 from source ----
+# Built in its own layer (before our source is COPYed) so it stays cached
+# across kernel-code iterations. We only need the modeling + data-exchange +
+# application-framework modules the cxx bridge links (see OCCT_LIBS in
+# opencascade-sys/build.rs); Visualization/Draw/VTK/FreeType/Tk are disabled to
+# cut build time and runtime deps. OCCT 8.0 brings the boolean-fuse infinite-loop
+# fix and UnifySameDomain face-unification improvements we need.
+ARG OCCT_TAG=V8_0_0
+RUN git clone --depth 1 --branch ${OCCT_TAG} \
+      https://github.com/Open-Cascade-SAS/OCCT.git /tmp/occt-src \
+ && cmake -S /tmp/occt-src -B /tmp/occt-build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DBUILD_LIBRARY_TYPE=Shared \
+      -DUSE_VTK=OFF -DUSE_FREETYPE=OFF -DUSE_TK=OFF \
+      -DUSE_OPENGL=OFF -DUSE_GLES2=OFF -DUSE_FREEIMAGE=OFF \
+      -DUSE_TBB=OFF -DUSE_RAPIDJSON=OFF -DUSE_DRACO=OFF \
+      -DBUILD_MODULE_Draw=OFF -DBUILD_MODULE_Visualization=OFF \
+      -DBUILD_DOC_Overview=OFF \
+ && cmake --build /tmp/occt-build --target install -j"$(nproc)" \
+ && rm -rf /tmp/occt-src /tmp/occt-build \
+ && ldconfig
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
@@ -52,19 +70,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # ---- runtime ----
 FROM debian:bookworm-slim
 
-# OCCT runtime shared libs only. Using the -dev packages here keeps the
-# apt invocation simple (they pull in the runtime .so files plus headers
-# we don't need). Swap to the version-suffixed runtime-only packages
-# later if image size becomes a concern — the -dev variants add ~50MB
-# of headers.
+# OCCT 8.0 runtime shared libs are copied from the builder (we built them from
+# source there — they're not in apt). libstdc++6 provides the C++ runtime.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libocct-foundation-dev \
-      libocct-modeling-data-dev \
-      libocct-modeling-algorithms-dev \
-      libocct-ocaf-dev \
-      libocct-data-exchange-dev \
+      libstdc++6 \
  && rm -rf /var/lib/apt/lists/*
 
+# OCCT 8.0 shared objects + the kernel binary.
+COPY --from=builder /usr/local/lib/ /usr/local/lib/
+RUN ldconfig
 COPY --from=builder /build/cad-kernel /usr/local/bin/cad-kernel
 
 # Listen on all interfaces inside the container so other compose services

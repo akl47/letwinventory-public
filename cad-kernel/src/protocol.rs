@@ -281,7 +281,7 @@ pub enum BuildBooleanOp {
     Common,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct BuildBooleanParams {
     #[serde(rename = "featureId", default = "default_feature_id")]
     pub feature_id: String,

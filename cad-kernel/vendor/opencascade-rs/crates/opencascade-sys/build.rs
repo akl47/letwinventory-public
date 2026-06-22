@@ -1,7 +1,7 @@
 /// Minimum compatible version of OpenCASCADE library (major, minor)
 ///
 /// Pre-installed OpenCASCADE library will be checked for compatibility using semver rules.
-const OCCT_VERSION: (u8, u8) = (7, 8);
+const OCCT_VERSION: (u8, u8) = (8, 0);
 
 /// The list of used OpenCASCADE libraries which needs to be linked with.
 const OCCT_LIBS: &[&str] = &[
@@ -107,7 +107,9 @@ fn main() {
 
     build
         .cpp(true)
-        .flag_if_supported("-std=c++11")
+        // OCCT 8.0 headers require C++17 (std::optional / std::variant /
+        // string_view / if constexpr). Was c++11 for OCCT 7.x.
+        .flag_if_supported("-std=c++17")
         .define("_USE_MATH_DEFINES", "TRUE")
         .include(occt_config.include_dir)
         .include("include")

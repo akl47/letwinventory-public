@@ -81,16 +81,32 @@ class CadKernelClient {
     // Per-call override lets cheap probes (e.g. the `ping` health check) fail
     // fast instead of hanging on the 30 s default when the kernel is wedged.
     const t = timeoutMs || this.timeoutMs;
+    // Diagnostic logging: every kernel RPC is logged with its id, payload size,
+    // and a featureId hint (when present) on send, and its duration + outcome
+    // (ok / rpc-error / timeout / disconnect) on settle. Makes a wedged or slow
+    // kernel call visible from the backend side without guesswork. `ping` is
+    // skipped to avoid spamming the log with the status-poll probe.
+    const log = method !== 'ping';
+    const featureHint = params && (params.featureId || params.feature_id) ? ` feature=${params.featureId || params.feature_id}` : '';
+    const startedAt = Date.now();
+    if (log) console.log(`[kernel-rpc] → #${id} ${method}${featureHint} payloadBytes=${payload.length} timeoutMs=${t}`);
     return new Promise((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
         this.pending.delete(id);
+        if (log) console.error(`[kernel-rpc] ✗ #${id} ${method}${featureHint} TIMEOUT after ${Date.now() - startedAt}ms (limit ${t}ms) — kernel did not respond`);
         reject(new Error(`CAD kernel ${method} timed out after ${t}ms`));
       }, t);
-      this.pending.set(id, { resolve, reject, timeoutHandle, method });
+      this.pending.set(id, {
+        resolve: (v) => { if (log) console.log(`[kernel-rpc] ✓ #${id} ${method}${featureHint} ok in ${Date.now() - startedAt}ms`); resolve(v); },
+        reject: (e) => { if (log) console.error(`[kernel-rpc] ✗ #${id} ${method}${featureHint} ${e && e.name || 'error'} in ${Date.now() - startedAt}ms: ${e && e.message}`); reject(e); },
+        timeoutHandle,
+        method,
+      });
       this.socket.write(payload, (err) => {
         if (err) {
           clearTimeout(timeoutHandle);
           this.pending.delete(id);
+          if (log) console.error(`[kernel-rpc] ✗ #${id} ${method}${featureHint} write failed in ${Date.now() - startedAt}ms: ${err.message}`);
           reject(new KernelDisconnected(err.message));
         }
       });
@@ -201,10 +217,27 @@ function getDefaultClient() {
   return _default;
 }
 
+// Dedicated client for the health probe (`kernelStatus`) ONLY, kept on its own
+// TCP connection. The kernel processes requests on a single connection
+// SERIALLY and runs OCCT ops synchronously inline, so a long build (e.g. a
+// slow UnifySameDomain `clean()`) parks the default client's connection read
+// loop — a ping queued behind it never gets read, times out, and the editor
+// falsely shows "kernel offline." Since the kernel's runtime is multi-threaded,
+// a ping arriving on a SEPARATE connection is answered by another worker thread
+// while the build still churns, so the heartbeat correctly reports the kernel
+// as up (just busy). This connection only ever carries `ping`, so it can never
+// be wedged by a build.
+let _heartbeat = null;
+function getHeartbeatClient() {
+  if (!_heartbeat) _heartbeat = new CadKernelClient();
+  return _heartbeat;
+}
+
 module.exports = {
   CadKernelClient,
   KernelDisconnected,
   KernelRpcError,
   getDefaultClient,
+  getHeartbeatClient,
   DEFAULT_ADDR,
 };

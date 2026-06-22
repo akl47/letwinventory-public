@@ -390,6 +390,33 @@ pub(crate) fn detect_tangent_edges_pub(
 fn detect_tangent_edges(shape: &Shape) -> std::collections::HashMap<[[i64; 3]; 3], TangentKind> {
     use opencascade::primitives::Face;
     let faces: Vec<Face> = shape.faces().collect();
+    // Per-face flatness, computed ONCE: a face is FLAT when its surface normal
+    // is constant across its boundary-edge midpoints (Some(unit normal)), else
+    // None. Sampled ONLY at edge midpoints — those lie on the face boundary, so
+    // normal_at is safe there; center_of_mass can be off a trimmed/curved
+    // surface and makes normal_at throw (Standard_Failure → kernel abort).
+    // We can't use surface_kind()==Plane: booleans here produce geometrically-
+    // flat faces backed by NON-Geom_Plane surfaces (their normal_at returns
+    // non-unit vectors), which is also why UnifySameDomain won't merge them.
+    let face_flat_normal: Vec<Option<DVec3>> = faces
+        .iter()
+        .map(|face| {
+            let mut rep: Option<DVec3> = None;
+            for edge in face.edges() {
+                let k = edge_geom_key(&edge);
+                let m = DVec3::new(k[1][0] as f64 / 1.0e6, k[1][1] as f64 / 1.0e6, k[1][2] as f64 / 1.0e6);
+                let n = face.normal_at(m);
+                let l = n.length();
+                if l < 1.0e-9 { continue; }
+                let nu = n / l;
+                match rep {
+                    None => rep = Some(nu),
+                    Some(r) => if r.dot(nu).abs() <= 0.999 { return None },
+                }
+            }
+            rep
+        })
+        .collect();
     // Per edge key: list of (face_index, count) for every face that
     // references this edge. Count > 1 indicates a seam on a single face.
     let mut edge_faces: std::collections::HashMap<[[i64; 3]; 3], Vec<(usize, usize)>> = std::collections::HashMap::new();
@@ -434,6 +461,30 @@ fn detect_tangent_edges(shape: &Shape) -> std::collections::HashMap<[[i64; 3]; 3
             let n1 = faces[owners[1].0].normal_at(mid);
             let l0 = n0.length(); let l1 = n1.length();
             let dot = if l0 > 1.0e-9 && l1 > 1.0e-9 { n0.dot(n1) / (l0 * l1) } else { f64::NAN };
+            // Coplanar-redundant edge: two FLAT faces meeting with SAME-direction
+            // normals (dot ≈ +1) lie in one plane (both contain the edge), so the
+            // surface is flat and continuous across the edge. UnifySameDomain
+            // sometimes leaves this seam stranded (e.g. an additive extrude fused
+            // flush against the body — its wall is coplanar+continuous with the
+            // body wall, but the edge between them survives and reads as "not
+            // joined"). Drop it like a parametric seam. Anti-parallel (dot ≈ -1)
+            // coplanar faces are a real fold-back/lamina boundary and are kept.
+            // "Flat" = the face's normal at this edge equals its centroid normal
+            // (constant normal ⇒ planar), which excludes a tangent cylinder↔plane
+            // pair (the cylinder's normal varies, so it stays a dashed tangent edge).
+            let flat0 = face_flat_normal[owners[0].0].is_some();
+            let flat1 = face_flat_normal[owners[1].0].is_some();
+            if dot > 0.9962 && flat0 && flat1 {
+                classified.insert(*key, TangentKind::Seam);
+                tracing::info!(
+                    key_mid = format!("({}, {}, {})", key[1][0], key[1][1], key[1][2]),
+                    owners = format!("{:?}", owner_indices),
+                    dot_product = dot,
+                    verdict = "SEAM (coplanar planar faces, dot≈+1) → drop",
+                    "detect_tangent_edges",
+                );
+                continue;
+            }
             let is_tangent = dot.abs() > 0.9962;
             if is_tangent { classified.insert(*key, TangentKind::Tangent); }
             tracing::info!(
@@ -442,6 +493,8 @@ fn detect_tangent_edges(shape: &Shape) -> std::collections::HashMap<[[i64; 3]; 3
                 n0 = format!("({:.4}, {:.4}, {:.4})", n0.x, n0.y, n0.z),
                 n1 = format!("({:.4}, {:.4}, {:.4})", n1.x, n1.y, n1.z),
                 dot_product = dot,
+                flat0,
+                flat1,
                 verdict = if is_tangent { "TANGENT (|dot|>0.9962) → dashed" } else { "feature edge → keep" },
                 "detect_tangent_edges",
             );

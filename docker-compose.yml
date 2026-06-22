@@ -24,13 +24,15 @@ services:
       - letwinventory-cad-kernel
     container_name: letwinventory-backend
   letwinventory-cad-kernel:
+    # Native C++ kernel on OCCT 8.0 (replaced the Rust + opencascade-rs kernel).
+    # Same line-delimited JSON-RPC protocol on the same port, so the backend
+    # config and service name are unchanged.
     build:
-      context: ./cad-kernel
+      context: ./cad-kernel-cpp
     environment:
       # Listen on all interfaces inside the container so backend can dial
       # us via the compose-network service name.
       CAD_KERNEL_ADDR: 0.0.0.0:9876
-      RUST_LOG: info
     # Internal-only: no host port published. Only the backend service
     # talks to the kernel, and it reaches us by service name.
     expose:

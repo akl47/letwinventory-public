@@ -79,6 +79,13 @@ export interface DimensionRender {
   labelAnchor: { x: number; y: number };
   dimensionLine: [{ x: number; y: number }, { x: number; y: number }] | null;
   extensionLines: Array<[{ x: number; y: number }, { x: number; y: number }]>;
+  /** Angle dimensions render an ARC (between the two lines) instead of a
+   * straight dimension line. center/radius + signed sweep from startAngle to
+   * endAngle (radians, CCW). Arrowheads sit tangent at each end. */
+  arc?: { center: { x: number; y: number }; radius: number; startAngle: number; endAngle: number };
+  /** Arrowhead style: false/undefined = inside (default), true = outside. Copied
+   * from the constraint's `arrowsOutside`. */
+  arrowsOutside?: boolean;
 }
 
 const DIMENSIONAL_TYPES = new Set<ConstraintType>([
@@ -135,7 +142,7 @@ export function dimensionRenders(
     // them — only the chain's ONE visible dim renders.
     if (c.chainId && !c.placement) continue;
     const r = renderConstraint(state, c, defaultUnit, externalEdges);
-    if (r) out.push(r);
+    if (r) { if (c.arrowsOutside) r.arrowsOutside = true; out.push(r); }
   }
   return out;
 }
@@ -442,16 +449,24 @@ function angleRender(
   const bisector = blen < 1e-9
     ? { x: i.x + arcRadius, y: i.y }
     : { x: i.x + (bx / blen) * arcRadius, y: i.y + (by / blen) * arcRadius };
+  // Arc swept from line A to line B, going the SHORT way (the measured angle is
+  // ≤ π between the far-directions). startAngle/endAngle in [-π,π]; pick the
+  // signed sweep whose magnitude matches the angle between da and db.
+  const startAngle = Math.atan2(da.y, da.x);
+  let endAngle = Math.atan2(db.y, db.x);
+  // Normalize so the sweep takes the minor arc (the one the bisector lies on).
+  let delta = endAngle - startAngle;
+  while (delta > Math.PI) delta -= 2 * Math.PI;
+  while (delta < -Math.PI) delta += 2 * Math.PI;
+  endAngle = startAngle + delta;
   return {
     constraintId, text,
     labelAnchor: bisector,
-    // We don't render arcs as the dim line yet — just a chord for now.
-    // The two extension lines along the source lines convey orientation.
-    dimensionLine: [arcStart, arcEnd],
-    extensionLines: [
-      [i, arcStart],
-      [i, arcEnd],
-    ],
+    // Just the arc between the two lines — no chord, and no extension lines back
+    // to the vertex (the arc itself conveys the angle).
+    dimensionLine: null,
+    extensionLines: [],
+    arc: { center: { x: i.x, y: i.y }, radius: arcRadius, startAngle, endAngle },
   };
 }
 
