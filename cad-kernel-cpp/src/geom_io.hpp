@@ -89,6 +89,11 @@ void volume_centroid_exact(const TopoDS_Shape& shape, double& volume, gp_Pnt& ce
 // ── Boolean cleanup (ShapeUpgrade_UnifySameDomain) ─────────────────────────────
 TopoDS_Shape clean_unify(const TopoDS_Shape& shape);
 
+// Rebase non-canonical-axis cylinder faces onto a deterministic canonical
+// surface (volume-guarded — returns the input unchanged if the rebase would
+// alter the signed volume). Utility; not currently on the boolean path.
+TopoDS_Shape canonicalize_cylinders(const TopoDS_Shape& shape);
+
 // Bounding-box-relative fuzzy tolerance for boolean ops (fuse/cut/common and
 // pattern/mirror unions). A tool/instance wall rebuilt from a solved sketch can
 // land a few 1e-5 mm off a coincident wall — far above OCCT's 1e-7 confusion

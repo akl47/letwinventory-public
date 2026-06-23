@@ -148,7 +148,7 @@ const { applyProjectionToSketchDoc } = require('./cadProjection');
 //    (part 586: negative volume → faces on the wrong side/missing). Now the
 //    canonicalized shape is kept only when it preserves the signed volume, else
 //    the un-canonicalized shape is used. Kernel cpp-10 deployed+verified first.
-const NAMING_VERSION = 43;  // matches NAMING_SCHEMA_VERSION in cad-kernel-cpp/src/main.cpp — bump together with kernel
+const NAMING_VERSION = 45;  // matches NAMING_SCHEMA_VERSION in cad-kernel-cpp/src/main.cpp — bump together with kernel
 
 // Sentinel distance for Through All. Picked to comfortably exceed any
 // reasonable model dimension without overflowing OCCT's tolerance

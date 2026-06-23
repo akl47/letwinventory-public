@@ -71,7 +71,17 @@ static constexpr const char* KERNEL_BUILD = "cpp-10";
 // change). Genuinely distinct cylinders differ by far more than the tolerances.
 // 43: drop edges of sub-micron SLIVER faces (the flat remnant a full round leaves
 // between its two halves) so the seam line around it does not render. Display-only.
-static constexpr int NAMING_SCHEMA_VERSION = 43;
+// 44/45: split-cylinder fix, two parts.
+//  (a) clean_unify no longer hands back an INVALID solid. When a bore is extended
+//      by a coaxial same-Ø cut, UnifySameDomain meets two opposite-axis cylinder
+//      walls it cannot merge and, in bailing, flags one face UnorientableShape —
+//      corrupting the whole (previously valid) solid and breaking downstream
+//      fillets/booleans. clean_unify now keeps the un-unified (valid) shape.
+//  (b) tessellate_generic presents coaxial + same-radius + adjacent cylinder
+//      faces (which OCCT can't geometrically merge across the opposite-axis split)
+//      as ONE face in its output, so the wall reads/selects as a single face. The
+//      BRep keeps both faces; only the tessellation the UI sees is unified.
+static constexpr int NAMING_SCHEMA_VERSION = 45;
 
 // ── Operation watchdog ─────────────────────────────────────────────────────────
 // An uncancellable OCCT hang (infinite-loop boolean/mesh) can't be interrupted

@@ -34,8 +34,12 @@
 #include <TopoDS_Wire.hxx>
 #include <TopoDS_Solid.hxx>
 #include <TopoDS_Vertex.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopTools_MapOfShape.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
+#include <TopTools_ListOfShape.hxx>
 #include <TopAbs_Orientation.hxx>
 #include <TopLoc_Location.hxx>
 
@@ -85,11 +89,16 @@
 #include <gp_Ax3.hxx>
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom2d_Curve.hxx>
+#include <gp_Vec2d.hxx>
 #include <GeomProjLib.hxx>
 #include <ShapeBuild_ReShape.hxx>
+#include <ShapeFix_Face.hxx>
 #include <BRepLib.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepTools.hxx>
+#include <GeomLProp_SLProps.hxx>
 #include <ElCLib.hxx>
+#include <ElSLib.hxx>
 
 namespace kernel {
 
@@ -1119,6 +1128,95 @@ json make_face_mesh(const TopoDS_Face& face, const std::string& id, bool force_f
   if (classify_face_surface(face, surf)) fm["surface"] = surf;
   return fm;
 }
+
+// Combine several faces' meshes into ONE FaceMesh with a shared id. Used to
+// present coaxial + same-radius + adjacent cylinder faces as a single face: OCCT
+// leaves such walls split when their surface axes are opposite (a bore extended
+// by a coaxial same-Ø cut) and cannot geometrically merge them. The BRep keeps
+// the separate faces; only the tessellation the UI sees is unified, so the wall
+// reads, highlights, and selects as one face.
+json combine_face_meshes(const std::vector<TopoDS_Face>& faces, const std::string& id,
+                         const std::unordered_map<std::string, std::string>& id_by_key) {
+  std::vector<float> positions, normals;
+  std::vector<uint32_t> indices;
+  std::vector<std::string> boundary;
+  uint32_t base = 0;
+  for (const TopoDS_Face& f : faces) {
+    FaceMeshArrays m = mesh_face(f);
+    positions.insert(positions.end(), m.positions.begin(), m.positions.end());
+    normals.insert(normals.end(), m.normals.begin(), m.normals.end());
+    for (uint32_t idx : m.indices) indices.push_back(idx + base);
+    base += static_cast<uint32_t>(m.positions.size() / 3);
+    if (!id_by_key.empty()) {
+      for (const TopoDS_Edge& e : face_edges(f)) {
+        auto it = id_by_key.find(key_to_str(edge_geom_key(e)));
+        if (it != id_by_key.end()) boundary.push_back(it->second);
+      }
+    }
+  }
+  std::sort(boundary.begin(), boundary.end());
+  boundary.erase(std::unique(boundary.begin(), boundary.end()), boundary.end());
+
+  json fm;
+  fm["faceId"] = id;
+  fm["persistentName"] = id;
+  fm["isFlat"] = false;  // cylinder group — never flat
+  fm["positions"] = positions;
+  fm["normals"] = normals;
+  fm["indices"] = indices;
+  if (!boundary.empty()) fm["boundaryEdgeIds"] = boundary;
+  json surf;
+  if (classify_face_surface(faces.front(), surf)) fm["surface"] = surf;
+  return fm;
+}
+
+// Group cylinder faces that are coaxial + same-radius + adjacent (share an edge)
+// via union-find; returns, for each input face index, its group root. Non-
+// cylinder faces (and cylinders with no qualifying neighbour) are their own root.
+std::vector<int> group_coaxial_cylinders(const TopoDS_Shape& shape,
+                                         const std::vector<TopoDS_Face>& faces) {
+  const int n = static_cast<int>(faces.size());
+  std::vector<int> parent(n);
+  for (int i = 0; i < n; ++i) parent[i] = i;
+  auto find = [&](int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  auto unite = [&](int a, int b) { parent[find(a)] = find(b); };
+
+  struct Cyl { bool is = false; gp_Cylinder cyl; };
+  std::vector<Cyl> cyl(n);
+  TopTools_IndexedMapOfShape face_map;
+  for (int i = 0; i < n; ++i) {
+    face_map.Add(faces[i]);
+    BRepAdaptor_Surface ad(faces[i]);
+    if (ad.GetType() == GeomAbs_Cylinder) { cyl[i].is = true; cyl[i].cyl = ad.Cylinder(); }
+  }
+
+  auto coaxial_same_r = [](const gp_Cylinder& A, const gp_Cylinder& B) {
+    if (std::fabs(A.Radius() - B.Radius()) > 1e-4) return false;
+    const gp_Dir& da = A.Axis().Direction();
+    const gp_Dir& db = B.Axis().Direction();
+    if (!da.IsParallel(db, 1e-6)) return false;  // parallel OR anti-parallel
+    gp_Vec d(A.Axis().Location(), B.Axis().Location());
+    gp_Vec ax(da);
+    return (d - ax.Multiplied(d.Dot(ax))).Magnitude() <= 1e-4;  // collinear axis lines
+  };
+
+  TopTools_IndexedDataMapOfShapeListOfShape ef;
+  TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, ef);
+  for (int ei = 1; ei <= ef.Extent(); ++ei) {
+    std::vector<int> cyl_here;
+    for (const TopoDS_Shape& fs : ef.FindFromIndex(ei)) {
+      int idx = face_map.FindIndex(fs);  // 1-based; 0 if absent
+      if (idx >= 1 && cyl[idx - 1].is) cyl_here.push_back(idx - 1);
+    }
+    for (size_t x = 0; x < cyl_here.size(); ++x)
+      for (size_t y = x + 1; y < cyl_here.size(); ++y)
+        if (coaxial_same_r(cyl[cyl_here[x]].cyl, cyl[cyl_here[y]].cyl))
+          unite(cyl_here[x], cyl_here[y]);
+  }
+  std::vector<int> root(n);
+  for (int i = 0; i < n; ++i) root[i] = find(i);
+  return root;
+}
 }  // namespace
 
 // ── tessellate_named (extrude/revolve/sweep/loft cap/side classification) ────
@@ -1185,21 +1283,49 @@ Tessellated tessellate_generic(const TopoDS_Shape& shape, const std::string& sco
   json topology = extract_topology(shape);
   auto id_by_key = build_edge_id_lookup(topology);
 
-  // Sort faces by centroid lexicographically (deterministic ids).
   std::vector<TopoDS_Face> faces = collect_faces(shape);
-  std::vector<std::pair<gp_Pnt, TopoDS_Face>> with_c;
-  with_c.reserve(faces.size());
-  for (const TopoDS_Face& f : faces) with_c.push_back({face_center_of_mass(f), f});
-  std::stable_sort(with_c.begin(), with_c.end(), [](const auto& a, const auto& b) {
-    if (a.first.X() != b.first.X()) return a.first.X() < b.first.X();
-    if (a.first.Y() != b.first.Y()) return a.first.Y() < b.first.Y();
-    return a.first.Z() < b.first.Z();
+
+  // Group coaxial + same-radius + adjacent cylinder faces: OCCT leaves such walls
+  // split into two faces when their surface axes are opposite (a bore extended by
+  // a coaxial same-Ø cut) and cannot geometrically merge them, so we present the
+  // group as ONE face. A face with no qualifying neighbour is its own singleton
+  // group (the common case), so non-split geometry — and its side indices — is
+  // unchanged.
+  std::vector<int> root = group_coaxial_cylinders(shape, faces);
+  struct Group { std::vector<TopoDS_Face> faces; gp_Pnt rep; };
+  std::unordered_map<int, size_t> root_to_group;
+  std::vector<Group> groups;
+  for (size_t i = 0; i < faces.size(); ++i) {
+    gp_Pnt c = face_center_of_mass(faces[i]);
+    auto it = root_to_group.find(root[i]);
+    if (it == root_to_group.end()) {
+      root_to_group[root[i]] = groups.size();
+      groups.push_back({{faces[i]}, c});
+    } else {
+      Group& g = groups[it->second];
+      g.faces.push_back(faces[i]);
+      // representative = lexicographically smallest member centroid (stable id)
+      if (c.X() < g.rep.X() ||
+          (c.X() == g.rep.X() && (c.Y() < g.rep.Y() ||
+           (c.Y() == g.rep.Y() && c.Z() < g.rep.Z())))) g.rep = c;
+    }
+  }
+
+  // Deterministic order by representative centroid (matches the old per-face
+  // ordering for singletons).
+  std::stable_sort(groups.begin(), groups.end(), [](const Group& a, const Group& b) {
+    if (a.rep.X() != b.rep.X()) return a.rep.X() < b.rep.X();
+    if (a.rep.Y() != b.rep.Y()) return a.rep.Y() < b.rep.Y();
+    return a.rep.Z() < b.rep.Z();
   });
 
   json faces_out = json::array();
-  for (size_t i = 0; i < with_c.size(); ++i) {
+  for (size_t i = 0; i < groups.size(); ++i) {
     std::string id = persistent_name(scope, "side", static_cast<uint32_t>(i));
-    faces_out.push_back(make_face_mesh(with_c[i].second, id, /*force_flat=*/false, id_by_key));
+    if (groups[i].faces.size() == 1)
+      faces_out.push_back(make_face_mesh(groups[i].faces[0], id, /*force_flat=*/false, id_by_key));
+    else
+      faces_out.push_back(combine_face_meshes(groups[i].faces, id, id_by_key));
   }
   return Tessellated{faces_out, topology};
 }
@@ -1274,19 +1400,34 @@ static TopoDS_Face rebase_cyl_face(const TopoDS_Face& face, const Handle(Geom_Su
   const double tol = BRep_Tool::Tolerance(face);
   for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next()) {
     TopoDS_Edge e = TopoDS::Edge(ex.Current());
-    if (BRep_Tool::Degenerated(e)) return TopoDS_Face();  // seam edge — bail (rare for arcs)
+    if (BRep_Tool::Degenerated(e)) continue;  // degenerate (cone apex) — leave as-is
     double f, l;
     Handle(Geom_Curve) c3d = BRep_Tool::Curve(e, f, l);
     if (c3d.IsNull()) return TopoDS_Face();
     Handle(Geom2d_Curve) pc = GeomProjLib::Curve2d(c3d, f, l, surf);
     if (pc.IsNull()) return TopoDS_Face();
-    b.UpdateEdge(e, pc, surf, TopLoc_Location(), tol);
+    // A seam edge needs a pcurve on BOTH sides of the wrap (U=0 and U=2π) or the
+    // rebuilt face is unorientable. Project once, then add the +2π-shifted copy.
+    if (BRep_Tool::IsClosed(e, face)) {
+      Handle(Geom2d_Curve) pc2 = Handle(Geom2d_Curve)::DownCast(pc->Copy());
+      pc2->Translate(gp_Vec2d(2.0 * M_PI, 0.0));
+      b.UpdateEdge(e, pc, pc2, surf, TopLoc_Location(), tol);
+    } else {
+      b.UpdateEdge(e, pc, surf, TopLoc_Location(), tol);
+    }
   }
   TopoDS_Face nf;
   b.MakeFace(nf, surf, TopLoc_Location(), tol);
   for (TopExp_Explorer wx(face, TopAbs_WIRE); wx.More(); wx.Next()) b.Add(nf, wx.Current());
   nf.Orientation(face.Orientation());
   BRepLib::SameParameter(nf, tol, Standard_True);
+  // Flipping a cylinder's axis reverses its surface's natural U-direction, which
+  // leaves the projected wire parametrically inconsistent (BRepCheck status 27,
+  // UnorientableShape). ShapeFix_Face repairs the seam/wire bookkeeping so the
+  // face is valid; verified to preserve signed volume when orientation is kept.
+  ShapeFix_Face fx(nf);
+  fx.Perform();
+  nf = fx.Face();
   BRepCheck_Analyzer ana(nf);
   if (!ana.IsValid()) return TopoDS_Face();
   return nf;
@@ -1330,17 +1471,16 @@ double boolean_fuzzy(const TopoDS_Shape& a, const TopoDS_Shape& b) {
   return std::max(diag * 1.0e-6, 1.0e-5);
 }
 
-// ── Boolean cleanup (UnifySameDomain) ────────────────────────────────────────
-TopoDS_Shape clean_unify(const TopoDS_Shape& shape) {
-  // Canonicalize coaxial cylinder surfaces (edge-preserving) so opposite-axis
-  // fragments become the same domain and UnifySameDomain merges them into one
-  // face. The per-face rebase is geometry-preserving in principle, but on some
-  // bodies it flips a face's effective orientation and INVERTS the solid
-  // (negative volume → faces render on the wrong side / appear missing). GUARD:
-  // keep the canonicalized shape ONLY when it preserves the signed volume; else
-  // fall back to the un-canonicalized shape (the seam edge is still dropped from
-  // the view by detect_tangent_edges, so the cylinder still reads continuous).
-  TopoDS_Shape canon = shape;
+// ── Cylinder canonicalization (volume-guarded) ───────────────────────────────
+// Rebase every non-canonical-axis cylinder face onto a deterministic canonical
+// surface so coaxial faces share one domain. The per-face rebase is geometry-
+// preserving in principle, but a bad orientation flip can INVERT the solid
+// (negative volume → faces render on the wrong side / appear missing). GUARD:
+// keep the canonicalized shape ONLY when it preserves the signed volume; else
+// return the original unchanged. Utility, kept available; not on the boolean
+// path — for the opposite-axis-fragment case it can't merge faces without
+// inverting the solid (see clean_unify), so it isn't wired in.
+TopoDS_Shape canonicalize_cylinders(const TopoDS_Shape& shape) {
   try {
     TopoDS_Shape c = canonicalize_cyl_faces(shape);
     if (!c.IsSame(shape)) {
@@ -1348,13 +1488,33 @@ TopoDS_Shape clean_unify(const TopoDS_Shape& shape) {
       volume_centroid_exact(shape, v0, cc);
       volume_centroid_exact(c, v1, cc);
       const double tol = 1e-6 * std::fabs(v0) + 1e-9;
-      if (v1 > 0 && std::fabs(v1 - v0) <= tol) canon = c;  // volume preserved → safe
+      if (v1 > 0 && std::fabs(v1 - v0) <= tol) return c;  // volume preserved → safe
     }
-  } catch (const Standard_Failure&) { canon = shape; }
-  ShapeUpgrade_UnifySameDomain upgrader(canon, true, true, true);
+  } catch (const Standard_Failure&) { /* fall through to original */ }
+  return shape;
+}
+
+// ── Boolean cleanup (UnifySameDomain) ────────────────────────────────────────
+TopoDS_Shape clean_unify(const TopoDS_Shape& shape) {
+  ShapeUpgrade_UnifySameDomain upgrader(shape, true, true, true);
   upgrader.AllowInternalEdges(false);
   upgrader.Build();
-  return upgrader.Shape();
+  TopoDS_Shape result = upgrader.Shape();
+
+  // UnifySameDomain CORRUPTS a valid solid when it meets coaxial cylinder faces
+  // with OPPOSITE axis directions (a bore extended by a coaxial same-radius cut
+  // leaves the old wall +axis and the new wall -axis). It can't merge them and
+  // bails leaving one face flagged UnorientableShape — the whole solid becomes
+  // invalid, which then breaks downstream fillets/booleans. We can't merge those
+  // faces (OCCT has no edge-preserving way to re-base one onto the other without
+  // inverting the solid), but we must never hand back a solid WORSE than we got:
+  // if unify invalidated a previously-valid shape, keep the un-unified shape.
+  // The two faces still read as one cylinder visually (detect_tangent_edges drops
+  // the co-domain seam between them).
+  if (result.IsNull()) return shape;
+  if (BRepCheck_Analyzer(result).IsValid()) return result;
+  if (BRepCheck_Analyzer(shape).IsValid()) return shape;
+  return result;
 }
 
 }  // namespace kernel
