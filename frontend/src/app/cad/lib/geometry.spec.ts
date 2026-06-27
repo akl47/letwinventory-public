@@ -2,9 +2,41 @@ import { describe, it, expect } from 'vitest';
 import {
   lineLineIntersection, lineCircleIntersection, circleCircleIntersection,
   reflectAcrossLine, projectOntoSegment, projectOntoLine, offsetLineLeft,
-  angleInArcSweep, allCurveIntersections,
+  angleInArcSweep, allCurveIntersections, angleQuadrant,
 } from './geometry';
 import { emptySketchState, addPoint, addLine, addCircle } from './store';
+
+describe('angleQuadrant (placement-driven angle, SolidWorks-style)', () => {
+  // Line A along +X (0,0)->(10,0); line B at 30° (0,0)->(8.66,5). Intersect at origin.
+  const a1 = { x: 0, y: 0 }, a2 = { x: 10, y: 0 };
+  const b1 = { x: 0, y: 0 }, b2 = { x: 8.66, y: 5 };
+  const deg = (r: number) => (r * 180) / Math.PI;
+
+  it('placement between the lines → interior (acute) angle', () => {
+    const q = angleQuadrant(a1, a2, b1, b2, { x: 4, y: 1 });
+    expect(q).not.toBeNull();
+    expect(deg(q!.angle)).toBeCloseTo(30, 0);
+    expect(q!.rays).toEqual([1, 1]);
+  });
+
+  it('placement on the far side of A → supplementary (obtuse) angle', () => {
+    const q = angleQuadrant(a1, a2, b1, b2, { x: -4, y: 1 });
+    expect(q).not.toBeNull();
+    expect(deg(q!.angle)).toBeCloseTo(150, 0);
+    expect(q!.rays).toEqual([-1, 1]);  // line A flipped
+  });
+
+  it('opposite vertical quadrant → interior angle again, both rays flipped', () => {
+    const q = angleQuadrant(a1, a2, b1, b2, { x: -4, y: -1 });
+    expect(q).not.toBeNull();
+    expect(deg(q!.angle)).toBeCloseTo(30, 0);
+    expect(q!.rays).toEqual([-1, -1]);
+  });
+
+  it('returns null for parallel lines', () => {
+    expect(angleQuadrant(a1, a2, { x: 0, y: 2 }, { x: 10, y: 2 }, { x: 5, y: 1 })).toBeNull();
+  });
+});
 
 describe('lineLineIntersection', () => {
   it('returns intersection for crossing segments with correct parameters', () => {

@@ -978,6 +978,7 @@ export function addConstraint(
   placement?: { x: number; y: number },
   driven?: boolean,
   externalRef?: ExternalRef,
+  angleRays?: [number, number],
 ): { state: SketchState; constraint: SketchConstraint } {
   const constraint: SketchConstraint = {
     id: nextId('c'),
@@ -988,6 +989,7 @@ export function addConstraint(
   if (placement !== undefined) constraint.placement = placement;
   if (driven) constraint.driven = true;
   if (externalRef) constraint.externalRef = externalRef;
+  if (angleRays) constraint.angleRays = angleRays;
   return {
     state: { ...state, constraints: [...state.constraints, constraint] },
     constraint,

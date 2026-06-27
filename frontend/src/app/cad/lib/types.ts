@@ -342,6 +342,13 @@ export interface SketchConstraint {
    * mm regardless. */
   unit?: 'mm' | 'um' | 'in';
   value?: number;
+  /** Angle dimensions only: the ray orientation [sA, sB] (±1 per line) chosen
+   * at first placement — which of the four angles between the two lines is
+   * measured (interior vs supplementary/exterior), per the quadrant the user
+   * dropped the dimension in. Locks the measured angle so the solver and arc
+   * render stay consistent on later label drags. Absent on legacy angle dims →
+   * falls back to the interior-angle orientation. */
+  angleRays?: [number, number];
   /** True when the dim is "driven" — it reads the current geometry
    * back rather than driving it. The solver skips driven dims; the
    * renderer shows them in a muted color with parentheses around the

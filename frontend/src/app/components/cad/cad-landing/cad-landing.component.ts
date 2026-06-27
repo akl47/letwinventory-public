@@ -82,8 +82,8 @@ import { filterBySearch } from '../../../utils/search';
         <p class="hint">Create a part, then open its CAD tab to begin a model.</p>
       </div>
 
+      <div class="cad-table-wrap" *ngIf="!loading() && filtered().length > 0">
       <table
-        *ngIf="!loading() && filtered().length > 0"
         mat-table
         [dataSource]="filtered()"
         class="cad-table"
@@ -164,6 +164,7 @@ import { filterBySearch } from '../../../utils/search';
         <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
         <tr mat-row *matRowDef="let row; columns: displayedColumns" class="row" (click)="openLatest(row)"></tr>
       </table>
+      </div>
     </div>
   `,
   styles: [`
@@ -176,7 +177,10 @@ import { filterBySearch } from '../../../utils/search';
     .loading { display: flex; justify-content: center; padding: 32px; }
     .empty { padding: 32px; text-align: center; color: #666; border: 1px dashed #ccc; border-radius: 8px; }
     .empty .hint { font-size: 13px; opacity: 0.7; }
-    .cad-table { width: 100%; }
+    /* Horizontal scroll so the table (incl. the Open column) is reachable on
+       narrow/portrait phones instead of being clipped off-screen. */
+    .cad-table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .cad-table { width: 100%; min-width: 560px; }
     .row { cursor: pointer; }
     .row:hover { background: rgba(0,0,0,0.04); }
     .part-link { text-decoration: none; color: inherit; }

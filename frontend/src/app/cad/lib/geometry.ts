@@ -51,6 +51,40 @@ export function lineLineIntersection(
   return { p: { x: a1.x + t1 * r.x, y: a1.y + t1 * r.y }, t1, t2 };
 }
 
+/**
+ * Which of the four angles between two lines a (a1→a2) and b (b1→b2) the user
+ * means, chosen by where the dimension is PLACED (SolidWorks-style): the angle
+ * of the quadrant — around the lines' intersection — that contains `placement`.
+ * Dropping the dim between the lines gives the interior angle; on the far side
+ * gives the supplementary/exterior one.
+ *
+ * Returns the measured `angle` (radians, 0..π) and the ray orientation
+ * `rays = [sA, sB]` (±1 per line) that bounds that quadrant — store these on
+ * the constraint so the solver and renderer reproduce the same angle
+ * regardless of later label drags. Null when the lines are parallel (no
+ * intersection) or `placement` sits on a line (ambiguous side).
+ */
+export function angleQuadrant(
+  a1: Pt, a2: Pt, b1: Pt, b2: Pt, placement: Pt,
+): { angle: number; rays: [number, number] } | null {
+  const hit = lineLineIntersection(a1, a2, b1, b2);
+  if (!hit) return null;                       // parallel
+  const da = { x: a2.x - a1.x, y: a2.y - a1.y };
+  const db = { x: b2.x - b1.x, y: b2.y - b1.y };
+  const pd = { x: placement.x - hit.p.x, y: placement.y - hit.p.y };
+  if (Math.hypot(pd.x, pd.y) < EPS) return null;  // placement on the vertex
+  const cross = (u: Pt, v: Pt) => u.x * v.y - u.y * v.x;
+  const sgn = (n: number) => (n >= 0 ? 1 : -1);
+  // Ray of A on the placement's side of line B; ray of B on placement's side
+  // of line A. (cross(B,p) and cross(B,A) same sign ⇒ keep +A, else flip.)
+  const sA = sgn(cross(db, pd)) * sgn(cross(db, da));
+  const sB = sgn(cross(da, pd)) * sgn(cross(da, db));
+  const rax = sA * da.x, ray = sA * da.y;
+  const rbx = sB * db.x, rby = sB * db.y;
+  const angle = Math.atan2(Math.abs(rax * rby - ray * rbx), rax * rbx + ray * rby);
+  return { angle, rays: [sA, sB] };
+}
+
 /** Intersect a line (a1→a2) with a circle (center, radius). Returns 0-2
  * intersection points, in the order they appear along the line direction. */
 export function lineCircleIntersection(

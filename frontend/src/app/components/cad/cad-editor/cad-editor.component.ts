@@ -108,6 +108,13 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
   providers: [AssemblyEditController],
   template: `
     <div class="cad-editor" [class.fullscreen]="fullscreen()" [attr.data-testid]="'cad-editor'">
+      <!-- Mobile: the CAD editor needs landscape. We best-effort lock the
+           orientation (Android/Chrome fullscreen only) and show this prompt on
+           touch devices held in portrait as the universal fallback. -->
+      <div class="rotate-to-landscape">
+        <mat-icon>screen_rotation</mat-icon>
+        <p>Rotate your device to landscape to use the CAD editor.</p>
+      </div>
       <!-- REQ 616 — tabbed ribbon. Toolbar content swaps with the active tab.
            Active tab follows the editor context (auto-switches to Sketch when a
            sketch is active) but the user can manually click tabs to override.
@@ -777,8 +784,19 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           (bodyVisibilityToggled)="toggleBodyVisibility($event)"
           (bodyIsolated)="onIsolateBody($event)"
           (bodyDeleted)="onDeleteBody($event)"
-          class="feature-tree">
+          class="feature-tree"
+          [class.collapsed]="sidebarCollapsed()"
+          [style.width.px]="sidebarCollapsed() ? 0 : sidebarWidth()">
         </app-cad-feature-tree-panel>
+        <!-- Drag the bar to resize the feature-tree sidebar; the button collapses it. -->
+        <div class="sidebar-resize" *ngIf="!assemblyMode()" (mousedown)="startSidebarResize($event)">
+          <button class="sidebar-toggle" type="button"
+                  (mousedown)="$event.stopPropagation()"
+                  (click)="toggleSidebar()"
+                  [title]="sidebarCollapsed() ? 'Show feature tree' : 'Hide feature tree'">
+            <mat-icon>{{ sidebarCollapsed() ? 'chevron_right' : 'chevron_left' }}</mat-icon>
+          </button>
+        </div>
 
         <!-- Sketch properties rail — ONE sidebar shown only while editing a
              sketch (activeSketchId): the host plane/face selection at the top,
@@ -3845,13 +3863,45 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
        overflows that container by the toolbar's height and pushes the
        feature-tree's bottom off the bottom of the screen. */
     .cad-editor { display: flex; flex-direction: column; height: 100%; min-height: 0; background: #1e1e2e; color: #ddd; }
+    /* Force-landscape prompt — hidden except on touch devices in portrait. */
+    .rotate-to-landscape { display: none; }
+    @media (orientation: portrait) and (pointer: coarse) {
+      .rotate-to-landscape {
+        position: fixed; inset: 0; z-index: 10000; display: flex;
+        flex-direction: column; align-items: center; justify-content: center;
+        gap: 18px; padding: 24px; text-align: center;
+        background: #1e1e2e; color: #ddd;
+      }
+      .rotate-to-landscape mat-icon {
+        font-size: 72px; width: 72px; height: 72px; color: #42a5f5;
+        animation: rotate-hint 2.2s ease-in-out infinite;
+      }
+      .rotate-to-landscape p { font-size: 16px; line-height: 1.4; max-width: 280px; margin: 0; }
+    }
+    @keyframes rotate-hint { 0%, 60%, 100% { transform: rotate(0deg); } 30% { transform: rotate(-90deg); } }
     .cad-editor.fullscreen { position: fixed; inset: 0; z-index: 9999; }
     /* Floating status overlay across the bottom of the viewport. The bar
        itself is fully transparent — only the left and right groups carry
        the HUD plate (rgba black), so the empty middle reveals whatever's
        in the cad viewport behind it. Pointer-events stay off the bar so
        clicks in the gap fall through to the viewport's orbit/pan/zoom. */
-    .editor-footer { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 8px; font-size: 12px; min-height: 28px; pointer-events: none; z-index: 5; }
+    /* Footer height scales with viewport height (clamped) so it stays small on
+       short screens like landscape phones — large width, small height — that a
+       width-only rule would miss. */
+    .editor-footer { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 8px; font-size: clamp(9px, 1.6vh, 12px); min-height: clamp(20px, 4vh, 28px); pointer-events: none; z-index: 5; }
+    /* Short OR narrow screen: shrink the footer + hide the verbose dev HUD so it
+       doesn't eat the viewport; the status group scrolls inside its capped
+       width instead of overflowing; view buttons stay put. */
+    @media (max-width: 768px), (max-height: 540px) {
+      .editor-footer { left: 4px; right: 4px; bottom: 4px; gap: 4px; font-size: 11px; min-height: 24px; }
+      .editor-footer .footer-group { padding: 3px 7px; gap: 6px; min-height: 24px; }
+      .editor-footer .footer-gap { display: none; }
+      .editor-footer .footer-group-right { margin-left: auto; }
+      .editor-footer .footer-group-left { overflow-x: auto; max-width: 56vw; -webkit-overflow-scrolling: touch; }
+      .editor-footer .footer-mode:not(.footer-cursor) { display: none; }
+      .editor-footer .kernel-badge { display: none; }
+      .editor-footer .unit-field { width: 72px; }
+    }
     .footer-volume {
       display: inline-flex; align-items: center; gap: 4px;
       padding: 3px 10px;
@@ -3868,7 +3918,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .footer-volume:hover { background: rgba(50, 50, 70, 0.85); border-color: #555; }
     .footer-volume:active { background: rgba(66, 165, 245, 0.25); border-color: #42a5f5; }
     .footer-volume-icon { font-size: 14px; width: 14px; height: 14px; opacity: 0.75; }
-    .editor-footer .footer-group { display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: rgba(0,0,0,0.35); border-radius: 4px; min-height: 28px; pointer-events: auto; }
+    .editor-footer .footer-group { display: flex; align-items: center; gap: 8px; padding: clamp(2px, 0.5vh, 4px) 10px; background: rgba(0,0,0,0.35); border-radius: 4px; min-height: clamp(20px, 4vh, 28px); pointer-events: auto; }
     .editor-footer .footer-gap { flex: 1; }
     .editor-footer .footer-mode { font-family: monospace; opacity: 0.8; }
     .editor-footer .footer-icon-btn { width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
@@ -3967,7 +4017,14 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .tab-strip-top .tab { border-top: none; border-bottom: 2px solid transparent; }
     .tab-strip-top .tab.active { border-bottom-color: #42a5f5; }
     .editor-body { display: flex; flex: 1; min-height: 0; }
-    .feature-tree { width: 240px; background: #25253a; border-right: 1px solid #444; }
+    .feature-tree { width: 240px; background: #25253a; border-right: 1px solid #444; flex: 0 0 auto; overflow: hidden; }
+    .feature-tree.collapsed { width: 0 !important; border-right: none; }
+    /* Resize handle + collapse toggle for the feature-tree sidebar. */
+    .sidebar-resize { position: relative; flex: 0 0 6px; width: 6px; background: #2a2a3e; border-right: 1px solid #444; cursor: col-resize; }
+    .sidebar-resize:hover { background: #3a4a6a; }
+    .sidebar-toggle { position: absolute; top: 8px; left: -7px; width: 18px; height: 24px; display: flex; align-items: center; justify-content: center; padding: 0; background: #3a3a52; color: #ccc; border: 1px solid #444; border-radius: 3px; cursor: pointer; z-index: 6; }
+    .sidebar-toggle:hover { background: #4a4a6a; color: #fff; }
+    .sidebar-toggle mat-icon { font-size: 16px; width: 16px; height: 16px; }
     /* Sketch properties rail — one 220px column holding the Sketch Plane
        selection on top and the constraint list filling the rest. */
     .sketch-rail { width: 220px; border-right: 1px solid #444; background: #2a2a3e; display: flex; flex-direction: column; min-height: 0; }
@@ -4256,7 +4313,34 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
 export class CadEditorComponent implements OnInit, OnDestroy {
   /** Temporary build marker shown in the debug overlay so the user can confirm
    * which build is loaded. Bump alongside the sketch-editor text-NN marker. */
-  readonly buildMarker = 'text-298';
+  readonly buildMarker = 'text-307';
+
+  // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
+  /** Sidebar width in px (drag the divider to change); persisted. */
+  readonly sidebarWidth = signal<number>(Number(localStorage.getItem('cadSidebarWidth')) || 240);
+  /** Collapsed = width 0 (the divider's toggle re-opens it); persisted. */
+  readonly sidebarCollapsed = signal<boolean>(localStorage.getItem('cadSidebarCollapsed') === '1');
+  toggleSidebar(): void {
+    const v = !this.sidebarCollapsed();
+    this.sidebarCollapsed.set(v);
+    localStorage.setItem('cadSidebarCollapsed', v ? '1' : '0');
+  }
+  startSidebarResize(e: MouseEvent): void {
+    e.preventDefault();
+    if (this.sidebarCollapsed()) this.toggleSidebar();  // dragging a collapsed bar re-opens it
+    const startX = e.clientX, startW = this.sidebarWidth();
+    const move = (ev: MouseEvent) => {
+      const w = Math.max(160, Math.min(560, startW + (ev.clientX - startX)));
+      this.sidebarWidth.set(w);
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      localStorage.setItem('cadSidebarWidth', String(this.sidebarWidth()));
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  }
   /** Whether the pick-debug overlay (+ build markers) is shown. Toggled from
    * the footer bug button; persisted so the choice survives reloads. */
   readonly debugVisible = signal<boolean>(localStorage.getItem('cadDebugVisible') === '1');
@@ -6626,6 +6710,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit() {
+    // Best-effort: lock to landscape on mobile. Only succeeds on Android/Chrome
+    // while fullscreen or installed as a PWA; iOS Safari rejects it — the
+    // .rotate-to-landscape CSS prompt is the universal fallback for portrait.
+    try {
+      const o = (screen as unknown as { orientation?: { lock?: (s: string) => Promise<void> } }).orientation;
+      o?.lock?.('landscape').catch(() => { /* unsupported / not fullscreen */ });
+    } catch { /* no Screen Orientation API */ }
     // Assembly mode — this part is an assembly. Skip the single-part CAD load
     // flow entirely; the controller drives the assembly. (Route data flag set on
     // the /parts/:id/assembly/editor route.)

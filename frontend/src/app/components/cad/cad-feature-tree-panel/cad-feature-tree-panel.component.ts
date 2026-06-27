@@ -85,12 +85,13 @@ export interface TreeNode {
   imports: [CommonModule, MatIconModule, MatTooltipModule, MatMenuModule],
   template: `
     <div class="panel">
-      <div class="section features-section">
-        <header class="panel-header">
+      <div class="section features-section" [class.collapsed]="featuresCollapsed()" [style.flex]="featuresFlex()">
+        <header class="panel-header collapsible" (click)="toggleFeaturesCollapsed()">
+          <mat-icon class="section-chevron">{{ featuresCollapsed() ? 'chevron_right' : 'expand_more' }}</mat-icon>
           <mat-icon>{{ headerIcon() }}</mat-icon>
           <span>{{ headerTitle() }}</span>
         </header>
-        <ul class="tree" #treeList>
+        <ul class="tree" #treeList *ngIf="!featuresCollapsed()">
         <li *ngFor="let n of nodes()"
             [attr.data-testid]="rowTestId(n)"
             [attr.data-feature-index]="n.featureIndex"
@@ -141,16 +142,21 @@ export interface TreeNode {
         </ul>
       </div>
 
+      <!-- Drag to resize the split between the feature tree and bodies. -->
+      <div class="section-resize" *ngIf="showBodies() && !featuresCollapsed() && !bodiesCollapsed()"
+           (mousedown)="startSectionResize($event)"></div>
+
       <!-- Bodies section. Lists every body in the part (1 per additive
            feature with merge=false, plus a default body for merge=true
            additive chains). Each row has a visibility toggle. -->
-      <div class="section bodies-section" *ngIf="showBodies()">
-        <header class="panel-header">
+      <div class="section bodies-section" *ngIf="showBodies()" [class.collapsed]="bodiesCollapsed()">
+        <header class="panel-header collapsible" (click)="toggleBodiesCollapsed()">
+          <mat-icon class="section-chevron">{{ bodiesCollapsed() ? 'chevron_right' : 'expand_more' }}</mat-icon>
           <mat-icon>category</mat-icon>
           <span>Bodies</span>
           <span class="count" *ngIf="bodiesView().length > 0">({{ bodiesView().length }})</span>
         </header>
-        <ul class="tree">
+        <ul class="tree" *ngIf="!bodiesCollapsed()">
           <li *ngIf="bodiesView().length === 0" class="row empty-row">
             <span class="label muted">No body yet — add an Extrude or Revolve.</span>
           </li>
@@ -329,6 +335,14 @@ export interface TreeNode {
     .section { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     .features-section { border-bottom: 1px solid #555; }
     .section .tree { flex: 1 1 0; overflow-y: auto; }
+    /* Collapsed section = header only. Collapsible headers get a chevron. */
+    .section.collapsed { flex: 0 0 auto !important; }
+    .panel-header.collapsible { cursor: pointer; user-select: none; }
+    .panel-header.collapsible:hover { opacity: 1; }
+    .section-chevron { font-size: 18px; width: 18px; height: 18px; opacity: 0.7; margin-left: -4px; }
+    /* Drag handle to resize the feature-tree / bodies split. */
+    .section-resize { flex: 0 0 6px; height: 6px; background: #2a2a3e; cursor: row-resize; border-top: 1px solid #555; border-bottom: 1px solid #555; }
+    .section-resize:hover { background: #3a4a6a; }
     .panel-header { display: flex; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid #444; font-weight: 600; font-size: 13px; text-transform: uppercase; opacity: 0.75; flex-shrink: 0; }
     .panel-header .count { opacity: 0.55; font-weight: 400; text-transform: none; margin-left: 2px; }
     .empty-row { font-style: italic; opacity: 0.55; }
@@ -428,6 +442,39 @@ export class CadFeatureTreePanelComponent {
   headerTitle = input<string>('Feature Tree');
   headerIcon = input<string>('account_tree');
   showBodies = input<boolean>(true);
+
+  // ── Section collapse / vertical resize (feature tree ↔ bodies) ───────────────
+  readonly featuresCollapsed = signal<boolean>(localStorage.getItem('cadTreeFeaturesCollapsed') === '1');
+  readonly bodiesCollapsed = signal<boolean>(localStorage.getItem('cadTreeBodiesCollapsed') === '1');
+  /** Explicit features-section height (px) once the user drags the divider. */
+  readonly featuresBasisPx = signal<number | null>(Number(localStorage.getItem('cadTreeFeaturesBasis')) || null);
+  featuresFlex(): string | null {
+    // No bodies section to split against (e.g. the embedded assembly tree) →
+    // don't override the layout's own flex.
+    if (!this.showBodies()) return this.featuresCollapsed() ? '0 0 auto' : null;
+    if (this.featuresCollapsed()) return '0 0 auto';
+    if (this.bodiesCollapsed()) return '1 1 0';        // features take the rest
+    const b = this.featuresBasisPx();
+    return b ? `0 0 ${b}px` : '1 1 0';
+  }
+  toggleFeaturesCollapsed(): void { const v = !this.featuresCollapsed(); this.featuresCollapsed.set(v); localStorage.setItem('cadTreeFeaturesCollapsed', v ? '1' : '0'); }
+  toggleBodiesCollapsed(): void { const v = !this.bodiesCollapsed(); this.bodiesCollapsed.set(v); localStorage.setItem('cadTreeBodiesCollapsed', v ? '1' : '0'); }
+  startSectionResize(e: MouseEvent): void {
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    const section = handle.previousElementSibling as HTMLElement | null;  // features-section
+    if (!section) return;
+    const startH = section.getBoundingClientRect().height, startY = e.clientY;
+    const move = (ev: MouseEvent) => { this.featuresBasisPx.set(Math.max(60, startH + (ev.clientY - startY))); };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      const b = this.featuresBasisPx();
+      if (b) localStorage.setItem('cadTreeFeaturesBasis', String(b));
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  }
   /** Debug mode (footer bug toggle). Gates developer-only context-menu items
    * — the "Copy feature/sketch name" entries that surface the internal id. */
   debugVisible = input<boolean>(false);

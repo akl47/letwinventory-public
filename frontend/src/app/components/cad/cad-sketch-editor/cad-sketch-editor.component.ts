@@ -12,6 +12,7 @@ import type {
 } from '../../../cad/lib/types';
 import { pointsOf, linesOf, findPoint, onEdgeLookupKey, isCenterExternalRef } from '../../../cad/lib/types';
 import { nearestCandidateHit, externalRefForCandidate, parseCandidateId, closestPointOnSegment, closestPointOnPolyline } from '../../../cad/lib/externalSnap';
+import { angleQuadrant } from '../../../cad/lib/geometry';
 import {
   addPoint, addLine, addCircle, addCircleByPoint, addArc, addArcByPoints, addConstraint, movePoint, deletePrimitive, emptySketchState,
   addRectangleCorners, addRectangleCenter, addRectangle3PtCorner, addRectangle3PtCenter, addParallelogram,
@@ -3915,13 +3916,13 @@ export class CadSketchEditorComponent implements OnDestroy {
     // based on where the user clicked.
     const resolved = resolveSmartDim(this.state(), sel, placement);
     if (!resolved) return;
-    const { type, targets, value } = resolved;
+    const { type, targets, value, angleRays } = resolved;
     // If every entity this dimension references is ALREADY fully constrained,
     // the dimension is redundant — add it as a DRIVEN (reference) dimension
     // instead of over-constraining the sketch (SolidWorks/Onshape behaviour).
     const driven = this._dimensionWouldBeRedundant(targets);
     const { state: next, constraint } = addConstraint(
-      this.state(), type, targets, value, placement, driven,
+      this.state(), type, targets, value, placement, driven, undefined, angleRays,
     );
     this.commitAfterAdd(next, constraint.id);
     this.selected.set(new Set());
@@ -4092,6 +4093,13 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (spec.type === 'point-line-distance' && this.selectedExternalEdgeId() && this._applyDistanceToEdge(entities)) {
       return;
     }
+    // Parallel / perpendicular between a sketch line and a selected MODEL edge
+    // (or projected reference line). The edge isn't a sketch entity, so this is
+    // handled via an externalRef + the solver's synthetic-line orientation pass.
+    if ((spec.type === 'parallel' || spec.type === 'perpendicular')
+        && this.selectedExternalEdgeId() && this._applyOrientationToEdge(entities, spec.type)) {
+      return;
+    }
     if (!spec.predicate(entities)) return;
     // One-shot actions short-circuit the persisted-constraint path.
     // Merge Points collapses the second-picked point into the first;
@@ -4162,7 +4170,31 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (spec.type === 'point-line-distance' && edge) {
       return entities.length === 1 && entities[0].kind === 'point';
     }
+    // Parallel / perpendicular between one sketch line and a selected model edge.
+    if ((spec.type === 'parallel' || spec.type === 'perpendicular') && edge) {
+      return entities.length === 1 && entities[0].kind === 'line';
+    }
     return false;
+  }
+
+  /** Constrain a single selected sketch LINE parallel/perpendicular to the
+   * selected model edge (or projected reference line) via an externalRef. The
+   * solver resolves it against the edge's live 2D projection (synthetic fixed
+   * line) — no converted sketch geometry. */
+  private _applyOrientationToEdge(entities: SketchEntity[], type: 'parallel' | 'perpendicular'): boolean {
+    const edgeId = this.selectedExternalEdgeId();
+    if (!edgeId) return false;
+    if (entities.length !== 1 || entities[0].kind !== 'line') return false;
+    const cand = this._candidateForEdgeId(edgeId);
+    const ref = cand ? externalRefForCandidate(cand) : null;
+    if (!ref) return false;
+    const { state: next, constraint } = addConstraint(
+      this.state(), type, [entities[0].id], undefined, undefined, false, ref,
+    );
+    this.commitAfterAdd(next, constraint.id);
+    this.selected.set(new Set());
+    this.selectedExternalEdgeId.set(null);
+    return true;
   }
 
   /** The center external-ref for a selected circular model edge, or null when
@@ -4718,7 +4750,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-298');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-307');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);
@@ -4987,7 +5019,7 @@ function canPlaceDimension(sel: SketchEntity[]): boolean {
  * Returns null if the picks don't form a recognized case. */
 function resolveSmartDim(
   state: SketchState, sel: SketchEntity[], cursor: { x: number; y: number } | null = null,
-): { type: ConstraintType; targets: string[]; value: number } | null {
+): { type: ConstraintType; targets: string[]; value: number; angleRays?: [number, number] } | null {
   if (sel.length === 1 && sel[0].kind === 'line') {
     const line = sel[0] as LineEntity;
     const a = findPoint(state, line.startId);
@@ -5038,9 +5070,9 @@ function resolveSmartDim(
       if (v === null) return null;
       return { type: 'point-line-distance', targets: [l1.startId, l2.id], value: v };
     }
-    const v = measureAngleBetween(state, l1, l2);
-    if (v === null) return null;
-    return { type: 'angle', targets: [l1.id, l2.id], value: v };
+    const m = measureAngleBetween(state, l1, l2, cursor);
+    if (m === null) return null;
+    return { type: 'angle', targets: [l1.id, l2.id], value: m.value, angleRays: m.rays };
   }
   if (sel.length === 2 && sel.some(e => e.kind === 'point') && sel.some(e => e.kind === 'line')) {
     const p = sel.find(e => e.kind === 'point') as PointEntity;
@@ -5064,10 +5096,20 @@ function resolveSmartDim(
  *
  * For lines without a shared endpoint, the direction-vector angle is
  * what the user means (no "corner" to reference). */
-function measureAngleBetween(state: SketchState, a: LineEntity, b: LineEntity): number | null {
+function measureAngleBetween(
+  state: SketchState, a: LineEntity, b: LineEntity,
+  placement: { x: number; y: number } | null = null,
+): { value: number; rays?: [number, number] } | null {
   const a1 = findPoint(state, a.startId), a2 = findPoint(state, a.endId);
   const b1 = findPoint(state, b.startId), b2 = findPoint(state, b.endId);
   if (!a1 || !a2 || !b1 || !b2) return null;
+  // SolidWorks-style: the measured angle is the one in the quadrant the user
+  // dropped the dimension in. Lock the ray orientation so interior vs exterior
+  // is set by first placement (the solver + arc render reuse it).
+  if (placement) {
+    const q = angleQuadrant(a1, a2, b1, b2, placement);
+    if (q) return { value: q.angle, rays: q.rays };
+  }
   let ax: number, ay: number, bx: number, by: number;
   const shared = sharedEndpointId(a, b);
   if (shared) {
@@ -5084,7 +5126,7 @@ function measureAngleBetween(state: SketchState, a: LineEntity, b: LineEntity): 
   const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
   if (la < 1e-9 || lb < 1e-9) return null;
   const cos = (ax * bx + ay * by) / (la * lb);
-  return Math.acos(Math.max(-1, Math.min(1, cos)));
+  return { value: Math.acos(Math.max(-1, Math.min(1, cos))) };
 }
 
 function sharedEndpointId(a: LineEntity, b: LineEntity): string | null {

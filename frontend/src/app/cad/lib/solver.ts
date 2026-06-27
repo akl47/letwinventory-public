@@ -168,8 +168,12 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
     case 'distance':
       return [{ id: c.id, type: 'p2p_distance', p1_id: tid(0), p2_id: tid(1), distance: c.value ?? 0 }];
     case 'perpendicular':
+      // To a model edge (single sketch-line target + externalRef): handled by
+      // the edge-orientation pass in solve() via a synthetic fixed line.
+      if (c.externalRef) return [];
       return [{ id: c.id, type: 'perpendicular_ll', l1_id: tid(0), l2_id: tid(1) }];
     case 'parallel':
+      if (c.externalRef) return [];
       return [{ id: c.id, type: 'parallel', l1_id: tid(0), l2_id: tid(1) }];
     case 'tangent': {
       const a = at(0), b = at(1);
@@ -293,7 +297,7 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
       //    sense (minimum rotation).
       const a = at(0), b = at(1);
       if (!a || !b || a.kind !== 'line' || b.kind !== 'line') return [];
-      const oriented = orientLinesForAngle(a, b);
+      const oriented = orientLinesForAngle(a, b, c.angleRays);
       const angle = adjustAngleSignFromPoints(
         state, oriented.l1p1, oriented.l1p2, oriented.l2p1, oriented.l2p2, c.value ?? 0,
       );
@@ -587,6 +591,20 @@ export async function solveSketch(
     const e = entityByIdSolver.get(c.targets[0]?.entityId);
     if (e && e.kind === 'point') edgeDistanceDims.push({ pointId: e.id, cid: c.id, line, distance: c.value ?? 0, driven: !!c.driven });
   }
+  // Sketch-line PARALLEL / PERPENDICULAR to a model edge (externalRef, single
+  // line target). The edge has no sketch entity, so — like edgeDistanceDims —
+  // we build a synthetic fixed line at its projection and emit the orientation
+  // primitive against the sketch line.
+  interface EdgeOrient { lineId: string; cid: string; line: [{ x: number; y: number }, { x: number; y: number }]; type: 'parallel' | 'perpendicular'; }
+  const edgeOrientations: EdgeOrient[] = [];
+  for (const c of state.constraints) {
+    if ((c.type !== 'parallel' && c.type !== 'perpendicular') || !c.externalRef) continue;
+    const key = onEdgeLookupKey(c.externalRef);
+    const line = key ? opts.externalEdges?.get(key) : undefined;
+    if (!line) continue;
+    const e = entityByIdSolver.get(c.targets[0]?.entityId);
+    if (e && e.kind === 'line') edgeOrientations.push({ lineId: e.id, cid: c.id, line, type: c.type });
+  }
   const ridePointIds = new Set(edgeRidePoints.map(r => r.pointId));
   for (const c of state.constraints) {
     if (c.type !== 'on-edge') continue;
@@ -629,6 +647,21 @@ export async function solveSketch(
     if (e?.kind === 'circle') primitives.push({ id: `_coradrad_${c.id}`, type: 'circle_radius', c_id: e.id, radius: e.radius });
     else if (e?.kind === 'arc') primitives.push({ id: `_coradrad_${c.id}`, type: 'arc_radius', a_id: e.id, radius: e.radius });
   }
+  // On-edge CIRCLE/ARC to a model edge: the curve coincides with that edge, so
+  // its RADIUS must be pinned too (the on-edge pass above only pins the center).
+  // Without this the radius is a free DOF and any later constraint that touches
+  // the curve — e.g. a coincident point where the user attaches a line — silently
+  // resizes it off the edge. _reprojectAllSketches keeps e.radius equal to the
+  // source edge's radius each regen, so pinning to e.radius tracks the edge. The
+  // determinacy analyzer already pre-fixes this radius; this makes the solver
+  // agree. (sub:'center' refs are concentric/coradial, handled above — skip.)
+  for (const c of state.constraints) {
+    if (c.type !== 'on-edge' || !c.externalRef) continue;
+    if (c.externalRef.scope !== 'cross-part' && c.externalRef.sub === 'center') continue;
+    const e = entityByIdSolver.get(c.targets[0]?.entityId);
+    if (e?.kind === 'circle') primitives.push({ id: `_onedgerad_${c.id}`, type: 'circle_radius', c_id: e.id, radius: e.radius });
+    else if (e?.kind === 'arc') primitives.push({ id: `_onedgerad_${c.id}`, type: 'arc_radius', a_id: e.id, radius: e.radius });
+  }
   // Synthetic point-on-edge geometry: two fixed reference points at the
   // projected edge endpoints + a point_on_line_ppp tying the sketch point to
   // that line. These ids never collide with entity ids and readBack ignores
@@ -650,6 +683,17 @@ export async function solveSketch(
     primitives.push({ id: b, type: 'point', x: r.line[1].x, y: r.line[1].y, fixed: true });
     primitives.push({ id: ln, type: 'line', p1_id: a, p2_id: b });
     primitives.push({ id: `_distC_${r.cid}`, type: 'p2l_distance', p_id: r.pointId, l_id: ln, distance: r.distance });
+  }
+  // Line-to-edge orientation: fixed endpoints + synthetic line + parallel /
+  // perpendicular against the sketch line (whose PlaneGCS line id is its id).
+  for (const r of edgeOrientations) {
+    const a = `_orientA_${r.cid}`, b = `_orientB_${r.cid}`, ln = `_orientL_${r.cid}`;
+    primitives.push({ id: a, type: 'point', x: r.line[0].x, y: r.line[0].y, fixed: true });
+    primitives.push({ id: b, type: 'point', x: r.line[1].x, y: r.line[1].y, fixed: true });
+    primitives.push({ id: ln, type: 'line', p1_id: a, p2_id: b });
+    primitives.push(r.type === 'parallel'
+      ? { id: `_orientC_${r.cid}`, type: 'parallel', l1_id: r.lineId, l2_id: ln }
+      : { id: `_orientC_${r.cid}`, type: 'perpendicular_ll', l1_id: r.lineId, l2_id: ln });
   }
   try {
     wrapper.push_primitives_and_params(primitives);
@@ -747,11 +791,24 @@ function movablePointsForNewConstraint(
  * order is preserved.
  */
 function orientLinesForAngle(
-  l1: SketchEntity, l2: SketchEntity,
+  l1: SketchEntity, l2: SketchEntity, angleRays?: [number, number],
 ): { l1p1: string; l1p2: string; l2p1: string; l2p2: string } {
   if (l1.kind !== 'line' || l2.kind !== 'line') {
     // Shouldn't happen — caller validates — but fall back to identity.
     return { l1p1: '', l1p2: '', l2p1: '', l2p2: '' };
+  }
+  // Placement-locked orientation (the quadrant the user dropped the dim in):
+  // sA/sB = +1 means the line's own start→end direction, -1 means reversed.
+  // The directed angle between these rays IS the measured value, so the solver
+  // holds the exact angle the user picked (interior vs supplementary).
+  if (angleRays) {
+    const [sA, sB] = angleRays;
+    return {
+      l1p1: sA >= 0 ? l1.startId : l1.endId,
+      l1p2: sA >= 0 ? l1.endId : l1.startId,
+      l2p1: sB >= 0 ? l2.startId : l2.endId,
+      l2p2: sB >= 0 ? l2.endId : l2.startId,
+    };
   }
   let shared: string | null = null;
   if (l1.startId === l2.startId || l1.startId === l2.endId) shared = l1.startId;

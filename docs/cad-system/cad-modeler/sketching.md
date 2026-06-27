@@ -1,7 +1,7 @@
 # Sketching
 
 > **System** ▸ [Overview](../00-overview.md) ▸ [CAD Modeler](../10-cad-modeler.md) ▸ **Sketching**
-> Related: [Constraints](./constraints.md) · [Profiles and arrangement](./profiles-arrangement.md) · [Datums and planes](./datums-planes.md) · [Modeler overview](./00-overview.md)
+> Related: [Test-Case Catalog](./sketch-test-cases.md) · [Constraints](./constraints.md) · [Profiles and arrangement](./profiles-arrangement.md) · [Datums and planes](./datums-planes.md) · [Modeler overview](./00-overview.md)
 
 ---
 

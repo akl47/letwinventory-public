@@ -287,6 +287,29 @@ function evalAllResiduals(
     const d = ((Px - A.x) * dy - (Py - A.y) * dx) / len;  // signed perpendicular distance
     out.push(Math.abs(d) - c.value);
   }
+  // Sketch-line PARALLEL / PERPENDICULAR to a model edge (externalRef, single
+  // line target): 1 residual fixing the line's direction against the fixed
+  // projected edge — mirrors the solver's edgeOrientations pass (solver.ts).
+  // The two-entity `parallel`/`perpendicular` residual cases below need a second
+  // sketch line and bail for these single-target external refs, so without this
+  // the line's angle reads as a free DOF and the sketch never rolls up to
+  // fully-constrained even though the solver fully pins it.
+  for (const c of state.constraints) {
+    if ((c.type !== 'parallel' && c.type !== 'perpendicular') || !c.externalRef) continue;
+    const line = edgeLineForConstraint(c, externalEdges);
+    if (!line) continue;
+    const e = entById.get(c.targets[0]?.entityId);
+    if (e?.kind !== 'line') continue;
+    const [A, B] = line;
+    const ex = B.x - A.x, ey = B.y - A.y;  // fixed model-edge direction
+    const sx = paramX(state, entById, values, index, e.startId);
+    const sy = paramY(state, entById, values, index, e.startId);
+    const tx = paramX(state, entById, values, index, e.endId);
+    const ty = paramY(state, entById, values, index, e.endId);
+    const lx = tx - sx, ly = ty - sy;  // sketch-line direction
+    // parallel ⇒ cross product 0; perpendicular ⇒ dot product 0.
+    out.push(c.type === 'parallel' ? (lx * ey - ly * ex) : (lx * ex + ly * ey));
+  }
   // Intrinsic arc invariants (mirrors the solver's arc_rules primitive):
   // every arc's start and end MUST lie on the circle of radius R around
   // the arc's center. Without these residuals, the analyzer treats

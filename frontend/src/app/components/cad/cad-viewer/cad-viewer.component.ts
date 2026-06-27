@@ -849,6 +849,14 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // orbit/pan/zoom buttons set this). Left-click still selects; middle-button
   // navigation keeps working regardless.
   navMode = signal<'orbit' | 'pan' | 'zoom'>('orbit');
+
+  // Touch navigation state (mobile). 'orbit' = one-finger drag rotates the
+  // camera (3D mode only); 'multi' = two fingers pinch-zoom + pan together.
+  private touchNav: 'none' | 'orbit' | 'multi' = 'none';
+  private touchMoved = false;            // a real drag happened → suppress tap-select
+  private lastTouch = { x: 0, y: 0 };    // last single-finger position
+  private lastPinchDist = 0;             // last two-finger distance (pinch)
+  private lastPinchMid = { x: 0, y: 0 }; // last two-finger midpoint (pan)
   // Set when the browser can't give us a WebGL context (usually GPU-context
   // exhaustion after a long session, or hardware acceleration disabled). Drives
   // a visible notice instead of a silent blank viewport.
@@ -1422,6 +1430,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     canvas.addEventListener('pointermove', this.onPointerMove);
     canvas.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('pointerleave', this.onPointerUp);
+    // Touch navigation (mobile): 1 finger = orbit, 2 fingers = pinch-zoom + pan.
+    // There's no middle button on a phone, so we drive the camera here directly.
+    canvas.addEventListener('touchstart', this.onTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', this.onTouchMove, { passive: false });
+    canvas.addEventListener('touchend', this.onTouchEnd, { passive: false });
+    canvas.addEventListener('touchcancel', this.onTouchEnd, { passive: false });
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
     canvas.addEventListener('click', this.onClick);
     // REQ 623: right-click in normal mode opens a feature context menu (handled
@@ -2178,6 +2192,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   };
 
   private onPointerMove = (ev: PointerEvent) => {
+    // Two-finger touch gesture owns the camera — ignore the pointer stream it
+    // also emits (onTouchMove does the zoom/pan).
+    if (this.touchNav === 'multi') return;
     const dx = ev.clientX - this.lastPointer.x;
     const dy = ev.clientY - this.lastPointer.y;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
@@ -2382,6 +2399,80 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       }
     }
   }
+
+  // ── Touch navigation (mobile) ───────────────────────────────────────────────
+  // 1 finger = orbit (3D mode), 2 fingers = pinch-zoom + drag-to-pan. Pointer
+  // events also fire for touch, so we cancel/guard those for the multi-touch
+  // gesture and let one-finger taps still select (touchMoved gates that).
+  private onTouchStart = (ev: TouchEvent) => {
+    const inSketch = this.activeSketchId() !== null;
+    if (ev.touches.length === 2) {
+      ev.preventDefault();
+      this.touchNav = 'multi';
+      this.touchMoved = false;
+      // Cancel anything the first finger's pointer events started.
+      this.orbiting = this.panning = this.zoomDragging = false;
+      this.dragCandidate = null;
+      const a = ev.touches[0], b = ev.touches[1];
+      this.lastPinchDist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      this.lastPinchMid = { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
+    } else if (ev.touches.length === 1 && !inSketch) {
+      // One-finger orbit in 3D. Don't preventDefault yet — a tap (no drag) must
+      // still reach the click handler to select.
+      this.touchNav = 'orbit';
+      this.touchMoved = false;
+      this.lastTouch = { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
+    }
+  };
+
+  private onTouchMove = (ev: TouchEvent) => {
+    if (this.touchNav === 'multi' && ev.touches.length === 2) {
+      ev.preventDefault();
+      this.touchMoved = true;
+      const a = ev.touches[0], b = ev.touches[1];
+      const dist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      const mx = (a.clientX + b.clientX) / 2, my = (a.clientY + b.clientY) / 2;
+      // Pinch → zoom (fingers apart = zoom in).
+      if (this.lastPinchDist > 0 && dist > 0) {
+        this.orbitDistance = Math.max(5, Math.min(2000, this.orbitDistance * (this.lastPinchDist / dist)));
+      }
+      // Two-finger drag (midpoint movement) → pan. 1:1 with the fingers: the
+      // ortho frustum half-height is orbitDistance (see updateOrthoFrustum), so
+      // the visible world height is 2·orbitDistance and world-per-pixel is that
+      // over the canvas height. (The fixed 0.0015 MMB factor under-moves badly on
+      // a short mobile canvas — this tracks the fingers at any screen size.)
+      const dx = mx - this.lastPinchMid.x, dy = my - this.lastPinchMid.y;
+      const hPx = this.renderer?.domElement.clientHeight || 600;
+      const k = (2 * this.orbitDistance) / hPx;
+      const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0);
+      const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 1);
+      this.orbitTarget.addScaledVector(right, -dx * k);
+      this.orbitTarget.addScaledVector(up, dy * k);
+      this.lastPinchDist = dist;
+      this.lastPinchMid = { x: mx, y: my };
+      this.updateCamera();
+    } else if (this.touchNav === 'orbit' && ev.touches.length === 1) {
+      const t = ev.touches[0];
+      const dx = t.clientX - this.lastTouch.x, dy = t.clientY - this.lastTouch.y;
+      this.lastTouch = { x: t.clientX, y: t.clientY };
+      if (!this.touchMoved && Math.abs(dx) + Math.abs(dy) < 3) return;  // ignore micro-jitter so taps select
+      this.touchMoved = true;
+      ev.preventDefault();
+      // Same free-orbit math as the MMB-drag path in onPointerMove.
+      this.sketchPlaneNormal = null;
+      if (this.camera.up.z < 0.999 && this.orbitPhi > 0.3 && this.orbitPhi < Math.PI - 0.3) this.camera.up.copy(WORLD_UP);
+      this.orbitTheta -= dx * 0.005;
+      this.orbitPhi = Math.max(0.05, Math.min(Math.PI - 0.05, this.orbitPhi - dy * 0.005));
+      this.updateCamera();
+    }
+  };
+
+  private onTouchEnd = (ev: TouchEvent) => {
+    // A real orbit/pan/zoom drag must not also fire a tap-select.
+    if (this.touchMoved) this.didNavDrag = true;
+    if (ev.touches.length === 0) { this.touchNav = 'none'; }
+    else if (ev.touches.length === 1) { this.touchNav = 'none'; }  // lifting from 2→1 ends the gesture
+  };
 
   private onWheel = (ev: WheelEvent) => {
     ev.preventDefault();

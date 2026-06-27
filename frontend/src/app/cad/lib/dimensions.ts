@@ -3,6 +3,7 @@ import type {
   ConstraintType, SketchEntity,
 } from './types';
 import { findPoint, findEntity, onEdgeLookupKey } from './types';
+import { angleQuadrant } from './geometry';
 import { formatWithUnit, unitSymbol, type Unit } from './units';
 
 /** Projected 2D endpoints of referenced model edges, keyed by the edge's
@@ -179,7 +180,7 @@ function renderConstraint(
     return c.driven ? { ...r, text: `(${r.text})` } : r;
   }
   const r = computeRender(
-    state, c.id, c.type, c.targets.map(t => t.entityId), c.value!, c.placement, c.unit, defaultUnit,
+    state, c.id, c.type, c.targets.map(t => t.entityId), c.value!, c.placement, c.unit, defaultUnit, c.angleRays,
   );
   if (!r) return r;
   // Driven dim convention (SolidWorks-style): wrap the value text in
@@ -200,6 +201,7 @@ function computeRender(
   placement: { x: number; y: number } | undefined,
   dimUnit: Unit | undefined,
   defaultUnit: Unit,
+  angleRays?: [number, number],
 ): DimensionRender | null {
   const text = formatDimensionText(type, value, dimUnit, defaultUnit);
   switch (type) {
@@ -233,7 +235,7 @@ function computeRender(
       const a = findEntity(state, targetIds[0]);
       const b = findEntity(state, targetIds[1]);
       if (!a || a.kind !== 'line' || !b || b.kind !== 'line') return null;
-      return angleRender(constraintId, text, state, a as LineEntity, b as LineEntity, placement);
+      return angleRender(constraintId, text, state, a as LineEntity, b as LineEntity, placement, angleRays);
     }
     case 'point-line-distance': {
       const p = findPoint(state, targetIds[0]);
@@ -429,6 +431,7 @@ function angleRender(
   constraintId: string, text: string,
   state: SketchState, la: LineEntity, lb: LineEntity,
   placement: { x: number; y: number } | undefined,
+  angleRays?: [number, number],
 ): DimensionRender | null {
   const a1 = findPoint(state, la.startId), a2 = findPoint(state, la.endId);
   const b1 = findPoint(state, lb.startId), b2 = findPoint(state, lb.endId);
@@ -437,9 +440,23 @@ function angleRender(
   if (!i) return null;
   const target = placement ?? { x: i.x + DEFAULT_OFFSET, y: i.y + DEFAULT_OFFSET };
   const arcRadius = Math.max(1, Math.hypot(target.x - i.x, target.y - i.y));
-  // Unit direction along each line FROM the intersection toward the far end.
-  const da = farUnit(i, a1, a2);
-  const db = farUnit(i, b1, b2);
+  // Rays bounding the measured quadrant. Prefer the stored orientation (locked
+  // at first placement); else derive it from the current placement so the live
+  // preview follows the cursor (interior vs exterior). Fall back to far-ends.
+  let da: { x: number; y: number };
+  let db: { x: number; y: number };
+  const q = angleRays
+    ? { rays: angleRays }
+    : (placement ? angleQuadrant(a1, a2, b1, b2, placement) : null);
+  if (q) {
+    const [sA, sB] = q.rays;
+    da = normVec({ x: sA * (a2.x - a1.x), y: sA * (a2.y - a1.y) });
+    db = normVec({ x: sB * (b2.x - b1.x), y: sB * (b2.y - b1.y) });
+  } else {
+    // Unit direction along each line FROM the intersection toward the far end.
+    da = farUnit(i, a1, a2);
+    db = farUnit(i, b1, b2);
+  }
   // Arc endpoints — sampled along each line at the arc radius.
   const arcStart = { x: i.x + da.x * arcRadius, y: i.y + da.y * arcRadius };
   const arcEnd   = { x: i.x + db.x * arcRadius, y: i.y + db.y * arcRadius };
@@ -664,6 +681,11 @@ function intersectLines(
 
 /** Unit vector from `from` toward whichever of `e1`,`e2` is farther — used
  * to orient the angle arc along the "outward" side of each line. */
+function normVec(v: { x: number; y: number }): { x: number; y: number } {
+  const len = Math.hypot(v.x, v.y);
+  return len < 1e-9 ? { x: 1, y: 0 } : { x: v.x / len, y: v.y / len };
+}
+
 function farUnit(
   from: { x: number; y: number },
   e1: { x: number; y: number }, e2: { x: number; y: number },
