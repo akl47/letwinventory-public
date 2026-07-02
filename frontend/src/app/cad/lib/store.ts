@@ -738,6 +738,11 @@ export function addSlotArcCenterpoint(
   let ccwSpan = eAng - sAng0;
   while (ccwSpan < 0) ccwSpan += 2 * Math.PI;
   while (ccwSpan >= 2 * Math.PI) ccwSpan -= 2 * Math.PI;
+  // Degenerate: start and end at the same angle (e.g. an accidental
+  // double-click) would build a self-intersecting full annulus — reject like
+  // the other zero-size guards above.
+  const EPS_ANG = 1e-6;
+  if (ccwSpan < EPS_ANG || 2 * Math.PI - ccwSpan < EPS_ANG) return { state, ids: [] };
   return _addSlotArc(state, cx, cy, sx, sy, exSnap, eySnap, r, halfWidth, ccwSpan <= Math.PI);
 }
 

@@ -850,11 +850,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // navigation keeps working regardless.
   navMode = signal<'orbit' | 'pan' | 'zoom'>('orbit');
 
-  // Touch navigation state (mobile). 'orbit' = one-finger drag rotates the
-  // camera (3D mode only); 'multi' = two fingers pinch-zoom + pan together.
-  private touchNav: 'none' | 'orbit' | 'multi' = 'none';
+  // Touch navigation state (mobile). 'multi' = two fingers pinch-zoom + pan
+  // together. One-finger touch rides the synthesized POINTER events instead
+  // (touch-action:none keeps them alive) — handling it here too would double
+  // every orbit delta.
+  private touchNav: 'none' | 'multi' = 'none';
   private touchMoved = false;            // a real drag happened → suppress tap-select
-  private lastTouch = { x: 0, y: 0 };    // last single-finger position
   private lastPinchDist = 0;             // last two-finger distance (pinch)
   private lastPinchMid = { x: 0, y: 0 }; // last two-finger midpoint (pan)
   // Set when the browser can't give us a WebGL context (usually GPU-context
@@ -2405,7 +2406,6 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // events also fire for touch, so we cancel/guard those for the multi-touch
   // gesture and let one-finger taps still select (touchMoved gates that).
   private onTouchStart = (ev: TouchEvent) => {
-    const inSketch = this.activeSketchId() !== null;
     if (ev.touches.length === 2) {
       ev.preventDefault();
       this.touchNav = 'multi';
@@ -2416,13 +2416,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const a = ev.touches[0], b = ev.touches[1];
       this.lastPinchDist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
       this.lastPinchMid = { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
-    } else if (ev.touches.length === 1 && !inSketch) {
-      // One-finger orbit in 3D. Don't preventDefault yet — a tap (no drag) must
-      // still reach the click handler to select.
-      this.touchNav = 'orbit';
-      this.touchMoved = false;
-      this.lastTouch = { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
     }
+    // One-finger touch is deliberately NOT handled here: the canvas has
+    // touch-action:none, so the browser still synthesizes pointer events for
+    // it and the onPointerDown/Move path already orbits (and tap-selects).
+    // Handling it here too applied every orbit delta TWICE (double-speed
+    // rotation). Single-finger sketching likewise stays on the pointer path.
   };
 
   private onTouchMove = (ev: TouchEvent) => {
@@ -2451,27 +2450,23 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       this.lastPinchDist = dist;
       this.lastPinchMid = { x: mx, y: my };
       this.updateCamera();
-    } else if (this.touchNav === 'orbit' && ev.touches.length === 1) {
-      const t = ev.touches[0];
-      const dx = t.clientX - this.lastTouch.x, dy = t.clientY - this.lastTouch.y;
-      this.lastTouch = { x: t.clientX, y: t.clientY };
-      if (!this.touchMoved && Math.abs(dx) + Math.abs(dy) < 3) return;  // ignore micro-jitter so taps select
-      this.touchMoved = true;
-      ev.preventDefault();
-      // Same free-orbit math as the MMB-drag path in onPointerMove.
-      this.sketchPlaneNormal = null;
-      if (this.camera.up.z < 0.999 && this.orbitPhi > 0.3 && this.orbitPhi < Math.PI - 0.3) this.camera.up.copy(WORLD_UP);
-      this.orbitTheta -= dx * 0.005;
-      this.orbitPhi = Math.max(0.05, Math.min(Math.PI - 0.05, this.orbitPhi - dy * 0.005));
-      this.updateCamera();
     }
   };
 
   private onTouchEnd = (ev: TouchEvent) => {
-    // A real orbit/pan/zoom drag must not also fire a tap-select.
+    // A real pinch/pan drag must not also fire a tap-select.
     if (this.touchMoved) this.didNavDrag = true;
-    if (ev.touches.length === 0) { this.touchNav = 'none'; }
-    else if (ev.touches.length === 1) { this.touchNav = 'none'; }  // lifting from 2→1 ends the gesture
+    if (ev.touches.length >= 2) {
+      // 3→2 fingers: keep the gesture but RE-SEED the pinch baseline from the
+      // remaining pair — the stale distance/midpoint from before the lift
+      // would otherwise apply a zoom/pan jump on the next move.
+      const a = ev.touches[0], b = ev.touches[1];
+      this.lastPinchDist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      this.lastPinchMid = { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
+      this.touchNav = 'multi';
+    } else {
+      this.touchNav = 'none';  // 0 or 1 finger left — gesture over
+    }
   };
 
   private onWheel = (ev: WheelEvent) => {

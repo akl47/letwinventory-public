@@ -53,9 +53,11 @@ const login = await api('POST', '/api/auth/google/test-login', null, { email: EM
 const token = login.json.accessToken;
 if (!token) fail(`login failed (${login.status}): ${JSON.stringify(login.json).slice(0, 200)}`);
 
+
 // Existing CADTEST parts → reuse their models (idempotent across runs / CI).
-const withCad = (await api('GET', '/api/design/cad-model/parts-with-cad', token)).json;
-const byName = new Map((Array.isArray(withCad) ? withCad : []).map(e => [e.part.name, { partID: e.partID, modelId: e.latestRevisionID }]));
+const withCadRes = await api('GET', '/api/design/cad-model/parts-with-cad', token);
+if (!Array.isArray(withCadRes.json)) fail(`parts-with-cad failed (${withCadRes.status}): ${JSON.stringify(withCadRes.json).slice(0, 200)}`);
+const byName = new Map(withCadRes.json.filter(e => e && e.part).map(e => [e.part.name, { partID: e.partID, modelId: e.latestRevisionID }]));
 
 let passed = 0;
 const failures = [];
@@ -76,8 +78,10 @@ for (const c of cases) {
       rec = { partID: part.json.id, modelId: model.json.id };
     }
 
-    // Checkout → inject doc → regenerate.
-    await api('POST', `/api/design/cad-model/${rec.modelId}/checkout`, token, {});
+    // Checkout → inject doc → regenerate. A checkout conflict (locked by
+    // another user) would otherwise surface as a confusing 423 on the PUT.
+    const co = await api('POST', `/api/design/cad-model/${rec.modelId}/checkout`, token, {});
+    if (co.status >= 400 && co.status !== 409) throw new Error(`checkout failed (${co.status}): ${JSON.stringify(co.json).slice(0, 160)}`);
     const put = await api('PUT', `/api/design/cad-model/${rec.modelId}`, token, { featureTree: c.featureTree, sketchDoc: c.sketchDoc });
     if (put.status !== 200) throw new Error(`PUT doc failed (${put.status}): ${JSON.stringify(put.json).slice(0, 160)}`);
 

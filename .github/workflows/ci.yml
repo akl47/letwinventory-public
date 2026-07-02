@@ -94,6 +94,10 @@ jobs:
         run: npm ci
         working-directory: backend
 
+      - name: Create database schema (migrations)
+        run: npx sequelize-cli db:migrate
+        working-directory: backend
+
       - name: Start backend
         run: nohup node index.js > /tmp/backend.log 2>&1 &
         working-directory: backend
@@ -107,6 +111,7 @@ jobs:
             fi
             echo "Waiting for backend... ($i/30)"
             sleep 2
+            if [ "$i" = "30" ]; then echo "Backend never became ready"; exit 1; fi
           done
 
       - name: Install frontend dependencies
@@ -169,17 +174,29 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      # Prebuilt OCCT kernel image (published by publish-kernel.yml on master).
-      # Pulled as a service so PR runs don't rebuild OCCT from source.
-      cad-kernel:
-        image: ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:latest
-        credentials:
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-        ports:
-          - 9876:9876
     steps:
       - uses: actions/checkout@v4
+
+      # Prebuilt OCCT kernel image (published by publish-kernel.yml on master).
+      # Started as a guarded step, NOT a service container: a service pull of a
+      # not-yet-published image fails the whole job before any step runs. Until
+      # the image is published once (merge/dispatch publish-kernel.yml) this
+      # skips verification with a notice instead of failing every PR. Note the
+      # tradeoff of the prebuilt approach: PRs changing kernel SOURCE run
+      # against the stale master image — the backend's naming-schema guard
+      # fails fast (clear error) if the schemas have diverged.
+      - name: Start CAD kernel (prebuilt image)
+        id: kernel
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          IMG="ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:latest"
+          if docker pull "$IMG"; then
+            docker run -d --name cad-kernel -p 9876:9876 "$IMG"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Kernel image $IMG not found — run publish-kernel.yml once to enable kernel verification. Skipping."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -191,6 +208,10 @@ jobs:
 
       - name: Install backend dependencies
         run: npm ci
+        working-directory: backend
+
+      - name: Create database schema (migrations)
+        run: npx sequelize-cli db:migrate
         working-directory: backend
 
       # The 3D-case generator bundles the frontend CAD sketch lib via esbuild.
@@ -209,16 +230,20 @@ jobs:
               echo "Backend is ready"; break
             fi
             echo "Waiting for backend... ($i/30)"; sleep 2
+            if [ "$i" = "30" ]; then echo "Backend never became ready"; exit 1; fi
           done
 
       - name: Wait for CAD kernel
+        if: steps.kernel.outputs.available == 'true'
         run: |
           for i in $(seq 1 30); do
             if (echo > /dev/tcp/127.0.0.1/9876) 2>/dev/null; then echo "Kernel is ready"; break; fi
             echo "Waiting for kernel... ($i/30)"; sleep 2
+            if [ "$i" = "30" ]; then echo "Kernel never became ready"; exit 1; fi
           done
 
       - name: Verify 3D feature cases regenerate through the OCCT kernel
+        if: steps.kernel.outputs.available == 'true'
         run: node scripts/verify-cad-kernel.mjs
         env:
           CAD_E2E_API: http://localhost:3000

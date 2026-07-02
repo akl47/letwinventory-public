@@ -97,4 +97,9 @@ writeFileSync(OUT, JSON.stringify(doc));
 console.log(`Generated ${ok.length} sketches → ${OUT}`);
 console.log(`Pre-solved ${solved.length}: ${solved.join(', ')}`);
 console.log('OK:', ok.join(', '));
-if (failed.length) { console.log('\nFAILED (' + failed.length + '):'); for (const f of failed) console.log('  ' + f); }
+// S08 is over-constrained BY DESIGN — its solve reporting 'inconsistent' is the
+// expected outcome, not a failure. Anything else failing exits nonzero so CI /
+// callers notice broken case builders instead of shipping a partial part.
+const unexpected = failed.filter(f => !f.startsWith('S08:'));
+if (failed.length) { console.log('\nFAILED (' + failed.length + '):'); for (const f of failed) console.log('  ' + f + (f.startsWith('S08:') ? '  (expected — conflicting dims)' : '')); }
+if (unexpected.length) process.exit(1);

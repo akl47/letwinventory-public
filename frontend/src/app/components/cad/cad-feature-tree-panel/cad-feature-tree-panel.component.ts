@@ -90,7 +90,7 @@ export interface TreeNode {
   imports: [CommonModule, MatIconModule, MatTooltipModule, MatMenuModule],
   template: `
     <div class="panel">
-      <div class="section features-section" [class.collapsed]="featuresCollapsed()" [style.flex]="featuresFlex()">
+      <div class="section features-section" [class.collapsed]="featuresCollapsed()" [class.with-bodies]="showBodies() && !bodiesCollapsed()" [style.flex]="featuresFlex()">
         <header class="panel-header collapsible" (click)="toggleFeaturesCollapsed()">
           <mat-icon class="section-chevron">{{ featuresCollapsed() ? 'chevron_right' : 'expand_more' }}</mat-icon>
           <mat-icon>{{ headerIcon() }}</mat-icon>
@@ -346,6 +346,10 @@ export interface TreeNode {
        off-screen, and a long bodies list doesn't push features off-screen. */
     .section { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     .features-section { border-bottom: 1px solid #555; }
+    /* When splitting against a visible Bodies section, cap any persisted
+       flex-basis (e.g. saved on a taller window) so the Bodies section +
+       resize handle always stay reachable. */
+    .features-section.with-bodies { max-height: calc(100% - 96px); }
     .section .tree { flex: 1 1 0; overflow-y: auto; }
     /* Collapsed section = header only. Collapsible headers get a chevron. */
     .section.collapsed { flex: 0 0 auto !important; }
@@ -480,7 +484,14 @@ export class CadFeatureTreePanelComponent {
     const section = handle.previousElementSibling as HTMLElement | null;  // features-section
     if (!section) return;
     const startH = section.getBoundingClientRect().height, startY = e.clientY;
-    const move = (ev: MouseEvent) => { this.featuresBasisPx.set(Math.max(60, startH + (ev.clientY - startY))); };
+    // Clamp both ways: ≥60px for the Features section AND leave the Bodies
+    // section at least ~96px (header + a row). Without the upper clamp the
+    // divider could push Bodies to zero height — and since the panel host is
+    // overflow:hidden, an oversized persisted basis also clips the drag handle
+    // itself, leaving no way to recover.
+    const parent = section.parentElement;
+    const maxH = parent ? Math.max(60, parent.getBoundingClientRect().height - 96) : Infinity;
+    const move = (ev: MouseEvent) => { this.featuresBasisPx.set(Math.min(maxH, Math.max(60, startH + (ev.clientY - startY)))); };
     const up = () => {
       document.removeEventListener('mousemove', move);
       document.removeEventListener('mouseup', up);
@@ -805,6 +816,13 @@ export class CadFeatureTreePanelComponent {
   private _constrainedCache = new WeakMap<object, boolean>();
   private _sketchFullyConstrained(state: SketchState): boolean | undefined {
     if (!state || !Array.isArray(state.entities)) return undefined;  // legacy/empty doc
+    // External-ref constraints (on-edge rides, dims/orientations against model
+    // edges) need the ACTIVE sketch's projected-edge map to analyze correctly —
+    // the tree panel has no access to it for inactive sketches. Running the
+    // analysis with an empty map misreports in BOTH directions (edge-ride
+    // points read as pinned; edge-referenced dims contribute nothing), so show
+    // no indicator at all for these sketches rather than a wrong one.
+    if (state.constraints?.some(c => c.externalRef)) return undefined;
     const cached = this._constrainedCache.get(state);
     if (cached !== undefined) return cached;
     // A sketch is fully constrained when every real (non-origin) geometric

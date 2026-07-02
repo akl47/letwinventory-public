@@ -240,6 +240,27 @@ function _buildExternalEdges(sketchDoc, externalRefResolver) {
 async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollbackBeforeIndex, includeBodyBreps, externalRefResolver, configurationId } = {}) {
   const client = kernelClient || cadKernelClient.getDefaultClient();
   const dbClient = db || global.db;
+  // Naming-schema guard: DesignBRepCache rows are keyed by this module's
+  // NAMING_VERSION constant, but the geometry actually comes from whatever
+  // kernel binary is running. If a stale kernel (older NAMING_SCHEMA_VERSION)
+  // serves a regen after a backend bump, its old-schema output gets cached
+  // under the NEW version and poisons the cache for as long as the rows stay
+  // warm (hits bump lastAccessedAt, defeating TTL eviction). Fail fast with an
+  // actionable error instead. Tolerant by design: mocked clients (tests) and
+  // down kernels skip the check — a down kernel fails on its first real call
+  // anyway, and mocks don't report a numeric namingSchemaVersion.
+  if (client) {
+    try {
+      const pong = await client.call('ping', {}, { timeoutMs: 4000 });
+      const kernelNaming = pong && pong.namingSchemaVersion;
+      if (typeof kernelNaming === 'number' && kernelNaming !== NAMING_VERSION) {
+        throw new Error(`CAD kernel naming schema v${kernelNaming} does not match backend v${NAMING_VERSION} — restart/rebuild the cad-kernel container before regenerating (mismatched output would poison the BRep cache).`);
+      }
+    } catch (err) {
+      if (/naming schema/.test(err.message)) throw err;
+      // ping unavailable — proceed; real kernel calls surface their own errors.
+    }
+  }
   // Resolve any equations BEFORE we hash params / dispatch features.
   // Returns a new featureTree + sketchDoc with every drivable numeric
   // parameter overwritten with the resolved value, plus an array of

@@ -188,10 +188,12 @@ export class CadLandingComponent implements OnInit {
   loading = signal<boolean>(true);
 
   columns: ColumnDef<PartWithCadSummary>[] = [
-    { key: 'part', header: 'Part', sortable: true, sortValue: r => r.part?.name ?? '' },
-    { key: 'type', header: 'Type', sortable: true, sortValue: r => r.isAssembly ? 'Assembly' : 'Part' },
-    { key: 'latest', header: 'Latest CAD Revision', sortable: true, sortValue: r => r.latestRevision ?? '' },
-    { key: 'released', header: 'Released', sortable: true, sortValue: r => r.releasedRevision ?? '' },
+    // String sortValues are lowercased — DataTable's default comparator only
+    // lowercases on its fallback path, so raw values would sort 'Zebra' < 'anchor'.
+    { key: 'part', header: 'Part', sortable: true, sortValue: r => (r.part?.name ?? '').toLowerCase() },
+    { key: 'type', header: 'Type', sortable: true, sortValue: r => r.isAssembly ? 'assembly' : 'part' },
+    { key: 'latest', header: 'Latest CAD Revision', sortable: true, sortValue: r => (r.latestRevision ?? '').toLowerCase() },
+    { key: 'released', header: 'Released', sortable: true, sortValue: r => (r.releasedRevision ?? '').toLowerCase() },
     { key: 'count', header: 'Revisions', sortable: true, sortValue: r => r.revisionCount ?? 0 },
     { key: 'updated', header: 'Updated', sortable: true, sortValue: r => r.latestUpdatedAt ?? '' },
     { key: 'actions', header: '', sortable: false },

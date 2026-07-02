@@ -106,7 +106,7 @@ export const SKETCH_CASES: SketchCase[] = [
   { id: 'O07', title: 'Offset line', build: s => { let a, b; [s, a] = P(s, 0, 0); [s, b] = P(s, 30, 0); s = L.addLine(s, a, b).state; return opState(L.offsetCurve(s, lastId(s), 5, { x: 15, y: 5 })); } },
   { id: 'O10', title: 'Fillet line/line', build: s => { let a, b, c; [s, a] = P(s, 0, 20); [s, b] = P(s, 0, 0); s = L.addLine(s, a, b).state; const l1 = lastId(s); [s, c] = P(s, 20, 0); s = L.addLine(s, b, c).state; const l2 = lastId(s); return opState(L.filletLines(s, l1, l2, 4)); } },
   { id: 'O13', title: 'Chamfer (equal)', build: s => { let a, b, c; [s, a] = P(s, 0, 20); [s, b] = P(s, 0, 0); s = L.addLine(s, a, b).state; const l1 = lastId(s); [s, c] = P(s, 20, 0); s = L.addLine(s, b, c).state; const l2 = lastId(s); return opState(L.chamferLines(s, l1, l2, 4)); } },
-  { id: 'O16', title: 'Move entities', build: s => { s = L.addCircle(s, 0, 0, 8).state; const c = findKind(s, 'circle'); const r = L.moveEntities(s, [c], 15, 5); return r.state || s; } },
+  { id: 'O16', title: 'Move entities', build: s => { s = L.addCircle(s, 0, 0, 8).state; const c = findKind(s, 'circle'); return opState(L.moveEntities(s, [c], 15, 5)); } },
   { id: 'O20', title: 'Linear pattern', build: s => { s = L.addCircle(s, 0, 0, 3).state; const c = findKind(s, 'circle'); return opState(L.linearPatternEntities(s, [c], 10, 0, 4)); } },
   { id: 'O21', title: 'Circular pattern', build: s => { s = L.addCircle(s, 15, 0, 3).state; const c = findKind(s, 'circle'); return opState(L.circularPatternEntities(s, [c], { x: 0, y: 0 }, 2 * Math.PI, 6)); } },
 

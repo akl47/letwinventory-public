@@ -16,11 +16,13 @@ const login = await (await fetch(`${API}/api/auth/google/test-login`, {
   body: JSON.stringify({ email: 'claude@letwin.co' }),
 })).json();
 const TOKEN = login.accessToken;
+if (!TOKEN) { console.error('test-login failed:', JSON.stringify(login).slice(0, 200)); process.exit(1); }
 const H = { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` };
 
 // Existing CADTEST parts → reuse their models.
 const existing = await (await fetch(`${API}/api/design/cad-model/parts-with-cad`, { headers: H })).json();
-const byName = new Map(existing.map(e => [e.part.name, { partID: e.partID, modelId: e.latestRevisionID }]));
+if (!Array.isArray(existing)) { console.error('parts-with-cad failed:', JSON.stringify(existing).slice(0, 200)); process.exit(1); }
+const byName = new Map(existing.filter(e => e && e.part).map(e => [e.part.name, { partID: e.partID, modelId: e.latestRevisionID }]));
 
 const models = [];
 for (const c of cases) {

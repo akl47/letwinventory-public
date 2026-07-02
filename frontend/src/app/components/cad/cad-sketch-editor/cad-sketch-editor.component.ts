@@ -4676,10 +4676,19 @@ export class CadSketchEditorComponent implements OnDestroy {
     }
     const ea = localAngle(draft.center.x, draft.center.y, draft.majorEnd.x, draft.majorEnd.y, x, y);
     if (Math.abs(ea - draft.startAngle) < 0.01) return;
+    // The entity stores PARAMETRIC angles t (point = a·cos t, b·sin t — what the
+    // tessellator sweeps), but the clicks give GEOMETRIC angles φ (the cursor's
+    // direction in the local frame). For a non-circular ellipse these differ
+    // (tan φ = (b/a)·tan t), so convert: t = atan2(a·sin φ, b·cos φ). Without
+    // this the arc's endpoints drift away from the clicked directions as
+    // eccentricity grows.
+    const a = Math.hypot(draft.majorEnd.x - draft.center.x, draft.majorEnd.y - draft.center.y);
+    const b = draft.minorRadius!;
+    const toParametric = (phi: number) => Math.atan2(a * Math.sin(phi), b * Math.cos(phi));
     this.commit(addEllipticalArc(
       this.state(),
       draft.center.x, draft.center.y, draft.majorEnd.x, draft.majorEnd.y,
-      draft.minorRadius!, draft.startAngle, ea, true,
+      draft.minorRadius!, toParametric(draft.startAngle), toParametric(ea), true,
     ).state);
     this.draftPartialEllipse.set({});
   }
@@ -4750,7 +4759,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-311');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-312');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);
