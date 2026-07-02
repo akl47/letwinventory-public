@@ -27,24 +27,28 @@ LOG_FILE="$ROOT_DIR/test_log.txt"
 run_backend=false
 run_frontend=false
 run_e2e=false
+run_kernel=false
 
 # Parse args
 if [[ $# -eq 0 ]]; then
   run_backend=true
   run_frontend=true
   run_e2e=true
+  run_kernel=true
 else
   for arg in "$@"; do
     case "$arg" in
       --backend)  run_backend=true ;;
       --frontend) run_frontend=true ;;
       --e2e)      run_e2e=true ;;
-      --all)      run_backend=true; run_frontend=true; run_e2e=true ;;
+      --kernel)   run_kernel=true ;;
+      --all)      run_backend=true; run_frontend=true; run_e2e=true; run_kernel=true ;;
       -h|--help)
-        echo "Usage: $0 [--backend] [--frontend] [--e2e] [--all]"
+        echo "Usage: $0 [--backend] [--frontend] [--e2e] [--kernel] [--all]"
         echo "  --backend   Run backend Jest tests (SQLite in-memory)"
         echo "  --frontend  Run frontend Angular unit tests (Chrome headless)"
         echo "  --e2e       Run Playwright E2E tests (requires backend + Postgres)"
+        echo "  --kernel    Verify 3D feature cases regenerate through the OCCT kernel (requires backend + kernel)"
         echo "  --all       Run all suites (default when no flags given)"
         exit 0
         ;;
@@ -149,6 +153,28 @@ if $run_e2e; then
     popd > /dev/null
     record_result "E2E (Playwright)" $e2e_rc "$e2e_out"
     rm -f "$e2e_out"
+  fi
+fi
+
+# ── CAD Kernel Verification (3D feature cases) ─────────────────
+if $run_kernel; then
+  print_header "CAD Kernel Verification (3D feature cases)"
+
+  # Needs the backend AND the OCCT kernel reachable (regen dials the kernel).
+  if ! curl -so /dev/null "http://localhost:3000/api/auth/user/checkToken" 2>/dev/null; then
+    echo -e "${YELLOW}WARNING: Backend not reachable at localhost:3000${NC}"
+    echo "  CAD kernel verification needs a running backend + cad-kernel."
+    echo "  Start the Docker dev environment first, then re-run."
+    echo "WARNING: Backend not reachable at localhost:3000 (kernel suite)" >> "$LOG_FILE"
+    record_result "CAD Kernel (3D cases)" 1
+  else
+    kernel_out=$(mktemp)
+    set +e
+    node "$ROOT_DIR/scripts/verify-cad-kernel.mjs" 2>&1 | tee "$kernel_out" >(sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> "$LOG_FILE")
+    kernel_rc=${PIPESTATUS[0]}
+    set -e
+    record_result "CAD Kernel (3D cases)" $kernel_rc "$kernel_out"
+    rm -f "$kernel_out"
   fi
 fi
 

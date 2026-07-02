@@ -1,4 +1,4 @@
-import { make_gcs_wrapper, SolveStatus, Algorithm, type GcsWrapper } from '../vendor/planegcs';
+import { make_gcs_wrapper, init_planegcs_module, GcsWrapper, SolveStatus, Algorithm } from '../vendor/planegcs';
 import type { SketchPrimitive, SketchParam } from '../vendor/planegcs';
 import type {
   SketchState, SketchConstraint, SketchEntity, CircleEntity, ArcEntity,
@@ -41,8 +41,47 @@ function wasmPathForRuntime(): string | undefined {
 }
 
 function getWrapper(): Promise<GcsWrapper> {
-  if (!wrapperPromise) wrapperPromise = make_gcs_wrapper(wasmPathForRuntime());
+  if (!wrapperPromise) {
+    // Unit-test runner: Angular's vitest builder serves modules over http, so
+    // planegcs's Emscripten loader can't find its `.wasm` on disk. test-setup.ts
+    // preloads the bytes onto globalThis; hand them straight to Emscripten as
+    // `wasmBinary`, which bypasses all path/URL resolution. Absent in the browser
+    // (production) → the normal locateFile path runs unchanged.
+    const testBinary = (globalThis as { __PLANEGCS_WASM_BINARY__?: Uint8Array }).__PLANEGCS_WASM_BINARY__;
+    wrapperPromise = testBinary
+      ? initWrapperFromBinary(testBinary)
+      : make_gcs_wrapper(wasmPathForRuntime());
+  }
   return wrapperPromise;
+}
+
+async function initWrapperFromBinary(wasmBinary: Uint8Array): Promise<GcsWrapper> {
+  // Emscripten's Node branch derives its script dir from `import.meta.url` via
+  // `url.fileURLToPath()`; under the vitest runner that URL is `http:` and the
+  // call throws "The URL must be of scheme file" — before `wasmBinary` is even
+  // consulted. Force the browser/web branch (which skips fileURLToPath) by
+  // hiding `process.versions.node` across the module factory's SYNCHRONOUS
+  // env-detection, and hand it the bytes so it never fetches a file. Restore
+  // immediately (the detection is done once the factory call returns, before the
+  // awaited instantiation) to avoid leaking the change to concurrent code.
+  const init = init_planegcs_module as (arg: { wasmBinary: Uint8Array }) => Promise<{ GcsSystem: new () => unknown }>;
+  const versions = (globalThis as { process?: { versions?: { node?: string } } }).process?.versions;
+  // `process.versions.node` is READ-ONLY (non-writable) but configurable —
+  // plain assignment throws, so hide/restore via defineProperty.
+  const savedDesc = versions ? Object.getOwnPropertyDescriptor(versions, 'node') : undefined;
+  let modPromise: Promise<{ GcsSystem: new () => unknown }>;
+  try {
+    if (versions && savedDesc?.configurable) {
+      Object.defineProperty(versions, 'node', { value: undefined, configurable: true, writable: true, enumerable: true });
+    }
+    modPromise = init({ wasmBinary });
+  } finally {
+    if (versions && savedDesc?.configurable) {
+      Object.defineProperty(versions, 'node', savedDesc);
+    }
+  }
+  const mod = await modPromise;
+  return new GcsWrapper(new mod.GcsSystem() as never);
 }
 
 // Test-only hook: drop the cached wrapper so a fresh one is initialized.

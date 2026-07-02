@@ -23,7 +23,7 @@ Legend: ✅ implemented · 🟡 partial / storage-only · ⬜ declared, not impl
 | **E06** | Arc — center + endpoints | ✅ center/start/end (+`ccw`) | End snapped onto radius; start==end (degenerate full circle) |
 | **E07** | Arc — 3-point | ✅ circumarc + CCW/CW detect | Collinear → null; near-2π sweep |
 | **E08** | Ellipse | ✅ center + major-axis end + minor radius | `minor==major` (circle); major < minor |
-| **E09** | Elliptical arc | 🟡 angles in local frame, `ccw`; **tessellation NOT implemented** | Full ellipse; zero-length sweep |
+| **E09** | Elliptical arc | ✅ angles in local frame, `ccw`; tessellated + rendered | Full ellipse; zero-length sweep |
 | **E10** | Spline (B-spline) | ✅ N control points, degree (default 3) | `N < degree+1` rejected; degree 1/2/≥4 |
 | **E11** | Conic — parabola | ✅ vertex + focus + sample point | vertex==focus degenerate; sample collinear with axis |
 | **E12** | Conic — hyperbola | ⬜ schema only, no tessellation | placeholder |
@@ -41,7 +41,7 @@ Legend: ✅ implemented · 🟡 partial / storage-only · ⬜ declared, not impl
 | **E24** | Slot — straight | ✅ 2 parallel lines + 2 arc caps | |
 | **E25** | Slot — straight centerpoint | ✅ | |
 | **E26** | Slot — arc (3-pt / centerpoint) | ✅ curved slot | |
-| **E27** | Construction-flag cascade | toggling construction on a curve cascades to its support points | per-kind cascade (line/circle/arc/ellipse/spline) |
+| **E27** | Construction-flag cascade | ✅ flagging an arc cascades to its centre + both endpoints | per-kind cascade (line/circle/arc/ellipse/spline) |
 
 ---
 
@@ -131,23 +131,27 @@ Geometric (no value) and dimensional (carry `value`, can be `driven`). Multiple-
 
 | id | Title | What to verify | Edge cases |
 |----|-------|----------------|------------|
-| **S01** | Closed profile loop | a closed, non-self-intersecting loop extracts | open chain ⇒ no loop |
-| **S02** | Nested loops | a hole loop inside an outer loop | both valid; profile has a void |
-| **S03** | Self-intersection rejected | figure-eight is not a valid profile | |
-| **S04** | Construction excluded from profile | centerline doesn't extrude | |
-| **S05** | Single-circle profile | a lone circle extrudes (special-cased) | |
-| **S06** | Fully constrained | DOF = 0, status black/defined | |
-| **S07** | Under-constrained | free DOF highlighted | |
-| **S08** | Over-constrained / conflicting | rejected or flagged | |
-| **S09** | Origin-anchored | dim/symmetry referencing the origin | |
-| **S10** | Datum-plane placement | sketch on a model face/plane | gravity-aligned canonical orientation |
-| **S11** | Dimension off origin / datum plane | distance to an origin plane | |
-| **S12** | Legacy-doc migration | `{points,lines,constraints}` upgrades on load | |
+| **S01** ✅ | Closed profile loop | a closed, non-self-intersecting loop extracts | open chain ⇒ no loop |
+| **S02** ✅ | Nested loops | a hole loop inside an outer loop | both valid; profile has a void |
+| **S03** ✅ | Self-intersection rejected | figure-eight is not a valid profile (bowtie quad, diagonals cross) | |
+| **S04** ✅ | Construction excluded from profile | rectangle + dashed centerline; only the rectangle extrudes | |
+| **S05** ✅ | Single-circle profile | a lone circle extrudes (special-cased) | |
+| **S06** ✅ | Fully constrained | rectangle pinned at origin + W/H dims → DOF = 0, status black/defined | |
+| **S07** ✅ | Under-constrained | bare line, 4 free DOF highlighted | |
+| **S08** ✅ | Over-constrained / conflicting | two distance dims (20 vs 30) on one pair → solver inconsistent | |
+| **S09** ✅ | Origin-anchored | distance dim referencing the origin | |
+| **S10** ✅ | Datum-plane placement | rectangle hosted on the **XZ** datum plane (Z-up frame), no body needed | gravity-aligned canonical orientation |
+| **S11** ✅ | Dimension off origin / datum plane | vertical-distance from origin = ⟂ distance to the XZ plane (y=0) | |
+| **S12** ✅ | Legacy-doc migration | hand-built `{points,lines,constraints}` blob (legacy `point-on-line`) upgrades on load | |
 
 ---
 
 ## Coverage checklist
 
-When walking the generated part, tick each id. An entry that needs a **base 3D body** (external refs: C11, C13, C25, C31, C35–C40, O24, S10, S11) is created against the part's base boss feature; the rest are standalone sketches on the front plane.
+When walking the generated part, tick each id. An entry that needs a **base 3D body** (external refs: C11, C13, C25, C31, C35–C40, O24) is created against the part's base boss feature; the rest are standalone sketches. Most sit on the front (XY) plane; **S10** is hosted on the XZ datum plane to exercise non-front placement. **S08** is intentionally left **unsolved** (its constraints conflict) so the editor flags it; **S12** is stored in the legacy schema and upgrades on load.
 
+> **Automated:** every case is defined once in `frontend/src/app/cad/lib/test-cases/sketch-cases.ts` (`SKETCH_CASES`) and asserted by `sketch-cases.spec.ts` (builds + solves; conflicts flagged) on every frontend test run / CI push. The generator below consumes the same list, so the part and the test never drift.
+>
 > Generated by `scripts/gen-sketch-test-part.mjs`. Re-run after changing the sketch lib to regenerate the part. Cases marked ⬜/🟡 above are included where a representative sketch is meaningful and skipped where the feature is storage-only.
+>
+> Sketches carrying a constraint are **pre-solved** by the generator (real PlaneGCS, run headless in Node) so the stored geometry already satisfies the constraint — coincident points coincide, tangent circles touch, dimensioned edges hit their value. Without this, a constraint case would open showing its unsolved initial layout (the editor only re-solves on edit, not on open), which reads as "the constraint isn't working."

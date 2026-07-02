@@ -132,3 +132,97 @@ jobs:
       - name: Show backend logs
         if: ${{ failure() }}
         run: cat /tmp/backend.log 2>/dev/null || true
+
+  cad-kernel-e2e:
+    name: CAD Kernel E2E (3D features)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      BACKEND_PORT: 3000
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: letwinventory_test
+      DB_USERNAME: testuser
+      DB_PASSWORD: testpass
+      DB_DIALECT: postgres
+      DB_LOGGING: "false"
+      JWT_SECRET: kernel-e2e-secret
+      FRONTEND_URL: http://localhost:4201
+      GOOGLE_CLIENT_ID: ci-placeholder
+      GOOGLE_CLIENT_SECRET: ci-placeholder
+      GOOGLE_CALLBACK_URL: http://localhost:3000/api/auth/google/callback
+      # Backend dials the kernel service on the mapped port.
+      CAD_KERNEL_ADDR: 127.0.0.1:9876
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: letwinventory_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      # Prebuilt OCCT kernel image (published by publish-kernel.yml on master).
+      # Pulled as a service so PR runs don't rebuild OCCT from source.
+      cad-kernel:
+        image: ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:latest
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        ports:
+          - 9876:9876
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      # The 3D-case generator bundles the frontend CAD sketch lib via esbuild.
+      - name: Install frontend dependencies
+        run: npm install
+        working-directory: frontend
+
+      - name: Start backend
+        run: nohup node index.js > /tmp/backend.log 2>&1 &
+        working-directory: backend
+
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 30); do
+            if curl -so /dev/null http://localhost:3000/api/auth/user/checkToken 2>/dev/null; then
+              echo "Backend is ready"; break
+            fi
+            echo "Waiting for backend... ($i/30)"; sleep 2
+          done
+
+      - name: Wait for CAD kernel
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/9876) 2>/dev/null; then echo "Kernel is ready"; break; fi
+            echo "Waiting for kernel... ($i/30)"; sleep 2
+          done
+
+      - name: Verify 3D feature cases regenerate through the OCCT kernel
+        run: node scripts/verify-cad-kernel.mjs
+        env:
+          CAD_E2E_API: http://localhost:3000
+
+      - name: Show backend logs
+        if: ${{ failure() }}
+        run: cat /tmp/backend.log 2>/dev/null || true

@@ -1,5 +1,32 @@
 import { vi } from 'vitest';
 
+// ── PlaneGCS WASM preload (unit-test runner only) ─────────────────────────────
+// Angular's vitest-based unit-test builder serves modules over http, so the
+// vendored Emscripten glue (planegcs.js) can't locate its `.wasm` on disk (it
+// ends up fs-reading an `http:` path → ENOENT), and vitest's module isolation
+// means monkeypatching node's `url`/`fs` from here doesn't reach planegcs's own
+// `require(...)`. Instead, read the wasm bytes here and stash them on globalThis;
+// `solver.ts` hands them to Emscripten as `Module.wasmBinary`, which bypasses ALL
+// path/URL resolution. Uses `process.getBuiltinModule('fs')` — NO `node:` import,
+// so the browser-target (e2e) build never has to resolve it. No-op off a Node
+// runner or if the file is missing.
+{
+  const proc = (globalThis as {
+    process?: { getBuiltinModule?: (m: string) => { readFileSync: (p: string) => Uint8Array }; cwd?: () => string };
+  }).process;
+  const getBuiltin = proc?.getBuiltinModule;
+  if (getBuiltin && proc?.cwd) {
+    try {
+      const fs = getBuiltin('fs');
+      const wasmPath = proc.cwd() + '/src/app/cad/vendor/planegcs/planegcs_dist/planegcs.wasm';
+      (globalThis as { __PLANEGCS_WASM_BINARY__?: Uint8Array }).__PLANEGCS_WASM_BINARY__ =
+        new Uint8Array(fs.readFileSync(wasmPath));
+    } catch {
+      // wasm not on disk — leave unset; solver.ts falls back to its normal loader.
+    }
+  }
+}
+
 // Mock ResizeObserver (not implemented in jsdom)
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class ResizeObserver {
