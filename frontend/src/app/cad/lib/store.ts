@@ -661,10 +661,11 @@ export function addSlotStraight(
   // Side lines: a1 → b1 (top) and b2 → a2 (bottom, reversed for CCW walk).
   const lTop = addLine(s, pa1.id, pb1.id); s = lTop.state;
   const lBot = addLine(s, pb2.id, pa2.id); s = lBot.state;
-  // End caps: arc from b1 to b2 around p2 (CCW), and from a2 to a1 around p1 (CCW).
-  // The CCW choice ensures the loop walks consistently for profile extraction.
-  const arc1 = addArc(s, p2x, p2y, b1x, b1y, b2x, b2y, true); s = arc1.state;
-  const arc2 = addArc(s, p1x, p1y, a2x, a2y, a1x, a1y, true); s = arc2.state;
+  // End caps bulge OUTWARD (away from the slot interior). b1→b2 around p2 and
+  // a2→a1 around p1 must sweep CW (ccw=false) to pass the far side of each cap
+  // centre; ccw=true would cave the caps inward through the slot body.
+  const arc1 = addArc(s, p2x, p2y, b1x, b1y, b2x, b2y, false); s = arc1.state;
+  const arc2 = addArc(s, p1x, p1y, a2x, a2y, a1x, a1y, false); s = arc2.state;
   return { state: s, ids: [lTop.id, arc1.id, lBot.id, arc2.id] };
 }
 
@@ -711,7 +712,9 @@ export function addSlotArc3Pt(
   const cx = p1x + ux, cy = p1y + uy;
   const r = Math.hypot(ux, uy);
   if (r < 1e-6 || halfWidth < 1e-6 || halfWidth >= r) return { state, ids: [] };
-  return _addSlotArc(state, cx, cy, p1x, p1y, p3x, p3y, r, halfWidth);
+  // d = 2·(a×b); its sign is the winding of p1→p2→p3 about the circumcenter.
+  // d > 0 ⇒ the centerline sweeps CCW from p1 through p2 to p3.
+  return _addSlotArc(state, cx, cy, p1x, p1y, p3x, p3y, r, halfWidth, d > 0);
 }
 
 /**
@@ -729,7 +732,13 @@ export function addSlotArcCenterpoint(
   // so the inner/outer arcs are concentric and well-formed.
   const eAng = Math.atan2(ey - cy, ex - cx);
   const exSnap = cx + r * Math.cos(eAng), eySnap = cy + r * Math.sin(eAng);
-  return _addSlotArc(state, cx, cy, sx, sy, exSnap, eySnap, r, halfWidth);
+  // Choose the minor-arc direction: if the CCW span start→end is ≤ π, sweep
+  // CCW, otherwise the shorter path is CW.
+  const sAng0 = Math.atan2(sy - cy, sx - cx);
+  let ccwSpan = eAng - sAng0;
+  while (ccwSpan < 0) ccwSpan += 2 * Math.PI;
+  while (ccwSpan >= 2 * Math.PI) ccwSpan -= 2 * Math.PI;
+  return _addSlotArc(state, cx, cy, sx, sy, exSnap, eySnap, r, halfWidth, ccwSpan <= Math.PI);
 }
 
 /** Shared arc-slot body builder. Given the centerline arc's center,
@@ -742,7 +751,7 @@ export function addSlotArcCenterpoint(
 function _addSlotArc(
   state: SketchState,
   cx: number, cy: number, sx: number, sy: number, ex: number, ey: number,
-  r: number, halfWidth: number,
+  r: number, halfWidth: number, ccwDir: boolean,
 ): { state: SketchState; ids: string[] } {
   const sAng = Math.atan2(sy - cy, sx - cx);
   const eAng = Math.atan2(ey - cy, ex - cx);
@@ -759,14 +768,15 @@ function _addSlotArc(
   const pIe = addPoint(s, innerEnd.x,   innerEnd.y);   s = pIe.state;
   const pOs = addPoint(s, outerStart.x, outerStart.y); s = pOs.state;
   const pOe = addPoint(s, outerEnd.x,   outerEnd.y);   s = pOe.state;
-  // Inner arc (smaller radius) CCW from innerStart → innerEnd.
-  const inner = addArc(s, cx, cy, innerStart.x, innerStart.y, innerEnd.x, innerEnd.y, true); s = inner.state;
-  // Outer arc CCW from outerEnd → outerStart (reverse direction for CCW loop).
-  const outer = addArc(s, cx, cy, outerEnd.x, outerEnd.y, outerStart.x, outerStart.y, true); s = outer.state;
-  // Cap at end: arc from innerEnd to outerEnd around (ex, ey).
-  const capEnd = addArc(s, ex, ey, innerEnd.x, innerEnd.y, outerEnd.x, outerEnd.y, true); s = capEnd.state;
-  // Cap at start: arc from outerStart to innerStart around (sx, sy).
-  const capStart = addArc(s, sx, sy, outerStart.x, outerStart.y, innerStart.x, innerStart.y, true); s = capStart.state;
+  // Inner arc follows the centerline's own sweep (innerStart → innerEnd).
+  const inner = addArc(s, cx, cy, innerStart.x, innerStart.y, innerEnd.x, innerEnd.y, ccwDir); s = inner.state;
+  // Outer arc returns along the reverse sweep to close the loop.
+  const outer = addArc(s, cx, cy, outerEnd.x, outerEnd.y, outerStart.x, outerStart.y, !ccwDir); s = outer.state;
+  // Caps bulge OUTWARD past each centerline endpoint; they sweep opposite the
+  // inner arc so the semicircle passes the far side of the cap centre rather
+  // than caving back through the slot body.
+  const capEnd = addArc(s, ex, ey, innerEnd.x, innerEnd.y, outerEnd.x, outerEnd.y, !ccwDir); s = capEnd.state;
+  const capStart = addArc(s, sx, sy, outerStart.x, outerStart.y, innerStart.x, innerStart.y, !ccwDir); s = capStart.state;
   return { state: s, ids: [inner.id, capEnd.id, outer.id, capStart.id] };
 }
 

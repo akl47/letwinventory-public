@@ -3021,7 +3021,7 @@ async function _dispatchHole(feature, bodies, model, client, dbClient, results, 
       // (a) Drill cylinder.
       const drillRpc = await client.call('buildExtrude', {
         featureId: `${feature.id}#p${pi}#drill`,
-        profile: [{ kind: 'circle', center: [0, 0], radius: drillDia / 2 }],
+        profile: [{ kind: 'circle', center: { x: 0, y: 0 }, radius: drillDia / 2 }],
         holes: [],
         plane: holePlane,
         distance: drillDepth,
@@ -3040,7 +3040,7 @@ async function _dispatchHole(feature, bodies, model, client, dbClient, results, 
       if (feature.holeType === 'counterbore') {
         const cboreRpc = await client.call('buildExtrude', {
           featureId: `${feature.id}#p${pi}#cbore`,
-          profile: [{ kind: 'circle', center: [0, 0], radius: cboreDia / 2 }],
+          profile: [{ kind: 'circle', center: { x: 0, y: 0 }, radius: cboreDia / 2 }],
           holes: [],
           plane: holePlane,
           distance: cboreDepth,
@@ -3072,9 +3072,9 @@ async function _dispatchHole(feature, bodies, model, client, dbClient, results, 
         const cskRpc = await client.call('buildRevolve', {
           featureId: `${feature.id}#p${pi}#csk`,
           profile: [
-            { kind: 'line', start: [0, 0], end: [cskRadius, 0] },
-            { kind: 'line', start: [cskRadius, 0], end: [0, cskDepth] },
-            { kind: 'line', start: [0, cskDepth], end: [0, 0] },
+            { kind: 'line', start: { x: 0, y: 0 }, end: { x: cskRadius, y: 0 } },
+            { kind: 'line', start: { x: cskRadius, y: 0 }, end: { x: 0, y: cskDepth } },
+            { kind: 'line', start: { x: 0, y: cskDepth }, end: { x: 0, y: 0 } },
           ],
           holes: [],
           plane: revPlane,

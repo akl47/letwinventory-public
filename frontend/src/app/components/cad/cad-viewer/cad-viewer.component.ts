@@ -5355,6 +5355,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         const pts3 = pts2D.map(project);
         return drawCurve(pts3);
       }
+      case 'ellipticalArc':
       case 'conic':
       case 'equation': {
         // Batch 6 — use the shared tessellator (returns [] for

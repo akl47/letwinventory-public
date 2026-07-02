@@ -120,6 +120,42 @@ export function tessellateEllipse(
   return out;
 }
 
+export function tessellateEllipticalArc(
+  center: { x: number; y: number },
+  majorAxisEnd: { x: number; y: number },
+  minorRadius: number,
+  startAngle: number,
+  endAngle: number,
+  ccw: boolean,
+  chordTolerance: number,
+): Array<{ x: number; y: number }> {
+  const majorRadius = Math.hypot(majorAxisEnd.x - center.x, majorAxisEnd.y - center.y);
+  if (majorRadius < 1e-9) return [];
+  // Sweep in the ellipse's parametric frame, applying the same CCW/CW
+  // normalisation as a circular arc so start→end traces the intended side.
+  let sweep = endAngle - startAngle;
+  if (ccw) {
+    while (sweep <= 0) sweep += Math.PI * 2;
+  } else {
+    while (sweep >= 0) sweep -= Math.PI * 2;
+  }
+  // Segment count from the larger radius and the swept fraction of a full
+  // ellipse — high curvature near the major-axis ends needs the major radius.
+  const full = segmentsForCircle(Math.max(majorRadius, minorRadius), chordTolerance);
+  const n = Math.max(1, Math.ceil(full * (Math.abs(sweep) / (Math.PI * 2))));
+  const ux = (majorAxisEnd.x - center.x) / majorRadius;
+  const uy = (majorAxisEnd.y - center.y) / majorRadius;
+  const vx = -uy, vy = ux;
+  const out: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i <= n; i++) {
+    const t = startAngle + sweep * (i / n);
+    const a = majorRadius * Math.cos(t);
+    const b = minorRadius * Math.sin(t);
+    out.push({ x: center.x + ux * a + vx * b, y: center.y + uy * a + vy * b });
+  }
+  return out;
+}
+
 /**
  * Open uniform clamped B-spline sampler via De Boor's algorithm.
  *
@@ -223,10 +259,15 @@ export function tessellateEntity(
       if (pts.length < entity.degree + 1) return [];
       return tessellateSpline(pts.map(p => ({ x: p.x, y: p.y })), entity.degree, chordTolerance);
     }
-    case 'ellipticalArc':
-      // Tessellation for elliptical arc is the ellipse path clipped
-      // to the arc's angle range — kept simple for now.
-      return [];
+    case 'ellipticalArc': {
+      const c = findPoint(state, entity.centerId);
+      const m = findPoint(state, entity.majorAxisEndId);
+      if (!c || !m) return [];
+      return tessellateEllipticalArc(
+        { x: c.x, y: c.y }, { x: m.x, y: m.y }, entity.minorRadius,
+        entity.startAngle, entity.endAngle, entity.ccw, chordTolerance,
+      );
+    }
     case 'conic': {
       if (entity.conicType !== 'parabola') return [];
       return tessellateParabola(state, entity, chordTolerance);
