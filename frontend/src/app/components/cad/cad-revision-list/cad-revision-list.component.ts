@@ -40,7 +40,7 @@ import { formatDiffEntry } from '../../../cad/lib/diffFormat';
 
       <div *ngIf="!loading() && !model()" class="empty">
         <p>No CAD model for this part yet.</p>
-        <button mat-raised-button color="primary" [disabled]="!canWrite() || creating()" (click)="onCreate()"><mat-icon>add</mat-icon> Create CAD</button>
+        <button mat-raised-button color="primary" data-testid="cad-create-button" [disabled]="!canWrite() || creating()" (click)="onCreate()"><mat-icon>add</mat-icon> Create CAD</button>
       </div>
 
       <div *ngIf="!loading() && model() && !nodes().length" class="empty">

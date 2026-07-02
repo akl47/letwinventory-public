@@ -3,7 +3,9 @@ import { CommonModule } from '@angular/common';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
-import type { Feature, Sketch, SketchDocument, OriginFeature, ExtrudeFeature } from '../../../cad/lib/types';
+import type { Feature, Sketch, SketchDocument, OriginFeature, ExtrudeFeature, SketchState } from '../../../cad/lib/types';
+import { analyzeDeterminacy } from '../../../cad/lib/determinacy';
+import { ORIGIN_POINT_ID } from '../../../cad/lib/store';
 import { defaultDatumVisibility } from '../../../cad/lib/featureTree';
 import { holeSpec } from '../../../cad/lib/holeSpecs';
 import { originPlaneLabel } from '../../../cad/lib/datum';
@@ -76,6 +78,9 @@ export interface TreeNode {
   feature?: Feature;
   /** Top-level createdAt (sketch rows) — used for drag-reorder hit-testing. */
   createdAt?: number;
+  /** Sketch rows only: true = fully constrained (DOF 0), false = under-constrained,
+   * undefined = not applicable / unknown (e.g. legacy doc). */
+  fullyConstrained?: boolean;
 }
 
 @Component({
@@ -130,6 +135,13 @@ export interface TreeNode {
                       matTooltip="Reference face missing — this sketch's host face was deleted. Right-click → Change reference face."
                       [attr.data-testid]="'sketch-dangling-' + n.sketchId">link_off</mat-icon>
           </ng-container>
+          <mat-icon *ngIf="n.kind === 'sketch' && n.fullyConstrained !== undefined"
+                    class="constraint-indicator"
+                    [class.fully]="n.fullyConstrained"
+                    [matTooltip]="n.fullyConstrained ? 'Fully constrained' : 'Under-constrained'"
+                    [attr.data-testid]="'sketch-constraint-' + n.sketchId">
+            {{ n.fullyConstrained ? 'lock' : 'lock_open' }}
+          </mat-icon>
           <button class="visibility-toggle"
                   *ngIf="n.visibilityToggleable"
                   [attr.data-testid]="visibilityTestId(n)"
@@ -361,11 +373,11 @@ export interface TreeNode {
     .error-indicator { font-size: 16px; width: 16px; height: 16px; color: #ef5350; flex-shrink: 0; }
     .dangling-indicator { font-size: 16px; width: 16px; height: 16px; color: #ffa726; flex-shrink: 0; cursor: help; }
     .menu-anchor { position: fixed; width: 0; height: 0; }
-    .chevron { display: inline-flex; align-items: center; width: 18px; cursor: pointer; opacity: 0.7; }
+    .chevron { display: inline-flex; align-items: center; width: 18px; flex: 0 0 18px; cursor: pointer; opacity: 0.7; }
     .chevron mat-icon { font-size: 18px; width: 18px; height: 18px; }
     .chevron:hover { opacity: 1; }
-    .chevron-spacer { display: inline-block; width: 18px; }
-    .kind-icon { font-size: 18px; width: 18px; height: 18px; }
+    .chevron-spacer { display: inline-block; width: 18px; flex: 0 0 18px; }
+    .kind-icon { font-size: 18px; width: 18px; height: 18px; flex: 0 0 18px; }
     .kind-icon.origin { color: #ffeb3b; }
     .kind-icon.part { color: #90a4ae; }
     .kind-icon.mate { color: #42a5f5; }
@@ -382,10 +394,13 @@ export interface TreeNode {
     .dbg-id { flex: 1 0 auto; margin-left: 4px; font-family: ui-monospace, monospace; font-size: 10px; opacity: 0.45; }
     .ctx-info { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 11px; opacity: 0.65; cursor: default; }
     .ctx-info mat-icon { font-size: 16px; width: 16px; height: 16px; }
-    .visibility-toggle { border: none; background: none; cursor: pointer; opacity: 0.55; padding: 2px; display: inline-flex; align-items: center; justify-content: center; color: inherit; }
+    .visibility-toggle { border: none; background: none; cursor: pointer; opacity: 0.55; padding: 2px; display: inline-flex; align-items: center; justify-content: center; color: inherit; flex-shrink: 0; }
     .visibility-toggle:hover { opacity: 1; }
     .visibility-toggle mat-icon { font-size: 16px; width: 16px; height: 16px; }
-    .pick-hint { font-size: 14px; width: 14px; height: 14px; opacity: 0.7; color: #42a5f5; }
+    .pick-hint { font-size: 14px; width: 14px; height: 14px; opacity: 0.7; color: #42a5f5; flex-shrink: 0; }
+    /* Sketch constraint status: green lock = fully constrained, faint open lock = under-constrained. */
+    .constraint-indicator { font-size: 15px; width: 15px; height: 15px; flex-shrink: 0; opacity: 0.4; color: #9e9e9e; cursor: help; }
+    .constraint-indicator.fully { opacity: 0.95; color: #4caf50; }
 
     /* SolidWorks-style rollback bar — a thick yellow horizontal divider
        between feature rows. Rows below it (.rolled-back class) render
@@ -772,8 +787,42 @@ export class CadFeatureTreePanelComponent {
       });
     }
 
+    // Tag each sketch row with its constraint state (DOF 0 → fully constrained)
+    // so the tree can show a lock indicator. Computed once per render; memoized
+    // by sketch-state reference so expand/collapse doesn't re-run the analysis.
+    for (const n of out) {
+      if (n.kind !== 'sketch' || !n.sketchId) continue;
+      const sk = doc?.sketches?.[n.sketchId];
+      if (sk) n.fullyConstrained = this._sketchFullyConstrained(sk.state as SketchState);
+    }
+
     return out;
   });
+
+  // Memoized constraint-state per sketch state (immutable, so the WeakMap stays
+  // valid until the sketch is edited). Avoids re-running the Jacobian-rank
+  // analysis for every sketch on each tree recompute.
+  private _constrainedCache = new WeakMap<object, boolean>();
+  private _sketchFullyConstrained(state: SketchState): boolean | undefined {
+    if (!state || !Array.isArray(state.entities)) return undefined;  // legacy/empty doc
+    const cached = this._constrainedCache.get(state);
+    if (cached !== undefined) return cached;
+    // A sketch is fully constrained when every real (non-origin) geometric
+    // entity is pinned by the constraint graph. analyzeDeterminacy returns the
+    // set of fully-determined entity ids (points / lines / circles / arcs).
+    const tracked = state.entities.filter(e =>
+      (e.kind === 'point' && e.id !== ORIGIN_POINT_ID)
+      || e.kind === 'line' || e.kind === 'circle' || e.kind === 'arc');
+    let result: boolean;
+    if (tracked.length === 0) {
+      result = false;  // nothing drawn yet — not meaningfully "constrained"
+    } else {
+      const determined = analyzeDeterminacy(state);
+      result = tracked.every(e => determined.has(e.id));
+    }
+    this._constrainedCache.set(state, result);
+    return result;
+  }
 
   /** Body of the per-feature emit, factored so the rollback-bar inject
    * loop stays readable. The original logic lives unchanged below. */

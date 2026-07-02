@@ -4,7 +4,6 @@ import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
-import { MatTableModule } from '@angular/material/table';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
@@ -17,32 +16,22 @@ import { PartWithCadSummary } from '../../../models/cad-model.model';
 import { EligiblePart } from '../../../cad/lib/assembly.types';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
-import { filterBySearch } from '../../../utils/search';
+import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-table/data-table';
 
 @Component({
   selector: 'app-cad-landing',
   standalone: true,
   imports: [
     CommonModule, RouterLink, FormsModule,
-    MatButtonModule, MatIconModule, MatTableModule,
+    MatButtonModule, MatIconModule,
     MatFormFieldModule, MatInputModule, MatProgressSpinnerModule, MatTooltipModule, MatDialogModule,
+    DataTable, DataTableColumnDef,
   ],
   template: `
     <div class="cad-landing" data-testid="cad-landing">
       <header class="page-header">
         <mat-icon class="page-icon">view_in_ar</mat-icon>
         <h2>CAD Models</h2>
-        <span class="spacer"></span>
-        <button mat-stroked-button (click)="newPart('assembly')"
-                matTooltip="Create a new assembly part and open it.">
-          <mat-icon>account_tree</mat-icon>
-          New assembly
-        </button>
-        <button mat-flat-button color="primary" (click)="newPart('part')"
-                matTooltip="Create a new CAD part and open it.">
-          <mat-icon>add</mat-icon>
-          New Part
-        </button>
       </header>
 
       @if (showPicker()) {
@@ -66,123 +55,95 @@ import { filterBySearch } from '../../../utils/search';
         </section>
       }
 
-      <mat-form-field appearance="outline" class="search">
-        <mat-icon matPrefix>search</mat-icon>
-        <mat-label>Filter by part name or number</mat-label>
-        <input matInput [(ngModel)]="searchTerm" (ngModelChange)="searchTerm.set($event)">
-      </mat-form-field>
-
       <div *ngIf="loading()" class="loading">
         <mat-spinner diameter="32"></mat-spinner>
       </div>
 
-      <div *ngIf="!loading() && filtered().length === 0" class="empty">
-        <p *ngIf="rows().length === 0">No parts have CAD models yet.</p>
-        <p *ngIf="rows().length > 0">No parts match "{{ searchTerm() }}".</p>
-        <p class="hint">Create a part, then open its CAD tab to begin a model.</p>
-      </div>
-
-      <div class="cad-table-wrap" *ngIf="!loading() && filtered().length > 0">
-      <table
-        mat-table
-        [dataSource]="filtered()"
-        class="cad-table"
+      <app-data-table *ngIf="!loading()"
+        [data]="rows()"
+        [columns]="columns"
+        [searchKeys]="searchKeys"
+        [defaultSort]="{ key: 'updated', dir: 'desc' }"
+        searchPlaceholder="Filter by part name, description, or revision"
+        (rowClick)="openLatest($event)"
         data-testid="cad-landing-table">
-        <ng-container matColumnDef="part">
-          <th mat-header-cell *matHeaderCellDef>Part</th>
-          <td mat-cell *matCellDef="let r">
-            <a [routerLink]="['/parts', r.partID, 'cad']" class="part-link">
-              <strong>{{ r.part?.name || '(unnamed)' }}</strong>
-              <span class="part-rev">·  Rev {{ r.part?.revision }}</span>
+
+        <div dataTableToolbar>
+          <button mat-stroked-button (click)="newPart('assembly')"
+                  matTooltip="Create a new assembly part and open it.">
+            <mat-icon>account_tree</mat-icon>
+            New assembly
+          </button>
+          <button mat-flat-button color="primary" (click)="newPart('part')"
+                  matTooltip="Create a new CAD part and open it.">
+            <mat-icon>add</mat-icon>
+            New Part
+          </button>
+        </div>
+
+        <ng-template appColumn="part" let-r>
+          <a [routerLink]="['/parts', r.partID, 'cad']" class="part-link" (click)="$event.stopPropagation()">
+            <strong>{{ r.part?.name || '(unnamed)' }}</strong>
+            <span class="part-rev">·  Rev {{ r.part?.revision }}</span>
+          </a>
+          <div class="part-desc" *ngIf="r.part?.description">{{ r.part!.description }}</div>
+        </ng-template>
+
+        <ng-template appColumn="type" let-r>
+          <span class="type-chip" [class.assembly]="r.isAssembly">
+            <mat-icon>{{ r.isAssembly ? 'account_tree' : 'view_in_ar' }}</mat-icon>
+            {{ r.isAssembly ? 'Assembly' : 'Part' }}
+          </span>
+        </ng-template>
+
+        <ng-template appColumn="latest" let-r>
+          <span class="rev-tag">Rev {{ r.latestRevision }}</span>
+          <span class="state-badge"
+                [class.draft]="r.latestReleaseState==='draft'"
+                [class.review]="r.latestReleaseState==='review'"
+                [class.released]="r.latestReleaseState==='released'">
+            {{ r.latestReleaseState }}
+          </span>
+        </ng-template>
+
+        <ng-template appColumn="released" let-r>
+          <span *ngIf="r.hasReleased" class="released-pill">
+            <mat-icon>verified</mat-icon> Rev {{ r.releasedRevision }}
+          </span>
+          <span *ngIf="!r.hasReleased" class="muted">—</span>
+        </ng-template>
+
+        <ng-template appColumn="count" let-r>{{ r.revisionCount }}</ng-template>
+
+        <ng-template appColumn="updated" let-r>{{ r.latestUpdatedAt | date:'short' }}</ng-template>
+
+        <ng-template appColumn="actions" let-r>
+          <div class="row-actions" (click)="$event.stopPropagation()">
+            <a mat-stroked-button
+               [routerLink]="['/parts', r.partID, 'cad']"
+               matTooltip="View the version history — graph, branches, diffs">
+              <mat-icon>history</mat-icon> Show history
             </a>
-            <div class="part-desc" *ngIf="r.part?.description">{{ r.part!.description }}</div>
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="type">
-          <th mat-header-cell *matHeaderCellDef>Type</th>
-          <td mat-cell *matCellDef="let r">
-            <span class="type-chip" [class.assembly]="r.isAssembly">
-              <mat-icon>{{ r.isAssembly ? 'account_tree' : 'view_in_ar' }}</mat-icon>
-              {{ r.isAssembly ? 'Assembly' : 'Part' }}
-            </span>
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="latest">
-          <th mat-header-cell *matHeaderCellDef>Latest CAD Revision</th>
-          <td mat-cell *matCellDef="let r">
-            <span class="rev-tag">Rev {{ r.latestRevision }}</span>
-            <span class="state-badge"
-                  [class.draft]="r.latestReleaseState==='draft'"
-                  [class.review]="r.latestReleaseState==='review'"
-                  [class.released]="r.latestReleaseState==='released'">
-              {{ r.latestReleaseState }}
-            </span>
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="released">
-          <th mat-header-cell *matHeaderCellDef>Released</th>
-          <td mat-cell *matCellDef="let r">
-            <span *ngIf="r.hasReleased" class="released-pill">
-              <mat-icon>verified</mat-icon> Rev {{ r.releasedRevision }}
-            </span>
-            <span *ngIf="!r.hasReleased" class="muted">—</span>
-          </td>
-        </ng-container>
-
-        <ng-container matColumnDef="count">
-          <th mat-header-cell *matHeaderCellDef>Revisions</th>
-          <td mat-cell *matCellDef="let r">{{ r.revisionCount }}</td>
-        </ng-container>
-
-        <ng-container matColumnDef="updated">
-          <th mat-header-cell *matHeaderCellDef>Updated</th>
-          <td mat-cell *matCellDef="let r">{{ r.latestUpdatedAt | date:'short' }}</td>
-        </ng-container>
-
-        <ng-container matColumnDef="actions">
-          <th mat-header-cell *matHeaderCellDef></th>
-          <td mat-cell *matCellDef="let r" (click)="$event.stopPropagation()">
-            <div class="row-actions">
-              <a mat-stroked-button
-                 [routerLink]="['/parts', r.partID, 'cad']"
-                 matTooltip="View the version history — graph, branches, diffs">
-                <mat-icon>history</mat-icon> Show history
-              </a>
-              <a mat-stroked-button
-                 [routerLink]="r.isAssembly ? ['/parts', r.partID, 'assembly', 'editor'] : ['/parts', r.partID, 'cad', 'editor']"
-                 [queryParams]="r.isAssembly ? null : { revisionID: r.latestRevisionID }"
-                 [matTooltip]="r.isAssembly ? 'Open in the assembly editor' : 'Open the latest revision in the CAD editor'">
-                <mat-icon>open_in_new</mat-icon> Open
-              </a>
-            </div>
-          </td>
-        </ng-container>
-
-        <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
-        <tr mat-row *matRowDef="let row; columns: displayedColumns" class="row" (click)="openLatest(row)"></tr>
-      </table>
-      </div>
+            <a mat-stroked-button
+               [routerLink]="r.isAssembly ? ['/parts', r.partID, 'assembly', 'editor'] : ['/parts', r.partID, 'cad', 'editor']"
+               [queryParams]="r.isAssembly ? null : { revisionID: r.latestRevisionID }"
+               [matTooltip]="r.isAssembly ? 'Open in the assembly editor' : 'Open the latest revision in the CAD editor'">
+              <mat-icon>open_in_new</mat-icon> Open
+            </a>
+          </div>
+        </ng-template>
+      </app-data-table>
     </div>
   `,
   styles: [`
+    /* The app shell's .content host is overflow:hidden — each page owns its
+       own vertical scroll. Matches cad-revision-list. */
+    :host { display: block; height: 100%; overflow-y: auto; }
     .cad-landing { padding: 24px; max-width: 1200px; margin: 0 auto; }
     .page-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
     .page-header h2 { margin: 0; }
     .page-icon { font-size: 28px; width: 28px; height: 28px; opacity: 0.8; }
-    .spacer { flex: 1; }
-    .search { width: 100%; max-width: 480px; margin-bottom: 16px; }
     .loading { display: flex; justify-content: center; padding: 32px; }
-    .empty { padding: 32px; text-align: center; color: #666; border: 1px dashed #ccc; border-radius: 8px; }
-    .empty .hint { font-size: 13px; opacity: 0.7; }
-    /* Horizontal scroll so the table (incl. the Open column) is reachable on
-       narrow/portrait phones instead of being clipped off-screen. */
-    .cad-table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .cad-table { width: 100%; min-width: 560px; }
-    .row { cursor: pointer; }
-    .row:hover { background: rgba(0,0,0,0.04); }
     .part-link { text-decoration: none; color: inherit; }
     .part-link strong { font-weight: 600; }
     .part-rev { opacity: 0.6; font-size: 12px; }
@@ -225,7 +186,17 @@ export class CadLandingComponent implements OnInit {
 
   rows = signal<PartWithCadSummary[]>([]);
   loading = signal<boolean>(true);
-  searchTerm = signal<string>('');
+
+  columns: ColumnDef<PartWithCadSummary>[] = [
+    { key: 'part', header: 'Part', sortable: true, sortValue: r => r.part?.name ?? '' },
+    { key: 'type', header: 'Type', sortable: true, sortValue: r => r.isAssembly ? 'Assembly' : 'Part' },
+    { key: 'latest', header: 'Latest CAD Revision', sortable: true, sortValue: r => r.latestRevision ?? '' },
+    { key: 'released', header: 'Released', sortable: true, sortValue: r => r.releasedRevision ?? '' },
+    { key: 'count', header: 'Revisions', sortable: true, sortValue: r => r.revisionCount ?? 0 },
+    { key: 'updated', header: 'Updated', sortable: true, sortValue: r => r.latestUpdatedAt ?? '' },
+    { key: 'actions', header: '', sortable: false },
+  ];
+  searchKeys = ['part.name', 'part.description', 'part.revision'];
 
   // "New assembly" picker — Assembly-category parts eligible to start one.
   showPicker = signal(false);
@@ -236,13 +207,6 @@ export class CadLandingComponent implements OnInit {
     if (!q) return this.eligibleParts();
     return this.eligibleParts().filter((p) =>
       `${p.part?.name || ''} ${p.part?.revision || ''}`.toLowerCase().includes(q));
-  });
-
-  displayedColumns = ['part', 'type', 'latest', 'released', 'count', 'updated', 'actions'];
-
-  filtered = computed(() => {
-    const q = this.searchTerm().trim();
-    return filterBySearch(this.rows(), q, ['part.name', 'part.description', 'part.revision']);
   });
 
   ngOnInit() {
