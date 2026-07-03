@@ -105,6 +105,7 @@ interface ConstraintRow {
             class="row"
             [class.selected]="r.id === selectedId()"
             [class.related]="relatedIds().has(r.id)"
+            [class.conflict]="conflictIds().has(r.id)"
             [attr.data-testid]="'constraint-row-' + r.id"
             (click)="onSelectRow(r)">
           <mat-icon class="row-icon" [svgIcon]="r.icon"></mat-icon>
@@ -144,6 +145,10 @@ interface ConstraintRow {
        reads distinctly from the blue clicked-constraint highlight. */
     .row.related { background: rgba(255, 193, 7, 0.12); border-left-color: #ffc107; }
     .row.related.selected { background: rgba(66, 165, 245, 0.2); }
+    /* REQ 860 — a constraint the solver named as conflicting. Red wins over
+       related/selected so the conflict set is unmissable. */
+    .row.conflict { background: rgba(239, 83, 80, 0.16); border-left-color: #ef5350; }
+    .row.conflict .row-label { color: #ef9a9a; }
     .row-icon { font-size: 18px; width: 18px; height: 18px; opacity: 0.85; flex-shrink: 0; }
     .row-body { display: flex; flex-direction: column; flex: 1; min-width: 0; }
     .row-label { font-weight: 500; }
@@ -160,6 +165,8 @@ export class CadConstraintListComponent {
   constraints = input<SketchConstraint[]>([]);
   entities = input<SketchEntity[]>([]);
   defaultUnit = input<Unit>('mm');
+  /** REQ 860: constraint ids the solver named as conflicting — rows render red. */
+  conflictIds = input<Set<string>>(new Set());
   /** Currently-selected constraint id — when set, the matching row in this
    * panel gets a blue highlight bar. Parent owns selection state. */
   selectedId = input<string | null>(null);

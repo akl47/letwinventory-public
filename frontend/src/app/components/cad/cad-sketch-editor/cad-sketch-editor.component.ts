@@ -19,11 +19,11 @@ import {
   addPolygon, addSlotStraight, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
   addCircle3Points, addArc3Points, addEllipse, addEllipticalArc, addSpline,
   addParabolaByPoints, addEquationCurve, addText, addTextBoxByCorners, addPicture,
-  setConstructionFlag, mergePoints, ORIGIN_POINT_ID,
+  setConstructionFlag, setConstraintDriven, mergePoints, ORIGIN_POINT_ID,
 } from '../../../cad/lib/store';
 import { solveSketch } from '../../../cad/lib/solver';
 import { extractClosedLoops } from '../../../cad/lib/profile';
-import { pickEntity, distanceToEntity } from '../../../cad/lib/picking';
+import { pickEntity, distanceToEntity, entityTouchesRect } from '../../../cad/lib/picking';
 import { inferLineEnd, inferAlignment, type InferenceResult, type PendingConstraint, type AlignmentRef } from '../../../cad/lib/inference';
 import { findEntity, isProjectedEntity } from '../../../cad/lib/types';
 import { previewDimension, previewPointToEdgeDimension, chooseTwoPointDimType, twoPointDimValue, type DimensionRender } from '../../../cad/lib/dimensions';
@@ -507,6 +507,26 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
         <mat-icon svgIcon="cad-break-link"></mat-icon>
         <span class="ribbon-label">Break Link</span>
       </button>
+      <!-- REQ 865 — per-user sketch settings (persisted locally). -->
+      <button class="ribbon-button"
+              data-testid="sketch-settings"
+              [matMenuTriggerFor]="sketchSettingsMenu"
+              matTooltip="Sketch settings">
+        <mat-icon>tune</mat-icon>
+        <span class="ribbon-label">Settings</span>
+      </button>
+      <mat-menu #sketchSettingsMenu="matMenu">
+        <button mat-menu-item data-testid="setting-grid-snap"
+                (click)="setGridSnap(!gridSnap()); $event.stopPropagation()">
+          <mat-icon>{{ gridSnap() ? 'check_box' : 'check_box_outline_blank' }}</mat-icon>
+          Grid snap (1 mm)
+        </button>
+        <button mat-menu-item data-testid="setting-rim-drag-resize"
+                (click)="setRimDragResize(!rimDragResize()); $event.stopPropagation()">
+          <mat-icon>{{ rimDragResize() ? 'check_box' : 'check_box_outline_blank' }}</mat-icon>
+          Rim-drag resizes circles/arcs
+        </button>
+      </mat-menu>
 
       <span class="ribbon-divider"></span>
 
@@ -520,6 +540,40 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
       </button>
 
       <span class="ribbon-divider"></span>
+
+      <!-- REQ 862 — contextual tool parameters, replacing window.prompt.
+           Visible while the matching tool is armed; the gesture clicks
+           read these signals at commit time. -->
+      @switch (tool()) {
+        @case ('rotate') {
+          <label class="tool-param" data-testid="param-rotate-angle">Angle°
+            <input type="number" step="any" [value]="rotateAngleDeg()"
+                   (change)="rotateAngleDeg.set(+$any($event.target).value)" /></label>
+        }
+        @case ('scale') {
+          <label class="tool-param" data-testid="param-scale-factor">Factor
+            <input type="number" step="any" [value]="scaleFactor()"
+                   (change)="scaleFactor.set(+$any($event.target).value)" /></label>
+        }
+        @case ('pattern-linear') {
+          <label class="tool-param" data-testid="param-pattern-count">Count
+            <input type="number" min="2" step="1" [value]="patternLinearCount()"
+                   (change)="patternLinearCount.set(+$any($event.target).value)" /></label>
+        }
+        @case ('pattern-circular') {
+          <label class="tool-param" data-testid="param-pattern-circ-count">Count
+            <input type="number" min="2" step="1" [value]="patternCircCount()"
+                   (change)="patternCircCount.set(+$any($event.target).value)" /></label>
+          <label class="tool-param" data-testid="param-pattern-circ-sweep">Sweep°
+            <input type="number" step="any" [value]="patternCircSweepDeg()"
+                   (change)="patternCircSweepDeg.set(+$any($event.target).value)" /></label>
+        }
+        @case ('polygon') {
+          <label class="tool-param" data-testid="param-polygon-sides">Sides
+            <input type="number" min="3" step="1" [value]="polygonSides()"
+                   (change)="setPolygonSides(+$any($event.target).value)" /></label>
+        }
+      }
 
       <span class="status">
         {{ pointCount() }} pts · {{ lineCount() }} lns · DOF {{ dof() }}
@@ -607,6 +661,9 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
     .pick-debug-item.out { color: #78909c; opacity: 0.7; }
     .ribbon-divider { width: 1px; align-self: stretch; background: #444; margin: 8px 6px; flex-shrink: 0; }
     .status { font-size: 11px; opacity: 0.7; font-family: monospace; align-self: center; padding: 0 6px; white-space: nowrap; }
+    /* REQ 862 — contextual tool-parameter inputs in the ribbon. */
+    .tool-param { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; align-self: center; padding: 0 4px; white-space: nowrap; color: #ccc; }
+    .tool-param input { width: 56px; background: rgba(255,255,255,0.08); color: #eee; border: 1px solid rgba(255,255,255,0.2); border-radius: 3px; padding: 2px 4px; font-size: 11px; }
     .spacer { flex: 1; }
     .ribbon-button {
       display: inline-flex;
@@ -816,6 +873,13 @@ export class CadSketchEditorComponent implements OnDestroy {
   roundedRectRadius = signal<number>(5);
   draftPolygonCenter = signal<PendingPoint | null>(null);       // polygon: center
   polygonSides = signal<number>(6);                              // polygon: N (persisted across draws)
+  // REQ 862 — contextual tool parameters (ribbon inputs replace window.prompt).
+  rotateAngleDeg = signal<number>(90);
+  scaleFactor = signal<number>(2);
+  patternLinearCount = signal<number>(3);
+  patternCircCount = signal<number>(6);
+  patternCircSweepDeg = signal<number>(360);
+  setPolygonSides(n: number) { this.polygonSides.set(Math.max(3, Math.round(n) || 3)); }
   draftSlotPath = signal<{ p1?: PendingPoint; p2?: PendingPoint }>({});  // slot: 2 centerline endpoints + 1 width click
   // 3-point rectangle (corner variant): 2 clicks define the first edge,
   // 3rd click picks the opposite-side offset.
@@ -874,6 +938,26 @@ export class CadSketchEditorComponent implements OnDestroy {
   } | null>(null);
   // Rubber-band selection rectangle. Set on pointer-down over empty space.
   rubberBand = signal<{ start: { x: number; y: number }; current: { x: number; y: number } } | null>(null);
+
+  // ── REQ 865 — per-user sketch settings (localStorage-persisted) ──────────
+  /** Grid snap (default ON): drawing tools + drag commits round new
+   * coordinates to integer mm. Off = continuous coordinates (SW/Onshape). */
+  gridSnap = signal<boolean>(typeof localStorage === 'undefined' || localStorage.getItem('sketchGridSnap') !== 'off');
+  /** Rim-drag resize (default OFF): dragging a circle/arc rim resizes its
+   * radius about a fixed center instead of translating the whole curve. */
+  rimDragResize = signal<boolean>(typeof localStorage !== 'undefined' && localStorage.getItem('sketchRimDragResize') === 'on');
+  setGridSnap(on: boolean) {
+    this.gridSnap.set(on);
+    try { localStorage.setItem('sketchGridSnap', on ? 'on' : 'off'); } catch { /* private mode */ }
+  }
+  setRimDragResize(on: boolean) {
+    this.rimDragResize.set(on);
+    try { localStorage.setItem('sketchRimDragResize', on ? 'on' : 'off'); } catch { /* private mode */ }
+  }
+  /** Drawing-tool coordinate snap — integer grid when enabled (REQ 865). */
+  private _snap(n: number): number { return this.gridSnap() ? Math.round(n) : n; }
+  /** Active rim-resize gesture (REQ 865, rimDragResize on). */
+  private radiusDrag = signal<{ entityId: string; isDragging: boolean; start: { x: number; y: number } } | null>(null);
   // Async-solver generation counter for live drag solves. Each pointermove
   // bumps it; only the latest solve's result is applied (race-free).
   private dragSolveGen = 0;
@@ -917,6 +1001,16 @@ export class CadSketchEditorComponent implements OnDestroy {
    * 'inconsistent' when the most recent commit() couldn't satisfy all
    * constraints (over-constrained or contradictory). */
   solveStatus = signal<'ok' | 'inconsistent'>('ok');
+  /** REQ 860: constraint ids named by the last failed solve (PlaneGCS
+   * conflicting-constraint diagnostics). Empty while the solve is ok or
+   * when the solver couldn't name specific constraints. */
+  conflictingConstraints = signal<Set<string>>(new Set());
+  /** Record a solve outcome: status + DOF + conflicting-constraint ids. */
+  private _recordSolve(r: { status: 'ok' | 'inconsistent'; dof: number; conflicting?: string[] }): void {
+    this.solveStatus.set(r.status);
+    this.solverDof.set(r.dof);
+    this.conflictingConstraints.set(new Set(r.status === 'inconsistent' ? (r.conflicting ?? []) : []));
+  }
   /** 'under' = remaining DOF, 'fixed' = sketch is fully constrained,
    * 'over' = solver reported inconsistency. The renderer swaps the sketch
    * stroke color based on this (blue / green / red). */
@@ -1169,8 +1263,7 @@ export class CadSketchEditorComponent implements OnDestroy {
         const gen = this.latestCommitId;  // a real commit during the probe supersedes us
         solveSketch(st, { externalEdges: edges }).then(r => {
           if (this.latestCommitId !== gen) return;
-          this.solveStatus.set(r.status);
-          this.solverDof.set(r.dof);
+          this._recordSolve(r);
         });
       });
     });
@@ -1775,8 +1868,8 @@ export class CadSketchEditorComponent implements OnDestroy {
     // PICK existing geometry must use the RAW cursor (rx, ry) — rounding the
     // pick point makes entities at non-integer coords (e.g. a line at y=13.5)
     // unselectable, because every rounded click lands ≥0.5 units off them.
-    const x = Math.round(p.x);
-    const y = Math.round(p.y);
+    const x = this._snap(p.x);
+    const y = this._snap(p.y);
     const rx = p.x, ry = p.y;
     // Raw (un-rounded) click position for H/V alignment detection. The hint
     // preview tests alignment against the raw cursor; `_snapClickToPoint`
@@ -1864,6 +1957,14 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (p.tolerance !== undefined) this.lastPickTolerance = p.tolerance;
     if (p.pointTolerance !== undefined) this.lastPointPickTolerance = p.pointTolerance;
     const picked = pickEntity(this.state(), p, this.lastPickTolerance, this.lastPointPickTolerance);
+    // REQ 865 (rim-drag resize ON): a circle/arc pick is by analytic boundary
+    // distance, i.e. a RIM grab — arm a radius drag instead of a translate.
+    // Moving the curve still works by dragging its center point.
+    if (this.rimDragResize() && picked && (picked.kind === 'circle' || picked.kind === 'arc')
+      && !isProjectedEntity(this.state(), picked.id)) {
+      this.radiusDrag.set({ entityId: picked.id, isDragging: false, start: p });
+      return;
+    }
     const pointIds = picked ? pointsControlledBy(picked) : [];
     if (pointIds.length === 0) {
       // Empty space (or unpickable kind) → rubber-band selection.
@@ -1988,6 +2089,22 @@ export class CadSketchEditorComponent implements OnDestroy {
     this._updateDebugPick(p);
     this._updateHoverEntity(p);
     this._armHoveredRef(p);
+    // REQ 865 — rim-resize gesture: radius follows |cursor − center| live.
+    const rdrag = this.radiusDrag();
+    if (rdrag) {
+      const e0 = findEntity(this.state(), rdrag.entityId);
+      const center = e0 && (e0.kind === 'circle' || e0.kind === 'arc')
+        ? findPoint(this.state(), e0.centerId) : null;
+      if (!e0 || !center) { this.radiusDrag.set(null); return; }
+      if (!rdrag.isDragging) {
+        if (Math.hypot(p.x - rdrag.start.x, p.y - rdrag.start.y) < 1) return;
+        this.radiusDrag.set({ ...rdrag, isDragging: true });
+        this.didDrag = true;
+      }
+      const newR = Math.max(0.01, Math.hypot(p.x - center.x, p.y - center.y));
+      this.sketchChanged.emit(this._withRadius(this.state(), e0.id, newR));
+      return;
+    }
     const drag = this.dragState();
     if (drag) {
       const dx = p.x - drag.startCursor.x;
@@ -2023,6 +2140,22 @@ export class CadSketchEditorComponent implements OnDestroy {
   }
 
   handleSketchPointerUp(p: { x: number; y: number }) {
+    // REQ 865 — commit a rim resize: snap the final radius to the grid (when
+    // grid snap is on) and run the full solve so constraints re-satisfy.
+    const rdrag = this.radiusDrag();
+    if (rdrag) {
+      this.radiusDrag.set(null);
+      if (!rdrag.isDragging) return;  // press-release → click falls through next frame
+      this.didDrag = true;
+      const e0 = findEntity(this.state(), rdrag.entityId);
+      const center = e0 && (e0.kind === 'circle' || e0.kind === 'arc')
+        ? findPoint(this.state(), e0.centerId) : null;
+      if (!e0 || !center) return;
+      const raw = Math.hypot(p.x - center.x, p.y - center.y);
+      const newR = Math.max(this.gridSnap() ? 1 : 0.01, this._snap(raw));
+      void this.commit(this._withRadius(this.state(), e0.id, newR));
+      return;
+    }
     const drag = this.dragState();
     if (drag) {
       this.dragState.set(null);
@@ -2049,7 +2182,7 @@ export class CadSketchEditorComponent implements OnDestroy {
           // Round to the integer grid, then clamp any H/V-locked axis back to
           // its reference coordinate so a point tied to a fixed anchor commits
           // ON its constraint rather than off it.
-          const q = this._slideToConstraints(next, id, Math.round(origX + dx), Math.round(origY + dy));
+          const q = this._slideToConstraints(next, id, this._snap(origX + dx), this._snap(origY + dy));
           next = movePoint(next, id, q.x, q.y);
         }
       }
@@ -2117,10 +2250,11 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (result.status === 'ok' && !this._solveCollapsed(state, result.state)) this.sketchChanged.emit(result.state);
   }
 
-  /** Apply a rubber-band rectangle as a selection. Standard "fully enclosed"
-   * rule: a point counts if it sits inside the rect; a line/circle/arc
-   * counts if every controlling point sits inside (so partial overlaps
-   * don't sweep things in). */
+  /** Apply a rubber-band rectangle as a selection (REQ 863, SW convention):
+   *  - left→right (window): only entities FULLY ENCLOSED by the rect — a
+   *    point inside it, a curve whose every controlling point is inside.
+   *  - right→left (crossing): additionally, anything the rect TOUCHES —
+   *    a segment crossing the rect edge counts even with endpoints outside. */
   private applyRubberBandSelection(rb: { start: { x: number; y: number }; current: { x: number; y: number } }) {
     const minX = Math.min(rb.start.x, rb.current.x);
     const maxX = Math.max(rb.start.x, rb.current.x);
@@ -2129,6 +2263,8 @@ export class CadSketchEditorComponent implements OnDestroy {
     // Below-threshold rect → treat as a plain click (selection stays empty).
     if ((maxX - minX) < 1 && (maxY - minY) < 1) return;
     this.didDrag = true;  // suppress the follow-up click event
+    const crossing = rb.current.x < rb.start.x;
+    const rect = { minX, minY, maxX, maxY };
     const inRect = (x: number, y: number) =>
       x >= minX && x <= maxX && y >= minY && y <= maxY;
     const state = this.state();
@@ -2136,6 +2272,10 @@ export class CadSketchEditorComponent implements OnDestroy {
     for (const e of state.entities) {
       const ids = pointsControlledBy(e);
       if (ids.length === 0) continue;
+      if (crossing) {
+        if (entityTouchesRect(state, e, rect)) next.add(e.id);
+        continue;
+      }
       const allInside = ids.every(id => {
         const pt = findPoint(state, id);
         return pt && inRect(pt.x, pt.y);
@@ -3552,8 +3692,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.sketchChanged.emit(next);
     const result = await solveSketch(next, { movablePoints, externalEdges: this._externalEdgeLines() });
     if (id !== this.latestCommitId) return;
-    this.solveStatus.set(result.status);
-    this.solverDof.set(result.dof);
+    this._recordSolve(result);
     if (result.status === 'ok') {
       this.sketchChanged.emit(result.state);
     } else {
@@ -3561,7 +3700,7 @@ export class CadSketchEditorComponent implements OnDestroy {
       // need pre-existing geometry to move (rare for chamfer).
       const fallback = await solveSketch(next, { externalEdges: this._externalEdgeLines() });
       if (id !== this.latestCommitId) return;
-      this.solveStatus.set(fallback.status);
+      this._recordSolve(fallback);
       this.solverDof.set(fallback.dof);
       if (fallback.status === 'ok') this.sketchChanged.emit(fallback.state);
     }
@@ -3616,10 +3755,9 @@ export class CadSketchEditorComponent implements OnDestroy {
       console.warn('Rotate: select entities first');
       return;
     }
-    const raw = window.prompt('Rotation angle (degrees, CCW positive):', '90');
-    if (raw === null) return;
-    const deg = parseFloat(raw);
-    if (!isFinite(deg)) { console.warn('Rotate: invalid angle'); return; }
+    // REQ 862: angle comes from the ribbon's contextual input, not a prompt.
+    const deg = this.rotateAngleDeg();
+    if (!isFinite(deg) || Math.abs(deg) < 1e-9) { console.warn('Rotate: invalid angle'); return; }
     const result = rotateEntities(
       this.state(), Array.from(this.selected()), { x, y }, deg * Math.PI / 180,
     );
@@ -3635,9 +3773,8 @@ export class CadSketchEditorComponent implements OnDestroy {
       console.warn('Scale: select entities first');
       return;
     }
-    const raw = window.prompt('Scale factor (e.g. 2 doubles size, 0.5 halves):', '2');
-    if (raw === null) return;
-    const f = parseFloat(raw);
+    // REQ 862: factor comes from the ribbon's contextual input, not a prompt.
+    const f = this.scaleFactor();
     if (!isFinite(f) || Math.abs(f) < 1e-9) { console.warn('Scale: invalid factor'); return; }
     const result = scaleEntities(this.state(), Array.from(this.selected()), { x, y }, f);
     if (result.error) { console.warn('Scale:', result.error); return; }
@@ -3721,9 +3858,8 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (!ref) { this.draftPatternRef.set({ x, y }); return; }
     const dx = x - ref.x, dy = y - ref.y;
     if (Math.hypot(dx, dy) < 1) { this.draftPatternRef.set(null); return; }
-    const raw = window.prompt('Number of instances (including original):', '3');
-    if (raw === null) { this.draftPatternRef.set(null); return; }
-    const n = parseInt(raw, 10);
+    // REQ 862: count comes from the ribbon's contextual input, not a prompt.
+    const n = Math.round(this.patternLinearCount());
     if (!isFinite(n) || n < 2) { console.warn('Linear pattern: count must be >= 2'); this.draftPatternRef.set(null); return; }
     const result = linearPatternEntities(this.state(), Array.from(this.selected()), dx, dy, n);
     if (result.error) { console.warn('Linear pattern:', result.error); this.draftPatternRef.set(null); return; }
@@ -3738,13 +3874,10 @@ export class CadSketchEditorComponent implements OnDestroy {
       console.warn('Circular pattern: select entities first');
       return;
     }
-    const rawN = window.prompt('Number of instances (including original):', '6');
-    if (rawN === null) return;
-    const n = parseInt(rawN, 10);
+    // REQ 862: count + sweep come from the ribbon's contextual inputs.
+    const n = Math.round(this.patternCircCount());
     if (!isFinite(n) || n < 2) { console.warn('Circular pattern: count must be >= 2'); return; }
-    const rawA = window.prompt('Total sweep angle (degrees, CCW positive). Use 360 for a full circle:', '360');
-    if (rawA === null) return;
-    const totalDeg = parseFloat(rawA);
+    const totalDeg = this.patternCircSweepDeg();
     if (!isFinite(totalDeg) || Math.abs(totalDeg) < 1) { console.warn('Circular pattern: invalid angle'); return; }
     const result = circularPatternEntities(
       this.state(), Array.from(this.selected()), { x, y }, totalDeg * Math.PI / 180, n,
@@ -3917,16 +4050,69 @@ export class CadSketchEditorComponent implements OnDestroy {
     const resolved = resolveSmartDim(this.state(), sel, placement);
     if (!resolved) return;
     const { type, targets, value, angleRays } = resolved;
-    // If every entity this dimension references is ALREADY fully constrained,
-    // the dimension is redundant — add it as a DRIVEN (reference) dimension
-    // instead of over-constraining the sketch (SolidWorks/Onshape behaviour).
+    // REQ 861: if every entity this dimension references is ALREADY fully
+    // constrained, the dimension is redundant — ask the user (driven vs
+    // cancel) instead of silently converting to a reference dim.
     const driven = this._dimensionWouldBeRedundant(targets);
+    if (driven) {
+      const ok = window.confirm(
+        'This dimension would over-define the sketch — its geometry is already fully constrained.\n\n'
+        + 'Add it as a DRIVEN (reference) dimension instead?');
+      if (!ok) { this.selected.set(new Set()); return; }
+    }
     const { state: next, constraint } = addConstraint(
       this.state(), type, targets, value, placement, driven, undefined, angleRays,
     );
     this.commitAfterAdd(next, constraint.id);
     this.selected.set(new Set());
     this.dimensionCreated.emit(constraint.id);
+  }
+
+  /** REQ 865: replace an entity's radius, keeping arc endpoints ON the new
+   * radius (scaled radially about the center — the arc invariant
+   * |center→start| == |center→end| == radius must hold). */
+  private _withRadius(state: SketchState, entityId: string, radius: number): SketchState {
+    const e = findEntity(state, entityId);
+    if (!e || (e.kind !== 'circle' && e.kind !== 'arc')) return state;
+    let s: SketchState = {
+      ...state,
+      entities: state.entities.map(en => en.id === entityId ? ({ ...en, radius } as SketchEntity) : en),
+    };
+    if (e.kind === 'arc') {
+      const c = findPoint(s, e.centerId);
+      if (c) {
+        for (const pid of [e.startId, e.endId]) {
+          const pt = findPoint(s, pid);
+          if (!pt) continue;
+          const d = Math.hypot(pt.x - c.x, pt.y - c.y) || 1;
+          s = movePoint(s, pid, c.x + (pt.x - c.x) * radius / d, c.y + (pt.y - c.y) * radius / d);
+        }
+      }
+    }
+    return s;
+  }
+
+  /** REQ 855: flip a dimension between driven (reference) and driving.
+   * Driving → driven always succeeds (loosening). Driven → driving is
+   * pre-flighted through the solver: if the re-driven system is
+   * inconsistent (or collapses), the toggle is REJECTED with the state
+   * untouched so a reference dim can never over-define the sketch. */
+  async toggleConstraintDriven(constraintId: string): Promise<'ok' | 'over-defined' | 'not-found'> {
+    const c = this.state().constraints.find(cc => cc.id === constraintId);
+    if (!c) return 'not-found';
+    const nextDriven = c.driven !== true;
+    const candidate = setConstraintDriven(this.state(), constraintId, nextDriven);
+    if (nextDriven) {
+      void this.commit(candidate);
+      return 'ok';
+    }
+    const result = await solveSketch(candidate, { externalEdges: this._externalEdgeLines() });
+    if (result.status !== 'ok' || this._solveCollapsed(candidate, result.state)) {
+      return 'over-defined';
+    }
+    this._recordSolve(result);
+    this.sketchChanged.emit(result.state);
+    return 'ok';
   }
 
   /** Commit-and-solve variant for the case where a NEW constraint was just
@@ -3944,11 +4130,10 @@ export class CadSketchEditorComponent implements OnDestroy {
     const result = await solveSketch(state, { externalEdges: this._externalEdgeLines() });
     if (id !== this.latestCommitId) return;
     const collapsed = this._solveCollapsed(state, result.state);
-    this.solveStatus.set(result.status);
+    this._recordSolve(result);
     if (result.status === 'ok' && !collapsed) {
       this.sketchChanged.emit(result.state);
     }
-    this.solverDof.set(result.dof);
   }
 
   /** True when `after` flattened a non-construction line that had real length
@@ -4114,29 +4299,103 @@ export class CadSketchEditorComponent implements OnDestroy {
     }
     let value: number | undefined;
     if (spec.implicitValue !== undefined) {
-      // Skip the prompt entirely — the spec hard-codes the value (e.g.,
+      // Skip value entry entirely — the spec hard-codes the value (e.g.,
       // Equal X / Equal Y use horizontal/vertical-distance with value 0).
       value = spec.implicitValue;
     } else if (spec.requiresValue) {
-      // Angle is the only constraint that's user-facing in degrees but solver-
-      // facing in radians; convert here so the constraint payload is in the
-      // unit the solver expects.
-      const isAngle = spec.type === 'angle';
-      const promptDefault = isAngle ? '45' : '10';
-      const promptLabel = isAngle ? `${spec.label} (degrees):` : `Enter value for ${spec.label}:`;
-      const raw = window.prompt(promptLabel, promptDefault);
-      if (raw === null) return;
-      const parsed = parseFloat(raw);
-      if (!isFinite(parsed)) return;
-      value = isAngle ? parsed * Math.PI / 180 : parsed;
+      // REQ 862: seed the dimension with the MEASURED value from the current
+      // geometry (no blocking window.prompt); the inline dimension editor
+      // opens on it below so the user can immediately type the target value.
+      value = this._measuredValueFor(spec.type, entities)
+        ?? (spec.type === 'angle' ? Math.PI / 4 : 10);
     }
     const ordered = orderTargetsForConstraint(spec.type, entities);
-    // A value-bearing dimension whose entities are all already fully constrained
-    // is redundant → add it DRIVEN (reference) rather than over-constraining.
-    const driven = !!spec.requiresValue && this._dimensionWouldBeRedundant(ordered);
-    const { state: next, constraint } = addConstraint(this.state(), spec.type, ordered, value, undefined, driven);
+    // REQ 861: a value-bearing dimension whose entities are all already fully
+    // constrained is redundant. Ask (driven vs cancel) instead of silently
+    // converting — the user may not have wanted a reference dim at all.
+    const redundant = !!spec.requiresValue && this._dimensionWouldBeRedundant(ordered);
+    if (redundant) {
+      const ok = window.confirm(
+        'This dimension would over-define the sketch — its geometry is already fully constrained.\n\n'
+        + 'Add it as a DRIVEN (reference) dimension instead?');
+      if (!ok) { this.selected.set(new Set()); return; }
+    }
+    const { state: next, constraint } = addConstraint(this.state(), spec.type, ordered, value, undefined, redundant);
     this.commitAfterAdd(next, constraint.id);
     this.selected.set(new Set());
+    // Open the inline value editor for driving dims (matches the smart-dim
+    // flow) — driven reference dims just display, no edit prompt.
+    if (spec.requiresValue && spec.implicitValue === undefined && !redundant) {
+      this.dimensionCreated.emit(constraint.id);
+    }
+  }
+
+  /** REQ 862: the as-drawn value a new dimension would measure — seeds the
+   * inline editor so toolbar dims start at the current geometry instead of a
+   * hardcoded default. Null when the selection shape is unexpected. */
+  private _measuredValueFor(type: ConstraintSpec['type'], entities: SketchEntity[]): number | null {
+    const st = this.state();
+    const pt = (id: string) => findPoint(st, id);
+    const lineDir = (l: SketchEntity): { x: number; y: number } | null => {
+      if (l.kind !== 'line') return null;
+      const a = pt(l.startId), b = pt(l.endId);
+      return a && b ? { x: b.x - a.x, y: b.y - a.y } : null;
+    };
+    switch (type) {
+      case 'radius':
+        return entities[0]?.kind === 'circle' || entities[0]?.kind === 'arc' ? entities[0].radius : null;
+      case 'diameter':
+        return entities[0]?.kind === 'circle' || entities[0]?.kind === 'arc' ? entities[0].radius * 2 : null;
+      case 'angle': {
+        const d1 = entities[0] ? lineDir(entities[0]) : null;
+        const d2 = entities[1] ? lineDir(entities[1]) : null;
+        if (!d1 || !d2) return null;
+        const dot = d1.x * d2.x + d1.y * d2.y;
+        const cross = d1.x * d2.y - d1.y * d2.x;
+        return Math.abs(Math.atan2(cross, dot));
+      }
+      case 'distance': {
+        const [a, b] = entities;
+        if (a?.kind === 'point' && b?.kind === 'point') return Math.hypot(b.x - a.x, b.y - a.y);
+        return null;
+      }
+      case 'horizontal-distance': {
+        const [a, b] = entities;
+        return a?.kind === 'point' && b?.kind === 'point' ? Math.abs(b.x - a.x) : null;
+      }
+      case 'vertical-distance': {
+        const [a, b] = entities;
+        return a?.kind === 'point' && b?.kind === 'point' ? Math.abs(b.y - a.y) : null;
+      }
+      case 'point-line-distance': {
+        const p = entities.find((e): e is PointEntity => e.kind === 'point');
+        const l = entities.find(e => e.kind === 'line');
+        const d = l ? lineDir(l) : null;
+        const a = l && l.kind === 'line' ? pt(l.startId) : null;
+        if (!p || !d || !a) return null;
+        const len = Math.hypot(d.x, d.y) || 1;
+        return Math.abs(((p.x - a.x) * d.y - (p.y - a.y) * d.x) / len);
+      }
+      case 'arc-length': {
+        const e = entities[0];
+        if (e?.kind !== 'arc') return null;
+        const c = pt(e.centerId), s0 = pt(e.startId), s1 = pt(e.endId);
+        if (!c || !s0 || !s1) return null;
+        const a0 = Math.atan2(s0.y - c.y, s0.x - c.x);
+        const a1 = Math.atan2(s1.y - c.y, s1.x - c.x);
+        let sweep = e.ccw ? a1 - a0 : a0 - a1;
+        while (sweep <= 0) sweep += 2 * Math.PI;
+        return e.radius * sweep;
+      }
+      case 'chord-distance': {
+        const e = entities[0];
+        if (e?.kind !== 'arc') return null;
+        const s0 = pt(e.startId), s1 = pt(e.endId);
+        return s0 && s1 ? Math.hypot(s1.x - s0.x, s1.y - s0.y) : null;
+      }
+      default:
+        return null;
+    }
   }
 
   /** True when every entity a new dimension would reference is ALREADY fully
@@ -4303,14 +4562,9 @@ export class CadSketchEditorComponent implements OnDestroy {
     const len = Math.hypot(dx, dy) || 1;
     const measured = Math.abs(((pt.x - a.x) * dy - (pt.y - a.y) * dx) / len);
     const driven = this.determinedEntities().has(entities[0].id);
-    let value = measured;
-    if (!driven) {
-      const raw = window.prompt('Enter value for Point-line distance:', measured.toFixed(3));
-      if (raw === null) return true;            // cancelled — handled, don't fall through
-      const parsed = parseFloat(raw);
-      if (!isFinite(parsed)) return true;
-      value = parsed;
-    }
+    // REQ 862: seed with the measured value — the dimensionCreated emit below
+    // opens the inline editor so the user types the target value in place.
+    const value = measured;
     const { state: next, constraint } = addConstraint(
       this.state(), 'point-line-distance', [entities[0].id], value, undefined, driven, ref,
     );
@@ -4429,13 +4683,8 @@ export class CadSketchEditorComponent implements OnDestroy {
   private handlePolygonClick(x: number, y: number) {
     const center = this.draftPolygonCenter();
     if (!center) {
-      // Prompt for N at the start of each polygon gesture so the user can
-      // change side count without leaving the tool. Default to last value used.
-      const raw = window.prompt('Number of sides:', String(this.polygonSides()));
-      if (raw === null) { this.tool.set('select'); return; }
-      const n = parseInt(raw, 10);
-      if (!isFinite(n) || n < 3) return;
-      this.polygonSides.set(n);
+      // REQ 862: side count comes from the ribbon's contextual input (shown
+      // while the polygon tool is active) — the first click places the center.
       this.draftPolygonCenter.set({ x, y });
       return;
     }
@@ -4759,7 +5008,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-312');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-316');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);
@@ -4966,8 +5215,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.sketchChanged.emit(next);
     const result = await solveSketch(next, { externalEdges: this._externalEdgeLines() });
     if (id !== this.latestCommitId) return;
-    this.solveStatus.set(result.status);
-    this.solverDof.set(result.dof);
+    this._recordSolve(result);
     const collapsedC = this._solveCollapsed(next, result.state);
     if (result.status === 'ok' && !collapsedC) {
       this.sketchChanged.emit(result.state);

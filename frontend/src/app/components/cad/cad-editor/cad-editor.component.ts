@@ -35,17 +35,18 @@ import { extrudePreview, revolvePreview, sweepPreview } from '../../../cad/lib/p
 import { propagateTangentEdges } from '../../../cad/lib/tangentPropagation';
 import { CadSelectionListComponent, SelectionRow } from '../cad-selection-list/cad-selection-list.component';
 import { computeMeasure, fitCircle, MeasureItem } from '../../../cad/lib/measure';
-import type { FeatureTree, SketchDocument, SketchId, ModelGeometry, ModelTopology, SketchState, ExtrudeFeature, ExtrudeEndCondition, LineEntity, CircleEntity, PointEntity, ChamferFeature, DatumPlaneFeature, PlaneRef, VertexRef, EdgeRef3D, Plane3, ReferenceCandidate } from '../../../cad/lib/types';
+import type { FeatureTree, Feature, OriginFeature, SketchDocument, SketchId, ModelGeometry, ModelTopology, SketchState, ExtrudeFeature, ExtrudeEndCondition, LineEntity, CircleEntity, PointEntity, ChamferFeature, DatumPlaneFeature, PlaneRef, VertexRef, EdgeRef3D, Plane3, ReferenceCandidate } from '../../../cad/lib/types';
 import {
   emptyFeatureTree, addFeature, defaultDatumVisibility,
   removeFeature, updateFeatureParam, removeFeaturesReferencingSketch,
+  featureReferencesSketch, setBodyVisibility, setBodyName, setRollbackIndex,
 } from '../../../cad/lib/featureTree';
 import { newFeatureId } from '../../../cad/lib/ids';
 import { emptyDocument, createSketch, updateSketchState, deleteSketch, setSketchVisibility, setSketchName, projectTopologyToCandidates } from '../../../cad/lib/document';
 import { sizeOptions as holeSizeOptionsFor, defaultSizeFor as holeDefaultSizeFor, holeSpec, type HoleStandard, type HoleSizeKey } from '../../../cad/lib/holeSpecs';
 import { removeConstraint, setConstraintValue, addPoint, addLine, addCircle, addCircleByPoint, addArc, addArcByPoints, updateTextEntity, updatePictureEntity, updateEquationCurveEntity, rotateTextBox, ORIGIN_POINT_ID } from '../../../cad/lib/store';
 import { solveSketch } from '../../../cad/lib/solver';
-import { parseUserValue, type Unit } from '../../../cad/lib/units';
+import { parseUserValue, formatNumber, type Unit } from '../../../cad/lib/units';
 import { migrateSketchDocument, migrateFeatureTree } from '../../../cad/lib/migration';
 import { friendlyError } from '../../../cad/lib/errorMessages';
 import { planeForDatum, buildOriginDatums, computeDatumPlane, computeDatumAxis, computeDatumPoint, resolvePlaneRef } from '../../../cad/lib/datum';
@@ -88,6 +89,9 @@ type EditorMode =
 interface HistorySnapshot {
   featureTree: FeatureTree;
   doc: SketchDocument;
+  /** REQ 859: equations restore with the tree/doc so equation-driven dims
+   * never desynchronize from a reverted feature tree. */
+  equations: EquationDoc;
 }
 
 // Fed to the viewer when the kernel is offline so it clears all meshes (an
@@ -137,7 +141,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   [class.active]="activeTab() === 'assembly'"
                   (click)="setActiveTab('assembly')">Assembly</button>
           <button class="tab" data-testid="tab-visualize"
-                  *ngIf="assemblyMode()"
                   [class.active]="activeTab() === 'visualize'"
                   (click)="setActiveTab('visualize')">Visualize</button>
           <button class="tab" data-testid="tab-analyze"
@@ -604,9 +607,36 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <button class="ribbon-button" [class.active]="asm.sectionEnabled()" (click)="asm.sectionEnabled.set(!asm.sectionEnabled())" matTooltip="Section view">
                   <mat-icon>content_cut</mat-icon><span class="ribbon-label">Section</span>
                 </button>
+                <button class="ribbon-button" data-testid="asm-explode" [class.active]="asm.explodeEnabled()" [disabled]="asm.explodeBusy()" (click)="asm.toggleExplode()" matTooltip="Exploded view — components spread radially from the assembly center">
+                  <mat-icon>open_with</mat-icon><span class="ribbon-label">Explode</span>
+                </button>
                 <button class="ribbon-button" (click)="asm.saveDisplayState()" matTooltip="Save current visibility as a display state">
                   <mat-icon>bookmark_add</mat-icon><span class="ribbon-label">Save view</span>
                 </button>
+              </div>
+              <div class="ribbon-group-label">Visualize</div>
+            </div>
+          </div>
+
+          <!-- Visualize ribbon (part) — REQ 869: section view for single parts. -->
+          <div class="ribbon-pane" [hidden]="activeTab() !== 'visualize'" *ngIf="!assemblyMode()">
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="part-section-toggle"
+                        [class.active]="partSectionEnabled()"
+                        (click)="partSectionEnabled.set(!partSectionEnabled())"
+                        matTooltip="Section view — clip the displayed geometry against a plane (render-only)">
+                  <mat-icon>content_cut</mat-icon><span class="ribbon-label">Section</span>
+                </button>
+                @if (partSectionEnabled()) {
+                  <label class="tool-param">Plane
+                    <select class="asm-input" [ngModel]="partSectionAxis()" (ngModelChange)="partSectionAxis.set($event)">
+                      <option value="X">X</option><option value="Y">Y</option><option value="Z">Z</option>
+                    </select></label>
+                  <label class="tool-param">Pos
+                    <input type="range" min="-100" max="100" step="1" [value]="partSectionPos()"
+                           (input)="partSectionPos.set(+$any($event.target).value)" /></label>
+                }
               </div>
               <div class="ribbon-group-label">Visualize</div>
             </div>
@@ -733,6 +763,14 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               </div>
             }
 
+            <!-- REQ 764 — exploded-view factor: 0 = assembled … 1 = fully exploded. -->
+            @if (asm.explodeEnabled()) {
+              <div class="asm-section" data-testid="asm-explode-controls">
+                <div class="asm-head">Explode</div>
+                <label class="asm-field">Factor<input type="range" min="0" max="1" step="0.01" [value]="asm.explodeFactor()" (input)="asm.explodeFactor.set(+$any($event.target).value)" /></label>
+              </div>
+            }
+
             <!-- Analysis results -->
             @if (asm.interferencePairs(); as pairs) {
               <div class="asm-head">Interference</div>
@@ -764,7 +802,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           [selectedSketches]="selectedSketches()"
           [selectedDatums]="selectedDatums()"
           [danglingSketchIds]="missingHostSketchIds()"
-          [bodyList]="bodies()"
+          [bodyList]="bodiesForTree()"
           [hiddenBodyIds]="hiddenBodies()"
           [rollbackBeforeIndex]="rollbackBeforeIndex()"
           [rollbackBeforeCreatedAt]="rollbackBeforeCreatedAt()"
@@ -783,6 +821,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           (datumSelect)="onTreeDatumSelect($event)"
           (bodyVisibilityToggled)="toggleBodyVisibility($event)"
           (bodyIsolated)="onIsolateBody($event)"
+          (bodyRenamed)="onRenameBody($event)"
           (bodyDeleted)="onDeleteBody($event)"
           class="feature-tree"
           [class.collapsed]="sidebarCollapsed()"
@@ -839,6 +878,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             [constraints]="activeSketchConstraints()"
             [entities]="activeSketchEntities()"
             [defaultUnit]="defaultUnit()"
+            [conflictIds]="sketchConflictConstraintIds()"
             [selectedId]="selectedConstraintId()"
             [selectedEntityIds]="sketchEditor.selected()"
             (remove)="onRemoveConstraint(sid, $event)"
@@ -3555,9 +3595,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [normalToPlane]="normalToPlane()"
               [selectedFeatures]="viewerSelectedFeatures()"
               [selectedDatums]="selectedDatums()"
-              [sectionPlane]="assemblyMode() ? asm.sectionPlane() : null"
+              [sectionPlane]="assemblyMode() ? asm.sectionPlane() : partSectionPlane()"
               [pickedFaceIds]="assemblyMode() ? asm.pickedFaceIds() : pickedFaceIdsForViewer()"
-              [assemblyDrag]="assemblyMode()"
+              [assemblyDrag]="assemblyMode() && !asm.explodeEnabled()"
               [draggableInstanceIds]="asm.draggableInstanceIds()"
               [pickedEdgeIds]="pickedEdgeIdsForViewer()"
               [pickedVertexIds]="pickedVertexIdsForViewer()"
@@ -3576,6 +3616,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [mirrorAxisId]="sketchEditor.mirrorAxisId()"
               [activeSketchDof]="activeSketchDof()"
               [determinedEntities]="determinedEntities()"
+              [conflictEntityIds]="sketchConflictEntityIds()"
               [editingDimensionId]="editingDimensionId()"
               [drivenDimensions]="drivenSketchDimensions()"
               [selectedConstraintId]="selectedConstraintId()"
@@ -3584,6 +3625,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               (saveDefaultView)="onSaveDefaultView($event)"
               [smartDimPreview]="smartDimPreview()"
               [displayMode]="displayMode()"
+              [invertZoom]="invertZoom()"
               [profileFills]="profileFills()"
               [holePreviews]="holePreviews()"
               [cosmeticThreads]="cosmeticThreads()"
@@ -3618,6 +3660,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               (crossPartVertexPicked)="onCrossPartVertexPicked($event)"
               (selectionChange)="onSelectionChange($event)"
               (featureClick)="onViewerFeatureClick($event)"
+              (boxSelect)="onViewerBoxSelect($event)"
               (instanceDragEnd)="asm.dragMoveInstance($event.instanceId, $event.delta)"
               (featureContextMenu)="onViewerFeatureContextMenu($event)"
               (sketchClick)="onViewerSketchClick($event)"
@@ -3630,6 +3673,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               (dimensionCanceled)="onDimensionCanceled()"
               (dimensionDragged)="onDimensionDragged($event)"
               (dimensionDeleteRequested)="onDimensionDeleteRequested($event)"
+              (dimensionContextMenu)="onDimensionContextMenu($event)"
               (dimensionDoubleClicked)="onDimensionDoubleClicked($event)"
               (constraintIconClicked)="onConstraintIconClicked($event)">
             </app-cad-viewer>
@@ -3647,10 +3691,61 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <button mat-menu-item data-testid="viewer-ctx-rename" (click)="onTreeAction({ action: 'rename-feature', featureId: fid })">
                   <mat-icon>drive_file_rename_outline</mat-icon> Rename
                 </button>
-                <button mat-menu-item data-testid="viewer-ctx-visibility" (click)="onTreeAction({ action: 'toggle-feature-visibility', featureId: fid })">
-                  <mat-icon>visibility_off</mat-icon> Toggle visibility
+                <!-- REQ 610/840: Suppress replaces Hide — hiding a solid
+                     feature was regen-affecting and misread as render-only. -->
+                <button mat-menu-item data-testid="viewer-ctx-suppress" (click)="onTreeAction({ action: 'toggle-feature-suppression', featureId: fid })">
+                  <mat-icon>block</mat-icon> Suppress / Unsuppress
                 </button>
                 <button mat-menu-item data-testid="viewer-ctx-delete" (click)="onTreeAction({ action: 'delete-feature', featureId: fid })">
+                  <mat-icon>delete</mat-icon> Delete
+                </button>
+              </ng-container>
+            </mat-menu>
+
+            <!-- REQ 872 — empty-space viewport menu: view actions at the cursor. -->
+            <div class="ctx-anchor" #viewCtxAnchor
+                 [style.left.px]="viewCtxMenuX()"
+                 [style.top.px]="viewCtxMenuY()"
+                 [matMenuTriggerFor]="viewCtxMenu"></div>
+            <mat-menu #viewCtxMenu="matMenu">
+              <button mat-menu-item data-testid="view-ctx-fit" (click)="viewerZoomToFit()">
+                <mat-icon>fit_screen</mat-icon> Zoom to fit
+              </button>
+              <button mat-menu-item data-testid="view-ctx-normal-to" (click)="viewerNormalTo()">
+                <mat-icon>crop_free</mat-icon> Normal to
+              </button>
+              <button mat-menu-item [matMenuTriggerFor]="displayModeMenu">
+                <mat-icon>visibility</mat-icon> Display mode
+              </button>
+              <button mat-menu-item data-testid="view-ctx-invert-zoom" (click)="toggleInvertZoom()">
+                <mat-icon>{{ invertZoom() ? 'check_box' : 'check_box_outline_blank' }}</mat-icon>
+                Invert zoom
+              </button>
+            </mat-menu>
+            <mat-menu #displayModeMenu="matMenu">
+              <button *ngFor="let m of displayModes" mat-menu-item
+                      [attr.data-testid]="'display-mode-' + m.mode"
+                      (click)="displayMode.set(m.mode)">
+                <mat-icon>{{ displayMode() === m.mode ? 'radio_button_checked' : 'radio_button_unchecked' }}</mat-icon>
+                {{ m.label }}
+              </button>
+            </mat-menu>
+
+            <!-- REQ 855 — dimension context menu, anchored at the cursor.
+                 Right-click on a dim label opens this instead of deleting. -->
+            <div class="ctx-anchor" #dimCtxAnchor
+                 [style.left.px]="dimCtxMenuX()"
+                 [style.top.px]="dimCtxMenuY()"
+                 [matMenuTriggerFor]="dimCtxMenu"></div>
+            <mat-menu #dimCtxMenu="matMenu">
+              <ng-container *ngIf="dimCtxConstraintId() as cid">
+                <button mat-menu-item data-testid="dim-ctx-edit" (click)="onDimensionDoubleClicked(cid)">
+                  <mat-icon>edit</mat-icon> Edit value
+                </button>
+                <button mat-menu-item data-testid="dim-ctx-driven" (click)="onToggleDimensionDriven()">
+                  <mat-icon>straighten</mat-icon> {{ dimCtxIsDriven() ? 'Make driving' : 'Make driven' }}
+                </button>
+                <button mat-menu-item data-testid="dim-ctx-delete" (click)="onDimensionDeleteRequested(cid)">
                   <mat-icon>delete</mat-icon> Delete
                 </button>
               </ng-container>
@@ -3955,6 +4050,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     @keyframes kernel-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
     .tool-action.active { background: rgba(66, 165, 245, 0.22); border-color: #42a5f5; }
     .ctx-anchor { position: fixed; width: 0; height: 0; }
+    /* REQ 869/862 — inline ribbon parameter controls. */
+    .tool-param { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; align-self: center; padding: 0 6px; white-space: nowrap; color: #ccc; }
+    .tool-param select, .tool-param input[type="range"] { width: auto; margin: 0; }
     .display-mode-field { width: 220px; font-size: 12px; }
     .display-mode-field .mat-mdc-form-field-subscript-wrapper { display: none; }
     .unit-field { width: 80px; font-size: 12px; }
@@ -4563,6 +4661,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // transient — a hidden body's faces are excluded from the rendered
   // geometry but the body itself stays in the roster.
   bodies = signal<Array<{ id: string; name: string | null; volume?: number }>>([]);
+  /** REQ 857: body roster with user-assigned names overlaid from the
+   * featureTree's bodyNames map (backend always emits name: null). */
+  bodiesForTree = computed(() => {
+    const names = this.featureTree().bodyNames ?? {};
+    return this.bodies().map(b => names[b.id] ? { ...b, name: names[b.id] } : b);
+  });
   hiddenBodies = signal<Set<string>>(new Set());
   /** Per-body { faces, topology } populated as regen events arrive.
    * geometry() is derived by merging visible bodies' contents. */
@@ -4933,6 +5037,40 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   activeTab = signal<'file' | 'features' | 'sketch' | 'assembly' | 'visualize' | 'analyze'>('features');
   // REQ 619 — display mode for the 3D viewer (session state, not persisted).
   displayMode = signal<DisplayMode>('visible-edges');
+  /** REQ 872 — display modes exposed in the viewport context menu. */
+  readonly displayModes: Array<{ mode: DisplayMode; label: string }> = [
+    { mode: 'visible-edges', label: 'Shaded with edges' },
+    { mode: 'all-edges', label: 'Shaded, all edges' },
+    { mode: 'hidden-dashed', label: 'Shaded, hidden edges dashed' },
+    { mode: 'wireframe', label: 'Wireframe' },
+    { mode: 'wireframe-no-hidden', label: 'Wireframe, hidden removed' },
+    { mode: 'wireframe-hidden-dashed', label: 'Wireframe, hidden dashed' },
+  ];
+  // REQ 869 — part-mode section view (render-only clipping; mirrors the
+  // assembly controller's section signals).
+  partSectionEnabled = signal(false);
+  partSectionAxis = signal<'X' | 'Y' | 'Z'>('X');
+  partSectionPos = signal(0);
+  partSectionPlane = computed<{ normal: [number, number, number]; point: [number, number, number] } | null>(() => {
+    if (!this.partSectionEnabled()) return null;
+    const ax = this.partSectionAxis();
+    const normal: [number, number, number] = ax === 'X' ? [1, 0, 0] : ax === 'Y' ? [0, 1, 0] : [0, 0, 1];
+    const p = this.partSectionPos();
+    return { normal, point: [normal[0] * p, normal[1] * p, normal[2] * p] };
+  });
+  /** REQ 873 — per-user wheel-direction preference (localStorage). */
+  invertZoom = signal<boolean>(typeof localStorage !== 'undefined' && localStorage.getItem('cadInvertZoom') === 'on');
+  toggleInvertZoom() {
+    const next = !this.invertZoom();
+    this.invertZoom.set(next);
+    try { localStorage.setItem('cadInvertZoom', next ? 'on' : 'off'); } catch { /* private mode */ }
+  }
+  // REQ 872 — empty-space viewport context menu (view actions).
+  viewCtxMenuX = signal(0);
+  viewCtxMenuY = signal(0);
+  @ViewChild('viewCtxAnchor', { read: MatMenuTrigger }) private viewCtxMenuTrigger?: MatMenuTrigger;
+  viewerZoomToFit() { this.viewerRef()?.zoomToFit(); }
+  viewerNormalTo() { this.viewerRef()?.onNormalToClick(); }
   // REQ 623 — feature multi-select. Updated by viewer's featureClick event.
   selectedFeatures = signal<Set<string>>(new Set());
   /** What the viewer highlights via its feature-selection coloring. In part
@@ -6062,6 +6200,24 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const editor = this.sketchEditorRef();
     return editor?.dofState() ?? 'under';
   });
+  /** REQ 860: constraint ids the solver named as conflicting on the last
+   * failed solve, mirrored from the sketch editor. */
+  sketchConflictConstraintIds = computed<Set<string>>(() =>
+    this.sketchEditorRef()?.conflictingConstraints() ?? new Set<string>());
+  /** REQ 860: the entity ids those conflicting constraints target — what the
+   * viewer paints red instead of the whole sketch. */
+  sketchConflictEntityIds = computed<Set<string>>(() => {
+    const cids = this.sketchConflictConstraintIds();
+    const out = new Set<string>();
+    if (!cids.size) return out;
+    const sid = this.activeSketchId();
+    const sketch = sid ? this.doc().sketches[sid] : null;
+    for (const c of sketch?.state.constraints ?? []) {
+      if (!cids.has(c.id)) continue;
+      for (const t of c.targets) out.add(t.entityId);
+    }
+    return out;
+  });
   /** Per-entity determinacy. Forwarded to the viewer so each sketch entity
    * colors based on its own constraint state (SW-style), not a single
    * global flag for the whole sketch. */
@@ -6087,6 +6243,18 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   ctxMenuX = signal(0);
   ctxMenuY = signal(0);
   ctxMenuFeatureId = signal<string | null>(null);
+  // REQ 855 — dimension-label context menu (Edit value / driven toggle /
+  // Delete), same floating-anchor pattern as the feature menu above.
+  dimCtxMenuX = signal(0);
+  dimCtxMenuY = signal(0);
+  dimCtxConstraintId = signal<string | null>(null);
+  dimCtxIsDriven = computed(() => {
+    const id = this.dimCtxConstraintId();
+    const sid = this.activeSketchId();
+    if (!id || !sid) return false;
+    return this.doc().sketches[sid]?.state.constraints
+      .find(c => c.id === id)?.driven === true;
+  });
   // Assembly tree right-click menu (components + mates) — mirrors the feature
   // tree's Edit/Delete context menu instead of inline delete buttons.
   asmCtxMenuX = signal(0);
@@ -6205,6 +6373,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private viewerRef = viewChild<CadViewerComponent>('viewer');
   private partTree = viewChild<CadFeatureTreePanelComponent>('partTree');
   @ViewChild('ctxAnchor', { read: MatMenuTrigger }) private ctxMenuTrigger?: MatMenuTrigger;
+  @ViewChild('dimCtxAnchor', { read: MatMenuTrigger }) private dimCtxMenuTrigger?: MatMenuTrigger;
 
   // ── VCS working-copy state (Phase 1) ──────────────────────────────────────
   commits = signal<CadCommit[]>([]);
@@ -6350,11 +6519,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     effect(() => {
       const ft = this.featureTree();
       const dc = this.doc();
+      const eq = this.equations();
       if (this.replayingHistory) return;
       if (this.historyTimer !== null) clearTimeout(this.historyTimer);
       this.historyTimer = window.setTimeout(() => {
         this.historyTimer = null;
-        this.pushSnapshot({ featureTree: ft, doc: dc });
+        this.pushSnapshot({ featureTree: ft, doc: dc, equations: eq });
       }, 500);
     });
 
@@ -6522,7 +6692,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const dof = this.activeSketchDof();
       const wasOver = untracked(() => this.lastSketchWasOver);
       if (dof === 'over' && !wasOver) {
-        this.errors.showError('Sketch is over-constrained — the last constraint conflicts with existing ones.');
+        // REQ 860: name the conflicting constraints when the solver
+        // identified them — the red rows in the constraint list carry the
+        // one-click delete. Generic message only as the no-ids fallback.
+        const cids = untracked(() => this.sketchConflictConstraintIds());
+        const sid = untracked(() => this.activeSketchId());
+        const sketch = sid ? untracked(() => this.doc()).sketches[sid] : null;
+        const names = [...cids]
+          .map(id => sketch?.state.constraints.find(c => c.id === id))
+          .filter((c): c is NonNullable<typeof c> => !!c)
+          .map(c => c.value !== undefined ? `${c.type} ${formatNumber(c.type === 'angle' ? c.value * 180 / Math.PI : c.value)}` : c.type);
+        this.errors.showError(names.length
+          ? `Sketch is over-constrained — conflicting constraints: ${names.join(', ')} (highlighted red in the constraint list).`
+          : 'Sketch is over-constrained — the last constraint conflicts with existing ones.');
         this.lastSketchWasOver = true;
       } else if (dof !== 'over' && wasOver) {
         this.lastSketchWasOver = false;
@@ -6642,6 +6824,38 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.redo();
       return;
     }
+    // REQ 868 — view shortcuts. Plain keys (browsers reserve Ctrl+1..8 for
+    // tab switching): 1..6 = Front/Back/Left/Right/Top/Bottom, 7 = Iso,
+    // n = Normal-To, f = Zoom to fit. Outside sketch mode only — in a
+    // sketch the letters keep their tool meanings (f = Fillet); Shift+F
+    // fits in both modes. No modifier keys (don't shadow browser combos).
+    if (!ctrl && !ev.altKey) {
+      const inSketch = this.activeSketchId() !== null;
+      if (ev.shiftKey && (ev.key === 'F' || ev.key === 'f')) {
+        ev.preventDefault();
+        this.viewerZoomToFit();
+        return;
+      }
+      if (!inSketch && !ev.shiftKey) {
+        const views = ['front', 'back', 'left', 'right', 'top', 'bottom', 'iso'] as const;
+        const digit = Number(ev.key);
+        if (digit >= 1 && digit <= 7 && Number.isInteger(digit)) {
+          ev.preventDefault();
+          this.viewerRef()?.orientToView(views[digit - 1]);
+          return;
+        }
+        if (ev.key === 'n' || ev.key === 'N') {
+          ev.preventDefault();
+          this.viewerNormalTo();
+          return;
+        }
+        if (ev.key === 'f' || ev.key === 'F') {
+          ev.preventDefault();
+          this.viewerZoomToFit();
+          return;
+        }
+      }
+    }
     if (ev.key !== 'Delete' && ev.key !== 'Backspace') return;
     // Sketch dimension delete takes priority while one is selected.
     const cid = this.selectedConstraintId();
@@ -6672,7 +6886,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const last = truncated[truncated.length - 1];
       // Skip if nothing actually changed since the previous snapshot
       // (signal write that didn't mutate values, etc).
-      if (last && last.featureTree === snap.featureTree && last.doc === snap.doc) return h;
+      if (last && last.featureTree === snap.featureTree && last.doc === snap.doc
+        && last.equations === snap.equations) return h;
       const next = [...truncated, snap];
       // Cap memory at ~100 entries.
       const trimmed = next.length > 100 ? next.slice(next.length - 100) : next;
@@ -6692,7 +6907,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.applySnapshot(this.history().snapshots[this.history().index]);
   }
 
-  /** Restore featureTree + doc to a stored snapshot. Flips
+  /** Restore featureTree + doc + equations to a stored snapshot. Flips
    * `replayingHistory` so the capture effect doesn't re-snapshot the
    * restore as a new edit, then saves + regenerates so server state +
    * geometry catch up. */
@@ -6700,6 +6915,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.replayingHistory = true;
     this.featureTree.set(s.featureTree);
     this.doc.set(s.doc);
+    // Pre-859 snapshots (mid-session upgrade) may lack equations — keep current.
+    if (s.equations) this.equations.set(s.equations);
     // Effect runs synchronously after signal writes; reset on microtask
     // so the post-write effect sees the flag still true.
     queueMicrotask(() => { this.replayingHistory = false; });
@@ -6946,9 +7163,24 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.selectedDatums.set(dats);
   }
 
+  /** REQ 867 — box selection resolved by the viewer: merge the owning
+   * features into the selection. Plain drag replaces; shift-drag extends. */
+  onViewerBoxSelect(ev: { faceIds: string[]; featureIds: string[]; crossing: boolean; shiftKey: boolean }) {
+    const next = new Set(ev.shiftKey ? this.selectedFeatures() : []);
+    for (const fid of ev.featureIds) next.add(fid);
+    this.selectedFeatures.set(next);
+  }
+
   // REQ 623 — right-click in the viewer opens the feature context menu.
+  // REQ 872 — right-click on EMPTY SPACE opens the view menu instead.
   onViewerFeatureContextMenu(ev: { featureId: string | null; faceId: string | null; clientX: number; clientY: number }) {
-    if (!ev.featureId) return;
+    if (!ev.featureId) {
+      if (this.assemblyMode() || this.activeSketchId() !== null) return;
+      this.viewCtxMenuX.set(ev.clientX);
+      this.viewCtxMenuY.set(ev.clientY);
+      queueMicrotask(() => this.viewCtxMenuTrigger?.openMenu());
+      return;
+    }
     // If the right-clicked feature isn't already in the selection, drop the
     // selection to just it (familiar OS behaviour).
     if (!this.selectedFeatures().has(ev.featureId)) {
@@ -12176,15 +12408,18 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   private renameFeature(featureId: string) {
     const feature = this.featureTree().features.find(f => f.id === featureId);
-    if (!feature || feature.type !== 'extrude') return;
+    // Every kind except Origin carries `name` (REQ 624) — Origin has no
+    // context menu, but guard anyway since this is reachable by id.
+    if (!feature || feature.type === 'origin') return;
     const current = feature.name ?? '';
     const next = window.prompt('Rename feature:', current);
     if (next === null) return;  // user cancelled
     const trimmed = next.trim();
-    this.featureTree.set(updateFeatureParam<ExtrudeFeature>(this.featureTree(), featureId, {
+    this.featureTree.set(updateFeatureParam<Exclude<Feature, OriginFeature>>(this.featureTree(), featureId, {
       name: trimmed || undefined,  // clearing the name reverts to default label
     }));
-    this.save();
+    // Metadata only — no geometry change, skip regen (same as renameSketch).
+    this.save({ skipRegen: true });
   }
 
   private renameSketch(sketchId: string) {
@@ -12262,6 +12497,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     if (feature.type === 'hole') {
       this._editHole(feature);
+      return;
+    }
+    if (feature.type === 'loft') {
+      // Rehydrate the Loft sidebar in editing mode (REQ 854) — commit
+      // already handles editingFeatureId in commitLoftSidebar.
+      this.activeSketchId.set(null);
+      this.setMode('idle');
+      this.loftSketchIds.set([...feature.sketchIds]);
+      this.loftMerge.set(feature.merge !== false);
+      this.loftSidebar.set({ editingFeatureId: featureId });
       return;
     }
     if (feature.type === 'mirrorBody') {
@@ -12573,12 +12818,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // so every batch member ends in the same visibility (intuitive bulk toggle).
     const anchor = this.featureTree().features.find(f => f.id === featureId);
     if (!anchor || anchor.type === 'origin') return;
+    // REQ 610/840: only datum features keep a render-only visible flag.
+    // Solid features route to suppression — the explicit regen exclusion.
+    const isDatum = (t: string) => t === 'datumPlane' || t === 'datumAxis' || t === 'datumPoint';
+    if (!isDatum(anchor.type)) { this.toggleFeatureSuppression(featureId); return; }
     const nextVisible = anchor.visible === false;
     let tree = this.featureTree();
     for (const id of ids) {
       const f = tree.features.find(ft => ft.id === id);
-      if (!f || f.type === 'origin') continue;
-      tree = updateFeatureParam<ExtrudeFeature>(tree, id, { visible: nextVisible });
+      if (!f || !isDatum(f.type)) continue;
+      tree = updateFeatureParam<DatumPlaneFeature>(tree, id, { visible: nextVisible });
     }
     this.featureTree.set(tree);
     // Visibility is a view preference — allow toggling on a locked part, but
@@ -12690,6 +12939,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.shellSidebar()?.editingFeatureId ??
       this.combineSidebar()?.editingFeatureId ??
       this.holeSidebar()?.editingFeatureId ??
+      this.loftSidebar()?.editingFeatureId ??
       this.mirrorBodySidebar()?.editingFeatureId ??
       this.moveCopyBodySidebar()?.editingFeatureId ?? null;
     if (editingId) {
@@ -12723,8 +12973,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // warning dialog for the lot, not N dialogs that the user has to dismiss
     // one by one.
     const features = this.featureTree().features;
+    // Shared predicate with the cascade (REQ 608) — covers extrude/revolve
+    // variants, sweep profile+path, and loft profiles, so no dependent kind
+    // can slip past the warning dialog.
     const dependents = features
-      .filter((f): f is ExtrudeFeature => (f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve' || f.type === 'cutRevolve') && ids.includes((f as ExtrudeFeature).sketchId))
+      .filter(f => ids.some(id => featureReferencesSketch(f, id)))
       .map(f => f.id);
     if (dependents.length === 0) {
       // No references — just delete all selected.
@@ -12898,7 +13151,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
             this.setMode('idle');
             this.loading.set(false);
             // Single-entry history so undo can't escape the read-only view.
-            this.history.set({ snapshots: [{ featureTree: this.featureTree(), doc: this.doc() }], index: 0 });
+            this.history.set({ snapshots: [{ featureTree: this.featureTree(), doc: this.doc(), equations: this.equations() }], index: 0 });
             this.loadCommitGeometry(modelId, hash);
           },
           error: err => { this.loading.set(false); this.errors.showError(err?.error?.error || 'Failed to load version'); },
@@ -13013,12 +13266,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.activeSketchId.set(null);
     this.setMode('idle');
     this.loading.set(false);
+    // REQ 858: restore the persisted rollback-bar position before the first
+    // regenerate so the initial build honors it (no roll-forward on reload).
+    const persistedRollback = this.featureTree().rollbackIndex;
+    this._rollbackSketchAnchorCa.set(null);
+    this.rollbackBeforeIndex.set(
+      typeof persistedRollback === 'number' && persistedRollback >= 0 ? persistedRollback : null);
+    // REQ 745: restore persisted per-body visibility into the live hidden set.
+    const bodyVis = this.featureTree().bodyVisibility ?? {};
+    this.hiddenBodies.set(new Set(Object.keys(bodyVis).filter(id => bodyVis[id] === false)));
     // Seed history with the loaded state so undo can return to "as
     // opened" without going past it. Reset to a fresh stack so models
     // loaded into the same component instance don't inherit each other's
     // history.
     this.history.set({
-      snapshots: [{ featureTree: this.featureTree(), doc: this.doc() }],
+      snapshots: [{ featureTree: this.featureTree(), doc: this.doc(), equations: this.equations() }],
       index: 0,
     });
     // Phase 1.5 — subscribe to the streaming session for per-feature events.
@@ -13153,6 +13415,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   setRollbackBeforeIndex(idx: number | null): void {
     this._rollbackSketchAnchorCa.set(null); // feature/forward rollback — not a sketch anchor
     this.rollbackBeforeIndex.set(idx);
+    this.persistRollbackIndex(idx);
     // Cache-derived rebuild paints the new state instantly (no kernel
     // round-trip). The regen kick that follows tells the backend the
     // new bar position so it skips features past it on this and future
@@ -13176,8 +13439,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     this._rollbackSketchAnchorCa.set(ca);
     this.rollbackBeforeIndex.set(cutoff);
+    this.persistRollbackIndex(cutoff);
     this._rederivePerBodyFromCache();
     this.regenerate('rollback');
+  }
+
+  /** REQ 858: persist the user-driven rollback position on the featureTree
+   * blob (saved without an extra regen — setRollbackBeforeIndex already
+   * kicks one). The auto-rollback-during-edit path sets the signal directly
+   * and deliberately never persists. Transient while locked. */
+  private persistRollbackIndex(idx: number | null): void {
+    if (this.readonly()) return;
+    const tree = this.featureTree();
+    if ((tree.rollbackIndex ?? null) === idx) return;
+    this.featureTree.set(setRollbackIndex(tree, idx));
+    this.save({ skipRegen: true });
   }
 
   /** Drag-reorder a sketch in the tree — sketches are positioned by createdAt,
@@ -13266,16 +13542,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.rebuildGeometryFromBodies();
   }
 
-  /** Toggle the visibility of a body in the Bodies panel. Transient
-   * (lost on reload) — body visibility isn't persisted yet. */
+  /** Toggle the visibility of a body in the Bodies panel. REQ 745:
+   * persisted with the working copy when checked out; transient view
+   * toggle when the part is locked. */
   toggleBodyVisibility(bodyId: string): void {
     const next = new Set(this.hiddenBodies());
     if (next.has(bodyId)) next.delete(bodyId); else next.add(bodyId);
     this.hiddenBodies.set(next);
     this.rebuildGeometryFromBodies();
+    this.persistBodyVisibility();
   }
 
-  /** Hide every body except this one. Transient. Re-isolating shows all. */
+  /** Hide every body except this one. Re-isolating shows all. Persisted
+   * like the single toggle (REQ 745). */
   onIsolateBody(bodyId: string): void {
     const allIds = this.bodies().map(b => b.id);
     const current = this.hiddenBodies();
@@ -13285,6 +13564,34 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       [...current].every(id => isolated.has(id));
     this.hiddenBodies.set(restoringAll ? new Set() : isolated);
     this.rebuildGeometryFromBodies();
+    this.persistBodyVisibility();
+  }
+
+  /** REQ 745: mirror the live hidden-body set into featureTree.bodyVisibility
+   * and save without regen (render-only preference). No-op while locked —
+   * the toggle stays a transient view preference. */
+  private persistBodyVisibility(): void {
+    if (this.readonly()) return;
+    let tree = this.featureTree();
+    const hidden = this.hiddenBodies();
+    const prev = tree.bodyVisibility ?? {};
+    const prevHidden = Object.keys(prev).filter(id => prev[id] === false);
+    if (prevHidden.length === hidden.size && prevHidden.every(id => hidden.has(id))) return;
+    for (const id of prevHidden) tree = setBodyVisibility(tree, id, true);
+    for (const id of hidden) tree = setBodyVisibility(tree, id, false);
+    this.featureTree.set(tree);
+    this.save({ skipRegen: true });
+  }
+
+  /** REQ 857: rename a body via the bodies-section context menu. Empty
+   * clears back to the default "Body N" label. */
+  onRenameBody(bodyId: string): void {
+    if (this.readonly()) return;
+    const current = this.featureTree().bodyNames?.[bodyId] ?? '';
+    const next = window.prompt('Rename body:', current);
+    if (next === null) return;  // cancelled
+    this.featureTree.set(setBodyName(this.featureTree(), bodyId, next));
+    this.save({ skipRegen: true });
   }
 
   /** Delete every feature that contributed to this body. Body id == the
@@ -13368,10 +13675,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.regenLoading.set(true);
     this.regenError.set(null);
     // Seed the progress counters from the current featureTree so the HUD
-    // shows accurate "feature X of N" right away. Origin and hidden
-    // features are excluded — they're skipped by the regen service.
+    // shows accurate "feature X of N" right away. Origin, hidden, AND
+    // suppressed features are excluded — all three are skipped by the
+    // regen service and would otherwise over-count the denominator.
     const expectedFeatures = this.featureTree().features.filter(
-      f => f.type !== 'origin' && f.visible !== false,
+      // `in` guard: datum features carry no suppressed flag (not suppressible).
+      f => f.type !== 'origin' && f.visible !== false
+        && !('suppressed' in f && f.suppressed === true),
     ).length;
     this.regenExpectedCount.set(expectedFeatures);
     this.regenStreamedCount.set(0);
@@ -13705,9 +14015,37 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     editor?.selected.set(targetIds);
   }
 
-  /** Right-click on a dimension label — remove the constraint from the
-   * active sketch and re-solve (without that constraint there may be
-   * extra DOF, but the geometry is left as-is). */
+  /** REQ 855: right-click on a dimension label — open the context menu at
+   * the cursor (Edit value / Make driven-driving / Delete) instead of the
+   * old immediate delete. */
+  onDimensionContextMenu(ev: { id: string; clientX: number; clientY: number }) {
+    if (this.readonly()) return;
+    // Select the dim so its label highlights while the menu is open.
+    this.selectedConstraintId.set(ev.id);
+    this.dimCtxMenuX.set(ev.clientX);
+    this.dimCtxMenuY.set(ev.clientY);
+    this.dimCtxConstraintId.set(ev.id);
+    queueMicrotask(() => this.dimCtxMenuTrigger?.openMenu());
+  }
+
+  /** REQ 855: flip the menu's dimension between driven and driving via the
+   * sketch editor's pre-flighted toggle; explain a rejected re-drive. */
+  async onToggleDimensionDriven() {
+    const id = this.dimCtxConstraintId();
+    const editor = this.sketchEditorRef();
+    if (!id || !editor || this.readonly()) return;
+    const result = await editor.toggleConstraintDriven(id);
+    if (result === 'over-defined') {
+      this.errors.showError(
+        'Cannot make this dimension driving — it would over-define the sketch. '
+        + 'Delete or make driven another constraint on the same geometry first.');
+    }
+  }
+
+  /** Delete a dimension — the Delete-key shortcut in the inline editor, or
+   * the context menu's Delete item. Removes the constraint from the active
+   * sketch and re-solves (without that constraint there may be extra DOF,
+   * but the geometry is left as-is). */
   onDimensionDeleteRequested(constraintId: string) {
     if (this.readonly()) return;
     const sid = this.activeSketchId();

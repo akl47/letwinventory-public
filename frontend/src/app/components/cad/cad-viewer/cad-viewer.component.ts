@@ -186,6 +186,13 @@ const DIM_ARROW_WIDTH_FRAC = 1 / 180;      // dimension arrowhead half-width
   imports: [CommonModule, MatIconModule],
   template: `
     <div class="viewer" data-testid="cad-viewer">
+      <!-- REQ 867 — box-selection marquee (window solid / crossing dashed). -->
+      @if (marqueeSig(); as mq) {
+        <div class="marquee" data-testid="box-select-marquee"
+             [class.crossing]="mq.crossing"
+             [style.left.px]="mq.left" [style.top.px]="mq.top"
+             [style.width.px]="mq.width" [style.height.px]="mq.height"></div>
+      }
       <div #mount class="canvas-mount"></div>
       <div class="webgl-error" *ngIf="webglUnavailable()" data-testid="webgl-error">
         <mat-icon>desktop_access_disabled</mat-icon>
@@ -239,6 +246,8 @@ const DIM_ARROW_WIDTH_FRAC = 1 / 180;      // dimension arrowhead half-width
       </button>
       <!-- View controls beneath the orientation cube: nav modes + default view. -->
       <div class="view-controls">
+        <button type="button" class="vc-btn" [class.on]="navMode()==='select'" title="Select (drag for box selection — left-to-right window, right-to-left crossing)" aria-label="Box select"
+                data-testid="nav-select" (click)="setNav('select')"><mat-icon>highlight_alt</mat-icon></button>
         <button type="button" class="vc-btn" [class.on]="navMode()==='orbit'" title="Orbit (drag to rotate)" aria-label="Orbit"
                 (click)="setNav('orbit')"><mat-icon>3d_rotation</mat-icon></button>
         <button type="button" class="vc-btn" [class.on]="navMode()==='pan'" title="Pan (drag to move)" aria-label="Pan"
@@ -278,6 +287,9 @@ const DIM_ARROW_WIDTH_FRAC = 1 / 180;      // dimension arrowhead half-width
     </div>
   `,
   styles: [`
+    /* REQ 867 — box-selection marquee. Solid = window, dashed = crossing. */
+    .marquee { position: absolute; z-index: 30; border: 1px solid #42a5f5; background: rgba(66, 165, 245, 0.08); pointer-events: none; }
+    .marquee.crossing { border-style: dashed; border-color: #66bb6a; background: rgba(102, 187, 106, 0.08); }
     .viewer { position: relative; width: 100%; height: 100%; background: #1e1e2e; }
     .canvas-mount { width: 100%; height: 100%; }
     .canvas-mount canvas { display: block; }
@@ -501,6 +513,16 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * fully-constrained); others stay blue. Globally 'over' or 'fixed'
    * overrides this per-entity decision. */
   determinedEntities = input<Set<string>>(new Set());
+  /** REQ 860: entity ids targeted by the constraints the solver named as
+   * conflicting. When non-empty in the 'over' state, ONLY these render red
+   * (others keep their determinacy coloring); empty falls back to all-red. */
+  conflictEntityIds = input<Set<string>>(new Set());
+  /** REQ 867 — box selection resolved on marquee release: the faces whose
+   * screen projection the box encloses (window) or touches (crossing), plus
+   * their owning feature ids for feature-level selection. */
+  boxSelect = output<{ faceIds: string[]; featureIds: string[]; crossing: boolean; shiftKey: boolean }>();
+  /** REQ 873: flip the scroll-wheel zoom direction (per-user preference). */
+  invertZoom = input<boolean>(false);
   /** When set, the dimension label for this constraint id renders as an
    * editable <input> instead of a static value pill. Used by Smart Dim's
    * auto-focus after placing a dimension, and by click-to-edit on existing
@@ -550,9 +572,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   /** User dragged a dimension label to a new placement. Emitted per
    * pointermove (live preview) and once more on pointerup (commit). */
   dimensionDragged = output<{ id: string; placement: { x: number; y: number }; commit: boolean }>();
-  /** User asked to delete a dimension — right-click on the label, or the
-   * Delete key shortcut while the inline editor is focused. */
+  /** User asked to delete a dimension — the Delete key shortcut while the
+   * inline editor is focused (right-click now opens a menu, REQ 855). */
   dimensionDeleteRequested = output<string>();
+  /** Right-click on a dim label — open the dimension context menu at the
+   * cursor (Edit value / Make driven-driving / Delete). REQ 855. */
+  dimensionContextMenu = output<{ id: string; clientX: number; clientY: number }>();
   /** Double-click on a dim label — open the inline value editor. */
   dimensionDoubleClicked = output<string>();
   /** Click on a mini constraint badge near a selected entity → user
@@ -848,7 +873,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // Which gesture a left-button drag performs in 3D mode (the on-screen
   // orbit/pan/zoom buttons set this). Left-click still selects; middle-button
   // navigation keeps working regardless.
-  navMode = signal<'orbit' | 'pan' | 'zoom'>('orbit');
+  navMode = signal<'orbit' | 'pan' | 'zoom' | 'select'>('orbit');
 
   // Touch navigation state (mobile). 'multi' = two fingers pinch-zoom + pan
   // together. One-finger touch rides the synthesized POINTER events instead
@@ -1639,7 +1664,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   }
 
   /** Set which gesture a left-button drag performs in 3D mode. */
-  setNav(mode: 'orbit' | 'pan' | 'zoom') { this.navMode.set(mode); }
+  setNav(mode: 'orbit' | 'pan' | 'zoom' | 'select') { this.navMode.set(mode); }
 
   /** Zoom-to-fit: smoothly re-frame the current view on the whole model (keeps
    * the orientation, incl. the plane-normal lock while sketching). No-op when
@@ -2059,6 +2084,21 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.animateOrbitTo(target.theta, target.phi, 480, this.computeFrame());
   }
 
+  /** REQ 868 — orient to a named view (keyboard shortcuts). Same animated
+   * rotate-and-frame as a nav-cube face click. */
+  orientToView(view: 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso') {
+    const dirs: Record<typeof view, [number, number, number]> = {
+      front: [0, -1, 0], back: [0, 1, 0], left: [-1, 0, 0], right: [1, 0, 0],
+      top: [0, 0, 1], bottom: [0, 0, -1], iso: [1, -1, 1],
+    };
+    const [dx, dy, dz] = dirs[view];
+    const len = Math.hypot(dx, dy, dz) || 1;
+    let { theta, phi } = dirToOrbit(dx / len, dy / len, dz / len);
+    if (phi < 0.001) phi = 0.001;
+    if (phi > Math.PI - 0.001) phi = Math.PI - 0.001;
+    this.animateOrbitTo(theta, phi, 480, this.computeFrame());
+  }
+
   /** Convert a hit point on the beveled cube (in local cube space) to a
    * target (theta, phi). Classification uses the central-face boundary as
    * the threshold: hits inside the central face on a given axis don't
@@ -2178,9 +2218,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       // Left-drag navigates per the active nav-mode button; a click (no drag)
       // still falls through to onClick for selection.
       const m = this.navMode();
-      if (m === 'pan') this.panning = true;
+      if (m === 'select' && ev.pointerType !== 'touch') {
+        // REQ 867 — arm the box-selection marquee (engages past a small
+        // threshold in pointermove; a plain click still selects normally).
+        this.marquee = { startX: ev.clientX, startY: ev.clientY, curX: ev.clientX, curY: ev.clientY, active: false, shiftKey: ev.shiftKey };
+      }
+      else if (m === 'pan') this.panning = true;
       else if (m === 'zoom') this.zoomDragging = true;
-      else this.orbiting = true;
+      else if (m === 'orbit') this.orbiting = true;
+      else this.orbiting = true;  // touch in select mode keeps one-finger orbit
     } else if (ev.button === 0 && inSketch) {
       const p = this.toSketchCoords(ev);
       if (p) {
@@ -2200,6 +2246,27 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const dy = ev.clientY - this.lastPointer.y;
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
     if ((this.orbiting || this.panning || this.zoomDragging) && (dx || dy)) this.didNavDrag = true;
+    // REQ 867 — box-selection marquee tracking (select nav mode).
+    if (this.marquee) {
+      this.marquee.curX = ev.clientX;
+      this.marquee.curY = ev.clientY;
+      if (!this.marquee.active
+        && Math.hypot(ev.clientX - this.marquee.startX, ev.clientY - this.marquee.startY) > 4) {
+        this.marquee.active = true;
+        this.didNavDrag = true;  // suppress the follow-up click selection
+      }
+      if (this.marquee.active) {
+        const host = this.renderer.domElement.getBoundingClientRect();
+        this.zone.run(() => this.marqueeSig.set({
+          left: Math.min(this.marquee!.startX, this.marquee!.curX) - host.left,
+          top: Math.min(this.marquee!.startY, this.marquee!.curY) - host.top,
+          width: Math.abs(this.marquee!.curX - this.marquee!.startX),
+          height: Math.abs(this.marquee!.curY - this.marquee!.startY),
+          crossing: this.marquee!.curX < this.marquee!.startX,
+        }));
+      }
+      return;
+    }
     // CAD-782: assembly component drag takes priority over the nav gestures
     // (which are never armed while a drag candidate is active).
     if (this.dragCandidate) {
@@ -2284,6 +2351,19 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   };
 
   private onPointerUp = (ev: PointerEvent) => {
+    // REQ 867 — finish a box selection: resolve an engaged marquee; a
+    // sub-threshold press-release falls through to onClick for plain select.
+    if (this.marquee) {
+      const m = this.marquee;
+      this.marquee = null;
+      this.zone.run(() => this.marqueeSig.set(null));
+      if (m.active) {
+        m.curX = ev.clientX; m.curY = ev.clientY;
+        this.resolveMarquee(m);
+        (ev.target as Element).releasePointerCapture?.(ev.pointerId);
+        return;
+      }
+    }
     // CAD-783: finish an assembly component drag — emit the final world delta
     // for the editor to persist + re-solve. A candidate that never engaged a
     // drag (press-release under threshold) falls through to onClick for select.
@@ -2471,7 +2551,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
 
   private onWheel = (ev: WheelEvent) => {
     ev.preventDefault();
-    const factor = ev.deltaY > 0 ? 1.1 : 1 / 1.1;
+    // REQ 873: per-user wheel-direction preference flips the sign.
+    const dy = this.invertZoom() ? -ev.deltaY : ev.deltaY;
+    const factor = dy > 0 ? 1.1 : 1 / 1.1;
     const next = Math.max(5, Math.min(2000, this.orbitDistance * factor));
     const applied = next / this.orbitDistance;  // actual scale after clamping
     // Cursor-anchored zoom (SolidWorks-style): shift orbitTarget within the view
@@ -2602,7 +2684,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       if (p) {
         const tolerance = this.pixelsToSketchUnits(this.PICK_PX);
         const pointTolerance = this.pixelsToSketchUnits(this.POINT_PICK_PX);
-        this.zone.run(() => this.sketchClick.emit({ x: p.x, y: p.y, shiftKey: ev.shiftKey, tolerance, pointTolerance }));
+        // REQ 871: Ctrl (or Cmd) extends the sketch selection like Shift.
+        this.zone.run(() => this.sketchClick.emit({ x: p.x, y: p.y, shiftKey: ev.shiftKey || ev.ctrlKey || ev.metaKey, tolerance, pointTolerance }));
       }
       return;
     }
@@ -2725,6 +2808,26 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // accidentally selecting a face behind the canvas while trying to
     // pick a region.
     if (this.profileFills().length > 0) return;
+    // REQ 870 — Alt+click cycles through every hit under the cursor along
+    // the ray (Select Other): occluded faces and body-covered datum planes
+    // become reachable. Repeated Alt+clicks near the same spot advance and
+    // wrap; the feature-level multi-select emit is skipped so the cycled
+    // pick isn't clobbered by the top face's feature.
+    if (ev.altKey) {
+      const all = this.pickEntityAll();
+      if (all.length === 0) {
+        this.selectOtherCycle = null;
+        this.zone.run(() => this.selectionChange.emit(null));
+        return;
+      }
+      const near = this.selectOtherCycle
+        && Math.hypot(ev.clientX - this.selectOtherCycle.x, ev.clientY - this.selectOtherCycle.y) < 5;
+      const index = near ? (this.selectOtherCycle!.index + 1) % all.length : 0;
+      this.selectOtherCycle = { x: ev.clientX, y: ev.clientY, index };
+      this.zone.run(() => this.selectionChange.emit(all[index]));
+      return;
+    }
+    this.selectOtherCycle = null;
     const id = this.pickEntity();
     // REQ 623 — emit both the legacy face-id selection (for datum + pick-plane
     // flows) and the new featureClick (for feature-level multi-select).
@@ -2737,7 +2840,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (this.activeSketchId() !== null) return;  // right-click in sketch mode = orbit only
     this.updatePointer(ev);
     const info = this.pickFeatureInfo(ev);
-    if (!info.featureId) return;  // empty space — no menu
+    // Empty space still emits (featureId: null) — the editor shows the
+    // view menu there (REQ 872) instead of the feature menu.
     this.zone.run(() => this.featureContextMenu.emit({
       featureId: info.featureId,
       faceId: info.faceId,
@@ -2867,6 +2971,69 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     } finally {
       for (const [mat, side] of saved) mat.side = side;
     }
+  }
+
+  // REQ 867 — box-selection marquee (select nav mode). Screen coords;
+  // `active` flips once the drag passes the engage threshold.
+  marquee: { startX: number; startY: number; curX: number; curY: number; active: boolean; shiftKey: boolean } | null = null;
+  marqueeSig = signal<{ left: number; top: number; width: number; height: number; crossing: boolean } | null>(null);
+
+  /** REQ 867 — resolve the marquee to hits. Projects every face-mesh vertex
+   * to screen space: window mode (L→R) needs ALL of a face's vertices inside
+   * the box; crossing (R→L) needs ANY. Emits face ids + owning feature ids. */
+  private resolveMarquee(m: { startX: number; startY: number; curX: number; curY: number; shiftKey: boolean }): void {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const minX = Math.min(m.startX, m.curX), maxX = Math.max(m.startX, m.curX);
+    const minY = Math.min(m.startY, m.curY), maxY = Math.max(m.startY, m.curY);
+    const crossing = m.curX < m.startX;
+    this.camera.updateMatrixWorld();
+    const v = new THREE.Vector3();
+    const faceIds: string[] = [];
+    const featureIds = new Set<string>();
+    for (const mesh of this.faceMeshes.values()) {
+      if (!mesh.visible) continue;
+      const geom = (mesh as THREE.Mesh).geometry as THREE.BufferGeometry;
+      const pos = geom.getAttribute('position');
+      if (!pos) continue;
+      let anyIn = false, allIn = true;
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos as THREE.BufferAttribute, i).applyMatrix4(mesh.matrixWorld).project(this.camera);
+        const sx = rect.left + (v.x + 1) / 2 * rect.width;
+        const sy = rect.top + (1 - v.y) / 2 * rect.height;
+        const inside = v.z < 1 && sx >= minX && sx <= maxX && sy >= minY && sy <= maxY;
+        if (inside) anyIn = true; else allIn = false;
+        if (anyIn && !allIn && crossing) break;  // crossing: first hit decides
+      }
+      const selected = crossing ? anyIn : (allIn && pos.count > 0);
+      if (!selected) continue;
+      const ud = mesh.userData as { faceId?: string; featureId?: string | null };
+      if (ud.faceId) faceIds.push(ud.faceId);
+      if (ud.featureId) featureIds.add(ud.featureId);
+    }
+    this.zone.run(() => this.boxSelect.emit({ faceIds, featureIds: [...featureIds], crossing, shiftKey: m.shiftKey }));
+  }
+
+  /** REQ 870 — Select Other cycle state: last Alt+click position + index. */
+  private selectOtherCycle: { x: number; y: number; index: number } | null = null;
+
+  /** Every pickable id under the cursor, nearest first: faces (both sides),
+   * then datum planes/axes — deduped. Powers Alt+click cycling (REQ 870). */
+  private pickEntityAll(): string[] {
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const ranked: Array<{ d: number; id: string }> = [];
+    for (const h of this.intersectFacesBothSides(this.faceGroup.children)) {
+      const id = (h.object.userData as { faceId?: string }).faceId;
+      if (id) ranked.push({ d: h.distance, id });
+    }
+    for (const h of this.raycaster.intersectObjects(this.datumGroup.children, true)) {
+      let obj: THREE.Object3D | null = h.object;
+      while (obj && !(obj.userData as { datumId?: string }).datumId) obj = obj.parent;
+      if (obj) ranked.push({ d: h.distance, id: `datum:${(obj.userData as { datumId?: string }).datumId}` });
+    }
+    ranked.sort((a, b) => a.d - b.d);
+    const ids: string[] = [];
+    for (const r of ranked) if (!ids.includes(r.id)) ids.push(r.id);
+    return ids;
   }
 
   private pickEntity(): string | null {
@@ -4825,7 +4992,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     div.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      this.zone.run(() => this.dimensionDeleteRequested.emit(constraintId));
+      // REQ 855: menu instead of immediate delete — destructive-on-right-click
+      // was an accident magnet and left no home for the driven toggle.
+      this.zone.run(() => this.dimensionContextMenu.emit({
+        id: constraintId, clientX: ev.clientX, clientY: ev.clientY,
+      }));
     });
     return div;
   }
@@ -5228,10 +5399,17 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const dof = this.activeSketchDof();
     const determined = this.determinedEntities();
     let baseColor: number;
+    const conflicts = this.conflictEntityIds();
     if (!isActive) {
       baseColor = looseColor;
+    } else if (dof === 'over' && conflicts.size > 0) {
+      // REQ 860: the solver named the conflicting constraints — flag only
+      // their target entities red; everything else keeps its determinacy
+      // coloring so the user can see WHERE the conflict lives.
+      baseColor = conflicts.has(e.id) ? errorColor
+        : determined.has(e.id) ? fixedColor : looseColor;
     } else if (dof === 'over') {
-      // Solver-reported inconsistency overrides per-entity coloring —
+      // Fallback: solver reported inconsistency without naming constraints —
       // every entity is suspect when the system can't satisfy itself.
       baseColor = errorColor;
     } else {
@@ -5275,7 +5453,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         // Fully-determined points in the active sketch fill green to
         // match the line/curve "fully constrained" coloring — gives an
         // at-a-glance view of which corner points still carry free DOFs.
-        const isDeterminedNow = isActive && dof !== 'over' && determined.has(e.id);
+        const isDeterminedNow = isActive && determined.has(e.id)
+          && (dof !== 'over' || (conflicts.size > 0 && !conflicts.has(e.id)));
         const fillColor = selected
           ? 0xffb74d
           : hovered

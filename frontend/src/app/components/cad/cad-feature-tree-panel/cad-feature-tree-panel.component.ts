@@ -215,6 +215,10 @@ export interface TreeNode {
                   (click)="bodyIsolated.emit(b.id)">
             <mat-icon>filter_center_focus</mat-icon> Isolate body
           </button>
+          <button mat-menu-item data-testid="ctx-body-rename"
+                  (click)="bodyRenamed.emit(b.id)">
+            <mat-icon>drive_file_rename_outline</mat-icon> Rename body
+          </button>
           <button mat-menu-item data-testid="ctx-body-delete"
                   (click)="bodyDeleted.emit(b.id)">
             <mat-icon>delete</mat-icon> Delete body
@@ -252,11 +256,9 @@ export interface TreeNode {
                       (click)="rollbackChanged.emit(null)">
                 <mat-icon>arrow_drop_up</mat-icon> Roll forward to end
               </button>
-              <button mat-menu-item data-testid="ctx-toggle-feature-visibility"
-                      (click)="emitAction({ action: 'toggle-feature-visibility', featureId: n.feature.id })">
-                <mat-icon>{{ scope.anyVisible ? 'visibility_off' : 'visibility' }}</mat-icon>
-                {{ scope.anyVisible ? 'Hide' : 'Show' }}{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
-              </button>
+              <!-- REQ 610/840: no Hide on solid features — hiding a fused
+                   feature silently changed downstream geometry. Suppress is
+                   the explicit regen-exclusion; datums keep their eye rows. -->
               <button mat-menu-item data-testid="ctx-toggle-feature-suppression"
                       (click)="emitAction({ action: 'toggle-feature-suppression', featureId: n.feature.id })">
                 <mat-icon>{{ scope.anySuppressed ? 'play_arrow' : 'block' }}</mat-icon>
@@ -546,6 +548,8 @@ export class CadFeatureTreePanelComponent {
   bodyVisibilityToggled = output<string>();
   /** Isolate body — hide everything but this one. */
   bodyIsolated = output<string>();
+  /** REQ 857 — user picked "Rename body" from the body context menu. */
+  bodyRenamed = output<string>();
   /** Delete body — drops every feature whose target was this body. */
   bodyDeleted = output<string>();
 
@@ -984,6 +988,52 @@ export class CadFeatureTreePanelComponent {
           sketchesUsed.add(profile.id);
         }
         if (path) sketchesUsed.add(path.id);
+      } else if (f.type === 'loft') {
+        // REQ 854 — loft renders like sweep but with N ordered profile
+        // children. (Previously lofts fell through the if/else chain and
+        // emitted no row at all — invisible and unmanageable in the tree.)
+        const lf = f;
+        const profiles = lf.sketchIds.map(id => doc?.sketches[id] ?? null);
+        const hasChild = profiles.some(Boolean);
+        const isOpen = expanded.has(f.id);
+        const defaultLabel = `Loft · ${lf.sketchIds.length} profiles`;
+        out.push({
+          key: f.id,
+          kind: 'feature',
+          label: lf.name && lf.name.trim() ? lf.name : defaultLabel,
+          iconName: 'layers',
+          iconClass: 'extrude',
+          depth: 0,
+          expandable: hasChild,
+          expanded: isOpen,
+          selectable: false,
+          visible: lf.visible !== false,
+          featureIndex: idx,
+          rolledBack: isRolledBack,
+          suppressed: lf.suppressed === true,
+          feature: f,
+        });
+        profiles.forEach((sk, i) => {
+          if (!sk) return;
+          sketchesUsed.add(sk.id);
+          if (!isOpen || this.selectableSketches()) return;
+          const role = `Profile ${i + 1}`;
+          const defaultSketchLabel = `${role}: ${sk.id} — ${this.hostLabel(sk.hostId)}`;
+          out.push({
+            key: `child:${sk.id}:${role}`,
+            kind: 'sketch',
+            label: sk.name && sk.name.trim() ? `${role}: ${sk.name}` : defaultSketchLabel,
+            iconName: 'draw',
+            iconClass: 'sketch',
+            depth: 1,
+            expandable: false,
+            expanded: false,
+            selectable: false,
+            visible: sk.visible !== false,
+            visibilityToggleable: true,
+            sketchId: sk.id,
+          });
+        });
       } else if (f.type === 'hole') {
         // REQ 663 — Hole Wizard. Direct face-pick placements; no
         // sketch child. Label shows hole type + size + placement count.
@@ -1103,9 +1153,9 @@ export class CadFeatureTreePanelComponent {
           expanded: false,
           selectable: true,
           visible: pf.visible !== false,
-          // Mirror + Linear Pattern have no show/hide (hiding the derived copies
-          // is confusing — use Suppress instead). Circular Pattern keeps it.
-          visibilityToggleable: f.type === 'circularPattern',
+          // REQ 840: no show/hide on any pattern/mirror — hiding derived
+          // copies is regen-affecting. Suppress is the explicit mechanism.
+          visibilityToggleable: false,
           featureIndex: idx,
           rolledBack: isRolledBack,
           suppressed: pf.suppressed === true,
