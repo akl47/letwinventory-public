@@ -3,7 +3,7 @@ import type {
   EllipseEntity, SplineEntity,
 } from './types';
 import { findPoint } from './types';
-import { tessellateEllipse, tessellateSpline, DEFAULT_CHORD_TOLERANCE } from './tessellator';
+import { tessellateEllipse, tessellateSpline, tessellateEntity, DEFAULT_CHORD_TOLERANCE } from './tessellator';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Parametric closest-point picker (REQ 564).
@@ -341,4 +341,54 @@ export function pickEntity(
     if (best === null || bestPointDist <= bestDist + reachBonus) return bestPoint;
   }
   return best;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// REQ 863 — crossing selection: does an entity TOUCH a rectangle?
+// Used by the sketch editor's right-to-left rubber band (crossing mode).
+// Window mode (left-to-right, fully-enclosed) stays in the editor.
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface PickRect { minX: number; minY: number; maxX: number; maxY: number; }
+
+function pointInRect(x: number, y: number, r: PickRect): boolean {
+  return x >= r.minX && x <= r.maxX && y >= r.minY && y <= r.maxY;
+}
+
+/** Segment (a→b) vs axis-aligned rect: touch = an endpoint inside, or the
+ * segment crossing any rect edge. */
+function segmentTouchesRect(ax: number, ay: number, bx: number, by: number, r: PickRect): boolean {
+  if (pointInRect(ax, ay, r) || pointInRect(bx, by, r)) return true;
+  const edges: Array<[number, number, number, number]> = [
+    [r.minX, r.minY, r.maxX, r.minY], [r.maxX, r.minY, r.maxX, r.maxY],
+    [r.maxX, r.maxY, r.minX, r.maxY], [r.minX, r.maxY, r.minX, r.minY],
+  ];
+  const cross = (ox: number, oy: number, px: number, py: number, qx: number, qy: number) =>
+    (px - ox) * (qy - oy) - (py - oy) * (qx - ox);
+  for (const [ex1, ey1, ex2, ey2] of edges) {
+    const d1 = cross(ax, ay, bx, by, ex1, ey1);
+    const d2 = cross(ax, ay, bx, by, ex2, ey2);
+    const d3 = cross(ex1, ey1, ex2, ey2, ax, ay);
+    const d4 = cross(ex1, ey1, ex2, ey2, bx, by);
+    if (((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0))) return true;
+  }
+  return false;
+}
+
+/** True when the entity touches the rect: a point inside it, a line segment
+ * crossing/inside it, or a curve whose tessellated polyline touches it.
+ * A rect fully INSIDE a circle (no rim contact) does not touch it —
+ * crossing selection follows the drawn stroke, not the enclosed area. */
+export function entityTouchesRect(state: SketchState, entity: SketchEntity, rect: PickRect): boolean {
+  if (entity.kind === 'point') return pointInRect(entity.x, entity.y, rect);
+  if (entity.kind === 'line') {
+    const a = findPoint(state, entity.startId);
+    const b = findPoint(state, entity.endId);
+    return !!a && !!b && segmentTouchesRect(a.x, a.y, b.x, b.y, rect);
+  }
+  const poly = tessellateEntity(state, entity);
+  for (let i = 0; i + 1 < poly.length; i++) {
+    if (segmentTouchesRect(poly[i].x, poly[i].y, poly[i + 1].x, poly[i + 1].y, rect)) return true;
+  }
+  return false;
 }

@@ -180,6 +180,12 @@ export function inferLineEnd(
       hint: 'vertical',
     };
   }
+  // (3b) REQ 864 — perpendicular / parallel against an existing line whose
+  // direction the cursor is close to (mod 90°). Fires after H/V (axis
+  // alignment wins) and before polar tracking (a real relation beats a
+  // visual-only snap). Emits the constraint so the commit locks it in.
+  const orient = orientationSnap(state, start, dx, dy);
+  if (orient) return orient;
   // (4) Polar tracking — snap to multiples of POLAR_STEP (15°) measured
   // from the absolute +X axis. Visual snap only: no constraint is added
   // because PlaneGCS doesn't have a built-in "fix this angle to N°" type
@@ -342,6 +348,63 @@ export function inferAlignment(
   if (bestH) guides.push({ from: { x: bestH.ref.x, y: bestH.ref.y }, to: { x: snapped.x, y: snapped.y } });
 
   return { snapped, refs, hints, guides };
+}
+
+/** REQ 864 — perpendicular / parallel inference against existing lines.
+ * Finds the reference line whose direction (mod 90°) is angularly closest
+ * to the drawn direction; within ANGLE_SNAP_TOL the cursor snaps onto the
+ * exact ray and the matching constraint fires on commit. The reference
+ * line's own segment is emitted as a dashed guide so the user sees WHICH
+ * line the relation is against. */
+function orientationSnap(
+  state: SketchState,
+  start: { x: number; y: number },
+  dx: number, dy: number,
+): InferenceResult | null {
+  const drawnAngle = Math.atan2(dy, dx);
+  const norm = (a: number) => {
+    // Fold into [0, π) — line directions are unsigned.
+    let r = a % Math.PI;
+    if (r < 0) r += Math.PI;
+    return r;
+  };
+  const drawn = norm(drawnAngle);
+  let best: { line: SketchEntity & { kind: 'line' }; type: 'parallel' | 'perpendicular'; target: number; dev: number; a: PointEntity; b: PointEntity } | null = null;
+  for (const e of state.entities) {
+    if (e.kind !== 'line') continue;
+    const a = findPoint(state, e.startId);
+    const b = findPoint(state, e.endId);
+    if (!a || !b) continue;
+    const refLen = Math.hypot(b.x - a.x, b.y - a.y);
+    if (refLen < 1e-6) continue;
+    const ref = norm(Math.atan2(b.y - a.y, b.x - a.x));
+    // Axis-aligned references duplicate the H/V branch — skip them so the
+    // badge reads horizontal/vertical, not parallel-to-a-horizontal-line.
+    const AX = 1e-3;
+    if (ref < AX || Math.PI - ref < AX || Math.abs(ref - Math.PI / 2) < AX) continue;
+    for (const [type, target] of [['parallel', ref], ['perpendicular', norm(ref + Math.PI / 2)]] as const) {
+      let dev = Math.abs(drawn - target);
+      dev = Math.min(dev, Math.PI - dev);
+      if (dev < ANGLE_SNAP_TOL && (!best || dev < best.dev)) {
+        best = { line: e, type, target, dev, a, b };
+      }
+    }
+  }
+  if (!best) return null;
+  // Snap onto the exact ray at the target direction, preserving the drawn
+  // length and the side of `start` the cursor is on.
+  const dirX = Math.cos(best.target), dirY = Math.sin(best.target);
+  const t = dx * dirX + dy * dirY;  // signed projection picks the half-ray
+  if (Math.abs(t) < 1e-6) return null;
+  const snapped = { x: start.x + t * dirX, y: start.y + t * dirY };
+  return {
+    snapped,
+    constraint: { type: best.type, targets: [{ self: true }, { entityId: best.line.id }] },
+    constraints: [{ type: best.type, targets: [{ self: true }, { entityId: best.line.id }] }],
+    hint: best.type,
+    hints: [best.type],
+    guides: [{ from: { x: best.a.x, y: best.a.y }, to: { x: best.b.x, y: best.b.y } }],
+  };
 }
 
 function polarSnap(

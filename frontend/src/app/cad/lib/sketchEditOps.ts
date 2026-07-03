@@ -6,7 +6,7 @@ import { findEntity, findPoint } from './types';
 import {
   addPoint, addLine, addArc, addArcByPoints, addCircle, addCircleByPoint,
   addEllipseByPoints, addSplineByPoints, addConstraint, deletePrimitive,
-  addRectangleCorners, addRectangleCenter,
+  addRectangleCorners, addRectangleCenter, setConstructionFlag,
   ORIGIN_POINT_ID,
 } from './store';
 import type { Pt } from './geometry';
@@ -255,7 +255,8 @@ export function previewExtendLine(state: SketchState, lineId: string, clickPoint
 export function trimAt(state: SketchState, entityId: string, clickPoint: Pt): OpResult {
   const e = findEntity(state, entityId);
   if (!e) return { state, error: 'Entity not found' };
-  if (e.construction) return { state, error: 'Cannot trim construction geometry' };
+  // REQ 866: construction geometry trims like regular geometry (survivors
+  // keep their construction flag; see splitLineKeepingOnly / trimCircle/Arc).
   switch (e.kind) {
     case 'line':   return trimLine(state, e as LineEntity, clickPoint);
     case 'circle': return trimCircle(state, e as CircleEntity, clickPoint);
@@ -380,7 +381,7 @@ function splitLineKeepingOnly(
     // existing constraints rather than spawning a parallel coincident.
     const paRes = acquireOrCreatePoint(s, p0.x, p0.y); s = paRes.state;
     const pbRes = acquireOrCreatePoint(s, p1.x, p1.y); s = pbRes.state;
-    const lr = addLine(s, paRes.id, pbRes.id); s = lr.state;
+    const lr = addLine(s, paRes.id, pbRes.id, line.construction ? { construction: true } : undefined); s = lr.state;
     newIds.push(lr.id);
     // Pin each freshly-created endpoint to the curve that bounded it.
     // Skip when the (reused) point is ALREADY coincident with that
@@ -529,13 +530,13 @@ function isDirectionConstraint(type: ConstraintType): boolean {
 interface LineHit { t: number; intersectedEntityId: string; }
 
 /** Hit parameters (t in [0,1]) where `line` is crossed by every other
- * non-construction curve. Excludes endpoint touches. */
+ * curve (construction included — REQ 866). Excludes endpoint touches. */
 function collectLineHits(
   state: SketchState, line: LineEntity, a: Pt, b: Pt,
 ): LineHit[] {
   const out: LineHit[] = [];
   for (const e of state.entities) {
-    if (e.id === line.id || e.construction) continue;
+    if (e.id === line.id) continue;  // REQ 866: construction curves are valid trim boundaries
     if (e.kind === 'line') {
       const oa = findPoint(state, e.startId);
       const ob = findPoint(state, e.endId);
@@ -655,6 +656,7 @@ function trimCircle(state: SketchState, circle: CircleEntity, click: Pt): OpResu
   const endId = resolveEndpoint(prevHit);
   const ar = addArcByPoints(s, centerId, startId, endId, true);
   s = ar.state;
+  if (circle.construction) s = setConstructionFlag(s, [ar.id], true);  // REQ 866
   s = inheritConstraintsOntoEntity(s, circle.id, ar.id, inheritedConstraints);
   return { state: s, affectedIds: [ar.id] };
 }
@@ -754,6 +756,7 @@ function trimArc(state: SketchState, arc: ArcEntity, click: Pt): OpResult {
     const endId   = resolveEndpoint(k.h1, k.o1, arc.endId);
     const ar = addArcByPoints(s, centerId, startId, endId, arc.ccw);
     s = ar.state;
+    if (arc.construction) s = setConstructionFlag(s, [ar.id], true);  // REQ 866
     newIds.push(ar.id);
   }
   if (newIds.length > 0) {
@@ -810,7 +813,7 @@ function collectCircleHits(state: SketchState, circle: CircleEntity, center: Pt)
     }
   }
   for (const e of state.entities) {
-    if (e.id === circle.id || e.construction) continue;
+    if (e.id === circle.id) continue;  // REQ 866: construction curves are valid trim boundaries
     if (e.kind === 'line') {
       const a = findPoint(state, e.startId);
       const b = findPoint(state, e.endId);
@@ -872,7 +875,7 @@ function collectArcHits(
     if (angleInArcSweep(ang, startA, endA, arc.ccw)) out.push({ angle: ang, pointId: e.id });
   }
   for (const e of state.entities) {
-    if (e.id === arc.id || e.construction) continue;
+    if (e.id === arc.id) continue;  // REQ 866: construction curves are valid trim boundaries
     if (e.kind === 'line') {
       const a = findPoint(state, e.startId);
       const b = findPoint(state, e.endId);

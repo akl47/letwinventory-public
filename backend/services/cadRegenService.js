@@ -13,13 +13,11 @@
 // and can be dropped + rebuilt at any time. See
 // `docs/cad-architecture-pivot-plan.md` for the broader design.
 //
-// Phase 1 v1 limits (extension points called out as TODOs):
-//   - Only extrude features. Cut/revolve/sweep/loft land in Phase 2.
-//   - upstreamHash is always '' because no current feature kind consumes
-//     upstream BRep yet. Cuts/fillets will populate this when they land.
-//   - No streaming — returns the full geometry payload in the response.
-//     The cadStreamService skeleton is in place for the Phase 1.5
-//     incremental-edit path.
+// Cache keying: prism-stage entries use (featureId, paramHash,
+// upstreamHash='') while compose/blend/shell/pattern stages key
+// upstreamHash = the upstream body's paramHash, so an upstream edit
+// cascades invalidation down the body chain. Results stream per-feature
+// over the WebSocket (cadStreamService) as they resolve.
 
 const crypto = require('crypto');
 // Imported as a namespace (not destructured) so tests can swap the kernel via
@@ -397,12 +395,19 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
     _captureSnapPrev();
     _snapPrev = { featureId: feature.id, bodiesBefore: new Map(bodies.map(b => [b.id, b.brep])) };
     if (feature.type === 'origin') continue;
-    if (feature.suppressed === true) {
+    // REQ 610: suppression is the only regen-exclusion mechanism for solid
+    // features. Legacy docs (and old commits) may still carry visible:false
+    // on solid features from the era when hide skipped regen — treat those
+    // exactly as suppressed so historical geometry reproduces. Datum kinds
+    // keep visible as a render-only toggle (they produce no solid geometry,
+    // so skipping them here just hides the datum in the viewer).
+    const isDatumKind = feature.type === 'datumPlane' || feature.type === 'datumAxis' || feature.type === 'datumPoint';
+    if (feature.suppressed === true || (!isDatumKind && feature.visible === false)) {
       console.log(`[cadRegen] skipping ${feature.id} (suppressed)`);
       continue;
     }
-    if (feature.visible === false) {
-      console.log(`[cadRegen] skipping ${feature.id} (hidden)`);
+    if (isDatumKind && feature.visible === false) {
+      console.log(`[cadRegen] skipping ${feature.id} (hidden datum)`);
       continue;
     }
     if (rollbackCutoff !== null && featureIdx >= rollbackCutoff) {
@@ -1005,7 +1010,15 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
   {
     const usedSketchIds = new Set();
     for (const f of featureTree.features) {
-      if (f && f.suppressed !== true && f.sketchId) usedSketchIds.add(f.sketchId);
+      if (!f) continue;
+      // Skip features regen skipped: suppressed, or legacy hidden (REQ 610 —
+      // visible:false on a solid feature is legacy suppression).
+      const datumKind = f.type === 'datumPlane' || f.type === 'datumAxis' || f.type === 'datumPoint';
+      if (f.suppressed === true || (!datumKind && f.visible === false)) continue;
+      if (f.sketchId) usedSketchIds.add(f.sketchId);
+      if (f.profileSketchId) usedSketchIds.add(f.profileSketchId);
+      if (f.pathSketchId) usedSketchIds.add(f.pathSketchId);
+      if (Array.isArray(f.sketchIds)) for (const sid of f.sketchIds) usedSketchIds.add(sid);
     }
     const dangling = _danglingHostFaceWarnings(sketchDoc, faceMap, usedSketchIds);
     for (const w of dangling.warnings) errors.push(w);

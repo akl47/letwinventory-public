@@ -12,6 +12,10 @@ export interface SolveResult {
   status: SolveStatus_;
   state: SketchState;
   dof: number;
+  /** REQ 860: on an inconsistent solve, the sketch-constraint ids that
+   * participate in the conflict (mapped back from PlaneGCS's conflicting
+   * primitive tags). Empty/absent when the solver names none. */
+  conflicting?: string[];
 }
 
 export type GcsModule = unknown; // retained for backward-compat call sites
@@ -751,8 +755,29 @@ export async function solveSketch(
     return { status: 'ok', state: newState, dof };
   }
 
+  // REQ 860: map PlaneGCS's conflicting primitive ids back to sketch
+  // constraint ids. Primitive-id conventions: a plain constraint emits
+  // primitives with `id === c.id`; multi-primitive translations use
+  // `${c.id}-suffix`; solver-internal synthetics use `_prefix_${c.id}`.
+  let conflicting: string[] | undefined;
+  try {
+    if (wrapper.has_gcs_conflicting_constraints()) {
+      const raw = wrapper.get_gcs_conflicting_constraints();
+      const cids = new Set(state.constraints.map(c => c.id));
+      const mapped = new Set<string>();
+      for (const pid of raw) {
+        if (cids.has(pid)) { mapped.add(pid); continue; }
+        const synthetic = pid.match(/^_[a-zA-Z]+_(.+)$/);
+        if (synthetic && cids.has(synthetic[1])) { mapped.add(synthetic[1]); continue; }
+        for (const cid of cids) {
+          if (pid.startsWith(cid + '-')) { mapped.add(cid); break; }
+        }
+      }
+      if (mapped.size) conflicting = [...mapped];
+    }
+  } catch { /* diagnostics only — never fail the solve path over them */ }
   wrapper.clear_data();
-  return { status: 'inconsistent', state, dof };
+  return { status: 'inconsistent', state, dof, conflicting };
 }
 
 /**

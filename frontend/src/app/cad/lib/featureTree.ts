@@ -102,22 +102,84 @@ export function updateFeatureParam<T extends Feature>(
   };
 }
 
-// REQ 608 cascade: drops every sketch-hosted feature whose sketchId (or
-// profileSketchId/pathSketchId for Sweep variants) matches. Origin
-// features and any future features without a sketch ref are unaffected.
+// REQ 608: single source of truth for "does this feature consume this
+// sketch?" — used by both the deletion cascade below and the editor's
+// pre-delete dependent scan so the two can never disagree on a kind.
+export function featureReferencesSketch(f: Feature, sketchId: string): boolean {
+  switch (f.type) {
+    case 'extrude': case 'cutExtrude': case 'revolve': case 'cutRevolve':
+      return f.sketchId === sketchId;
+    case 'sweep': case 'cutSweep':
+      return f.profileSketchId === sketchId || f.pathSketchId === sketchId;
+    case 'loft':
+      return f.sketchIds.includes(sketchId);
+    default:
+      return false;
+  }
+}
+
+// REQ 608 cascade: drops every sketch-hosted feature that references the
+// sketch (extrude/revolve variants, sweep profile OR path, loft profiles).
+// Origin features and any future features without a sketch ref are unaffected.
 export function removeFeaturesReferencingSketch(tree: FeatureTree, sketchId: string): FeatureTree {
   return {
-    features: tree.features.filter(f => {
-      if (f.type === 'extrude' || f.type === 'cutExtrude' || f.type === 'revolve' || f.type === 'cutRevolve') {
-        return f.sketchId !== sketchId;
-      }
-      if (f.type === 'sweep' || f.type === 'cutSweep') {
-        return f.profileSketchId !== sketchId && f.pathSketchId !== sketchId;
-      }
-      return true;
-    }),
+    features: tree.features.filter(f => !featureReferencesSketch(f, sketchId)),
     nextFeatureSeq: tree.nextFeatureSeq,
   };
+}
+
+/** Datum feature kinds — their `visible` flag is render-only (they produce no
+ * solid geometry), unlike solid features where hiding was regen-affecting. */
+const DATUM_KINDS = new Set(['datumPlane', 'datumAxis', 'datumPoint']);
+
+/** REQ 610: upgrade a loaded document in memory — legacy `visible: false` on a
+ * SOLID feature becomes `suppressed: true` (hide-that-skips-regen is dead;
+ * suppression is the explicit mechanism). Datum kinds keep `visible` as their
+ * render-only toggle. Returns the same object when nothing needs upgrading so
+ * callers can cheaply detect no-ops. */
+export function upgradeFeatureTree(tree: FeatureTree): FeatureTree {
+  let changed = false;
+  const features = tree.features.map(f => {
+    if (f.type === 'origin' || DATUM_KINDS.has(f.type)) return f;
+    if ((f as { visible?: boolean }).visible !== false) return f;
+    changed = true;
+    const next = { ...f, suppressed: true } as Feature;
+    delete (next as { visible?: boolean }).visible;
+    return next;
+  });
+  return changed ? { ...tree, features } : tree;
+}
+
+/** REQ 745: per-body render visibility on the featureTree blob. Visible is
+ * the default, so setting true removes the key (keeps the map minimal). */
+export function setBodyVisibility(tree: FeatureTree, bodyId: string, visible: boolean): FeatureTree {
+  const map = { ...(tree.bodyVisibility ?? {}) };
+  if (visible) delete map[bodyId];
+  else map[bodyId] = false;
+  const next = { ...tree };
+  if (Object.keys(map).length) next.bodyVisibility = map;
+  else delete next.bodyVisibility;
+  return next;
+}
+
+/** REQ 857: user body names. Empty/whitespace clears back to the default label. */
+export function setBodyName(tree: FeatureTree, bodyId: string, name: string): FeatureTree {
+  const trimmed = name.trim();
+  const map = { ...(tree.bodyNames ?? {}) };
+  if (trimmed) map[bodyId] = trimmed;
+  else delete map[bodyId];
+  const next = { ...tree };
+  if (Object.keys(map).length) next.bodyNames = map;
+  else delete next.bodyNames;
+  return next;
+}
+
+/** REQ 858: persisted rollback-bar position. null clears (fully rolled forward). */
+export function setRollbackIndex(tree: FeatureTree, index: number | null): FeatureTree {
+  const next = { ...tree };
+  if (index === null) delete next.rollbackIndex;
+  else next.rollbackIndex = index;
+  return next;
 }
 
 export function isOriginFeature(f: Feature): f is OriginFeature { return f.type === 'origin'; }

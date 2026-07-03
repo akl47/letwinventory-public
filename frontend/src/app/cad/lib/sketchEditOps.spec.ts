@@ -63,6 +63,38 @@ describe('trimAt — lines', () => {
     expect(lineCount(r.state)).toBe(2);
   });
 
+  it('trims construction lines and keeps the survivors construction (REQ 866)', () => {
+    let s = emptySketchState();
+    // Construction horizontal centerline crossed by two regular verticals.
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const main = addLine(s, a.id, b.id, { construction: true }); s = main.state;
+    for (const x of [3, 7]) {
+      const p1 = addPoint(s, x, -1); s = p1.state;
+      const p2 = addPoint(s, x, 1); s = p2.state;
+      const vl = addLine(s, p1.id, p2.id); s = vl.state;
+    }
+    const r = trimAt(s, main.id, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    expect(findEntity(r.state, main.id)).toBeUndefined();
+    const stubs = r.state.entities.filter(
+      (e): e is LineEntity => e.kind === 'line' && e.construction === true);
+    expect(stubs.length).toBe(2);
+  });
+
+  it('uses construction geometry as a trim boundary (REQ 866)', () => {
+    let s = emptySketchState();
+    const main = horizontalLine(s); s = main.state;
+    // A construction vertical crossing at x=4 bounds the trim.
+    const p1 = addPoint(s, 4, -1); s = p1.state;
+    const p2 = addPoint(s, 4, 1); s = p2.state;
+    const vl = addLine(s, p1.id, p2.id, { construction: true }); s = vl.state;
+    const r = trimAt(s, main.lineId, { x: 8, y: 0 });
+    expect(r.error).toBeUndefined();
+    // The [0,4] stub survives (construction cutter bounded the span).
+    expect(lineCount(r.state)).toBe(2);
+  });
+
   it('deletes the entire line when no other curves intersect it', () => {
     let s = emptySketchState();
     const main = horizontalLine(s); s = main.state;
@@ -72,7 +104,7 @@ describe('trimAt — lines', () => {
     expect(lineCount(r.state)).toBe(0);
   });
 
-  it('refuses to trim construction geometry', () => {
+  it('deletes an unbounded construction line on trim (REQ 866 — no refusal)', () => {
     let s = emptySketchState();
     const main = horizontalLine(s); s = main.state;
     // Mark the line as construction.
@@ -81,8 +113,8 @@ describe('trimAt — lines', () => {
       entities: s.entities.map(e => e.id === main.lineId ? { ...e, construction: true } : e),
     };
     const r = trimAt(s, main.lineId, { x: 5, y: 0 });
-    expect(r.error).toBeDefined();
-    expect(findEntity(r.state, main.lineId)).toBeDefined();
+    expect(r.error).toBeUndefined();
+    expect(findEntity(r.state, main.lineId)).toBeUndefined();
   });
 
   it('trims a converted (on-edge) line — sub-segment survives and inherits the link', () => {

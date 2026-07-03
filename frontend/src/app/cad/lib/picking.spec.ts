@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { distanceToEntity, pickEntity } from './picking';
+import { distanceToEntity, pickEntity, entityTouchesRect } from './picking';
 import type {
   SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity, EllipseEntity, SplineEntity,
 } from './types';
@@ -157,6 +157,45 @@ describe('picking: parametric closest-point-on-entity (REQ 564)', () => {
       const s = state(p0, p1, p2, p3, spl);
       // First control point lies on the curve (clamped knot vector).
       expect(distanceToEntity(s, spl, { x: 0, y: 0 })).toBeLessThan(0.5);
+    });
+  });
+
+  describe('entityTouchesRect (REQ 863 — crossing selection)', () => {
+    const rect = { minX: 2, minY: -1, maxX: 6, maxY: 1 };
+
+    it('selects a line the rect merely crosses (endpoints outside)', () => {
+      const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 0 };
+      const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: 0 };
+      const l: LineEntity = { kind: 'line', id: 'l', startId: 'a', endId: 'b' };
+      const s = state(a, b, l);
+      expect(entityTouchesRect(s, l, rect)).toBe(true);
+    });
+
+    it('rejects a line entirely outside the rect', () => {
+      const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 5 };
+      const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: 5 };
+      const l: LineEntity = { kind: 'line', id: 'l', startId: 'a', endId: 'b' };
+      const s = state(a, b, l);
+      expect(entityTouchesRect(s, l, rect)).toBe(false);
+    });
+
+    it('selects a circle whose rim crosses the rect, but not one enclosing it untouched', () => {
+      const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+      const rim: CircleEntity = { kind: 'circle', id: 'ci', centerId: 'c', radius: 4 };
+      const s = state(c, rim);
+      expect(entityTouchesRect(s, rim, rect)).toBe(true);
+      // Huge circle far outside the rect: rect fully inside, rim never touches.
+      const big: CircleEntity = { kind: 'circle', id: 'big', centerId: 'c', radius: 100 };
+      const s2 = state(c, big);
+      expect(entityTouchesRect(s2, big, rect)).toBe(false);
+    });
+
+    it('selects a point inside the rect only', () => {
+      const inP: PointEntity = { kind: 'point', id: 'i', x: 3, y: 0 };
+      const outP: PointEntity = { kind: 'point', id: 'o', x: 30, y: 0 };
+      const s = state(inP, outP);
+      expect(entityTouchesRect(s, inP, rect)).toBe(true);
+      expect(entityTouchesRect(s, outP, rect)).toBe(false);
     });
   });
 });

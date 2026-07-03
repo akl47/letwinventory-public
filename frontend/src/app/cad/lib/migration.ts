@@ -3,6 +3,7 @@ import type {
   SketchDocument, Sketch, FeatureTree, Feature,
 } from './types';
 import { ensureOriginPoint } from './store';
+import { upgradeFeatureTree } from './featureTree';
 
 // Legacy constraint types that have been folded into `coincident`. They
 // remain in old persisted documents but can't be expressed in the live
@@ -220,5 +221,7 @@ export function migrateFeatureTree(tree: FeatureTree): FeatureTree {
     }
     return next as Feature;
   });
-  return { ...tree, features };
+  // REQ 610: legacy `visible:false` on solid features upgrades to
+  // `suppressed:true` (hide-that-skips-regen is dead; datums keep visible).
+  return upgradeFeatureTree({ ...tree, features });
 }

@@ -20,6 +20,46 @@ describe('inferLineEnd', () => {
     expect(r.hint).toBe('vertical');
   });
 
+  it('infers PARALLEL against an existing angled line (REQ 864)', () => {
+    // Reference line at 30°, far from the drawing area (no on-curve hit).
+    const a: PointEntity = { kind: 'point', id: 'a', x: 100, y: 100 };
+    const b: PointEntity = { kind: 'point', id: 'b', x: 100 + 10 * Math.cos(Math.PI / 6), y: 100 + 10 * Math.sin(Math.PI / 6) };
+    const l: LineEntity = { kind: 'line', id: 'ref', startId: 'a', endId: 'b' };
+    const state: SketchState = { entities: [a, b, l], constraints: [] };
+    // Draw from origin at ~32° (within 5° of the reference's 30°).
+    const cursor = { x: 10 * Math.cos(32 * Math.PI / 180), y: 10 * Math.sin(32 * Math.PI / 180) };
+    const r = inferLineEnd(state, { x: 0, y: 0 }, cursor);
+    expect(r.constraint?.type).toBe('parallel');
+    expect(r.constraint?.targets).toEqual([{ self: true }, { entityId: 'ref' }]);
+    // Snapped direction is exactly 30°.
+    const ang = Math.atan2(r.snapped.y, r.snapped.x) * 180 / Math.PI;
+    expect(ang).toBeCloseTo(30, 5);
+    expect(r.hint).toBe('parallel');
+  });
+
+  it('infers PERPENDICULAR against an existing angled line (REQ 864)', () => {
+    const a: PointEntity = { kind: 'point', id: 'a', x: 100, y: 100 };
+    const b: PointEntity = { kind: 'point', id: 'b', x: 100 + 10 * Math.cos(Math.PI / 6), y: 100 + 10 * Math.sin(Math.PI / 6) };
+    const l: LineEntity = { kind: 'line', id: 'ref', startId: 'a', endId: 'b' };
+    const state: SketchState = { entities: [a, b, l], constraints: [] };
+    // Draw at ~118° — within 5° of 30° + 90°.
+    const cursor = { x: 10 * Math.cos(118 * Math.PI / 180), y: 10 * Math.sin(118 * Math.PI / 180) };
+    const r = inferLineEnd(state, { x: 0, y: 0 }, cursor);
+    expect(r.constraint?.type).toBe('perpendicular');
+    const ang = Math.atan2(r.snapped.y, r.snapped.x) * 180 / Math.PI;
+    expect(ang).toBeCloseTo(120, 5);
+  });
+
+  it('does not infer parallel against axis-aligned reference lines (H/V own those)', () => {
+    const a: PointEntity = { kind: 'point', id: 'a', x: 100, y: 100 };
+    const b: PointEntity = { kind: 'point', id: 'b', x: 120, y: 100 };  // horizontal ref
+    const l: LineEntity = { kind: 'line', id: 'ref', startId: 'a', endId: 'b' };
+    const state: SketchState = { entities: [a, b, l], constraints: [] };
+    // ~2° from horizontal → the HORIZONTAL branch fires, not parallel.
+    const r = inferLineEnd(state, { x: 0, y: 0 }, { x: 10, y: 0.3 });
+    expect(r.constraint?.type).toBe('horizontal');
+  });
+
   it('returns the raw cursor when the angle is too oblique', () => {
     const r = inferLineEnd(empty, { x: 0, y: 0 }, { x: 10, y: 7 });
     expect(r.snapped).toEqual({ x: 10, y: 7 });

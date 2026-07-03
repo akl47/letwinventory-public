@@ -168,6 +168,36 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
     expect(res.status).toBe('inconsistent');
   });
 
+  it('names the conflicting constraint ids on a failed solve (REQ 860)', async () => {
+    const state: SketchState = {
+      entities: [pt('p1', 0, 0), pt('p2', 1, 0)],
+      constraints: [
+        c('c0', 'fixed', ['p1']),
+        c('c1', 'distance', ['p1', 'p2'], 5),
+        c('c2', 'distance', ['p1', 'p2'], 10),
+      ],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('inconsistent');
+    // PlaneGCS names the constraints participating in the conflict — at
+    // minimum one of the two contradictory dims; never unrelated ids.
+    expect(res.conflicting && res.conflicting.length).toBeTruthy();
+    for (const id of res.conflicting!) {
+      expect(['c0', 'c1', 'c2']).toContain(id);
+    }
+    expect(res.conflicting!.some(id => id === 'c1' || id === 'c2')).toBe(true);
+  });
+
+  it('reports no conflicting ids on a successful solve', async () => {
+    const state: SketchState = {
+      entities: [pt('p1', 0, 0), pt('p2', 1, 0)],
+      constraints: [c('c0', 'fixed', ['p1']), c('c1', 'distance', ['p1', 'p2'], 5)],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    expect(res.conflicting ?? []).toEqual([]);
+  });
+
   it('construction points stay at their initial position regardless of solver pressure (REQ 560)', async () => {
     const state: SketchState = {
       entities: [pt('ref1', 3, 4, true), pt('p2', 0, 0)],

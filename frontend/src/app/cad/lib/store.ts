@@ -1015,6 +1015,24 @@ export function removeConstraint(state: SketchState, constraintId: string): Sket
   return { ...state, constraints: state.constraints.filter(c => c.id !== constraintId) };
 }
 
+/** REQ 855: flip a dimension between driven (reference — excluded from the
+ * solve, rendered in parentheses) and driving. The flag is stored only when
+ * true, matching addConstraint's convention. Callers re-solve afterwards:
+ * re-driving a dim in a fully-determined chain can over-define the sketch,
+ * which the caller must detect and reject. */
+export function setConstraintDriven(state: SketchState, constraintId: string, driven: boolean): SketchState {
+  return {
+    ...state,
+    constraints: state.constraints.map(c => {
+      if (c.id !== constraintId) return c;
+      const next = { ...c };
+      if (driven) next.driven = true;
+      else delete next.driven;
+      return next;
+    }),
+  };
+}
+
 /**
  * Set every entity in `ids` to construction (or non-construction).
  *

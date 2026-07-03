@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   emptySketchState, addPoint, addLine, addCircle, addArc, movePoint, deletePrimitive,
-  addConstraint, setDistanceValue,
+  addConstraint, setDistanceValue, setConstraintDriven,
   addRectangleCorners, addRectangleCenter, addRectangle3PtCorner, addRectangle3PtCenter, addParallelogram,
   addPolygon, addSlotStraight, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
   addCircle3Points, addArc3Points, addEllipse, addEllipticalArc, addSpline,
@@ -304,6 +304,29 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       const { state: s2, constraint } = addConstraint(s, 'fixed', [p1.id]);
       const s3 = setDistanceValue(s2, constraint.id, 99);
       expect(s3.constraints[0].value).toBeUndefined();
+    });
+  });
+
+  describe('setConstraintDriven (REQ 855)', () => {
+    it('flips a driving dimension to driven and back', () => {
+      let s = emptySketchState();
+      const p1 = addPoint(s, 0, 0); s = p1.state;
+      const p2 = addPoint(s, 5, 0); s = p2.state;
+      const { state: s2, constraint } = addConstraint(s, 'distance', [p1.id, p2.id], 10);
+      const s3 = setConstraintDriven(s2, constraint.id, true);
+      expect(s3.constraints[0].driven).toBe(true);
+      const s4 = setConstraintDriven(s3, constraint.id, false);
+      expect(s4.constraints[0].driven).toBeUndefined();
+    });
+
+    it('is immutable and a no-op for unknown ids', () => {
+      let s = emptySketchState();
+      const p1 = addPoint(s, 0, 0); s = p1.state;
+      const p2 = addPoint(s, 5, 0); s = p2.state;
+      const { state: s2 } = addConstraint(s, 'distance', [p1.id, p2.id], 10);
+      const s3 = setConstraintDriven(s2, 'no-such-id', true);
+      expect(s3.constraints).toEqual(s2.constraints);
+      expect(s2.constraints[0].driven).toBeUndefined();
     });
   });
 

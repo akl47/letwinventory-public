@@ -1296,6 +1296,15 @@ export interface FeatureTree {
   configurations?: CadConfiguration[];
   /** Which configuration regen applies. Absent = base document (Default). */
   activeConfigurationId?: string;
+  /** REQ 745 — per-body render visibility, keyed by body id. Missing key =
+   * visible. Persisted with the working copy; view-only (never affects regen). */
+  bodyVisibility?: Record<string, boolean>;
+  /** REQ 857 — user-assigned body names, keyed by body id. Missing key =
+   * default "Body N" label. */
+  bodyNames?: Record<string, string>;
+  /** REQ 858 — persisted rollback-bar position (features at index >= this are
+   * skipped in regen). null/absent = fully rolled forward. */
+  rollbackIndex?: number | null;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
