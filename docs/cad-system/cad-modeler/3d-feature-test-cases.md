@@ -41,7 +41,7 @@ Status legend: ✅ generated & regenerates · 🟡 generated, needs eyeball / pa
 | **B16** | Revolve — two-direction / mid-plane | symmetric about the profile plane | |
 | **B17** | Sweep — along open path | profile swept down a path sketch | profile not ⟂ path start |
 | **B18** | Sweep — along arc/closed path | curved/closed path | self-intersecting sweep |
-| **B19** | Loft — two profiles | blended solid between 2 sections on parallel planes | |
+| **B19** ✅ | Loft — two profiles | blended solid between 2 sections on parallel planes | |
 | **B20** | Loft — three+ profiles | multi-section blend | mismatched vertex counts |
 | **B21** | Loft — closed / guide curves | closed loop or guide-curve-controlled | ⬜ if unsupported |
 
