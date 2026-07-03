@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
-  Assembly, AssemblyInstance, AssemblyRegenResponse, BomLine, Placement, Mate, MateType, MateRef, EligiblePart,
+  Assembly, AssemblyDoc, AssemblyInstance, AssemblyRegenResponse, BomLine, Placement, Mate, MateType, MateRef, EligiblePart,
   AssemblyPattern, PatternKind, DisplayState, MassProperties, InterferencePair,
 } from '../cad/lib/assembly.types';
 
@@ -31,6 +31,13 @@ export class AssemblyService {
 
   delete(id: number): Observable<void> {
     return this.http.delete<void>(`${this.apiUrl}/${id}`);
+  }
+
+  /** REQ 764 — derive radial explode offsets from instance placements and
+   * persist them on the assembly doc. */
+  autoExplode(id: number, spread?: number): Observable<{ explode: NonNullable<AssemblyDoc['explode']>; assembly: Assembly }> {
+    return this.http.post<{ explode: NonNullable<AssemblyDoc['explode']>; assembly: Assembly }>(
+      `${this.apiUrl}/${id}/explode/auto`, spread !== undefined ? { spread } : {});
   }
 
   insertInstance(id: number, body: { partID: number; placement?: Placement; grounded?: boolean; originMate?: boolean; branch?: string }):

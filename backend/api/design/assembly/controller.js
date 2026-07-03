@@ -758,9 +758,11 @@ module.exports = {
   },
 };
 
-// Bake an instance placement (rotate-about-origin then translate) into a child
-// BRep via the kernel pattern op, mirroring the MoveCopyBody dispatch.
-async function placeBrep(brep, placement, client) {
+// Bake an instance placement (rotate-about-origin, translate, then any
+// mirror reflection) into a child BRep via the kernel pattern op, mirroring
+// the MoveCopyBody dispatch. REQ 856: mirror-pattern copies export with
+// genuinely reflected geometry.
+async function placeBrep(brep, placement, mirror, client) {
   let out = brep;
   const q = (placement && placement.quaternion) || [0, 0, 0, 1];
   const t = (placement && placement.translate) || [0, 0, 0];
@@ -783,6 +785,13 @@ async function placeBrep(brep, placement, client) {
     });
     out = rpc.brepBytes;
   }
+  if (mirror && Array.isArray(mirror.normal)) {
+    const rpc = await client.call('buildPattern', {
+      brepBytes: out,
+      transforms: [{ kind: 'mirror', origin: mirror.origin || [0, 0, 0], normal: mirror.normal }],
+    });
+    out = rpc.brepBytes;
+  }
   return out;
 }
 
@@ -795,7 +804,7 @@ async function exportAssembly(req, res, format) {
     const breps = [];
     for (const body of composed.bodies) {
       if (!body.brep) continue;
-      breps.push(await placeBrep(body.brep, body.placement, client));
+      breps.push(await placeBrep(body.brep, body.placement, body.mirror, client));
     }
     if (!breps.length) return res.status(422).json({ error: 'Assembly has no body geometry to export' });
     const out = await cadRegenService.exportBodyBreps(breps, format, { kernelClient: client });

@@ -132,6 +132,30 @@ export class AssemblyEditController {
   });
 
   displayStates = computed<DisplayState[]>(() => this.assembly()?.assemblyDoc?.displayStates || []);
+
+  // REQ 764 — exploded view. Offsets are persisted per instance on the doc
+  // (world vectors at factor 1); the factor slider scales them 0..1 locally.
+  // Purely a render-layer displacement: geometry() shifts each instance's
+  // meshes, the stored placements and the solver never see it.
+  explodeEnabled = signal(false);
+  explodeFactor = signal(1);
+  explodeOffsets = computed<Record<string, [number, number, number]>>(
+    () => this.assembly()?.assemblyDoc?.explode?.offsets || {});
+  explodeBusy = signal(false);
+
+  toggleExplode() {
+    if (this.explodeEnabled()) { this.explodeEnabled.set(false); return; }
+    if (Object.keys(this.explodeOffsets()).length > 0) { this.explodeEnabled.set(true); return; }
+    // First use on this assembly — derive + persist radial offsets.
+    const id = this.assembly()?.id;
+    if (!id || this.explodeBusy()) return;
+    this.explodeBusy.set(true);
+    this.assemblyApi.autoExplode(id).subscribe({
+      next: (r) => { this.assembly.set(r.assembly); this.explodeEnabled.set(true); this.explodeBusy.set(false); },
+      error: (e) => { this.explodeBusy.set(false); this.errors.showError(e?.error?.error || 'Auto-explode failed'); },
+    });
+  }
+
   sectionEnabled = signal(false);
   sectionAxis = signal<'X' | 'Y' | 'Z'>('X');
   sectionPos = signal(0);
@@ -235,25 +259,44 @@ export class AssemblyEditController {
     const r = this.regen();
     if (!r) return EMPTY_GEOMETRY;
     const hidden = new Set(this.instances().filter((i) => i.visible === false).map((i) => i.instanceId));
+    // REQ 764 — explode displacement per instance (render-only). Pattern
+    // copies (id `seed#patternN`) inherit their seed's offset.
+    const exOffsets = this.explodeEnabled() ? this.explodeOffsets() : null;
+    const exFactor = this.explodeFactor();
+    const offsetFor = (instanceId: string): [number, number, number] | null => {
+      if (!exOffsets || exFactor <= 0) return null;
+      const o = exOffsets[instanceId] ?? exOffsets[String(instanceId).split('#')[0]];
+      if (!o) return null;
+      return [o[0] * exFactor, o[1] * exFactor, o[2] * exFactor];
+    };
     const faces: FaceMesh[] = [];
     const vertices: ModelTopology['vertices'] = [];
     const edges: ModelTopology['edges'] = [];
     let vi = 0, ei = 0;
     for (const body of r.bodies) {
       if (hidden.has(body.instanceId)) continue;
+      const off = offsetFor(body.instanceId);
+      const pt = (p: [number, number, number]): [number, number, number] =>
+        off ? [p[0] + off[0], p[1] + off[1], p[2] + off[2]] : p;
       for (const f of body.faces) {
+        const positions = new Float32Array(f.positions);
+        if (off) {
+          for (let i = 0; i < positions.length; i += 3) {
+            positions[i] += off[0]; positions[i + 1] += off[1]; positions[i + 2] += off[2];
+          }
+        }
         faces.push({
           faceId: f.faceId || f.persistentName,
-          positions: new Float32Array(f.positions),
+          positions,
           normals: new Float32Array(f.normals),
           indices: new Uint32Array(f.indices),
           featureId: body.instanceId,
           isFlat: f.surface?.kind === 'plane',
         });
       }
-      for (const v of body.vertices) vertices.push({ id: `v${vi++}`, position: [v[0], v[1], v[2]] });
+      for (const v of body.vertices) vertices.push({ id: `v${vi++}`, position: pt([v[0], v[1], v[2]]) });
       for (const e of body.edges) {
-        const poly = e.polyline as Array<[number, number, number]>;
+        const poly = (e.polyline as Array<[number, number, number]>)?.map(pt);
         if (!poly || poly.length < 2) continue;
         edges.push({ id: `e${ei++}`, isStraight: poly.length === 2, endpoints: [poly[0], poly[poly.length - 1]], polyline: poly.length > 2 ? poly : undefined });
       }

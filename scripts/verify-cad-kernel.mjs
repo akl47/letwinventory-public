@@ -23,7 +23,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Per-case expectation: minimum face count on the busiest body after regen.
 // (Datum-only cases produce no body → 0.) Pulled from observed-correct output.
 const EXPECT = {
-  B01: 6, B02: 6, B14: 3, U01: 10, U07: 7, U09: 9, U10: 8,
+  B01: 6, B02: 6, B14: 3, B19: 6, U01: 10, U07: 7, U09: 9, U10: 8,
   D01: 7, D06: 7, D10: 11, R01: 0, M01: 10, M04: 6,
 };
 

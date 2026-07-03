@@ -576,11 +576,12 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
       name: b.name || null,
       instanceId,
       partID: unit.partID,
-      // BRep is the seed's UNTRANSFORMED child brep; placement is applied
-      // kernel-side at export. Pattern/mirror copies carry the seed brep + their
-      // own placement (mirror copies are export-approximated as the seed for now).
+      // BRep is the seed's UNTRANSFORMED child brep; placement (and, for
+      // mirror copies, the world reflection plane) is applied kernel-side at
+      // export/interference: rotate → translate → mirror (REQ 856).
       brep: b.brep,
       placement: pose ? { translate: pose.translate, quaternion: pose.quaternion } : null,
+      mirror: unit.mirror || null,
       derivedFrom: unit.derivedFrom,
       // Volume is invariant under rigid/mirror transforms; the centroid moves.
       volume: typeof b.volume === 'number' ? b.volume : undefined,
@@ -624,6 +625,10 @@ function expandPatterns(patterns, renderUnits, errors) {
         instanceId: id, partID: seed.partID, grounded: false, childGeo: seed.childGeo,
         pose: { translate: st, quaternion: sq },
         xform: mirrorTransform(sq, st, pat.planeOrigin || [0, 0, 0], pat.planeNormal || [1, 0, 0]),
+        // World-space reflection applied AFTER the seed pose — export and
+        // interference bake it kernel-side (REQ 856) so mirror copies use
+        // genuinely reflected geometry, not the unmirrored seed.
+        mirror: { origin: pat.planeOrigin || [0, 0, 0], normal: pat.planeNormal || [1, 0, 0] },
         derivedFrom: { patternId: pat.patternId, seedInstanceId: seed.instanceId, kind: 'mirror' },
       });
       continue;

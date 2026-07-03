@@ -81,6 +81,10 @@ export interface AssemblyDoc {
   mates: Mate[];
   patterns?: AssemblyPattern[];
   displayStates?: DisplayState[];
+  /** REQ 764 — exploded view: per-instance world offsets at factor 1, scaled
+   * by `factor` (0 = assembled … 1 = fully exploded). Persisted server-side
+   * via POST /:id/explode/auto and PUT /:id/explode. */
+  explode?: { offsets: Record<string, [number, number, number]>; factor: number };
 }
 
 /** An assembly is a unified DesignCADModel row (isAssembly=true) whose content

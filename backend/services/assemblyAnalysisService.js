@@ -50,9 +50,10 @@ function aabbOverlap(a, b, tol = 1e-6) {
     && a.min[2] <= b.max[2] + tol && a.max[2] >= b.min[2] - tol;
 }
 
-// Bake an instance placement into a BRep via the kernel pattern op (rotate then
-// translate) — mirrors the export path.
-async function placeBrep(brep, placement, client) {
+// Bake an instance placement into a BRep via the kernel pattern op (rotate,
+// translate, then any mirror reflection) — mirrors the export path. REQ 856:
+// mirror-pattern copies must interference-check with reflected geometry.
+async function placeBrep(brep, placement, mirror, client) {
   let out = brep;
   const q = (placement && placement.quaternion) || [0, 0, 0, 1];
   const t = (placement && placement.translate) || [0, 0, 0];
@@ -67,6 +68,10 @@ async function placeBrep(brep, placement, client) {
   }
   if (t[0] || t[1] || t[2]) {
     const rpc = await client.call('buildPattern', { brepBytes: out, transforms: [{ kind: 'translate', dx: t[0], dy: t[1], dz: t[2] }] });
+    out = rpc.brepBytes;
+  }
+  if (mirror && Array.isArray(mirror.normal)) {
+    const rpc = await client.call('buildPattern', { brepBytes: out, transforms: [{ kind: 'mirror', origin: mirror.origin || [0, 0, 0], normal: mirror.normal }] });
     out = rpc.brepBytes;
   }
   return out;
@@ -91,8 +96,8 @@ async function interference(composed, { kernelClient } = {}) {
       let interfering = null;
       if (kernelClient && A.body.brep && B.body.brep) {
         try {
-          const pa = await placeBrep(A.body.brep, A.body.placement, kernelClient);
-          const pb = await placeBrep(B.body.brep, B.body.placement, kernelClient);
+          const pa = await placeBrep(A.body.brep, A.body.placement, A.body.mirror, kernelClient);
+          const pb = await placeBrep(B.body.brep, B.body.placement, B.body.mirror, kernelClient);
           const rpc = await kernelClient.call('buildBoolean', { featureId: 'interference', op: 'common', aBrep: pa, bBrep: pb });
           interfering = ((rpc.solids || []).length > 0) || ((rpc.faces || []).length > 0);
         } catch (e) {

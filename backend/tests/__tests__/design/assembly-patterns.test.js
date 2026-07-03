@@ -52,6 +52,26 @@ describe('assembly component patterns (REQ 760/761)', () => {
     expect(Array.from(composed.bodies[1].faces[0].indices)).toEqual([0, 2, 1]);
   });
 
+  it('mirror copies carry the reflection plane for kernel-side baking (REQ 856)', async () => {
+    const assembly = {
+      partID: 1,
+      assemblyDoc: {
+        instances: [{ instanceId: 'i1', partID: 2, grounded: true, placement: { translate: [5, 0, 0], quaternion: [0, 0, 0, 1] } }],
+        patterns: [{ patternId: 'p1', kind: 'mirror', seedInstanceId: 'i1', planeOrigin: [1, 2, 3], planeNormal: [0, 1, 0] }],
+      },
+    };
+    const composed = await svc.regenerateAssembly(assembly, { resolveChild: async () => stubChild() });
+    // Export/interference bake rotate → translate → mirror from these fields —
+    // without `mirror`, the copy would be placed as the unmirrored seed.
+    const seedBody = composed.bodies[0];
+    const mirrorBody = composed.bodies[1];
+    expect(seedBody.mirror).toBeNull();
+    expect(mirrorBody.mirror).toEqual({ origin: [1, 2, 3], normal: [0, 1, 0] });
+    // The mirror copy keeps the SEED's rigid placement; the reflection is a
+    // separate world-space step applied after it.
+    expect(mirrorBody.placement).toEqual({ translate: [5, 0, 0], quaternion: [0, 0, 0, 1] });
+  });
+
   it('records an error when a pattern references a missing seed', async () => {
     const assembly = {
       partID: 1,

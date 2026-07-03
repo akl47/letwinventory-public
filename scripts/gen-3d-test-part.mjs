@@ -35,9 +35,9 @@ function makeCtx() {
   const features = [{ id: 'f1', type: 'origin' }];
   let skSeq = 1, ftSeq = 2;
   const ftId = () => `f${ftSeq++}`;
-  const sketch = (state) => {
+  const sketch = (state, plane = XY_PLANE) => {
     const id = `sk${String(skSeq++).padStart(3, '0')}`;
-    sketches[id] = { id, hostId: 'datum:xy_plane', name: id, plane: XY_PLANE, state, candidates: [], visible: false, createdAt: 1700000000000 + skSeq * 1000 };
+    sketches[id] = { id, hostId: 'datum:xy_plane', name: id, plane, state, candidates: [], visible: false, createdAt: 1700000000000 + skSeq * 1000 };
     return id;
   };
   const push = (f) => { features.push(f); return f; };
@@ -68,6 +68,14 @@ C('B02', 'Extrude mid-plane', c => {
 C('B14', 'Revolve 360', c => {
   const r = c.rectRaw(0, 0, 8, 15);
   c.push({ id: c.ftId(), type: 'revolve', name: 'B14 — Revolve 360', sketchId: r.sk, axisLineId: r.ids[3], angle: 360, regionIndices: [0], merge: false });
+});
+
+C('B19', 'Loft two sections', c => {
+  // 20×20 base at z=0 lofted to a centered 10×10 at z=15 (REQ 854).
+  const skBottom = c.rect(0, 0, 20, 20);
+  const topPlane = { origin: [0, 0, 15], xAxis: [1, 0, 0], yAxis: [0, 1, 0], normal: [0, 0, 1] };
+  const skTop = c.sketch(L.addRectangleCorners(L.emptySketchState(), 5, 5, 15, 15).state, topPlane);
+  c.push({ id: c.ftId(), type: 'loft', name: 'B19 — Loft two sections', sketchIds: [skBottom, skTop], merge: false });
 });
 
 C('U01', 'Cut-extrude through', c => {
