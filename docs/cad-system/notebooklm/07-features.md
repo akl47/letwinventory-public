@@ -40,7 +40,9 @@ Before touching any feature, `regenerateModel` resolves all equation formulas to
 
 ### Step 1: Walk Features in Order
 
-The pipeline iterates front to back. Each feature is skipped if: it is the Origin (no geometry); it has `suppressed` set; it has `visible === false`; or it is at or past the **rollback bar** — a movable line in the tree that temporarily excludes features below it, enabling mid-history insertion.
+The pipeline iterates front to back. Each feature is skipped if: it is the Origin (no geometry); it has `suppressed` set; or it is at or past the **rollback bar** — a movable line in the tree that temporarily excludes features below it, enabling mid-history insertion.
+
+Suppress and hide are now distinct concepts with SolidWorks semantics (REQ 610): solid features can only be *suppressed* (removed from the regeneration entirely), while *visibility* is reserved for things that can meaningfully be shown or hidden without changing the model — datums, sketches, bodies. A legacy `visible === false` on a solid feature is still honored as suppression for old documents, but the editor no longer offers "hide" on solid features.
 
 Skipping is not "produce empty geometry" — it is "pretend this step never ran." Downstream features compose against whatever existed before the skipped feature. Suppress the middle extrude and the fillet after it has no new edges to round; it operates on the earlier body. Suppression can cascade errors downstream.
 
@@ -70,7 +72,7 @@ Two disjoint regions in one sketch — a circle and a triangle that do not touch
 
 ### The BRep Cache
 
-Calling the kernel is expensive: it is a separate Rust process running OpenCascade, reached over a remote-procedure-call channel. Before every kernel call, the pipeline checks a content-addressed cache. The database model is `DesignBRepCache` (BRep = boundary representation, the precise mathematical solid the kernel produces).
+Calling the kernel is expensive: it is a separate C++ process running OpenCASCADE, reached over a remote-procedure-call channel. Before every kernel call, the pipeline checks a content-addressed cache. The database model is `DesignBRepCache` (BRep = boundary representation, the precise mathematical solid the kernel produces).
 
 The cache key is a tuple: model id, feature id, `paramHash`, `upstreamHash`, and `namingVersion`. The `paramHash` is a SHA-256 truncated to 32 hex characters, computed over the feature's fully resolved inputs — the profile, holes, sketch plane, distance, flip flag, end conditions, and any secondary direction. Same inputs → same hash. Different distance → different hash.
 
@@ -82,7 +84,7 @@ A formal requirement in the spec states this property explicitly: editing a glob
 
 ### The namingVersion
 
-The cache key includes a `namingVersion` integer (currently 20). The kernel returns not just a shape but names for its faces and edges, so the rest of the system can refer to "that face" stably. When the kernel's naming scheme or mesh format changes, old cached rows describe geometry in the old scheme. Reusing them produces maddening mismatches. `NAMING_VERSION` is a single shared constant, identical in the backend code and in the kernel; bumping it instantly invalidates all old rows, forcing a clean rebuild. Forgetting to bump it when kernel output changes is a known path to shipping corruption.
+The cache key includes a `namingVersion` integer (currently 45 — the number itself is a fossil record of how many times the kernel's output format has evolved). The kernel returns not just a shape but names for its faces and edges, so the rest of the system can refer to "that face" stably. When the kernel's naming scheme or mesh format changes, old cached rows describe geometry in the old scheme. Reusing them produces maddening mismatches. `NAMING_VERSION` is a single shared constant, identical in the backend code and in the kernel; bumping it instantly invalidates all old rows, forcing a clean rebuild. Forgetting to bump it when kernel output changes is a known path to shipping corruption — so the regen service now also *verifies* at runtime: it pings the kernel before every regeneration, compares the kernel's reported naming-schema version against its own constant, and refuses to regenerate on a mismatch rather than poison the cache with a stale binary's output.
 
 ### Cache Eviction
 
@@ -92,7 +94,9 @@ An eviction service runs hourly and deletes rows untouched for 14 days. Every hi
 
 ### Extrude
 
-Extrude pushes a closed profile straight out, perpendicular to its sketch plane. The feature carries a `sketchId`, a `distance`, and several refinements. A `flipped` flag reverses the growth direction to the other side of the sketch plane. An `endCondition` field selects among: `blind` (exact distance), `midPlane` (symmetric growth both ways), `throughAll` (pierce everything in the way), `upToVertex`, `upToSurface`, `offsetFromSurface`, and `upToBody`. The smart end conditions express design intent — "this boss reaches the top face" — rather than a hard number, so they follow that face if it moves. A `direction2` field enables asymmetric two-direction growth; `regionIndices` selects which loops in a multi-loop sketch to extrude; a `merge` flag controls whether the result fuses into the existing body or seeds a new one.
+Extrude pushes a closed profile straight out, perpendicular to its sketch plane. The feature carries a `sketchId`, a `distance`, and several refinements. A `flipped` flag reverses the growth direction to the other side of the sketch plane. An `endCondition` field selects among: `blind` (exact distance), `midPlane` (symmetric growth both ways), `throughAll` (pierce everything in the way), `upToVertex`, `upToSurface`, `offsetFromSurface`, `upToBody` (grow until meeting a specific named body), and `upToNext` (grow until the next surface encountered). The smart end conditions express design intent — "this boss reaches the top face" — rather than a hard number, so they follow that face if it moves. For up-to-body and up-to-next, the backend sends the target bodies' exact solids to the kernel and the kernel derives the cap surface itself. A `direction2` field enables asymmetric two-direction growth (with its own independent end condition, including up-to variants); `regionIndices` selects which loops in a multi-loop sketch to extrude; a `merge` flag controls whether the result fuses into the existing body or seeds a new one.
+
+When multiple regions are selected with merge on, adjacent edge-touching regions are merged into one connected profile before extrusion (separately extruding edge-touching prisms and fusing them afterward can hang the kernel's boolean engine). With merge off, each selected region seeds its own body — extruding the word "AB" produces one body per letter.
 
 ### Revolve
 
@@ -124,7 +128,7 @@ The solution across all finishing features is to store picks by geometry rather 
 
 ### Fillet
 
-Fillet rounds edges, carrying a list of `EdgeRef3D` picks and a single `radius`. A reserved per-edge `value` field exists for eventual multi-radius support, but the common case is one radius for the whole set.
+Fillet rounds edges, carrying a list of `EdgeRef3D` picks and a single `radius`. A reserved per-edge `value` field exists for eventual multi-radius support, but the common case is one radius for the whole set. A **full-round fillet** variant is also supported: instead of a radius, the user picks three face sets (two sides and a center face), and the kernel replaces the center face entirely with a blend whose radius is dictated by the flanking faces — the classic fully-rounded rib end.
 
 **Tangent propagation** (on by default, toggle available) automatically expands a single edge pick to the full smooth chain. The module `tangentPropagation.ts` does a breadth-first walk from the clicked edge, testing each neighbor with a dot product of the edge tangent vectors at their shared endpoint. Edges whose tangents align past a threshold (cosine of 5°, approximately 0.996) are added to the chain; a real corner terminates the walk. The absolute value of the dot product is used because antiparallel tangents at a shared endpoint (two edges heading opposite directions along the same line) are still smooth. One click on a circular hole rim fillets the entire rim.
 
@@ -145,6 +149,8 @@ Patterns replicate existing features by applying transforms, implemented in `pat
 **Circular pattern:** copies rotate around an axis — either evenly spaced across a total sweep angle, or at a fixed angular step. The pattern emits count-minus-one rotations (the zeroth slot is the original). Each rotation captures the axis as a frozen origin-and-direction snapshot so it survives renumbering.
 
 **Mirror:** one reflected copy across a plane.
+
+All three come in two execution flavors, matching the SolidWorks distinction. A **geometry pattern** transforms copies of the seed feature's finished shape — fast, and every copy is an exact replica. A true **feature pattern** re-executes the seed feature's operation at each pattern location via a dedicated kernel operation, so context-dependent behavior re-evaluates per copy: a cut that ends "up to the next surface" cuts to whatever surface each copy actually meets, which may differ across a stepped part. Geometry patterns are the default; feature patterns are the escape hatch when copies must adapt.
 
 **Mirror-body** and **move-copy-body** apply the same transform logic to whole bodies rather than individual features. Mirror-body has a `keepOriginals` flag; move-copy-body has a `copy` flag.
 
@@ -231,6 +237,10 @@ This sequencing is the linchpin between equations and the cache. The `paramHash`
 
 The equations panel has two tables: "Variables" (globals, with an auto-promoting empty draft row) and "Used in" (parameter-bound entries with labels like "f20 · distance"). Value columns update live while typing. Every numeric input field accepts an expression.
 
+### Configurations
+
+Configurations build on equations to give one model multiple named variants — the SolidWorks concept of a small/medium/large family from a single feature tree. A configuration is a named set of overrides: variable values and per-feature suppression states. Equation resolution accepts a configuration id and applies its overrides during the resolve step, before any hashing or dispatch, so the cache treats each configuration's resolved numbers exactly like any other parameter edit. In an assembly, each component instance can select which configuration of its part it instantiates — five instances of one bracket part can be three "short" and two "long."
+
 ## Multi-Body Parts and Combine
 
 ### Bodies Array
@@ -277,7 +287,7 @@ None of these are bugs — they are scoped decisions: approximate where approxim
 
 - The feature tree (`featureTree.ts`) stores an ordered, immutable array of tagged steps — the "recipe." Editing the model means changing a step in the past and replaying forward; order is causal, not decorative.
 - Every tree operation produces a new copy (immutable); this makes undo trivial and Angular change-detection reliable.
-- The regeneration pipeline (`cadRegenService.js`, `regenerateModel`) resolves equations to plain numbers first, then walks features in order, skipping suppressed/hidden/post-rollback features.
+- The regeneration pipeline (`cadRegenService.js`, `regenerateModel`) resolves equations to plain numbers first (applying any active configuration's overrides), then walks features in order, skipping suppressed and post-rollback features. Suppress and hide are distinct: solid features suppress; only datums, sketches, and bodies hide.
 - Profile extraction (`cadProfile.js`, `profile.ts`) canonicalizes coincident corners, detects nested loops (holes), and preserves curve types — arcs stay arcs — so the kernel builds one analytic face per edge, not dozens of chord facets.
 - The `DesignBRepCache` keyed by `paramHash` (SHA-256 over resolved inputs) + `namingVersion` lets a rebuild reuse geometry for every feature whose resolved parameters did not change; editing one of ten extrudes causes exactly one cache miss.
 - Finishing features (fillet, chamfer, shell) store picks as world-space geometry (`EdgeRef3D`, `ShellFaceRef`) rather than internal ids, because the kernel renumbers topology on every boolean; picks are re-matched by closest geometry on each rebuild.
@@ -285,3 +295,5 @@ None of these are bugs — they are scoped decisions: approximate where approxim
 - Datum features have 8/5/5 construction methods for plane/axis/point; they are recomputed during every regen against current geometry, so a datum offset from a face automatically tracks that face.
 - The Hole Wizard spec table (`holeSpecs.ts`) stores all ISO metric and ANSI inch fastener dimensions in millimeters; hole geometry is synthesized from existing extrude/revolve primitives, and cosmetic threads (frontend-only translucent shell) represent tapped holes without a real helix.
 - Equations (`equations.ts`, `cadEquations.js`) resolve a dependency graph topologically before dispatch; the cache hashes *resolved* values so an equation edit is surgical — only the features whose actual numbers changed get a cache miss.
+- Configurations layer named variants (variable overrides + per-feature suppression) onto one feature tree, applied at equation-resolve time; assembly instances can each select a configuration of the same part.
+- Patterns come in two execution flavors: geometry patterns (transform copies of the finished shape) and true feature patterns (re-execute the operation at each location so up-to-next conditions re-evaluate per copy).

@@ -42,7 +42,7 @@ Crucially, the modeler never does the actual solid-geometry math itself. It is t
 
 ### 2. The Geometry Kernel — the engine room
 
-The kernel is a completely separate program written in **Rust**, wrapped around **OCCT** (OpenCASCADE Technology) — the open-source geometry library that underpins many professional CAD packages. It lives in its own directory (`cad-kernel/src/`) in its own language, behind a network boundary.
+The kernel is a completely separate program written in **native C++** directly on **OCCT 8.0** (OpenCASCADE Technology) — the open-source geometry library that underpins many professional CAD packages. It lives in its own directory (`cad-kernel-cpp/src/`) in its own language, behind a network boundary. (The kernel's first implementation was a Rust wrapper bridging into OCCT; it was rewritten in OCCT's own language to eliminate the FFI bridge, with the wire protocol — and therefore the rest of the system — unchanged.)
 
 The kernel owns all the hard geometry:
 - Taking a 2D profile and a distance and producing a real **boundary-representation solid** (a B-rep — the object defined by exact surfaces and edges, not triangles).
@@ -51,7 +51,7 @@ The kernel owns all the hard geometry:
 - **Tessellation**: turning exact mathematical surfaces into the triangles the browser can draw.
 - **Per-face naming and classification**: assigning each face a stable persistent name and a surface type (flat, cylindrical, spherical).
 
-The kernel runs as its own process. The backend communicates with it over **JSON-RPC over TCP** — structured requests and responses on a socket. If the kernel fails on a pathological piece of geometry (OCCT can throw exceptions or crash on unusual inputs), the web server catches the error and stays up. The backend does not know OCCT exists; it knows there is a thing on a socket that answers geometry questions. The kernel does not know Sequelize or Postgres exist; it knows it receives profiles and returns meshes.
+The kernel runs as its own process. The backend communicates with it over **JSON-RPC over TCP** — structured requests and responses on a socket. If the kernel fails on a pathological piece of geometry (OCCT can throw exceptions, hang, or crash on unusual inputs), the web server catches the error and stays up: detectable bad inputs are rejected with readable errors, aborts are healed by an automatic container restart, and hangs are broken by a per-operation watchdog deadline that force-exits the process so the restart can happen. The backend does not know OCCT exists; it knows there is a thing on a socket that answers geometry questions. The kernel does not know Sequelize or Postgres exist; it knows it receives profiles and returns meshes.
 
 ### 3. The Version-Control System — the time machine
 
@@ -65,7 +65,7 @@ An assembly is where finished parts come together into a larger object. Componen
 
 Assembly logic is split between `backend/services/assembly*` (server-side regen and mate analysis) and `frontend/src/app/cad/lib/mateSolver.ts` (frontend constraint solving for interactive positioning).
 
-The key architectural decision: **an assembly is itself a Part.** It appears in bills of materials, can be nested inside other assemblies, and rides the exact same version-control machinery as a single-component part. An assembly is a different kind of document that the same system already knows how to store, version, and release.
+The key architectural decision: **an assembly is itself a Part.** It appears in bills of materials, can be nested inside other assemblies, and rides the exact same version-control machinery as a single-component part. An assembly is a different kind of document that the same system already knows how to store, version, and release. The consolidation runs all the way to the working-copy storage: an assembly's live document is a row in the same `DesignCADModels` table as a part's, flagged by an `isAssembly` boolean and carrying an `assemblyDoc` JSONB column instead of a feature tree.
 
 ---
 
@@ -97,7 +97,7 @@ A `namingVersion` field stamps each cache row. When the kernel's output changes 
 
 ### Step 4: Call the kernel (on a cache miss)
 
-`cadKernelClient` packages the profile and operation as a JSON-RPC request and sends it to the Rust process. The kernel builds a B-rep solid in OCCT and returns: arrays of positions, normals, and indices forming a tessellated mesh, plus per-face metadata.
+`cadKernelClient` packages the profile and operation as a JSON-RPC request and sends it to the C++ process. The kernel builds a B-rep solid in OCCT and returns: arrays of positions, normals, and indices forming a tessellated mesh, plus per-face metadata.
 
 The per-face metadata is two things. First, a **stable persistent name** that survives a rebuild. When a downstream feature says "fillet the edge between face A and face B," the system must find faces A and B again after re-running the recipe with different parameters — even though the triangles are entirely new. The persistent name is the thread that ties a downstream feature to the geometry it depends on across rebuilds. Naming can break when topology changes drastically (a known footgun across the whole industry), but the attempt to keep names stable is what makes "edit an early feature and watch later features stay attached" possible at all.
 
@@ -151,7 +151,7 @@ All transformed, re-scoped child meshes are bundled into one assembly geometry, 
 
 Two fundamentally different kinds of storage coexist in the system, and confusing them is the source of most versioning bugs.
 
-The **working copy** is the live, editable, current draft. For a part it is the `DesignCADModel` database row; for an assembly it is the `DesignAssembly` row. It is mutable — the thing currently on the workbench. The row carries VCS bookkeeping: which branch it is on, which commit it is based on, whether it is locked for editing, and whether it is "dirty" (changed since the last check-in).
+The **working copy** is the live, editable, current draft: a `DesignCADModel` database row, for parts and assemblies alike (an assembly row is distinguished by its `isAssembly` flag and stores an `assemblyDoc` instead of a feature tree). It is mutable — the thing currently on the workbench. The row carries VCS bookkeeping: which branch it is on, which commit it is based on, whether it is locked for editing, and whether it is "dirty" (changed since the last check-in).
 
 The **durable history** is the content-addressed VCS store — the `VcsObject` and `VcsRef` tables. Every commit there is immutable. It is a permanent, frozen snapshot. History is never edited; only appended to.
 
@@ -227,10 +227,10 @@ The factory pattern adds indirection. Understanding check-in requires reading bo
 | Backend server | Node.js + Express | HTTP API; hosts regen service; bridges frontend to database and kernel |
 | ORM | Sequelize | Translates JavaScript model objects to PostgreSQL SQL |
 | Database | PostgreSQL | All durable storage: Part rows, working copies, `VcsObject`/`VcsRef` tables |
-| Geometry kernel | Rust + OCCT (C++) | Solid modeling, boolean ops, tessellation, face naming; separate process |
+| Geometry kernel | Native C++ + OCCT 8.0 | Solid modeling, boolean ops, tessellation, face naming; separate process |
 | Kernel protocol | JSON-RPC over TCP | Structured request/response over a socket; isolates kernel crashes from the web server |
 
-The full data path for a single click: the user interacts with an Angular component; Three.js handles the 3D input; the frontend calls an Express API endpoint; Node runs the regen service; the service checks the PostgreSQL cache table; on a miss it sends a JSON-RPC request over a socket to the Rust kernel; the kernel returns tessellated triangles; the service stores them in the cache and hands them to the frontend; Three.js draws them.
+The full data path for a single click: the user interacts with an Angular component; Three.js handles the 3D input; the frontend calls an Express API endpoint; Node runs the regen service; the service checks the PostgreSQL cache table; on a miss it sends a JSON-RPC request over a socket to the C++ kernel; the kernel returns tessellated triangles; the service stores them in the cache and hands them to the frontend; Three.js draws them.
 
 Every boundary in that path is deliberate: browser-to-backend is HTTP, backend-to-kernel is a socket, truth-to-derived is the recipe-versus-cache split, working-copy-to-history is check-in. The architecture is a set of well-chosen borders — and "written once" explains why the borders are where they are. Put the genuinely-shared logic on one side of a clean line, put the genuinely-different logic on the other, and the first can be shared without entangling the second.
 
@@ -240,7 +240,7 @@ Every boundary in that path is deliberate: browser-to-backend is HTTP, backend-t
 
 - A parametric CAD model is a feature history — an ordered list of operations with editable parameters — not a static mesh. The shape is derived by replaying the history; the history is the truth.
 - Attaching the model directly to the Part database row (rather than a floating file) is the foundational design decision. The inventory record and the geometry share the same identity, revision, and governance.
-- Four subsystems with explicit borders: the **modeler** (conductor, browser + `cadRegenService`), the **geometry kernel** (Rust/OCCT, behind a JSON-RPC socket), the **VCS** (content-addressed, `VcsObject`/`VcsRef` in Postgres), and **assemblies** (mate-solver-driven arrangement, itself a Part).
+- Four subsystems with explicit borders: the **modeler** (conductor, browser + `cadRegenService`), the **geometry kernel** (native C++/OCCT 8.0, behind a JSON-RPC socket), the **VCS** (content-addressed, `VcsObject`/`VcsRef` in Postgres), and **assemblies** (mate-solver-driven arrangement, itself a Part, stored in the same working-copy table).
 - Part regeneration constructs geometry: resolve equations → walk tree → extract profiles → check `DesignBRepCache` → call kernel on miss → accumulate cumulative bodies. The kernel is the cost center.
 - Assembly regeneration arranges existing geometry: resolve instances to frozen meshes → solve mates → transform by placement matrix → re-scope face IDs → compose. The mate solver is the cost center; the kernel is barely touched.
 - Face IDs are scoped by body within a part (`f2#0-f0`) and by instance within an assembly (`instanceId::bodyId::faceId`) to prevent collisions and ghost-edge bugs.

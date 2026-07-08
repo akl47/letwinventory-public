@@ -35,9 +35,9 @@ A line stores the IDs of its two endpoint point-entities, not literal coordinate
 
 ### The construction flag
 
-`construction: true` marks an entity as reference geometry: it participates in the constraint solve but is excluded from profile extraction and does not become material in 3D. A construction centerline can be the axis of a symmetric constraint. The system keeps the flag consistent: toggling a curve to construction also flags its support points, so a dashed construction circle has a dashed center dot — visual coherence and semantic consistency together.
+`construction: true` marks an entity as reference geometry: it participates in the constraint solve but is excluded from profile extraction and does not become material in 3D. A construction centerline can be the axis of a symmetric constraint. The system keeps the flag consistent: toggling a curve to construction also flags its support points, so a dashed construction circle has a dashed center dot — visual coherence and semantic consistency together. The cascade logic lives in `store.ts`, in `setConstructionFlag`.
 
-The flag's meaning grew organically from "don't extrude this" to "locked reference scaffold" — a construction circle is a stable thing to build tangencies and symmetry against. The cascade logic lives in `store.ts`, in `setConstructionFlag`.
+The flag's meaning has been deliberately walked back to match SolidWorks. An earlier design treated construction geometry as a "locked reference scaffold" — construction points were pinned and construction curves had their radii frozen during solves. That over-reached: in professional CAD, construction geometry is ordinary geometry that simply doesn't become material. The current solver pins nothing based on the flag; construction entities are fully draggable, dimensionable, and constrainable exactly like solid geometry. The dashed rendering is the whole story.
 
 ### The forced origin point
 
@@ -87,6 +87,10 @@ Synthesized primitives need IDs that cannot collide with any entity ID. The conv
 
 **Dimensional constraints** emit their matching PlaneGCS dimensional primitive: `circle_radius`, `arc_radius`, diameter variants. Angle constraints use an angle-between-four-points primitive with a sign chosen from the current geometry so the solver rotates the short way to the target — not 350 degrees the long way. Horizontal-distance and vertical-distance use a "difference" primitive on the x or y component alone.
 
+**Driven dimensions emit nothing.** A dimension flagged `driven` is a reference annotation — it displays a measured value in parentheses but is skipped entirely at translation time, so a sketch can be over-annotated (a redundant chord length next to a radius) without ever going inconsistent. The cost is symmetrical: a driven dimension contributes zero constraint to the solve.
+
+**External references translate into synthetic fixed geometry.** Constraints that target projected model edges (dimension-to-edge, parallel/perpendicular-to-edge, ride-on-edge, concentric-to-an-edge's-center) emit no primitive from `translateConstraint` at all. Instead, dedicated passes in `solveSketch` build invisible fixed reference points and lines at the edge's current projection and constrain against those — so the model edge acts as an anchor the sketch can lean on without the edge itself being sketch geometry. These are covered in depth in the sketch-constraints deep-dive document.
+
 ### Solving, reading back, and handling failure
 
 Primitives are handed to the WASM wrapper via `push_primitives_and_params`. The internal algorithm is DogLeg — a robust Newton-Raphson variant blending the aggressive Newton step with a safer gradient step. The WASM module initializes lazily on the first solve (approximately 50 ms), then is cached for the page lifetime. Subsequent solves call `clear_data`, push the new problem, and run; sub-millisecond per solve is what makes dragging feel continuous.
@@ -95,9 +99,13 @@ If the status is Success or Converged, `apply_solution` runs and `readBack` copi
 
 **Failure is handled strictly** (REQ 526). If the solver returns anything other than Success or Converged — meaning the constraints are contradictory or the system cannot converge — no results are applied. The function returns an `inconsistent` result tag and the **original, unmodified sketch state**. The editor discards the new constraint and informs the user (REQ 532). Geometry never flinches; the user cannot corrupt their sketch by trying an impossible rule.
 
-### Local-first solving and drag stability
+**Conflict diagnosis** goes further than a boolean failure (REQ 860). On an inconsistent solve, PlaneGCS is asked *which* of its primitives conflict; the solver maps those primitive ids back to the user's constraint ids (through the synthetic-id naming conventions), and the editor paints only the conflicting entities red rather than condemning the whole sketch. The user sees exactly which rules are fighting.
 
-When adding a constraint, many valid solutions often exist. The wrapper `solveSketchAfterAdd` does two passes: first with `movablePoints` restricted to only the points directly involved in the new constraint; if that fails, it retries globally. The effect: a dimension added to one corner adjusts that corner only; the far side of the sketch does not jump. The `pinAllRadii` option locks radii during drags so circles do not resize when the user intends only to translate.
+### Drag stability and the local-first lesson
+
+During a drag, the solver runs on every frame with the dragged points pinned at the cursor and a `pinAllRadii` option locking every curve's radius at its current value, so circles do not resize when the user intends only to translate. A failed drag-frame solve simply does not emit — the geometry sticks at the last consistent frame, which is itself feedback that a constraint is resisting.
+
+A cautionary tale lives next to this code. An earlier design solved new constraints "local-first": a two-pass wrapper (`solveSketchAfterAdd`) that first restricted movement to only the points directly involved in the new constraint, then retried globally on failure. The intent was to stop a dimension added at one corner from making the far side of the sketch jump. In practice the restricted pass could wander into degenerate collapses on under-determined sketches — a rectangle flattening into a line when a dimension was added. The editor now runs a plain, warm-started full solve on every commit; the two-pass machinery remains in the codebase but is deliberately not called. Warm-starting from the current geometry turns out to provide most of the locality the two-pass design was chasing, without the collapse mode.
 
 ---
 
@@ -197,9 +205,9 @@ If the sketch contains exactly one non-construction circle and no non-constructi
 
 ## Inference: Constraint Suggestions While Drawing
 
-`inference.ts` provides live constraint suggestions during entity placement. `inferLineEnd` runs on every mouse-move while the user draws a line, checking in priority order: (1) curve coincidence — snap to an existing curve, offer `coincident`; (2) horizontal snap within 5 degrees, offer `horizontal`; (3) vertical snap; (4) polar tracking to 15-degree multiples — snap and draw a dashed guide, no constraint; (5) alignment with other sketch points — snap and draw a guide, no constraint.
+`inference.ts` provides live constraint suggestions during entity placement. `inferLineEnd` runs on every mouse-move while the user draws a line, checking in priority order: (1) curve coincidence — snap to an existing curve, offer `coincident` (and, if the cursor is also near the curve's horizontal or vertical intersection, stack the matching axis constraint on top); (2) tangency — if the line is being drawn along an existing curve's tangent direction, snap and offer `tangent`; (3) horizontal snap within 5 degrees, offer `horizontal`; (4) vertical snap; (5) polar tracking to 15-degree multiples — snap and draw a dashed guide, no constraint; (6) alignment with other sketch points — snap and draw a guide, no constraint.
 
-First match wins. Coincidence, horizontal, and vertical add real solver-backed constraints. Polar and alignment add only visual guidance — the system never offers a constraint it cannot enforce. Inference is pure: cursor in, snapped-position-plus-offer out; nothing is committed until the user clicks.
+First match wins for the primary snap, though multiple hint badges can stack. Coincidence, tangency, horizontal, and vertical add real solver-backed constraints. Polar and alignment add only visual guidance — the system never offers a constraint it cannot enforce. Inference is pure: cursor in, snapped-position-plus-offer out; nothing is committed until the user clicks.
 
 ---
 
@@ -240,11 +248,12 @@ The backend regeneration service (`cadRegenService`) re-extracts profiles from s
 ## Key Points
 
 - Sketch entities are stored as a single tagged-union list in one `entities` array, with each entity carrying a `kind` field; this eliminates per-consumer loops over multiple arrays and makes adding a new entity kind an extension rather than a change to every consumer.
-- The `construction` flag marks reference geometry that participates in solving but is excluded from extrusion; its meaning grew organically from "don't extrude" to "locked reference scaffold," and it cascades to an entity's support points for visual and semantic consistency.
+- The `construction` flag marks reference geometry that participates in solving but is excluded from extrusion; it cascades to an entity's support points for visual consistency. An earlier "locked reference scaffold" behavior (pinning construction points and radii) was deliberately removed to match SolidWorks — the flag now affects rendering and profile extraction only.
 - PlaneGCS — FreeCAD's 2D constraint solver — is vendored at `frontend/src/app/cad/vendor/planegcs/` and compiled to WebAssembly; it is deliberately not managed via npm to insulate against upstream disappearance or version drift.
 - `translateConstraint` returns an array: some user constraints map one-to-one to PlaneGCS primitives, some dispatch by entity kind (tangent has six variants), and some are synthesized from two primitives (midpoint = point-on-line + point-on-bisector); synthesized primitives use suffixed IDs to avoid collisions.
 - Every arc must have an `arc_rules` primitive emitted by `buildPrimitives`; without it, PlaneGCS allows the center, endpoints, radius, and angles to drift independently, producing geometrically inconsistent arcs.
-- Contradictory constraints never corrupt the sketch: if solve fails, the original state is returned unchanged and the new constraint is discarded (REQ 526/532).
+- Contradictory constraints never corrupt the sketch: if solve fails, the original state is returned unchanged and the new constraint is discarded (REQ 526/532). On failure, PlaneGCS's conflicting-constraint report is mapped back to user constraint ids so only the actually-conflicting entities are highlighted red.
+- Constraint commits run a plain, warm-started full solve. A "local-first" two-pass wrapper (pin uninvolved points, retry globally) exists in the code but is deliberately unused — its restricted pass could collapse under-determined sketches (a rectangle flattening to a line). Driven (reference) dimensions are skipped at translation entirely.
 - Per-entity determinacy (the blue/black coloring) is computed in `determinacy.ts` by Gauss-Jordan elimination on a finite-difference Jacobian; a parameter is "determined" only if its value is fixed independently of all remaining free parameters — not merely if it has a constraint relating it to something else.
 - A circle is represented three ways: a fan of chord segments for the renderer and extruder (tessellator.ts), a center-and-radius for the solver (PlaneGCS), and an analytic ring distance for pick hit-testing (picking.ts); this decoupling means coarse rendering never degrades pick accuracy.
 - Profile extraction from a sketch requires canonicalizing coincident-constrained points (union-find), splitting curves at geometric crossings (DCEL arrangement), walking faces with half-edge sorted-angle next-pointers, and nesting loops by containment to distinguish outer boundaries from holes.

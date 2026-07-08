@@ -1,6 +1,6 @@
 # The Geometry Kernel (Accessible Overview)
 
-This document explains the geometry kernel — the specialized program that does all the heavy solid-shape mathematics in the CAD system. It covers why the kernel exists as a separate service, how the rest of the system communicates with it, the eight fundamental operations it knows how to perform, and two design choices (persistent face names and surface classification) that turn a shape calculator into a full parametric CAD engine.
+This document explains the geometry kernel — the specialized program that does all the heavy solid-shape mathematics in the CAD system. It covers why the kernel exists as a separate service, how the rest of the system communicates with it, the nine fundamental operations it knows how to perform, and two design choices (persistent face names and surface classification) that turn a shape calculator into a full parametric CAD engine.
 
 ---
 
@@ -24,13 +24,15 @@ The important consequence of the recipe model is precision: there is no resoluti
 
 The geometry kernel runs as its own isolated process, separate from the web application and the browser-based editor. That separation is intentional and load-bearing, for two reasons.
 
-**The math is specialized and already solved.** Computing the exact shape of a rounded edge, where two curved surfaces blend into each other using a rolling-ball fillet, is genuinely difficult mathematics. Building this from scratch is not a reasonable option for an application team. The kernel is therefore built on top of *OpenCASCADE* (abbreviated OCCT), a large, mature, open-source geometry library that has been in industrial use for decades. It originated inside a commercial CAD system and is the same library that powers FreeCAD. Standing on OCCT means the system inherits battle-tested geometry algorithms — not a weekend reimplementation.
+**The math is specialized and already solved.** Computing the exact shape of a rounded edge, where two curved surfaces blend into each other using a rolling-ball fillet, is genuinely difficult mathematics. Building this from scratch is not a reasonable option for an application team. The kernel is therefore built on top of *OpenCASCADE* (abbreviated OCCT), a large, mature, open-source geometry library that has been in industrial use for decades. It originated inside a commercial CAD system and is the same library that powers FreeCAD. Standing on OCCT means the system inherits battle-tested geometry algorithms — not a weekend reimplementation. The system runs on OCCT 8.0, the current major release of the library.
 
-The thin wrapper around OCCT is written in Rust. Rust was chosen for two concrete reasons. First, it compiles to fast native code with no slow runtime layer, which matters because geometry operations are computationally expensive and users are sitting there waiting for a shape to appear. Second, Rust's compiler rejects an entire class of memory-management mistakes at compile time rather than letting them surface as runtime crashes. Geometry code deals with large, intricate data structures — all those faces, edges, and pointers between them — and those are exactly the structures that unsafe memory management corrupts.
+The kernel itself is written in native C++ — the same language OCCT is written in. That was not the first choice: the original kernel was a Rust program bridging into OCCT through a foreign-function layer. It worked, but every OCCT capability the system needed had to be individually plumbed through the language bridge, and the bridge's build machinery had its own sharp edges. The rewrite to native C++ removed the bridge entirely: the kernel now speaks OCCT's own language and can reach any part of the library's enormous API directly. The rest of the system did not notice the rewrite — the kernel's message protocol stayed identical, which is itself evidence that the "replaceable engine" boundary is real. C++ compiles to fast native code with no runtime layer, which matters because geometry operations are computationally expensive and users are sitting there waiting for a shape to appear.
 
 **Crash isolation.** Geometry kernels crash. Not because they are poorly written, but because the problem space is brutal: ask the kernel to round an edge with a radius that is geometrically too large to fit, and the underlying OCCT math can reach a state it cannot resolve. In the worst case, it hard-crashes the process it is running in rather than returning a polite error.
 
-If the kernel shared a process with the main application, such a crash would take the entire session down — the user loses their work because they typed a slightly too-large fillet radius. Running the kernel as a separate process creates a blast wall: when the kernel crashes, it crashes alone. The application detects that the kernel has gone dark, relights it automatically via a supervisor, and reports a clean error to the user — "that operation failed, try a smaller radius." The crash is mostly invisible. No work is lost.
+If the kernel shared a process with the main application, such a crash would take the entire session down — the user loses their work because they typed a slightly too-large fillet radius. Running the kernel as a separate process creates a blast wall: when the kernel crashes, it crashes alone. The application detects that the kernel has gone dark, the container platform relights it automatically, and a clean error is reported to the user — "that operation failed, try a smaller radius." The crash is mostly invisible. No work is lost.
+
+The blast wall actually has three layers, matched to three failure modes. Bad inputs the kernel can *detect* — degenerate outlines, zero-length edges — are rejected up front with a readable error, before OCCT ever sees them. Operations that make OCCT *abort* kill the process, which the container platform immediately restarts fresh. And operations that make OCCT *hang* — spin forever without crashing, the most insidious failure — are caught by a watchdog: every operation is given a deadline, and if the handler runs past it, the watchdog deliberately kills the process so the restart machinery can bring back a clean one. Reject what you can see, restart what dies, and execute what merely hangs.
 
 The cost of that blast wall is operational: the kernel is a second service that must be running, must be reachable, and must be monitored. The editor performs a heartbeat check to confirm the kernel is alive and grays out geometry-dependent controls when it is not. Two buildings must be kept lit instead of one.
 
@@ -54,9 +56,9 @@ The triangles are for eyes only. The exact B-rep is for everything that matters.
 
 ---
 
-## The Eight Operations: A Working Vocabulary
+## The Nine Operations: A Working Vocabulary
 
-The kernel knows a small vocabulary of fundamental operations. Almost every manufactured object — a phone case, an engine block, a bracket, a Lego brick — is some combination of these eight verbs.
+The kernel knows a small vocabulary of fundamental operations. Almost every manufactured object — a phone case, an engine block, a bracket, a Lego brick — is some combination of these nine verbs.
 
 ### Extrude
 
@@ -80,6 +82,10 @@ Sweep is extrude's generalization: instead of pushing a profile in a straight li
 
 Sweeping around sharp corners is geometrically hard. The straightforward approach chokes at ninety-degree bends. The kernel uses a method that handles sharp corners gracefully, because real parts — wires, brackets, tubing — have sharp bends constantly.
 
+### Loft
+
+Loft blends smoothly between two or more different cross-section outlines placed on different planes. Where sweep drags one unchanging profile along a path, loft interpolates *between* profiles: a square at the bottom morphing into a circle at the top, a fan blade whose cross-section changes along its length. The kernel constructs the transitional surface that passes through every section in order.
+
 ### Boolean
 
 Boolean operations combine two solid bodies using set logic. There are three variants.
@@ -94,7 +100,7 @@ If a cut happens to divide a body into two separate disconnected chunks, the ker
 
 Pattern copies a feature according to a repeating rule without requiring the designer to place each copy individually. The linear variant repeats copies in a straight row at a given spacing. The circular variant distributes copies evenly around a center point, like the hour marks on a clock face. The mirror variant reflects a feature to the opposite side of a plane, producing a guaranteed-symmetric counterpart.
 
-All three are parametric: the count, spacing, or angle of the pattern can be changed and every copy updates automatically.
+All three are parametric: the count, spacing, or angle of the pattern can be changed and every copy updates automatically. The kernel supports two flavors: a *geometry pattern* that stamps out transformed copies of the finished shape (fast, exact copies), and a true *feature pattern* that re-executes the original feature's operation at each pattern location — so a cut that ends "at the next surface" re-evaluates against whatever surface each copy actually meets, the way SolidWorks distinguishes the two.
 
 ### Shell
 
@@ -118,7 +124,7 @@ Fillets and chamfers are typically the last operations applied in a design seque
 
 ## The Two Clever Bits
 
-A kernel with only those eight operations would be a capable shape calculator. Two additional mechanisms turn it into a system that supports robust parametric editing and part assembly.
+A kernel with only those nine operations would be a capable shape calculator. Two additional mechanisms turn it into a system that supports robust parametric editing and part assembly.
 
 ### Persistent Face Names
 
@@ -156,7 +162,7 @@ The kernel has three honest limitations worth understanding.
 
 **Operational overhead.** The blast-wall isolation that prevents kernel crashes from destroying user sessions comes at a cost: the kernel is a second service that must run, must be reachable, and must be monitored. The editor performs a continuous health-check and disables geometry-dependent functions when the kernel is unreachable. This is the right tradeoff — crash isolation alone justifies it — but it is not free.
 
-**Manual rebuilds with a stale-detection gap.** The kernel is a large native compiled program. Rebuilding it is slow and must be triggered manually; it does not hot-reload like the web application. More dangerously, one specific case causes the build system to miss that a rebuild is needed: certain changes to the kernel source do not update the timestamps the build system uses to detect staleness. It is possible to make a change to the kernel, believe it has taken effect, and spend time debugging behavior that is actually running the previous version. This is a known footgun, documented for maintainers, but it remains sharp.
+**Manual rebuilds on a separate cadence.** The kernel is a large native compiled program. Rebuilding it is slow and must be triggered manually; it does not hot-reload like the web application. It is possible to change kernel code, forget the rebuild, and spend time debugging behavior that is actually running the previous binary. As a partial defense, the running kernel reports a build identifier and a naming-schema version on every health check, and the application refuses to regenerate geometry against a kernel whose schema version does not match its own — a mismatched binary cannot silently poison the cache. (An earlier, sharper version of this footgun — the original Rust kernel's language bridge only rebuilt when one specific file's timestamp changed, so header edits silently had no effect — was eliminated by the rewrite to native C++.)
 
 **The display is permanently approximate.** The tessellated triangle mesh on screen is always, by definition, not exactly the true curve. The 0.05 mm chord tolerance means triangles stay within a fraction of a millimeter of the real surface — well below visual detection and well below typical manufacturing tolerances — but the difference is not zero. This is not a deficiency to be fixed; it is intentional. The display is an approximation so that graphics hardware can draw it. Every time anything consequential happens — export, manufacturing, precise computation — the system bypasses the mesh and uses the exact B-rep. The approximation is real and quarantined to the display layer. The screen is allowed to be slightly wrong because the screen was never the source of truth.
 
@@ -165,10 +171,11 @@ The kernel has three honest limitations worth understanding.
 ## Key Points
 
 - A 3D solid in this system is a boundary representation (B-rep): a watertight quilt of mathematically exact surfaces — planes, cylinders, curves — stitched at edges, with a clear inside and outside. It is a recipe, not a drawing.
-- The kernel runs as a separate process built on OpenCASCADE (OCCT), an industrial geometry library used by professional CAD tools. Separation provides crash isolation: a kernel failure cannot destroy a user's session.
-- The Rust wrapper provides fast native execution and compile-time memory safety over the complex OCCT data structures.
+- The kernel runs as a separate process built on OpenCASCADE (OCCT) 8.0, an industrial geometry library used by professional CAD tools. Separation provides crash isolation: a kernel failure cannot destroy a user's session.
+- The kernel is native C++ — the same language as OCCT itself. The original implementation was a Rust wrapper bridging into OCCT; the rewrite removed the language bridge entirely while leaving the message protocol, and therefore the rest of the system, untouched.
+- Resilience has three layers matched to three failure modes: detectable bad inputs are rejected with a readable error before OCCT sees them; hard crashes kill the process and the container platform restarts it; hangs are killed by a per-operation watchdog deadline so the restart machinery can recover even from an operation that never returns.
 - Application and kernel communicate via JSON-RPC: a small text message goes in (the operation and parameters), a finished shape comes back.
 - Every shape is returned as two things: the exact B-rep (stored as source of truth) and a tessellated triangle mesh (displayed on screen). The mesh approximates the B-rep to within 0.05 mm — close enough to look smooth, never used for anything real.
-- The kernel's vocabulary is eight operations: extrude, revolve, sweep, boolean (fuse/cut/intersect), pattern (linear/circular/mirror), shell, fillet, and chamfer. Almost every manufactured part is some combination of these.
+- The kernel's vocabulary is nine operations: extrude, revolve, sweep, loft, boolean (fuse/cut/intersect), pattern (linear/circular/mirror, in both geometry-copy and true feature-re-execution flavors), shell, fillet, and chamfer. Almost every manufactured part is some combination of these.
 - Persistent face names solve the topological naming problem: each face carries a role-based identity ("top cap of extrude three") that survives rebuilds, preventing downstream features from drifting to wrong geometry when upstream parameters change.
 - Surface classification extracts exact analytic parameters (plane normals, cylinder axes and radii) from the B-rep and attaches them to each face alongside the mesh, giving the assembly system stable geometric anchors that do not degrade with zoom or tessellation density.

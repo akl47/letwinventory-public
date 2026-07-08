@@ -14,7 +14,7 @@ The four shared factories, all in `backend/services/vcs/`, each accept a binding
 
 - **`makeWorkingCopy`** — returns checkout, check-in, undo-checkout, force-unlock, and history-reading operations. This is where the PDM-style exclusive-lock protocol lives: the logic that says "you cannot check this out, Dana has it," lock expiry, and the 423 HTTP response code (resource locked). All of it is document-agnostic.
 - **`makeBranchOps`** — returns create-branch, list-branches, switch-branch, and archive-branch operations. Branch switching reads the target branch's head commit, calls the binding's `deserialize` to reconstruct the document, and calls `applyDoc` to restore it onto the working-copy row. It also sets `releaseLocked` to true when switching to the branch named `main`, because `main` is the protected released line. That "main is protected and read-only" rule lives in the shared factory; both document types inherit it automatically.
-- **`makeFreeze`** — on release, calls the binding's `regen` to build geometry, stores a mesh snapshot blob plus one binary BRep object per body, and records a manifest. The function `geometryForCommit` checks whether a commit has frozen geometry stamped on it; if so, it reconstructs the shape from frozen pieces via the binding's `reconstruct` with zero kernel calls. A released part never re-runs the Rust geometry engine on open — the geometry is the exact bytes that were reviewed and approved.
+- **`makeFreeze`** — on release, calls the binding's `regen` to build geometry, stores a mesh snapshot blob plus one binary BRep object per body, and records a manifest. The function `geometryForCommit` checks whether a commit has frozen geometry stamped on it; if so, it reconstructs the shape from frozen pieces via the binding's `reconstruct` with zero kernel calls. A released part never re-runs the geometry engine on open — the geometry is the exact bytes that were reviewed and approved.
 - **`makeRelease`** — implements a careful ordering that exists because the naive ordering caused a real bug (see the footguns section): check for a duplicate tag first, then serialize, then freeze geometry, then claim the write-once tag, then advance the branch. Mutation comes last.
 
 ### The binding contract
@@ -68,9 +68,9 @@ The database tables divide into three jobs: the desk (what you're working on now
 
 ### The desk: working copies
 
-Two tables hold the live editable working copies. `DesignCADModel` is the open CAD document. `DesignAssembly` is the open assembly document.
+One table holds every live editable working copy: `DesignCADModel`. A row is either an open CAD document or an open assembly document, distinguished by an `isAssembly` boolean. (An earlier design used two parallel tables — `DesignCADModel` and a separate `DesignAssembly` — carrying byte-identical version-control column blocks. The duplication bought nothing, so the tables were consolidated: the assembly rows moved into the CAD model table, and the schema-level difference between the two document types shrank to one flag plus which document column is populated.)
 
-Both tables carry an identical block of version-control columns:
+Every working-copy row carries the version-control columns:
 
 - `branchName` — which version line the working copy is on, defaulting to `main`.
 - `baseCommitHash` — the sixty-four-character SHA-256 hash of the commit it was checked out from.
@@ -79,9 +79,9 @@ Both tables carry an identical block of version-control columns:
 - `defaultView` — a saved camera angle, stored as a user preference, not versioned content.
 - `releaseLocked` — a boolean marking the working copy read-only after a release.
 
-The difference between the two working-copy tables is only in the document columns. `DesignCADModel` has three JSONB columns: `featureTree`, `sketchDoc`, `equations`. `DesignAssembly` has one JSONB column: `assemblyDoc`. That is the entire schema-level difference between the two document types.
+The difference between the two document types is only in which document columns are populated. A part row uses three JSONB columns: `featureTree`, `sketchDoc`, `equations`. An assembly row uses one: `assemblyDoc`. The backend controller picks the binding per request — `model.isAssembly ? assemblyBinding : cadBinding` — and everything downstream is shared.
 
-One active working copy per part is enforced by a partial unique index (e.g., `design_cad_models_part_unique_active`) that applies only where `activeFlag = true`. Soft-deleting an old working copy and creating a new one does not conflict, because the deleted row is no longer active. Revisions of a part are not extra rows in these tables — they are tags in version control.
+One active working copy per part — of exactly one kind — is enforced by a partial unique index (`design_cad_models_part_unique_active`) that applies only where `activeFlag = true`. Soft-deleting an old working copy and creating a new one does not conflict, because the deleted row is no longer active. Revisions of a part are not extra rows in this table — they are tags in version control.
 
 ### The filing cabinet: VcsObject and VcsRef
 
@@ -106,13 +106,13 @@ Six kinds of object exist:
 
 ### The logbook: audit, workflow, and support tables
 
-`DesignCADModelHistory` and `DesignAssemblyHistory` are append-only audit logs. Every meaningful administrative action — created, updated, checked out, checked in, released — writes a row recording who, when, and the before and after state. This is the human-facing paper trail that answers "who released this and when." It is separate from the VCS commit history, which is the geometry trail. A checkout does not create a VCS commit (nothing about the geometry changed) but it absolutely creates an audit row (someone took the lock). Different granularity, different question.
+`DesignCADModelHistory` is the append-only audit log, covering part and assembly working copies alike. Every meaningful administrative action — created, updated, checked out, checked in, released — writes a row recording who, when, and the before and after state. This is the human-facing paper trail that answers "who released this and when." It is separate from the VCS commit history, which is the geometry trail. A checkout does not create a VCS commit (nothing about the geometry changed) but it absolutely creates an audit row (someone took the lock). Different granularity, different question.
 
 `VcsWorkflowState` records the review state — draft, in-review, or approved — one row per workflow scope. Its `repoId` is composed as `<lineageRootPartId>:<branchName>`, making workflow state per-branch. Part 42 on `main` and part 42 on `draft/01` have independent review states. Two draft branches can be in review simultaneously; `main` keeps its own production-approval cycle. Absence of a row means the initial state, draft — a brand-new model starts in draft with zero database writes.
 
 `VcsChangeset` is a reserved placeholder for bundling commits across repositories in one atomic operation — the "I edited a part and the assembly that contains it in one save" scenario. The table and model exist; nothing writes to it yet. It was wired in early because adding new structures to a content-addressed store is painful to migrate. Its status is honestly labeled: reserved, empty.
 
-`VcsUsage` is a where-used reverse index. When an assembly commit references a child part's commit, a row records the relationship. The question "which assemblies use this part?" becomes one indexed lookup instead of scanning every assembly commit ever made. The object store holds the forward edge; `VcsUsage` holds the reverse edge.
+`VcsUsage` is a where-used reverse index, now actively written. When an assembly check-in pins a child part's commit — or a part pins another part's commit for cross-part in-context reference geometry — a row records the relationship. The question "which assemblies use this part?" becomes one indexed lookup instead of scanning every assembly commit ever made. The object store holds the forward edge; `VcsUsage` holds the reverse edge.
 
 `DesignBRepCache` is a performance cache for draft editing, CAD only. When a model regenerates, each feature's computed 3D output is cached keyed by four values: the model id, the feature id, a hash of the feature's parameters, and a hash of all upstream geometry feeding into it. Editing a feature near the top of a twenty-feature model invalidates only the downstream features; everything above the edit is a cache hit loaded with zero kernel calls. This cache is disposable — deleting every row loses nothing, and the next regeneration rebuilds it. Durable released geometry lives as immutable `geometry`-kind objects in `VcsObject`. A `namingVersion` column on the cache ensures that when face-naming conventions change, old cache rows are ignored automatically.
 
@@ -145,7 +145,7 @@ Frontend routes are guarded by a login guard and a `cad` permission guard, mirro
 
 ### Test cleanup table ordering
 
-Tables with foreign keys to `Part` or `User` using `onDelete: RESTRICT` must appear at the top of the `tablesToClean` array in the test setup file, before `Parts` and `Users`. `DesignCADModelHistory`, `DesignAssembly`, and similar tables must be cleaned first. Violating this order produces a restrict-violation error in an unrelated test's teardown that costs significant debugging time. Every new table with a Part or User FK on restrict goes at the top of the cleanup list.
+Tables with foreign keys to `Part` or `User` using `onDelete: RESTRICT` must appear at the top of the `tablesToClean` array in the test setup file, before `Parts` and `Users`. `DesignCADModelHistory` and similar tables must be cleaned first. Violating this order produces a restrict-violation error in an unrelated test's teardown that costs significant debugging time. Every new table with a Part or User FK on restrict goes at the top of the cleanup list.
 
 ### Unique display names in multi-user tests
 
@@ -185,7 +185,7 @@ The final score: the backend shared architecture is as clean a "written once" as
 - **A binding is nine functions and a noun.** The binding contract — `repoFor`, `docOf`, `serialize`, `deserialize`, `applyDoc`, `commitMeta`, `regen`, `snapshot`, `reconstruct`, plus `noun` — is the entire interface separating the shared machine from document-specific logic. CAD and assembly each supply a binding of roughly two hundred lines.
 - **The shared machine never inspects document content.** It works with hashes. Whether a hash represents a three-field CAD document or a one-field assembly document is sealed inside the binding's serializer, invisible to the factories.
 - **One Angular component serves both editors.** `cad-editor.component.ts` is both the CAD editor and the assembly editor, distinguished by an `assemblyMode` signal set from the route. The entire fork between the two products on the frontend is one boolean on a route definition.
-- **Both working-copy tables carry an identical block of VCS columns.** The schema difference between `DesignCADModel` and `DesignAssembly` is only the document content columns — three JSONB columns versus one. The version-control machinery columns are byte-for-byte identical.
+- **One working-copy table serves both document types.** `DesignCADModel` holds parts and assemblies alike, distinguished by an `isAssembly` boolean; the only per-type difference is which document columns are populated (three JSONB columns versus one `assemblyDoc`). An earlier two-table design with duplicated VCS columns was consolidated away.
 - **`VcsObject` is the immutable core.** Every blob, tree, commit, geometry, component reference, and thumbnail is one row, keyed by `(repoType, repoId, hash)`. Objects are write-once and have no `updatedAt`. Each part's entire revision lineage shares one repository via the lineage-root id.
 - **One permission resource covers both products.** Every CAD and assembly route uses the resource string `cad` with four actions: `read`, `write`, `delete`, `approve`. No separate assembly permission exists. Write gates development release; approve gates production release and force-unlock.
 - **The release ordering must check before mutating.** The `makeRelease` function verifies no duplicate tag exists before creating any commit or moving any branch. This ordering was learned from a real bug where advancing the branch before checking the tag left a corrupted-looking history. The irreversible step is always last.

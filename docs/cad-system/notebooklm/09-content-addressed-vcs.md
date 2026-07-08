@@ -5,7 +5,7 @@ The CAD system's version control is a purpose-built, content-addressed object st
 
 ## The Object Store — There Is No Save
 
-The implementation lives in `backend/services/vcs/vcsService.js`, and by design it knows nothing about CAD. It knows nothing about sketches, extrudes, parts, or features. It is a generic, domain-blind object store implementing exactly four git primitives. This was deliberate: the hard machinery — content addressing, commit DAG, ref management — is written once and then bound separately to the CAD domain in one set of files and to the assembly domain in another. Adding a new domain (future: assemblies) does not require touching the store.
+The implementation lives in `backend/services/vcs/vcsService.js`, and by design it knows nothing about CAD. It knows nothing about sketches, extrudes, parts, or features. It is a generic, domain-blind object store implementing exactly four git primitives. This was deliberate: the hard machinery — content addressing, commit DAG, ref management — is written once and then bound separately to the CAD domain in one set of files (`cadVcsService.js`) and to the assembly domain in another (`assemblyVcsService.js`). When assemblies arrived as the second domain, the store itself did not change — the domain-blindness paid off exactly as designed.
 
 The backing tables are `VcsObjects` (columns: `hash`, `content`, `bytes`) and `VcsRefs`. `VcsObjects` holds every piece of immutable stored data; `VcsRefs` holds the mutable pointers.
 
@@ -54,7 +54,7 @@ Three extension kinds:
 
 **Geometry.** Binary, stored via `putBinary` (hashing raw bytes). When a part is released, its computed 3D solid-body data from the kernel is frozen here. Zero kernel calls are needed to re-read a released commit's shape.
 
-**Component.** A reserved seam for assemblies — an object that references another repo's commit, so an assembly snapshot can record exactly which revision of each child part it was assembled from. Validated in the model today; the assembly editor has not fully landed.
+**Component.** An object that references another repo's commit, so a snapshot can record exactly which state of another document it depends on. This seam, originally reserved for assemblies, is now load-bearing twice over: an assembly check-in pins the commit of each child part it was assembled from, and a part that borrows cross-part in-context reference geometry pins the source part's commit the same way. Each pin also writes a `VcsUsage` row — a where-used reverse index, so "which assemblies use this part?" is one indexed lookup instead of a scan.
 
 **Thumbnail.** A PNG preview captured at check-in. Deliberately *not* content-addressed: it is keyed per commit, because the access pattern is "give me the thumbnail for commit X," not "give me this exact image." An explicit, intentional exception to the content-addressing rule.
 
@@ -88,13 +88,15 @@ Deleting a ref via `deleteRef` removes only the sticky note. Every commit, tree,
 
 ## Working Copy — Checkout, Lock, Autosave, Check-in, Undo
 
-The working copy is a `DesignCADModel` database row — the live, mutable document open on the user's desk. The commits in the store are the permanent snapshots filed in the archive. The operations that move material between them are written once in a factory called `makeWorkingCopy` in `vcsWorkingCopy.js`, domain-blind, with adapters provided by `cadVcsService.js` and (eventually) the assembly service.
+The working copy is a `DesignCADModel` database row — the live, mutable document open on the user's desk. The commits in the store are the permanent snapshots filed in the archive. The operations that move material between them are written once in a factory called `makeWorkingCopy` in `vcsWorkingCopy.js`, domain-blind, with adapters provided by `cadVcsService.js` for parts and `assemblyVcsService.js` for assemblies.
 
-**Checkout** acquires an exclusive PDM-style lock on the branch: a `lockedByUserID`, `lockedAt`, and `lockExpiresAt` stamp (default 30 minutes, configurable). While the lock is held, any other user who attempts checkout receives HTTP 423 with the current holder's name in the error. Expired locks do not block anyone. Three release paths exist: the holder can release, time can release (the lock expires), or an admin can force-release (requires the approve permission). A background sweep, `sweepExpiredLocks`, bulk-clears stale locks periodically.
+**Checkout** acquires an exclusive PDM-style lock on the branch: a `lockedByUserID`, `lockedAt`, and `lockExpiresAt` stamp (default 30 minutes, configurable). While the lock is held, any other user who attempts checkout receives HTTP 423 with the current holder's name in the error. Three release paths exist: the holder can release, time can release (the lock expires), or an admin can force-release (requires the approve permission). Active work extends the lock automatically — every content save slides `lockExpiresAt` forward, and an explicit renew endpoint lets an idle-but-present editor keep its claim.
 
-**Autosave** persists edits to the working-copy row continuously and sets a `dirty` flag. It does not create a commit. Its job is preventing data loss; it is not a history mechanism.
+Expiry interacts with unsaved work carefully. A background sweep, `sweepExpiredLocks`, bulk-clears stale locks — but only on *clean* working copies. An expired lock on a *dirty* copy keeps its holder attribution, because someone's uncommitted work is at stake. A second user checking out over an expired-dirty lock gets a 409 requiring an explicit takeover; the takeover first **stashes** the abandoned work — commits it onto a dedicated `stash/<branch>/<timestamp>` branch authored by the prior holder — and only then resets the working copy to the branch head. Nobody's work is ever silently destroyed by a lock expiring; it is parked on a branch with the right author's name on it. A save attempted against an already-expired lock is rejected with 423 rather than quietly succeeding under someone else's takeover.
 
-**Check-in** is the deliberate milestone action. It requires holding the lock and supplying a commit message. It serializes the working document via `cadSerialize`, creates a commit whose parent is the current branch head, advances the branch ref to the new commit, and clears the dirty flag. Check-in does not release the lock — the user may check in multiple times in a session while keeping the branch.
+**Autosave** persists edits to the working-copy row continuously and sets a `dirty` flag, stamping `lastContentSavedAt` on genuine content changes (renames and camera-view saves do not count). It does not create a commit. Its job is preventing data loss; it is not a history mechanism. The editor uses the `lastContentSavedAt` age to warn about *stale dirty work* — a checkout sitting uncommitted past a four-hour threshold gets a visible nudge to check in.
+
+**Check-in** is the deliberate milestone action. It requires holding the lock and supplying a commit message. It serializes the working document via `cadSerialize`, creates a commit whose parent is the current branch head, advances the branch ref to the new commit, and clears the dirty flag. A `keepCheckedOut` option makes the check-in a *checkpoint*: the commit lands and the lock is renewed rather than released, for the long session that wants durable milestones without surrendering the branch.
 
 **Undo checkout** discards all changes since the last check-in. It clears the lock and dirty flag, then — if a commit exists to roll back to — deserializes that commit's tree and writes it back over the working copy. If no commit exists (brand-new part, never checked in), it simply unlocks. The last good state is an immutable commit, so restoration is trivially safe.
 
@@ -163,9 +165,9 @@ The front end (`cad-revision-list.component.ts`) renders four views: **Graph** (
 
 **Dedup bookkeeping in reconcile.** Splicing selected features from a branch into a main-base document requires tracking which features have already been applied, so a feature present in both main and the branch is not added twice. This is the standard off-by-one bookkeeping problem any tree-merge code encounters; the implementation handles it with explicit "seen" tracking.
 
-**Reserved seams, not finished features.** The `component` object kind (cross-repo assembly references) is validated in the model and waiting for the assembly editor. `VcsChangeset` and `VcsUsage` tables — for atomic multi-part check-ins and a where-used index — are wired but effectively empty for single-part use today. The store was built domain-blind specifically so these seams could exist without structural change; they are scaffolded, not load-bearing.
+**Seams that graduated, and one still reserved.** The `component` object kind and the `VcsUsage` where-used index — originally scaffolded for a future assembly editor — are now in active use: assembly check-ins pin child-part commits, cross-part in-context references pin their source-part commits, and every pin writes a usage edge. The `VcsChangeset` table — for atomic multi-document check-ins ("I edited a part and the assembly that contains it in one save") — remains wired but empty. The store was built domain-blind specifically so these seams could exist without structural change; two of the three are now load-bearing.
 
-The git core — objects, trees, commits, refs, canonical hashing, working copy, checkout/lock/check-in/undo, branches, diff, feature-level merge, history graph — is fully implemented, tested, and running in production. The assembly cross-repo machinery is the next frontier.
+The git core — objects, trees, commits, refs, canonical hashing, working copy, checkout/lock/check-in/undo, branches, diff, feature-level merge, history graph — is fully implemented, tested, and serving both parts and assemblies.
 
 
 ## Key Points
