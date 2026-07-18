@@ -107,17 +107,20 @@ describe('POST /api/design/assembly/:id/push-variables (REQ 918)', () => {
     expect(res.body.results[0].lockedBy).toBe('Push Lock Holder');
   });
 
-  it('skips a release-locked child and a child with no CAD model', async () => {
+  it('skips a release-locked child and a child whose CAD model was deleted', async () => {
     const auth = await authenticatedRequest();
     const { part, model } = await partWithCad(auth);
     const row = await db.DesignCADModel.findByPk(model.id);
     await row.update({ releaseLocked: true });
-    const bare = await createTestPart();
-    const asmId = await assemblyWithVars(auth, [part.id, bare.id], { width: { expression: '50' } });
+    // insertInstance rejects parts WITHOUT a model, so 'no-model' is only
+    // reachable when the model is deleted after insertion.
+    const gone = await partWithCad(auth);
+    const asmId = await assemblyWithVars(auth, [part.id, gone.part.id], { width: { expression: '50' } });
+    await (await db.DesignCADModel.findByPk(gone.model.id)).update({ activeFlag: false });
     const res = await auth.post(`/api/design/assembly/${asmId}/push-variables`).send({});
     const byPart = Object.fromEntries(res.body.results.map((r) => [r.partID, r.status]));
     expect(byPart[part.id]).toBe('skipped-released');
-    expect(byPart[bare.id]).toBe('no-model');
+    expect(byPart[gone.part.id]).toBe('no-model');
   });
 
   it('422s when nothing is pushable', async () => {

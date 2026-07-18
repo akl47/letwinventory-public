@@ -159,8 +159,12 @@ describe('trimAt — arcs (B8 constraint discipline)', () => {
     const piece = findEntity<ArcEntity>(r.state, pieceId)!;
     const ps = findPoint(r.state, piece.startId)!;
     expect(Math.atan2(ps.y, ps.x)).toBeCloseTo(135 * D);
-    // Sweep-dependent dims drop (B8 — splitArcAt discipline).
-    expect(r.state.constraints.filter(c => c.type === 'radius').length).toBe(0);
+    // Radius dims are NOT sweep-dependent — they transfer onto exactly ONE
+    // kept piece (see trimAt constraint preservation; sweep-dependent dims
+    // still drop).
+    const radiusDims = r.state.constraints.filter(c => c.type === 'radius');
+    expect(radiusDims.length).toBe(1);
+    expect(r.affectedIds).toContain(radiusDims[0].targets[0].entityId);
   });
 
   it('B8: releases a passenger cut away with the removed span', () => {
