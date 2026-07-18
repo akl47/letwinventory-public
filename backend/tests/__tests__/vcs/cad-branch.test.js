@@ -26,7 +26,7 @@ describe('cadBranchService', () => {
   beforeEach(async () => { uid = (await authenticatedRequest()).user.id; });
 
   test('create + list branches (VC-24, VC-25)', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     const c0 = await cadvcs.checkin(model, uid, 'init');
     const b = await branchSvc.createBranch(model, 'variant', {}, uid);
     expect(b.targetHash).toBe(c0.commitHash); // defaults to current head
@@ -35,7 +35,7 @@ describe('cadBranchService', () => {
   });
 
   test('switch loads the branch state; rejects while dirty (VC-26)', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     const c0 = await cadvcs.checkin(model, uid, 'init'); // main @ origin-only
     await branchSvc.createBranch(model, 'variant', { fromCommit: c0.commitHash }, uid);
 
@@ -51,7 +51,7 @@ describe('cadBranchService', () => {
   });
 
   test('archive removes a branch; current + default protected (VC-27)', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     await cadvcs.checkin(model, uid, 'init');
     await branchSvc.createBranch(model, 'variant', {}, uid);
 
@@ -65,7 +65,7 @@ describe('cadBranchService', () => {
   });
 
   test('cherry-pick splices a feature + its sketches into the working copy (VC-28)', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     const c0 = await cadvcs.checkin(model, uid, 'init'); // origin only
     await model.update({ featureTree: F2_TREE, sketchDoc: F2_DOC, dirty: true });
     const c1 = await cadvcs.checkin(model, uid, 'add f2'); // main has f2 + s1

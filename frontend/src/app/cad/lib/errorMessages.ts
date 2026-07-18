@@ -35,12 +35,6 @@ const MAPPERS: Mapper[] = [
     ? 'Profile needs at least 3 connected edges.'
     : null,
 
-  // Mixed-curve loops (slots, ellipses, splines) — not yet supported by the
-  // straight-line + single-circle profile walker.
-  (raw) => /arc.*not yet supported|mixed.*line.*arc.*not supported/i.test(raw)
-    ? 'Profiles mixing lines and arcs (e.g. slots) are not yet extrudable. This shape is work in progress.'
-    : null,
-
   // Kernel transport problems.
   (raw) => /kernel unavailable|kernel disconnected|ECONNREFUSED|socket closed/i.test(raw)
     ? 'CAD kernel is not running. Start the kernel service and try again.'

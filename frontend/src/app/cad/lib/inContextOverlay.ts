@@ -132,5 +132,57 @@ export function buildInContextOverlay(regen: AssemblyRegenResponse, hostInstance
       });
     }
   }
+  // REQ 915 — assembly SKELETON sketch entities as referenceable ghost
+  // geometry. They live in the assembly WORLD frame (identity placement), so
+  // only the host's inverse applies. `stableId` IS the backend resolver key
+  // (`asketch:<sid>/<eid>` / `asketchv:…`); source coords stay world-frame —
+  // the same frame the resolver's fallback matcher uses.
+  for (const se of regen.skeleton?.edges ?? []) {
+    const world = se.polyline;
+    if (!world.length) continue;
+    if (se.kind === 'point') {
+      const w: Vec3 = world[0];
+      vertices.push({
+        instanceId: SKELETON_INSTANCE_ID,
+        position: transformPoint(inv, w),
+        partID: regen.skeleton!.partID,
+        sourcePosition: w,
+        stableId: `asketchv:${se.sketchId}/${se.entityId}/self`,
+      });
+      continue;
+    }
+    const poly = world.map((p) => transformPoint(inv, p));
+    if (poly.length < 2) continue;
+    edges.push({
+      instanceId: SKELETON_INSTANCE_ID,
+      id: `ovl:${SKELETON_INSTANCE_ID}:${se.key}`,
+      polyline: poly,
+      isStraight: se.isStraight,
+      partID: regen.skeleton!.partID,
+      sourceStart: world[0],
+      sourceEnd: world[world.length - 1],
+      stableId: se.key,
+    });
+    // Line endpoints double as pickable skeleton vertices.
+    if (se.kind === 'line') {
+      vertices.push({
+        instanceId: SKELETON_INSTANCE_ID,
+        position: poly[0], partID: regen.skeleton!.partID,
+        sourcePosition: world[0],
+        stableId: `asketchv:${se.sketchId}/${se.entityId}/start`,
+      });
+      vertices.push({
+        instanceId: SKELETON_INSTANCE_ID,
+        position: poly[poly.length - 1], partID: regen.skeleton!.partID,
+        sourcePosition: world[world.length - 1],
+        stableId: `asketchv:${se.sketchId}/${se.entityId}/end`,
+      });
+    }
+  }
   return { faces, edges, vertices };
 }
+
+/** REQ 915 — sentinel `sourceInstanceId` marking a cross-part ref whose source
+ * is the defining assembly's own SKELETON sketch (not a component instance).
+ * Mirrors the backend constant in assemblyRegenService. */
+export const SKELETON_INSTANCE_ID = '__skeleton__';

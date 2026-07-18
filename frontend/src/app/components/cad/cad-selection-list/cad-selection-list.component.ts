@@ -36,49 +36,52 @@ export interface SelectionRow {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CommonModule, MatIconModule, MatTooltipModule],
   template: `
-    <div class="panel-field" [class.active]="active()" [attr.data-testid]="testid()">
-      <div class="field-header">
+    <div class="panel-field" [class.section]="appearance() === 'section'" [class.active]="active()" [attr.data-testid]="testid()">
+      <div class="field-header" [class.collapsible]="collapsible()" (click)="onHeaderClick()">
+        <mat-icon class="section-chevron" *ngIf="collapsible()">{{ collapsed() ? 'chevron_right' : 'expand_more' }}</mat-icon>
         <mat-icon class="field-icon" *ngIf="headerIcon()">{{ headerIcon() }}</mat-icon>
         <span class="field-label">{{ label() }}</span>
         <span class="field-count" *ngIf="showCount()">{{ rows().length }}</span>
         <button class="header-clear"
                 type="button"
-                *ngIf="rows().length > 0"
+                *ngIf="rows().length > 0 && !collapsed()"
                 [attr.data-testid]="testid() ? testid() + '-clear' : null"
                 matTooltip="Clear all"
-                (click)="clear.emit()">
+                (click)="clear.emit(); $event.stopPropagation()">
           <mat-icon>clear_all</mat-icon>
         </button>
       </div>
-      <ng-content></ng-content>
-      <ul class="entity-list" *ngIf="rows().length > 0">
-        <li class="entity-row"
-            *ngFor="let row of rows(); let i = index"
-            [attr.data-testid]="testid() ? testid() + '-row-' + i : null">
-          <mat-icon class="entity-row-icon">{{ row.icon || 'radio_button_unchecked' }}</mat-icon>
-          <span class="entity-row-text">
-            <span class="entity-row-label">{{ row.label }}</span>
-            <span class="entity-row-detail" *ngIf="row.detail">{{ row.detail }}</span>
-          </span>
-          <button class="entity-row-action"
-                  type="button"
-                  *ngIf="row.action as act"
-                  [attr.data-testid]="testid() ? testid() + '-action-' + i : null"
-                  [matTooltip]="act.tooltip || ''"
-                  (click)="rowAction.emit(row.id)">
-            <mat-icon>{{ act.icon }}</mat-icon>
-          </button>
-          <button class="entity-row-remove"
-                  type="button"
-                  [attr.data-testid]="testid() ? testid() + '-remove-' + i : null"
-                  [matTooltip]="row.tooltip || 'Remove'"
-                  (click)="remove.emit(row.id)">
-            <mat-icon>close</mat-icon>
-          </button>
-        </li>
-      </ul>
-      <div class="field-empty" *ngIf="rows().length === 0 && emptyHint()">
-        {{ emptyHint() }}
+      <div [hidden]="collapsed()">
+        <ng-content></ng-content>
+        <ul class="entity-list" *ngIf="rows().length > 0">
+          <li class="entity-row"
+              *ngFor="let row of rows(); let i = index"
+              [attr.data-testid]="testid() ? testid() + '-row-' + i : null">
+            <mat-icon class="entity-row-icon">{{ row.icon || 'radio_button_unchecked' }}</mat-icon>
+            <span class="entity-row-text">
+              <span class="entity-row-label">{{ row.label }}</span>
+              <span class="entity-row-detail" *ngIf="row.detail">{{ row.detail }}</span>
+            </span>
+            <button class="entity-row-action"
+                    type="button"
+                    *ngIf="row.action as act"
+                    [attr.data-testid]="testid() ? testid() + '-action-' + i : null"
+                    [matTooltip]="act.tooltip || ''"
+                    (click)="rowAction.emit(row.id)">
+              <mat-icon>{{ act.icon }}</mat-icon>
+            </button>
+            <button class="entity-row-remove"
+                    type="button"
+                    [attr.data-testid]="testid() ? testid() + '-remove-' + i : null"
+                    [matTooltip]="row.tooltip || 'Remove'"
+                    (click)="remove.emit(row.id)">
+              <mat-icon>close</mat-icon>
+            </button>
+          </li>
+        </ul>
+        <div class="field-empty" *ngIf="rows().length === 0 && emptyHint()">
+          {{ emptyHint() }}
+        </div>
       </div>
     </div>
   `,
@@ -155,6 +158,22 @@ export interface SelectionRow {
     }
     .entity-row-action:hover { background: rgba(255,255,255,0.12); color: #fff; }
     .entity-row-action mat-icon { font-size: 12px; width: 12px; height: 12px; line-height: 12px; }
+
+    /* 'section' appearance — full-width sidebar section chrome matching the
+       Constraints / Dimension panels (dark header row with 18px icon + bold
+       title + count), instead of the bordered inline field chip. */
+    .panel-field.section { padding: 0; margin: 0; border: none; border-radius: 0; font-size: 12px; color: #e0e0e0; }
+    .panel-field.section.active { background: rgba(66, 165, 245, 0.12); }
+    .section .field-header { gap: 8px; padding: 8px 10px; margin-bottom: 0; border-bottom: 1px solid #444; }
+    .section .field-icon { font-size: 18px; width: 18px; height: 18px; opacity: 1; }
+    .section .field-label { font-size: 12px; color: #e0e0e0; text-transform: none; letter-spacing: 0; font-weight: 600; }
+    .section .field-count { background: none; border: none; padding: 0; opacity: 0.6; color: #e0e0e0; font-family: monospace; }
+    .section .entity-list { margin: 0; padding: 6px; }
+    .section .entity-row { margin-top: 0; }
+    .section .entity-row + .entity-row { margin-top: 2px; }
+    .section .field-empty { padding: 6px 10px; }
+    .field-header.collapsible { cursor: pointer; user-select: none; }
+    .section-chevron { font-size: 16px; width: 16px; height: 16px; opacity: 0.7; flex-shrink: 0; }
   `],
 })
 export class CadSelectionListComponent {
@@ -173,6 +192,15 @@ export class CadSelectionListComponent {
   emptyHint = input<string | null>(null);
   /** Optional data-testid base — children get `{testid}-row-N` etc. */
   testid = input<string | null>(null);
+  /** Visual shell: 'field' (default) = bordered inline field chip;
+   * 'section' = full-width sidebar section matching the Constraints /
+   * Dimension panel headers. */
+  appearance = input<'field' | 'section'>('field');
+  /** Show a collapse chevron and make the header click-toggleable. The
+   * PARENT owns the collapsed state (it usually also drives section flex
+   * sizing / dividers off it) — this component just renders + emits. */
+  collapsible = input<boolean>(false);
+  collapsed = input<boolean>(false);
 
   /** Emits the row's `id` when its X button is clicked. */
   remove = output<string>();
@@ -183,4 +211,10 @@ export class CadSelectionListComponent {
    * renders only when `rows.length > 0`. Host is responsible for
    * actually clearing whatever underlying state feeds `rows`. */
   clear = output<void>();
+  /** Header clicked while `collapsible` — parent flips its collapsed state. */
+  toggleCollapsed = output<void>();
+
+  onHeaderClick() {
+    if (this.collapsible()) this.toggleCollapsed.emit();
+  }
 }

@@ -1,11 +1,11 @@
 import type {
   SketchState, SketchEntity, LineEntity, CircleEntity, ArcEntity, PointEntity,
-  ConstraintType, SketchConstraint,
+  EllipticalArcEntity, ConstraintType, SketchConstraint,
 } from './types';
 import { findEntity, findPoint } from './types';
 import {
   addPoint, addLine, addArc, addArcByPoints, addCircle, addCircleByPoint,
-  addEllipseByPoints, addSplineByPoints, addConstraint, deletePrimitive,
+  addEllipseByPoints, addEllipticalArc, addSplineByPoints, addConstraint, deletePrimitive,
   addRectangleCorners, addRectangleCenter, setConstructionFlag,
   ORIGIN_POINT_ID,
 } from './store';
@@ -51,14 +51,16 @@ export interface OpResult {
  * `clickPoint`. Returns the endpoints of the segment-to-be-cut, or null when
  * no preview is available (entity isn't a line, not found, etc). The
  * algorithm mirrors `trimLine` — see that function for case rationale. */
-export function previewTrimLine(state: SketchState, lineId: string, clickPoint: Pt): { start: Pt; end: Pt } | null {
+export function previewTrimLine(state: SketchState, lineId: string, clickPoint: Pt, opts: TrimOptions = {}): { start: Pt; end: Pt } | null {
   const line = findEntity<LineEntity>(state, lineId);
-  if (!line || line.kind !== 'line' || line.construction) return null;
+  // Construction sources preview like regular geometry — trimAt accepts
+  // them (REQ 866), so the hover preview must too (B15-22 ride-along).
+  if (!line || line.kind !== 'line') return null;
   const a = findPoint(state, line.startId);
   const b = findPoint(state, line.endId);
   if (!a || !b) return null;
 
-  const hits = collectLineHits(state, line, a, b);
+  const hits = collectLineHits(state, line, a, b, opts.ignoreConstruction);
   const proj = projectOntoSegment(a, b, clickPoint);
   const tClick = proj.t;
   if (hits.length === 0) return { start: { x: a.x, y: a.y }, end: { x: b.x, y: b.y } };
@@ -91,13 +93,14 @@ export function previewTrimLine(state: SketchState, lineId: string, clickPoint: 
  * polyline along the arc segment between the two intersections that
  * bracket the click angle (or the full circle when no/one
  * intersection). Mirrors `trimCircle`. */
-export function previewTrimCircle(state: SketchState, circleId: string, click: Pt): Pt[] | null {
+export function previewTrimCircle(state: SketchState, circleId: string, click: Pt, opts: TrimOptions = {}): Pt[] | null {
   const circle = findEntity<CircleEntity>(state, circleId);
-  if (!circle || circle.kind !== 'circle' || circle.construction) return null;
+  // Construction sources allowed — match trimAt (REQ 866 ride-along).
+  if (!circle || circle.kind !== 'circle') return null;
   const center = findPoint(state, circle.centerId);
   if (!center) return null;
   const r = circle.radius;
-  const hits = collectCircleHits(state, circle, center);
+  const hits = collectCircleHits(state, circle, center, opts.ignoreConstruction);
   // No / single hit → entire circle is removed.
   if (hits.length < 2) {
     return tessellateCircleArc(center, r, 0, 2 * Math.PI, true);
@@ -118,16 +121,17 @@ export function previewTrimCircle(state: SketchState, circleId: string, click: P
 }
 
 /** What the Trim tool would remove on an arc. Mirrors `trimArc`. */
-export function previewTrimArc(state: SketchState, arcId: string, click: Pt): Pt[] | null {
+export function previewTrimArc(state: SketchState, arcId: string, click: Pt, opts: TrimOptions = {}): Pt[] | null {
   const arc = findEntity<ArcEntity>(state, arcId);
-  if (!arc || arc.kind !== 'arc' || arc.construction) return null;
+  // Construction sources allowed — match trimAt (REQ 866 ride-along).
+  if (!arc || arc.kind !== 'arc') return null;
   const center = findPoint(state, arc.centerId);
   const sp = findPoint(state, arc.startId);
   const ep = findPoint(state, arc.endId);
   if (!center || !sp || !ep) return null;
   const startA = Math.atan2(sp.y - center.y, sp.x - center.x);
   const endA = Math.atan2(ep.y - center.y, ep.x - center.x);
-  const hits = collectArcHits(state, arc, center, startA, endA);
+  const hits = collectArcHits(state, arc, center, startA, endA, opts.ignoreConstruction);
   const sweep = arcOffset(startA, endA, arc.ccw);
   if (sweep < EPS) return null;
   const clickAngle = Math.atan2(click.y - center.y, click.x - center.x);
@@ -191,7 +195,9 @@ export function previewExtendLine(state: SketchState, lineId: string, clickPoint
   const extendStart = da < db;
   const candidates: number[] = [];
   for (const e of state.entities) {
-    if (e.id === line.id || e.construction) continue;
+    // Construction curves are valid extend boundaries — parity with
+    // trim (REQ 866 spirit; B15-22 ride-along: SW honors both).
+    if (e.id === line.id) continue;
     if (e.kind === 'line') {
       const oa = findPoint(state, e.startId);
       const ob = findPoint(state, e.endId);
@@ -252,30 +258,53 @@ export function previewExtendLine(state: SketchState, lineId: string, clickPoint
  * Trim the curve under `clickPoint`. Returns a new state with the relevant
  * curve segment removed/shortened. Supports lines, circles, and arcs.
  */
-export function trimAt(state: SketchState, entityId: string, clickPoint: Pt): OpResult {
+/** Trim tool options (REQ: trim options sidebar).
+ *   - `keepAsConstruction`: removed SOLID segments become construction
+ *     geometry instead of being deleted (already-construction sources
+ *     still delete normally — converting them would make the tool a
+ *     no-op).
+ *   - `ignoreConstruction`: construction curves stop acting as trim
+ *     boundaries — only solid lines/arcs/circles bound the removed
+ *     segment. (Default keeps REQ 866 behavior: construction curves ARE
+ *     valid boundaries.) */
+export interface TrimOptions {
+  keepAsConstruction?: boolean;
+  ignoreConstruction?: boolean;
+}
+
+export function trimAt(state: SketchState, entityId: string, clickPoint: Pt, opts: TrimOptions = {}): OpResult {
   const e = findEntity(state, entityId);
   if (!e) return { state, error: 'Entity not found' };
   // REQ 866: construction geometry trims like regular geometry (survivors
   // keep their construction flag; see splitLineKeepingOnly / trimCircle/Arc).
   switch (e.kind) {
-    case 'line':   return trimLine(state, e as LineEntity, clickPoint);
-    case 'circle': return trimCircle(state, e as CircleEntity, clickPoint);
-    case 'arc':    return trimArc(state, e as ArcEntity, clickPoint);
+    case 'line':   return trimLine(state, e as LineEntity, clickPoint, opts);
+    case 'circle': return trimCircle(state, e as CircleEntity, clickPoint, opts);
+    case 'arc':    return trimArc(state, e as ArcEntity, clickPoint, opts);
     default:       return { state, error: `Trim not supported for ${e.kind}` };
   }
 }
 
-function trimLine(state: SketchState, line: LineEntity, click: Pt): OpResult {
+/** Whole-entity removal under the trim tool: convert to construction when
+ * the option is on and the entity is solid; plain delete otherwise. */
+function removeWholeEntity(state: SketchState, e: SketchEntity, opts: TrimOptions): OpResult {
+  if (opts.keepAsConstruction && !(e as { construction?: boolean }).construction) {
+    return { state: setConstructionFlag(state, [e.id], true), affectedIds: [e.id] };
+  }
+  return { state: deletePrimitive(state, e.id), affectedIds: [] };
+}
+
+function trimLine(state: SketchState, line: LineEntity, click: Pt, opts: TrimOptions = {}): OpResult {
   const a = findPoint(state, line.startId);
   const b = findPoint(state, line.endId);
   if (!a || !b) return { state, error: 'Line endpoints missing' };
 
-  // Find every intersection of this line with another non-construction
-  // curve, in the line's parameter space.
-  const hits = collectLineHits(state, line, a, b);
+  // Find every intersection of this line with another curve, in the
+  // line's parameter space.
+  const hits = collectLineHits(state, line, a, b, opts.ignoreConstruction);
   if (hits.length === 0) {
-    // No neighbors → trim deletes the whole line.
-    return { state: deletePrimitive(state, line.id), affectedIds: [] };
+    // No neighbors → trim removes the whole line.
+    return removeWholeEntity(state, line, opts);
   }
 
   // Click parameter along the line.
@@ -293,6 +322,15 @@ function trimLine(state: SketchState, line: LineEntity, click: Pt): OpResult {
     }
   }
 
+  // The removed span becomes a construction line when the option is on
+  // (solid sources only — a construction source's removed piece would be
+  // indistinguishable from what it already was). Appended AFTER the kept
+  // segments so its endpoints REUSE the kept segments' cut points
+  // (acquireOrCreatePoint) and stay attached without extra constraints.
+  const keepCut = opts.keepAsConstruction && !line.construction;
+  const cut = (t0: number, t1: number): KeptSegment[] =>
+    keepCut ? [{ t0, t1, pin0: null, pin1: null, construction: true }] : [];
+
   // Case A: both sides bounded → split into two segments and drop the
   // middle piece (the segment under the cursor). Each new endpoint is
   // pinned to the curve it landed on via a coincident constraint so the
@@ -301,17 +339,20 @@ function trimLine(state: SketchState, line: LineEntity, click: Pt): OpResult {
     return splitLineKeepingOnly(state, line, a, b, [
       { t0: 0, t1: leftHit.t, pin0: null, pin1: leftHit.intersectedEntityId },
       { t0: rightHit.t, t1: 1, pin0: rightHit.intersectedEntityId, pin1: null },
+      ...cut(leftHit.t, rightHit.t),
     ]);
   }
   if (leftHit === null && rightHit !== null) {
     // Click sits to the left of every hit → shorten by moving start to rightHit.
     return splitLineKeepingOnly(state, line, a, b, [
       { t0: rightHit.t, t1: 1, pin0: rightHit.intersectedEntityId, pin1: null },
+      ...cut(0, rightHit.t),
     ]);
   }
   if (leftHit !== null && rightHit === null) {
     return splitLineKeepingOnly(state, line, a, b, [
       { t0: 0, t1: leftHit.t, pin0: null, pin1: leftHit.intersectedEntityId },
+      ...cut(leftHit.t, 1),
     ]);
   }
   // Shouldn't be reachable.
@@ -326,7 +367,14 @@ function trimLine(state: SketchState, line: LineEntity, click: Pt): OpResult {
  * intersection at that end of the kept segment. SolidWorks-style: the
  * trimmed line sub-segment stays attached to the curve that bounded it
  * when that curve moves. */
-interface KeptSegment { t0: number; t1: number; pin0: string | null; pin1: string | null; }
+interface KeptSegment {
+  t0: number; t1: number; pin0: string | null; pin1: string | null;
+  /** This segment is a trim REMNANT kept as construction geometry (trim's
+   * keepAsConstruction option) — rendered dashed, no constraint
+   * inheritance (its endpoints reuse the kept segments' cut points, which
+   * already pin it; inheriting direction constraints would over-define). */
+  construction?: boolean;
+}
 function splitLineKeepingOnly(
   state: SketchState, line: LineEntity, a: Pt, b: Pt,
   kept: KeptSegment[],
@@ -365,8 +413,40 @@ function splitLineKeepingOnly(
     if (!pt) continue;
     passengers.push({ pointId: pt.id, t: projectOntoSegment(a, b, pt).t });
   }
-  let s = deletePrimitive(state, line.id);
+  // ANCHORED single-target relations on the line — tangent (to a curve)
+  // and point→line distance dims. Both reference the INFINITE line, so
+  // they stay valid on a collinear kept piece; dropping them silently
+  // un-constrained the sketch on every trim. Each is re-attached to the
+  // SOLID kept piece nearest its geometric anchor (the tangency foot /
+  // the measured point's projection) — cloning onto every piece would
+  // duplicate dims and over-constrain.
+  const anchored: Array<{ c: SketchConstraint; t: number }> = [];
+  for (const c of state.constraints) {
+    if (c.type !== 'tangent' && c.type !== 'point-line-distance') continue;
+    if (!c.targets.some(t => t.entityId === line.id)) continue;
+    const otherId = c.targets.map(t => t.entityId).find(id => id !== line.id);
+    const other = otherId ? findEntity(state, otherId) : undefined;
+    let anchor: Pt | null = null;
+    if (c.type === 'tangent' && other && (other.kind === 'circle' || other.kind === 'arc')) {
+      anchor = findPoint(state, other.centerId) ?? null;
+    } else if (c.type === 'point-line-distance' && other?.kind === 'point') {
+      anchor = other;
+    }
+    if (anchor) anchored.push({ c, t: projectOntoSegment(a, b, anchor).t });
+  }
+  // Original endpoints REUSED by a kept segment (incl. the construction
+  // remnant) survive the delete cascade — with their constraints. An
+  // endpoint whose whole side was trimmed away (no kept segment touches
+  // it) still cascades: that geometry is gone, SW-style. Without this,
+  // every trim recreated bare points at the same coords and silently
+  // dropped whatever was constrained to the originals.
+  const keepPts: string[] = [];
+  if (kept.some(k => k.t0 < EPS)) keepPts.push(line.startId);
+  if (kept.some(k => k.t1 > 1 - EPS)) keepPts.push(line.endId);
+  let s = deletePrimitive(state, line.id, keepPts.length ? { keepPoints: keepPts } : undefined);
   const newIds: string[] = [];
+  const solidIds: string[] = [];
+  const solidSegs: Array<{ id: string; t0: number; t1: number }> = [];
   const segDebug: Array<{ t0: number; t1: number; newId: string; pa: Pt; pb: Pt; pin0: string | null; pin1: string | null; paReused: boolean; pbReused: boolean }> = [];
   for (const seg of kept) {
     if (Math.abs(seg.t1 - seg.t0) < EPS) continue;
@@ -381,8 +461,9 @@ function splitLineKeepingOnly(
     // existing constraints rather than spawning a parallel coincident.
     const paRes = acquireOrCreatePoint(s, p0.x, p0.y); s = paRes.state;
     const pbRes = acquireOrCreatePoint(s, p1.x, p1.y); s = pbRes.state;
-    const lr = addLine(s, paRes.id, pbRes.id, line.construction ? { construction: true } : undefined); s = lr.state;
+    const lr = addLine(s, paRes.id, pbRes.id, (line.construction || seg.construction) ? { construction: true } : undefined); s = lr.state;
     newIds.push(lr.id);
+    if (!seg.construction) { solidIds.push(lr.id); solidSegs.push({ id: lr.id, t0: seg.t0, t1: seg.t1 }); }
     // Pin each freshly-created endpoint to the curve that bounded it.
     // Skip when the (reused) point is ALREADY coincident with that
     // cutter — adding a redundant constraint clutters the sidebar and
@@ -404,25 +485,22 @@ function splitLineKeepingOnly(
     }
     segDebug.push({ t0: seg.t0, t1: seg.t1, newId: lr.id, pa: p0, pb: p1, pin0: seg.pin0, pin1: seg.pin1, paReused: paRes.existed, pbReused: pbRes.existed });
   }
-  s = inheritConstraintsOntoMultiple(s, line.id, newIds, inheritedConstraints);
-  // Preserve axis orientation. The original line may be horizontal/vertical
-  // WITHOUT carrying a line-level relation — e.g. it's kept level only because
-  // its endpoints are each constrained horizontal to some reference. Trimming
-  // mints NEW interior endpoints with no such constraint, so each sub-segment
-  // could swing off-axis. When the source line is axis-aligned at trim time,
-  // give every sub-segment an explicit horizontal/vertical relation (matching
-  // SolidWorks), unless inheritance already supplied one.
-  const ORIENT_TOL = 1e-6;
-  const wasHorizontal = Math.abs(a.y - b.y) < ORIENT_TOL && Math.abs(a.x - b.x) > ORIENT_TOL;
-  const wasVertical = Math.abs(a.x - b.x) < ORIENT_TOL && Math.abs(a.y - b.y) > ORIENT_TOL;
-  if (wasHorizontal || wasVertical) {
-    for (const id of newIds) {
-      const hasOrient = s.constraints.some(c =>
-        (c.type === 'horizontal' || c.type === 'vertical') && c.targets.some(t => t.entityId === id));
-      if (hasOrient) continue;
-      s = addConstraint(s, wasHorizontal ? 'horizontal' : 'vertical', [id]).state;
+  s = inheritConstraintsOntoMultiple(s, line.id, solidIds, inheritedConstraints);
+  // Re-attach each anchored relation (tangent / point-line dim) to the
+  // solid piece nearest its anchor parameter.
+  for (const { c, t } of anchored) {
+    let best: { id: string; d: number } | null = null;
+    for (const seg of solidSegs) {
+      const d = t < seg.t0 ? seg.t0 - t : t > seg.t1 ? t - seg.t1 : 0;
+      if (!best || d < best.d) best = { id: seg.id, d };
     }
+    if (best) s = inheritConstraintsOntoEntity(s, line.id, best.id, [c]);
   }
+  // NOTE (B15-22 ride-along): trim used to SYNTHESIZE a horizontal /
+  // vertical relation whenever the source line happened to be axis-
+  // aligned at trim time. That invented intent the user never expressed
+  // (SolidWorks doesn't) — only constraints that already exist on the
+  // line are inherited now.
   // Diagnostic dump for "trim still broken on converted line". Enable
   // with `window.__cadDebug = true`; silent otherwise. Logs the
   // inherited constraints (incl. on-edge externalRef), each kept
@@ -523,20 +601,75 @@ function isDirectionConstraint(type: ConstraintType): boolean {
     || type === 'collinear' || type === 'angle';
 }
 
+/** Relations on a circle/arc whose semantics depend only on the CENTER
+ * and RADIUS (never the sweep) — safe to transfer onto a trim's kept
+ * arc, which shares both. */
+function isCenterRadiusConstraint(type: ConstraintType): boolean {
+  return type === 'radius' || type === 'diameter'
+    || type === 'tangent' || type === 'concentric' || type === 'coradial'
+    || type === 'equal';
+}
+
 /** A trim hit on `line` produced by another curve. `t` is the parameter
  * along the line (0 = start, 1 = end); `intersectedEntityId` is the id of
  * the curve that produced the hit, so trim's post-split point can be
  * pinned to that curve via a coincident constraint. */
 interface LineHit { t: number; intersectedEntityId: string; }
 
+/** Tolerance for treating a TOUCH (tangency) as a trim boundary. A curve
+ * constrained tangent to another touches without crossing, so the exact
+ * intersection discriminant sits at ~0 and floating point puts it on the
+ * "miss" side about half the time — the tangency then silently stopped
+ * counting as a place to stop trimming. Solver residuals keep true
+ * tangencies far inside 1e-3 sketch units; geometry that close without a
+ * tangent constraint is treated as touching too (harmless). */
+const TANGENT_TOL = 1e-3;
+
+/** `lineCircleIntersection` + near-tangency rescue: when the exact
+ * intersection is empty but the infinite line passes within TANGENT_TOL
+ * of tangency, return the perpendicular foot as a single touch point. */
+function lineCircleHitsWithTangency(a: Pt, b: Pt, center: Pt, radius: number): Pt[] {
+  const pts = lineCircleIntersection(a, b, center, radius);
+  if (pts.length > 0) return pts;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len < EPS) return [];
+  const dPerp = Math.abs(((center.x - a.x) * dy - (center.y - a.y) * dx) / len);
+  if (Math.abs(dPerp - radius) > TANGENT_TOL) return [];
+  const t = ((center.x - a.x) * dx + (center.y - a.y) * dy) / (len * len);
+  return [{ x: a.x + dx * t, y: a.y + dy * t }];
+}
+
+/** `circleCircleIntersection` + near-tangency rescue (external and
+ * internal tangency). The touch point lies on the center line; of the two
+ * candidates at ±r1 from c1, the one that actually sits on the other
+ * circle wins. */
+function circleCircleHitsWithTangency(c1: Pt, r1: number, c2: Pt, r2: number): Pt[] {
+  const pts = circleCircleIntersection(c1, r1, c2, r2);
+  if (pts.length > 0) return pts;
+  const d = Math.hypot(c2.x - c1.x, c2.y - c1.y);
+  if (d < EPS) return [];
+  const external = Math.abs(d - (r1 + r2)) <= TANGENT_TOL;
+  const internal = Math.abs(d - Math.abs(r1 - r2)) <= TANGENT_TOL;
+  if (!external && !internal) return [];
+  const ux = (c2.x - c1.x) / d, uy = (c2.y - c1.y) / d;
+  const cand1 = { x: c1.x + ux * r1, y: c1.y + uy * r1 };
+  const cand2 = { x: c1.x - ux * r1, y: c1.y - uy * r1 };
+  const err = (p: Pt) => Math.abs(Math.hypot(p.x - c2.x, p.y - c2.y) - r2);
+  return [err(cand1) <= err(cand2) ? cand1 : cand2];
+}
+
 /** Hit parameters (t in [0,1]) where `line` is crossed by every other
- * curve (construction included — REQ 866). Excludes endpoint touches. */
+ * curve (construction included by default — REQ 866; the trim tool's
+ * ignoreConstruction option restricts boundaries to solid curves).
+ * Excludes endpoint touches. */
 function collectLineHits(
-  state: SketchState, line: LineEntity, a: Pt, b: Pt,
+  state: SketchState, line: LineEntity, a: Pt, b: Pt, ignoreConstruction = false,
 ): LineHit[] {
   const out: LineHit[] = [];
   for (const e of state.entities) {
     if (e.id === line.id) continue;  // REQ 866: construction curves are valid trim boundaries
+    if (ignoreConstruction && (e as { construction?: boolean }).construction) continue;
     if (e.kind === 'line') {
       const oa = findPoint(state, e.startId);
       const ob = findPoint(state, e.endId);
@@ -556,7 +689,7 @@ function collectLineHits(
     } else if (e.kind === 'circle') {
       const ce = findPoint(state, (e as CircleEntity).centerId);
       if (!ce) continue;
-      const pts = lineCircleIntersection(a, b, ce, (e as CircleEntity).radius);
+      const pts = lineCircleHitsWithTangency(a, b, ce, (e as CircleEntity).radius);
       for (const p of pts) for (const t of tForPoint(a, b, p)) out.push({ t, intersectedEntityId: e.id });
     } else if (e.kind === 'arc') {
       const ae = e as ArcEntity;
@@ -564,7 +697,7 @@ function collectLineHits(
       const sp = findPoint(state, ae.startId);
       const fp = findPoint(state, ae.endId);
       if (!ce || !sp || !fp) continue;
-      const pts = lineCircleIntersection(a, b, ce, ae.radius);
+      const pts = lineCircleHitsWithTangency(a, b, ce, ae.radius);
       const sa = Math.atan2(sp.y - ce.y, sp.x - ce.x);
       const ea = Math.atan2(fp.y - ce.y, fp.x - ce.x);
       for (const p of pts) {
@@ -587,17 +720,15 @@ function tForPoint(a: Pt, b: Pt, p: Pt): number[] {
   return [];
 }
 
-function trimCircle(state: SketchState, circle: CircleEntity, click: Pt): OpResult {
+function trimCircle(state: SketchState, circle: CircleEntity, click: Pt, opts: TrimOptions = {}): OpResult {
   const center = findPoint(state, circle.centerId);
   if (!center) return { state, error: 'Circle center missing' };
   // Find every angle where another curve crosses the circle.
-  const hits = collectCircleHits(state, circle, center);
-  if (hits.length === 0) {
-    return { state: deletePrimitive(state, circle.id), affectedIds: [] };
-  }
-  if (hits.length === 1) {
-    // Single crossing — can't cut into an arc segment cleanly. Delete it.
-    return { state: deletePrimitive(state, circle.id), affectedIds: [] };
+  const hits = collectCircleHits(state, circle, center, opts.ignoreConstruction);
+  if (hits.length <= 1) {
+    // Zero crossings, or a single one (can't cut into an arc segment
+    // cleanly) → the whole circle goes.
+    return removeWholeEntity(state, circle, opts);
   }
   // Click angle.
   const clickAngle = normalizeAngle(Math.atan2(click.y - center.y, click.x - center.x));
@@ -616,15 +747,36 @@ function trimCircle(state: SketchState, circle: CircleEntity, click: Pt): OpResu
   if (nextHit.angle <= clickAngle) {
     nextHit = { ...sortedHits[0], angle: sortedHits[0].angle + 2 * Math.PI };
   }
-  // Capture every constraint touching the circle BEFORE the delete —
-  // deletePrimitive drops them as a side-effect, and they'd be lost
-  // otherwise. We'll rewire each onto the replacement arc.
-  const inheritedConstraints = state.constraints.filter(
-    c => c.targets.some(t => t.entityId === circle.id),
+  // B8: inherit only direction-class + on-edge constraints (the same
+  // filter as splitLineKeepingOnly / splitCircleAt). Rewiring EVERY
+  // constraint onto the kept arc welded passengers from the removed
+  // span onto it (snapping them ~100°+ on the next solve) and
+  // re-applied sweep-dependent dims that no longer hold. Center/radius-
+  // class relations are NOT sweep-dependent — the kept arc has the same
+  // center and radius — so they transfer: radius/diameter dims, tangent,
+  // concentric, coradial, and equal-radius (SolidWorks keeps them all;
+  // dropping them silently un-constrained the sketch on every trim).
+  const inheritedConstraints = state.constraints.filter(c =>
+    c.targets.some(t => t.entityId === circle.id)
+    && (isDirectionConstraint(c.type) || c.type === 'on-edge'
+        || isCenterRadiusConstraint(c.type)),
   );
+  // Passenger points riding the circle re-attach to the kept arc only
+  // when their angle falls inside the kept span; passengers cut away
+  // with the removed wedge are released (B8 — split-op discipline).
+  const passengers: Array<{ pointId: string; angle: number }> = [];
+  for (const c of state.constraints) {
+    if (c.type !== 'coincident') continue;
+    const ids = c.targets.map(t => t.entityId);
+    if (!ids.includes(circle.id)) continue;
+    const otherId = ids.find(id => id !== circle.id);
+    const pt = otherId ? findPoint(state, otherId) : null;
+    if (!pt) continue;
+    passengers.push({ pointId: pt.id, angle: Math.atan2(pt.y - center.y, pt.x - center.x) });
+  }
   // Remove the wedge between prevHit and nextHit (the side under the click), keep
   // the rest as an arc from nextHit → prevHit + 2π going CCW.
-  let s = deletePrimitive(state, circle.id);
+  let s = deletePrimitive(state, circle.id, { keepPoints: [circle.centerId] });
   const r = circle.radius;
   // Reuse the original center point id when possible so constraints
   // attached to the center (fixed, coincident-with-origin, …) survive
@@ -658,10 +810,30 @@ function trimCircle(state: SketchState, circle: CircleEntity, click: Pt): OpResu
   s = ar.state;
   if (circle.construction) s = setConstructionFlag(s, [ar.id], true);  // REQ 866
   s = inheritConstraintsOntoEntity(s, circle.id, ar.id, inheritedConstraints);
+  // Removed wedge → construction arc sharing the kept arc's endpoints
+  // (CCW from prevHit to nextHit — the side under the click). Endpoint
+  // reuse pins it; no constraint inheritance (see KeptSegment note).
+  if (opts.keepAsConstruction && !circle.construction) {
+    const cutArc = addArcByPoints(s, centerId, endId, startId, true);
+    s = cutArc.state;
+    s = setConstructionFlag(s, [cutArc.id], true);
+  }
+  // B8: re-attach passengers covered by the kept span (CCW from
+  // nextHit to prevHit); the rest were removed with the wedge.
+  const keptSweep = arcOffset(nextHit.angle, prevHit.angle, true);
+  for (const pass of passengers) {
+    if (pass.pointId === startId || pass.pointId === endId) continue;
+    if (!s.entities.some(e => e.id === pass.pointId)) continue;
+    const off = arcOffset(nextHit.angle, pass.angle, true);
+    if (off > keptSweep + EPS) continue;  // fell in the removed wedge — released
+    if (!alreadyCoincidentWith(s, pass.pointId, ar.id)) {
+      s = addConstraint(s, 'coincident', [pass.pointId, ar.id]).state;
+    }
+  }
   return { state: s, affectedIds: [ar.id] };
 }
 
-function trimArc(state: SketchState, arc: ArcEntity, click: Pt): OpResult {
+function trimArc(state: SketchState, arc: ArcEntity, click: Pt, opts: TrimOptions = {}): OpResult {
   const center = findPoint(state, arc.centerId);
   const sp = findPoint(state, arc.startId);
   const ep = findPoint(state, arc.endId);
@@ -669,9 +841,9 @@ function trimArc(state: SketchState, arc: ArcEntity, click: Pt): OpResult {
 
   const startA = Math.atan2(sp.y - center.y, sp.x - center.x);
   const endA = Math.atan2(ep.y - center.y, ep.x - center.x);
-  const hits = collectArcHits(state, arc, center, startA, endA);
+  const hits = collectArcHits(state, arc, center, startA, endA, opts.ignoreConstruction);
   if (hits.length === 0) {
-    return { state: deletePrimitive(state, arc.id), affectedIds: [] };
+    return removeWholeEntity(state, arc, opts);
   }
   // Express click + hits as sweep-offset from startA in the arc's CCW dir.
   const offset = (a: number) => arcOffset(startA, a, arc.ccw);
@@ -714,13 +886,47 @@ function trimArc(state: SketchState, arc: ArcEntity, click: Pt): OpResult {
   } else if (right !== null) {
     keep.push({ o0: right.off, o1: sweep, h0: right, h1: null });
   } else {
-    return { state: deletePrimitive(state, arc.id), affectedIds: [] };
+    return removeWholeEntity(state, arc, opts);
   }
+  // Sweep-offset bounds of the REMOVED span (between the kept pieces /
+  // arc ends) — used to attach the construction remnant when the trim
+  // option is on.
+  const cutO0 = left !== null ? left.off : 0;
+  const cutO1 = right !== null ? right.off : sweep;
 
-  const inheritedConstraints = state.constraints.filter(
-    c => c.targets.some(t => t.entityId === arc.id),
+  // B8: direction-class + on-edge only — see trimCircle. Passengers
+  // re-attach to whichever kept piece covers their sweep offset;
+  // passengers in the removed span are released.
+  const inheritedConstraints = state.constraints.filter(c =>
+    c.targets.some(t => t.entityId === arc.id)
+    && (isDirectionConstraint(c.type) || c.type === 'on-edge'),
   );
-  let s = deletePrimitive(state, arc.id);
+  // Center/radius-class relations survive the trim (same center and
+  // radius, not sweep-dependent) but go onto ONE kept piece only —
+  // cloning onto both sub-arcs would duplicate dims and stack
+  // redundant relations.
+  const inheritedDims = state.constraints.filter(c =>
+    c.targets.some(t => t.entityId === arc.id) && isCenterRadiusConstraint(c.type),
+  );
+  const passengers: Array<{ pointId: string; off: number }> = [];
+  for (const c of state.constraints) {
+    if (c.type !== 'coincident') continue;
+    const ids = c.targets.map(t => t.entityId);
+    if (!ids.includes(arc.id)) continue;
+    const otherId = ids.find(id => id !== arc.id);
+    const pt = otherId ? findPoint(state, otherId) : null;
+    if (!pt) continue;
+    const ang = Math.atan2(pt.y - center.y, pt.x - center.x);
+    passengers.push({ pointId: pt.id, off: arcOffset(startA, ang, arc.ccw) });
+  }
+  // The arc's original start/end survive (with their constraints) when a
+  // kept piece — or the construction remnant — still reaches them. Only
+  // an endpoint whose whole side was trimmed away cascades.
+  const keepCutArc = !!opts.keepAsConstruction && !arc.construction;
+  const keepPts = [arc.centerId];
+  if (left !== null || keepCutArc) keepPts.push(arc.startId);
+  if (right !== null || keepCutArc) keepPts.push(arc.endId);
+  let s = deletePrimitive(state, arc.id, { keepPoints: keepPts });
   const centerId = s.entities.some(e => e.id === arc.centerId)
     ? arc.centerId
     : (() => { const r2 = addPoint(s, center.x, center.y); s = r2.state; return r2.id; })();
@@ -750,17 +956,55 @@ function trimArc(state: SketchState, arc: ArcEntity, click: Pt): OpResult {
     return np.id;
   };
   const newIds: string[] = [];
+  const pieces: Array<{ id: string; o0: number; o1: number; startId: string; endId: string }> = [];
   for (const k of keep) {
     if (Math.abs(k.o1 - k.o0) < EPS) continue;
-    const startId = resolveEndpoint(k.h0, k.o0, arc.startId);
-    const endId   = resolveEndpoint(k.h1, k.o1, arc.endId);
-    const ar = addArcByPoints(s, centerId, startId, endId, arc.ccw);
+    const segStartId = resolveEndpoint(k.h0, k.o0, arc.startId);
+    const segEndId   = resolveEndpoint(k.h1, k.o1, arc.endId);
+    const ar = addArcByPoints(s, centerId, segStartId, segEndId, arc.ccw);
     s = ar.state;
     if (arc.construction) s = setConstructionFlag(s, [ar.id], true);  // REQ 866
     newIds.push(ar.id);
+    pieces.push({ id: ar.id, o0: k.o0, o1: k.o1, startId: segStartId, endId: segEndId });
   }
+  // Removed span → construction arc (trim option). Its endpoints reuse
+  // the kept pieces' cut points where a kept piece bounds the span;
+  // an unbounded side (span reaching the arc's original start/end)
+  // resolves that original endpoint (recreating it if the delete
+  // cascaded it away). No constraint inheritance — endpoint sharing
+  // already pins it (see KeptSegment note).
+  if (opts.keepAsConstruction && !arc.construction && cutO1 - cutO0 > EPS) {
+    const cutStartId = left !== null
+      ? (pieces.find(p => Math.abs(p.o1 - cutO0) < EPS)?.endId ?? null)
+      : resolveEndpoint(null, 0, arc.startId);
+    const cutEndId = right !== null
+      ? (pieces.find(p => Math.abs(p.o0 - cutO1) < EPS)?.startId ?? null)
+      : resolveEndpoint(null, sweep, arc.endId);
+    if (cutStartId && cutEndId) {
+      const cutArc = addArcByPoints(s, centerId, cutStartId, cutEndId, arc.ccw);
+      s = cutArc.state;
+      s = setConstructionFlag(s, [cutArc.id], true);
+    }
+  }
+  // B8: every kept piece inherits (unique cloned constraint ids) —
+  // matching splitArcAt, instead of dumping everything on the first.
+  s = inheritConstraintsOntoMultiple(s, arc.id, newIds, inheritedConstraints);
   if (newIds.length > 0) {
-    s = inheritConstraintsOntoEntity(s, arc.id, newIds[0], inheritedConstraints);
+    s = inheritConstraintsOntoEntity(s, arc.id, newIds[0], inheritedDims);
+  }
+  // B8: re-attach passengers to the piece whose sweep range covers
+  // them; a passenger inside the removed span is released.
+  const boundaryIds = new Set(pieces.flatMap(p => [p.startId, p.endId]));
+  for (const pass of passengers) {
+    if (boundaryIds.has(pass.pointId)) continue;
+    if (!s.entities.some(e => e.id === pass.pointId)) continue;
+    for (const piece of pieces) {
+      if (pass.off < piece.o0 - EPS || pass.off > piece.o1 + EPS) continue;
+      if (!alreadyCoincidentWith(s, pass.pointId, piece.id)) {
+        s = addConstraint(s, 'coincident', [pass.pointId, piece.id]).state;
+      }
+      break;
+    }
   }
   return { state: s, affectedIds: newIds };
 }
@@ -790,15 +1034,17 @@ function inheritConstraintsOntoEntity(
  * and pin it to that curve via coincident). */
 interface CircleHit { angle: number; pointId?: string; curveId?: string; }
 
-function collectCircleHits(state: SketchState, circle: CircleEntity, center: Pt): CircleHit[] {
+function collectCircleHits(state: SketchState, circle: CircleEntity, center: Pt, ignoreConstruction = false): CircleHit[] {
   const out: CircleHit[] = [];
   // Point entities sitting ON the circle count as cut points too — a
-  // user-placed point on the circumference (with or without an
-  // explicit point-on-curve constraint) signals "cut here." Test
-  // against radius with a generous tolerance so floating-point drift
-  // doesn't disqualify a point the user clearly intended to land on
-  // the curve. Construction points participate (they're reference
-  // markers, not visual-only).
+  // user-placed point riding the circumference signals "cut here."
+  // B9: only points genuinely ATTACHED to the geometry qualify (see
+  // pointQualifiesAsCutMarker) — a foreign point that merely lies near
+  // the circumference (another circle's center, the origin) must not
+  // cut the curve, and must NEVER be welded in as the replacement
+  // arc's endpoint. Radius test uses a generous tolerance so floating-
+  // point drift doesn't disqualify an intended rider. Construction
+  // points participate (they're reference markers, not visual-only).
   const circleTol = Math.max(circle.radius * 1e-4, 1e-4);
   // Avoid double-counting the curve's own controlling vertices when
   // we walk through standalone points — for a Circle, that's just
@@ -807,6 +1053,7 @@ function collectCircleHits(state: SketchState, circle: CircleEntity, center: Pt)
   for (const e of state.entities) {
     if (e.kind !== 'point') continue;
     if (e.id === circle.centerId) continue;
+    if (!pointQualifiesAsCutMarker(state, e.id, circle.id)) continue;  // B9
     const dr = Math.hypot(e.x - center.x, e.y - center.y) - circle.radius;
     if (Math.abs(dr) <= circleTol) {
       out.push({ angle: Math.atan2(e.y - center.y, e.x - center.x), pointId: e.id });
@@ -814,11 +1061,12 @@ function collectCircleHits(state: SketchState, circle: CircleEntity, center: Pt)
   }
   for (const e of state.entities) {
     if (e.id === circle.id) continue;  // REQ 866: construction curves are valid trim boundaries
+    if (ignoreConstruction && (e as { construction?: boolean }).construction) continue;
     if (e.kind === 'line') {
       const a = findPoint(state, e.startId);
       const b = findPoint(state, e.endId);
       if (!a || !b) continue;
-      const pts = lineCircleIntersection(a, b, center, circle.radius);
+      const pts = lineCircleHitsWithTangency(a, b, center, circle.radius);
       for (const p of pts) {
         const t = lineParam(a, b, p);
         // ACCEPT endpoint touches on the cutting line — a sketched
@@ -832,7 +1080,7 @@ function collectCircleHits(state: SketchState, circle: CircleEntity, center: Pt)
     } else if (e.kind === 'circle') {
       const oc = findPoint(state, (e as CircleEntity).centerId);
       if (!oc) continue;
-      const pts = circleCircleIntersection(center, circle.radius, oc, (e as CircleEntity).radius);
+      const pts = circleCircleHitsWithTangency(center, circle.radius, oc, (e as CircleEntity).radius);
       for (const p of pts) {
         out.push({ angle: Math.atan2(p.y - center.y, p.x - center.x), curveId: e.id });
       }
@@ -842,7 +1090,7 @@ function collectCircleHits(state: SketchState, circle: CircleEntity, center: Pt)
       const osp = findPoint(state, ae.startId);
       const oep = findPoint(state, ae.endId);
       if (!oc || !osp || !oep) continue;
-      const pts = circleCircleIntersection(center, circle.radius, oc, ae.radius);
+      const pts = circleCircleHitsWithTangency(center, circle.radius, oc, ae.radius);
       const sa = Math.atan2(osp.y - oc.y, osp.x - oc.x);
       const ea = Math.atan2(oep.y - oc.y, oep.x - oc.x);
       for (const p of pts) {
@@ -853,22 +1101,66 @@ function collectCircleHits(state: SketchState, circle: CircleEntity, center: Pt)
       }
     }
   }
+  return dedupeHitsByAngle(out);  // B9: collapse T-junction double counts
+}
+
+/** B9: a bare point entity qualifies as a trim cut-marker on `curveId`
+ * only when it is genuinely attached to the geometry there: either
+ * coincident-constrained onto the trimmed curve, or the endpoint of
+ * another curve (a T-junction vertex whose owning curve touches the
+ * trimmed one at that point). Foreign points that merely sit near the
+ * circumference — another circle's center, the origin — are neither
+ * boundaries nor candidate weld endpoints (the vesica bug). */
+function pointQualifiesAsCutMarker(state: SketchState, pointId: string, curveId: string): boolean {
+  for (const c of state.constraints) {
+    if (c.type !== 'coincident') continue;
+    const ids = c.targets.map(t => t.entityId);
+    if (ids.includes(pointId) && ids.includes(curveId)) return true;
+  }
+  for (const e of state.entities) {
+    if (e.kind === 'line' && (e.startId === pointId || e.endId === pointId)) return true;
+    if (e.kind === 'arc' && (e.startId === pointId || e.endId === pointId)) return true;
+  }
+  return false;
+}
+
+/** B9: collapse hits landing at the same angle. A T-junction reports
+ * TWO hits — the vertex point AND the touching curve — which defeated
+ * the "< 2 boundaries" guards and minted degenerate arcs. Point
+ * sources win the merge (the trim reuses them as endpoints); the
+ * curve source is kept as the pin fallback. */
+function dedupeHitsByAngle(hits: CircleHit[]): CircleHit[] {
+  const ANGLE_TOL = 1e-3;
+  const out: CircleHit[] = [];
+  for (const h of hits) {
+    const match = out.find(o => {
+      let d = Math.abs(normalizeAngle(o.angle) - normalizeAngle(h.angle));
+      if (d > Math.PI) d = 2 * Math.PI - d;
+      return d <= ANGLE_TOL;
+    });
+    if (!match) { out.push({ ...h }); continue; }
+    if (!match.pointId && h.pointId) match.pointId = h.pointId;
+    if (!match.curveId && h.curveId) match.curveId = h.curveId;
+  }
   return out;
 }
 
 function collectArcHits(
   state: SketchState, arc: ArcEntity, center: Pt, startA: number, endA: number,
+  ignoreConstruction = false,
 ): CircleHit[] {
   const out: CircleHit[] = [];
   // Standalone points sitting on the arc's circle within its sweep
-  // count as cut markers — same rationale as collectCircleHits.
-  // Exclude the arc's own controlling points (start/end/center)
-  // since those define the arc's domain rather than cut it.
+  // count as cut markers — same rationale (and same B9 attachment
+  // filter) as collectCircleHits. Exclude the arc's own controlling
+  // points (start/end/center) since those define the arc's domain
+  // rather than cut it.
   const arcTol = Math.max(arc.radius * 1e-4, 1e-4);
   const ownPoints = new Set([arc.centerId, arc.startId, arc.endId]);
   for (const e of state.entities) {
     if (e.kind !== 'point') continue;
     if (ownPoints.has(e.id)) continue;
+    if (!pointQualifiesAsCutMarker(state, e.id, arc.id)) continue;  // B9
     const dr = Math.hypot(e.x - center.x, e.y - center.y) - arc.radius;
     if (Math.abs(dr) > arcTol) continue;
     const ang = Math.atan2(e.y - center.y, e.x - center.x);
@@ -876,11 +1168,12 @@ function collectArcHits(
   }
   for (const e of state.entities) {
     if (e.id === arc.id) continue;  // REQ 866: construction curves are valid trim boundaries
+    if (ignoreConstruction && (e as { construction?: boolean }).construction) continue;
     if (e.kind === 'line') {
       const a = findPoint(state, e.startId);
       const b = findPoint(state, e.endId);
       if (!a || !b) continue;
-      const pts = lineCircleIntersection(a, b, center, arc.radius);
+      const pts = lineCircleHitsWithTangency(a, b, center, arc.radius);
       for (const p of pts) {
         const t = lineParam(a, b, p);
         // ACCEPT endpoint touches on the cutting line — T-junctions
@@ -893,7 +1186,7 @@ function collectArcHits(
     } else if (e.kind === 'circle') {
       const oc = findPoint(state, (e as CircleEntity).centerId);
       if (!oc) continue;
-      const pts = circleCircleIntersection(center, arc.radius, oc, (e as CircleEntity).radius);
+      const pts = circleCircleHitsWithTangency(center, arc.radius, oc, (e as CircleEntity).radius);
       for (const p of pts) {
         const ang = Math.atan2(p.y - center.y, p.x - center.x);
         if (angleInArcSweep(ang, startA, endA, arc.ccw)) out.push({ angle: ang, curveId: e.id });
@@ -904,7 +1197,7 @@ function collectArcHits(
       const osp = findPoint(state, ae.startId);
       const oep = findPoint(state, ae.endId);
       if (!oc || !osp || !oep) continue;
-      const pts = circleCircleIntersection(center, arc.radius, oc, ae.radius);
+      const pts = circleCircleHitsWithTangency(center, arc.radius, oc, ae.radius);
       const sa2 = Math.atan2(osp.y - oc.y, osp.x - oc.x);
       const ea2 = Math.atan2(oep.y - oc.y, oep.x - oc.x);
       for (const p of pts) {
@@ -917,7 +1210,7 @@ function collectArcHits(
       }
     }
   }
-  return out;
+  return dedupeHitsByAngle(out);  // B9: collapse T-junction double counts
 }
 
 function lineParam(a: Pt, b: Pt, p: Pt): number | null {
@@ -971,7 +1264,9 @@ export function extendLine(state: SketchState, lineId: string, clickPoint: Pt): 
   // against the curve when the boundary is a circle/arc/ellipse.
   const candidates: Array<{ t: number; entity: SketchEntity }> = [];
   for (const e of state.entities) {
-    if (e.id === line.id || e.construction) continue;
+    // Construction curves are valid extend boundaries — parity with
+    // trim (REQ 866 spirit; B15-22 ride-along: SW honors both).
+    if (e.id === line.id) continue;
     if (e.kind === 'line') {
       const oa = findPoint(state, e.startId);
       const ob = findPoint(state, e.endId);
@@ -1094,6 +1389,123 @@ function pointIsSharedBeyond(state: SketchState, pointId: string, exceptEntityId
   return false;
 }
 
+/** Extend `arc` from the endpoint nearest to `clickPoint` to the first
+ * crossing with another curve, walking along the arc's own circle (REQ
+ * 888 — arc parity for Extend). Same candidate-scan structure as
+ * `extendLine`, but parameterized by angle: crossings are expressed as
+ * sweep-offsets from the arc's start (`arcOffset`); interior points have
+ * offset in [0, sweep] and the extension gap is (sweep, 2π). Extending
+ * the END walks forward → nearest boundary = smallest offset above the
+ * sweep; extending the START walks backward → largest offset below 2π. */
+export function extendArc(state: SketchState, arcId: string, clickPoint: Pt): OpResult {
+  const arc = findEntity<ArcEntity>(state, arcId);
+  if (!arc || arc.kind !== 'arc') return { state, error: 'Not an arc' };
+  if (arc.construction) return { state, error: 'Cannot extend construction geometry' };
+  const center = findPoint(state, arc.centerId);
+  const sp = findPoint(state, arc.startId);
+  const ep = findPoint(state, arc.endId);
+  if (!center || !sp || !ep) return { state, error: 'Arc endpoints missing' };
+
+  const startA = Math.atan2(sp.y - center.y, sp.x - center.x);
+  const endA = Math.atan2(ep.y - center.y, ep.x - center.x);
+  const sweep = arcOffset(startA, endA, arc.ccw);
+
+  // Pick the endpoint to extend: whichever is closer to the click.
+  const ds = (clickPoint.x - sp.x) ** 2 + (clickPoint.y - sp.y) ** 2;
+  const de = (clickPoint.x - ep.x) ** 2 + (clickPoint.y - ep.y) ** 2;
+  const extendStart = ds < de;
+
+  // Each candidate carries its sweep-offset PLUS the boundary entity it
+  // came from — needed for the coincident pin after the move.
+  const candidates: Array<{ off: number; entity: SketchEntity }> = [];
+  const pushCandidate = (p: Pt, entity: SketchEntity) => {
+    const ang = Math.atan2(p.y - center.y, p.x - center.x);
+    const off = arcOffset(startA, ang, arc.ccw);
+    if (off > sweep + EPS && off < 2 * Math.PI - EPS) candidates.push({ off, entity });
+  };
+  for (const e of state.entities) {
+    // Construction curves are valid extend boundaries — parity with
+    // trim (REQ 866 spirit; B15-22 ride-along).
+    if (e.id === arc.id) continue;
+    if (e.kind === 'line') {
+      const oa = findPoint(state, e.startId);
+      const ob = findPoint(state, e.endId);
+      if (!oa || !ob) continue;
+      const pts = lineCircleIntersection(oa, ob, center, arc.radius);
+      for (const p of pts) {
+        const t = lineParam(oa, ob, p);
+        // Boundary must hit within its own segment (endpoint touches OK).
+        if (t === null || t < -EPS || t > 1 + EPS) continue;
+        pushCandidate(p, e);
+      }
+    } else if (e.kind === 'circle') {
+      const oc = findPoint(state, e.centerId);
+      if (!oc) continue;
+      const pts = circleCircleIntersection(center, arc.radius, oc, e.radius);
+      for (const p of pts) pushCandidate(p, e);
+    } else if (e.kind === 'arc') {
+      const ae = e as ArcEntity;
+      const oc = findPoint(state, ae.centerId);
+      const osp = findPoint(state, ae.startId);
+      const oep = findPoint(state, ae.endId);
+      if (!oc || !osp || !oep) continue;
+      const pts = circleCircleIntersection(center, arc.radius, oc, ae.radius);
+      const sa = Math.atan2(osp.y - oc.y, osp.x - oc.x);
+      const ea = Math.atan2(oep.y - oc.y, oep.x - oc.x);
+      for (const p of pts) {
+        const angOther = Math.atan2(p.y - oc.y, p.x - oc.x);
+        if (angleInArcSweep(angOther, sa, ea, ae.ccw)) pushCandidate(p, e);
+      }
+    }
+  }
+  if (candidates.length === 0) return { state, error: 'No boundary to extend to' };
+
+  const chosen = extendStart
+    ? candidates.reduce((acc, x) => x.off > acc.off ? x : acc)
+    : candidates.reduce((acc, x) => x.off < acc.off ? x : acc);
+  const targetAng = startA + (arc.ccw ? chosen.off : -chosen.off);
+  const newPoint = {
+    x: center.x + arc.radius * Math.cos(targetAng),
+    y: center.y + arc.radius * Math.sin(targetAng),
+  };
+  const boundaryEntity = chosen.entity;
+  const oldEndpointId = extendStart ? arc.startId : arc.endId;
+  // Same two paths as extendLine (see there for the rationale): a shared
+  // endpoint gets a fresh point + rebind so adjacent geometry doesn't
+  // drag along; an exclusive endpoint just moves in place. Both paths
+  // pin the extended endpoint to the boundary curve via coincident. The
+  // new endpoint stays on the arc's circle, so `radius` is untouched.
+  if (pointIsSharedBeyond(state, oldEndpointId, arc.id)) {
+    const np = addPoint(state, newPoint.x, newPoint.y);
+    let s: SketchState = {
+      ...np.state,
+      entities: np.state.entities.map(en => {
+        if (en.id !== arc.id || en.kind !== 'arc') return en;
+        return {
+          ...en,
+          startId: extendStart ? np.id : en.startId,
+          endId:   extendStart ? en.endId : np.id,
+        };
+      }),
+    };
+    // 1) The old corner stays on the extended arc's curve.
+    s = addConstraint(s, 'coincident', [oldEndpointId, arc.id]).state;
+    // 2) The new endpoint sits on the boundary entity.
+    s = addConstraint(s, 'coincident', [np.id, boundaryEntity.id]).state;
+    return { state: s, affectedIds: [arc.id] };
+  }
+  let s: SketchState = {
+    ...state,
+    entities: state.entities.map(en =>
+      en.id === oldEndpointId && en.kind === 'point'
+        ? { ...en, x: newPoint.x, y: newPoint.y }
+        : en,
+    ),
+  };
+  s = addConstraint(s, 'coincident', [oldEndpointId, boundaryEntity.id]).state;
+  return { state: s, affectedIds: [arc.id] };
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Split
 // ────────────────────────────────────────────────────────────────────────────
@@ -1112,15 +1524,277 @@ export function splitLineAt(state: SketchState, lineId: string, clickPoint: Pt):
   if (proj.t < EPS || proj.t > 1 - EPS) {
     return { state, error: 'Cannot split at an endpoint' };
   }
-  let s = deletePrimitive(state, line.id);
-  const np = addPoint(s, proj.p.x, proj.p.y); s = np.state;
-  // Re-introduce the two endpoints (deletePrimitive removed them too via the
-  // cascade — same lifecycle as the line's own deletion).
-  const newA = addPoint(s, a.x, a.y); s = newA.state;
-  const newB = addPoint(s, b.x, b.y); s = newB.state;
-  const l1 = addLine(s, newA.id, np.id); s = l1.state;
-  const l2 = addLine(s, np.id, newB.id); s = l2.state;
-  return { state: s, affectedIds: [l1.id, l2.id] };
+  // B3: rebuilt on the splitArcAt pattern. The old implementation
+  // deleted the line and unconditionally minted FRESH endpoints,
+  // tearing shared topology (a rectangle side's corners got duplicated
+  // while the adjacent sides stayed on the originals) and dropping
+  // every relation. Discipline now matches splitLineKeepingOnly /
+  // splitArcAt: direction-class (+ on-edge) constraints inherit onto
+  // both pieces with unique cloned ids, dims drop (different lengths),
+  // and passenger points re-attach to the piece covering their
+  // parameter.
+  const inheritedConstraints = state.constraints.filter(c =>
+    c.targets.some(t => t.entityId === line.id)
+    && (isDirectionConstraint(c.type) || c.type === 'on-edge'),
+  );
+  const passengers: Array<{ pointId: string; t: number }> = [];
+  for (const c of state.constraints) {
+    if (c.type !== 'coincident') continue;
+    const ids = c.targets.map(t => t.entityId);
+    if (!ids.includes(line.id)) continue;
+    const otherId = ids.find(id => id !== line.id);
+    const pt = otherId ? findPoint(state, otherId) : null;
+    if (!pt) continue;
+    passengers.push({ pointId: pt.id, t: projectOntoSegment(a, b, pt).t });
+  }
+  let s = deletePrimitive(state, line.id, { keepPoints: [line.startId, line.endId] });
+  // Reuse the line's own endpoint points when they survive the delete
+  // cascade (shared corners always do — they may anchor other
+  // entities); otherwise re-create at the original coords.
+  const aId = s.entities.some(e => e.id === line.startId)
+    ? line.startId
+    : (() => { const r = addPoint(s, a.x, a.y); s = r.state; return r.id; })();
+  const bId = s.entities.some(e => e.id === line.endId)
+    ? line.endId
+    : (() => { const r = addPoint(s, b.x, b.y); s = r.state; return r.id; })();
+  // Split point: reuse an existing point within tolerance (a passenger
+  // sitting at the click, a crossing curve's endpoint, …).
+  const np = acquireOrCreatePoint(s, proj.p.x, proj.p.y); s = np.state;
+  if (np.id === aId || np.id === bId) {
+    // The acquire tolerance welded the split point onto an endpoint —
+    // a piece would be zero-length. Treat like the endpoint-click case.
+    return { state, error: 'Cannot split at an endpoint' };
+  }
+  const l1 = addLine(s, aId, np.id); s = l1.state;
+  const l2 = addLine(s, np.id, bId); s = l2.state;
+  const newIds = [l1.id, l2.id];
+  s = inheritConstraintsOntoMultiple(s, line.id, newIds, inheritedConstraints);
+  // Re-attach passenger points to the piece that covers their parameter.
+  for (const pass of passengers) {
+    if (pass.pointId === aId || pass.pointId === bId || pass.pointId === np.id) continue;
+    if (!s.entities.some(e => e.id === pass.pointId)) continue;
+    const target = pass.t <= proj.t ? l1.id : l2.id;
+    if (!alreadyCoincidentWith(s, pass.pointId, target)) {
+      s = addConstraint(s, 'coincident', [pass.pointId, target]).state;
+    }
+  }
+  return { state: s, affectedIds: newIds };
+}
+
+/** Split a circle at the two crossings bracketing the click into two
+ * complementary arcs (REQ 888 — split = trim keeping BOTH sides). Same
+ * bracket walk as `trimCircle`, but the clicked wedge is kept as a
+ * second arc instead of being deleted. Constraint discipline follows
+ * `splitLineKeepingOnly`: directional constraints (+ on-edge) inherit
+ * onto every piece, dimensional constraints drop, passenger points
+ * re-attach to the piece that covers them, and split-point endpoints
+ * reuse existing points via `acquireOrCreatePoint`. */
+export function splitCircleAt(state: SketchState, circleId: string, clickPoint: Pt): OpResult {
+  const circle = findEntity<CircleEntity>(state, circleId);
+  if (!circle || circle.kind !== 'circle') return { state, error: 'Not a circle' };
+  const center = findPoint(state, circle.centerId);
+  if (!center) return { state, error: 'Circle center missing' };
+  const hits = collectCircleHits(state, circle, center);
+  if (hits.length < 2) {
+    return { state, error: 'Need at least two intersections to split a circle' };
+  }
+  // Bracket the click between two consecutive hits — same walk as trimCircle.
+  const clickAngle = normalizeAngle(Math.atan2(clickPoint.y - center.y, clickPoint.x - center.x));
+  const sortedHits = hits
+    .map(h => ({ ...h, angle: normalizeAngle(h.angle) }))
+    .sort((a, b) => a.angle - b.angle);
+  let prevHit: CircleHit = { ...sortedHits[sortedHits.length - 1], angle: sortedHits[sortedHits.length - 1].angle - 2 * Math.PI };
+  let nextHit: CircleHit = sortedHits[0];
+  for (let i = 0; i < sortedHits.length; i++) {
+    if (sortedHits[i].angle <= clickAngle + EPS) prevHit = sortedHits[i];
+    if (sortedHits[i].angle > clickAngle - EPS) { nextHit = sortedHits[i]; break; }
+  }
+  if (nextHit.angle <= clickAngle) {
+    nextHit = { ...sortedHits[0], angle: sortedHits[0].angle + 2 * Math.PI };
+  }
+  if (Math.abs(normalizeAngle(nextHit.angle) - normalizeAngle(prevHit.angle)) < EPS) {
+    return { state, error: 'Split points coincide' };
+  }
+  // splitLineKeepingOnly discipline: directional (+ on-edge) inherit,
+  // dims drop (each piece has a different sweep), passengers re-attach.
+  const inheritedConstraints = state.constraints.filter(c =>
+    c.targets.some(t => t.entityId === circle.id)
+    && (isDirectionConstraint(c.type) || c.type === 'on-edge'),
+  );
+  const passengers: Array<{ pointId: string; angle: number }> = [];
+  for (const c of state.constraints) {
+    if (c.type !== 'coincident') continue;
+    const ids = c.targets.map(t => t.entityId);
+    if (!ids.includes(circle.id)) continue;
+    const otherId = ids.find(id => id !== circle.id);
+    const pt = otherId ? findPoint(state, otherId) : null;
+    if (!pt) continue;
+    passengers.push({ pointId: pt.id, angle: Math.atan2(pt.y - center.y, pt.x - center.x) });
+  }
+  let s = deletePrimitive(state, circle.id, { keepPoints: [circle.centerId] });
+  const r = circle.radius;
+  // Reuse the original center point id when it survives the delete
+  // cascade — same rationale as trimCircle.
+  const centerId = s.entities.some(e => e.id === circle.centerId)
+    ? circle.centerId
+    : (() => { const r2 = addPoint(s, center.x, center.y); s = r2.state; return r2.id; })();
+  // Resolve each split point ONCE so both pieces share it: reuse the hit's
+  // own point id, else acquire-or-create at the crossing coord and pin it
+  // to the crossing curve via coincident.
+  const resolveEndpoint = (hit: CircleHit): string => {
+    if (hit.pointId && s.entities.some(e => e.id === hit.pointId)) return hit.pointId;
+    const px = center.x + r * Math.cos(hit.angle);
+    const py = center.y + r * Math.sin(hit.angle);
+    const pr = acquireOrCreatePoint(s, px, py); s = pr.state;
+    if (hit.curveId && s.entities.some(e => e.id === hit.curveId)
+        && !alreadyCoincidentWith(s, pr.id, hit.curveId)) {
+      s = addConstraint(s, 'coincident', [pr.id, hit.curveId]).state;
+    }
+    return pr.id;
+  };
+  const prevId = resolveEndpoint(prevHit);
+  const nextId = resolveEndpoint(nextHit);
+  // Two complementary CCW arcs sharing the split points: the wedge under
+  // the click (prev → next) and the rest (next → prev).
+  const wedge = addArcByPoints(s, centerId, prevId, nextId, true); s = wedge.state;
+  const rest = addArcByPoints(s, centerId, nextId, prevId, true); s = rest.state;
+  const newIds = [wedge.id, rest.id];
+  if (circle.construction) s = setConstructionFlag(s, newIds, true);  // REQ 866
+  s = inheritConstraintsOntoMultiple(s, circle.id, newIds, inheritedConstraints);
+  // Re-attach passenger points to whichever piece covers their angle.
+  const wedgeSweep = arcOffset(prevHit.angle, nextHit.angle, true);
+  for (const pass of passengers) {
+    if (pass.pointId === prevId || pass.pointId === nextId) continue;
+    if (!s.entities.some(e => e.id === pass.pointId)) continue;
+    const off = arcOffset(prevHit.angle, pass.angle, true);
+    const target = off <= wedgeSweep ? wedge.id : rest.id;
+    if (!alreadyCoincidentWith(s, pass.pointId, target)) {
+      s = addConstraint(s, 'coincident', [pass.pointId, target]).state;
+    }
+  }
+  return { state: s, affectedIds: newIds };
+}
+
+/** Split an arc at the crossings bracketing the click, keeping every
+ * piece (REQ 888). Same bracket walk as `trimArc`, minus the deletion of
+ * the clicked piece: with brackets on both sides the arc becomes three
+ * pieces, with one bracket it becomes two. Adjacent pieces share the
+ * split-point ids; the original start/end point ids are reused at the
+ * outer boundaries. Constraint discipline as in `splitCircleAt`. */
+export function splitArcAt(state: SketchState, arcId: string, clickPoint: Pt): OpResult {
+  const arc = findEntity<ArcEntity>(state, arcId);
+  if (!arc || arc.kind !== 'arc') return { state, error: 'Not an arc' };
+  const center = findPoint(state, arc.centerId);
+  const sp = findPoint(state, arc.startId);
+  const ep = findPoint(state, arc.endId);
+  if (!center || !sp || !ep) return { state, error: 'Arc endpoints missing' };
+  const startA = Math.atan2(sp.y - center.y, sp.x - center.x);
+  const endA = Math.atan2(ep.y - center.y, ep.x - center.x);
+  const sweep = arcOffset(startA, endA, arc.ccw);
+  const clickAngle = Math.atan2(clickPoint.y - center.y, clickPoint.x - center.x);
+  const clickOff = arcOffset(startA, clickAngle, arc.ccw);
+  if (clickOff < -EPS || clickOff > sweep + EPS) {
+    return { state, error: 'Click is outside arc sweep' };
+  }
+  const hits = collectArcHits(state, arc, center, startA, endA)
+    .map(h => ({ ...h, off: arcOffset(startA, h.angle, arc.ccw) }))
+    .filter(h => h.off > EPS && h.off < sweep - EPS);
+  if (hits.length === 0) {
+    return { state, error: 'No intersection to split at' };
+  }
+  // Bracket the click — same as trimArc, but split KEEPS the middle piece.
+  let left: (typeof hits)[number] | null = null;
+  let right: (typeof hits)[number] | null = null;
+  for (const h of hits) {
+    if (h.off < clickOff - EPS) {
+      if (left === null || h.off > left.off) left = h;
+    } else if (h.off > clickOff + EPS) {
+      if (right === null || h.off < right.off) right = h;
+    }
+  }
+  if (left === null && right === null) {
+    // Click landed exactly ON a crossing — split at that crossing.
+    let nearest = hits[0];
+    for (const h of hits) {
+      if (Math.abs(h.off - clickOff) < Math.abs(nearest.off - clickOff)) nearest = h;
+    }
+    left = nearest;
+  }
+  // Boundaries in sweep order: 0, [left], [right], sweep. Consecutive
+  // pairs become kept pieces.
+  type Boundary = { off: number; hit: (typeof hits)[number] | null };
+  const boundaries: Boundary[] = [{ off: 0, hit: null }];
+  if (left !== null) boundaries.push({ off: left.off, hit: left });
+  if (right !== null) boundaries.push({ off: right.off, hit: right });
+  boundaries.push({ off: sweep, hit: null });
+
+  const inheritedConstraints = state.constraints.filter(c =>
+    c.targets.some(t => t.entityId === arc.id)
+    && (isDirectionConstraint(c.type) || c.type === 'on-edge'),
+  );
+  const passengers: Array<{ pointId: string; off: number }> = [];
+  for (const c of state.constraints) {
+    if (c.type !== 'coincident') continue;
+    const ids = c.targets.map(t => t.entityId);
+    if (!ids.includes(arc.id)) continue;
+    const otherId = ids.find(id => id !== arc.id);
+    const pt = otherId ? findPoint(state, otherId) : null;
+    if (!pt) continue;
+    const ang = Math.atan2(pt.y - center.y, pt.x - center.x);
+    passengers.push({ pointId: pt.id, off: arcOffset(startA, ang, arc.ccw) });
+  }
+  let s = deletePrimitive(state, arc.id, { keepPoints: [arc.centerId] });
+  const centerId = s.entities.some(e => e.id === arc.centerId)
+    ? arc.centerId
+    : (() => { const r2 = addPoint(s, center.x, center.y); s = r2.state; return r2.id; })();
+  // Resolve each boundary to a point id ONCE so adjacent pieces share it.
+  // Outer boundaries reuse the original arc's own start/end point ids;
+  // interior boundaries reuse the hit's point (or acquire-or-create +
+  // pin to the crossing curve) — same resolution as trimArc.
+  const resolveBoundary = (b: Boundary, fallbackOwnId: string | null): string => {
+    if (b.hit === null && fallbackOwnId !== null && s.entities.some(e => e.id === fallbackOwnId)) {
+      return fallbackOwnId;
+    }
+    if (b.hit && b.hit.pointId && s.entities.some(e => e.id === b.hit!.pointId)) {
+      return b.hit.pointId;
+    }
+    const ang = startA + (arc.ccw ? b.off : -b.off);
+    const px = center.x + arc.radius * Math.cos(ang);
+    const py = center.y + arc.radius * Math.sin(ang);
+    const pr = acquireOrCreatePoint(s, px, py); s = pr.state;
+    if (b.hit && b.hit.curveId && s.entities.some(e => e.id === b.hit!.curveId)
+        && !alreadyCoincidentWith(s, pr.id, b.hit.curveId)) {
+      s = addConstraint(s, 'coincident', [pr.id, b.hit.curveId]).state;
+    }
+    return pr.id;
+  };
+  const boundaryIds = boundaries.map((b, i) => resolveBoundary(
+    b,
+    i === 0 ? arc.startId : i === boundaries.length - 1 ? arc.endId : null,
+  ));
+  const pieces: Array<{ id: string; o0: number; o1: number }> = [];
+  for (let i = 0; i + 1 < boundaries.length; i++) {
+    if (boundaries[i + 1].off - boundaries[i].off < EPS) continue;
+    const ar = addArcByPoints(s, centerId, boundaryIds[i], boundaryIds[i + 1], arc.ccw);
+    s = ar.state;
+    pieces.push({ id: ar.id, o0: boundaries[i].off, o1: boundaries[i + 1].off });
+  }
+  const newIds = pieces.map(p => p.id);
+  if (arc.construction) s = setConstructionFlag(s, newIds, true);  // REQ 866
+  s = inheritConstraintsOntoMultiple(s, arc.id, newIds, inheritedConstraints);
+  // Re-attach passenger points to the piece whose sweep range covers them.
+  for (const pass of passengers) {
+    if (boundaryIds.includes(pass.pointId)) continue;
+    if (!s.entities.some(e => e.id === pass.pointId)) continue;
+    for (const piece of pieces) {
+      if (pass.off < piece.o0 - EPS || pass.off > piece.o1 + EPS) continue;
+      if (!alreadyCoincidentWith(s, pass.pointId, piece.id)) {
+        s = addConstraint(s, 'coincident', [pass.pointId, piece.id]).state;
+      }
+      break;
+    }
+  }
+  return { state: s, affectedIds: newIds };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1133,6 +1807,32 @@ export function splitLineAt(state: SketchState, lineId: string, clickPoint: Pt):
 // SolidWorks's "Mirror Entities" default — drag the original, watch the
 // mirror follow. Caller can remove constraints afterwards if they want a
 // decoupled copy.
+
+/** Build an ellipticalArc that re-uses existing point ids (B14 mirror /
+ * copyEntities kind-gap ride-along). The store only exposes
+ * `addEllipticalArc`, which mints its own center/major points — so we
+ * let it mint scratch points (keeping id generation in the store),
+ * then rewire the entity onto the supplied ids and drop the scratch
+ * points. */
+function addEllipticalArcByPoints(
+  state: SketchState, centerId: string, majorAxisEndId: string,
+  minorRadius: number, startAngle: number, endAngle: number, ccw: boolean,
+): { state: SketchState; id: string } {
+  const r = addEllipticalArc(state, 0, 0, 1, 0, minorRadius, startAngle, endAngle, ccw);
+  const createdArc = findEntity<EllipticalArcEntity>(r.state, r.id)!;
+  const scratch = new Set([createdArc.centerId, createdArc.majorAxisEndId]);
+  return {
+    state: {
+      ...r.state,
+      entities: r.state.entities
+        .filter(e => !scratch.has(e.id))
+        .map(e => e.id === r.id && e.kind === 'ellipticalArc'
+          ? { ...e, centerId, majorAxisEndId }
+          : e),
+    },
+    id: r.id,
+  };
+}
 
 export function mirrorEntities(
   state: SketchState, entityIds: string[], axisLineId: string,
@@ -1154,6 +1854,44 @@ export function mirrorEntities(
   // radius of a mirrored circle/arc is a free parameter without an equal
   // link, even though symmetric point constraints fix the center positions.
   const equalPairs: Array<[string, string]> = [];
+  // B14: reflect each point exactly ONCE — original point id → its
+  // single mirrored id, reused by every incident entity. The old
+  // per-entity reflection minted duplicate stacked points at shared
+  // corners, so mirrored chains came out topologically shredded (no
+  // shared ids, no coincidents — drag one mirrored side and the chain
+  // tears).
+  const mirroredPointIds = new Map<string, string>();
+  // A point ON the axis mirrors onto itself: SHARE the original id
+  // (SolidWorks behavior — mirrored geometry welds to the original at
+  // the axis) instead of stacking a copy plus a degenerate symmetric
+  // pair. A zero-length pair makes the solver's perpendicular primitive
+  // singular, and PlaneGCS reported the whole sketch inconsistent
+  // (part 619 — mirroring a profile whose endpoints sit on the axis).
+  const AXIS_TOL = 1e-6;
+  const axisLen = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const distToAxis = (p: { x: number; y: number }) =>
+    Math.abs((p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)) / axisLen;
+  const reflectPointOnce = (pid: string): string => {
+    const existing = mirroredPointIds.get(pid);
+    if (existing) return existing;
+    const pt = findPoint(s, pid)!;   // callers pre-check existence
+    if (distToAxis(pt) <= AXIS_TOL) {
+      mirroredPointIds.set(pid, pid);   // self-mirror — no pair, no constraint
+      return pid;
+    }
+    const rp = reflectAcrossLine(pt, a, b);
+    const np = addPoint(s, rp.x, rp.y); s = np.state;
+    mirroredPointIds.set(pid, np.id);
+    pointPairs.push([pid, np.id]);
+    return np.id;
+  };
+  // B14: the construction flag carries over to the mirrored entity and
+  // its support points. setConstructionFlag cascades to line/circle/
+  // arc/ellipse/spline points; `extraIds` covers the kinds it doesn't
+  // (ellipticalArc).
+  const copyConstruction = (src: SketchEntity, newId: string, extraIds: string[] = []) => {
+    if (src.construction) s = setConstructionFlag(s, [newId, ...extraIds], true);
+  };
 
   for (const id of entityIds) {
     if (seen.has(id)) continue;
@@ -1161,50 +1899,75 @@ export function mirrorEntities(
     const e = findEntity(state, id);
     if (!e || e.id === axisLineId) continue;
     if (e.kind === 'line') {
-      const sa = findPoint(state, e.startId);
-      const sb = findPoint(state, e.endId);
-      if (!sa || !sb) continue;
-      const ra = reflectAcrossLine(sa, a, b);
-      const rb = reflectAcrossLine(sb, a, b);
-      const pa = addPoint(s, ra.x, ra.y); s = pa.state;
-      const pb = addPoint(s, rb.x, rb.y); s = pb.state;
-      const ln = addLine(s, pa.id, pb.id); s = ln.state;
+      if (!findPoint(state, e.startId) || !findPoint(state, e.endId)) continue;
+      const na = reflectPointOnce(e.startId);
+      const nb = reflectPointOnce(e.endId);
+      // Both endpoints on the axis → the line IS its own mirror; a copy
+      // would be an exact duplicate stacked on the original.
+      if (na === e.startId && nb === e.endId) continue;
+      const ln = addLine(s, na, nb); s = ln.state;
       created.push(ln.id);
-      pointPairs.push([e.startId, pa.id], [e.endId, pb.id]);
+      copyConstruction(e, ln.id);
     } else if (e.kind === 'circle') {
-      const ce = findPoint(state, e.centerId);
-      if (!ce) continue;
-      const rc = reflectAcrossLine(ce, a, b);
-      const cr = addCircle(s, rc.x, rc.y, e.radius); s = cr.state;
+      if (!findPoint(state, e.centerId)) continue;
+      const nc = reflectPointOnce(e.centerId);
+      // Center on the axis → the circle is self-symmetric; skip the
+      // duplicate.
+      if (nc === e.centerId) continue;
+      const cr = addCircleByPoint(s, nc, e.radius); s = cr.state;
       created.push(cr.id);
-      const newCircle = findEntity<CircleEntity>(s, cr.id);
-      if (newCircle) pointPairs.push([e.centerId, newCircle.centerId]);
+      copyConstruction(e, cr.id);
       equalPairs.push([e.id, cr.id]);
     } else if (e.kind === 'arc') {
-      const ce = findPoint(state, e.centerId);
-      const sp = findPoint(state, e.startId);
-      const ep = findPoint(state, e.endId);
-      if (!ce || !sp || !ep) continue;
-      const rc = reflectAcrossLine(ce, a, b);
-      const rs = reflectAcrossLine(sp, a, b);
-      const re = reflectAcrossLine(ep, a, b);
+      if (!findPoint(state, e.centerId) || !findPoint(state, e.startId) || !findPoint(state, e.endId)) continue;
+      const nc = reflectPointOnce(e.centerId);
+      const ns = reflectPointOnce(e.startId);
+      const ne = reflectPointOnce(e.endId);
+      // All three defining points on the axis → degenerate self-mirror.
+      if (nc === e.centerId && ns === e.startId && ne === e.endId) continue;
       // Reflection reverses orientation; flip ccw.
-      const ar = addArc(s, rc.x, rc.y, rs.x, rs.y, re.x, re.y, !e.ccw); s = ar.state;
+      const ar = addArcByPoints(s, nc, ns, ne, !e.ccw); s = ar.state;
       created.push(ar.id);
-      const newArc = findEntity<ArcEntity>(s, ar.id);
-      if (newArc) {
-        pointPairs.push(
-          [e.centerId, newArc.centerId],
-          [e.startId, newArc.startId],
-          [e.endId, newArc.endId],
-        );
-      }
+      copyConstruction(e, ar.id);
       equalPairs.push([e.id, ar.id]);
     } else if (e.kind === 'point') {
-      const rp = reflectAcrossLine(e, a, b);
-      const np = addPoint(s, rp.x, rp.y); s = np.state;
-      created.push(np.id);
-      pointPairs.push([e.id, np.id]);
+      const alreadyMirrored = mirroredPointIds.has(e.id);
+      const np = reflectPointOnce(e.id);
+      if (!alreadyMirrored && np !== e.id) created.push(np);
+      copyConstruction(e, np);
+    } else if (e.kind === 'ellipse') {
+      // B14: ellipses used to be skipped silently.
+      if (!findPoint(state, e.centerId) || !findPoint(state, e.majorAxisEndId)) continue;
+      const nc = reflectPointOnce(e.centerId);
+      const nm = reflectPointOnce(e.majorAxisEndId);
+      const el = addEllipseByPoints(s, nc, nm, e.minorRadius); s = el.state;
+      created.push(el.id);
+      copyConstruction(e, el.id);
+    } else if (e.kind === 'ellipticalArc') {
+      // B14: reflect center + major-axis end, keep minorRadius. In the
+      // parametric frame (minor axis = major direction rotated +90°) a
+      // reflection maps parameter θ → −θ:
+      //   P(θ) = C + M·cosθ·u + m·sinθ·rot90(u)
+      // reflects to C' + M·cos(−θ)·u' + m·sin(−θ)·rot90(u'), because
+      // R(rot90(u)) = −rot90(R(u)) for any reflection R. The mirrored
+      // arc therefore spans −startAngle → −endAngle with the traversal
+      // direction flipped (no start/end swap — flipping ccw already
+      // accounts for the orientation reversal).
+      if (!findPoint(state, e.centerId) || !findPoint(state, e.majorAxisEndId)) continue;
+      const nc = reflectPointOnce(e.centerId);
+      const nm = reflectPointOnce(e.majorAxisEndId);
+      const er = addEllipticalArcByPoints(
+        s, nc, nm, e.minorRadius, -e.startAngle, -e.endAngle, !e.ccw);
+      s = er.state;
+      created.push(er.id);
+      copyConstruction(e, er.id, [nc, nm]);  // cascade skips ellipticalArc
+    } else if (e.kind === 'spline') {
+      // B14: splines used to be skipped silently.
+      if (e.controlPointIds.some(cp => !findPoint(state, cp))) continue;
+      const cps = e.controlPointIds.map(cp => reflectPointOnce(cp));
+      const sp = addSplineByPoints(s, cps, e.degree); s = sp.state;
+      created.push(sp.id);
+      copyConstruction(e, sp.id);
     }
   }
 
@@ -2982,6 +3745,17 @@ export function computeFilletLineArcGeometry(
   if (calen < EPS) return null;
   const T_arc: Pt = { x: aCe.x + (cax / calen) * arc.radius, y: aCe.y + (cay / calen) * arc.radius };
 
+  // B11: reject radii that push a tangent point off the geometry —
+  // T_line must land within the line segment and T_arc inside the
+  // arc's sweep. Line-line fillet and line-arc chamfer have always
+  // guarded this; without it an oversized radius silently reversed
+  // the line / flipped the arc onto its reflex complement.
+  if (tProj < -EPS || tProj > u_lineLen + EPS) return null;
+  const arcStartA = Math.atan2(aSt.y - aCe.y, aSt.x - aCe.x);
+  const arcEndA = Math.atan2(aEn.y - aCe.y, aEn.x - aCe.x);
+  const tArcAngle = Math.atan2(T_arc.y - aCe.y, T_arc.x - aCe.x);
+  if (!angleInArcSweep(tArcAngle, arcStartA, arcEndA, arc.ccw)) return null;
+
   // CCW: positive cross of (T_line - C_F) × (T_arc - C_F).
   const v1x = T_line.x - C_F.x, v1y = T_line.y - C_F.y;
   const v2x = T_arc.x  - C_F.x, v2y = T_arc.y  - C_F.y;
@@ -3064,9 +3838,248 @@ export function filletLineArc(
     // determinacy analyzer report the sketch under-constrained.
     s = removeOrphanPoint(s, geom.line_near_id);
     if (geom.arc_near_id !== geom.line_near_id) s = removeOrphanPoint(s, geom.arc_near_id);
+    // B12 (REQ 896): a corner point that carries constraints survives
+    // the orphan sweep — a dim measuring it would be left on a free
+    // 2-DOF point. Pin it at the theoretical corner (virtual sharp)
+    // with coincident constraints onto the two surviving curves: the
+    // line's infinite carrier and the arc's circle intersect at the
+    // pre-fillet corner, so the point stays determined there.
+    for (const nearId of new Set([geom.line_near_id, geom.arc_near_id])) {
+      if (!findPoint(s, nearId) || !pointHasConstraint(s, nearId)) continue;
+      if (!alreadyCoincidentWith(s, nearId, line.id)) {
+        s = addConstraint(s, 'coincident', [nearId, line.id]).state;
+      }
+      if (!alreadyCoincidentWith(s, nearId, arc.id)) {
+        s = addConstraint(s, 'coincident', [nearId, arc.id]).state;
+      }
+    }
   }
 
   return { state: s, affectedIds: [fillet.id, ...constructionLineIds] };
+}
+
+/** Pure geometry for a fillet between two arcs at radius `radius`
+ * (REQ 888). The two arcs must share a corner (an endpoint, matched by
+ * coordinate via `sharedEndpointBetween`). The fillet circle is tangent
+ * to BOTH source circles, so its center lies at distance R_i ± r from
+ * each arc's center (+ external tangency, − internal): intersect the
+ * two offset circles for every ± combination that stays positive, then
+ * pick the root on the corner's side. Candidate selection uses the same
+ * tangent-bisector guidance as `computeFilletLineArcGeometry` (see
+ * there for why tangents, not chords) — it lands on the root nearest
+ * the shared corner V on the inside of the corner. */
+export interface FilletArcArcGeometry {
+  V: Pt;             // shared corner
+  T_arcA: Pt;        // tangent point on the first arc
+  T_arcB: Pt;        // tangent point on the second arc
+  C_F:    Pt;        // fillet arc center
+  ccw:    boolean;
+  radius: number;
+  arcAId: string;
+  arcBId: string;
+  arcA_near_id: string;  // endpoint of arc A at V (gets rebound to T_arcA)
+  arcB_near_id: string;  // endpoint of arc B at V (gets rebound to T_arcB)
+}
+export function computeFilletArcArcGeometry(
+  state: SketchState, arcAId: string, arcBId: string, radius: number,
+): FilletArcArcGeometry | null {
+  const arcA = findEntity<ArcEntity>(state, arcAId);
+  const arcB = findEntity<ArcEntity>(state, arcBId);
+  if (!arcA || arcA.kind !== 'arc' || !arcB || arcB.kind !== 'arc') return null;
+  if (arcA.id === arcB.id || !isFinite(radius) || radius <= EPS) return null;
+  const cA = findPoint(state, arcA.centerId);
+  const cB = findPoint(state, arcB.centerId);
+  if (!cA || !cB) return null;
+  const shared = sharedEndpointBetween(state, arcA, arcB);
+  if (!shared) return null;
+  const V = shared.V;
+  const arcA_near_id = shared.aOrigEndpointId;
+  const arcB_near_id = shared.bOrigEndpointId;
+
+  // Candidate fillet centers: intersections of the two offset circles
+  // (R_A ± r around cA) × (R_B ± r around cB). Up to 8 roots.
+  const candidates: Pt[] = [];
+  for (const signA of [+1, -1] as const) {
+    const targetA = arcA.radius + signA * radius;
+    if (targetA <= EPS) continue;
+    for (const signB of [+1, -1] as const) {
+      const targetB = arcB.radius + signB * radius;
+      if (targetB <= EPS) continue;
+      candidates.push(...circleCircleIntersection(cA, targetA, cB, targetB));
+    }
+  }
+  if (candidates.length === 0) return null;
+
+  // Orientation guidance — tangent-bisector, exactly as the line-arc
+  // fillet: unit tangents at V pointing toward each arc's FAR endpoint.
+  const u_arcA = arcTangentTowardFar(arcA, cA, V, arcA_near_id);
+  const u_arcB = arcTangentTowardFar(arcB, cB, V, arcB_near_id);
+  if (!u_arcA || !u_arcB) return null;
+  const bx = u_arcA.x + u_arcB.x;
+  const by = u_arcA.y + u_arcB.y;
+  const blen = Math.hypot(bx, by);
+  if (blen < EPS) return null;   // arcs tangent at V — no corner to fillet
+  const dot = u_arcA.x * u_arcB.x + u_arcA.y * u_arcB.y;
+  const clamped = Math.max(-1, Math.min(1, dot));
+  const halfAngle = Math.acos(clamped) / 2;
+  if (halfAngle < 1e-4 || Math.PI / 2 - halfAngle < 1e-4) return null;
+  const D_approx = radius / Math.sin(halfAngle);
+  const C_approx = { x: V.x + (bx / blen) * D_approx, y: V.y + (by / blen) * D_approx };
+
+  // Pick the candidate on the bisector's side of V, closest to the
+  // bisector-guided estimate (≈ the root nearest the corner).
+  let best: Pt | null = null;
+  let bestScore = Infinity;
+  for (const cand of candidates) {
+    const dvx = cand.x - V.x, dvy = cand.y - V.y;
+    const sideDot = dvx * (bx / blen) + dvy * (by / blen);
+    if (sideDot <= EPS) continue;  // wrong side or degenerate
+    const dd = Math.hypot(cand.x - C_approx.x, cand.y - C_approx.y);
+    if (dd < bestScore) { bestScore = dd; best = cand; }
+  }
+  if (!best) return null;
+  const C_F = best;
+
+  // Tangent points: along the ray from each arc's center toward the
+  // fillet center, at distance R_i — the correct side for both external
+  // and internal tangency (same formula as filletLineArc's T_arc).
+  const T_arcA = radialPoint(cA, C_F, arcA.radius);
+  const T_arcB = radialPoint(cB, C_F, arcB.radius);
+  if (!T_arcA || !T_arcB) return null;
+
+  // B11: both tangent points must land inside their arc's sweep —
+  // same guard rationale as computeFilletLineArcGeometry.
+  const sPtA = findPoint(state, arcA.startId);
+  const ePtA = findPoint(state, arcA.endId);
+  const sPtB = findPoint(state, arcB.startId);
+  const ePtB = findPoint(state, arcB.endId);
+  if (!sPtA || !ePtA || !sPtB || !ePtB) return null;
+  const tangentInSweep = (T: Pt, c: Pt, sp: Pt, ep: Pt, ccw: boolean) =>
+    angleInArcSweep(
+      Math.atan2(T.y - c.y, T.x - c.x),
+      Math.atan2(sp.y - c.y, sp.x - c.x),
+      Math.atan2(ep.y - c.y, ep.x - c.x),
+      ccw,
+    );
+  if (!tangentInSweep(T_arcA, cA, sPtA, ePtA, arcA.ccw)) return null;
+  if (!tangentInSweep(T_arcB, cB, sPtB, ePtB, arcB.ccw)) return null;
+
+  // CCW: positive cross of (T_arcA - C_F) × (T_arcB - C_F).
+  const v1x = T_arcA.x - C_F.x, v1y = T_arcA.y - C_F.y;
+  const v2x = T_arcB.x - C_F.x, v2y = T_arcB.y - C_F.y;
+  const ccw = (v1x * v2y - v1y * v2x) > 0;
+
+  return {
+    V, T_arcA, T_arcB, C_F, ccw, radius,
+    arcAId: arcA.id, arcBId: arcB.id,
+    arcA_near_id, arcB_near_id,
+  };
+}
+
+/** Unit tangent of `arc` at `V` pointing toward the arc's FAR endpoint
+ * (away from the corner). Mirrors the tangent computation inside
+ * computeFilletLineArcGeometry: CCW tangent = rotate (V − center) by
+ * +90°, flipped when walking toward the far end runs against CCW. */
+function arcTangentTowardFar(
+  arc: ArcEntity, center: Pt, V: Pt, nearId: string,
+): Pt | null {
+  const isArcStart = nearId === arc.startId;
+  const goingForwardCcw = isArcStart ? arc.ccw : !arc.ccw;
+  const rx = V.x - center.x, ry = V.y - center.y;
+  const rlen = Math.hypot(rx, ry);
+  if (rlen < EPS) return null;
+  const tangentCcw = { x: -ry / rlen, y: rx / rlen };
+  return goingForwardCcw ? tangentCcw : { x: -tangentCcw.x, y: -tangentCcw.y };
+}
+
+/** Point at `dist` from `from` along the ray toward `toward`. Null when
+ * the two coincide. */
+function radialPoint(from: Pt, toward: Pt, dist: number): Pt | null {
+  const dx = toward.x - from.x, dy = toward.y - from.y;
+  const len = Math.hypot(dx, dy);
+  if (len < EPS) return null;
+  return { x: from.x + (dx / len) * dist, y: from.y + (dy / len) * dist };
+}
+
+/** Apply an arc+arc fillet at the shared corner (REQ 888). Rebinds each
+ * arc's near-V endpoint to its tangent point, inserts the fillet arc
+ * tangent to both, and emits tangent constraints — structurally the
+ * same as `filletLineArc`, so the editor's batch loop can consume the
+ * result identically. */
+export function filletArcArc(
+  state: SketchState, arcAId: string, arcBId: string, radius: number,
+  options: FilletChamferOptions = {},
+): OpResult {
+  const arcA = findEntity<ArcEntity>(state, arcAId);
+  const arcB = findEntity<ArcEntity>(state, arcBId);
+  if (!arcA || arcA.kind !== 'arc') return { state, error: 'First entity must be an arc' };
+  if (!arcB || arcB.kind !== 'arc') return { state, error: 'Second entity must be an arc' };
+  if (arcA.construction || arcB.construction) return { state, error: 'Cannot fillet construction geometry' };
+  const geom = computeFilletArcArcGeometry(state, arcAId, arcBId, radius);
+  if (!geom) return { state, error: 'Fillet not applicable (radius too large or entities don\'t share a corner)' };
+
+  let s = state;
+  const pt_a = addPoint(s, geom.T_arcA.x, geom.T_arcA.y); s = pt_a.state;
+  const pt_b = addPoint(s, geom.T_arcB.x, geom.T_arcB.y); s = pt_b.state;
+  const pc = addPoint(s, geom.C_F.x, geom.C_F.y); s = pc.state;
+
+  // Rebind: each arc's near-V endpoint → its tangent point. Both points
+  // sit on their arc's circle, so the radius invariants hold.
+  s = {
+    ...s,
+    entities: s.entities.map(en => {
+      if (en.kind !== 'arc') return en;
+      if (en.id === arcA.id) {
+        return {
+          ...en,
+          startId: en.startId === geom.arcA_near_id ? pt_a.id : en.startId,
+          endId:   en.endId   === geom.arcA_near_id ? pt_a.id : en.endId,
+        };
+      }
+      if (en.id === arcB.id) {
+        return {
+          ...en,
+          startId: en.startId === geom.arcB_near_id ? pt_b.id : en.startId,
+          endId:   en.endId   === geom.arcB_near_id ? pt_b.id : en.endId,
+        };
+      }
+      return en;
+    }),
+  };
+
+  const fillet = addArcByPoints(s, pc.id, pt_a.id, pt_b.id, geom.ccw);
+  s = fillet.state;
+
+  // Tangent: each source arc ↔ fillet.
+  s = addConstraint(s, 'tangent', [arcA.id, fillet.id]).state;
+  s = addConstraint(s, 'tangent', [arcB.id, fillet.id]).state;
+  // Anchor tangent-point slide DOFs so the determinacy analyzer can
+  // pin each fillet endpoint linearly.
+  s = anchorFilletTangentPoint(s, pc.id, pt_a.id, arcA);
+  s = anchorFilletTangentPoint(s, pc.id, pt_b.id, arcB);
+
+  if (!options.keepRemovedAsConstruction) {
+    // Drop the old shared corner point(s) if nothing references them
+    // anymore. No construction remnant is kept for arcs either way —
+    // arcs aren't lines (see filletLineArc's arc-side comment).
+    s = removeOrphanPoint(s, geom.arcA_near_id);
+    if (geom.arcB_near_id !== geom.arcA_near_id) s = removeOrphanPoint(s, geom.arcB_near_id);
+    // B12 (REQ 896): pin a surviving constrained corner point at the
+    // theoretical corner — coincident onto both source circles, whose
+    // intersection is the pre-fillet corner (the solver keeps the
+    // nearest root). See filletLineArc for the full rationale.
+    for (const nearId of new Set([geom.arcA_near_id, geom.arcB_near_id])) {
+      if (!findPoint(s, nearId) || !pointHasConstraint(s, nearId)) continue;
+      if (!alreadyCoincidentWith(s, nearId, arcA.id)) {
+        s = addConstraint(s, 'coincident', [nearId, arcA.id]).state;
+      }
+      if (!alreadyCoincidentWith(s, nearId, arcB.id)) {
+        s = addConstraint(s, 'coincident', [nearId, arcB.id]).state;
+      }
+    }
+  }
+
+  return { state: s, affectedIds: [fillet.id] };
 }
 
 /** Pure geometry for a chamfer at a corner. Supports three modes:
@@ -3271,6 +4284,22 @@ export function filletLines(
     // id, and the second one no-ops because the point is already gone.
     s = removeOrphanPoint(s, a_near_id);
     if (b_near_id !== a_near_id) s = removeOrphanPoint(s, b_near_id);
+    // B12 (REQ 896): a corner point that carries constraints survives
+    // the orphan sweep — a dim measuring it would be left on a free
+    // 2-DOF point. Pin it at the theoretical corner as a SolidWorks-
+    // style virtual sharp by firing the keepRemovedAsConstruction
+    // mechanism AUTOMATICALLY: one construction line per leg, each
+    // collinear with its (trimmed) source line — their intersection
+    // is V, so the corner point stays determined and the dim solvable.
+    for (const [nearId, tangentPtId, srcLineId] of [
+      [a_near_id, pt1.id, l1.id],
+      [b_near_id, pt2.id, l2.id],
+    ] as const) {
+      if (!findPoint(s, nearId) || !pointHasConstraint(s, nearId)) continue;
+      const vs = addTrimConstruction(s, tangentPtId, nearId, srcLineId, V);
+      s = vs.state;
+      if (vs.lineId) constructionLineIds.push(vs.lineId);
+    }
   }
 
   const result: OpResult = { state: s, affectedIds: [l1.id, l2.id, arc.id] };
@@ -3361,6 +4390,111 @@ export function chamferLines(
   return result;
 }
 
+/** Chamfer the corner between a line and an arc (REQ 888). Structurally
+ * `chamferLines`: walk the setback from the shared corner V along each
+ * curve, rebind the near-V endpoints to the setback points, and connect
+ * them with a straight cut line. On the LINE side the setback is
+ * `distance` along the segment toward the far endpoint; on the ARC side
+ * it's the same distance measured ALONG the arc — an angular walk of
+ * `distance / R` from V toward the arc's far endpoint. The cut line
+ * shares the rebound endpoint ids, so it stays attached to both trimmed
+ * curves exactly the way chamferLines' cut does. */
+export function chamferLineArc(
+  state: SketchState, lineId: string, arcId: string, distance: number,
+  options: FilletChamferOptions = {},
+): OpResult {
+  const line = findEntity<LineEntity>(state, lineId);
+  const arc = findEntity<ArcEntity>(state, arcId);
+  if (!line || line.kind !== 'line') return { state, error: 'First entity must be a line' };
+  if (!arc || arc.kind !== 'arc') return { state, error: 'Second entity must be an arc' };
+  if (line.construction || arc.construction) return { state, error: 'Cannot chamfer construction geometry' };
+  if (!isFinite(distance) || distance <= EPS) return { state, error: 'Chamfer distance must be positive' };
+  const aCe = findPoint(state, arc.centerId);
+  const aSt = findPoint(state, arc.startId);
+  const aEn = findPoint(state, arc.endId);
+  if (!aCe || !aSt || !aEn) return { state, error: 'Arc points missing' };
+  const shared = sharedEndpointBetween(state, line, arc);
+  if (!shared) return { state, error: 'Chamfer not applicable (entities don\'t share a corner)' };
+  const V = shared.V;
+  const line_near_id = shared.aOrigEndpointId;
+  const arc_near_id = shared.bOrigEndpointId;
+
+  // Line-side setback: `distance` from V toward the line's far endpoint.
+  const line_far_id = line.startId === line_near_id ? line.endId : line.startId;
+  const lf = findPoint(state, line_far_id);
+  if (!lf) return { state, error: 'Line endpoints missing' };
+  const ux = lf.x - V.x, uy = lf.y - V.y;
+  const ulen = Math.hypot(ux, uy);
+  if (ulen < EPS || distance > ulen - EPS) {
+    return { state, error: 'Chamfer not applicable (distance too large)' };
+  }
+  const T_line = { x: V.x + (ux / ulen) * distance, y: V.y + (uy / ulen) * distance };
+
+  // Arc-side setback: angular walk of distance / R from V toward the
+  // far endpoint. Walking from V follows the arc's sweep direction when
+  // V is the start and reverses it when V is the end.
+  const startA = Math.atan2(aSt.y - aCe.y, aSt.x - aCe.x);
+  const endA = Math.atan2(aEn.y - aCe.y, aEn.x - aCe.x);
+  const sweep = arcOffset(startA, endA, arc.ccw);
+  if (arc.radius < EPS) return { state, error: 'Arc is degenerate' };
+  const theta = distance / arc.radius;
+  if (theta > sweep - EPS) {
+    return { state, error: 'Chamfer not applicable (distance too large)' };
+  }
+  const angV = Math.atan2(V.y - aCe.y, V.x - aCe.x);
+  const walkCcw = arc_near_id === arc.startId ? arc.ccw : !arc.ccw;
+  const angT = angV + (walkCcw ? theta : -theta);
+  const T_arc = { x: aCe.x + arc.radius * Math.cos(angT), y: aCe.y + arc.radius * Math.sin(angT) };
+
+  let s = state;
+  const pt1 = addPoint(s, T_line.x, T_line.y); s = pt1.state;
+  const pt2 = addPoint(s, T_arc.x, T_arc.y); s = pt2.state;
+
+  // Rebind: line's near-V endpoint → pt1; arc's near-V endpoint → pt2.
+  // pt2 lies on the arc's circle, so the radius invariant holds.
+  s = {
+    ...s,
+    entities: s.entities.map(en => {
+      if (en.id === line.id && en.kind === 'line') {
+        return {
+          ...en,
+          startId: en.startId === line_near_id ? pt1.id : en.startId,
+          endId:   en.endId   === line_near_id ? pt1.id : en.endId,
+        };
+      }
+      if (en.id === arc.id && en.kind === 'arc') {
+        return {
+          ...en,
+          startId: en.startId === arc_near_id ? pt2.id : en.startId,
+          endId:   en.endId   === arc_near_id ? pt2.id : en.endId,
+        };
+      }
+      return en;
+    }),
+  };
+
+  const cutLine = addLine(s, pt1.id, pt2.id);
+  s = cutLine.state;
+
+  const constructionLineIds: string[] = [];
+  if (options.keepRemovedAsConstruction) {
+    const r1 = addTrimConstruction(s, pt1.id, line_near_id, line.id, V);
+    s = r1.state;
+    if (r1.lineId) constructionLineIds.push(r1.lineId);
+    // No construction remnant for the arc side — arcs aren't lines
+    // (see filletLineArc's arc-side comment).
+  } else {
+    // Without construction lines, the original corner point(s) are orphan.
+    // Drop them. See filletLines for the full rationale.
+    s = removeOrphanPoint(s, line_near_id);
+    if (arc_near_id !== line_near_id) s = removeOrphanPoint(s, arc_near_id);
+  }
+
+  const result: OpResult = { state: s, affectedIds: [line.id, arc.id, cutLine.id] };
+  if (constructionLineIds.length > 0) result.constructionLineIds = constructionLineIds;
+  return result;
+}
+
 /** Drop `pointId` from state if no other entity OR constraint references
  * it. Used by filletLines / chamferLines (without construction lines) to
  * clean up the original corner point after rebinding the incident lines —
@@ -3444,6 +4578,14 @@ function removeOrphanPoint(state: SketchState, pointId: string): SketchState {
     if (c.targets.some(t => t.entityId === pointId)) return state;
   }
   return { ...state, entities: state.entities.filter(e => e.id !== pointId) };
+}
+
+/** True when any constraint targets `pointId`. Used by the B12
+ * virtual-sharp check: a corner point that survives the fillet's
+ * orphan sweep BECAUSE a constraint (typically a dim) references it
+ * must be re-pinned at the theoretical corner, not left free. */
+function pointHasConstraint(state: SketchState, pointId: string): boolean {
+  return state.constraints.some(c => c.targets.some(t => t.entityId === pointId));
 }
 
 /** Add a dashed construction line between `tangentId` and `nearId` IF the
@@ -3576,7 +4718,9 @@ export function scaleEntities(
       if (affected.has(e.id) && (e.kind === 'circle' || e.kind === 'arc')) {
         return { ...e, radius: e.radius * radiusFactor };
       }
-      if (affected.has(e.id) && e.kind === 'ellipse') {
+      // ellipticalArc carries minorRadius exactly like ellipse — it was
+      // missed here (B15-22 kind-gap ride-along).
+      if (affected.has(e.id) && (e.kind === 'ellipse' || e.kind === 'ellipticalArc')) {
         return { ...e, minorRadius: e.minorRadius * radiusFactor };
       }
       return e;
@@ -3641,6 +4785,16 @@ export function copyEntities(
       if (!nc || !nm) continue;
       const r = addEllipseByPoints(s, nc, nm, e.minorRadius); s = r.state;
       createdEntityIds.push(r.id);
+    } else if (e.kind === 'ellipticalArc') {
+      // Copy all fields, remapping the point ids (B15-22 kind-gap
+      // ride-along — ellipticalArc was dropped silently).
+      const nc = pointIdMap.get(e.centerId);
+      const nm = pointIdMap.get(e.majorAxisEndId);
+      if (!nc || !nm) continue;
+      const r = addEllipticalArcByPoints(
+        s, nc, nm, e.minorRadius, e.startAngle, e.endAngle, e.ccw);
+      s = r.state;
+      createdEntityIds.push(r.id);
     } else if (e.kind === 'spline') {
       const cps = e.controlPointIds.map(p => pointIdMap.get(p)).filter((p): p is string => !!p);
       if (cps.length !== e.controlPointIds.length) continue;
@@ -3679,9 +4833,11 @@ export function linearPatternEntities(
 /**
  * Circular sketch pattern: emit `count - 1` clones of `entityIds`
  * rotated around `pivot`. `totalAngleRad` is the sweep covered by
- * the WHOLE pattern (original + clones); each clone is rotated by
- * `totalAngleRad / (count - 1) * i` (i = 1..count-1). For a full
- * 360° pattern with N copies, pass totalAngleRad = 2π and count = N.
+ * the WHOLE pattern (original + clones): partial sweeps are
+ * endpoint-inclusive (clone i at `totalAngleRad / (count - 1) * i`),
+ * while a full 360° sweep steps by `totalAngleRad / count` so the
+ * N occurrences are evenly spaced with no duplicate (B10). For a
+ * full 360° pattern with N copies, pass totalAngleRad = 2π, count = N.
  */
 export function circularPatternEntities(
   state: SketchState, entityIds: string[], pivot: Pt, totalAngleRad: number, count: number,
@@ -3691,7 +4847,14 @@ export function circularPatternEntities(
   if (!isFinite(totalAngleRad) || Math.abs(totalAngleRad) < EPS) {
     return { state, error: 'Pattern angle must be non-zero' };
   }
-  const step = totalAngleRad / (count - 1);
+  // B10: a full-circle pattern steps by total/count — with the
+  // (count − 1) divisor, clone N landed at 0° stacked on the original
+  // (360°/4 gave 0/120/240 + duplicate instead of 0/90/180/270).
+  // Partial sweeps keep the endpoint-inclusive convention (original at
+  // 0, last clone at totalAngleRad).
+  const TAU = 2 * Math.PI;
+  const isFullCircle = Math.abs(Math.abs(totalAngleRad) - TAU) < 1e-9;
+  const step = isFullCircle ? totalAngleRad / count : totalAngleRad / (count - 1);
   let s = state;
   const allCreated: string[] = [];
   for (let i = 1; i < count; i++) {
@@ -3745,7 +4908,7 @@ export function jogLineAt(
   const p2 = { x: a.x + dx * t2,                          y: a.y + dy * t2 };
   const p1p = { x: p1.x + nx * perpOffset,                y: p1.y + ny * perpOffset };
   const p2p = { x: p2.x + nx * perpOffset,                y: p2.y + ny * perpOffset };
-  let s = deletePrimitive(state, line.id);
+  let s = deletePrimitive(state, line.id, { keepPoints: [line.startId, line.endId] });
   // Endpoint A and B usually survive the delete cascade (other
   // entities or constraints reference them); if not, re-create at
   // their original coords so the new chain still starts/ends where

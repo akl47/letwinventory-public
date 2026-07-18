@@ -7,9 +7,9 @@
 // the "user datum" amber style — so component datums read as added references
 // distinct from the assembly origin.
 
-import type { DatumElement } from './types';
+import type { DatumElement, FeatureTree, DatumPlaneFeature } from './types';
 import type { Placement } from './assembly.types';
-import { buildOriginDatums, planeForDatum, originPlaneLabel } from './datum';
+import { buildOriginDatums, planeForDatum, originPlaneLabel, computeDatumPlane } from './datum';
 import { transformPoint, transformDir } from './placementMath';
 
 // A datum plus the optional sidecars the viewer reads to place it off-origin.
@@ -79,6 +79,41 @@ export function placedOriginDatums(placement: Placement, idPrefix: string, nameP
         },
       });
     }
+  }
+  return out;
+}
+
+/** REQ 912 — assembly-level datum plane FEATURES (skeleton planes), computed
+ * in feature order against the assembly's own datums (origin planes + earlier
+ * skeleton planes). References resolve only against assembly-owned geometry —
+ * no faces or topology, so a skeleton plane can never depend on a mate
+ * solution. Hidden features are skipped (render-only; a hidden plane is still
+ * a valid sketch host through the stored sketch plane snapshot). Returns
+ * PlacedDatums with `plane` sidecars so the viewer renders them in the
+ * user-datum style and sketches can host on them. */
+export function computeSkeletonDatums(featureTree: FeatureTree | null | undefined): PlacedDatum[] {
+  const out: PlacedDatum[] = [];
+  if (!featureTree) return out;
+  const seed = {
+    datums: [...buildOriginDatums()] as DatumElement[],
+    faces: [],
+    topology: { vertices: [], edges: [] },
+  };
+  for (const f of featureTree.features || []) {
+    if (f.type !== 'datumPlane') continue;
+    const feat = f as DatumPlaneFeature;
+    const res = computeDatumPlane(feat, seed as never);
+    if (!res.ok) continue;
+    const d: PlacedDatum = {
+      id: feat.id,
+      kind: 'plane',
+      name: (feat as { name?: string }).name,
+      direction: res.plane.normal,
+      plane: res.plane,
+    } as PlacedDatum;
+    // Later skeleton planes may reference earlier ones.
+    seed.datums.push(d);
+    if ((feat as { visible?: boolean }).visible !== false) out.push(d);
   }
   return out;
 }

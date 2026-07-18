@@ -116,3 +116,45 @@ describe('cross-part overlay vertices', () => {
     expect(v.stableId.startsWith('cpv:i2:')).toBe(true);
   });
 });
+
+describe('skeleton overlay entries (REQ 915)', () => {
+  const ID = { translate: [0, 0, 0] as [number, number, number], quaternion: [0, 0, 0, 1] as [number, number, number, number] };
+  it('appends skeleton edges/vertices in host-local frame with asketch keys', () => {
+    const r: AssemblyRegenResponse = {
+      faces: [], vertices: [], edges: [], bodies: [], errors: [], constraintState: null,
+      instances: [{ instanceId: 'host', partID: 1, placement: { translate: [10, 0, 0], quaternion: [0, 0, 0, 1] }, bodyIds: [] } as never],
+      skeleton: {
+        partID: 77,
+        edges: [
+          { sketchId: 's1', entityId: 'l1', key: 'asketch:s1/l1', polyline: [[0, 0, 0], [50, 0, 0]], isStraight: true, kind: 'line' },
+          { sketchId: 's1', entityId: 'pc', key: 'asketch:s1/pc', polyline: [[5, 5, 0]], isStraight: true, kind: 'point' },
+        ],
+      },
+    };
+    const ov = buildInContextOverlay(r, 'host');
+    const edge = ov.edges.find((e) => e.stableId === 'asketch:s1/l1')!;
+    expect(edge).toBeTruthy();
+    expect(edge.instanceId).toBe('__skeleton__');
+    expect(edge.partID).toBe(77);
+    // Host at +10 → skeleton shifts −10 in host-local.
+    expect(edge.polyline[0].map(Math.round)).toEqual([-10, 0, 0]);
+    expect(edge.polyline[1].map(Math.round)).toEqual([40, 0, 0]);
+    // Fallback stays in the skeleton's own (world) frame.
+    expect(edge.sourceStart).toEqual([0, 0, 0]);
+    expect(edge.sourceEnd).toEqual([50, 0, 0]);
+    // Line endpoints + standalone points appear as skeleton vertices.
+    const vids = ov.vertices.filter((v) => v.instanceId === '__skeleton__').map((v) => v.stableId);
+    expect(vids).toContain('asketchv:s1/l1/start');
+    expect(vids).toContain('asketchv:s1/l1/end');
+    expect(vids).toContain('asketchv:s1/pc/self');
+  });
+
+  it('no skeleton in the regen → no skeleton overlay entries', () => {
+    const r: AssemblyRegenResponse = {
+      faces: [], vertices: [], edges: [], bodies: [], errors: [], constraintState: null,
+      instances: [{ instanceId: 'host', partID: 1, placement: ID, bodyIds: [] } as never],
+    };
+    const ov = buildInContextOverlay(r, 'host');
+    expect(ov.edges.some((e) => e.instanceId === '__skeleton__')).toBe(false);
+  });
+});

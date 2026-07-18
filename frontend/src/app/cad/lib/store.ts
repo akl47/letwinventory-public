@@ -3,7 +3,7 @@ import type {
   ConstraintTarget, PointEntity, LineEntity, CircleEntity, ArcEntity,
   EllipseEntity, EllipticalArcEntity, SplineEntity, ExternalRef,
 } from './types';
-import { findEntity } from './types';
+import { findEntity, findPoint } from './types';
 
 let _seq = 0;
 function nextId(prefix: string): string {
@@ -187,15 +187,16 @@ export function addTextBoxByCorners(
   // positioning reference only. Only the glyph outlines (textGlyphs.ts) become
   // real profile loops, so extruding yields RAISED 3D letters.
   //
-  // Constraints: fixed BL anchor + a RIGID, ROTATABLE rectangle
-  // (perpendicular corner + parallel opposite sides). The three free DOF are
-  // width, height and ANGLE — so the box can be rotated (rotateTextBox moves
-  // the real corner points; the lines, dimensions and centerline all follow as
-  // ordinary construction geometry). Width/height stay dimensionable.
-  s = addConstraint(s, 'fixed', [bl.id]).state;
+  // Constraints: a RIGID, AXIS-ALIGNED rectangle (perpendicular corner +
+  // parallel opposite sides + the baseline held HORIZONTAL). The box is NOT
+  // pinned to a location — its bottom-left corner stays free so the user can
+  // drag or dimension the text into position like ordinary geometry; the
+  // horizontal baseline keeps the text level. Free DOF: width, height, and
+  // the two translational DOF of the box. Width/height stay dimensionable.
   s = addConstraint(s, 'perpendicular', [lBot.id, lLft.id]).state;
   s = addConstraint(s, 'parallel', [lBot.id, lTop.id]).state;
   s = addConstraint(s, 'parallel', [lLft.id, lRgt.id]).state;
+  s = addConstraint(s, 'horizontal', [lBot.id]).state;
   s = addConstraint(s, 'midpoint', [bm.id, lBot.id]).state;
   s = addConstraint(s, 'midpoint', [tm.id, lTop.id]).state;
   const id = nextId('txt');
@@ -244,7 +245,31 @@ export function rotateTextBox(state: SketchState, textId: string, rotationDeg: n
     if (en.id === textId && en.kind === 'text') return { ...en, rotation: norm };
     return en;
   });
-  return { ...state, entities };
+  // Rotation CHANGES the baseline's orientation pin. The baseline (bl→br) is
+  // held `horizontal` while the text is level; a horizontal pin would fight any
+  // rotation, so replace it: drop the horizontal at a non-level angle (the
+  // rigid rectangle's own perpendicular/parallel constraints keep the box
+  // rectangular at the new angle, which becomes a free DOF — stable because
+  // nothing drives it), and restore horizontal when rotation returns to level
+  // (0° or 180°, where the baseline genuinely is horizontal).
+  const baseId = state.entities.find(e =>
+    e.kind === 'line'
+    && ((e.startId === blId && e.endId === brId) || (e.startId === brId && e.endId === blId)))?.id;
+  let next: SketchState = { ...state, entities };
+  if (baseId) {
+    next = {
+      ...next,
+      constraints: next.constraints.filter(c =>
+        !(c.type === 'horizontal' && c.targets.length === 1 && c.targets[0].entityId === baseId)),
+    };
+    // Folded distance to the nearest multiple of 180° (review B15–22): the
+    // plain `norm % 180 < 0.5` test missed angles just BELOW the fold —
+    // 179.8° / 359.8° are level too (179.8 % 180 = 179.8).
+    const m = norm % 180;
+    const level = Math.min(m, 180 - m) < 0.5;
+    if (level) next = addConstraint(next, 'horizontal', [baseId]).state;
+  }
+  return next;
 }
 
 /** Batch 6 — Add an intersection curve referencing a body. The
@@ -513,6 +538,23 @@ export function addPolygon(
     s = l.state;
     lineIds.push(l.id);
   }
+  // REQ 895 — auto-constraints so the N-gon stays REGULAR under edits
+  // (dragging a vertex used to destroy the regular polygon; rectangles
+  // already auto-constrain):
+  //   - a construction circle centered on the polygon center through the
+  //     vertices (the SW-style inscribing circle),
+  //   - each vertex coincident on that circle,
+  //   - an equal chain across consecutive sides — N−1 equals; the Nth is
+  //     implied and an explicit one would be PlaneGCS-redundant.
+  const centerPt = addPoint(s, cx, cy); s = centerPt.state;
+  const circ = addCircleByPoint(s, centerPt.id, radius); s = circ.state;
+  s = setConstructionFlag(s, [circ.id], true);
+  for (const pid of pointIds) {
+    s = addConstraint(s, 'coincident', [pid, circ.id]).state;
+  }
+  for (let i = 0; i + 1 < n; i++) {
+    s = addConstraint(s, 'equal', [lineIds[i], lineIds[i + 1]]).state;
+  }
   return { state: s, ids: lineIds };
 }
 
@@ -626,10 +668,12 @@ export function addParallelogram(
   const l2 = addLine(s, r2.id, r3.id); s = l2.state;
   const l3 = addLine(s, r3.id, r4.id); s = l3.state;
   const l4 = addLine(s, r4.id, r1.id); s = l4.state;
+  // Parallel opposite sides only. Explicit `equal` constraints were removed
+  // (review B15–22): parallel ×2 + the four shared corner points already
+  // force opposite sides equal, so the equals were redundant-by-construction
+  // and tripped PlaneGCS redundancy warnings on a fresh shape.
   s = addConstraint(s, 'parallel', [l1.id, l3.id]).state;
   s = addConstraint(s, 'parallel', [l2.id, l4.id]).state;
-  s = addConstraint(s, 'equal', [l1.id, l3.id]).state;
-  s = addConstraint(s, 'equal', [l2.id, l4.id]).state;
   return { state: s, ids: [l1.id, l2.id, l3.id, l4.id] };
 }
 
@@ -658,14 +702,28 @@ export function addSlotStraight(
   const pa2 = addPoint(s, a2x, a2y); s = pa2.state;
   const pb1 = addPoint(s, b1x, b1y); s = pb1.state;
   const pb2 = addPoint(s, b2x, b2y); s = pb2.state;
+  // Cap center points at the centerline endpoints — real entities so the cap
+  // arcs can reference them (and the user can dimension slot length
+  // center-to-center).
+  const pc1 = addPoint(s, p1x, p1y); s = pc1.state;
+  const pc2 = addPoint(s, p2x, p2y); s = pc2.state;
   // Side lines: a1 → b1 (top) and b2 → a2 (bottom, reversed for CCW walk).
   const lTop = addLine(s, pa1.id, pb1.id); s = lTop.state;
   const lBot = addLine(s, pb2.id, pa2.id); s = lBot.state;
   // End caps bulge OUTWARD (away from the slot interior). b1→b2 around p2 and
   // a2→a1 around p1 must sweep CW (ccw=false) to pass the far side of each cap
   // centre; ccw=true would cave the caps inward through the slot body.
-  const arc1 = addArc(s, p2x, p2y, b1x, b1y, b2x, b2y, false); s = arc1.state;
-  const arc2 = addArc(s, p1x, p1y, a2x, a2y, a1x, a1y, false); s = arc2.state;
+  // REQ 894 (review B4): the caps SHARE the rail endpoint ids instead of
+  // minting coincident-by-position duplicates — dragging a rail endpoint now
+  // drags the cap with it. |center→start| == |center→end| == halfWidth by
+  // construction, satisfying addArcByPoints's radius invariant.
+  const arc1 = addArcByPoints(s, pc2.id, pb1.id, pb2.id, false); s = arc1.state;
+  const arc2 = addArcByPoints(s, pc1.id, pa2.id, pa1.id, false); s = arc2.state;
+  // REQ 894 — slot relations, so the slot survives edits AS a slot (SW
+  // parity: slots stay slots and need only length/width/position dims):
+  // rails stay parallel, caps stay equal-radius.
+  s = addConstraint(s, 'parallel', [lTop.id, lBot.id]).state;
+  s = addConstraint(s, 'equal', [arc1.id, arc2.id]).state;
   return { state: s, ids: [lTop.id, arc1.id, lBot.id, arc2.id] };
 }
 
@@ -751,8 +809,14 @@ export function addSlotArcCenterpoint(
  *   - inner arc (radius - halfWidth) from inner-start to inner-end
  *   - outer arc (radius + halfWidth) from outer-end to outer-start
  *   - two semicircular caps at the centerline endpoints
- * All four entities + their shared corner points form a closed CCW
- * loop ready for profile extraction. */
+ * All four entities form a closed CCW loop ready for profile
+ * extraction. REQ 894 (review B4): the loop's four corner points are
+ * SHARED between the rails and the caps (single-identity topology, no
+ * coincident-by-position duplicates), the rails share ONE center
+ * point — concentric by construction, the structural equivalent of a
+ * `concentric` relation (whose solver form, coincident-on-centers,
+ * would degenerate to a self-constraint on the shared id) — and the
+ * caps carry an equal-radius relation. */
 function _addSlotArc(
   state: SketchState,
   cx: number, cy: number, sx: number, sy: number, ex: number, ey: number,
@@ -773,15 +837,24 @@ function _addSlotArc(
   const pIe = addPoint(s, innerEnd.x,   innerEnd.y);   s = pIe.state;
   const pOs = addPoint(s, outerStart.x, outerStart.y); s = pOs.state;
   const pOe = addPoint(s, outerEnd.x,   outerEnd.y);   s = pOe.state;
+  // ONE shared center point for both rails (REQ 894 — see docstring) plus a
+  // cap center at each centerline endpoint.
+  const pC  = addPoint(s, cx, cy); s = pC.state;
+  const pCs = addPoint(s, sx, sy); s = pCs.state;
+  const pCe = addPoint(s, ex, ey); s = pCe.state;
   // Inner arc follows the centerline's own sweep (innerStart → innerEnd).
-  const inner = addArc(s, cx, cy, innerStart.x, innerStart.y, innerEnd.x, innerEnd.y, ccwDir); s = inner.state;
+  const inner = addArcByPoints(s, pC.id, pIs.id, pIe.id, ccwDir); s = inner.state;
   // Outer arc returns along the reverse sweep to close the loop.
-  const outer = addArc(s, cx, cy, outerEnd.x, outerEnd.y, outerStart.x, outerStart.y, !ccwDir); s = outer.state;
+  const outer = addArcByPoints(s, pC.id, pOe.id, pOs.id, !ccwDir); s = outer.state;
   // Caps bulge OUTWARD past each centerline endpoint; they sweep opposite the
   // inner arc so the semicircle passes the far side of the cap centre rather
-  // than caving back through the slot body.
-  const capEnd = addArc(s, ex, ey, innerEnd.x, innerEnd.y, outerEnd.x, outerEnd.y, !ccwDir); s = capEnd.state;
-  const capStart = addArc(s, sx, sy, outerStart.x, outerStart.y, innerStart.x, innerStart.y, !ccwDir); s = capStart.state;
+  // than caving back through the slot body. Each cap reuses the rail
+  // endpoints it joins (REQ 894); |capCenter→endpoint| == halfWidth by
+  // construction, satisfying addArcByPoints's radius invariant.
+  const capEnd = addArcByPoints(s, pCe.id, pIe.id, pOe.id, !ccwDir); s = capEnd.state;
+  const capStart = addArcByPoints(s, pCs.id, pOs.id, pIs.id, !ccwDir); s = capStart.state;
+  // REQ 894 — caps keep equal radius (each spans the slot's width).
+  s = addConstraint(s, 'equal', [capStart.id, capEnd.id]).state;
   return { state: s, ids: [inner.id, capEnd.id, outer.id, capStart.id] };
 }
 
@@ -914,7 +987,10 @@ export function movePoint(state: SketchState, id: string, x: number, y: number):
   };
 }
 
-export function deletePrimitive(state: SketchState, id: string): SketchState {
+export function deletePrimitive(
+  state: SketchState, id: string,
+  opts?: { keepPoints?: Iterable<string> },
+): SketchState {
   // Origin is the one entity that cannot be deleted — every sketch needs it
   // as the coordinate anchor. Construction entities used to be undeletable
   // too (the legacy "locked reference" model), but they're now purely
@@ -922,16 +998,26 @@ export function deletePrimitive(state: SketchState, id: string): SketchState {
   // guard is just for the origin.
   if (id === ORIGIN_POINT_ID) return state;
   const toDelete = new Set<string>([id]);
+  // `keepPoints` (REQ 906): support points the CALLER is about to reuse in
+  // replacement geometry (trim/split delete a curve and rebuild pieces on
+  // the same center/endpoints). Exempting them keeps their identity AND
+  // their constraints (a fixed center survives a trim). User-facing deletes
+  // pass nothing and get the full cascade.
+  const keep = new Set<string>(opts?.keepPoints ?? []);
 
   // Iterative two-way cascade until stable:
   //   - Forward: any entity that structurally references a doomed point
   //     becomes doomed too (a line referencing a deleted endpoint, a
   //     circle referencing a deleted center, …).
   //   - Backward: a doomed entity's support points get cleaned up too,
-  //     UNLESS another surviving entity still references them OR a
-  //     surviving constraint still references them. Matches SW: dragging
-  //     a line into the bin takes the endpoints with it unless they're
-  //     tied to another vertex / constraint.
+  //     UNLESS another surviving ENTITY still structurally references
+  //     them (a shared corner of an L-shape, a concentric center).
+  //     Matches SW (REQ 906): deleting a line takes its endpoints with
+  //     it and their constraints die too. A constraint alone never keeps
+  //     a point alive — endpoints routinely carry auto-generated snaps
+  //     (coincident/horizontal to the origin or a neighbor), and
+  //     retaining for those littered the sketch with orphan points
+  //     after every line delete.
   let changed = true;
   while (changed) {
     changed = false;
@@ -949,17 +1035,11 @@ export function deletePrimitive(state: SketchState, id: string): SketchState {
       for (const ptId of supportPointIdsOf(e)) {
         if (toDelete.has(ptId)) continue;
         if (ptId === ORIGIN_POINT_ID) continue;  // origin always survives
+        if (keep.has(ptId)) continue;            // caller reuses this point
         const stillUsedByEntity = state.entities.some(o =>
           !toDelete.has(o.id) && supportPointIdsOf(o).includes(ptId),
         );
         if (stillUsedByEntity) continue;
-        // A constraint "survives" only if every target other than this
-        // point also survives. If so, it still pins this point to something.
-        const stillUsedByConstraint = state.constraints.some(c =>
-          c.targets.some(t => t.entityId === ptId) &&
-          c.targets.every(t => t.entityId === ptId || !toDelete.has(t.entityId)),
-        );
-        if (stillUsedByConstraint) continue;
         toDelete.add(ptId);
         changed = true;
       }
@@ -1059,6 +1139,14 @@ export function setConstructionFlag(state: SketchState, ids: Iterable<string>, v
         targets.add(e.centerId); targets.add(e.startId); targets.add(e.endId); break;
       case 'ellipse':
         targets.add(e.centerId); targets.add(e.majorAxisEndId); break;
+      // Review B15–22 kind gap: elliptical arcs and conics carry point refs
+      // too — without these the curve rendered dashed while its defining
+      // points stayed solid.
+      case 'ellipticalArc':
+        targets.add(e.centerId); targets.add(e.majorAxisEndId); break;
+      case 'conic':
+        for (const pid of e.pointIds) targets.add(pid);
+        break;
       case 'spline':
         for (const cp of e.controlPointIds) targets.add(cp);
         break;
@@ -1083,6 +1171,99 @@ export function setConstraintValue(state: SketchState, constraintId: string, val
     ...state,
     constraints: state.constraints.map(c => c.id === constraintId ? { ...c, value } : c),
   };
+}
+
+/** Dimension kinds that encode a SIDE, so a negative value can flip them. */
+const DIRECTIONAL_DIM_TYPES: ReadonlySet<ConstraintType> = new Set([
+  'horizontal-distance', 'vertical-distance', 'point-line-distance',
+]);
+
+/** REQ 893 (review B1) — true when reflecting `entityId` would physically
+ * relocate an ANCHOR: the origin, a point held by a `fixed` constraint, or a
+ * point pinned onto model geometry by an on-edge / external-ref constraint
+ * (the solver holds those at their stored / projected coordinates, so a
+ * reflected anchor becomes a phantom the solver then blesses). The dimension
+ * being edited is excluded from the scan — its own `externalRef` identifies
+ * what it MEASURES, not a pin on its sketch-side target. */
+function isAnchoredTarget(state: SketchState, entityId: string, ignoreConstraintId: string): boolean {
+  if (entityId === ORIGIN_POINT_ID) return true;
+  return state.constraints.some(c =>
+    c.id !== ignoreConstraintId
+    && (c.type === 'fixed' || c.type === 'on-edge' || !!c.externalRef)
+    && c.targets.some(t => t.entityId === entityId));
+}
+
+/**
+ * Set a dimension's value, flipping its DIRECTION when the entered value is
+ * negative (SolidWorks-style). Directional distance dims encode a side; a
+ * negative value reflects the driven geometry to the opposite side and stores
+ * the MAGNITUDE, so the sign-agnostic solver then holds the flipped side.
+ * Non-directional dims (radius, diameter, plain distance, angle, arc-length)
+ * have no side to flip — a negative there is just meaningless, so the
+ * magnitude is stored (never a negative radius).
+ *
+ * REQ 893 (review B1): the reflect targets the FREE side, never an anchor —
+ * which point sits in which target slot is pure pick order, so slot position
+ * alone must not decide who moves (reflecting a hardcoded slot could teleport
+ * the origin or a `fixed` point, whose pins hold them at their STORED coords).
+ * For h/v-distance: when targets[1] is free (also the both-free convention)
+ * it reflects across targets[0]; when only targets[0] is free it reflects
+ * across targets[1]; when BOTH are anchored nothing moves and only the
+ * magnitude is stored — the next solve surfaces the over-constraint as usual.
+ * For point-line-distance the point reflects across the line only when the
+ * point is free; an anchored point stores the magnitude only (reflecting the
+ * LINE instead is out of v1 scope — it carries two points plus whatever
+ * relations ride on them). A positive value is a plain value set, preserving
+ * the "hold the current side" behavior.
+ */
+export function setDimensionValue(state: SketchState, constraintId: string, value: number): SketchState {
+  const c = state.constraints.find(k => k.id === constraintId);
+  if (!c) return state;
+  const mag = Math.abs(value);
+  if (value >= 0 || !DIRECTIONAL_DIM_TYPES.has(c.type)) {
+    return setConstraintValue(state, constraintId, mag);
+  }
+  let entities = state.entities;
+  if (c.type === 'horizontal-distance' || c.type === 'vertical-distance') {
+    const a = findPoint(state, c.targets[0]?.entityId ?? '');
+    const b = findPoint(state, c.targets[1]?.entityId ?? '');
+    if (a && b) {
+      const axis = c.type === 'horizontal-distance' ? 'x' : 'y';
+      const aAnchored = isAnchoredTarget(state, a.id, c.id);
+      const bAnchored = isAnchoredTarget(state, b.id, c.id);
+      if (aAnchored && bAnchored) {
+        // Both pinned — nothing can legally move; magnitude-only (REQ 893).
+      } else if (aAnchored || !bAnchored) {
+        // targets[1] is free (or both are): reflect it across targets[0].
+        const reflected = { ...b, [axis]: 2 * a[axis] - b[axis] };
+        entities = state.entities.map(e => e.id === b.id ? reflected : e);
+      } else {
+        // targets[1] anchored, targets[0] free: reflect targets[0] instead.
+        const reflected = { ...a, [axis]: 2 * b[axis] - a[axis] };
+        entities = state.entities.map(e => e.id === a.id ? reflected : e);
+      }
+    }
+  } else if (c.type === 'point-line-distance' && !c.externalRef) {
+    // Reflect the point across the sketch line to move it to the other side.
+    // (External-edge point-line dims reference a model edge with no sketch
+    // geometry to reflect against — those store the magnitude without flipping.)
+    const p = findPoint(state, c.targets[0]?.entityId ?? '');
+    const line = findEntity(state, c.targets[1]?.entityId ?? '');
+    if (p && line && line.kind === 'line'
+        // REQ 893: an anchored point must not move — magnitude-only.
+        && !isAnchoredTarget(state, p.id, c.id)) {
+      const la = findPoint(state, line.startId), lb = findPoint(state, line.endId);
+      if (la && lb) {
+        const dx = lb.x - la.x, dy = lb.y - la.y;
+        const len2 = dx * dx + dy * dy || 1;
+        const t = ((p.x - la.x) * dx + (p.y - la.y) * dy) / len2;
+        const foot = { x: la.x + t * dx, y: la.y + t * dy };
+        const reflected = { ...p, x: 2 * foot.x - p.x, y: 2 * foot.y - p.y };
+        entities = state.entities.map(e => e.id === p.id ? reflected : e);
+      }
+    }
+  }
+  return setConstraintValue({ ...state, entities }, constraintId, mag);
 }
 
 export function setDistanceValue(state: SketchState, constraintId: string, value: number): SketchState {
@@ -1129,6 +1310,10 @@ export function mergePoints(state: SketchState, keepId: string, dropId: string):
         case 'ellipse': return { ...e, centerId: remap(e.centerId), majorAxisEndId: remap(e.majorAxisEndId) };
         case 'ellipticalArc': return { ...e, centerId: remap(e.centerId), majorAxisEndId: remap(e.majorAxisEndId) };
         case 'spline':  return { ...e, controlPointIds: e.controlPointIds.map(remap) };
+        // Review B15–22 kind gap: conics reference their defining points via
+        // `pointIds` — without the remap a merged vertex/focus/sample left a
+        // dangling id behind.
+        case 'conic':   return { ...e, pointIds: e.pointIds.map(remap) };
         default:        return e;
       }
     });

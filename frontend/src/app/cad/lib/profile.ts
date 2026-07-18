@@ -3,6 +3,7 @@ import { findPoint, findEntity } from './types';
 import { tessellateCircle, tessellateArc, DEFAULT_CHORD_TOLERANCE } from './tessellator';
 import { splitAtIntersections, extractArrangementFaces, type HalfEdge } from './arrangement';
 import { bezierLoopsFromTextEntity, type TextResolver } from './textGlyphs';
+import { bezierSegsFromSpline, bezierSegsFromEllipse } from './curveBeziers';
 
 // REQ 617 — typed profile edges. Each edge owns its analytic identity (line /
 // arc / circle) so the extrude kernel can produce one face per edge instead of
@@ -191,6 +192,60 @@ export function extractClosedLoops(
       if (contour.length < 2) continue;
       const edges: ProfileLoop = contour.map(seg => ({ kind: 'bezier', points: seg.points }));
       loops.push(edges);
+    }
+  }
+
+  // REQ 883 — closed splines and ellipses become extrudable profiles as
+  // chains of cubic Bézier edges (same kernel path as text glyphs:
+  // Edge::bezier, one smooth face per curve). Emitted SECOND, ahead of the
+  // arrangement walker.
+  //
+  // EMIT-ORDER RULE (must match backend/services/cadProfile.js exactly —
+  // stored regionIndices are positional): (1) text glyph loops, then
+  // (2) curve loops — closed splines + ellipses, in sketch entity order —
+  // then (3) standalone circles, then (4) arrangement faces.
+  //
+  // v1 LIMITATION: like glyphs, curve loops are emitted unconditionally and
+  // do NOT participate in the planar arrangement (splitAtIntersections
+  // ignores spline/ellipse kinds), so an ellipse or spline crossed by other
+  // geometry is still emitted whole — the intersection does not subdivide it
+  // into sub-regions. Nesting/holes still work exactly as for glyphs:
+  // extractRegions runs its containment test over the sampled Bézier chain.
+  for (const e of state.entities) {
+    if (e.construction) continue;
+    if (e.kind === 'spline') {
+      const ids = e.controlPointIds;
+      if (ids.length < 4) continue;  // below cubic minimum — no profile
+      const pts: Point2[] = [];
+      let missing = false;
+      for (const id of ids) {
+        const p = findPoint(state, id);
+        if (!p) { missing = true; break; }
+        pts.push({ x: p.x, y: p.y });
+      }
+      if (missing) { errors.push(`spline ${e.id}: control point not found`); continue; }
+      // Closed iff first/last control point share an id or coincide. Open
+      // splines contribute nothing (as before REQ 883).
+      const first = pts[0];
+      const last = pts[pts.length - 1];
+      const closed = ids[0] === ids[ids.length - 1]
+        || Math.hypot(last.x - first.x, last.y - first.y) < 1e-6;
+      if (!closed) continue;
+      const segs = bezierSegsFromSpline(pts, e.degree);
+      if (!segs) continue;  // non-cubic degree — out of v1 scope
+      loops.push(segs.map(points => ({ kind: 'bezier' as const, points })));
+    } else if (e.kind === 'ellipse') {
+      const center = findPoint(state, e.centerId);
+      const majorEnd = findPoint(state, e.majorAxisEndId);
+      if (!center || !majorEnd) {
+        errors.push(`ellipse ${e.id}: center or major-axis point not found`);
+        continue;
+      }
+      const segs = bezierSegsFromEllipse(
+        { x: center.x, y: center.y }, { x: majorEnd.x, y: majorEnd.y }, e.minorRadius,
+      );
+      if (!segs) continue;  // degenerate axes
+      loops.push(segs.map(points => ({ kind: 'bezier' as const, points })));
     }
   }
 

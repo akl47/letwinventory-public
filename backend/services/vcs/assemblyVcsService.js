@@ -29,8 +29,26 @@ async function repoForAssembly(assembly, db) {
   return { repoType: 'assembly', repoId: String(part ? part.id : assembly.partID) };
 }
 
+// REQ 913 — the versioned document is the full bundle: assemblyDoc plus the
+// skeleton content (sketchDoc / featureTree / equations columns, which were
+// previously unused on assembly rows and dropped by the serializer).
 function docOf(assembly) {
-  return assembly.assemblyDoc || { nextInstanceSeq: 1, nextMateSeq: 1, instances: [], mates: [] };
+  return {
+    assemblyDoc: assembly.assemblyDoc || { nextInstanceSeq: 1, nextMateSeq: 1, instances: [], mates: [] },
+    sketchDoc: assembly.sketchDoc || { sketches: {}, nextSketchSeq: 1 },
+    featureTree: assembly.featureTree || { features: [], nextFeatureSeq: 1 },
+    equations: assembly.equations || { entries: {} },
+  };
+}
+
+/** model.update() patch restoring a deserialized bundle onto the row. */
+function applyBundle(model, doc) {
+  return {
+    assemblyDoc: doc.assemblyDoc || doc,  // legacy doc shape safety
+    sketchDoc: doc.sketchDoc || { sketches: {}, nextSketchSeq: 1 },
+    featureTree: doc.featureTree || { features: [], nextFeatureSeq: 1 },
+    equations: doc.equations || { entries: {} },
+  };
 }
 
 const wc = makeWorkingCopy({
@@ -39,7 +57,7 @@ const wc = makeWorkingCopy({
   docOf,
   serialize: assemblySerialize,
   deserialize: assemblyDeserialize,
-  applyDoc: (model, doc) => ({ assemblyDoc: doc }),
+  applyDoc: applyBundle,
 });
 
 // Release-the-revision, written once in vcsRelease; freezes the COMPOSED
@@ -57,7 +75,8 @@ const { release } = makeRelease({
 // cadVcsService.pinCrossPartRefs. Returns the pins for VcsUsage edges.
 async function pinInstanceBranches(assembly, db) {
   const D = dbOf(db);
-  const doc = JSON.parse(JSON.stringify(docOf(assembly)));
+  // Pin operates on the assemblyDoc alone (docOf now returns the bundle).
+  const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || { instances: [], mates: [] }));
   const pinned = [];
   let changed = false;
   for (const inst of doc.instances || []) {
@@ -109,9 +128,11 @@ async function seedMain(assembly, userId, opts = {}, db) {
 module.exports = {
   repoForAssembly,
   docOf,
+  applyBundle,
   seedMain,
   release,
   checkout: wc.checkout,
+  renewLock: wc.renewLock,
   releaseLock: wc.releaseLock,
   undoCheckout: wc.undoCheckout,
   checkin,

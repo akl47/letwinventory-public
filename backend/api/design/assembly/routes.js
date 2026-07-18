@@ -13,6 +13,12 @@ router.get('/:id', checkToken, checkPermission('cad', 'read'), controller.getByI
 router.put('/:id', checkToken, checkPermission('cad', 'write'), controller.update);
 router.delete('/:id', checkToken, checkPermission('cad', 'delete'), controller.delete);
 
+// Skeleton content: assembly-level sketches, datum plane features, equations
+// (REQ 911/914). Guarded like part-CAD content saves.
+router.put('/:id/skeleton', checkToken, checkPermission('cad', 'write'), controller.updateSkeleton);
+// Push assembly global variables into child part equations (REQ 918).
+router.post('/:id/push-variables', checkToken, checkPermission('cad', 'write'), controller.pushVariables);
+
 // Component instances.
 router.post('/:id/instances', checkToken, checkPermission('cad', 'write'), controller.insertInstance);
 router.put('/:id/instances/:instanceId', checkToken, checkPermission('cad', 'write'), controller.updateInstance);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dimensionRenders, previewDimension, previewPointToEdgeDimension, formatDimensionText } from './dimensions';
+import { dimensionRenders, previewDimension, previewEdgeDimension, resolveEdgeDim, formatDimensionText } from './dimensions';
 import type {
   SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity, SketchConstraint,
 } from './types';
@@ -61,6 +61,24 @@ describe('dimensionRenders', () => {
     expect(r.extensionLines[1][1]).toEqual({ x: 10, y: 6 });
   });
 
+  it('3-point vertex angle renders a leader on the ray bisector (REQ 890)', () => {
+    const v: PointEntity = { kind: 'point', id: 'v', x: 0, y: 0 };
+    const a: PointEntity = { kind: 'point', id: 'a', x: 10, y: 0 };
+    const b: PointEntity = { kind: 'point', id: 'b', x: 0, y: 10 };
+    const ang: SketchConstraint = {
+      id: 'ca', type: 'angle',
+      targets: [{ entityId: 'a' }, { entityId: 'v' }, { entityId: 'b' }],
+      value: Math.PI / 2,
+    };
+    const [r] = dimensionRenders(state(v, a, b, ang));
+    expect(r).toBeTruthy();
+    expect(r.text).toContain('90');
+    // Default label anchor sits off the vertex along the 45° bisector.
+    expect(r.labelAnchor.x).toBeGreaterThan(0);
+    expect(r.labelAnchor.y).toBeGreaterThan(0);
+    expect(r.labelAnchor.x).toBeCloseTo(r.labelAnchor.y, 6);
+  });
+
   it('radius render is a leader from the curve edge out to the placement', () => {
     const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
     const k: CircleEntity = { kind: 'circle', id: 'k', centerId: 'c', radius: 10 };
@@ -91,9 +109,126 @@ describe('dimensionRenders', () => {
     // Dimension line spans the gap: inner edge (4,0) → outer edge (7,0).
     expect(render.dimensionLine![0]).toEqual({ x: 4, y: 0 });
     expect(render.dimensionLine![1]).toEqual({ x: 7, y: 0 });
-    // Extension from the outer edge out to the placed label.
-    expect(render.extensionLines[0][0]).toEqual({ x: 7, y: 0 });
-    expect(render.extensionLines[0][1]).toEqual({ x: 12, y: 0 });
+    // Solid label leader (NOT a witness line — no gap/overshoot styling)
+    // from the outer edge out to the placed label.
+    expect(render.extensionLines).toEqual([]);
+    expect(render.labelLeader![0]).toEqual({ x: 7, y: 0 });
+    expect(render.labelLeader![1]).toEqual({ x: 12, y: 0 });
+  });
+
+  it('radius render carries the single-arrow leader flag', () => {
+    const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+    const k: CircleEntity = { kind: 'circle', id: 'k', centerId: 'c', radius: 10 };
+    const r: SketchConstraint = {
+      id: 'cr', type: 'radius', targets: [{ entityId: 'k' }], value: 10,
+      placement: { x: 20, y: 0 },
+    };
+    const [render] = dimensionRenders(state(c, k, r));
+    expect(render.leader).toBe(true);
+    expect(render.curve).toEqual({ center: { x: 0, y: 0 }, radius: 10 });
+  });
+
+  // SolidWorks drag behavior: the label slides ALONG the dimension line
+  // following the placement, instead of being pinned to the midpoint.
+  it('label slides along the dim line to the placement projection', () => {
+    const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 0 };
+    const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: 0 };
+    const c: SketchConstraint = {
+      id: 'cd', type: 'distance', targets: [{ entityId: 'a' }, { entityId: 'b' }], value: 10,
+      placement: { x: 8, y: 6 },  // near B's end, 6 above
+    };
+    const [r] = dimensionRenders(state(a, b, c));
+    expect(r.labelAnchor).toEqual({ x: 8, y: 6 });
+    expect(r.labelLeader).toBeUndefined();
+    expect(r.labelOutside).toBeUndefined();
+  });
+
+  it('label dragged past the span grows a leader and flips arrows outside', () => {
+    const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 0 };
+    const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: 0 };
+    const c: SketchConstraint = {
+      id: 'cd', type: 'distance', targets: [{ entityId: 'a' }, { entityId: 'b' }], value: 10,
+      placement: { x: 15, y: 6 },  // beyond B's end
+    };
+    const [r] = dimensionRenders(state(a, b, c));
+    expect(r.labelAnchor).toEqual({ x: 15, y: 6 });
+    // Leader runs from the nearest dim-line end (B's projection) to the label.
+    expect(r.labelLeader![0]).toEqual({ x: 10, y: 6 });
+    expect(r.labelLeader![1]).toEqual({ x: 15, y: 6 });
+    expect(r.labelOutside).toBe(true);
+  });
+
+  it('diameter label outside the circle renders as a single-arrow radial leader (SW style)', () => {
+    const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+    const k: CircleEntity = { kind: 'circle', id: 'k', centerId: 'c', radius: 5 };
+    const d: SketchConstraint = {
+      id: 'cdia', type: 'diameter', targets: [{ entityId: 'k' }], value: 10,
+      placement: { x: 12, y: 0 },  // outside the circle along +x
+    };
+    const [r] = dimensionRenders(state(c, k, d));
+    // Same layout as a radius dim: leader from the near edge to the label,
+    // arrowhead only at the curve, with the curve info for the viewer's
+    // bend-aware tangency construction.
+    expect(r.leader).toBe(true);
+    expect(r.dimensionLine![0]).toEqual({ x: 5, y: 0 });
+    expect(r.dimensionLine![1]).toEqual({ x: 12, y: 0 });
+    expect(r.labelAnchor).toEqual({ x: 12, y: 0 });
+    expect(r.curve).toEqual({ center: { x: 0, y: 0 }, radius: 5 });
+    expect(r.labelLeader).toBeUndefined();
+  });
+
+  it('diameter label inside the circle rides the dim line with no leader', () => {
+    const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+    const k: CircleEntity = { kind: 'circle', id: 'k', centerId: 'c', radius: 5 };
+    const d: SketchConstraint = {
+      id: 'cdia', type: 'diameter', targets: [{ entityId: 'k' }], value: 10,
+      placement: { x: 2, y: 0 },
+    };
+    const [r] = dimensionRenders(state(c, k, d));
+    expect(r.labelAnchor).toEqual({ x: 2, y: 0 });
+    expect(r.labelLeader).toBeUndefined();
+  });
+
+  it('angle label follows the placement angle around the arc', () => {
+    // Two lines from the origin: along +x and +y.
+    const o: PointEntity = { kind: 'point', id: 'o', x: 0, y: 0 };
+    const ax: PointEntity = { kind: 'point', id: 'ax', x: 10, y: 0 };
+    const ay: PointEntity = { kind: 'point', id: 'ay', x: 0, y: 10 };
+    const o2: PointEntity = { kind: 'point', id: 'o2', x: 0, y: 0 };
+    const lx: LineEntity = { kind: 'line', id: 'lx', startId: 'o', endId: 'ax' };
+    const ly: LineEntity = { kind: 'line', id: 'ly', startId: 'o2', endId: 'ay' };
+    const ang: SketchConstraint = {
+      id: 'ca', type: 'angle', targets: [{ entityId: 'lx' }, { entityId: 'ly' }],
+      value: Math.PI / 2,
+      // ~30° above +x, radius 8 → label should sit at that angle, not the 45° bisector.
+      placement: { x: 8 * Math.cos(Math.PI / 6), y: 8 * Math.sin(Math.PI / 6) },
+    };
+    const [r] = dimensionRenders(state(o, ax, ay, o2, lx, ly, ang));
+    expect(r.arc).toBeTruthy();
+    const labelAng = Math.atan2(r.labelAnchor.y, r.labelAnchor.x);
+    expect(labelAng).toBeCloseTo(Math.PI / 6, 6);
+    // On the span → no extension arc.
+    expect(r.arcExtension).toBeUndefined();
+  });
+
+  it('angle arc beyond the line ends emits extension lines along the rays', () => {
+    const o: PointEntity = { kind: 'point', id: 'o', x: 0, y: 0 };
+    const ax: PointEntity = { kind: 'point', id: 'ax', x: 4, y: 0 };
+    const ay: PointEntity = { kind: 'point', id: 'ay', x: 0, y: 4 };
+    const o2: PointEntity = { kind: 'point', id: 'o2', x: 0, y: 0 };
+    const lx: LineEntity = { kind: 'line', id: 'lx', startId: 'o', endId: 'ax' };
+    const ly: LineEntity = { kind: 'line', id: 'ly', startId: 'o2', endId: 'ay' };
+    const ang: SketchConstraint = {
+      id: 'ca', type: 'angle', targets: [{ entityId: 'lx' }, { entityId: 'ly' }],
+      value: Math.PI / 2,
+      // Radius 10 — past both lines' 4-unit reach.
+      placement: { x: 10 * Math.cos(Math.PI / 4), y: 10 * Math.sin(Math.PI / 4) },
+    };
+    const [r] = dimensionRenders(state(o, ax, ay, o2, lx, ly, ang));
+    expect(r.extensionLines).toHaveLength(2);
+    // Each extension runs from the line's physical end out to the arc radius.
+    const lens = r.extensionLines.map(([f, t]) => Math.hypot(t.x - f.x, t.y - f.y));
+    for (const L of lens) expect(L).toBeCloseTo(6, 6);
   });
 
   it('uses a sensible default placement when constraint.placement is missing', () => {
@@ -256,12 +391,57 @@ describe('point-to-edge dimension (externalRef → projected model edge)', () =>
   });
 });
 
-describe('previewPointToEdgeDimension', () => {
+// REQ 886/907 — the SINGLE decision function behind the live preview, the
+// Smart-Dim commit, and the relations-toolbar edge-dim appliers.
+describe('resolveEdgeDim', () => {
   const edge: [{ x: number; y: number }, { x: number; y: number }] = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
 
-  it('previews the perpendicular distance, dim line following the placement cursor', () => {
+  function lineState(x1: number, y1: number, x2: number, y2: number): SketchState {
+    const a: PointEntity = { kind: 'point', id: 'a', x: x1, y: y1 };
+    const b: PointEntity = { kind: 'point', id: 'b', x: x2, y: y2 };
+    const l: LineEntity = { kind: 'line', id: 'l', startId: 'a', endId: 'b' };
+    return state(a, b, l);
+  }
+
+  it('point → perpendicular distance to the edge', () => {
     const p: PointEntity = { kind: 'point', id: 'p', x: 4, y: 6 };
-    const r = previewPointToEdgeDimension(state(p), 'p', edge, { x: 12, y: 3 });
+    const spec = resolveEdgeDim(state(p), p, edge)!;
+    expect(spec.type).toBe('point-line-distance');
+    expect(spec.targetId).toBe('p');
+    expect(spec.value).toBeCloseTo(6, 9);
+  });
+
+  it('angled line → angle between the lines (radians)', () => {
+    const s = lineState(0, 0, 10, 10); // 45° to the horizontal edge
+    const line = s.entities.find(e => e.id === 'l')!;
+    const spec = resolveEdgeDim(s, line, edge)!;
+    expect(spec.type).toBe('angle');
+    expect(spec.targetId).toBe('l');
+    expect(spec.value).toBeCloseTo(Math.PI / 4, 9);
+  });
+
+  it('parallel line → offset distance from its start endpoint', () => {
+    const s = lineState(2, 5, 12, 5); // parallel to the edge, 5 above
+    const line = s.entities.find(e => e.id === 'l')!;
+    const spec = resolveEdgeDim(s, line, edge)!;
+    expect(spec.type).toBe('point-line-distance');
+    expect(spec.targetId).toBe('a');
+    expect(spec.value).toBeCloseTo(5, 9);
+  });
+
+  it('non point/line entities resolve to null', () => {
+    const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+    const k: CircleEntity = { kind: 'circle', id: 'k', centerId: 'c', radius: 3 };
+    expect(resolveEdgeDim(state(c, k), k, edge)).toBeNull();
+  });
+});
+
+describe('previewEdgeDimension', () => {
+  const edge: [{ x: number; y: number }, { x: number; y: number }] = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
+
+  it('previews the perpendicular distance for a point, dim line following the cursor', () => {
+    const p: PointEntity = { kind: 'point', id: 'p', x: 4, y: 6 };
+    const r = previewEdgeDimension(state(p), p, edge, { x: 12, y: 3 });
     expect(r).not.toBeNull();
     const [d0, d1] = r!.dimensionLine!;
     expect(Math.abs(d1.y - d0.y)).toBeCloseTo(6, 6);
@@ -269,7 +449,14 @@ describe('previewPointToEdgeDimension', () => {
     expect(r!.text).toContain('6');
   });
 
-  it('returns null when the point id is missing', () => {
-    expect(previewPointToEdgeDimension(state(), 'nope', edge, { x: 0, y: 0 })).toBeNull();
+  it('previews an ANGLE (arc render) for a non-parallel line — same decision as the commit', () => {
+    const a: PointEntity = { kind: 'point', id: 'a', x: 0, y: 0 };
+    const b: PointEntity = { kind: 'point', id: 'b', x: 10, y: 10 };
+    const l: LineEntity = { kind: 'line', id: 'l', startId: 'a', endId: 'b' };
+    const s = state(a, b, l);
+    const r = previewEdgeDimension(s, l, edge, { x: 6, y: 2 });
+    expect(r).not.toBeNull();
+    expect(r!.arc).toBeTruthy();       // full angle render, not a distance layout
+    expect(r!.text).toContain('45');   // 45° measured live
   });
 });

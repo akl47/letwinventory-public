@@ -97,7 +97,7 @@ export type SketchPreview =
   | { kind: 'alignment-guide'; start: { x: number; y: number }; end: { x: number; y: number } }
   // Small text label rendered near the cursor describing the active
   // inference ("horizontal", "30°", "aligned", "on line", …).
-  | { kind: 'inference-badge'; x: number; y: number; label: string };
+  | { kind: 'inference-badge'; x: number; y: number; label: string; stackIndex?: number };
 
 // Click-to-select profile region overlay used during the Extrude sidebar
 // flow. The cad-editor computes one entry per closed loop in the host
@@ -179,6 +179,9 @@ const CHORD_SCREEN_FRAC = 0.05 / 180;      // ≈ curve chord tolerance
 const MIN_CHORD_TOL = 0.003;               // floor so segment count stays bounded
 const DIM_ARROW_LEN_FRAC = 3 / 180;        // dimension arrowhead length (constant on-screen)
 const DIM_ARROW_WIDTH_FRAC = 1 / 180;      // dimension arrowhead half-width
+const DIM_EXT_GAP_FRAC = 1.2 / 180;        // witness-line gap off the measured point
+const DIM_EXT_OVERSHOOT_FRAC = 1.4 / 180;  // witness-line overshoot past the dim line
+const DIM_SHOULDER_FRAC = 5 / 180;         // radius-leader horizontal landing length
 
 @Component({
   selector: 'app-cad-viewer',
@@ -387,6 +390,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   /** Selected origin-datum ids (point / axes / planes) — highlighted in the
    * viewer to mirror the feature-tree selection. */
   selectedDatums = input<Set<string>>(new Set());
+  /** REQ 907 — datum currently armed as the pending Smart Dimension
+   * reference. Highlighted orange: on its 3D visual when the datum is
+   * visible, else as its projected reference line in the active sketch —
+   * without this there was zero feedback between picking the datum and
+   * picking the sketch entity. */
+  pendingDimDatumId = input<string | null>(null);
   /** Currently-picked face ids in an active picker (Measure /
    * Fillet / Chamfer). Renders these in a sticky picked-color so the
    * user sees what's already in the selection set, separate from the
@@ -517,6 +526,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * conflicting. When non-empty in the 'over' state, ONLY these render red
    * (others keep their determinacy coloring); empty falls back to all-red. */
   conflictEntityIds = input<Set<string>>(new Set());
+  /** REQ 908: constraint ids the solver named as conflicting. Their canvas
+   * badges render red (shown even without selection) so the user can spot
+   * WHICH relation over-constrains the sketch directly in the canvas. */
+  conflictConstraintIds = input<Set<string>>(new Set());
   /** REQ 867 — box selection resolved on marquee release: the faces whose
    * screen projection the box encloses (window) or touches (crossing), plus
    * their owning feature ids for feature-level selection. */
@@ -555,15 +568,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // REQ 616: sketch pointer events dispatched when an active sketch exists.
   // Coordinates are in the active sketch's 2D plane space (post ray-plane
   // intersection). The parent component wires these into the sketch tool logic.
-  sketchClick = output<{ x: number; y: number; shiftKey: boolean; tolerance: number; pointTolerance: number }>();
+  sketchClick = output<{ x: number; y: number; shiftKey: boolean; tolerance: number; pointTolerance: number; datumId: string | null }>();
   sketchPointerDown = output<{ x: number; y: number; tolerance: number; pointTolerance: number }>();
   sketchPointerMove = output<{ x: number; y: number; tolerance?: number; pointTolerance?: number; edgeTolerance?: number }>();
   sketchPointerUp = output<{ x: number; y: number }>();
   /** Fired when the user clicks (without dragging) a dimension annotation. */
   dimensionLabelClicked = output<string>();
-  /** User clicked an arrow handle on a selected dimension → flip its arrowheads
-   * inside/outside (SolidWorks-style). The parent toggles `arrowsOutside`. */
-  dimensionArrowsToggled = output<string>();
   /** Inline dimension editor committed a new value (Enter / blur). Raw
    * text so the parent can parse units, magnitude, signs, etc. */
   dimensionCommitted = output<{ id: string; raw: string }>();
@@ -874,6 +884,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // orbit/pan/zoom buttons set this). Left-click still selects; middle-button
   // navigation keeps working regardless.
   navMode = signal<'orbit' | 'pan' | 'zoom' | 'select'>('orbit');
+  /** Nav mode to restore when the active sketch closes (REQ 909). */
+  private _navModeBeforeSketch: 'orbit' | 'pan' | 'zoom' | 'select' | null = null;
 
   // Touch navigation state (mobile). 'multi' = two fingers pinch-zoom + pan
   // together. One-finger touch rides the synthesized POINTER events instead
@@ -968,6 +980,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       this.selectedDatums();
       this.hovered();
       this.selected();
+      this.pendingDimDatumId();
       if (this.scene) this.recolorDatums();
     });
     effect(() => {
@@ -1006,6 +1019,23 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const mode = this.displayMode();
       if (this.scene) this.applyDisplayMode(mode);
+    });
+    // REQ 909 — sketch entry arms 'select' so left-drag keeps doing sketch
+    // interactions (point drag, marquee); the nav buttons (orbit/pan/zoom)
+    // work INSIDE a sketch too, so re-arming Orbit makes left-drag rotate
+    // the 3D view without leaving the sketch. The pre-sketch nav mode is
+    // restored on exit. (Right-drag orbits regardless, and MMB always navs.)
+    effect(() => {
+      const inSketch = this.activeSketchId() !== null;
+      untracked(() => {
+        if (inSketch && this._navModeBeforeSketch === null) {
+          this._navModeBeforeSketch = this.navMode();
+          this.navMode.set('select');
+        } else if (!inSketch && this._navModeBeforeSketch !== null) {
+          this.navMode.set(this._navModeBeforeSketch);
+          this._navModeBeforeSketch = null;
+        }
+      });
     });
     // DEBUG: face "area of influence" fills — only in sketch mode with the debug
     // toggle on. Tracks geometry so the fills follow face rebuilds.
@@ -2179,6 +2209,33 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.cubeAnimHandle = requestAnimationFrame(step);
   }
 
+  /** Re-derive the spherical orbit state (theta/phi/distance) from the
+   * camera's ACTUAL position, called whenever an orbit gesture ARMS. The
+   * camera can be moved by paths that bypass the orbit angles (the head-on
+   * sketch pin most of all), so orbiting from stale angles snapped the view
+   * to an unexpected orientation on the first drag. At a pole (head-on view
+   * of a horizontal plane) the azimuth is degenerate in the offset, so it's
+   * derived from the current screen-up instead: reaching the top pole along
+   * azimuth θ leaves screen-up −(cosθ, sinθ); the bottom pole +(cosθ, sinθ).
+   * Only the pin can place the camera at an exact pole (the orbit phi clamp
+   * stops at 0.05 rad), so the pole branch fires only for pinned views,
+   * where camera.up is the pin's explicit hint. */
+  private syncOrbitFromCamera() {
+    const off = this.camera.position.clone().sub(this.orbitTarget);
+    const len = off.length();
+    if (len < 1e-9) return;
+    if (Math.abs(off.z / len) > 0.999) {
+      const u = this.camera.up;
+      this.orbitTheta = off.z > 0 ? Math.atan2(-u.y, -u.x) : Math.atan2(u.y, u.x);
+      this.orbitPhi = off.z > 0 ? 0 : Math.PI;
+    } else {
+      const o = dirToOrbit(off.x / len, off.y / len, off.z / len);
+      this.orbitTheta = o.theta;
+      this.orbitPhi = o.phi;
+    }
+    this.orbitDistance = len;
+  }
+
   private onPointerDown = (ev: PointerEvent) => {
     this.lastPointer = { x: ev.clientX, y: ev.clientY };
     this.didNavDrag = false;
@@ -2192,11 +2249,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     //   LMB (3D)         = select (dispatched by onClick)
     //   LMB (sketch)     = sketch tool action
     //   RMB (3D)         = feature context menu (onContextMenu)
-    //   RMB (sketch)     = no-op (context menu suppressed in sketch mode)
+    //   RMB (sketch)     = orbit (context menu is suppressed, so right-drag
+    //                      rotates the view without leaving the tool — LMB
+    //                      stays the tool button)
     if (ev.button === 1) {
       if (ev.shiftKey) this.panning = true;
       else if (ev.ctrlKey || ev.metaKey) this.zoomDragging = true;
       else this.orbiting = true;
+    } else if (ev.button === 2 && inSketch) {
+      this.orbiting = true;
     } else if (ev.button === 0 && !inSketch) {
       // CAD-782: in assembly mode, a left press on a draggable component arms a
       // drag candidate (it translates the component) instead of orbiting. A
@@ -2228,13 +2289,27 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       else if (m === 'orbit') this.orbiting = true;
       else this.orbiting = true;  // touch in select mode keeps one-finger orbit
     } else if (ev.button === 0 && inSketch) {
-      const p = this.toSketchCoords(ev);
-      if (p) {
-        const tolerance = this.pixelsToSketchUnits(this.PICK_PX);
-        const pointTolerance = this.pixelsToSketchUnits(this.POINT_PICK_PX);
-        this.zone.run(() => this.sketchPointerDown.emit({ ...p, tolerance, pointTolerance }));
+      // REQ 909 — the nav buttons work inside a sketch: with Orbit/Pan/Zoom
+      // armed, left-drag navigates (a plain click still dispatches the
+      // sketch tool via onClick; didNavDrag suppresses it after a drag).
+      // 'Select' — set automatically on sketch entry — keeps left-drag for
+      // the sketch interactions (point drag, box select).
+      const m = this.navMode();
+      if (m === 'orbit') { this.orbiting = true; }
+      else if (m === 'pan') { this.panning = true; }
+      else if (m === 'zoom') { this.zoomDragging = true; }
+      else {
+        const p = this.toSketchCoords(ev);
+        if (p) {
+          const tolerance = this.pixelsToSketchUnits(this.PICK_PX);
+          const pointTolerance = this.pixelsToSketchUnits(this.POINT_PICK_PX);
+          this.zone.run(() => this.sketchPointerDown.emit({ ...p, tolerance, pointTolerance }));
+        }
       }
     }
+    // Whatever armed the orbit above: continue from where the camera
+    // ACTUALLY is (stale theta/phi = first-drag view snap).
+    if (this.orbiting) this.syncOrbitFromCamera();
     (ev.target as Element).setPointerCapture?.(ev.pointerId);
   };
 
@@ -2290,16 +2365,19 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (this.orbiting) {
       // Orbiting in sketch mode RELEASES the head-on pin so the user can 3D-
       // rotate freely (the "Normal to" button re-orients to the sketch normal).
-      // orbitTheta/Phi were synced to the plane normal on sketch entry, so the
-      // free-orbit continues smoothly from the head-on orientation.
       this.sketchPlaneNormal = null;
       // Free orbit is a world-Z-up turntable. Re-establish +Z up when orbiting
       // away from a canonical pole view (Top/Bottom, which set a horizontal ±Y
-      // up). GUARD against the poles: near ±Z the world-up is ~parallel to the
-      // view direction, so copying it would make `lookAt` degenerate and snap
-      // the roll to an arbitrary angle — the "view jumps when I rotate after
-      // exiting a Top/Bottom sketch" bug. Only re-establish once tilted enough.
-      if (this.camera.up.z < 0.999 && this.orbitPhi > 0.3 && this.orbitPhi < Math.PI - 0.3) {
+      // up). GUARD against the exact poles: at ±Z the world-up is parallel to
+      // the view direction and `lookAt` would snap the roll arbitrarily. The
+      // threshold sits just below the phi clamp floor (0.05) so world-up
+      // engages on the FIRST movement: while the ±Y hint was kept (old 0.3
+      // threshold), horizontal drags near the pole mutated theta with NO
+      // visible change, then the accumulated azimuth appeared all at once as
+      // a surprise in-plane spin when the up finally re-established — the
+      // "view randomly rotates 90° around Z" bug. Theta is synced from the
+      // pinned screen-up at release, so the switch is seamless.
+      if (this.camera.up.z < 0.999 && this.orbitPhi > 0.049 && this.orbitPhi < Math.PI - 0.049) {
         this.camera.up.copy(WORLD_UP);
       }
       // Horizontal drag rotates the model the SAME direction the cursor
@@ -2579,28 +2657,81 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   };
 
   /** SolidWorks-style arrow-key view rotation. Plain arrow = 15°, Shift +
-   * arrow = 90°. Directions match the viewport MMB-orbit convention (Z-up):
-   * Right rotates the view right (orbitTheta decreases, same as dragging the
-   * canvas rightward), Up tilts phi up. Skipped when focus is in a text input
-   * so typed text doesn't also rotate the model. */
+   * arrow = 90°. Implemented as a SCREEN-AXIS rotation relative to the
+   * CURRENT orientation — left/right spin about the camera's up axis,
+   * up/down about the camera's right axis — rotating the up-vector along.
+   *
+   * Why not the turntable tween (animateOrbitTo): that path assumed the
+   * canonical world-up turntable state and force-tweened camera.up back to
+   * WORLD_UP. Any view whose up differs (Top/Bottom pole views, after the
+   * ⟳ roll buttons, normal-to views) picked up an uncommanded roll during
+   * the tween — the reported "random rotation" on arrow keys. Rotating
+   * about the live screen axes preserves the orientation the user sees and
+   * has no pole/gimbal special cases.
+   *
+   * Skipped when focus is in a text input, and in sketch mode (the view is
+   * pinned to the sketch plane — updateCamera ignores theta/phi there, so
+   * the old path degenerated to a pure up-vector roll). */
   @HostListener('document:keydown', ['$event'])
   onViewerKeydown(ev: KeyboardEvent) {
     const t = ev.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+    if (this.sketchPlaneNormal) return;  // sketch view is pinned to its plane
     const step = ev.shiftKey ? Math.PI / 2 : Math.PI / 12;
-    let dTheta = 0, dPhi = 0;
+    const dir = new THREE.Vector3().subVectors(this.orbitTarget, this.camera.position).normalize();
+    const up = this.camera.up.clone().normalize();
+    let axis: THREE.Vector3; let angle: number;
     switch (ev.key) {
-      case 'ArrowLeft':  dTheta = +step; break;
-      case 'ArrowRight': dTheta = -step; break;
-      case 'ArrowUp':    dPhi   = +step; break;
-      case 'ArrowDown':  dPhi   = -step; break;
+      // Signs match the previous turntable behavior in the canonical state
+      // (Left ⇒ theta increases; Up ⇒ phi increases).
+      case 'ArrowLeft':  axis = up; angle = +step; break;
+      case 'ArrowRight': axis = up; angle = -step; break;
+      case 'ArrowUp':
+      case 'ArrowDown': {
+        const right = new THREE.Vector3().crossVectors(dir, up);
+        if (right.lengthSq() < 1e-12) return;  // degenerate up ∥ dir
+        axis = right.normalize();
+        angle = ev.key === 'ArrowUp' ? +step : -step;
+        break;
+      }
       default: return;
     }
     ev.preventDefault();  // stop arrows from also scrolling the surrounding page
-    const targetTheta = this.orbitTheta + dTheta;
-    const targetPhi   = Math.max(0.05, Math.min(Math.PI - 0.05, this.orbitPhi + dPhi));
-    this.animateOrbitTo(targetTheta, targetPhi, 340);
+    this.animateScreenRotate(axis, angle, 340);
+  }
+
+  /** Tween a rigid rotation of the camera (offset from orbitTarget + up
+   * vector) about a fixed world-space axis. Roll-preserving; used by the
+   * arrow-key rotation. Resyncs orbitTheta/orbitPhi at the end so the next
+   * drag-orbit continues from the landed orientation. */
+  private animateScreenRotate(axis: THREE.Vector3, totalAngle: number, durationMs: number) {
+    if (this.cubeAnimHandle) cancelAnimationFrame(this.cubeAnimHandle);
+    const ax = axis.clone().normalize();
+    const startOffset = this.camera.position.clone().sub(this.orbitTarget);
+    const startUp = this.camera.up.clone();
+    const start = performance.now();
+    const q = new THREE.Quaternion();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      q.setFromAxisAngle(ax, totalAngle * e);
+      const off = startOffset.clone().applyQuaternion(q);
+      this.camera.up.copy(startUp).applyQuaternion(q).normalize();
+      this.camera.position.copy(this.orbitTarget).add(off);
+      this.camera.lookAt(this.orbitTarget);
+      if (this.camera.isOrthographicCamera) this.updateOrthoFrustum();
+      if (t < 1) {
+        this.cubeAnimHandle = requestAnimationFrame(step);
+      } else {
+        // Resync the turntable state (theta undefined at a pole → keep).
+        const d = off.normalize();
+        this.orbitPhi = Math.acos(Math.max(-1, Math.min(1, d.z)));
+        if (Math.sin(this.orbitPhi) > 1e-6) this.orbitTheta = Math.atan2(d.y, d.x);
+        this.cubeAnimHandle = 0;
+      }
+    };
+    this.cubeAnimHandle = requestAnimationFrame(step);
   }
 
   private onClick = (ev: MouseEvent) => {
@@ -2684,8 +2815,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       if (p) {
         const tolerance = this.pixelsToSketchUnits(this.PICK_PX);
         const pointTolerance = this.pixelsToSketchUnits(this.POINT_PICK_PX);
+        // REQ 907 — carry the datum plane/axis under the cursor (if any) so
+        // Smart Dimension can reference it when the sketch pick misses.
+        const datumId = this.datumUnderCursor(ev);
         // REQ 871: Ctrl (or Cmd) extends the sketch selection like Shift.
-        this.zone.run(() => this.sketchClick.emit({ x: p.x, y: p.y, shiftKey: ev.shiftKey || ev.ctrlKey || ev.metaKey, tolerance, pointTolerance }));
+        this.zone.run(() => this.sketchClick.emit({ x: p.x, y: p.y, shiftKey: ev.shiftKey || ev.ctrlKey || ev.metaKey, tolerance, pointTolerance, datumId }));
       }
       return;
     }
@@ -2761,13 +2895,24 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const faceD = hits.length ? hits[0].distance : Infinity;
       const datumD = datumHits.length ? datumHits[0].distance : Infinity;
       if (datumHits.length && datumD <= faceD) {
-        const ref = this.componentDatumFaceRef(this.datumIdOfObject(datumHits[0].object));
+        const datumId = this.datumIdOfObject(datumHits[0].object);
+        const ref = this.componentDatumFaceRef(datumId);
         if (ref) {
           const p = datumHits[0].point;
           this.zone.run(() => {
             this.facePicked.emit(ref);
             this.facePickedAt.emit({ faceId: ref, point: [p.x, p.y, p.z], normal: [0, 0, 1] });
           });
+          return;
+        }
+        // Part-editor datum (origin plane / user datum plane, no `inst:`
+        // prefix): emit the normal `datum:` selection so sidebar routing
+        // (e.g. the Datum Plane sidebar's plane-ref slots) can consume
+        // it. Without this, face-pick mode swallowed datum clicks and
+        // datum planes were unselectable while a picking sidebar was
+        // open.
+        if (datumId) {
+          this.zone.run(() => this.selectionChange.emit(`datum:${datumId}`));
           return;
         }
       }
@@ -3034,6 +3179,18 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const ids: string[] = [];
     for (const r of ranked) if (!ids.includes(r.id)) ids.push(r.id);
     return ids;
+  }
+
+  /** REQ 907 — the datum plane/axis under the cursor, if any (nearest hit).
+   * Used to attach a datum reference to sketch-mode clicks, where the normal
+   * selection pipeline is bypassed by the sketch tools. */
+  private datumUnderCursor(ev: MouseEvent): string | null {
+    if (!this.datumGroup) return null;
+    this.updatePointer(ev);
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(this.datumGroup.children, true);
+    if (!hits.length) return null;
+    return this.datumIdOfObject(hits[0].object);
   }
 
   private pickEntity(): string | null {
@@ -3460,23 +3617,29 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    *  cyan tree/selection tint. Used for sketch-plane-pick hover. */
   private static readonly DATUM_HOVER_COLOR = 0xffeb3b;
 
+  /** Pending Smart-Dim datum reference (REQ 907) — orange. */
+  private static readonly DATUM_PENDING_DIM_COLOR = 0xff9800;
+
   private recolorDatums() {
     const sel = this.selectedDatums();
     const hovered = this.hovered();
     const transSel = this.selected();
+    const pendingDim = this.pendingDimDatumId();
     const SELC = CadViewerComponent.DATUM_SELECT_COLOR;
     const HOVC = CadViewerComponent.DATUM_HOVER_COLOR;
+    const PDIM = CadViewerComponent.DATUM_PENDING_DIM_COLOR;
     for (const [id, obj] of this.datumMeshes) {
       const ud = obj.userData as { datumBaseColor?: number; datumPlane?: boolean };
       if (ud.datumBaseColor === undefined) continue;
       const fullId = `datum:${id}`;
       const hot = hovered === fullId;
       const on = sel.has(id) || transSel === fullId;
+      const pend = pendingDim === id;
       const target = obj instanceof THREE.Mesh ? obj : (obj as THREE.Group).children[0] as THREE.Line;
       const mat = target.material as THREE.MeshBasicMaterial | THREE.LineBasicMaterial;
-      mat.color.setHex(hot ? HOVC : on ? SELC : ud.datumBaseColor);
+      mat.color.setHex(pend ? PDIM : hot ? HOVC : on ? SELC : ud.datumBaseColor);
       if (ud.datumPlane && mat instanceof THREE.MeshBasicMaterial) {
-        mat.opacity = (hot || on) ? 0.4 : 0.18;
+        mat.opacity = (hot || on || pend) ? 0.4 : 0.18;
       }
     }
   }
@@ -3973,6 +4136,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
           pointerEvents: 'none',
           userSelect: 'none',
           whiteSpace: 'nowrap',
+          // Review B-badge-stacking: badges for one snap share ONE sketch-space
+          // anchor and stack in SCREEN PIXELS via margins — sketch-unit offsets
+          // merged into a blob zoomed out and scattered zoomed in. (Margins
+          // compose with CSS2DRenderer's own transform; a transform wouldn't.)
+          marginLeft: '26px',
+          marginTop: `${14 + (item.stackIndex ?? 0) * 20}px`,
         });
         const obj = new CSS2DObject(el);
         obj.position.copy(project({ x: item.x, y: item.y }));
@@ -4817,9 +4986,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
 
   /** Project a dimension's 2D geometry onto the sketch plane and add the
    * dimension + extension lines to the overlay group as plain Three.js
-   * lines. Each dimension line gets traditional drawing arrowheads at
-   * both ends. `dashed` flips between solid (committed) and dashed
-   * (preview). */
+   * lines, styled to SolidWorks/Onshape drafting conventions:
+   *   - witness lines get a small gap off the measured point and a slight
+   *     overshoot past the dimension line;
+   *   - the dimension line breaks around the text (the label rides ON it);
+   *   - a label dragged past the span gets a solid leader and the
+   *     arrowheads flip outside automatically;
+   *   - radius dims get ONE arrowhead at the arc plus a horizontal
+   *     shoulder landing into the text.
+   * `dashed` flips between solid (committed) and dashed (preview). */
   private addDimensionLines(
     group: THREE.Group, sketch: Sketch, dim: DimensionRender,
     color: number, dashed: boolean = false,
@@ -4835,19 +5010,79 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       line.renderOrder = 3;
       return line;
     };
-    if (dim.dimensionLine) {
+    // Half-width of the text clearance, in sketch units. The label is a
+    // CSS2D element sized in screen px; the ortho frustum half-height is
+    // orbitDistance, so px→world = 2·orbitDistance / canvasHeightPx.
+    // ~7.2 px/char at 12px monospace, plus a little padding.
+    const worldPerPx = (2 * this.orbitDistance) / (this.renderer?.domElement.clientHeight || 600);
+    const halfGap = (dim.text.length * 3.6 + 5) * worldPerPx;
+    if (dim.dimensionLine && dim.leader) {
+      // Radius/diameter leader (SolidWorks layout): radial segment whose
+      // extension passes through the curve's CENTER, arrowhead tip on the
+      // arc, then a short horizontal shoulder landing into the text. The
+      // bend point is placed first (label minus text clearance + shoulder,
+      // both pixel-sized), and the tangency point is re-derived from the
+      // bend so the radial segment is exactly radial.
+      const label = dim.labelAnchor;
+      const shoulderLen = this.orbitDistance * DIM_SHOULDER_FRAC;
+      let seg: { edge: { x: number; y: number }; bend: { x: number; y: number }; textEdge: { x: number; y: number } } | null = null;
+      if (dim.curve) {
+        const { center, radius } = dim.curve;
+        const distC = Math.hypot(label.x - center.x, label.y - center.y);
+        const outside = distC >= radius;
+        // Shoulder attaches on whichever side of the text faces the arc:
+        // toward the center for outside text, away from it for inside.
+        let side = Math.sign(label.x - center.x) || 1;
+        if (!outside) side = -side;
+        const textEdge = { x: label.x - side * halfGap, y: label.y };
+        const bend = { x: textEdge.x - side * shoulderLen, y: label.y };
+        const bLen = Math.hypot(bend.x - center.x, bend.y - center.y);
+        // Keep the bend on the text's side of the arc — if the shoulder
+        // would cross the curve, fall back to a straight radial leader.
+        const crossesArc = outside ? bLen <= radius : bLen >= radius;
+        if (!crossesArc && bLen > 1e-6 && distC > 1e-6) {
+          const edge = {
+            x: center.x + ((bend.x - center.x) / bLen) * radius,
+            y: center.y + ((bend.y - center.y) / bLen) * radius,
+          };
+          seg = { edge, bend, textEdge };
+        }
+      }
+      if (seg) {
+        group.add(mkLine(seg.edge, seg.bend));
+        group.add(mkLine(seg.bend, seg.textEdge));
+        if (!dashed) group.add(this.makeDimArrowhead(sketch, seg.edge, seg.bend, color));
+      } else {
+        // Straight trimmed radial from the stored tangency point.
+        const edge = dim.dimensionLine[0];
+        const dx = label.x - edge.x, dy = label.y - edge.y, L = Math.hypot(dx, dy) || 1;
+        const end = { x: label.x - (dx / L) * halfGap, y: label.y - (dy / L) * halfGap };
+        if (L > halfGap) group.add(mkLine(edge, end));
+        if (!dashed) group.add(this.makeDimArrowhead(sketch, edge, end, color));
+      }
+    } else if (dim.dimensionLine) {
       const [a, b] = dim.dimensionLine;
-      group.add(mkLine(a, b));
+      const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
+      const ux = dx / L, uy = dy / L;
+      // Break the dimension line around the text when the label rides it
+      // (committed dims only — the preview label carries its own pill).
+      const t = (dim.labelAnchor.x - a.x) * ux + (dim.labelAnchor.y - a.y) * uy;
+      if (!dashed && !dim.labelLeader && t > 0 && t < L) {
+        const t0 = t - halfGap, t1 = t + halfGap;
+        if (t0 > 1e-6) group.add(mkLine(a, { x: a.x + ux * t0, y: a.y + uy * t0 }));
+        if (t1 < L - 1e-6) group.add(mkLine({ x: a.x + ux * t1, y: a.y + uy * t1 }, b));
+      } else {
+        group.add(mkLine(a, b));
+      }
       // Skip arrows in dashed preview mode since the user is still placing.
       if (!dashed) {
-        if (dim.arrowsOutside) {
+        if (dim.arrowsOutside || dim.labelOutside) {
           // Exterior: arrowheads BEYOND each end pointing inward, with a short
           // stub of the dimension line out to each arrow's base.
-          const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
           const al = this.orbitDistance * DIM_ARROW_LEN_FRAC;
-          const ux = (dx / L) * al, uy = (dy / L) * al;
-          const outA = { x: a.x - ux, y: a.y - uy };
-          const outB = { x: b.x + ux, y: b.y + uy };
+          const sx = ux * al, sy = uy * al;
+          const outA = { x: a.x - sx, y: a.y - sy };
+          const outB = { x: b.x + sx, y: b.y + sy };
           group.add(mkLine(a, outA));
           group.add(mkLine(b, outB));
           group.add(this.makeDimArrowhead(sketch, a, outA, color));
@@ -4859,33 +5094,79 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         }
       }
     }
+    // Solid leader out to a label dragged past the dim line's span,
+    // trimmed short of the text.
+    if (dim.labelLeader) {
+      const [from, to] = dim.labelLeader;
+      const dx = to.x - from.x, dy = to.y - from.y, L = Math.hypot(dx, dy);
+      if (L > halfGap + 1e-6) {
+        group.add(mkLine(from, { x: to.x - (dx / L) * halfGap, y: to.y - (dy / L) * halfGap }));
+      }
+    }
     // Angle dimensions render an arc between the two lines (no chord, no vertex
-    // lines). Tessellate the arc into a polyline and put tangent arrowheads at
-    // each end pointing outward.
+    // lines), broken around the text, with tangent arrowheads at each end.
     if (dim.arc) {
       const { center, radius, startAngle, endAngle } = dim.arc;
-      const SEG = Math.max(8, Math.ceil(Math.abs(endAngle - startAngle) / (Math.PI / 32)));
       const onArc = (ang: number) => ({ x: center.x + radius * Math.cos(ang), y: center.y + radius * Math.sin(ang) });
-      const pts: THREE.Vector3[] = [];
-      for (let s = 0; s <= SEG; s++) pts.push(this.project2DTo3D(sketch, onArc(startAngle + (endAngle - startAngle) * (s / SEG))));
-      const geom = new THREE.BufferGeometry().setFromPoints(pts);
-      const mat = dashed
-        ? new THREE.LineDashedMaterial({ color, dashSize: 1.2, gapSize: 0.6, depthTest: false })
-        : new THREE.LineBasicMaterial({ color, depthTest: false });
-      const arcLine = new THREE.Line(geom, mat);
-      if (dashed) arcLine.computeLineDistances();
-      arcLine.renderOrder = 3;
-      group.add(arcLine);
+      const drawArc = (a0: number, a1: number) => {
+        if (Math.abs(a1 - a0) < 1e-6) return;
+        const SEG = Math.max(4, Math.ceil(Math.abs(a1 - a0) / (Math.PI / 32)));
+        const pts: THREE.Vector3[] = [];
+        for (let s = 0; s <= SEG; s++) pts.push(this.project2DTo3D(sketch, onArc(a0 + (a1 - a0) * (s / SEG))));
+        const geom = new THREE.BufferGeometry().setFromPoints(pts);
+        const mat = dashed
+          ? new THREE.LineDashedMaterial({ color, dashSize: 1.2, gapSize: 0.6, depthTest: false })
+          : new THREE.LineBasicMaterial({ color, depthTest: false });
+        const arcLine = new THREE.Line(geom, mat);
+        if (dashed) arcLine.computeLineDistances();
+        arcLine.renderOrder = 3;
+        group.add(arcLine);
+      };
+      const sweep = endAngle - startAngle;
+      // Gap around the label when it rides the measured span.
+      const labelAng = Math.atan2(dim.labelAnchor.y - center.y, dim.labelAnchor.x - center.x);
+      let rel = labelAng - startAngle;
+      while (rel > Math.PI) rel -= 2 * Math.PI;
+      while (rel < -Math.PI) rel += 2 * Math.PI;
+      const halfGapAng = Math.min(halfGap / Math.max(radius, 1e-6), Math.abs(sweep) * 0.45);
+      const onSpan = sweep >= 0 ? rel >= 0 && rel <= sweep : rel <= 0 && rel >= sweep;
+      if (!dashed && onSpan && !dim.arcExtension) {
+        const dir = sweep >= 0 ? 1 : -1;
+        drawArc(startAngle, startAngle + rel - dir * halfGapAng);
+        drawArc(startAngle + rel + dir * halfGapAng, endAngle);
+      } else {
+        drawArc(startAngle, endAngle);
+      }
+      // Label dragged outside the span: arc extension out to it, trimmed
+      // short of the text at the label end.
+      if (dim.arcExtension) {
+        const [from, to] = dim.arcExtension;
+        const extDir = to >= from ? 1 : -1;
+        if (Math.abs(to - from) > halfGapAng) drawArc(from, to - extDir * halfGapAng);
+      }
       if (!dashed) {
         // Inside: arrow base steps INTO the span (tip points outward at each
         // end). Outside: base steps beyond the span (tip points inward).
-        const e = (endAngle - startAngle) * 0.08;
-        const eps = dim.arrowsOutside ? -e : e;
+        const e = sweep * 0.08;
+        const eps = dim.arrowsOutside || dim.arcExtension ? -e : e;
         group.add(this.makeDimArrowhead(sketch, onArc(startAngle), onArc(startAngle + eps), color));
         group.add(this.makeDimArrowhead(sketch, onArc(endAngle), onArc(endAngle - eps), color));
       }
     }
-    for (const ext of dim.extensionLines) group.add(mkLine(ext[0], ext[1]));
+    // Witness (extension) lines: gap off the measured geometry at [0],
+    // slight overshoot past the dimension line at [1].
+    const extGap = this.orbitDistance * DIM_EXT_GAP_FRAC;
+    const extOver = this.orbitDistance * DIM_EXT_OVERSHOOT_FRAC;
+    for (const [g, e] of dim.extensionLines) {
+      const dx = e.x - g.x, dy = e.y - g.y, L = Math.hypot(dx, dy);
+      if (L < 1e-9) continue;
+      const ux = dx / L, uy = dy / L;
+      const gap = Math.min(extGap, L * 0.4);
+      group.add(mkLine(
+        { x: g.x + ux * gap, y: g.y + uy * gap },
+        { x: e.x + ux * extOver, y: e.y + uy * extOver },
+      ));
+    }
   }
 
   /** Build a small filled triangular arrowhead at `tip`, pointing away
@@ -4922,30 +5203,6 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     const mesh = new THREE.Mesh(geom, mat);
     mesh.renderOrder = 4;
     return mesh;
-  }
-
-  /** Build a small clickable handle (shown on a SELECTED dimension's arrow ends)
-   * that flips the arrowheads inside/outside on click (SolidWorks-style). */
-  private buildArrowHandleElement(constraintId: string): HTMLDivElement {
-    const div = document.createElement('div');
-    div.textContent = '⇄';
-    Object.assign(div.style, {
-      width: '14px', height: '14px', lineHeight: '14px', textAlign: 'center',
-      fontSize: '11px', color: '#1e1e1e', background: '#ffb74d',
-      border: '1px solid #1e1e1e', borderRadius: '50%',
-      cursor: 'pointer', userSelect: 'none', pointerEvents: 'auto',
-      transform: 'translate(-50%, -50%)',
-    });
-    div.title = 'Flip arrows inside/outside';
-    // Toggle on pointerup (not 'click'): preventDefault on pointerdown can
-    // suppress a synthetic click in some browsers. stopPropagation keeps the
-    // canvas/label from also reacting (which would deselect the dimension).
-    div.addEventListener('pointerdown', (ev) => ev.stopPropagation());
-    div.addEventListener('pointerup', (ev) => {
-      ev.stopPropagation();
-      this.zone.run(() => this.dimensionArrowsToggled.emit(constraintId));
-    });
-    return div;
   }
 
   /** Build the static, click-to-select, drag-to-reposition, dbl-click-
@@ -5104,24 +5361,6 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         const obj = new CSS2DObject(el);
         obj.position.copy(this.project2DTo3D(sketch, dim.labelAnchor));
         group.add(obj);
-        // SolidWorks-style arrow handles: when this dimension is SELECTED, place
-        // a small clickable handle at each arrow end. Clicking flips the
-        // arrowheads inside/outside via dimensionArrowsToggled.
-        if (this.selectedConstraintId() === dim.constraintId && !isEditing) {
-          const ends: Array<{ x: number; y: number }> = dim.dimensionLine
-            ? [dim.dimensionLine[0], dim.dimensionLine[1]]
-            : dim.arc
-              ? [
-                  { x: dim.arc.center.x + dim.arc.radius * Math.cos(dim.arc.startAngle), y: dim.arc.center.y + dim.arc.radius * Math.sin(dim.arc.startAngle) },
-                  { x: dim.arc.center.x + dim.arc.radius * Math.cos(dim.arc.endAngle), y: dim.arc.center.y + dim.arc.radius * Math.sin(dim.arc.endAngle) },
-                ]
-              : [];
-          for (const end of ends) {
-            const h = new CSS2DObject(this.buildArrowHandleElement(dim.constraintId));
-            h.position.copy(this.project2DTo3D(sketch, end));
-            group.add(h);
-          }
-        }
       }
       // In-progress Smart Dim preview — orange/dashed render of the
       // dimension that WOULD be committed at the current cursor.
@@ -5162,8 +5401,32 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // One flex container per entity; all badges for that entity sit inside
     // it, so spacing stays fixed in screen pixels (CSS gap) instead of
     // sketch units that overlap when zoomed in.
+    // REQ 907 — pending Smart-Dim datum reference feedback: when the armed
+    // datum is HIDDEN (no 3D visual to re-tint), draw its projected
+    // reference line in the sketch, orange, so the pick isn't blind. A
+    // visible datum gets its 3D plane/axis highlighted instead
+    // (recolorDatums).
+    const pendingDim = this.pendingDimDatumId();
+    if (isActive && pendingDim && !this.datumMeshes.has(pendingDim)) {
+      const cand = this.sketchCandidates().find(c => c.id === `cand-e-datum:${pendingDim}`);
+      const a = cand?.points[0];
+      const b = cand?.points[cand.points.length - 1];
+      if (a && b) {
+        const geo = new THREE.BufferGeometry().setFromPoints([
+          this.project2DTo3D(sketch, a), this.project2DTo3D(sketch, b),
+        ]);
+        group.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
+          color: CadViewerComponent.DATUM_PENDING_DIM_COLOR, transparent: true, opacity: 0.9,
+        })));
+      }
+    }
     if (isActive) {
-      for (const entityId of selectedSet) {
+      // REQ 908: entities carrying a conflicting constraint show their
+      // badges even when NOT selected — an over-constrained sketch must be
+      // diagnosable from the canvas without hunting via selection.
+      const badgeIds = new Set<string>(selectedSet);
+      for (const id of this.conflictEntityIds()) badgeIds.add(id);
+      for (const entityId of badgeIds) {
         const g = constraintIconsForEntity(sketch.state, entityId);
         if (!g) continue;
         const container = this.buildConstraintIconCluster(g);
@@ -5310,13 +5573,19 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * or via the X button in the constraint-list panel. */
   private buildConstraintIconElement(icon: ConstraintIcon): HTMLDivElement {
     const isSelected = this.selectedConstraintId() === icon.constraintId;
-    const baseBg = isSelected ? 'rgba(255, 152, 0, 0.95)' : 'rgba(66, 165, 245, 0.92)';
-    const hoverBg = isSelected ? 'rgba(255, 152, 0, 0.95)' : 'rgba(102, 184, 248, 1)';
+    // REQ 908: a conflicting constraint's badge is red — selection still
+    // shows via the orange border so Delete-targeting stays visible.
+    const isConflict = this.conflictConstraintIds().has(icon.constraintId);
+    const baseBg = isConflict ? 'rgba(239, 83, 80, 0.95)'
+      : isSelected ? 'rgba(255, 152, 0, 0.95)' : 'rgba(66, 165, 245, 0.92)';
+    const hoverBg = isConflict ? 'rgba(244, 116, 113, 1)'
+      : isSelected ? 'rgba(255, 152, 0, 0.95)' : 'rgba(102, 184, 248, 1)';
     const div = document.createElement('div');
     div.textContent = icon.symbol;
-    div.title = isSelected
+    const conflictNote = isConflict ? ' — CONFLICTING: this relation over-constrains the sketch' : '';
+    div.title = (isSelected
       ? `${icon.label} — press Delete to remove`
-      : `${icon.label} — click to select`;
+      : `${icon.label} — click to select`) + conflictNote;
     div.dataset['constraintId'] = icon.constraintId;
     Object.assign(div.style, {
       width: '18px',

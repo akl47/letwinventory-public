@@ -64,7 +64,7 @@ function makeStub(fuseSolidCount) {
     calls: [],
     call(method, params) {
       this.calls.push({ method, params });
-      if (method === 'buildBoolean') {
+      if (method === 'buildBoolean' || method === 'buildFuseMany') {
         const solids = Array.from({ length: fuseSolidCount }, (_, i) => ({
           brepBytes: `solid-${i}`, centroid: [i, 0, 0], volume: 100 - i,
           faces: fakeFaces(`solid${i}`), topology: fakeTopo(`solid${i}`),

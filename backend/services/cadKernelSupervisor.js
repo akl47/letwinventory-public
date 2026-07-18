@@ -1,10 +1,11 @@
 'use strict';
 
-// Supervisor for the Rust CAD kernel sidecar.
+// Supervisor for the C++ CAD kernel sidecar.
 //
 // Opt-in: set `CAD_KERNEL_AUTOSPAWN=1` to have the Node server own the
-// kernel's lifecycle. Default (off) preserves the manual `cargo run` dev
-// workflow. Production deployments should turn this on.
+// kernel's lifecycle. Default (off) is the normal mode — dev and prod both
+// run the kernel as its own Docker service (compose-managed lifecycle with
+// `restart: unless-stopped`); autospawn exists for bare-metal setups only.
 //
 // What it does:
 //   - Spawns `cad-kernel` (compiled binary) as a child process.
@@ -17,7 +18,7 @@
 //
 // Binary location:
 //   1. `CAD_KERNEL_BIN` if set (absolute path)
-//   2. otherwise `<repo-root>/cad-kernel/target/release/cad-kernel`
+//   2. otherwise `<repo-root>/cad-kernel-cpp/build/cad-kernel`
 //
 // The kernel listens on TCP `127.0.0.1:9876` by default (override via
 // `CAD_KERNEL_ADDR=0.0.0.0:9876` when the kernel must be reachable from a
@@ -83,9 +84,9 @@ class CadKernelSupervisor {
       console.error('[CadKernelSupervisor] CAD_KERNEL_BIN=', process.env.CAD_KERNEL_BIN, 'does not exist');
       return null;
     }
-    const candidate = path.resolve(__dirname, '..', '..', 'cad-kernel', 'target', 'release', 'cad-kernel');
+    const candidate = path.resolve(__dirname, '..', '..', 'cad-kernel-cpp', 'build', 'cad-kernel');
     if (fs.existsSync(candidate)) return candidate;
-    console.error('[CadKernelSupervisor] kernel binary not at', candidate, '— build it with `cargo build --release` from cad-kernel/');
+    console.error('[CadKernelSupervisor] kernel binary not at', candidate, '— build it with `cmake -S . -B build && cmake --build build` from cad-kernel-cpp/');
     return null;
   }
 

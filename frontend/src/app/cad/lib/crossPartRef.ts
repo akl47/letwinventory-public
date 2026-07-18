@@ -11,6 +11,16 @@ import type { ExternalRef } from './types';
 export type CrossPartExternalRef = Extract<ExternalRef, { scope: 'cross-part' }>;
 export type CrossPartFallback = NonNullable<CrossPartExternalRef['fallback']>;
 
+/** REQ 915 — sentinel `sourceInstanceId` marking a cross-part ref whose source
+ * is the defining assembly's own SKELETON sketch (not a component instance).
+ * Mirrors the backend constant in assemblyRegenService.js. */
+export const SKELETON_INSTANCE_ID = '__skeleton__';
+
+/** True when a cross-part ref sources the assembly skeleton. */
+export function isSkeletonRef(er: ExternalRef | undefined | null): boolean {
+  return !!er && er.scope === 'cross-part' && er.sourceInstanceId === SKELETON_INSTANCE_ID;
+}
+
 /** Split a composed-assembly scoped id `instanceId::rawId` (rawId is the source
  * part's own face/edge id). Returns null for an unscoped (same-part) id. */
 export function parseScopedId(scopedId: string): { instanceId: string; rawId: string } | null {

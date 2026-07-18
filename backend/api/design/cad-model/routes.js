@@ -2,6 +2,13 @@ const router = require('express').Router();
 const controller = require('./controller');
 const checkToken = require('../../../middleware/checkToken.js');
 const checkPermission = require('../../../middleware/checkPermission');
+const { rateLimit } = require('../../../middleware/rateLimit');
+
+// Kernel-driving endpoints each cost a full OCCT pass — bound them per user
+// (REQ 903). Regenerate gets the loosest limit (the editor calls it on every
+// debounced save); diff/preview/export are occasional interactive actions.
+const regenLimit = rateLimit('cad-regenerate', { max: 60, windowMs: 60_000 });
+const kernelLimit = rateLimit('cad-kernel-op', { max: 10, windowMs: 60_000 });
 
 router.get('/kernel/status', checkToken, checkPermission('cad', 'read'), controller.kernelStatus);
 router.get('/parts-with-cad', checkToken, checkPermission('cad', 'read'), controller.listPartsWithCad);
@@ -30,6 +37,7 @@ router.get('/:id/history', checkToken, checkPermission('cad', 'read'), controlle
 router.post('/:id/checkout', checkToken, checkPermission('cad', 'write'), controller.checkout);
 router.post('/:id/checkin', checkToken, checkPermission('cad', 'write'), controller.checkin);
 router.post('/:id/undo-checkout', checkToken, checkPermission('cad', 'write'), controller.undoCheckout);
+router.post('/:id/renew-lock', checkToken, checkPermission('cad', 'write'), controller.renewLock);
 router.post('/:id/force-unlock', checkToken, checkPermission('cad', 'approve'), controller.forceUnlock);
 router.get('/:id/commits', checkToken, checkPermission('cad', 'read'), controller.getCommits);
 router.get('/:id/working-diff', checkToken, checkPermission('cad', 'read'), controller.getWorkingDiff);
@@ -43,7 +51,7 @@ router.delete('/:id/branches/:name', checkToken, checkPermission('cad', 'write')
 router.post('/:id/cherry-pick', checkToken, checkPermission('cad', 'write'), controller.cherryPick);
 router.post('/:id/rebase', checkToken, checkPermission('cad', 'write'), controller.rebaseBranch);
 router.post('/:id/reconcile', checkToken, checkPermission('cad', 'write'), controller.reconcileBranch);
-router.post('/:id/reconcile/preview', checkToken, checkPermission('cad', 'read'), controller.reconcilePreview);
+router.post('/:id/reconcile/preview', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.reconcilePreview);
 // Change LIST a merge would consider (assembly rows; empty for part models).
 router.get('/:id/reconcile/preview', checkToken, checkPermission('cad', 'read'), controller.reconcileChanges);
 
@@ -53,7 +61,7 @@ router.post('/:id/workflow', checkToken, checkPermission('cad', 'read'), control
 
 // VCS Phase 3: structural + 3D diff between two commits.
 router.get('/:id/commits/:a/diff/:b', checkToken, checkPermission('cad', 'read'), controller.getCommitDiff);
-router.post('/:id/commits/:a/diff/:b/regen', checkToken, checkPermission('cad', 'read'), controller.getBodyDiff3D);
+router.post('/:id/commits/:a/diff/:b/regen', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.getBodyDiff3D);
 router.get('/:id/commits/:a/diff/:b/faces', checkToken, checkPermission('cad', 'read'), controller.getFaceDiff);
 router.get('/:id/commits/:hash/geometry', checkToken, checkPermission('cad', 'read'), controller.getCommitGeometry);
 router.get('/:id/commits/:hash/doc', checkToken, checkPermission('cad', 'read'), controller.getCommitDoc);
@@ -65,7 +73,7 @@ router.post('/:id/default-view', checkToken, checkPermission('cad', 'write'), co
 // Phase 1 — server-side regeneration. Walks the feature tree, hits the
 // Postgres-backed BRep cache, falls through to the Rust kernel on miss.
 // Returns tessellated face meshes for the viewer to render.
-router.post('/:id/regenerate', checkToken, checkPermission('cad', 'read'), controller.regenerate);
-router.get('/:id/export/step', checkToken, checkPermission('cad', 'read'), controller.exportStep);
+router.post('/:id/regenerate', checkToken, checkPermission('cad', 'read'), regenLimit, controller.regenerate);
+router.get('/:id/export/step', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.exportStep);
 
 module.exports = router;

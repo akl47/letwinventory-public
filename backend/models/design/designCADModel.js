@@ -39,6 +39,10 @@ module.exports = (sequelize, DataTypes) => {
     branchName: { type: DataTypes.STRING(255), allowNull: false, defaultValue: 'main' },
     baseCommitHash: { type: DataTypes.STRING(64), allowNull: true },
     dirty: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    // Last CONTENT-changing save (featureTree/sketchDoc/equations). Unlike
+    // updatedAt it ignores renames, lock heartbeats, and default-view saves —
+    // the basis for the stale uncommitted-changes warning (REQ 877).
+    lastContentSavedAt: { type: DataTypes.DATE, allowNull: true },
     lockedByUserID: { type: DataTypes.INTEGER, allowNull: true },
     lockedAt: { type: DataTypes.DATE, allowNull: true },
     lockExpiresAt: { type: DataTypes.DATE, allowNull: true },

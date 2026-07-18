@@ -146,13 +146,36 @@ const { applyProjectionToSketchDoc } = require('./cadProjection');
 //    (part 586: negative volume → faces on the wrong side/missing). Now the
 //    canonicalized shape is kept only when it preserves the signed volume, else
 //    the un-canonicalized shape is used. Kernel cpp-10 deployed+verified first.
-const NAMING_VERSION = 45;  // matches NAMING_SCHEMA_VERSION in cad-kernel-cpp/src/main.cpp — bump together with kernel
+// 46: sweep transition mode Transformed → RightCorner (kernel). Sharp-cornered
+//    paths previously collapsed the post-corner leg into a zero-thickness sheet;
+//    RightCorner mitres the junction. Bump invalidates degenerate sweep rows.
+// 47: kernel heals sweeps whose profile exactly reaches a path bend's center
+//    of curvature (horn-torus elbow — BRepMesh strip-meshed it as a flat
+//    chamfer): surface swapped to spindle side by 1e-12 relative, which the
+//    mesher handles. Onshape parity. Bump invalidates v46 strip-mesh rows.
+// 48: pinched-elbow sweeps fully workable (kernel): sweep relocates the tube
+//    seam off the pinch (degenerate seam caused strip meshes + offset
+//    segfaults), and buildShell gives near-exact pinched tori 0.1 µm of
+//    clearance so hollowing succeeds. Invalidates v47 sweep rows.
+const NAMING_VERSION = 48;  // matches NAMING_SCHEMA_VERSION in cad-kernel-cpp/src/main.cpp — bump together with kernel
 
 // Sentinel distance for Through All. Picked to comfortably exceed any
 // reasonable model dimension without overflowing OCCT's tolerance
 // budget. When subtractive booleans land, Through All will be trimmed
 // against the body instead of relying on this constant.
 const THROUGH_ALL_DISTANCE = 10000;
+
+// REQ 878 — in-process body-volume cache keyed by body.paramHash (a scalar
+// per body state; a restart just recomputes once). Capped at 1000 entries.
+const _bodyVolumeCache = new Map();
+
+// REQ 880 — per-regen stage timing. Stages push rows onto the model-scoped
+// collector (models are per-request Sequelize instances, so concurrent regens
+// don't interleave); regenerateModel prints one summary table at the end.
+function _stat(model, featureId, stage, outcome, ms, note) {
+  if (!model.__regenStats) return;
+  model.__regenStats.push({ featureId, stage, outcome, ms, note: note || '' });
+}
 
 /**
  * @param {object} model    a DesignCADModel Sequelize instance (with featureTree+sketchDoc)
@@ -238,21 +261,27 @@ function _buildExternalEdges(sketchDoc, externalRefResolver) {
 async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollbackBeforeIndex, includeBodyBreps, externalRefResolver, configurationId } = {}) {
   const client = kernelClient || cadKernelClient.getDefaultClient();
   const dbClient = db || global.db;
+  // REQ 880 — per-regen stage timing collector; summary printed at the end.
+  const _regenStart = Date.now();
+  model.__regenStats = [];
   // Naming-schema guard: DesignBRepCache rows are keyed by this module's
   // NAMING_VERSION constant, but the geometry actually comes from whatever
   // kernel binary is running. If a stale kernel (older NAMING_SCHEMA_VERSION)
   // serves a regen after a backend bump, its old-schema output gets cached
   // under the NEW version and poisons the cache for as long as the rows stay
   // warm (hits bump lastAccessedAt, defeating TTL eviction). Fail fast with an
-  // actionable error instead. Tolerant by design: mocked clients (tests) and
-  // down kernels skip the check — a down kernel fails on its first real call
-  // anyway, and mocks don't report a numeric namingSchemaVersion.
+  // actionable error instead. A kernel that answers ping WITHOUT a numeric
+  // namingSchemaVersion is treated as a hard mismatch outside tests (REQ 903):
+  // that's an old/foreign binary whose output would poison the cache under
+  // the current version. Down kernels skip the check — the first real call
+  // fails anyway. Test mocks (NODE_ENV=test) stay exempt.
   if (client) {
     try {
       const pong = await client.call('ping', {}, { timeoutMs: 4000 });
       const kernelNaming = pong && pong.namingSchemaVersion;
-      if (typeof kernelNaming === 'number' && kernelNaming !== NAMING_VERSION) {
-        throw new Error(`CAD kernel naming schema v${kernelNaming} does not match backend v${NAMING_VERSION} — restart/rebuild the cad-kernel container before regenerating (mismatched output would poison the BRep cache).`);
+      const missing = typeof kernelNaming !== 'number' && process.env.NODE_ENV !== 'test';
+      if (missing || (typeof kernelNaming === 'number' && kernelNaming !== NAMING_VERSION)) {
+        throw new Error(`CAD kernel naming schema v${typeof kernelNaming === 'number' ? kernelNaming : 'unknown'} does not match backend v${NAMING_VERSION} — restart/rebuild the cad-kernel container before regenerating (mismatched output would poison the BRep cache).`);
       }
     } catch (err) {
       if (/naming schema/.test(err.message)) throw err;
@@ -575,6 +604,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
     }
 
     let result;
+    const _featStart = Date.now();
     try {
       console.log(`[cadRegen] dispatching feature ${feature.id} type=${feature.type}`);
       // Convert Entities live link: re-project every projected sketch
@@ -692,6 +722,8 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
             topology: _scopeTopology(rg.topology, bodyId),
           };
           body.centroid = _approxCentroidFromFaces(body.faces);
+          // REQ 892 — a freshly-seeded body's faces are all this feature's.
+          body.faceOwners = _carryFaceOwners([], null, body.faces, feature.id);
           bodies.push(body);
           for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
           for (const f of body.faces || []) {
@@ -705,6 +737,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
             topology: body.topology,
             cached: rg.cached,
             bodyParamHash: body.paramHash,
+            faceOwners: body.faceOwners,
           };
           results.push(seedResult);
           emit(seedResult);
@@ -768,6 +801,8 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
         // proxy for identity matching and dirt cheap to compute here
         // vs an extra kernel round-trip.
         body.centroid = _approxCentroidFromFaces(body.faces);
+        // REQ 892 — first feature into this body owns every face.
+        body.faceOwners = _carryFaceOwners([], null, body.faces, feature.id);
         allCached = prism.cached;
         // Index + emit single-body result.
         for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
@@ -785,6 +820,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
           // perBodyGeometry updates when an event echoes the same body
           // state it already has (e.g. cache-hit regen).
           bodyParamHash: body.paramHash,
+          faceOwners: body.faceOwners,
         };
       } else {
         // Compose this feature into the existing body. SolidWorks-style
@@ -798,6 +834,10 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
         // result solids back to "the same body" (preserving its id) vs.
         // identifying which are new pieces from this feature.
         const oldCentroid = body.centroid || null;
+        // REQ 892 — snapshot the pre-op faces + owners so ownership can be
+        // carried onto whichever result faces geometrically match them.
+        const prevFaces = body.faces || [];
+        const prevOwners = body.faceOwners || null;
         const composed = await _composeIntoBody({
           feature,
           prism,
@@ -827,6 +867,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
             body.faces = _scopeFaceBoundaryEdges(composed.faces || [], body.id);
             body.topology = _scopeTopology(composed.topology || { vertices: [], edges: [] }, body.id);
             body.centroid = _approxCentroidFromFaces(body.faces);
+            body.faceOwners = _carryFaceOwners(prevFaces, prevOwners, body.faces, feature.id);
             for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
             for (const f of body.faces || []) {
               const plane = _faceRepresentativePlane(f);
@@ -839,6 +880,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
               topology: body.topology,
               cached: allCached,
               bodyParamHash: body.paramHash,
+              faceOwners: body.faceOwners,
             };
             results.push(result);
             emit(result);
@@ -896,6 +938,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
         body.centroid = primary.centroid
           ? [primary.centroid[0], primary.centroid[1], primary.centroid[2]]
           : _approxCentroidFromFaces(body.faces);
+        body.faceOwners = _carryFaceOwners(prevFaces, prevOwners, body.faces, feature.id);
         for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
         for (const f of body.faces || []) {
           const plane = _faceRepresentativePlane(f);
@@ -908,6 +951,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
           topology: body.topology,
           cached: allCached,
           bodyParamHash: body.paramHash,
+          faceOwners: body.faceOwners,
         };
         results.push(result);
         emit(result);
@@ -936,6 +980,10 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
               ? [piece.centroid[0], piece.centroid[1], piece.centroid[2]]
               : null,
           };
+          // REQ 892 — split fragments inherit ownership from the parent
+          // body's pre-op faces (a severed half's walls were still made by
+          // their original features); genuinely new faces → this feature.
+          newBody.faceOwners = _carryFaceOwners(prevFaces, prevOwners, newBody.faces, feature.id);
           bodies.push(newBody);
           for (const v of newBody.topology.vertices || []) vertexMap.set(v.id, v.position);
           for (const f of newBody.faces || []) {
@@ -949,6 +997,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
             topology: newBody.topology,
             cached: allCached,
             bodyParamHash: newBody.paramHash,
+            faceOwners: newBody.faceOwners,
           };
           results.push(pieceResult);
           emit(pieceResult);
@@ -997,6 +1046,11 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
       errors.push(`feature ${feature.id}: ${err.message}`);
       results.push(result);
       emit(result);
+    } finally {
+      // REQ 880 — feature wall-clock (runs on success, error, AND the
+      // compose path's `continue`). Stage rows above attribute the time.
+      _stat(model, feature.id, 'feature', result && result.error ? 'error' : 'done',
+        Date.now() - _featStart, `type=${feature.type}`);
     }
   }
   // Capture the LAST feature's after-snapshot now the loop is done.
@@ -1029,17 +1083,37 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
   // Exact OCCT volume per body. The editor footer shows this instead of
   // integrating the tessellated mesh (the chord approximation of curved
   // faces under-counts the true volume). Computed from each body's FINAL
-  // BRep so it's uniform across every op (extrude / boolean / shell / …)
-  // and cache-agnostic. Non-fatal: a failure just leaves volume undefined,
-  // and the frontend omits that body from the total (no mesh fallback).
+  // BRep so it's uniform across every op (extrude / boolean / shell / …).
+  // REQ 878 — cached by the body's paramHash: the volume is fully
+  // determined by the body state, and re-shipping a large BRep to the
+  // kernel on every (even fully-cached) regen was pure overhead.
+  // Non-fatal: a failure just leaves volume undefined, and the frontend
+  // omits that body from the total (no mesh fallback).
   if (client) {
     for (const b of bodies) {
       if (!b.brep) continue;
+      const volKey = b.paramHash || null;
+      if (volKey && _bodyVolumeCache.has(volKey)) {
+        b.volume = _bodyVolumeCache.get(volKey);
+        _stat(model, b.id, 'bodyVolume', 'HIT', 0);
+        continue;
+      }
+      const _volStart = Date.now();
       try {
         const mp = await client.call('bodyVolume', {
           aBrep: Buffer.isBuffer(b.brep) ? b.brep.toString('base64') : b.brep,
         });
-        if (mp && Number.isFinite(mp.volume)) b.volume = mp.volume;
+        _stat(model, b.id, 'bodyVolume', 'MISS', Date.now() - _volStart);
+        if (mp && Number.isFinite(mp.volume)) {
+          b.volume = mp.volume;
+          if (volKey) {
+            _bodyVolumeCache.set(volKey, mp.volume);
+            // Simple size cap — evict oldest insertion order.
+            if (_bodyVolumeCache.size > 1000) {
+              _bodyVolumeCache.delete(_bodyVolumeCache.keys().next().value);
+            }
+          }
+        }
       } catch (err) {
         console.warn(`[cadRegen] bodyVolume failed for ${b.id}: ${err.message || err}`);
       }
@@ -1066,6 +1140,22 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
       ? { id: b.id, name: null, brep: b.brep, volume: b.volume }
       : { id: b.id, name: null, volume: b.volume }
   ));
+
+  // REQ 880 — one summary table per regen: every feature's wall-clock plus
+  // each cache-touching stage's outcome, so a slow regen attributes to a
+  // specific feature + stage (pair with the kernel's [kernel-timing] lines
+  // for the intra-op breakdown).
+  {
+    const stats = model.__regenStats || [];
+    const totalMs = Date.now() - _regenStart;
+    const misses = stats.filter(s => s.outcome === 'MISS').length;
+    const hits = stats.filter(s => s.outcome === 'HIT').length;
+    console.log(`[cadRegen] ── summary model=${model.id} total=${totalMs}ms cacheHits=${hits} cacheMisses=${misses} ──`);
+    for (const s of stats) {
+      console.log(`[cadRegen]   ${String(s.featureId).padEnd(16)} ${s.stage.padEnd(18)} ${String(s.outcome).padEnd(5)} ${String(s.ms).padStart(7)}ms  ${s.note}`);
+    }
+    delete model.__regenStats;
+  }
 
   return { features: results, errors, bodies: bodyList, kernelBuild, danglingSketchIds, sketchHostFaces };
 }
@@ -1442,10 +1532,12 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
       mergedTopology.edges.push(...scopedTopo.edges);
       regionBreps.push(brep);
       regionResults.push({ ri, brep, faces: scopedFaces, topology: scopedTopo, paramHash, cached: true });
+      _stat(model, feature.id, `region:${ri}`, 'HIT', 0);
       continue;
     }
 
     allCached = false;
+    const _regionStart = Date.now();
     // Attach the heavy dir-2 up-to BREP(s) to the payload now (kept out of the
     // cache key above). The kernel caps the dir-2 prism against them.
     const direction2Payload = direction2
@@ -1498,6 +1590,7 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
     mergedTopology.edges.push(...scopedTopo.edges);
     regionBreps.push(rpc.brepBytes || '');
     regionResults.push({ ri, brep: rpc.brepBytes || '', faces: scopedFaces, topology: scopedTopo, paramHash, cached: false });
+    _stat(model, feature.id, `region:${ri}`, 'MISS', Date.now() - _regionStart, 'buildExtrude');
   }
 
   // Every selected region failed (or was out of range) — there is no geometry
@@ -1519,17 +1612,76 @@ async function _regenerateExtrude(feature, sketchDoc, model, client, dbClient, v
   // solid; genuinely disjoint regions stay separate. The seed path uses
   // this to make one body per SOLID (merge on) instead of one per region.
   let fusedSolids = null;
-  for (let i = 1; i < regionBreps.length; i++) {
-    const fused = await client.call('buildBoolean', {
-      featureId: `${feature.id}#fuse${i}`,
-      op: 'fuse',
-      aBrep: prismBrep,
-      bBrep: regionBreps[i],
-    });
-    prismBrep = fused.brepBytes;
-    fusedSolids = Array.isArray(fused.solids) && fused.solids.length > 0 ? fused.solids : null;
-  }
   const featureParamHash = _hashParams({ regions: regionParamHashes });
+  if (regionBreps.length > 1) {
+    // The fused prism is fully determined by the set (and order) of region
+    // prisms, i.e. `featureParamHash`. Cache it — otherwise the N-1 progressive
+    // fuse kernel calls re-run on EVERY regen even when every region prism is
+    // cached, dominating regen time for text (a 9-glyph cut fused 8× at ~1s
+    // each). Keyed like the per-region entries but scoped `#fused`.
+    const fuseScope = `${feature.id}#fused`;
+    const cachedFuse = await dbClient.DesignBRepCache.findOne({
+      where: {
+        cadModelID: model.id,
+        featureID: fuseScope,
+        paramHash: featureParamHash,
+        upstreamHash: '',  // union of regions — no upstream body dependency
+        namingVersion: NAMING_VERSION,
+      },
+    });
+    if (cachedFuse) {
+      cachedFuse.lastAccessedAt = new Date();
+      await cachedFuse.save();
+      prismBrep = Buffer.isBuffer(cachedFuse.brepBytes)
+        ? cachedFuse.brepBytes.toString('base64')
+        : Buffer.from(cachedFuse.brepBytes || '').toString('base64');
+      fusedSolids = (cachedFuse.tessellatedFaces && cachedFuse.tessellatedFaces.solids) || null;
+      _stat(model, feature.id, 'fuse', 'HIT', 0, `${regionBreps.length} regions`);
+    } else {
+      const _fuseStart = Date.now();
+      // REQ 878 — one multi-tool fuse instead of N-1 chained pairwise calls
+      // (each of which re-parsed and re-tessellated the growing accumulator).
+      // The featureId matches the legacy chain's FINAL call so per-solid face
+      // persistent names are unchanged. Falls back to the pairwise chain when
+      // the running kernel predates buildFuseMany (pre-cpp-11).
+      try {
+        const fused = await client.call('buildFuseMany', {
+          featureId: `${feature.id}#fuse${regionBreps.length - 1}`,
+          breps: regionBreps,
+          wantFaces: 'solids',
+        });
+        prismBrep = fused.brepBytes;
+        fusedSolids = Array.isArray(fused.solids) && fused.solids.length > 0 ? fused.solids : null;
+        _stat(model, feature.id, 'fuse', 'MISS', Date.now() - _fuseStart, `fuseMany ${regionBreps.length} regions`);
+      } catch (err) {
+        if (!/not implemented/i.test((err && err.message) || '')) throw err;
+        console.warn('[cadRegen] kernel lacks buildFuseMany — pairwise fallback (rebuild cad-kernel for cpp-11)');
+        for (let i = 1; i < regionBreps.length; i++) {
+          const fused = await client.call('buildBoolean', {
+            featureId: `${feature.id}#fuse${i}`,
+            op: 'fuse',
+            aBrep: prismBrep,
+            bBrep: regionBreps[i],
+          });
+          prismBrep = fused.brepBytes;
+          fusedSolids = Array.isArray(fused.solids) && fused.solids.length > 0 ? fused.solids : null;
+        }
+        _stat(model, feature.id, 'fuse', 'MISS', Date.now() - _fuseStart, `pairwise x${regionBreps.length - 1} (legacy kernel)`);
+      }
+      await dbClient.DesignBRepCache.upsert({
+        cadModelID: model.id,
+        featureID: fuseScope,
+        paramHash: featureParamHash,
+        upstreamHash: '',
+        brepBytes: Buffer.from(prismBrep || '', 'base64'),
+        // The fuse produces no new faces (per-region tessellation is cached
+        // separately); stash the solid decomposition the seed path needs.
+        tessellatedFaces: { faces: [], topology: { vertices: [], edges: [] }, solids: fusedSolids },
+        namingVersion: NAMING_VERSION,
+        lastAccessedAt: new Date(),
+      });
+    }
+  }
 
   return {
     merged: mergedFaces,
@@ -2157,6 +2309,7 @@ async function _dispatchEdgeBlend(feature, bodies, model, client, dbClient, resu
     throw new Error(`${kind} produced no solid — the operation likely failed (radius/distance too large for an edge).`);
   }
   const primary = solids[0];
+  const prevFaces = body.faces || [], prevOwners = body.faceOwners || null;  // REQ 892
   body.brep = primary.brepBytes || brep;
   body.paramHash = paramHash;
   body.faces = _scopeFaceBoundaryEdges(primary.faces || faces, body.id);
@@ -2164,6 +2317,9 @@ async function _dispatchEdgeBlend(feature, bodies, model, client, dbClient, resu
   body.centroid = primary.centroid
     ? [primary.centroid[0], primary.centroid[1], primary.centroid[2]]
     : _approxCentroidFromFaces(body.faces);
+  // REQ 892 — untouched faces keep their creators; the blend faces (and the
+  // trimmed flanks whose centroids moved) belong to this fillet/chamfer.
+  body.faceOwners = _carryFaceOwners(prevFaces, prevOwners, body.faces, feature.id);
   for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
   for (const f of body.faces || []) {
     const plane = _faceRepresentativePlane(f);
@@ -2176,6 +2332,7 @@ async function _dispatchEdgeBlend(feature, bodies, model, client, dbClient, resu
     topology: body.topology,
     cached: cachedFlag,
     bodyParamHash: body.paramHash,
+    faceOwners: body.faceOwners,
   };
   results.push(result);
   emit(result);
@@ -2363,6 +2520,10 @@ async function _dispatchPattern(feature, bodies, model, client, dbClient, result
   // `solids`. Scopes face boundary edge ids and topology under the
   // body id so different bodies don't collide on shared local
   // identifiers.
+  // REQ 892 — the source instance's untouched faces keep their creators;
+  // transformed copies (centroids moved) belong to the pattern feature,
+  // matching SolidWorks' attribution of pattern instances.
+  const prevFacesP = body.faces || [], prevOwnersP = body.faceOwners || null;
   const adoptSolid = (target, s, scopeId) => {
     target.brep = s.brepBytes || '';
     target.faces = _scopeFaceBoundaryEdges(s.faces || [], scopeId);
@@ -2370,6 +2531,7 @@ async function _dispatchPattern(feature, bodies, model, client, dbClient, result
     target.centroid = s.centroid
       ? [s.centroid[0], s.centroid[1], s.centroid[2]]
       : _approxCentroidFromFaces(target.faces);
+    target.faceOwners = _carryFaceOwners(prevFacesP, prevOwnersP, target.faces, feature.id);
   };
   // Stage 1: first solid replaces the source body.
   const firstSolid = solids[0];
@@ -2387,6 +2549,7 @@ async function _dispatchPattern(feature, bodies, model, client, dbClient, result
     topology: body.topology,
     cached: cachedFlag,
     bodyParamHash: body.paramHash,
+    faceOwners: body.faceOwners,
   };
   results.push(result);
   emit(result);
@@ -2409,6 +2572,7 @@ async function _dispatchPattern(feature, bodies, model, client, dbClient, result
       topology: newBody.topology,
       cached: cachedFlag,
       bodyParamHash: newBody.paramHash,
+      faceOwners: newBody.faceOwners,
     };
     results.push(extraResult);
     emit(extraResult);
@@ -2495,13 +2659,15 @@ async function _applyGeometryPattern({ feature, transforms, before, after, targe
   if (!brep) {
     throw new Error(`${feature.type}: geometry pattern produced no geometry — the instances may overlap destructively.`);
   }
+  const prevFacesG = targetBody.faces || [], prevOwnersG = targetBody.faceOwners || null;  // REQ 892
   targetBody.brep = brep;
   targetBody.faces = _scopeFaceBoundaryEdges(faces, targetBody.id);
   targetBody.topology = _scopeTopology(topology, targetBody.id);
   targetBody.centroid = _approxCentroidFromFaces(targetBody.faces);
   targetBody.paramHash = paramHash;
+  targetBody.faceOwners = _carryFaceOwners(prevFacesG, prevOwnersG, targetBody.faces, feature.id);
   indexBody(targetBody);
-  const r = { featureId: feature.id, bodyId: targetBody.id, faces: targetBody.faces, topology: targetBody.topology, cached: cachedFlag, bodyParamHash: targetBody.paramHash };
+  const r = { featureId: feature.id, bodyId: targetBody.id, faces: targetBody.faces, topology: targetBody.topology, cached: cachedFlag, bodyParamHash: targetBody.paramHash, faceOwners: targetBody.faceOwners };
   results.push(r); emit(r);
 }
 
@@ -2627,13 +2793,15 @@ async function _dispatchFeaturePattern(feature, bodies, model, client, dbClient,
     // to the seed's body even when geometrically disjoint (no body fan-out;
     // that's the body-mode behavior). The whole result BREP (a compound when
     // disjoint) replaces the body in place, preserving its id for downstream.
+    const prevFacesF = targetBody.faces || [], prevOwnersF = targetBody.faceOwners || null;  // REQ 892
     targetBody.brep = brep;
     targetBody.faces = _scopeFaceBoundaryEdges(faces, targetBody.id);
     targetBody.topology = _scopeTopology(topology, targetBody.id);
     targetBody.centroid = _approxCentroidFromFaces(targetBody.faces);
     targetBody.paramHash = paramHash;
+    targetBody.faceOwners = _carryFaceOwners(prevFacesF, prevOwnersF, targetBody.faces, feature.id);
     indexBody(targetBody);
-    const r = { featureId: feature.id, bodyId: targetBody.id, faces: targetBody.faces, topology: targetBody.topology, cached: cachedFlag, bodyParamHash: targetBody.paramHash };
+    const r = { featureId: feature.id, bodyId: targetBody.id, faces: targetBody.faces, topology: targetBody.topology, cached: cachedFlag, bodyParamHash: targetBody.paramHash, faceOwners: targetBody.faceOwners };
     results.push(r); emit(r);
     appliedAny = true;
   }
@@ -2725,6 +2893,15 @@ async function _dispatchCombine(feature, bodies, model, client, dbClient, result
   if (solids.length === 0) {
     throw new Error(`Combine ${feature.operation} produced no solid. The tool bodies may not intersect the target as required by the operation.`);
   }
+  // REQ 892 — combine merges tool bodies INTO the target, so ownership
+  // carries from the union of every operand's pre-op faces (a fused tool's
+  // walls were still made by the tool's own features).
+  const prevFacesC = [...(target.faces || [])];
+  const prevOwnersC = { ...(target.faceOwners || {}) };
+  for (const tool of tools) {
+    prevFacesC.push(...(tool.faces || []));
+    Object.assign(prevOwnersC, tool.faceOwners || {});
+  }
   // Remove the tool bodies from the roster — they're consumed by the op.
   // Do this BEFORE updating the target so the target's index stays
   // stable while we splice out tools.
@@ -2742,6 +2919,7 @@ async function _dispatchCombine(feature, bodies, model, client, dbClient, result
     target_.centroid = s.centroid
       ? [s.centroid[0], s.centroid[1], s.centroid[2]]
       : _approxCentroidFromFaces(target_.faces);
+    target_.faceOwners = _carryFaceOwners(prevFacesC, prevOwnersC, target_.faces, feature.id);
   };
   adoptSolid(target, solids[0], target.id);
   target.paramHash = paramHash;
@@ -2752,7 +2930,7 @@ async function _dispatchCombine(feature, bodies, model, client, dbClient, result
   }
   const result = {
     featureId: feature.id, bodyId: target.id, faces: target.faces, topology: target.topology,
-    cached: cachedFlag, bodyParamHash: target.paramHash,
+    cached: cachedFlag, bodyParamHash: target.paramHash, faceOwners: target.faceOwners,
   };
   results.push(result);
   emit(result);
@@ -2769,7 +2947,7 @@ async function _dispatchCombine(feature, bodies, model, client, dbClient, result
     }
     const extraResult = {
       featureId: feature.id, bodyId: newBody.id, faces: newBody.faces, topology: newBody.topology,
-      cached: cachedFlag, bodyParamHash: newBody.paramHash,
+      cached: cachedFlag, bodyParamHash: newBody.paramHash, faceOwners: newBody.faceOwners,
     };
     results.push(extraResult);
     emit(extraResult);
@@ -2831,6 +3009,9 @@ async function _dispatchMirrorBody(feature, bodies, model, client, dbClient, res
       target.topology = _scopeTopology(s.topology || rpc.topology, scopeId);
       target.centroid = s.centroid ? [s.centroid[0], s.centroid[1], s.centroid[2]] : _approxCentroidFromFaces(target.faces);
       target.paramHash = paramHash;
+      // REQ 892 — a mirrored body is entirely this feature's product (every
+      // centroid reflected, so nothing carries — matches SW attribution).
+      target.faceOwners = _carryFaceOwners([], null, target.faces, feature.id);
     };
     if (keep) {
       // Add the mirror as a new body next to the original.
@@ -2843,7 +3024,7 @@ async function _dispatchMirrorBody(feature, bodies, model, client, dbClient, res
         const plane = _faceRepresentativePlane(f);
         if (plane) faceMap.set(f.faceId, plane);
       }
-      const r = { featureId: feature.id, bodyId: newBody.id, faces: newBody.faces, topology: newBody.topology, cached: cachedFlag, bodyParamHash: newBody.paramHash };
+      const r = { featureId: feature.id, bodyId: newBody.id, faces: newBody.faces, topology: newBody.topology, cached: cachedFlag, bodyParamHash: newBody.paramHash, faceOwners: newBody.faceOwners };
       results.push(r); emit(r);
     } else {
       adoptInto(source, solids[0], source.id);
@@ -2852,7 +3033,7 @@ async function _dispatchMirrorBody(feature, bodies, model, client, dbClient, res
         const plane = _faceRepresentativePlane(f);
         if (plane) faceMap.set(f.faceId, plane);
       }
-      const r = { featureId: feature.id, bodyId: source.id, faces: source.faces, topology: source.topology, cached: cachedFlag, bodyParamHash: source.paramHash };
+      const r = { featureId: feature.id, bodyId: source.id, faces: source.faces, topology: source.topology, cached: cachedFlag, bodyParamHash: source.paramHash, faceOwners: source.faceOwners };
       results.push(r); emit(r);
     }
   }
@@ -2929,6 +3110,8 @@ async function _dispatchMoveCopyBody(feature, bodies, model, client, dbClient, r
       target.topology = _scopeTopology(s.topology || lastRpc.topology, scopeId);
       target.centroid = s.centroid ? [s.centroid[0], s.centroid[1], s.centroid[2]] : _approxCentroidFromFaces(target.faces);
       target.paramHash = paramHash;
+      // REQ 892 — everything moved, so the transform feature owns the result.
+      target.faceOwners = _carryFaceOwners([], null, target.faces, feature.id);
     };
     if (copy) {
       const newBodyId = `${feature.id}#mc#${bodyId}`;
@@ -2940,7 +3123,7 @@ async function _dispatchMoveCopyBody(feature, bodies, model, client, dbClient, r
         const plane = _faceRepresentativePlane(f);
         if (plane) faceMap.set(f.faceId, plane);
       }
-      const out = { featureId: feature.id, bodyId: newBody.id, faces: newBody.faces, topology: newBody.topology, cached: cachedFlag, bodyParamHash: newBody.paramHash };
+      const out = { featureId: feature.id, bodyId: newBody.id, faces: newBody.faces, topology: newBody.topology, cached: cachedFlag, bodyParamHash: newBody.paramHash, faceOwners: newBody.faceOwners };
       results.push(out); emit(out);
     } else {
       adoptInto(source, solids[0], source.id);
@@ -2949,7 +3132,7 @@ async function _dispatchMoveCopyBody(feature, bodies, model, client, dbClient, r
         const plane = _faceRepresentativePlane(f);
         if (plane) faceMap.set(f.faceId, plane);
       }
-      const out = { featureId: feature.id, bodyId: source.id, faces: source.faces, topology: source.topology, cached: cachedFlag, bodyParamHash: source.paramHash };
+      const out = { featureId: feature.id, bodyId: source.id, faces: source.faces, topology: source.topology, cached: cachedFlag, bodyParamHash: source.paramHash, faceOwners: source.faceOwners };
       results.push(out); emit(out);
     }
   }
@@ -3146,6 +3329,7 @@ async function _dispatchHole(feature, bodies, model, client, dbClient, results, 
   // into multiple bodies — drilling can split a body in theory but
   // not within v1 scope, so additional disjoint solids are ignored.
   const scopeId = target.id;
+  const prevFacesH = target.faces || [], prevOwnersH = target.faceOwners || null;  // REQ 892
   target.brep = solids[0].brepBytes || brep;
   target.faces = _scopeFaceBoundaryEdges(solids[0].faces || faces, scopeId);
   target.topology = _scopeTopology(solids[0].topology || topology, scopeId);
@@ -3153,6 +3337,9 @@ async function _dispatchHole(feature, bodies, model, client, dbClient, results, 
     ? [solids[0].centroid[0], solids[0].centroid[1], solids[0].centroid[2]]
     : _approxCentroidFromFaces(target.faces);
   target.paramHash = paramHash;
+  // REQ 892 — the bore/counterbore walls belong to the hole feature; the
+  // surrounding body faces keep their creators.
+  target.faceOwners = _carryFaceOwners(prevFacesH, prevOwnersH, target.faces, feature.id);
   for (const v of target.topology.vertices || []) vertexMap.set(v.id, v.position);
   for (const f of target.faces || []) {
     const plane = _faceRepresentativePlane(f);
@@ -3160,7 +3347,7 @@ async function _dispatchHole(feature, bodies, model, client, dbClient, results, 
   }
   const result = {
     featureId: feature.id, bodyId: target.id, faces: target.faces, topology: target.topology,
-    cached: cachedFlag, bodyParamHash: target.paramHash,
+    cached: cachedFlag, bodyParamHash: target.paramHash, faceOwners: target.faceOwners,
   };
   results.push(result);
   emit(result);
@@ -3266,6 +3453,7 @@ async function _dispatchShell(feature, bodies, model, client, dbClient, results,
     throw new Error('Shell produced no solid — most likely cause is thickness too large for the body (offset surfaces self-intersect). Try a smaller thickness.');
   }
   const primary = solids[0];
+  const prevFacesS = body.faces || [], prevOwnersS = body.faceOwners || null;  // REQ 892
   body.brep = primary.brepBytes || brep;
   body.paramHash = paramHash;
   body.faces = _scopeFaceBoundaryEdges(primary.faces || faces, body.id);
@@ -3273,6 +3461,9 @@ async function _dispatchShell(feature, bodies, model, client, dbClient, results,
   body.centroid = primary.centroid
     ? [primary.centroid[0], primary.centroid[1], primary.centroid[2]]
     : _approxCentroidFromFaces(body.faces);
+  // REQ 892 — surviving outer faces keep their creators; the inner offset
+  // walls (their centroids sit one wall-thickness away) belong to the shell.
+  body.faceOwners = _carryFaceOwners(prevFacesS, prevOwnersS, body.faces, feature.id);
   for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
   for (const f of body.faces || []) {
     const plane = _faceRepresentativePlane(f);
@@ -3285,6 +3476,7 @@ async function _dispatchShell(feature, bodies, model, client, dbClient, results,
     topology: body.topology,
     cached: cachedFlag,
     bodyParamHash: body.paramHash,
+    faceOwners: body.faceOwners,
   };
   results.push(result);
   emit(result);
@@ -3326,6 +3518,7 @@ async function _composeIntoBody({ feature, prism, body, model, client, dbClient 
   if (cached) {
     cached.lastAccessedAt = new Date();
     await cached.save();
+    _stat(model, feature.id, `compose:${body.id}`, 'HIT', 0, op);
     return {
       brep: Buffer.isBuffer(cached.brepBytes)
         ? cached.brepBytes.toString('base64')
@@ -3342,12 +3535,19 @@ async function _composeIntoBody({ feature, prism, body, model, client, dbClient 
     };
   }
 
+  const _composeStart = Date.now();
   const rpc = await client.call('buildBoolean', {
     featureId: `${feature.id}#body`,
     op,
     aBrep: body.brep,
     bBrep: prism.prismBrep,
+    // REQ 878 — only solids[].faces are consumed below; skipping the
+    // top-level whole-body tessellation halves kernel meshing work.
+    // Pre-cpp-11 kernels ignore the flag (they just return full faces).
+    wantFaces: 'solids',
   });
+  _stat(model, feature.id, `compose:${body.id}`, 'MISS', Date.now() - _composeStart,
+    `${op} bodyKB=${Math.round((body.brep || '').length / 1024)}`);
 
   await dbClient.DesignBRepCache.upsert({
     cadModelID: model.id,
@@ -3423,6 +3623,65 @@ function _faceRepresentativePlane(face) {
     centroid: [cx / vCount, cy / vCount, cz / vCount],
     normal:   [nor[0], nor[1], nor[2]],
   };
+}
+
+/**
+ * REQ 892 — SolidWorks-style face OWNERSHIP: which feature CREATED each face.
+ * The kernel re-tags every face of a boolean result under the composing
+ * feature (positional naming), so ownership is carried geometrically at each
+ * body-mutating step: a result face whose centroid + first-vertex normal match
+ * a face of the PREVIOUS body state inherits that face's owner; everything
+ * else (new walls, blend faces) is owned by the composing feature. Faces that
+ * merely got trimmed symmetrically (e.g. a top face turned into a ring by a
+ * concentric hole) keep their centroid/normal and stay with their creator —
+ * asymmetric trims shift the centroid past tolerance and fall to the composer,
+ * a documented approximation (the exact fix is kernel-side boolean history).
+ *
+ * Pure and per-regen: owners are keyed by the CURRENT walk's scoped faceIds
+ * and never cached — cache hits return the same faces, so recomputation is
+ * deterministic and dirt cheap (no kernel calls).
+ */
+function _carryFaceOwners(prevFaces, prevOwners, nextFaces, featureId) {
+  const owners = {};
+  const prev = [];
+  for (const f of prevFaces || []) {
+    const g = _faceRepresentativePlane(f);
+    if (g) prev.push({ id: f.faceId, c: g.centroid, n: g.normal, size: _faceBboxDiag(f) });
+  }
+  for (const f of nextFaces || []) {
+    let owner = featureId;
+    const g = _faceRepresentativePlane(f);
+    if (g && prev.length) {
+      let best = null, bestD = Infinity;
+      for (const p of prev) {
+        // Same-orientation gate. Curved faces average toward a stable
+        // first-vertex normal too (both sides tessellate the same surface),
+        // so a plain dot test holds for planes and cylinders alike.
+        const dot = p.n[0] * g.normal[0] + p.n[1] * g.normal[1] + p.n[2] * g.normal[2];
+        if (dot < 0.999) continue;
+        const d = Math.hypot(p.c[0] - g.centroid[0], p.c[1] - g.centroid[1], p.c[2] - g.centroid[2]);
+        if (d < bestD) { bestD = d; best = p; }
+      }
+      const tol = Math.max(1e-4, (best?.size || 0) * 0.01);
+      if (best && bestD <= tol) owner = (prevOwners && prevOwners[best.id]) || featureId;
+    }
+    owners[f.faceId] = owner;
+  }
+  return owners;
+}
+
+function _faceBboxDiag(face) {
+  const pos = face.positions;
+  if (!pos || pos.length < 3) return 0;
+  let minx = Infinity, miny = Infinity, minz = Infinity, maxx = -Infinity, maxy = -Infinity, maxz = -Infinity;
+  const vCount = (pos.length / 3) | 0;
+  for (let i = 0; i < vCount; i++) {
+    const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+    if (x < minx) minx = x; if (x > maxx) maxx = x;
+    if (y < miny) miny = y; if (y > maxy) maxy = y;
+    if (z < minz) minz = z; if (z > maxz) maxz = z;
+  }
+  return Math.hypot(maxx - minx, maxy - miny, maxz - minz);
 }
 
 /**
@@ -3929,6 +4188,16 @@ function _hashParams(obj) {
 }
 
 function _canonicalJson(value) {
+  // REQ 878 — quantize floats to 9 decimals (sub-nanometre in mm units)
+  // before hashing. Profile coords and sketch-plane vectors are derived
+  // from projections / tessellation centroids whose double-precision
+  // noise (~1e-12) otherwise produces distinct hashes for geometrically
+  // identical inputs, spuriously invalidating the whole downstream cache
+  // chain. 1e-9 is far below any real edit and far above FP drift.
+  // (`+ 0` normalizes -0 so 0 and -0 hash identically.)
+  if (typeof value === 'number' && Number.isFinite(value) && !Number.isInteger(value)) {
+    return JSON.stringify(Math.round(value * 1e9) / 1e9 + 0);
+  }
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) {
     return '[' + value.map(_canonicalJson).join(',') + ']';
@@ -3945,4 +4214,5 @@ module.exports = {
   NAMING_VERSION,
   _buildExternalEdges, // exported for unit tests (REQ 770/773)
   _danglingHostFaceWarnings, // exported for unit tests (host-face resolution / dangling detection)
+  _carryFaceOwners, // exported for unit tests (REQ 892 — face ownership carry)
 };

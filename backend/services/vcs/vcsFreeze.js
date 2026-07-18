@@ -29,14 +29,27 @@ function makeFreeze(binding) {
   }
 
   // Reconstruct renderable geometry from frozen metadata — stored objects only.
+  // A missing referenced object is REPOSITORY CORRUPTION and must fail loudly
+  // (REQ 901): silently defaulting reconstructed a released revision as empty
+  // geometry, which then exported/rendered as nothing with no error.
   async function loadFrozenGeometry(repo, frozen, db) {
     const meshObj = await vcs.getObject(repo, frozen.meshHash, db);
-    const snap = (meshObj && meshObj.content) || {};
+    if (!meshObj || meshObj.content == null) {
+      throw new Error(
+        `Frozen geometry is missing its mesh snapshot object (${frozen.meshHash}) — the repository is corrupted; restore from backup or re-release`,
+      );
+    }
+    const snap = meshObj.content;
     const brepByBody = new Map();
     for (const b of frozen.bodies || []) {
       if (!b.brepHash) continue;
       const o = await vcs.getObject(repo, b.brepHash, db);
-      if (o && o.bytes) brepByBody.set(b.bodyId, o.bytes.toString('utf8'));
+      if (!o || !o.bytes) {
+        throw new Error(
+          `Frozen geometry is missing the BRep object for body ${b.bodyId} (${b.brepHash}) — the repository is corrupted; restore from backup or re-release`,
+        );
+      }
+      brepByBody.set(b.bodyId, o.bytes.toString('utf8'));
     }
     return binding.reconstruct(snap, brepByBody);
   }

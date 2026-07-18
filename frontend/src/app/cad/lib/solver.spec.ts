@@ -198,6 +198,58 @@ describe('Sketch solver (CAD-012/013/014/033, REQ 558–561)', () => {
     expect(res.conflicting ?? []).toEqual([]);
   });
 
+  it('names redundant constraint ids on a SUCCESSFUL solve (REQ 887)', async () => {
+    // Two identical distance dims between the same points: consistent (same
+    // value), so the solve succeeds — but one of them is redundant.
+    const state: SketchState = {
+      entities: [pt('p1', 0, 0), pt('p2', 1, 0)],
+      constraints: [
+        c('c0', 'fixed', ['p1']),
+        c('c1', 'distance', ['p1', 'p2'], 5),
+        c('c2', 'distance', ['p1', 'p2'], 5),
+      ],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    expect(res.redundant && res.redundant.length).toBeTruthy();
+    for (const id of res.redundant!) {
+      expect(['c0', 'c1', 'c2']).toContain(id);
+    }
+    expect(res.redundant!.some(id => id === 'c1' || id === 'c2')).toBe(true);
+  });
+
+  it('reports no redundant ids on a minimally-constrained solve (REQ 887)', async () => {
+    const state: SketchState = {
+      entities: [pt('p1', 0, 0), pt('p2', 1, 0)],
+      constraints: [c('c0', 'fixed', ['p1']), c('c1', 'distance', ['p1', 'p2'], 5)],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    expect(res.redundant ?? []).toEqual([]);
+  });
+
+  it('drives a 3-POINT vertex angle [rayA, vertex, rayB] to the target (REQ 890)', async () => {
+    // Vertex and rayA fixed; rayB held at radius 5 from the vertex, so the
+    // angle is the single remaining DOF the dim must remove.
+    const state: SketchState = {
+      entities: [pt('v', 0, 0), pt('a', 10, 0), pt('b', 4, 3)],
+      constraints: [
+        c('f1', 'fixed', ['v']),
+        c('f2', 'fixed', ['a']),
+        c('d', 'distance', ['v', 'b'], 5),
+        c('ang', 'angle', ['a', 'v', 'b'], Math.PI / 3),
+      ],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const v = findPoint(res.state, 'v')!, a = findPoint(res.state, 'a')!, b = findPoint(res.state, 'b')!;
+    const r1x = a.x - v.x, r1y = a.y - v.y;
+    const r2x = b.x - v.x, r2y = b.y - v.y;
+    const angle = Math.abs(Math.atan2(r1x * r2y - r1y * r2x, r1x * r2x + r1y * r2y));
+    expect(angle).toBeCloseTo(Math.PI / 3, 5);
+    expect(Math.hypot(r2x, r2y)).toBeCloseTo(5, 5);
+  });
+
   it('construction points stay at their initial position regardless of solver pressure (REQ 560)', async () => {
     const state: SketchState = {
       entities: [pt('ref1', 3, 4, true), pt('p2', 0, 0)],

@@ -76,7 +76,7 @@ const LABEL: Record<ConstraintType, string> = {
 const HAS_VALUE = new Set<ConstraintType>([
   'distance', 'radius', 'diameter', 'angle',
   'horizontal-distance', 'vertical-distance', 'point-line-distance', 'arc-length',
-  'chord-distance',
+  'chord-distance', 'radial-distance',  // review B21 — radial gap is dimensional too
 ]);
 
 interface ConstraintRow {
@@ -95,17 +95,24 @@ interface ConstraintRow {
   imports: [CommonModule, MatIconModule, MatTooltipModule],
   template: `
     <div class="panel" data-testid="constraint-list">
-      <header>
+      <header class="collapsible" (click)="toggleCollapsed.emit()">
+        <mat-icon class="section-chevron">{{ collapsed() ? 'chevron_right' : 'expand_more' }}</mat-icon>
         <mat-icon>rule</mat-icon>
         <span class="title">Constraints</span>
         <span class="count">{{ rows().length }}</span>
       </header>
+      <ng-container *ngIf="!collapsed()">
       <ul *ngIf="rows().length; else emptyTpl">
         <li *ngFor="let r of rows(); trackBy: trackById"
             class="row"
             [class.selected]="r.id === selectedId()"
             [class.related]="relatedIds().has(r.id)"
             [class.conflict]="conflictIds().has(r.id)"
+            [class.redundant]="redundantIds().has(r.id)"
+            [class.dangling]="danglingIds().has(r.id)"
+            [attr.title]="danglingIds().has(r.id)
+              ? 'Dangling — the model edge this relation references no longer exists; the relation is not being enforced. Delete it or re-pick the reference.'
+              : redundantIds().has(r.id) ? 'Redundant — this relation is already fully determined by other constraints' : null"
             [attr.data-testid]="'constraint-row-' + r.id"
             (click)="onSelectRow(r)">
           <mat-icon class="row-icon" [svgIcon]="r.icon"></mat-icon>
@@ -129,12 +136,14 @@ interface ConstraintRow {
       <ng-template #emptyTpl>
         <p class="empty">No constraints in this sketch.</p>
       </ng-template>
+      </ng-container>
     </div>
   `,
   styles: [`
     .panel { display: flex; flex-direction: column; height: 100%; background: #2a2a3e; color: #e0e0e0; font-size: 12px; }
-    header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #444; font-weight: 600; }
+    header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #444; font-weight: 600; cursor: pointer; user-select: none; }
     header mat-icon { font-size: 18px; width: 18px; height: 18px; }
+    .section-chevron { opacity: 0.7; flex-shrink: 0; }
     .title { flex: 1; }
     .count { opacity: 0.6; font-family: monospace; }
     ul { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
@@ -149,6 +158,17 @@ interface ConstraintRow {
        related/selected so the conflict set is unmissable. */
     .row.conflict { background: rgba(239, 83, 80, 0.16); border-left-color: #ef5350; }
     .row.conflict .row-label { color: #ef9a9a; }
+    /* REQ 887 — a constraint the solver reported as REDUNDANT on a successful
+       solve (over-annotation, not an error). Orange + dashed border so it reads
+       as a warning, distinct from both conflict red and related amber. */
+    .row.redundant { border-left-style: dashed; border-left-color: #fb8c00; background: rgba(251, 140, 0, 0.10); }
+    .row.redundant .row-label { color: #ffcc80; }
+    .row.conflict.redundant { border-left-style: solid; border-left-color: #ef5350; }
+    /* REQ 897 — a relation whose model-edge reference no longer resolves.
+       Olive (SolidWorks' dangling color), and the label struck subtly so it
+       reads as "not being enforced" rather than merely warned-about. */
+    .row.dangling { border-left-color: #9e9d24; background: rgba(158, 157, 36, 0.12); }
+    .row.dangling .row-label { color: #d4d157; font-style: italic; }
     .row-icon { font-size: 18px; width: 18px; height: 18px; opacity: 0.85; flex-shrink: 0; }
     .row-body { display: flex; flex-direction: column; flex: 1; min-width: 0; }
     .row-label { font-weight: 500; }
@@ -167,6 +187,12 @@ export class CadConstraintListComponent {
   defaultUnit = input<Unit>('mm');
   /** REQ 860: constraint ids the solver named as conflicting — rows render red. */
   conflictIds = input<Set<string>>(new Set());
+  /** REQ 887: constraint ids the solver reported as redundant on the last
+   * successful solve — rows render orange/dashed (warning, not error). */
+  redundantIds = input<Set<string>>(new Set());
+  /** REQ 897: constraint ids whose external (model-edge) reference could not
+   * be resolved — the relation is silently unenforced. Olive, SW-style. */
+  danglingIds = input<Set<string>>(new Set());
   /** Currently-selected constraint id — when set, the matching row in this
    * panel gets a blue highlight bar. Parent owns selection state. */
   selectedId = input<string | null>(null);
@@ -175,9 +201,13 @@ export class CadConstraintListComponent {
    * on the geometry they just clicked. */
   selectedEntityIds = input<Set<string>>(new Set());
 
+  /** Parent-owned section collapse (the editor drives flex sizing off it). */
+  collapsed = input<boolean>(false);
+
   remove = output<string>();
   edit = output<{ id: string; value: number; unit: Unit | null }>();
   select = output<string>();
+  toggleCollapsed = output<void>();
 
   constructor() {
     // Register custom CAD icons. Idempotent — already registered if
@@ -206,6 +236,14 @@ export class CadConstraintListComponent {
       return true;
     }).map(c => {
       const targetLabels = c.targets.map(t => labelForEntity(entMap.get(t.entityId), t.entityId));
+      // Review B-edge-rows: a relation carrying an externalRef references a
+      // MODEL edge/center that has no sketch entity — surface it, or an
+      // angle/tangent/parallel-to-edge row reads like a one-target mistake.
+      if (c.externalRef) {
+        // `sub` only exists on the local-scope ref variant — narrow safely.
+        const sub = (c.externalRef as { sub?: string }).sub;
+        targetLabels.push(sub === 'center' ? 'model center' : 'model edge');
+      }
       const value = formatValue(c, defUnit);
       return {
         id: c.id,

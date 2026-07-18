@@ -26,10 +26,11 @@ import { extractClosedLoops } from '../../../cad/lib/profile';
 import { pickEntity, distanceToEntity, entityTouchesRect } from '../../../cad/lib/picking';
 import { inferLineEnd, inferAlignment, type InferenceResult, type PendingConstraint, type AlignmentRef } from '../../../cad/lib/inference';
 import { findEntity, isProjectedEntity } from '../../../cad/lib/types';
-import { previewDimension, previewPointToEdgeDimension, chooseTwoPointDimType, twoPointDimValue, type DimensionRender } from '../../../cad/lib/dimensions';
+import { previewDimension, previewEdgeDimension, resolveEdgeDim, chooseTwoPointDimType, twoPointDimValue, type DimensionRender } from '../../../cad/lib/dimensions';
 import { analyzeDeterminacy } from '../../../cad/lib/determinacy';
+import { fullyDefineSketch } from '../../../cad/lib/fullyDefine';
 import {
-  trimAt, extendLine, splitLineAt, offsetCurve, offsetChain, propagateOffsetSides, mirrorEntities, filletLines, filletLineArc, chamferLines, jogLineAt,
+  trimAt, extendLine, extendArc, splitLineAt, splitArcAt, splitCircleAt, offsetCurve, offsetChain, propagateOffsetSides, mirrorEntities, filletLines, filletLineArc, filletArcArc, chamferLines, chamferLineArc, jogLineAt,
   moveEntities, copyEntities, rotateEntities, scaleEntities,
   linearPatternEntities, circularPatternEntities, stretchEntities,
   findChainedEntities, flipSidePoint,
@@ -185,7 +186,10 @@ const CONSTRAINT_SPECS: ConstraintSpec[] = [
   { type: 'diameter', label: 'Diameter', icon: 'cad-diameter', requiresValue: true,
     predicate: es => es.length === 1 && (es[0].kind === 'circle' || es[0].kind === 'arc') },
   { type: 'angle', label: 'Angle', icon: 'cad-angle', requiresValue: true,
-    predicate: es => es.length === 2 && es.every(isLineEntity) },
+    // Two lines, or three points [rayA, vertex, rayB] — vertex is the SECOND
+    // pick, SolidWorks-style (REQ 890).
+    predicate: es => (es.length === 2 && es.every(isLineEntity))
+      || (es.length === 3 && es.every(isPointEntity)) },
   { type: 'horizontal-distance', label: 'Horizontal distance', icon: 'cad-horizontal-distance', requiresValue: true,
     predicate: es => es.length === 2 && es.every(isPointEntity) },
   { type: 'vertical-distance', label: 'Vertical distance', icon: 'cad-vertical-distance', requiresValue: true,
@@ -538,6 +542,15 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               [matTooltip]="spec.label">
         <mat-icon [svgIcon]="spec.icon"></mat-icon>
       </button>
+      <!-- REQ 889 — Fully Define Sketch: auto-dimension every free point
+           (X/Y from origin) and curve (radius) at measured values. -->
+      <button class="ribbon-button compact"
+              data-testid="fully-define"
+              [disabled]="readonly() || dof() === 0"
+              (click)="fullyDefine()"
+              matTooltip="Fully Define Sketch — auto-dimension free geometry from the origin">
+        <mat-icon>lock</mat-icon>
+      </button>
 
       <span class="ribbon-divider"></span>
 
@@ -572,6 +585,28 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
           <label class="tool-param" data-testid="param-polygon-sides">Sides
             <input type="number" min="3" step="1" [value]="polygonSides()"
                    (change)="setPolygonSides(+$any($event.target).value)" /></label>
+        }
+        @case ('style-spline') {
+          <label class="tool-param" data-testid="param-spline-degree">Degree
+            <input type="number" min="1" max="9" step="1" [value]="styleSplineDegree()"
+                   (change)="setStyleSplineDegree(+$any($event.target).value)" /></label>
+        }
+        @case ('equation-curve') {
+          <label class="tool-param wide" data-testid="param-eq-x">x(t)
+            <input type="text" [value]="eqXExpr()"
+                   (change)="eqXExpr.set($any($event.target).value)" /></label>
+          <label class="tool-param wide" data-testid="param-eq-y">y(t)
+            <input type="text" [value]="eqYExpr()"
+                   (change)="eqYExpr.set($any($event.target).value)" /></label>
+          <label class="tool-param" data-testid="param-eq-tmin">t₀
+            <input type="number" step="any" [value]="eqTMin()"
+                   (change)="eqTMin.set(+$any($event.target).value)" /></label>
+          <label class="tool-param" data-testid="param-eq-tmax">t₁
+            <input type="number" step="any" [value]="eqTMax()"
+                   (change)="eqTMax.set(+$any($event.target).value)" /></label>
+          <label class="tool-param" data-testid="param-eq-samples">Samples
+            <input type="number" min="8" max="2000" step="1" [value]="eqSamples()"
+                   (change)="setEqSamples(+$any($event.target).value)" /></label>
         }
       }
 
@@ -664,6 +699,8 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
     /* REQ 862 — contextual tool-parameter inputs in the ribbon. */
     .tool-param { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; align-self: center; padding: 0 4px; white-space: nowrap; color: #ccc; }
     .tool-param input { width: 56px; background: rgba(255,255,255,0.08); color: #eee; border: 1px solid rgba(255,255,255,0.2); border-radius: 3px; padding: 2px 4px; font-size: 11px; }
+    /* REQ 891 — expression inputs (equation curve) need real text width. */
+    .tool-param.wide input { width: 120px; }
     .spacer { flex: 1; }
     .ribbon-button {
       display: inline-flex;
@@ -880,6 +917,14 @@ export class CadSketchEditorComponent implements OnDestroy {
   patternCircCount = signal<number>(6);
   patternCircSweepDeg = signal<number>(360);
   setPolygonSides(n: number) { this.polygonSides.set(Math.max(3, Math.round(n) || 3)); }
+  // REQ 891 — the last two prompt-based tools join the ribbon-param idiom.
+  setStyleSplineDegree(n: number) { this.styleSplineDegree.set(Math.max(1, Math.min(9, Math.round(n) || 3))); }
+  eqXExpr = signal<string>('5*Math.cos(t)');
+  eqYExpr = signal<string>('5*Math.sin(t)');
+  eqTMin = signal<number>(0);
+  eqTMax = signal<number>(Math.PI * 2);
+  eqSamples = signal<number>(100);
+  setEqSamples(n: number) { this.eqSamples.set(Math.max(8, Math.min(2000, Math.round(n) || 100))); }
   draftSlotPath = signal<{ p1?: PendingPoint; p2?: PendingPoint }>({});  // slot: 2 centerline endpoints + 1 width click
   // 3-point rectangle (corner variant): 2 clicks define the first edge,
   // 3rd click picks the opposite-side offset.
@@ -1005,11 +1050,21 @@ export class CadSketchEditorComponent implements OnDestroy {
    * conflicting-constraint diagnostics). Empty while the solve is ok or
    * when the solver couldn't name specific constraints. */
   conflictingConstraints = signal<Set<string>>(new Set());
-  /** Record a solve outcome: status + DOF + conflicting-constraint ids. */
-  private _recordSolve(r: { status: 'ok' | 'inconsistent'; dof: number; conflicting?: string[] }): void {
+  /** REQ 887: constraint ids PlaneGCS reported as redundant on the last
+   * SUCCESSFUL solve (over-annotation — consistent but re-stating an
+   * already-determined relation). Amber twin of the conflict set. */
+  redundantConstraints = signal<Set<string>>(new Set());
+  /** REQ 897: constraint ids whose EXTERNAL (model-edge) reference could not
+   * be resolved on the last solve — the relation was silently unenforced.
+   * Olive in the constraint list, SolidWorks-style. */
+  danglingConstraints = signal<Set<string>>(new Set());
+  /** Record a solve outcome: status + DOF + conflicting/redundant/dangling ids. */
+  private _recordSolve(r: { status: 'ok' | 'inconsistent'; dof: number; conflicting?: string[]; redundant?: string[]; dangling?: string[] }): void {
     this.solveStatus.set(r.status);
     this.solverDof.set(r.dof);
     this.conflictingConstraints.set(new Set(r.status === 'inconsistent' ? (r.conflicting ?? []) : []));
+    this.redundantConstraints.set(new Set(r.status === 'ok' ? (r.redundant ?? []) : []));
+    this.danglingConstraints.set(new Set(r.dangling ?? []));  // orthogonal to solve status
   }
   /** 'under' = remaining DOF, 'fixed' = sketch is fully constrained,
    * 'over' = solver reported inconsistency. The renderer swaps the sketch
@@ -1131,6 +1186,21 @@ export class CadSketchEditorComponent implements OnDestroy {
   /** Default OFF for fillet — the rounded arc usually replaces the
    * original corner cleanly and users don't want dashed clutter. */
   filletKeepConstruction = signal<boolean>(false);
+  /** Trim tool options (options sidebar). Persisted — the choice is a
+   * working style, not a per-gesture decision. */
+  trimKeepConstruction = signal<boolean>(localStorage.getItem('cadTrimKeepConstruction') === '1');
+  trimIgnoreConstruction = signal<boolean>(localStorage.getItem('cadTrimIgnoreConstruction') === '1');
+  setTrimOption(which: 'keep' | 'ignore', value: boolean): void {
+    const sig = which === 'keep' ? this.trimKeepConstruction : this.trimIgnoreConstruction;
+    sig.set(value);
+    localStorage.setItem(which === 'keep' ? 'cadTrimKeepConstruction' : 'cadTrimIgnoreConstruction', value ? '1' : '0');
+  }
+  private trimOptions() {
+    return {
+      keepAsConstruction: this.trimKeepConstruction(),
+      ignoreConstruction: this.trimIgnoreConstruction(),
+    };
+  }
   /** Chamfer is the same shape — distance + corner set + toggle. */
   chamferDistance = signal<number | null>(null);
   chamferCorners = signal<Set<string>>(new Set());
@@ -1184,13 +1254,12 @@ export class CadSketchEditorComponent implements OnDestroy {
    * named line. The tool button toggles this on/off. */
   dynamicMirrorAxisId = signal<string | null>(null);
 
-  /** Mirror tool state machine. The Mirror panel exposes two fields that
-   * accept different clicks based on which stage is active:
-   *   'pick-entities' — each click toggles an entity in `selected()`.
-   *   'pick-axis'     — the next click sets `mirrorAxisId` to a line.
-   * 'idle' is unused at runtime but kept as a guard for code paths that
-   * read the signal outside the Mirror tool. */
-  mirrorStage = signal<'pick-entities' | 'pick-axis'>('pick-entities');
+  /** Mirror tool state machine — AXIS FIRST (SolidWorks dynamic-mirror
+   * order): the tool opens in 'pick-axis'; picking a line sets
+   * `mirrorAxisId` and auto-advances to 'pick-entities', where each click
+   * toggles an entity in `selected()`. The panel fields can still re-arm
+   * either stage for corrections. */
+  mirrorStage = signal<'pick-entities' | 'pick-axis'>('pick-axis');
   mirrorAxisId = signal<string | null>(null);
   /** Selected entities filtered down to those still eligible to mirror —
    * excludes whatever the user picked as the axis. Drives the entity-row
@@ -1338,7 +1407,7 @@ export class CadSketchEditorComponent implements OnDestroy {
       // Leaving Mirror also clears the axis selection so a stray previous
       // pick doesn't carry over to a new gesture.
       if (tool === 'mirror') {
-        this.mirrorStage.set('pick-entities');
+        this.mirrorStage.set('pick-axis');
         this.mirrorAxisId.set(null);
       } else {
         this.mirrorAxisId.set(null);
@@ -1382,6 +1451,14 @@ export class CadSketchEditorComponent implements OnDestroy {
     else next.add(id);
     this.selected.set(next);
   }
+
+  /** REQ 907 — whether any sketch entity sits under the cursor. The
+   * cad-editor uses this to give sketch geometry priority over a datum
+   * plane/axis lying behind it when routing a Smart Dimension click. */
+  entityAt(x: number, y: number, tolerance: number, pointTolerance: number): SketchEntity | null {
+    return pickEntity(this.state(), { x, y }, tolerance, pointTolerance);
+  }
+
 
   /** True when the currently-active tool belongs to the given split-button
    * group. Drives the active-state highlight on the group's frame. */
@@ -2352,22 +2429,73 @@ export class CadSketchEditorComponent implements OnDestroy {
     const snap = this._snapClickToPoint(x, y);
     let snapped = { x: snap.x, y: snap.y };
     let pendings: PendingConstraint[] = [];
-    const snappedToGeometry = !!(snap.pointId || snap.onCurveId || snap.externalRef);
+    // A midpoint snap fully PINS the endpoint (it's a 0-DOF anchor, review B19)
+    // — treat it exactly like a point snap so inference can't stack a
+    // redundant coincident/H-V on top of the midpoint constraint.
+    const snappedToGeometry = !!(snap.pointId || snap.onCurveId || snap.externalRef || snap.midpointOf);
     // Armed-ref alignment (origin / hovered point) snaps the endpoint and adds
     // its own H/V constraint via `snap.alignTo`; when it fires it takes
     // precedence over inferLineEnd's orient-to-start so the two don't fight
     // over the endpoint coords.
     const hasAlign = !!(snap.alignTo && snap.alignTo.length);
-    if (!snappedToGeometry && !hasAlign && startPt) {
-      const inf = inferLineEnd(this.state(), startPt, { x, y });
-      snapped = inf.snapped;
+    // The endpoint RIDES its snap (keeps one residual DOF) when it lands on a
+    // sketch curve or a model EDGE — an on-edge/on-curve point slides along it,
+    // so an orthogonality snap the user aimed for can still be honored ON TOP
+    // of the coincident/on-edge link (the two intersect at a point). A snap to
+    // an existing POINT, a MIDPOINT, or a projected CENTER fully pins the
+    // endpoint, so H/V there could only conflict — those skip the add.
+    const ridesGeometry = !snap.midpointOf && !!(snap.onCurveId
+      || (snap.externalRef && !isCenterExternalRef(snap.externalRef)));
+    if (!hasAlign && startPt && (!snappedToGeometry || ridesGeometry)) {
+      // Detect inference on the RAW click, exactly like the hover preview does
+      // (cad-editor's sketchPreview) — NOT the grid-rounded {x, y}. At high zoom
+      // the rounding error can push a truly-horizontal line outside the angle
+      // tolerance, so the "horizontal"/"vertical" badge would show on hover but
+      // the constraint would be computed on the rounded coords and silently
+      // dropped. This is the same "hint shows but constraint drops" failure the
+      // _lastRawClick plumbing above guards against for point-alignment; wire it
+      // into the orthogonality inference too so the shown snap always sticks.
+      const rawEnd = this._lastRawClick ?? { x, y };
+      // Review B6: same zoom-adaptive curve ruler as the picker + the preview.
+      const inf = inferLineEnd(this.state(), startPt, rawEnd, { curveTol: this.lastPickTolerance });
       // Apply EVERY inference constraint the hover fired — e.g. when
       // hovering on a vertical converted line whose snap point also
       // happens to be horizontal-from-start, we'll add both
       // coincident-on-line AND horizontal so the new line is fully
       // constrained on commit. Falls back to the legacy single-
       // constraint shape for back-compat.
-      pendings = inf.constraints ?? (inf.constraint ? [inf.constraint] : []);
+      const infPendings = inf.constraints ?? (inf.constraint ? [inf.constraint] : []);
+      const horiz = infPendings.some(p => p.type === 'horizontal');
+      const vert = infPendings.some(p => p.type === 'vertical');
+      if (snappedToGeometry) {
+        // Endpoint placement stays on the snapped geometry (the on-edge/on-curve
+        // link + its slide DOF own the position). Stack ONLY relations that are
+        // FEASIBLE alongside the ride (review B5): H/V requires the snapped
+        // geometry to actually cross the axis line through the start near the
+        // click — the inference engine's own enrichment refuses arcs/circles
+        // and far intersections for exactly this reason, and the raw-cursor
+        // H/V branch has no such knowledge. Tangent (line ↔ START's curve) is
+        // independent of the endpoint snap and passes through unchanged.
+        pendings = infPendings.filter(p =>
+          p.type === 'tangent'
+          || ((p.type === 'horizontal' || p.type === 'vertical')
+              && this._axisSnapFeasible(p.type, startPt, snap)));
+      } else if (horiz || vert) {
+        // Open space: keep the FREE axis on the drawing grid; force the
+        // constrained axis to match the start point so the placed line is
+        // already flat (the added constraint + solve keep it so). Honors
+        // exactly the H/V snap the preview showed.
+        pendings = infPendings;
+        snapped = {
+          x: vert ? startPt.x : this._snap(rawEnd.x),
+          y: horiz ? startPt.y : this._snap(rawEnd.y),
+        };
+      } else {
+        // Tangent / polar / alignment snaps keep the engine's own snapped
+        // point (matches the preview, which renders inf.snapped directly).
+        pendings = infPendings;
+        snapped = inf.snapped;
+      }
     }
 
     // Zero-length self-line guard: if the snapped endpoint sits at the
@@ -2613,6 +2741,51 @@ export class CadSketchEditorComponent implements OnDestroy {
     return { x, y };
   }
 
+  /** Review B5 — can an H/V relation coexist with the endpoint's geometry
+   * snap? Only when the snapped geometry is STRAIGHT and actually crosses the
+   * axis line through the chain start within reach of the click (the solver
+   * would otherwise have to drag the endpoint far away — or fail outright on
+   * an arc/circle with no axis intersection). Mirrors the inference engine's
+   * own enrichment guard, which the raw-cursor H/V branch bypasses. */
+  private _axisSnapFeasible(
+    axis: 'horizontal' | 'vertical',
+    start: { x: number; y: number },
+    snap: PendingPoint,
+  ): boolean {
+    // Resolve the snapped geometry as a straight segment [a, b].
+    let a: { x: number; y: number } | null = null;
+    let b: { x: number; y: number } | null = null;
+    if (snap.onCurveId) {
+      const e = findEntity(this.state(), snap.onCurveId);
+      if (!e || e.kind !== 'line') return false;   // arcs/circles: engine policy — never stack H/V
+      const p1 = findPoint(this.state(), e.startId), p2 = findPoint(this.state(), e.endId);
+      if (!p1 || !p2) return false;
+      a = p1; b = p2;
+    } else if (snap.externalRef && !isCenterExternalRef(snap.externalRef)) {
+      const key = onEdgeLookupKey(snap.externalRef);
+      const seg = key ? this._externalEdgeLines().get(key) : undefined;
+      if (!seg) return false;                       // no live projection → can't verify → don't stack
+      a = seg[0]; b = seg[1];
+    } else {
+      return false;
+    }
+    // Intersect the segment with the axis line through the start point.
+    const denom = axis === 'horizontal' ? (b.y - a.y) : (b.x - a.x);
+    if (Math.abs(denom) < 1e-9) {
+      // Segment parallel to the axis: feasible only if it already lies ON the
+      // axis line (then the ride itself enforces the relation — adding H/V
+      // would be redundant, so still decline).
+      return false;
+    }
+    const t = axis === 'horizontal' ? (start.y - a.y) / denom : (start.x - a.x) / denom;
+    if (t < -0.05 || t > 1.05) return false;        // crossing lies off the segment
+    const ix = a.x + t * (b.x - a.x), iy = a.y + t * (b.y - a.y);
+    // The crossing must be within reach of where the user actually clicked —
+    // a far intersection means the solve would visibly teleport the endpoint.
+    const reach = Math.max(4 * this.lastPickTolerance, 2);
+    return Math.hypot(ix - snap.x, iy - snap.y) <= reach;
+  }
+
   /** Emit a real horizontal/vertical constraint between a freshly-placed point
    * and each armed reference it aligned to (REQ 825). No-op when `alignTo` is
    * empty. A point is never constrained to itself. */
@@ -2834,7 +3007,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     // Both operands chosen → this click is the placement; commit there.
     if (selEntity && pendingEdge) {
       const cand = this._candidateForEdgeId(pendingEdge);
-      if (cand && this._commitEntityToEdge(selEntity, cand, { x, y })) return;
+      if (cand && this._commitEdgeDim(selEntity, cand, { x, y })) return;
     }
     if (!picked) {
       // Nearest projected EDGE (ignoring vertices — `nearestCandidateHit`
@@ -2974,51 +3147,37 @@ export class CadSketchEditorComponent implements OnDestroy {
     const a = cand?.points[0];
     const b = cand?.points[1];
     if (!a || !b) return null;
-    const pointId = selEntity.kind === 'point' ? selEntity.id : selEntity.startId;
-    return previewPointToEdgeDimension(this.state(), pointId, [a, b], cursor);
+    // Same decision function the commit uses (resolveEdgeDim) — the hover
+    // is what the placement click will create, by construction.
+    return previewEdgeDimension(this.state(), selEntity, [a, b], cursor);
   }
 
-  /** Dimension a sketch POINT or LINE to a projected model edge. A point uses
-   * its perpendicular distance to the edge; a line uses its START endpoint's
-   * perpendicular distance (the offset for the common parallel case). Returns
-   * true if a dimension was added. */
-  private _commitEntityToEdge(
-    entity: SketchEntity, candidate: ReferenceCandidate, placement: { x: number; y: number },
-  ): boolean {
-    if (entity.kind === 'point') return this._commitPointToEdge(entity.id, candidate, placement);
-    if (entity.kind === 'line') return this._commitPointToEdge(entity.startId, candidate, placement);
-    return false;
-  }
-
-  /** Distance from a sketch POINT to a model EDGE, referencing the edge
-   * DIRECTLY — a point-line-distance constraint with an externalRef. The solver
-   * builds invisible fixed reference geometry for it (no converted sketch line
-   * is created). `placement` is where the dimension text/line sits. Returns
-   * true if it added the dimension. */
-  private _commitPointToEdge(
-    pointId: string, candidate: ReferenceCandidate, placement: { x: number; y: number },
+  /** THE single commit for an entity ↔ edge/datum dimension. What gets
+   * created is decided by `resolveEdgeDim` — the same function behind the
+   * live preview — so the hover and the committed constraint can never
+   * disagree. Smart-Dim passes the placement click; the relations toolbar
+   * passes undefined (the label auto-places). The dim references the edge
+   * DIRECTLY via externalRef (the solver builds invisible fixed reference
+   * geometry — no converted sketch line). A fully-determined target gets a
+   * DRIVEN (reference) dim, which is read-only and doesn't pop the value
+   * editor. */
+  private _commitEdgeDim(
+    entity: SketchEntity, candidate: ReferenceCandidate,
+    placement: { x: number; y: number } | undefined,
   ): boolean {
     const ref = externalRefForCandidate(candidate);
-    if (!ref) return false;
     const a = candidate.points[0];
-    const b = candidate.points[1];
-    if (!a || !b) return false;
-    const pt = findPoint(this.state(), pointId);
-    if (!pt) return false;
-    // Perpendicular distance from the point to the edge's projected line.
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const value = Math.abs(((pt.x - a.x) * dy - (pt.y - a.y) * dx) / len);
-    // A point that's already fully constrained → reference (driven) dimension.
-    const driven = this.determinedEntities().has(pointId);
+    const b = candidate.points[candidate.points.length - 1];
+    if (!ref || !a || !b) return false;
+    const spec = resolveEdgeDim(this.state(), entity, [a, b]);
+    if (!spec) return false;
+    const driven = this.determinedEntities().has(spec.targetId);
     const { state: next, constraint } = addConstraint(
-      this.state(), 'point-line-distance', [pointId], value, placement, driven, ref,
+      this.state(), spec.type, [spec.targetId], spec.value, placement, driven, ref,
     );
     this.commitAfterAdd(next, constraint.id);
     this.selected.set(new Set());
     this.selectedExternalEdgeId.set(null);
-    // A DRIVEN (reference) dimension is read-only — don't pop the value editor;
-    // only a DRIVING dimension opens for the user to type a value.
     if (!driven) this.dimensionCreated.emit(constraint.id);
     return true;
   }
@@ -3050,7 +3209,7 @@ export class CadSketchEditorComponent implements OnDestroy {
   private handleTrimClick(x: number, y: number) {
     const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
     if (!picked) return;
-    const result = trimAt(this.state(), picked.id, { x, y });
+    const result = trimAt(this.state(), picked.id, { x, y }, this.trimOptions());
     if (result.error) { console.warn('Trim:', result.error); return; }
     this.commit(result.state);
     this.selected.set(new Set());
@@ -3059,8 +3218,11 @@ export class CadSketchEditorComponent implements OnDestroy {
   private handleExtendClick(x: number, y: number) {
     const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
     if (!picked) return;
-    if (picked.kind !== 'line') { console.warn('Extend: not a line'); return; }
-    const result = extendLine(this.state(), picked.id, { x, y });
+    // REQ 888: lines and arcs extend; other kinds have no open ends to grow.
+    if (picked.kind !== 'line' && picked.kind !== 'arc') { console.warn('Extend: not a line or arc'); return; }
+    const result = picked.kind === 'line'
+      ? extendLine(this.state(), picked.id, { x, y })
+      : extendArc(this.state(), picked.id, { x, y });
     if (result.error) { console.warn('Extend:', result.error); return; }
     this.commit(result.state);
     this.selected.set(new Set());
@@ -3069,8 +3231,12 @@ export class CadSketchEditorComponent implements OnDestroy {
   private handleSplitClick(x: number, y: number) {
     const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
     if (!picked) return;
-    if (picked.kind !== 'line') { console.warn('Split: only lines supported'); return; }
-    const result = splitLineAt(this.state(), picked.id, { x, y });
+    // REQ 888: lines, arcs, and circles split at their crossings.
+    let result: { state: SketchState; error?: string };
+    if (picked.kind === 'line') result = splitLineAt(this.state(), picked.id, { x, y });
+    else if (picked.kind === 'arc') result = splitArcAt(this.state(), picked.id, { x, y });
+    else if (picked.kind === 'circle') result = splitCircleAt(this.state(), picked.id, { x, y });
+    else { console.warn('Split: only lines, arcs, and circles supported'); return; }
     if (result.error) { console.warn('Split:', result.error); return; }
     this.commit(result.state);
     this.selected.set(new Set());
@@ -3335,9 +3501,8 @@ export class CadSketchEditorComponent implements OnDestroy {
       const curves = this.curvesIncidentTo(s, id);
       if (curves.length !== 2) continue;
       const [c1, c2] = curves;
-      // Dispatch by kind pair: line+line uses the existing fillet,
-      // mixed line+arc uses the new filletLineArc, arc+arc is not
-      // yet supported.
+      // Dispatch by kind pair: line+line uses the existing fillet, mixed
+      // line+arc uses filletLineArc, arc+arc uses filletArcArc (REQ 888).
       let result: ReturnType<typeof filletLines> | null = null;
       if (c1.kind === 'line' && c2.kind === 'line') {
         result = filletLines(s, c1.id, c2.id, r, {
@@ -3351,8 +3516,12 @@ export class CadSketchEditorComponent implements OnDestroy {
         result = filletLineArc(s, c2.id, c1.id, r, {
           keepRemovedAsConstruction: this.filletKeepConstruction(),
         });
+      } else if (c1.kind === 'arc' && c2.kind === 'arc') {
+        result = filletArcArc(s, c1.id, c2.id, r, {
+          keepRemovedAsConstruction: this.filletKeepConstruction(),
+        });
       } else {
-        console.warn(`Fillet at ${id}: arc+arc not yet supported`);
+        console.warn(`Fillet at ${id}: unsupported curve pair`);
         continue;
       }
       if (result.error) { console.warn(`Fillet at ${id}:`, result.error); continue; }
@@ -3416,6 +3585,8 @@ export class CadSketchEditorComponent implements OnDestroy {
         result = filletLineArc(s, c1.id, c2.id, radius);
       } else if (c1.kind === 'arc' && c2.kind === 'line') {
         result = filletLineArc(s, c2.id, c1.id, radius);
+      } else if (c1.kind === 'arc' && c2.kind === 'arc') {
+        result = filletArcArc(s, c1.id, c2.id, radius);
       } else {
         continue;
       }
@@ -3495,12 +3666,16 @@ export class CadSketchEditorComponent implements OnDestroy {
     const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
     if (!picked) return;
     if (picked.kind !== 'point') {
-      console.warn('Chamfer: click a corner point (a vertex shared by two lines)');
+      console.warn('Chamfer: click a corner point (a vertex shared by two curves)');
       return;
     }
-    const lines = this.linesIncidentTo(this.state(), picked.id);
-    if (lines.length !== 2) {
-      console.warn('Chamfer: clicked point is not shared by exactly two lines');
+    // REQ 888: line+line corners chamfer in every mode; line+arc corners
+    // chamfer with the plain setback distance (see commitChamfer).
+    const curves = this.curvesIncidentTo(this.state(), picked.id);
+    const lineCount = curves.filter(cv => cv.kind === 'line').length;
+    const ok = curves.length === 2 && (lineCount === 2 || (lineCount === 1 && curves.some(cv => cv.kind === 'arc')));
+    if (!ok) {
+      console.warn('Chamfer: clicked point is not a two-line or line+arc corner');
       return;
     }
     const next = new Set(this.chamferCorners());
@@ -3534,7 +3709,23 @@ export class CadSketchEditorComponent implements OnDestroy {
     }> = [];
     for (const id of corners) {
       const lines = this.linesIncidentTo(s, id);
-      if (lines.length !== 2) continue;
+      if (lines.length !== 2) {
+        // REQ 888: a line+arc corner chamfers with the plain setback distance
+        // (equal-distance semantics — the distance-distance / distance-angle
+        // modes have no clean arc-side meaning). Dim-emission bookkeeping
+        // below is line+line specific, so these commit geometry only.
+        const curves = this.curvesIncidentTo(s, id);
+        const lineC = curves.find(cv => cv.kind === 'line');
+        const arcC = curves.find(cv => cv.kind === 'arc');
+        if (curves.length === 2 && lineC && arcC) {
+          const r2 = chamferLineArc(s, lineC.id, arcC.id, d, {
+            keepRemovedAsConstruction: this.chamferKeepConstruction(),
+          });
+          if (r2.error) { console.warn(`Chamfer at ${id}:`, r2.error); continue; }
+          s = r2.state;
+        }
+        continue;
+      }
       const cornerPt = findPoint(s, id);
       const V = cornerPt ? { x: cornerPt.x, y: cornerPt.y } : null;
       // computeChamferGeometry handles the more-vertical-first swap for
@@ -3692,16 +3883,24 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.sketchChanged.emit(next);
     const result = await solveSketch(next, { movablePoints, externalEdges: this._externalEdgeLines() });
     if (id !== this.latestCommitId) return;
-    this._recordSolve(result);
+    // Review B7: do NOT record the pinned solve's diagnostics — with every
+    // other point force-pinned, dof reads ~0 (a false green "fully
+    // constrained") and constraints among pinned points are reported
+    // redundant (false REQ 887 amber rows). Run a plain follow-up solve for
+    // truthful global state, same as the drag path's convention.
     if (result.status === 'ok') {
       this.sketchChanged.emit(result.state);
+      const global = await solveSketch(result.state, { externalEdges: this._externalEdgeLines() });
+      if (id !== this.latestCommitId) return;
+      this._recordSolve(global);
+      if (global.status === 'ok') this.sketchChanged.emit(global.state);
     } else {
       // Fallback: retry without pinning. Some constraint sets genuinely
-      // need pre-existing geometry to move (rare for chamfer).
+      // need pre-existing geometry to move (rare for chamfer). The unpinned
+      // solve's diagnostics ARE the truthful global state — record them.
       const fallback = await solveSketch(next, { externalEdges: this._externalEdgeLines() });
       if (id !== this.latestCommitId) return;
       this._recordSolve(fallback);
-      this.solverDof.set(fallback.dof);
       if (fallback.status === 'ok') this.sketchChanged.emit(fallback.state);
     }
   }
@@ -3907,35 +4106,51 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.tool.set('select');
   }
 
-  /** Mirror — two-stage gesture driven by the PropertyManager-style sidebar.
-   *   Stage 1 ('pick-entities'): each click toggles an entity in the
-   *       selection set. The sidebar's first field shows the count.
-   *   Stage 2 ('pick-axis'): the click sets `mirrorAxisId` to the picked
-   *       line. The sidebar's second field shows it.
+  /** Mirror — two-stage gesture driven by the PropertyManager-style sidebar,
+   * AXIS FIRST:
+   *   Stage 1 ('pick-axis'): the click sets `mirrorAxisId` to the picked
+   *       line and AUTO-ADVANCES to entity picking (the axis is a single
+   *       pick, so staying armed would just eat the next click).
+   *   Stage 2 ('pick-entities'): each click toggles an entity in the
+   *       selection set; the ghost preview updates live.
    * The mirror operation itself doesn't run until the user clicks OK in
    * the panel (`commitMirror`), so they can refine the selection without
-   * accidentally triggering the op. Auto-advance: when the user picks
-   * any line during 'pick-entities', the sidebar field for the axis
-   * lights up but stage doesn't auto-advance — they need to click into
-   * the axis field. Lower friction than auto-advancing on every line. */
+   * accidentally triggering the op. */
   private handleMirrorClick(x: number, y: number) {
     const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
     if (!picked) return;
-    if (this.mirrorStage() === 'pick-entities') {
-      // Toggle in selection — same UX as multi-select in the Select tool.
-      const next = new Set(this.selected());
-      if (next.has(picked.id)) next.delete(picked.id);
-      else next.add(picked.id);
-      this.selected.set(next);
+    if (this.mirrorStage() === 'pick-axis') {
+      // Only lines are valid axes.
+      if (picked.kind !== 'line') {
+        console.warn('Mirror axis must be a line');
+        return;
+      }
+      this.mirrorAxisId.set(picked.id);
+      this.mirrorStage.set('pick-entities');
       return;
     }
-    // 'pick-axis' — only lines are valid axes.
-    if (picked.kind !== 'line') {
-      console.warn('Mirror axis must be a line');
-      return;
-    }
-    this.mirrorAxisId.set(picked.id);
+    // 'pick-entities' — toggle in selection, same UX as multi-select.
+    if (picked.id === this.mirrorAxisId()) return;  // the axis isn't a mirror subject
+    const next = new Set(this.selected());
+    if (next.has(picked.id)) next.delete(picked.id);
+    else next.add(picked.id);
+    this.selected.set(next);
   }
+
+  /** Ghost preview of what OK will produce — the same `mirrorEntities` op
+   * the commit path runs, never committed. Non-null once the axis and at
+   * least one entity are picked. The cad-editor tessellates `newIds` from
+   * the returned state into dashed preview polylines. */
+  mirrorPreviewState = computed<{ state: SketchState; newIds: string[] } | null>(() => {
+    if (this.tool() !== 'mirror') return null;
+    const axisId = this.mirrorAxisId();
+    if (!axisId) return null;
+    const ids = Array.from(this.selected()).filter(id => id !== axisId);
+    if (ids.length === 0) return null;
+    const r = mirrorEntities(this.state(), ids, axisId);
+    if (r.error) return null;
+    return { state: r.state, newIds: r.affectedIds ?? [] };
+  });
 
   commitMirror() {
     const axisId = this.mirrorAxisId();
@@ -3947,7 +4162,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.commit(result.state);
     this.selected.set(new Set());
     this.mirrorAxisId.set(null);
-    this.mirrorStage.set('pick-entities');
+    this.mirrorStage.set('pick-axis');
     // After a successful mirror, return to Select so the user can interact
     // with the new geometry. Matches SolidWorks's "OK closes the tool".
     this.tool.set('select');
@@ -3956,7 +4171,7 @@ export class CadSketchEditorComponent implements OnDestroy {
   cancelMirror() {
     this.selected.set(new Set());
     this.mirrorAxisId.set(null);
-    this.mirrorStage.set('pick-entities');
+    this.mirrorStage.set('pick-axis');
     this.tool.set('select');
   }
 
@@ -3971,6 +4186,8 @@ export class CadSketchEditorComponent implements OnDestroy {
 
   clearMirrorAxis() {
     this.mirrorAxisId.set(null);
+    // No axis → the next canvas click should pick one.
+    if (this.tool() === 'mirror') this.mirrorStage.set('pick-axis');
   }
 
   /** Short kind label + Material icon + coordinate hint for entity rows
@@ -4185,14 +4402,14 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (!picked) return null;
     if (t === 'trim') {
       if (picked.kind === 'line') {
-        const seg = previewTrimLine(this.state(), picked.id, cursor);
+        const seg = previewTrimLine(this.state(), picked.id, cursor, this.trimOptions());
         if (!seg) return null;
         return { kind: 'edit-hover', start: seg.start, end: seg.end, mode: 'remove' };
       }
       if (picked.kind === 'circle' || picked.kind === 'arc') {
         const pts = picked.kind === 'circle'
-          ? previewTrimCircle(this.state(), picked.id, cursor)
-          : previewTrimArc(this.state(), picked.id, cursor);
+          ? previewTrimCircle(this.state(), picked.id, cursor, this.trimOptions())
+          : previewTrimArc(this.state(), picked.id, cursor, this.trimOptions());
         if (!pts || pts.length < 2) return null;
         return {
           kind: 'edit-hover',
@@ -4229,6 +4446,24 @@ export class CadSketchEditorComponent implements OnDestroy {
     const resolved = resolveSmartDim(this.state(), sel, cursor);
     if (!resolved) return null;
     return previewDimension(this.state(), resolved.type, resolved.targets, resolved.value, cursor);
+  }
+
+  /** REQ 889 — Fully Define Sketch: auto-dimension every underdetermined
+   * point (X/Y from the origin) and curve (radius) at its measured value.
+   * Additions that turn the solve inconsistent are rolled back by the lib;
+   * a partial result commits whatever locked cleanly. */
+  async fullyDefine() {
+    if (this.readonly()) return;
+    const res = await fullyDefineSketch(this.state(), this._externalEdgeLines());
+    if (res.added.length === 0) {
+      console.warn('Fully Define: nothing to dimension (already defined, or additions would conflict)');
+      return;
+    }
+    this.commit(res.state);
+    if (res.status === 'partial') {
+      console.warn('Fully Define: some geometry could not be locked automatically');
+    }
+    this.selected.set(new Set());
   }
 
   applyConstraint(spec: ConstraintSpec) {
@@ -4283,6 +4518,15 @@ export class CadSketchEditorComponent implements OnDestroy {
     // handled via an externalRef + the solver's synthetic-line orientation pass.
     if ((spec.type === 'parallel' || spec.type === 'perpendicular')
         && this.selectedExternalEdgeId() && this._applyOrientationToEdge(entities, spec.type)) {
+      return;
+    }
+    // Angle between a sketch line and a selected MODEL edge (REQ 886): an
+    // externalRef dim resolved by the solver's synthetic edge-angle pass.
+    if (spec.type === 'angle' && this.selectedExternalEdgeId() && this._applyAngleToEdge(entities)) {
+      return;
+    }
+    // Tangent between a sketch circle/arc and a selected MODEL edge (REQ 886).
+    if (spec.type === 'tangent' && this.selectedExternalEdgeId() && this._applyTangentToEdge(entities)) {
       return;
     }
     if (!spec.predicate(entities)) return;
@@ -4347,6 +4591,14 @@ export class CadSketchEditorComponent implements OnDestroy {
       case 'diameter':
         return entities[0]?.kind === 'circle' || entities[0]?.kind === 'arc' ? entities[0].radius * 2 : null;
       case 'angle': {
+        // 3-POINT vertex angle (REQ 890): [rayA, vertex, rayB].
+        if (entities.length === 3 && entities.every(e => e.kind === 'point')) {
+          const [pA, v, pB] = entities as PointEntity[];
+          const r1x = pA.x - v.x, r1y = pA.y - v.y;
+          const r2x = pB.x - v.x, r2y = pB.y - v.y;
+          if (Math.hypot(r1x, r1y) < 1e-9 || Math.hypot(r2x, r2y) < 1e-9) return null;
+          return Math.abs(Math.atan2(r1x * r2y - r1y * r2x, r1x * r2x + r1y * r2y));
+        }
         const d1 = entities[0] ? lineDir(entities[0]) : null;
         const d2 = entities[1] ? lineDir(entities[1]) : null;
         if (!d1 || !d2) return null;
@@ -4432,6 +4684,14 @@ export class CadSketchEditorComponent implements OnDestroy {
     // Parallel / perpendicular between one sketch line and a selected model edge.
     if ((spec.type === 'parallel' || spec.type === 'perpendicular') && edge) {
       return entities.length === 1 && entities[0].kind === 'line';
+    }
+    // Angle between one sketch line and a selected model edge (REQ 886).
+    if (spec.type === 'angle' && edge) {
+      return entities.length === 1 && entities[0].kind === 'line';
+    }
+    // Tangent between one sketch circle/arc and a selected model edge (REQ 886).
+    if (spec.type === 'tangent' && edge) {
+      return entities.length === 1 && (entities[0].kind === 'circle' || entities[0].kind === 'arc');
     }
     return false;
   }
@@ -4548,30 +4808,41 @@ export class CadSketchEditorComponent implements OnDestroy {
    * gets a driven (reference) dim at the measured value instead. */
   private _applyDistanceToEdge(entities: SketchEntity[]): boolean {
     const edgeId = this.selectedExternalEdgeId();
-    if (!edgeId) return false;
-    if (entities.length !== 1 || entities[0].kind !== 'point') return false;
+    if (!edgeId || entities.length !== 1 || entities[0].kind !== 'point') return false;
     const cand = this._candidateForEdgeId(edgeId);
-    if (!cand) return false;
-    const ref = externalRefForCandidate(cand);
-    const a = cand.points[0];
-    const b = cand.points[1];
-    if (!ref || !a || !b) return false;
-    const pt = findPoint(this.state(), entities[0].id);
-    if (!pt) return false;
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const measured = Math.abs(((pt.x - a.x) * dy - (pt.y - a.y) * dx) / len);
-    const driven = this.determinedEntities().has(entities[0].id);
-    // REQ 862: seed with the measured value — the dimensionCreated emit below
-    // opens the inline editor so the user types the target value in place.
-    const value = measured;
+    // Delegates to the shared resolveEdgeDim-backed commit (REQ 862 seeds
+    // with the measured value; the dimensionCreated emit opens the inline
+    // editor for a DRIVING dim).
+    return !!cand && this._commitEdgeDim(entities[0], cand, undefined);
+  }
+
+  /** Angle dim between a single selected sketch LINE and the selected model
+   * edge (REQ 886). Same resolveEdgeDim-backed commit as Smart Dim — a
+   * (near-)parallel line correctly commits the offset DISTANCE instead of a
+   * degenerate 0°/180° angle. */
+  private _applyAngleToEdge(entities: SketchEntity[]): boolean {
+    const edgeId = this.selectedExternalEdgeId();
+    if (!edgeId || entities.length !== 1 || entities[0].kind !== 'line') return false;
+    const cand = this._candidateForEdgeId(edgeId);
+    return !!cand && this._commitEdgeDim(entities[0], cand, undefined);
+  }
+
+  /** Tangent between a single selected sketch CIRCLE/ARC and the selected
+   * model edge (REQ 886). Resolved by the solver's synthetic edge-tangent
+   * pass against the edge's live projection. */
+  private _applyTangentToEdge(entities: SketchEntity[]): boolean {
+    const edgeId = this.selectedExternalEdgeId();
+    if (!edgeId) return false;
+    if (entities.length !== 1 || (entities[0].kind !== 'circle' && entities[0].kind !== 'arc')) return false;
+    const cand = this._candidateForEdgeId(edgeId);
+    const ref = cand ? externalRefForCandidate(cand) : null;
+    if (!ref) return false;
     const { state: next, constraint } = addConstraint(
-      this.state(), 'point-line-distance', [entities[0].id], value, undefined, driven, ref,
+      this.state(), 'tangent', [entities[0].id], undefined, undefined, false, ref,
     );
     this.commitAfterAdd(next, constraint.id);
     this.selected.set(new Set());
     this.selectedExternalEdgeId.set(null);
-    this.dimensionCreated.emit(constraint.id);
     return true;
   }
 
@@ -4852,28 +5123,16 @@ export class CadSketchEditorComponent implements OnDestroy {
   }
 
   /** Shared handler for the standard Spline tool (fixed degree=3) and
-   * Style Spline (variable degree). First click in a style-spline
-   * gesture prompts for the degree. Subsequent clicks add control
-   * points; double-click on the last point commits.
+   * Style Spline (variable degree). Clicks add control points;
+   * double-click on the last point commits.
    *
    * `desiredDegree` carries the caller's intent — for `spline` it's
-   * hard-coded 3; for `style-spline` it's whatever the user picked.
+   * hard-coded 3; for `style-spline` it's the ribbon Degree param
+   * (REQ 891 — no prompt; the input appears while the tool is armed).
    * Either way the resulting entity needs (degree + 1) control
    * points minimum. */
   private handleSplineClick(x: number, y: number, desiredDegree: number = 3) {
     const pts = this.draftSpline();
-    // Style-spline degree prompt on the very first click.
-    if (pts.length === 0 && this.tool() === 'style-spline') {
-      const raw = window.prompt(
-        'Spline degree (1 = polyline, 2 = quadratic, 3 = cubic, 5 = quintic):',
-        String(this.styleSplineDegree()),
-      );
-      if (raw === null) { this.tool.set('select'); return; }
-      const n = parseInt(raw, 10);
-      if (!isFinite(n) || n < 1 || n > 9) return;
-      this.styleSplineDegree.set(n);
-      desiredDegree = n;
-    }
     const last = pts[pts.length - 1];
     const doubleClick = last && Math.hypot(x - last.x, y - last.y) < 1;
     const minCps = desiredDegree + 1;
@@ -4979,20 +5238,15 @@ export class CadSketchEditorComponent implements OnDestroy {
 
   /** Batch 6 — Equation curve tool. One click anchors the curve
    * (purely a hint — the actual geometry comes from the expressions).
-   * Then prompts for x(t), y(t), tMin, tMax, samples. */
+   * Parameters come from the ribbon inputs shown while the tool is
+   * armed (REQ 891 — no prompts); the click commits from the signals. */
   private handleEquationCurveClick(_x: number, _y: number) {
-    const xExpr = window.prompt('x(t) — e.g. "5*Math.cos(t)":', '5*Math.cos(t)');
-    if (xExpr === null) { this.tool.set('select'); return; }
-    const yExpr = window.prompt('y(t) — e.g. "5*Math.sin(t)":', '5*Math.sin(t)');
-    if (yExpr === null) { this.tool.set('select'); return; }
-    const tMinStr = window.prompt('t min:', '0');
-    if (tMinStr === null) { this.tool.set('select'); return; }
-    const tMaxStr = window.prompt('t max:', String(Math.PI * 2));
-    if (tMaxStr === null) { this.tool.set('select'); return; }
-    const tMin = parseFloat(tMinStr), tMax = parseFloat(tMaxStr);
+    const xExpr = this.eqXExpr().trim();
+    const yExpr = this.eqYExpr().trim();
+    if (!xExpr || !yExpr) return;
+    const tMin = this.eqTMin(), tMax = this.eqTMax();
     if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMin === tMax) return;
-    const samplesStr = window.prompt('Samples (8..2000):', '100');
-    const samples = Math.max(8, Math.min(2000, parseInt(samplesStr || '100', 10) || 100));
+    const samples = Math.max(8, Math.min(2000, Math.round(this.eqSamples()) || 100));
     const r = addEquationCurve(this.state(), xExpr, yExpr, tMin, tMax, samples);
     this.commit(r.state);
   }
@@ -5008,7 +5262,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-316');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-365');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);
@@ -5269,6 +5523,8 @@ function canPlaceDimension(sel: SketchEntity[]): boolean {
     const curves = sel.filter(e => e.kind === 'circle' || e.kind === 'arc').length;
     return curves === 2;
   }
+  // Three points → vertex angle (REQ 890).
+  if (sel.length === 3) return sel.every(e => e.kind === 'point');
   return false;
 }
 
@@ -5337,6 +5593,16 @@ function resolveSmartDim(
     const v = measurePointLineDistance(state, p, l);
     if (v === null) return null;
     return { type: 'point-line-distance', targets: [p.id, l.id], value: v };
+  }
+  // Three points → vertex angle at the SECOND pick (REQ 890): targets
+  // [rayA, vertex, rayB], value = |angle| between vertex→rayA and vertex→rayB.
+  if (sel.length === 3 && sel.every(e => e.kind === 'point')) {
+    const [pA, v, pB] = sel as PointEntity[];
+    const r1x = pA.x - v.x, r1y = pA.y - v.y;
+    const r2x = pB.x - v.x, r2y = pB.y - v.y;
+    if (Math.hypot(r1x, r1y) < 1e-9 || Math.hypot(r2x, r2y) < 1e-9) return null;
+    const value = Math.abs(Math.atan2(r1x * r2y - r1y * r2x, r1x * r2x + r1y * r2y));
+    return { type: 'angle', targets: [pA.id, v.id, pB.id], value };
   }
   return null;
 }

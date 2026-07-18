@@ -74,6 +74,10 @@ import {
                         class="name-warning"
                         data-testid="eqn-name-warning"
                         [matTooltip]="w">⚠</span>
+                  <span *ngIf="row.fromAssembly != null"
+                        class="from-assembly-chip"
+                        data-testid="eqn-from-assembly"
+                        [matTooltip]="'Pushed from assembly #' + row.fromAssembly + ' — the next push overwrites local edits'">asm</span>
                 </div>
               </td>
               <td>
@@ -273,6 +277,7 @@ import {
       cursor: help; user-select: none;
       flex-shrink: 0;
     }
+    .from-assembly-chip { font-size: 9px; line-height: 14px; padding: 0 5px; border-radius: 7px; background: rgba(66,165,245,0.2); border: 1px solid rgba(66,165,245,0.5); color: #90caf9; text-transform: uppercase; letter-spacing: 0.5px; cursor: help; flex-shrink: 0; }
 
     .cell-input {
       width: 100%; padding: 4px 6px;
@@ -396,6 +401,7 @@ export class CadEquationsPanelComponent {
         key,
         label: isTarget ? shortLabelForKey(key) : key,
         isTarget,
+        fromAssembly: entry.fromAssembly ?? null,
         expression: expressionForRow,
         value: liveResult
           ? (liveResult.value !== undefined ? formatNumber(liveResult.value) : '—')
@@ -522,6 +528,8 @@ interface EquationRow {
   expression: string;
   value: string;
   error: string | null;
+  /** REQ 918 — set when an assembly pushed this value. */
+  fromAssembly?: number | null;
 }
 
 /** Sort: globals alphabetical, then feature, then sketch — but the

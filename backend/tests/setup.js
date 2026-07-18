@@ -15,6 +15,11 @@ process.env.GOOGLE_CALLBACK_URL = 'http://localhost:3999/api/auth/google/callbac
 process.env.FILE_STORAGE_PATH = path.join(os.tmpdir(), 'letwinventory-test-files');
 fs.mkdirSync(process.env.FILE_STORAGE_PATH, { recursive: true });
 
+// CLS transaction propagation — mirrors models/index.js (REQ 901) so the
+// transactional VCS verbs behave the same under test as in production.
+const cls = require('cls-hooked');
+Sequelize.useCLS(cls.createNamespace('letwinventory-sequelize-test'));
+
 // Create SQLite in-memory Sequelize instance
 const sequelize = new Sequelize({
   dialect: 'sqlite',

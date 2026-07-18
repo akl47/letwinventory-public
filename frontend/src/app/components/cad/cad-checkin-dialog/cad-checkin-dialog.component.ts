@@ -6,10 +6,11 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatCheckboxModule } from '@angular/material/checkbox';
 import { CadModelService } from '../../../services/cad-model.service';
 import { formatDiffEntry, FormattedDiff } from '../../../cad/lib/diffFormat';
 
-export interface CadCheckinResult { message: string; }
+export interface CadCheckinResult { message: string; keepCheckedOut: boolean; }
 
 // Check-in dialog: shows the uncommitted changes (working copy vs the last
 // check-in) and collects a commit message. Returns { message } on confirm, or
@@ -17,7 +18,7 @@ export interface CadCheckinResult { message: string; }
 @Component({
   selector: 'app-cad-checkin-dialog',
   standalone: true,
-  imports: [CommonModule, FormsModule, MatDialogModule, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressSpinnerModule],
+  imports: [CommonModule, FormsModule, MatDialogModule, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressSpinnerModule, MatCheckboxModule],
   template: `
     <h2 mat-dialog-title>Check in</h2>
     <mat-dialog-content>
@@ -38,6 +39,9 @@ export interface CadCheckinResult { message: string; }
         <input matInput [(ngModel)]="message" placeholder="Describe what changed" cdkFocusInitial
                (keydown.enter)="confirm()">
       </mat-form-field>
+      <mat-checkbox [(ngModel)]="keepCheckedOut" class="keep">
+        Keep checked out (checkpoint — continue editing after check-in)
+      </mat-checkbox>
     </mat-dialog-content>
     <mat-dialog-actions align="end">
       <button mat-button (click)="cancel()">Cancel</button>
@@ -57,6 +61,7 @@ export interface CadCheckinResult { message: string; }
     .empty { color: #888; font-size: 13px; padding: 2px 0; } .empty.err { color: #c62828; }
     .loading { display: flex; justify-content: center; padding: 14px; }
     .msg { width: 100%; }
+    .keep { display: block; margin-top: -8px; font-size: 13px; }
   `],
 })
 export class CadCheckinDialogComponent {
@@ -65,6 +70,7 @@ export class CadCheckinDialogComponent {
   private cadApi = inject(CadModelService);
 
   message = '';
+  keepCheckedOut = false;
   loading = signal(true);
   entries = signal<FormattedDiff[]>([]);
   error = signal<string | null>(null);
@@ -79,6 +85,6 @@ export class CadCheckinDialogComponent {
     });
   }
 
-  confirm() { this.ref.close({ message: this.message }); }
+  confirm() { this.ref.close({ message: this.message, keepCheckedOut: this.keepCheckedOut }); }
   cancel() { this.ref.close(null); }
 }

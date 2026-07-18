@@ -191,15 +191,15 @@ export type SketchLine = LineEntity;
 // ──────────────────────────────────────────────────────────────────────────
 // Constraints
 // ──────────────────────────────────────────────────────────────────────────
-// Per REQ 561, constraint targets are entity references — an entity id plus an
-// optional subelement selector. Subelements name a meaningful point or curve on
-// the entity (start, end, center, edge) without requiring a separate primitive.
-
-export type ConstraintSubElement = 'start' | 'end' | 'center' | 'edge';
+// Per REQ 561, constraint targets are entity references by id. (An earlier
+// design reserved an optional per-target `sub` selector for subelements —
+// start/end/center/edge — but nothing ever consumed it: the entity model
+// already exposes those as first-class point entities, and the only live
+// sub-element semantics is `ExternalRef.sub` for projected-edge centers.
+// Removed as dead data rather than left implying capability.)
 
 export interface ConstraintTarget {
   entityId: string;
-  sub?: ConstraintSubElement;
 }
 
 export type ConstraintType =
@@ -464,6 +464,10 @@ export interface ReferenceCandidate {
     sourceEnd: [number, number, number];
     /** Stable id stored on the ref + used as the externalEdges lookup key. */
     stableId: string;
+    /** REQ 916 — host-local polyline snapshot for skeleton refs; when
+     * present, the minted ref carries a `cachedProjection` so standalone
+     * regen resolves without the assembly. */
+    hostLocalPolyline?: [number, number, number][];
   };
 }
 

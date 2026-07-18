@@ -5,10 +5,14 @@ import {
   addRectangleCorners, addRectangleCenter, addRectangle3PtCorner, addRectangle3PtCenter, addParallelogram,
   addPolygon, addSlotStraight, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
   addCircle3Points, addArc3Points, addEllipse, addEllipticalArc, addSpline,
+  addParabolaByPoints, addTextBoxByCorners, rotateTextBox,
   setConstructionFlag, mergePoints,
   ORIGIN_POINT_ID,
 } from './store';
-import type { SketchState, CircleEntity, ArcEntity, EllipseEntity, SplineEntity, LineEntity, PointEntity } from './types';
+import type {
+  SketchState, CircleEntity, ArcEntity, EllipseEntity, EllipticalArcEntity, ConicEntity,
+  SplineEntity, LineEntity, PointEntity,
+} from './types';
 import { pointsOf, linesOf, findEntity, findPoint } from './types';
 
 // Every state from `emptySketchState()` carries the synthetic origin point.
@@ -16,6 +20,19 @@ import { pointsOf, linesOf, findEntity, findPoint } from './types';
 // they don't have to subtract one everywhere.
 const userPoints = (s: SketchState): PointEntity[] =>
   pointsOf(s).filter(p => p.id !== ORIGIN_POINT_ID);
+
+// REQ 894 (review B4): shape builders must not leave stacked duplicate points.
+// Counts pairs of distinct user points sitting at identical coordinates.
+const duplicatePointPairs = (s: SketchState): number => {
+  const pts = userPoints(s);
+  let dups = 0;
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      if (Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y) < 1e-9) dups++;
+    }
+  }
+  return dups;
+};
 
 describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () => {
   describe('addPoint (CAD-010)', () => {
@@ -210,10 +227,13 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       expect(pointsOf(s2).find(p => p.id === c.id)).toBeDefined();
     });
 
-    it('keeps an endpoint that has a surviving constraint referencing it', () => {
+    it('REQ 906: a constraint alone does NOT keep a deleted line`s endpoint alive', () => {
       // Two separate lines tied at one endpoint each via a coincident
-      // constraint. Deleting one line should leave its tied endpoint alive
-      // because the constraint (and the other line) still anchors it.
+      // constraint. Deleting one line takes its endpoints — including the
+      // coincident-tied one — with it; only STRUCTURAL use by a surviving
+      // entity retains a point. (The old behavior kept `b` for the
+      // constraint, littering the sketch with orphan points because every
+      // auto-snap constraint qualified.)
       let s = emptySketchState();
       const a = addPoint(s, 0, 0); s = a.state;
       const b = addPoint(s, 5, 0); s = b.state;
@@ -223,13 +243,31 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       const l2 = addLine(s, c.id, d.id); s = l2.state;
       s = addConstraint(s, 'coincident', [b.id, c.id]).state;
       const s2 = deletePrimitive(s, l1.id);
-      // 'a' was exclusive to l1 → gone.
+      // l1's endpoints are both exclusive to it → gone, coincident too.
       expect(pointsOf(s2).find(p => p.id === a.id)).toBeUndefined();
-      // 'b' is tied to 'c' via a surviving coincident → b stays.
-      expect(pointsOf(s2).find(p => p.id === b.id)).toBeDefined();
+      expect(pointsOf(s2).find(p => p.id === b.id)).toBeUndefined();
+      expect(s2.constraints.length).toBe(0);
       // 'c' and 'd' are still anchors of l2 → stay.
       expect(pointsOf(s2).find(p => p.id === c.id)).toBeDefined();
       expect(pointsOf(s2).find(p => p.id === d.id)).toBeDefined();
+    });
+
+    it('REQ 906: auto-snap constraints to the origin do not orphan endpoints on delete', () => {
+      // The common report: a line drawn with a horizontal snap to the
+      // origin left its endpoints behind on delete because the surviving
+      // origin kept the snap constraint (and thus the point) alive.
+      let s = emptySketchState();
+      const a = addPoint(s, 0, 5); s = a.state;
+      const b = addPoint(s, 8, 5); s = b.state;
+      const ln = addLine(s, a.id, b.id); s = ln.state;
+      s = addConstraint(s, 'vertical', [a.id, 'origin']).state;   // snap: a above origin
+      s = addConstraint(s, 'horizontal', [ln.id]).state;
+      const s2 = deletePrimitive(s, ln.id);
+      expect(pointsOf(s2).find(p => p.id === a.id)).toBeUndefined();
+      expect(pointsOf(s2).find(p => p.id === b.id)).toBeUndefined();
+      expect(s2.constraints.length).toBe(0);
+      // The origin itself always survives.
+      expect(pointsOf(s2).find(p => p.id === 'origin')).toBeDefined();
     });
 
     it('deletes a circle`s center when nothing else uses it', () => {
@@ -264,18 +302,20 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       expect(s2.constraints[0].targets).toEqual([{ entityId: p1.id }, { entityId: p2.id }]);
     });
 
-    it('accepts explicit ConstraintTarget objects for sub-element use', () => {
+    it('accepts explicit ConstraintTarget objects and passes them through', () => {
+      // (The per-target `sub` selector was removed as dead data — sub-element
+      // semantics live on ExternalRef.sub; entity refs are ids only.)
       let s = emptySketchState();
       const p1 = addPoint(s, 0, 0); s = p1.state;
       const p2 = addPoint(s, 5, 0); s = p2.state;
       const ln = addLine(s, p1.id, p2.id); s = ln.state;
       const ext = addPoint(s, 3, 3); s = ext.state;
       const { state: s2 } = addConstraint(
-        s, 'coincident', [{ entityId: ext.id }, { entityId: ln.id, sub: 'edge' }],
+        s, 'coincident', [{ entityId: ext.id }, { entityId: ln.id }],
       );
       expect(s2.constraints[0].targets).toEqual([
         { entityId: ext.id },
-        { entityId: ln.id, sub: 'edge' },
+        { entityId: ln.id },
       ]);
     });
 
@@ -368,11 +408,12 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
   });
 
   describe('addPolygon', () => {
-    it('creates N lines and N points for a regular N-gon', () => {
+    it('creates N lines and N points for a regular N-gon (plus the construction-circle center)', () => {
       const { state, ids } = addPolygon(emptySketchState(), 0, 0, 10, 0, 6);
       expect(ids.length).toBe(6);
       expect(linesOf(state).length).toBe(6);
-      expect(userPoints(state).length).toBe(6);
+      // 6 vertices + the REQ 895 construction circle's center point.
+      expect(userPoints(state).length).toBe(7);
       // First vertex at (10, 0)
       const first = userPoints(state)[0];
       expect(first.x).toBeCloseTo(10);
@@ -380,6 +421,34 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
     });
     it('rejects N < 3', () => {
       expect(() => addPolygon(emptySketchState(), 0, 0, 10, 0, 2)).toThrow();
+    });
+
+    // REQ 895 — the N-gon must stay REGULAR under edits: an inscribing
+    // construction circle, one coincident per vertex, and an equal chain
+    // across consecutive sides.
+    it('REQ 895: emits a construction circle through the vertices + coincident + equal-chain relations', () => {
+      const { state, ids } = addPolygon(emptySketchState(), 0, 0, 10, 0, 5);
+      const circles = state.entities.filter((e): e is CircleEntity => e.kind === 'circle');
+      expect(circles.length).toBe(1);
+      const circ = circles[0];
+      expect(circ.construction).toBe(true);
+      expect(circ.radius).toBeCloseTo(10);
+      const center = findPoint(state, circ.centerId)!;
+      expect(center.x).toBeCloseTo(0);
+      expect(center.y).toBeCloseTo(0);
+      // One coincident per vertex pinning it onto the circle.
+      const coincidents = state.constraints.filter(c => c.type === 'coincident');
+      expect(coincidents.length).toBe(5);
+      expect(coincidents.every(c => c.targets[1].entityId === circ.id)).toBe(true);
+      // Equal chain across consecutive sides: N−1 equals (the Nth is implied;
+      // an explicit one would be PlaneGCS-redundant).
+      const equals = state.constraints.filter(c => c.type === 'equal');
+      expect(equals.length).toBe(4);
+      for (let i = 0; i < 4; i++) {
+        expect(equals[i].targets.map(t => t.entityId)).toEqual([ids[i], ids[i + 1]]);
+      }
+      // No other relation kinds sneak in.
+      expect(state.constraints.length).toBe(9);
     });
   });
 
@@ -391,6 +460,37 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       const lines = state.entities.filter((e): e is LineEntity => e.kind === 'line');
       expect(arcs.length).toBe(2);
       expect(lines.length).toBe(2);
+    });
+
+    it('REQ 894: caps share the rail endpoint ids — no coincident-by-position duplicates', () => {
+      const { state, ids } = addSlotStraight(emptySketchState(), 0, 0, 20, 0, 5);
+      const [lTopId, arc1Id, lBotId, arc2Id] = ids;
+      const lTop = findEntity(state, lTopId) as LineEntity;
+      const lBot = findEntity(state, lBotId) as LineEntity;
+      const arc1 = findEntity(state, arc1Id) as ArcEntity;
+      const arc2 = findEntity(state, arc2Id) as ArcEntity;
+      // Walk the loop: top rail → far cap → bottom rail → near cap → close.
+      expect(arc1.startId).toBe(lTop.endId);
+      expect(arc1.endId).toBe(lBot.startId);
+      expect(arc2.startId).toBe(lBot.endId);
+      expect(arc2.endId).toBe(lTop.startId);
+      expect(duplicatePointPairs(state)).toBe(0);
+      // 4 rail corners + 2 cap centers — no orphaned per-arc duplicates.
+      expect(userPoints(state).length).toBe(6);
+      // Caps stay semicircles of the slot's half-width.
+      expect(arc1.radius).toBeCloseTo(5);
+      expect(arc2.radius).toBeCloseTo(5);
+    });
+
+    it('REQ 894: emits parallel rails + equal-radius caps', () => {
+      const { state, ids } = addSlotStraight(emptySketchState(), 0, 0, 20, 0, 5);
+      const [lTopId, arc1Id, lBotId, arc2Id] = ids;
+      const parallels = state.constraints.filter(c => c.type === 'parallel');
+      expect(parallels.length).toBe(1);
+      expect(parallels[0].targets.map(t => t.entityId).sort()).toEqual([lTopId, lBotId].sort());
+      const equals = state.constraints.filter(c => c.type === 'equal');
+      expect(equals.length).toBe(1);
+      expect(equals[0].targets.map(t => t.entityId).sort()).toEqual([arc1Id, arc2Id].sort());
     });
   });
 
@@ -484,6 +584,28 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       const off = setConstructionFlag(on, [r.id], false);
       expect(findEntity(off, r.id)?.construction).toBe(false);
     });
+
+    it("cascades to an elliptical arc's center + major-axis end (review B15–22 kind gap)", () => {
+      const r = addEllipticalArc(emptySketchState(), 0, 0, 10, 0, 5, 0, Math.PI / 2, true);
+      const ea = findEntity(r.state, r.id) as EllipticalArcEntity;
+      const next = setConstructionFlag(r.state, [r.id], true);
+      expect(findEntity(next, r.id)?.construction).toBe(true);
+      expect(findEntity(next, ea.centerId)?.construction).toBe(true);
+      expect(findEntity(next, ea.majorAxisEndId)?.construction).toBe(true);
+    });
+
+    it("cascades to a conic's defining points (review B15–22 kind gap)", () => {
+      let s = emptySketchState();
+      const v = addPoint(s, 0, 0); s = v.state;
+      const f = addPoint(s, 0, 2); s = f.state;
+      const smp = addPoint(s, 4, 4); s = smp.state;
+      const con = addParabolaByPoints(s, v.id, f.id, smp.id); s = con.state;
+      const next = setConstructionFlag(s, [con.id], true);
+      expect(findEntity(next, con.id)?.construction).toBe(true);
+      for (const pid of [v.id, f.id, smp.id]) {
+        expect(findEntity(next, pid)?.construction).toBe(true);
+      }
+    });
   });
 
   describe('dimensional constraints', () => {
@@ -539,12 +661,15 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       // c4 = c1 + (c3 - c2) = (0,0) + ((6,3) - (5,0)) = (1, 3)
       expect(sortedByX.map(p => [p.x, p.y])).toEqual([[0, 0], [1, 3], [5, 0], [6, 3]]);
     });
-    it('emits parallel + equal constraints for opposite sides', () => {
+    it('emits parallel constraints only — equals are implied by the shared corners (review B15–22)', () => {
+      // parallel ×2 + the four shared corner points already force opposite
+      // sides equal; explicit equals were redundant-by-construction and
+      // tripped PlaneGCS redundancy warnings on a fresh shape.
       const r = addParallelogram(emptySketchState(), 0, 0, 5, 0, 6, 3);
       const parallels = r.state.constraints.filter(c => c.type === 'parallel');
       const equals = r.state.constraints.filter(c => c.type === 'equal');
       expect(parallels.length).toBe(2);
-      expect(equals.length).toBe(2);
+      expect(equals.length).toBe(0);
     });
   });
 
@@ -583,6 +708,42 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       // End at (0,20) — wrong distance. Snap should pull it onto r=10.
       const r = addSlotArcCenterpoint(emptySketchState(), 0, 0, 10, 0, 0, 20, 2);
       expect(r.ids.length).toBe(4);
+    });
+
+    it('REQ 894: rails share one center point (structural concentric) and caps share rail endpoints', () => {
+      const { state, ids } = addSlotArcCenterpoint(emptySketchState(), 0, 0, 10, 0, 0, 10, 2);
+      const [innerId, capEndId, outerId, capStartId] = ids;
+      const inner = findEntity(state, innerId) as ArcEntity;
+      const outer = findEntity(state, outerId) as ArcEntity;
+      const capEnd = findEntity(state, capEndId) as ArcEntity;
+      const capStart = findEntity(state, capStartId) as ArcEntity;
+      // Rails concentric BY CONSTRUCTION: one shared center point id.
+      expect(inner.centerId).toBe(outer.centerId);
+      // Caps share the rail endpoints — a closed loop with single-identity corners.
+      expect(capEnd.startId).toBe(inner.endId);
+      expect(capEnd.endId).toBe(outer.startId);
+      expect(capStart.startId).toBe(outer.endId);
+      expect(capStart.endId).toBe(inner.startId);
+      expect(duplicatePointPairs(state)).toBe(0);
+      // 4 loop corners + shared rail center + 2 cap centers.
+      expect(userPoints(state).length).toBe(7);
+    });
+
+    it('REQ 894: caps carry an equal-radius relation', () => {
+      const { state, ids } = addSlotArcCenterpoint(emptySketchState(), 0, 0, 10, 0, 0, 10, 2);
+      const [, capEndId, , capStartId] = ids;
+      const equals = state.constraints.filter(c => c.type === 'equal');
+      expect(equals.length).toBe(1);
+      expect(equals[0].targets.map(t => t.entityId).sort()).toEqual([capEndId, capStartId].sort());
+    });
+
+    it('REQ 894: addSlotArc3Pt goes through the same shared-topology builder', () => {
+      const { state, ids } = addSlotArc3Pt(emptySketchState(), 10, 0, 0, 10, -10, 0, 2);
+      const inner = findEntity(state, ids[0]) as ArcEntity;
+      const outer = findEntity(state, ids[2]) as ArcEntity;
+      expect(inner.centerId).toBe(outer.centerId);
+      expect(duplicatePointPairs(state)).toBe(0);
+      expect(state.constraints.filter(c => c.type === 'equal').length).toBe(1);
     });
   });
 
@@ -638,6 +799,18 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       const merged = mergePoints(s, c1.id, c2.id);
       expect((findEntity(merged, 'cir-test') as CircleEntity).centerId).toBe(c1.id);
     });
+
+    it("remaps a conic's pointIds (review B15–22 kind gap)", () => {
+      let s = emptySketchState();
+      const v = addPoint(s, 0, 0); s = v.state;
+      const f = addPoint(s, 0, 2); s = f.state;
+      const smp = addPoint(s, 4, 4); s = smp.state;
+      const con = addParabolaByPoints(s, v.id, f.id, smp.id); s = con.state;
+      const dup = addPoint(s, 0, 2); s = dup.state;   // coincident-by-position with the focus
+      const merged = mergePoints(s, dup.id, f.id);
+      expect(findEntity(merged, f.id)).toBeUndefined();
+      expect((findEntity(merged, con.id) as ConicEntity).pointIds).toEqual([v.id, dup.id, smp.id]);
+    });
   });
 
   describe('addEllipticalArc', () => {
@@ -652,6 +825,35 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       expect(e.ccw).toBe(true);
       // Materialized center + major-end points.
       expect(userPoints(r.state).length).toBe(2);
+    });
+  });
+
+  describe('rotateTextBox level detection (review B15–22)', () => {
+    // The baseline's `horizontal` pin must come back whenever the box lands
+    // level — including angles just BELOW 180°/360°, which the old
+    // `norm % 180 < 0.5` test missed (179.8 % 180 = 179.8, not "level").
+    const makeBox = () => addTextBoxByCorners(emptySketchState(), 0, 0, 10, 5, 'hi');
+    const hasHorizontalOn = (s: SketchState, lineId: string) =>
+      s.constraints.some(c =>
+        c.type === 'horizontal' && c.targets.length === 1 && c.targets[0].entityId === lineId);
+
+    it('treats 179.8° as level — horizontal baseline restored', () => {
+      const t = makeBox();
+      const rotated = rotateTextBox(t.state, t.id, 179.8);
+      expect(hasHorizontalOn(rotated, t.lineIds[0])).toBe(true);
+    });
+
+    it('treats 359.8° as level', () => {
+      const t = makeBox();
+      const rotated = rotateTextBox(t.state, t.id, 359.8);
+      expect(hasHorizontalOn(rotated, t.lineIds[0])).toBe(true);
+    });
+
+    it('still treats 0.2° as level and 45° as tilted', () => {
+      const t1 = makeBox();
+      expect(hasHorizontalOn(rotateTextBox(t1.state, t1.id, 0.2), t1.lineIds[0])).toBe(true);
+      const t2 = makeBox();
+      expect(hasHorizontalOn(rotateTextBox(t2.state, t2.id, 45), t2.lineIds[0])).toBe(false);
     });
   });
 

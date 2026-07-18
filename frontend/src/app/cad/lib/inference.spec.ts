@@ -125,7 +125,9 @@ describe('inferLineEnd', () => {
     const remote: PointEntity = { kind: 'point', id: 'remote', x: 20, y: 0 };
     const state: SketchState = { entities: [remote], constraints: [] };
     const r = inferLineEnd(state, { x: -10, y: 0 }, { x: 20.3, y: 12 });
-    expect(r.hint).toBe('aligned');
+    // Vertical alignment now carries its axis glyph (the old label collapsed
+    // both axes to a dead-ternary 'aligned' — review fix).
+    expect(r.hint).toBe('aligned ┃');
     expect(r.snapped.x).toBeCloseTo(20);
     expect(r.snapped.y).toBeCloseTo(12);
     expect(r.guides![0].from).toEqual({ x: 20, y: 0 });

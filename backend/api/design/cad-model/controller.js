@@ -46,7 +46,11 @@ const assemblyBinding = {
   branch: assemblyBranchService,
   freeze: assemblyFreezeService,
   repoFor: (model, d) => assemblyVcsService.repoForAssembly(model, d),
-  cloneContent: (m) => ({ isAssembly: true, assemblyDoc: m.assemblyDoc, defaultView: m.defaultView || null }),
+  cloneContent: (m) => ({
+    isAssembly: true, assemblyDoc: m.assemblyDoc, defaultView: m.defaultView || null,
+    // REQ 913 — revision cloning carries the skeleton too.
+    sketchDoc: m.sketchDoc, featureTree: m.featureTree, equations: m.equations || { entries: {} },
+  }),
   reconcileSel: (body) => ({ instanceIds: (body && body.instanceIds) || [], mateIds: (body && body.mateIds) || [] }),
   workingDiffBinding: {
     repoFor: (model, d) => assemblyVcsService.repoForAssembly(model, d),
@@ -457,6 +461,34 @@ module.exports = {
       }
       return res.status(423).json({ error: `Check out CAD model ${id} before editing it` });
     }
+    // REQ 875: an EXPIRED lock is up for grabs — applying a save against it
+    // could interleave with a takeover. The editor's heartbeat + sliding
+    // renewal below keep an active session from ever getting here.
+    if (model.lockExpiresAt && new Date() > new Date(model.lockExpiresAt)) {
+      return res.status(423).json({
+        error: `Your checkout of CAD model ${id} has expired — check out again to continue`,
+        code: 'LOCK_EXPIRED',
+      });
+    }
+
+    // REQ 905 — doc-version conflict check. The checkout lock only guards
+    // against OTHER users; two sessions of the SAME user both pass it and
+    // previously overwrote each other last-write-wins. The client echoes the
+    // lastContentSavedAt it last synced; a mismatch means another session
+    // saved content since — reject instead of silently clobbering it. Clients
+    // that don't send the token (older frontends, scripts) keep legacy
+    // behavior.
+    if (req.body && req.body.clientSavedAt !== undefined
+        && (req.body.featureTree !== undefined || req.body.sketchDoc !== undefined || req.body.equations !== undefined)) {
+      const serverTok = model.lastContentSavedAt ? new Date(model.lastContentSavedAt).getTime() : null;
+      const clientTok = req.body.clientSavedAt ? new Date(req.body.clientSavedAt).getTime() : null;
+      if (serverTok !== clientTok) {
+        return res.status(409).json({
+          error: 'This model was changed by another session since this window last saved — reload to continue from the latest state.',
+          code: 'DOC_CONFLICT',
+        });
+      }
+    }
 
     const patch = {};
     const previousSnapshot = {
@@ -471,6 +503,9 @@ module.exports = {
     // Any content change makes the working copy differ from its base commit (VC-13).
     if (patch.featureTree !== undefined || patch.sketchDoc !== undefined || patch.equations !== undefined) {
       patch.dirty = true;
+      // REQ 877: the stale-work warning clocks from the last CONTENT save —
+      // renames, heartbeats, and view saves must not reset it.
+      patch.lastContentSavedAt = new Date();
     }
 
     try {
@@ -485,6 +520,9 @@ module.exports = {
           nextDoc: patch.sketchDoc,
         });
       }
+      // REQ 875: a successful save slides the lock expiry forward so an
+      // actively-editing session never expires mid-work.
+      patch.lockExpiresAt = new Date(Date.now() + cadVcsService.DEFAULT_LOCK_TTL_MS);
       await model.update(patch);
       await recordHistory(model.id, req.user.id, 'updated', previousSnapshot, {
         featureTree: model.featureTree,
@@ -675,8 +713,26 @@ module.exports = {
       return res.status(423).json({ error: 'The main branch is protected — create or switch to a draft branch to make changes' });
     }
     try {
-      await bindingFor(model).vcs.checkout(model, req.user.id, {});
-      return res.json(await withReleaseFlag(model));
+      // REQ 874: `takeover: true` confirms rescuing a prior user's expired
+      // dirty checkout — their work lands on a stash branch (stashedTo).
+      const { stashedTo } = await bindingFor(model).vcs.checkout(model, req.user.id, {
+        takeover: !!(req.body && req.body.takeover === true),
+      });
+      const json = await withReleaseFlag(model);
+      return res.json(stashedTo ? { ...json, stashedTo } : json);
+    } catch (err) {
+      return res.status(err.statusCode || 500).json({ error: err.message, ...(err.payload || {}) });
+    }
+  },
+
+  // REQ 875: extend the caller's active lock (editor heartbeat).
+  async renewLock(req, res) {
+    const id = Number(req.params.id);
+    const model = await fetchActiveModel(id);
+    if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
+    try {
+      await bindingFor(model).vcs.renewLock(model, req.user.id, {});
+      return res.json({ lockExpiresAt: model.lockExpiresAt });
     } catch (err) {
       return res.status(err.statusCode || 500).json({ error: err.message });
     }
@@ -688,6 +744,7 @@ module.exports = {
     if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
     const message = (req.body && req.body.message) || '';
     const thumbnail = req.body && req.body.thumbnail;
+    const keepCheckedOut = !!(req.body && req.body.keepCheckedOut);
     const binding = bindingFor(model);
     try {
       const { commitHash } = await binding.vcs.checkin(model, req.user.id, message);
@@ -696,8 +753,16 @@ module.exports = {
       if (thumbnail && binding.thumbnails) {
         try { await cadVcsService.storeThumbnail(model, commitHash, thumbnail); } catch { /* ignore */ }
       }
-      // Check-in releases the lock — the next edit requires a fresh check-out.
-      await binding.vcs.releaseLock(model, req.user.id);
+      // Default: check-in releases the lock. REQ 876: `keepCheckedOut`
+      // checkpoints instead — the lock renews so editing continues. The commit
+      // has already landed, so a renew failure (lock expired mid-check-in)
+      // must not fail the request — fall back to the default release.
+      if (keepCheckedOut) {
+        try { await binding.vcs.renewLock(model, req.user.id, {}); }
+        catch { await binding.vcs.releaseLock(model, req.user.id); }
+      } else {
+        await binding.vcs.releaseLock(model, req.user.id);
+      }
       return res.json({ commitHash, model: await withReleaseFlag(model) });
     } catch (err) {
       return res.status(err.statusCode || 500).json({ error: err.message });

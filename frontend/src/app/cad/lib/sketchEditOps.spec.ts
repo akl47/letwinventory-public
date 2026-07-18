@@ -1,13 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { emptySketchState, addPoint, addLine, addCircle, addArc, addArcByPoints, addConstraint } from './store';
+import {
+  emptySketchState, addPoint, addLine, addCircle, addArc, addArcByPoints, addConstraint,
+  addEllipseByPoints, addEllipticalArc, addSplineByPoints,
+} from './store';
 import {
   trimAt, extendLine, splitLineAt, mirrorEntities, offsetCurve, offsetChain, filletLines, chamferLines, jogLineAt,
   moveEntities, copyEntities, rotateEntities, scaleEntities,
   linearPatternEntities, circularPatternEntities, stretchEntities,
   findChainedEntities,
+  previewTrimLine, previewTrimCircle, previewTrimArc,
 } from './sketchEditOps';
 import { findEntity, findPoint } from './types';
-import type { LineEntity, ArcEntity, CircleEntity, PointEntity } from './types';
+import type {
+  LineEntity, ArcEntity, CircleEntity, PointEntity,
+  EllipseEntity, EllipticalArcEntity, SplineEntity,
+} from './types';
 
 /**
  * Build a horizontal line from x1 to x2 at y, return state + line id +
@@ -191,6 +198,43 @@ describe('trimAt — lines', () => {
       expect(c.externalRef).toEqual({ featureId: 'f1', edgeId: 'f1/e0' });
     }
   });
+
+  it('does not synthesize horizontal/vertical on a coincidentally axis-aligned line (B15-22 ride-along)', () => {
+    // The line happens to be horizontal but carries NO orientation
+    // constraint — trim must not invent one (SolidWorks doesn't).
+    let s = emptySketchState();
+    const main = horizontalLine(s); s = main.state;
+    for (const x of [3, 7]) {
+      const p1 = addPoint(s, x, -1); s = p1.state;
+      const p2 = addPoint(s, x, 1); s = p2.state;
+      s = addLine(s, p1.id, p2.id).state;
+    }
+    const r = trimAt(s, main.lineId, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    expect(lineCount(r.state)).toBe(4);
+    const orient = r.state.constraints.filter(
+      c => c.type === 'horizontal' || c.type === 'vertical');
+    expect(orient.length).toBe(0);
+  });
+
+  it('still inherits an EXISTING horizontal constraint onto every kept sub-segment', () => {
+    let s = emptySketchState();
+    const main = horizontalLine(s); s = main.state;
+    s = addConstraint(s, 'horizontal', [main.lineId]).state;
+    for (const x of [3, 7]) {
+      const p1 = addPoint(s, x, -1); s = p1.state;
+      const p2 = addPoint(s, x, 1); s = p2.state;
+      s = addLine(s, p1.id, p2.id).state;
+    }
+    const r = trimAt(s, main.lineId, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    const horiz = r.state.constraints.filter(c => c.type === 'horizontal');
+    expect(horiz.length).toBe(2);
+    expect(new Set(horiz.map(c => c.id)).size).toBe(2);
+    for (const c of horiz) {
+      expect(r.affectedIds).toContain(c.targets[0].entityId);
+    }
+  });
 });
 
 describe('trimAt — circles', () => {
@@ -217,65 +261,164 @@ describe('trimAt — circles', () => {
     expect(findEntity(r.state, c.id)).toBeUndefined();
   });
 
-  it('rewires radius + coincident constraints onto the replacement arc', () => {
-    // SolidWorks-style: trimming a circle that has a radius dim and a
-    // point-on-circumference constraint should NOT silently drop those
-    // constraints. They should re-anchor onto the new arc, so the
-    // resulting sketch stays fully constrained.
+  it('B8: re-attaches a passenger in the KEPT span to the replacement arc; radius dim transfers', () => {
+    // Circle r=5 cut by a vertical line (crossings at 90° / 270°); a
+    // passenger point rides the circle at 170° via coincident. Clicking
+    // at 0° removes the right wedge (−90°..90°): the passenger sits in
+    // the kept span (90°..270°) and must follow onto the new arc. The
+    // radius dim ALSO transfers — it isn't sweep-dependent (the kept arc
+    // has the same radius); only sweep-dependent dims drop.
     let s = emptySketchState();
     const c = addCircle(s, 0, 0, 5); s = c.state;
-    const onCircum = addPoint(s, 5, 0); s = onCircum.state;
-    // Anchor the radius via a coincident point on the circumference.
-    const cc = addConstraint(s, 'coincident', [onCircum.id, c.id]); s = cc.state;
-    // Pre-trim radius constraint that should also follow the arc.
-    const rc = addConstraint(s, 'radius', [c.id], 5); s = rc.state;
-    // Crossing line so trim has something to split against.
+    const ang = (170 * Math.PI) / 180;
+    const pass = addPoint(s, 5 * Math.cos(ang), 5 * Math.sin(ang)); s = pass.state;
+    s = addConstraint(s, 'coincident', [pass.id, c.id]).state;
+    s = addConstraint(s, 'radius', [c.id], 5).state;
     const a = addPoint(s, 0, -10); s = a.state;
     const b = addPoint(s, 0,  10); s = b.state;
-    const l = addLine(s, a.id, b.id); s = l.state;
+    s = addLine(s, a.id, b.id).state;
     const r = trimAt(s, c.id, { x: 5, y: 0 });
     expect(r.error).toBeUndefined();
     expect(r.affectedIds && r.affectedIds.length).toBe(1);
     const newArcId = r.affectedIds![0];
-    // Every constraint that referenced the circle now references the arc.
-    const referencesCircle = r.state.constraints.some(con =>
-      con.targets.some(t => t.entityId === c.id),
-    );
-    expect(referencesCircle).toBe(false);
-    const radiusRef = r.state.constraints.find(con => con.type === 'radius');
-    expect(radiusRef?.targets[0].entityId).toBe(newArcId);
+    // No constraint still references the deleted circle.
+    expect(r.state.constraints.some(con =>
+      con.targets.some(t => t.entityId === c.id))).toBe(false);
+    // Passenger re-attached to the kept arc.
     const coinRef = r.state.constraints.find(con =>
-      con.type === 'coincident' && con.targets.some(t => t.entityId === newArcId),
-    );
+      con.type === 'coincident'
+      && con.targets.some(t => t.entityId === pass.id)
+      && con.targets.some(t => t.entityId === newArcId));
     expect(coinRef).toBeDefined();
-    expect(coinRef!.targets.map(t => t.entityId)).toContain(onCircum.id);
+    // Radius dim transferred onto the kept arc (not dropped, not duplicated).
+    const radiusDims = r.state.constraints.filter(con => con.type === 'radius');
+    expect(radiusDims).toHaveLength(1);
+    expect(radiusDims[0].targets[0].entityId).toBe(newArcId);
+    expect(radiusDims[0].value).toBe(5);
   });
 
-  it('rewires constraints when trimming an arc into a single sub-arc', () => {
+  it('diameter dim transfers when a circle is trimmed to an arc', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    s = addConstraint(s, 'diameter', [c.id], 10).state;
+    const a = addPoint(s, 0, -10); s = a.state;
+    const b = addPoint(s, 0,  10); s = b.state;
+    s = addLine(s, a.id, b.id).state;
+    const r = trimAt(s, c.id, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    const dims = r.state.constraints.filter(con => con.type === 'diameter');
+    expect(dims).toHaveLength(1);
+    expect(dims[0].targets[0].entityId).toBe(r.affectedIds![0]);
+  });
+
+  it('radius dim lands on exactly ONE kept piece when an arc trim splits it in two', () => {
+    // Half-circle arc (r=5, (5,0)→(−5,0) CCW) with a radius dim, cut by
+    // verticals at ±45° (x = ±5·cos45°). Clicking the top (90°) removes
+    // the middle span, leaving two kept pieces.
+    let s = emptySketchState();
+    const arc = addArc(s, 0, 0, 5, 0, -5, 0, true); s = arc.state;
+    s = addConstraint(s, 'radius', [arc.id], 5).state;
+    const mk = (x: number) => {
+      const p1 = addPoint(s, x, 0); s = p1.state;
+      const p2 = addPoint(s, x, 10); s = p2.state;
+      s = addLine(s, p1.id, p2.id).state;
+    };
+    mk(-5 * Math.cos(Math.PI / 4));
+    mk(5 * Math.cos(Math.PI / 4));
+    const r = trimAt(s, arc.id, { x: 0, y: 5 });
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds!.length).toBe(2);
+    const dims = r.state.constraints.filter(con => con.type === 'radius');
+    expect(dims).toHaveLength(1);
+    expect(r.affectedIds).toContain(dims[0].targets[0].entityId);
+  });
+
+  it('B8: releases a passenger whose location falls in the REMOVED span', () => {
+    // Passenger rides at 10°, slightly off the circumference (beyond
+    // the cut-marker tolerance) so it acts as a pure passenger, not a
+    // cut boundary. Clicking at 0° removes −90°..90°, which covers the
+    // passenger → its coincident was genuinely cut away and is
+    // released (same as splitLineKeepingOnly's removed-middle rule).
+    // The old code welded it onto the kept arc, snapping it ~100° on
+    // the next solve.
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    const ang = (10 * Math.PI) / 180;
+    const pass = addPoint(s, 5.01 * Math.cos(ang), 5.01 * Math.sin(ang)); s = pass.state;
+    s = addConstraint(s, 'coincident', [pass.id, c.id]).state;
+    const a = addPoint(s, 0, -10); s = a.state;
+    const b = addPoint(s, 0,  10); s = b.state;
+    s = addLine(s, a.id, b.id).state;
+    const r = trimAt(s, c.id, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    // Passenger point survives, but its coincident is gone.
+    expect(findEntity(r.state, pass.id)).toBeDefined();
+    expect(r.state.constraints.some(con =>
+      con.targets.some(t => t.entityId === pass.id))).toBe(false);
+  });
+
+  it('B9: a constrained point at the cut becomes the sub-arc endpoint (weld by id, not by rewired coincident)', () => {
     let s = emptySketchState();
     // Half-circle from (5,0) → (-5,0) above the x-axis.
     const a = addArc(s, 0, 0, 5, 0, -5, 0, true); s = a.state;
-    const arcEnt = findEntity(s, a.id) as any;
     const onArc = addPoint(s, 0, 5); s = onArc.state;
-    const cc = addConstraint(s, 'coincident', [onArc.id, a.id]); s = cc.state;
-    // Vertical cut line at x=0 — crosses the arc at (0, 5).
+    s = addConstraint(s, 'coincident', [onArc.id, a.id]).state;
+    // Vertical cut line at x=0 — crosses the arc at (0, 5), the same
+    // spot as the constrained point (T-junction double count → deduped).
     const pA = addPoint(s, 0, -10); s = pA.state;
     const pB = addPoint(s, 0,  10); s = pB.state;
-    const ln = addLine(s, pA.id, pB.id); s = ln.state;
+    s = addLine(s, pA.id, pB.id).state;
     // Click on the right half of the arc — keeps the left half.
     const r = trimAt(s, a.id, { x: 3, y: 4 });
     expect(r.error).toBeUndefined();
-    expect((r.affectedIds || []).length).toBeGreaterThanOrEqual(1);
-    const firstArc = r.affectedIds![0];
-    const referencesOldArc = r.state.constraints.some(con =>
-      con.targets.some(t => t.entityId === a.id),
-    );
-    expect(referencesOldArc).toBe(false);
-    const coinRef = r.state.constraints.find(con =>
-      con.type === 'coincident' && con.targets.some(t => t.entityId === firstArc),
-    );
-    expect(coinRef).toBeDefined();
-    void arcEnt;
+    expect((r.affectedIds || []).length).toBe(1);
+    const piece = findEntity<ArcEntity>(r.state, r.affectedIds![0])!;
+    // The on-curve point is REUSED as the kept piece's start (90°..180°).
+    expect(piece.startId).toBe(onArc.id);
+    // Nothing references the deleted arc anymore.
+    expect(r.state.constraints.some(con =>
+      con.targets.some(t => t.entityId === a.id))).toBe(false);
+  });
+
+  it('B9: another circle\'s center on the circumference is NOT a trim boundary (vesica case)', () => {
+    // Circles A(0,0,r5) and B(5,0,r5): B's center sits exactly ON A's
+    // circumference. Trimming A inside the lens must remove the FULL
+    // lens span (±60°) — B's center is neither a cut boundary nor a
+    // weld candidate for the new arc's endpoints.
+    let s = emptySketchState();
+    const cA = addCircle(s, 0, 0, 5); s = cA.state;
+    const cB = addCircle(s, 5, 0, 5); s = cB.state;
+    const bCenterId = findEntity<CircleEntity>(s, cB.id)!.centerId;
+    const ang = (10 * Math.PI) / 180;
+    const r = trimAt(s, cA.id, { x: 5 * Math.cos(ang), y: 5 * Math.sin(ang) });
+    expect(r.error).toBeUndefined();
+    const arc = findEntity<ArcEntity>(r.state, r.affectedIds![0])!;
+    expect(arc.startId).not.toBe(bCenterId);
+    expect(arc.endId).not.toBe(bCenterId);
+    // Endpoints at the circle-circle intersections (2.5, ±5·sin 60°).
+    const sp = findPoint(r.state, arc.startId)!;
+    const ep = findPoint(r.state, arc.endId)!;
+    expect(sp.x).toBeCloseTo(2.5);
+    expect(Math.abs(sp.y)).toBeCloseTo(5 * Math.sin(Math.PI / 3));
+    expect(ep.x).toBeCloseTo(2.5);
+    expect(Math.abs(ep.y)).toBeCloseTo(5 * Math.sin(Math.PI / 3));
+    // B keeps its center.
+    expect(findEntity<CircleEntity>(r.state, cB.id)!.centerId).toBe(bCenterId);
+  });
+
+  it('B9: a T-junction counts as ONE boundary — the circle is deleted, not cut into a bogus arc', () => {
+    // A line ENDING on the circle used to double-count (vertex point +
+    // curve touch at the same angle), defeating the "< 2 boundaries"
+    // guard and minting a degenerate arc.
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    const a = addPoint(s, 5, 0); s = a.state;   // exactly on the circle
+    const b = addPoint(s, 10, 0); s = b.state;
+    s = addLine(s, a.id, b.id).state;
+    const r = trimAt(s, c.id, { x: -5, y: 0 });
+    expect(r.error).toBeUndefined();
+    expect(findEntity(r.state, c.id)).toBeUndefined();
+    expect(arcCount(r.state)).toBe(0);
   });
 
   it('preserves the original center point id so center-anchored constraints survive', () => {
@@ -298,6 +441,277 @@ describe('trimAt — circles', () => {
     // And the new arc uses that same center.
     const newArc = findEntity(r.state, r.affectedIds![0]) as any;
     expect(newArc.centerId).toBe(originalCenterId);
+  });
+});
+
+describe('trimAt — options (trim tool sidebar)', () => {
+  /** Horizontal solid line crossed by two verticals at x=3 and x=7. */
+  function crossedLine() {
+    let s = emptySketchState();
+    const main = horizontalLine(s); s = main.state;
+    const va = addPoint(s, 3, -1); s = va.state;
+    const vb = addPoint(s, 3,  1); s = vb.state;
+    const v1 = addLine(s, va.id, vb.id); s = v1.state;
+    const vc = addPoint(s, 7, -1); s = vc.state;
+    const vd = addPoint(s, 7,  1); s = vd.state;
+    const v2 = addLine(s, vc.id, vd.id); s = v2.state;
+    return { state: s, main, v1: v1.id, v2: v2.id };
+  }
+
+  it('keepAsConstruction: the removed middle segment survives as a construction line', () => {
+    const { state: s, main } = crossedLine();
+    const r = trimAt(s, main.lineId, { x: 5, y: 0 }, { keepAsConstruction: true });
+    expect(r.error).toBeUndefined();
+    // 2 verticals + 2 kept stubs + 1 construction remnant.
+    expect(lineCount(r.state)).toBe(5);
+    const remnants = r.state.entities.filter(e => e.kind === 'line' && e.construction);
+    expect(remnants).toHaveLength(1);
+    // The remnant spans the removed range [3,7] and REUSES the kept
+    // stubs' cut points (structurally attached, no duplicate points).
+    const rem = remnants[0] as LineEntity;
+    const pa = findPoint(r.state, rem.startId)!;
+    const pb = findPoint(r.state, rem.endId)!;
+    expect([pa.x, pb.x].sort((x, y) => x - y)).toEqual([3, 7]);
+    const solidStubs = r.state.entities.filter(e =>
+      e.kind === 'line' && !e.construction && e.id !== main.lineId) as LineEntity[];
+    const stubEndIds = new Set(solidStubs.flatMap(l => [l.startId, l.endId]));
+    expect(stubEndIds.has(rem.startId)).toBe(true);
+    expect(stubEndIds.has(rem.endId)).toBe(true);
+  });
+
+  it('keepAsConstruction: a no-intersection trim converts the whole line instead of deleting', () => {
+    let s = emptySketchState();
+    const main = horizontalLine(s); s = main.state;
+    const r = trimAt(s, main.lineId, { x: 5, y: 0 }, { keepAsConstruction: true });
+    expect(r.error).toBeUndefined();
+    const line = findEntity<LineEntity>(r.state, main.lineId);
+    expect(line).toBeDefined();
+    expect(line!.construction).toBe(true);
+  });
+
+  it('keepAsConstruction: an already-construction source still deletes (conversion would no-op)', () => {
+    let s = emptySketchState();
+    const main = horizontalLine(s); s = main.state;
+    s = { ...s, entities: s.entities.map(e => e.id === main.lineId ? { ...e, construction: true } : e) };
+    const r = trimAt(s, main.lineId, { x: 5, y: 0 }, { keepAsConstruction: true });
+    expect(r.error).toBeUndefined();
+    expect(findEntity(r.state, main.lineId)).toBeUndefined();
+  });
+
+  it('keepAsConstruction: circle trim keeps the removed wedge as a construction arc', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    const a = addPoint(s, 0, -10); s = a.state;
+    const b = addPoint(s, 0,  10); s = b.state;
+    const l = addLine(s, a.id, b.id); s = l.state;
+    const r = trimAt(s, c.id, { x: 5, y: 0 }, { keepAsConstruction: true });
+    expect(r.error).toBeUndefined();
+    const arcs = r.state.entities.filter(e => e.kind === 'arc') as ArcEntity[];
+    expect(arcs).toHaveLength(2);
+    const kept = arcs.find(x => !x.construction)!;
+    const remnant = arcs.find(x => x.construction)!;
+    expect(kept).toBeDefined();
+    expect(remnant).toBeDefined();
+    // The remnant shares BOTH endpoints with the kept arc (welded at the cuts).
+    expect(new Set([kept.startId, kept.endId])).toEqual(new Set([remnant.startId, remnant.endId]));
+  });
+
+  it('ignoreConstruction: a construction curve no longer bounds the trim', () => {
+    // Middle click between a construction vertical (x=3) and a solid one
+    // (x=7): with the option ON the construction line is invisible to the
+    // trim, so the removed span extends from the line START to x=7.
+    const { state: s0, main, v1 } = crossedLine();
+    const s = { ...s0, entities: s0.entities.map(e => e.id === v1 ? { ...e, construction: true } : e) };
+    const r = trimAt(s, main.lineId, { x: 5, y: 0 }, { ignoreConstruction: true });
+    expect(r.error).toBeUndefined();
+    // The only horizontal survivor spans [7, 10] — the whole left side
+    // (start..7) was removed because x=3 didn't count as a boundary.
+    const horiz = (r.state.entities.filter(e => e.kind === 'line') as LineEntity[]).filter(l => {
+      const p0 = findPoint(r.state, l.startId)!;
+      const p1 = findPoint(r.state, l.endId)!;
+      return Math.abs(p0.y - p1.y) < 1e-9;
+    });
+    expect(horiz).toHaveLength(1);
+    const hp0 = findPoint(r.state, horiz[0].startId)!;
+    const hp1 = findPoint(r.state, horiz[0].endId)!;
+    expect(Math.min(hp0.x, hp1.x)).toBeCloseTo(7, 9);
+    expect(Math.max(hp0.x, hp1.x)).toBeCloseTo(10, 9);
+  });
+
+  it('ignoreConstruction: the hover preview matches the click result', () => {
+    const { state: s0, main, v1 } = crossedLine();
+    const s = { ...s0, entities: s0.entities.map(e => e.id === v1 ? { ...e, construction: true } : e) };
+    const withOpt = previewTrimLine(s, main.lineId, { x: 5, y: 0 }, { ignoreConstruction: true })!;
+    const without = previewTrimLine(s, main.lineId, { x: 5, y: 0 })!;
+    // Without the option the preview stops at the construction vertical (x=3);
+    // with it, the span reaches the line start (x=0).
+    expect(Math.min(without.start.x, without.end.x)).toBeCloseTo(3, 9);
+    expect(Math.min(withOpt.start.x, withOpt.end.x)).toBeCloseTo(0, 9);
+    expect(Math.max(withOpt.start.x, withOpt.end.x)).toBeCloseTo(7, 9);
+  });
+});
+
+describe('trimAt — tangency counts as a trim boundary', () => {
+  // A tangent curve TOUCHES without crossing: the exact intersection
+  // discriminant sits at ~0 and floating point can land it on the "miss"
+  // side, silently dropping the tangency as a stop. All fixtures nudge
+  // the geometry 1e-8 to the miss side to pin the flaky case.
+
+  it('slot construction: circle bounded only by two tangent lines trims to an arc', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    const mkH = (y: number) => {
+      const p1 = addPoint(s, -8, y); s = p1.state;
+      const p2 = addPoint(s, 8, y); s = p2.state;
+      s = addLine(s, p1.id, p2.id).state;
+    };
+    mkH(5 + 1e-8); mkH(-(5 + 1e-8));
+    const r = trimAt(s, c.id, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    // Previously: zero boundaries found → whole circle deleted.
+    expect(findEntity(r.state, c.id)).toBeUndefined();
+    expect(arcCount(r.state)).toBe(1);
+  });
+
+  it('a line trims at its tangency with a circle', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 2, 2 + 1e-8, 2); s = c.state;  // tangent to y=0 at (2,0)
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const main = addLine(s, a.id, b.id); s = main.state;
+    const r = trimAt(s, main.id, { x: 6, y: 0 });
+    expect(r.error).toBeUndefined();
+    const lines = r.state.entities.filter(e => e.kind === 'line') as LineEntity[];
+    expect(lines).toHaveLength(1);
+    const p0 = findPoint(r.state, lines[0].startId)!;
+    const p1 = findPoint(r.state, lines[0].endId)!;
+    expect(Math.max(p0.x, p1.x)).toBeCloseTo(2, 6);  // stops at the tangency
+  });
+
+  it('an arc trims at a tangency with another circle (external tangent)', () => {
+    let s = emptySketchState();
+    const c1 = addCircle(s, 0, 0, 5); s = c1.state;
+    const c2 = addCircle(s, 8 + 1e-8, 0, 3); s = c2.state;  // touches at (5, 0)
+    const va = addPoint(s, -2, -10); s = va.state;
+    const vb = addPoint(s, -2, 10); s = vb.state;
+    s = addLine(s, va.id, vb.id).state;
+    const r = trimAt(s, c1.id, { x: 3, y: 4 });
+    expect(r.error).toBeUndefined();
+    expect(arcCount(r.state)).toBe(1);
+  });
+
+  it('does NOT invent a boundary from a clearly-separated curve', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    const p1 = addPoint(s, -8, 5.5); s = p1.state;  // 0.5 above — not tangent
+    const p2 = addPoint(s, 8, 5.5); s = p2.state;
+    s = addLine(s, p1.id, p2.id).state;
+    const r = trimAt(s, c.id, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    expect(findEntity(r.state, c.id)).toBeUndefined();  // whole circle removed
+    expect(arcCount(r.state)).toBe(0);
+  });
+});
+
+describe('trimAt — constraint preservation', () => {
+  it('endpoint constraints survive a middle trim (endpoints are reused, not recreated)', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const main = addLine(s, a.id, b.id); s = main.state;
+    s = addConstraint(s, 'fixed', [a.id]).state;
+    s = addConstraint(s, 'distance', [a.id, b.id], 10).state;
+    const mk = (x: number) => {
+      const p1 = addPoint(s, x, -1); s = p1.state;
+      const p2 = addPoint(s, x, 1); s = p2.state;
+      s = addLine(s, p1.id, p2.id).state;
+    };
+    mk(3); mk(7);
+    const r = trimAt(s, main.id, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    // The original endpoints survive with identity intact…
+    expect(findEntity(r.state, a.id)).toBeDefined();
+    expect(findEntity(r.state, b.id)).toBeDefined();
+    // …and so do the constraints on them.
+    expect(r.state.constraints.some(c => c.type === 'fixed' && c.targets[0].entityId === a.id)).toBe(true);
+    expect(r.state.constraints.some(c => c.type === 'distance')).toBe(true);
+  });
+
+  it('an endpoint whose whole side was trimmed away still cascades (SW behavior)', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const main = addLine(s, a.id, b.id); s = main.state;
+    s = addConstraint(s, 'fixed', [a.id]).state;
+    const p1 = addPoint(s, 3, -1); s = p1.state;
+    const p2 = addPoint(s, 3, 1); s = p2.state;
+    s = addLine(s, p1.id, p2.id).state;
+    // Click left of the only cutter → the [0..3] side (with `a`) is removed.
+    const r = trimAt(s, main.id, { x: 1, y: 0 });
+    expect(r.error).toBeUndefined();
+    expect(findEntity(r.state, a.id)).toBeUndefined();
+    expect(r.state.constraints.some(c => c.type === 'fixed')).toBe(false);
+  });
+
+  it('tangent survives a line trim, re-attached to the piece nearest the tangency', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 2, 2, 2); s = c.state;  // tangent to y=0 at (2,0)
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const main = addLine(s, a.id, b.id); s = main.state;
+    s = addConstraint(s, 'tangent', [main.id, c.id]).state;
+    const p1 = addPoint(s, 6, -1); s = p1.state;
+    const p2 = addPoint(s, 6, 1); s = p2.state;
+    s = addLine(s, p1.id, p2.id).state;
+    // Remove [6..10]; the kept [0..6] piece contains the tangency at x=2.
+    const r = trimAt(s, main.id, { x: 8, y: 0 });
+    expect(r.error).toBeUndefined();
+    const tangents = r.state.constraints.filter(x => x.type === 'tangent');
+    expect(tangents).toHaveLength(1);
+    const lineTarget = tangents[0].targets.map(t => t.entityId).find(id => id !== c.id)!;
+    const kept = findEntity<LineEntity>(r.state, lineTarget)!;
+    const k0 = findPoint(r.state, kept.startId)!;
+    const k1 = findPoint(r.state, kept.endId)!;
+    expect(Math.min(k0.x, k1.x)).toBeCloseTo(0, 6);
+    expect(Math.max(k0.x, k1.x)).toBeCloseTo(6, 6);
+  });
+
+  it('tangent and concentric survive a circle trim onto the kept arc', () => {
+    let s = emptySketchState();
+    const c1 = addCircle(s, 0, 0, 5); s = c1.state;
+    const ta = addPoint(s, -3, 5); s = ta.state;
+    const tb = addPoint(s, 3, 5); s = tb.state;
+    const tl = addLine(s, ta.id, tb.id); s = tl.state;
+    s = addConstraint(s, 'tangent', [c1.id, tl.id]).state;
+    const c2 = addCircle(s, 0.5, 0, 8); s = c2.state;
+    s = addConstraint(s, 'concentric', [c1.id, c2.id]).state;
+    const va = addPoint(s, 0, -10); s = va.state;
+    const vb = addPoint(s, 0, 10); s = vb.state;
+    s = addLine(s, va.id, vb.id).state;
+    const r = trimAt(s, c1.id, { x: 5, y: 0 });
+    expect(r.error).toBeUndefined();
+    const arcId = r.affectedIds![0];
+    const tangents = r.state.constraints.filter(x => x.type === 'tangent');
+    expect(tangents).toHaveLength(1);
+    expect(tangents[0].targets.some(t => t.entityId === arcId)).toBe(true);
+    const conc = r.state.constraints.filter(x => x.type === 'concentric');
+    expect(conc).toHaveLength(1);
+    expect(conc[0].targets.some(t => t.entityId === arcId)).toBe(true);
+  });
+
+  it('arc trim keeps the surviving original endpoint and its constraints', () => {
+    let s = emptySketchState();
+    const arc = addArc(s, 0, 0, 5, 0, -5, 0, true); s = arc.state;
+    const arcEnt = findEntity<ArcEntity>(s, arc.id)!;
+    s = addConstraint(s, 'fixed', [arcEnt.startId]).state;
+    const p1 = addPoint(s, 0, 1); s = p1.state;
+    const p2 = addPoint(s, 0, 10); s = p2.state;
+    s = addLine(s, p1.id, p2.id).state;
+    // Click at ~137° → removes [90°..180°], keeps [0°..90°] (start side).
+    const r = trimAt(s, arc.id, { x: 5 * Math.cos(2.4), y: 5 * Math.sin(2.4) });
+    expect(r.error).toBeUndefined();
+    expect(findEntity(r.state, arcEnt.startId)).toBeDefined();
+    expect(r.state.constraints.some(c => c.type === 'fixed' && c.targets[0].entityId === arcEnt.startId)).toBe(true);
   });
 });
 
@@ -400,6 +814,19 @@ describe('extendLine', () => {
     );
     expect(onCurve).toBeDefined();
   });
+
+  it('extends to a CONSTRUCTION boundary (parity with trim — REQ 866 ride-along)', () => {
+    let s = emptySketchState();
+    const main = horizontalLine(s, 0, 5, 0); s = main.state;
+    const va = addPoint(s, 8, -1); s = va.state;
+    const vb = addPoint(s, 8,  1); s = vb.state;
+    s = addLine(s, va.id, vb.id, { construction: true }).state;
+    const r = extendLine(s, main.lineId, { x: 4.9, y: 0 });
+    expect(r.error).toBeUndefined();
+    const endPt = findPoint(r.state, main.endId)!;
+    expect(endPt.x).toBeCloseTo(8);
+    expect(endPt.y).toBeCloseTo(0);
+  });
 });
 
 describe('splitLineAt', () => {
@@ -423,6 +850,135 @@ describe('splitLineAt', () => {
     const main = horizontalLine(s, 0, 10, 0); s = main.state;
     const r = splitLineAt(s, main.lineId, { x: 0, y: 0 });
     expect(r.error).toBe('Cannot split at an endpoint');
+  });
+
+  it('B3: splitting a rectangle side keeps corner ids, adjacent sides connected, horizontal on both pieces', () => {
+    // Rectangle with SHARED corner points. Splitting the bottom side
+    // must reuse the corners (the old code minted duplicates, tearing
+    // the rectangle), share the split point between the two pieces,
+    // inherit `horizontal` onto both with unique cloned ids, and drop
+    // dimensional constraints — the splitArcAt discipline.
+    let s = emptySketchState();
+    const p00 = addPoint(s, 0, 0); s = p00.state;
+    const p10 = addPoint(s, 10, 0); s = p10.state;
+    const p11 = addPoint(s, 10, 10); s = p11.state;
+    const p01 = addPoint(s, 0, 10); s = p01.state;
+    const bottom = addLine(s, p00.id, p10.id); s = bottom.state;
+    const right = addLine(s, p10.id, p11.id); s = right.state;
+    const top = addLine(s, p11.id, p01.id); s = top.state;
+    const left = addLine(s, p01.id, p00.id); s = left.state;
+    s = addConstraint(s, 'horizontal', [bottom.id]).state;
+    s = addConstraint(s, 'distance', [bottom.id], 10).state;  // dim → must drop
+
+    const r = splitLineAt(s, bottom.id, { x: 4, y: 0 });
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(2);
+    const [l1, l2] = r.affectedIds!.map(id => findEntity<LineEntity>(r.state, id)!);
+    // Corners keep their ids — the pieces reuse them.
+    expect(l1.startId).toBe(p00.id);
+    expect(l2.endId).toBe(p10.id);
+    // Adjacent sides stay anchored on the original corners.
+    expect(findEntity<LineEntity>(r.state, right.id)!.startId).toBe(p10.id);
+    expect(findEntity<LineEntity>(r.state, left.id)!.endId).toBe(p00.id);
+    expect(findEntity(r.state, top.id)).toBeDefined();
+    // The pieces share the split point at (4, 0).
+    expect(l1.endId).toBe(l2.startId);
+    const split = findPoint(r.state, l1.endId)!;
+    expect(split.x).toBeCloseTo(4);
+    expect(split.y).toBeCloseTo(0);
+    // `horizontal` inherited onto BOTH pieces with unique ids.
+    const horiz = r.state.constraints.filter(c => c.type === 'horizontal');
+    expect(horiz.length).toBe(2);
+    expect(new Set(horiz.map(c => c.id)).size).toBe(2);
+    expect(horiz.map(c => c.targets[0].entityId).sort())
+      .toEqual([l1.id, l2.id].sort());
+    // Dims drop (each piece has a different length).
+    expect(r.state.constraints.filter(c => c.type === 'distance').length).toBe(0);
+  });
+
+  it('B3: re-attaches a passenger point to the piece covering its parameter', () => {
+    let s = emptySketchState();
+    const main = horizontalLine(s, 0, 10, 0); s = main.state;
+    const pass = addPoint(s, 6, 0); s = pass.state;
+    s = addConstraint(s, 'coincident', [pass.id, main.lineId]).state;
+    const r = splitLineAt(s, main.lineId, { x: 4, y: 0 });
+    expect(r.error).toBeUndefined();
+    const [, id2] = r.affectedIds!;
+    // Passenger (t = 0.6) belongs to the second piece [0.4 .. 1].
+    const coin = r.state.constraints.filter(c => c.type === 'coincident');
+    expect(coin.length).toBe(1);
+    expect(coin[0].targets.map(t => t.entityId).sort())
+      .toEqual([id2, pass.id].sort());
+  });
+
+  it('B3: reuses an existing point within tolerance as the split point', () => {
+    let s = emptySketchState();
+    const main = horizontalLine(s, 0, 10, 0); s = main.state;
+    const marker = addPoint(s, 4.0004, 0); s = marker.state;
+    const r = splitLineAt(s, main.lineId, { x: 4, y: 0 });
+    expect(r.error).toBeUndefined();
+    const [l1, l2] = r.affectedIds!.map(id => findEntity<LineEntity>(r.state, id)!);
+    expect(l1.endId).toBe(marker.id);
+    expect(l2.startId).toBe(marker.id);
+  });
+});
+
+describe('mirrorEntities — on-axis points (part 619 over-constraint)', () => {
+  /** Vertical construction axis at x=0. */
+  function withAxis() {
+    let s = emptySketchState();
+    const a1 = addPoint(s, 0, -20); s = a1.state;
+    const a2 = addPoint(s, 0, 20); s = a2.state;
+    const ax = addLine(s, a1.id, a2.id, { construction: true }); s = ax.state;
+    return { s, axisId: ax.id };
+  }
+
+  it('a chain endpoint ON the axis is SHARED (no copy, no degenerate symmetric)', () => {
+    // L-profile whose two chain ends sit on the axis: (0,10)→(5,10)→(5,0)→(0,0).
+    let { s, axisId } = withAxis();
+    const p1 = addPoint(s, 0, 10); s = p1.state;
+    const p2 = addPoint(s, 5, 10); s = p2.state;
+    const p3 = addPoint(s, 5, 0); s = p3.state;
+    const p4 = addPoint(s, 0, 0); s = p4.state;
+    const l1 = addLine(s, p1.id, p2.id); s = l1.state;
+    const l2 = addLine(s, p2.id, p3.id); s = l2.state;
+    const l3 = addLine(s, p3.id, p4.id); s = l3.state;
+    const r = mirrorEntities(s, [l1.id, l2.id, l3.id], axisId);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds).toHaveLength(3);
+    // Only the two OFF-axis points pair up — the on-axis ends are welded
+    // by identity. A zero-length symmetric pair made the solver's
+    // perpendicular primitive singular → whole sketch "over-constrained".
+    const syms = r.state.constraints.filter(c => c.type === 'symmetric');
+    expect(syms).toHaveLength(2);
+    // The mirrored outer lines attach to the ORIGINAL on-axis points.
+    const m1 = findEntity<LineEntity>(r.state, r.affectedIds![0])!;
+    expect([m1.startId, m1.endId]).toContain(p1.id);
+    const m3 = findEntity<LineEntity>(r.state, r.affectedIds![2])!;
+    expect([m3.startId, m3.endId]).toContain(p4.id);
+  });
+
+  it('a circle centered on the axis is self-symmetric — no duplicate is created', () => {
+    let { s, axisId } = withAxis();
+    const c = addCircle(s, 0, 5, 3); s = c.state;
+    const before = s.entities.length;
+    const r = mirrorEntities(s, [c.id], axisId);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds).toHaveLength(0);
+    expect(r.state.entities.length).toBe(before);
+    expect(r.state.constraints.filter(x => x.type === 'symmetric')).toHaveLength(0);
+  });
+
+  it('a line lying entirely on the axis is skipped as its own mirror', () => {
+    let { s, axisId } = withAxis();
+    const q1 = addPoint(s, 0, 2); s = q1.state;
+    const q2 = addPoint(s, 0, 8); s = q2.state;
+    const l = addLine(s, q1.id, q2.id); s = l.state;
+    const before = s.entities.length;
+    const r = mirrorEntities(s, [l.id], axisId);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds).toHaveLength(0);
+    expect(r.state.entities.length).toBe(before);
   });
 });
 
@@ -495,6 +1051,127 @@ describe('mirrorEntities', () => {
     const added = r.state.constraints.slice(before);
     expect(added.filter(c => c.type === 'symmetric')).toHaveLength(1);  // center pair
     expect(added.filter(c => c.type === 'equal')).toHaveLength(1);      // radius lock
+  });
+
+  it('B14: mirrored chains share ONE reflected point per shared corner', () => {
+    // Rectangle above the axis, all four sides mirrored. Each corner
+    // must reflect once and be shared by both adjacent mirrored sides
+    // — the old per-entity reflection stacked duplicate points.
+    let s = emptySketchState();
+    const axis = horizontalLine(s, 0, 10, 0); s = axis.state;
+    const p1 = addPoint(s, 1, 1); s = p1.state;
+    const p2 = addPoint(s, 4, 1); s = p2.state;
+    const p3 = addPoint(s, 4, 3); s = p3.state;
+    const p4 = addPoint(s, 1, 3); s = p4.state;
+    const l1 = addLine(s, p1.id, p2.id); s = l1.state;
+    const l2 = addLine(s, p2.id, p3.id); s = l2.state;
+    const l3 = addLine(s, p3.id, p4.id); s = l3.state;
+    const l4 = addLine(s, p4.id, p1.id); s = l4.state;
+    const pointsBefore = s.entities.filter(e => e.kind === 'point').length;
+    const r = mirrorEntities(s, [l1.id, l2.id, l3.id, l4.id], axis.lineId);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds).toHaveLength(4);
+    const m = r.affectedIds!.map(id => findEntity<LineEntity>(r.state, id)!);
+    // Adjacent mirrored sides share point ids around the loop.
+    expect(m[0].endId).toBe(m[1].startId);
+    expect(m[1].endId).toBe(m[2].startId);
+    expect(m[2].endId).toBe(m[3].startId);
+    expect(m[3].endId).toBe(m[0].startId);
+    // Exactly 4 new points (not 8).
+    const pointsAfter = r.state.entities.filter(e => e.kind === 'point').length;
+    expect(pointsAfter - pointsBefore).toBe(4);
+    // One symmetric constraint per unique corner pair.
+    expect(r.state.constraints.filter(c => c.type === 'symmetric')).toHaveLength(4);
+  });
+
+  it('B14: a construction line mirrors as construction (entity + support points)', () => {
+    let s = emptySketchState();
+    const axis = horizontalLine(s, 0, 10, 0); s = axis.state;
+    const ta = addPoint(s, 1, 1); s = ta.state;
+    const tb = addPoint(s, 3, 2); s = tb.state;
+    const tl = addLine(s, ta.id, tb.id, { construction: true }); s = tl.state;
+    const r = mirrorEntities(s, [tl.id], axis.lineId);
+    expect(r.error).toBeUndefined();
+    const m = findEntity<LineEntity>(r.state, r.affectedIds![0])!;
+    expect(m.construction).toBe(true);
+    expect(findPoint(r.state, m.startId)!.construction).toBe(true);
+    expect(findPoint(r.state, m.endId)!.construction).toBe(true);
+  });
+
+  it('B14: mirrors an ellipse (center + major-axis end reflected, minorRadius kept)', () => {
+    let s = emptySketchState();
+    const axis = horizontalLine(s, 0, 10, 0); s = axis.state;
+    const ce = addPoint(s, 2, 1); s = ce.state;
+    const me = addPoint(s, 5, 1); s = me.state;
+    const ell = addEllipseByPoints(s, ce.id, me.id, 0.8); s = ell.state;
+    const r = mirrorEntities(s, [ell.id], axis.lineId);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds).toHaveLength(1);
+    const m = findEntity<EllipseEntity>(r.state, r.affectedIds![0])!;
+    expect(m.kind).toBe('ellipse');
+    const mc = findPoint(r.state, m.centerId)!;
+    const mm = findPoint(r.state, m.majorAxisEndId)!;
+    expect(mc.x).toBeCloseTo(2); expect(mc.y).toBeCloseTo(-1);
+    expect(mm.x).toBeCloseTo(5); expect(mm.y).toBeCloseTo(-1);
+    expect(m.minorRadius).toBeCloseTo(0.8);
+    // Two symmetric constraints — center pair + major-end pair.
+    expect(r.state.constraints.filter(c => c.type === 'symmetric')).toHaveLength(2);
+  });
+
+  it('B14: mirrors an ellipticalArc — endpoints map to the reflected originals, traversal flips', () => {
+    let s = emptySketchState();
+    const axis = horizontalLine(s, 0, 10, 0); s = axis.state;
+    // Quarter elliptical arc: center (0,2), major end (4,2), minor 1,
+    // parametric 0..π/2 CCW — from (4,2) to (0,3).
+    const ea = addEllipticalArc(s, 0, 2, 4, 2, 1, 0, Math.PI / 2, true); s = ea.state;
+    const r = mirrorEntities(s, [ea.id], axis.lineId);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds).toHaveLength(1);
+    const m = findEntity<EllipticalArcEntity>(r.state, r.affectedIds![0])!;
+    expect(m.kind).toBe('ellipticalArc');
+    expect(m.minorRadius).toBeCloseTo(1);
+    const mc = findPoint(r.state, m.centerId)!;
+    const mm = findPoint(r.state, m.majorAxisEndId)!;
+    expect(mc.x).toBeCloseTo(0); expect(mc.y).toBeCloseTo(-2);
+    expect(mm.x).toBeCloseTo(4); expect(mm.y).toBeCloseTo(-2);
+    // Evaluate the mirrored arc's endpoints in the tessellator's frame
+    // (minor axis = major direction rotated +90°): they must be the
+    // reflections of the original endpoints (4,2)→(4,−2), (0,3)→(0,−3).
+    const evalAt = (t: number) => {
+      const M = Math.hypot(mm.x - mc.x, mm.y - mc.y);
+      const ux = (mm.x - mc.x) / M, uy = (mm.y - mc.y) / M;
+      const ca = M * Math.cos(t), sb = m.minorRadius * Math.sin(t);
+      return { x: mc.x + ux * ca - uy * sb, y: mc.y + uy * ca + ux * sb };
+    };
+    const startPt = evalAt(m.startAngle);
+    const endPt = evalAt(m.endAngle);
+    expect(startPt.x).toBeCloseTo(4); expect(startPt.y).toBeCloseTo(-2);
+    expect(endPt.x).toBeCloseTo(0);   expect(endPt.y).toBeCloseTo(-3);
+    // Reflection reverses the traversal direction.
+    expect(m.ccw).toBe(false);
+  });
+
+  it('B14: mirrors a spline (control points reflected, degree kept)', () => {
+    let s = emptySketchState();
+    const axis = horizontalLine(s, 0, 10, 0); s = axis.state;
+    const coords = [[0, 1], [1, 2], [2, 1], [3, 2]] as const;
+    const cpIds: string[] = [];
+    for (const [x, y] of coords) {
+      const p = addPoint(s, x, y); s = p.state; cpIds.push(p.id);
+    }
+    const sp = addSplineByPoints(s, cpIds, 3); s = sp.state;
+    const r = mirrorEntities(s, [sp.id], axis.lineId);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds).toHaveLength(1);
+    const m = findEntity<SplineEntity>(r.state, r.affectedIds![0])!;
+    expect(m.kind).toBe('spline');
+    expect(m.degree).toBe(3);
+    expect(m.controlPointIds).toHaveLength(4);
+    m.controlPointIds.forEach((id, i) => {
+      const pt = findPoint(r.state, id)!;
+      expect(pt.x).toBeCloseTo(coords[i][0]);
+      expect(pt.y).toBeCloseTo(-coords[i][1]);
+    });
   });
 });
 
@@ -603,6 +1280,98 @@ describe('filletLines', () => {
     const l2 = addLine(s, b1.id, b2.id); s = l2.state;
     const r = filletLines(s, l1.id, l2.id, 1);
     expect(r.error).toMatch(/parallel/i);
+  });
+
+  it('B12 (REQ 896): a dimensioned corner survives as a virtual sharp pinned by collinear construction lines', () => {
+    // The corner point carries a dim, so it survives the fillet's
+    // orphan sweep — the old behavior left it FREE (2 DOF) while the
+    // dim kept measuring it. Now the keepRemovedAsConstruction
+    // mechanism fires automatically: one construction line per leg,
+    // each collinear with its source line, pinning the point at the
+    // theoretical corner so the dim stays solvable.
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const corner = addPoint(s, 10, 0); s = corner.state;
+    const c = addPoint(s, 10, 10); s = c.state;
+    const l1 = addLine(s, a.id, corner.id); s = l1.state;
+    const l2 = addLine(s, corner.id, c.id); s = l2.state;
+    s = addConstraint(s, 'distance', [a.id, corner.id], 10).state;
+    const r = filletLines(s, l1.id, l2.id, 2);
+    expect(r.error).toBeUndefined();
+    // Corner point survives at the theoretical corner; dim intact.
+    const cornerAfter = findPoint(r.state, corner.id)!;
+    expect(cornerAfter).toBeDefined();
+    expect(cornerAfter.x).toBeCloseTo(10);
+    expect(cornerAfter.y).toBeCloseTo(0);
+    const dim = r.state.constraints.find(con => con.type === 'distance')!;
+    expect(dim.targets.map(t => t.entityId)).toContain(corner.id);
+    // Virtual sharp: two construction lines THROUGH the corner point
+    // (the tangent-anchor construction lines don't touch it), plus a
+    // collinear constraint tying each back to its source line.
+    const throughCorner = r.state.entities.filter(
+      (e): e is LineEntity => e.kind === 'line' && e.construction === true
+        && (e.startId === corner.id || e.endId === corner.id));
+    expect(throughCorner.length).toBe(2);
+    const collinears = r.state.constraints.filter(con => con.type === 'collinear');
+    expect(collinears.length).toBe(2);
+    const collinearTargets = collinears.flatMap(con => con.targets.map(t => t.entityId));
+    expect(collinearTargets).toContain(l1.id);
+    expect(collinearTargets).toContain(l2.id);
+  });
+
+  it('B12: an unconstrained corner is still cleaned up (no gratuitous construction lines)', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const corner = addPoint(s, 10, 0); s = corner.state;
+    const c = addPoint(s, 10, 10); s = c.state;
+    const l1 = addLine(s, a.id, corner.id); s = l1.state;
+    const l2 = addLine(s, corner.id, c.id); s = l2.state;
+    const r = filletLines(s, l1.id, l2.id, 2);
+    expect(r.error).toBeUndefined();
+    expect(findPoint(r.state, corner.id)).toBeUndefined();
+    expect(r.state.constraints.filter(con => con.type === 'collinear').length).toBe(0);
+  });
+});
+
+describe('trim previews on construction sources (REQ 866 ride-along)', () => {
+  it('previewTrimLine previews a construction line like trimAt trims it', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const main = addLine(s, a.id, b.id, { construction: true }); s = main.state;
+    for (const x of [3, 7]) {
+      const p1 = addPoint(s, x, -1); s = p1.state;
+      const p2 = addPoint(s, x, 1); s = p2.state;
+      s = addLine(s, p1.id, p2.id).state;
+    }
+    const seg = previewTrimLine(s, main.id, { x: 5, y: 0 });
+    expect(seg).not.toBeNull();
+    expect(seg!.start.x).toBeCloseTo(3);
+    expect(seg!.end.x).toBeCloseTo(7);
+  });
+
+  it('previewTrimCircle previews a construction circle', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 0, 0, 5); s = c.state;
+    s = { ...s, entities: s.entities.map(e => e.id === c.id ? { ...e, construction: true } : e) };
+    const a = addPoint(s, 0, -10); s = a.state;
+    const b = addPoint(s, 0, 10); s = b.state;
+    s = addLine(s, a.id, b.id).state;
+    const poly = previewTrimCircle(s, c.id, { x: 5, y: 0 });
+    expect(poly).not.toBeNull();
+    expect(poly!.length).toBeGreaterThan(1);
+  });
+
+  it('previewTrimArc previews a construction arc', () => {
+    let s = emptySketchState();
+    const arc = addArc(s, 0, 0, 5, 0, -5, 0, true); s = arc.state;
+    s = { ...s, entities: s.entities.map(e => e.id === arc.id ? { ...e, construction: true } : e) };
+    const a = addPoint(s, 0, -10); s = a.state;
+    const b = addPoint(s, 0, 10); s = b.state;
+    s = addLine(s, a.id, b.id).state;
+    const poly = previewTrimArc(s, arc.id, { x: 3, y: 4 });
+    expect(poly).not.toBeNull();
+    expect(poly!.length).toBeGreaterThan(1);
   });
 });
 
@@ -717,6 +1486,25 @@ describe('copyEntities', () => {
     const origA = findPoint(r.state, a.id)!;
     expect(origA.y).toBeCloseTo(0);
   });
+
+  it('copies an ellipticalArc — all fields, remapped point ids (kind-gap ride-along)', () => {
+    let s = emptySketchState();
+    const ea = addEllipticalArc(s, 0, 0, 4, 0, 1.5, 0.3, 2.1, false); s = ea.state;
+    const r = copyEntities(s, [ea.id], 10, 0);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds).toHaveLength(1);
+    const copy = findEntity<EllipticalArcEntity>(r.state, r.affectedIds![0])!;
+    expect(copy.kind).toBe('ellipticalArc');
+    const orig = findEntity<EllipticalArcEntity>(r.state, ea.id)!;
+    expect(copy.centerId).not.toBe(orig.centerId);
+    expect(copy.majorAxisEndId).not.toBe(orig.majorAxisEndId);
+    expect(findPoint(r.state, copy.centerId)!.x).toBeCloseTo(10);
+    expect(findPoint(r.state, copy.majorAxisEndId)!.x).toBeCloseTo(14);
+    expect(copy.minorRadius).toBeCloseTo(1.5);
+    expect(copy.startAngle).toBeCloseTo(0.3);
+    expect(copy.endAngle).toBeCloseTo(2.1);
+    expect(copy.ccw).toBe(false);
+  });
 });
 
 describe('rotateEntities', () => {
@@ -741,6 +1529,17 @@ describe('scaleEntities', () => {
     const center = findPoint(r.state, circ.centerId)!;
     expect(center.x).toBeCloseTo(30);  // scaled 3×
     expect(circ.radius).toBeCloseTo(6);  // radius scaled too
+  });
+
+  it('scales an ellipticalArc`s minorRadius along with its points (kind-gap ride-along)', () => {
+    let s = emptySketchState();
+    const ea = addEllipticalArc(s, 2, 0, 6, 0, 1, 0, Math.PI, true); s = ea.state;
+    const r = scaleEntities(s, [ea.id], { x: 0, y: 0 }, 2);
+    expect(r.error).toBeUndefined();
+    const m = findEntity<EllipticalArcEntity>(r.state, ea.id)!;
+    expect(m.minorRadius).toBeCloseTo(2);
+    expect(findPoint(r.state, m.centerId)!.x).toBeCloseTo(4);
+    expect(findPoint(r.state, m.majorAxisEndId)!.x).toBeCloseTo(12);
   });
 });
 
@@ -773,8 +1572,41 @@ describe('circularPatternEntities', () => {
     const firstId = r.affectedIds![0];
     const first = findEntity<CircleEntity>(r.state, firstId)!;
     const center = findPoint(r.state, first.centerId)!;
-    expect(center.x).toBeCloseTo(10 * Math.cos(2 * Math.PI / 3));
-    expect(center.y).toBeCloseTo(10 * Math.sin(2 * Math.PI / 3));
+    // B10: full-circle patterns step by total/count — the first clone
+    // of a 360°/4 pattern lands at 90°, not 120°.
+    expect(center.x).toBeCloseTo(10 * Math.cos(Math.PI / 2));
+    expect(center.y).toBeCloseTo(10 * Math.sin(Math.PI / 2));
+  });
+
+  it('B10: a full 360° pattern spaces N occurrences evenly — no clone stacked on the original', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 10, 0, 1); s = c.state;
+    const r = circularPatternEntities(s, [c.id], { x: 0, y: 0 }, 2 * Math.PI, 4);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(3);
+    const angles = r.affectedIds!
+      .map(id => findEntity<CircleEntity>(r.state, id)!)
+      .map(circ => findPoint(r.state, circ.centerId)!)
+      .map(p => ((Math.atan2(p.y, p.x) * 180) / Math.PI + 360) % 360)
+      .sort((x, y) => x - y);
+    expect(angles[0]).toBeCloseTo(90);
+    expect(angles[1]).toBeCloseTo(180);
+    expect(angles[2]).toBeCloseTo(270);
+  });
+
+  it('B10: partial sweeps keep the endpoint-inclusive convention (180°/3 → 90° and 180°)', () => {
+    let s = emptySketchState();
+    const c = addCircle(s, 10, 0, 1); s = c.state;
+    const r = circularPatternEntities(s, [c.id], { x: 0, y: 0 }, Math.PI, 3);
+    expect(r.error).toBeUndefined();
+    expect(r.affectedIds?.length).toBe(2);
+    const angles = r.affectedIds!
+      .map(id => findEntity<CircleEntity>(r.state, id)!)
+      .map(circ => findPoint(r.state, circ.centerId)!)
+      .map(p => ((Math.atan2(p.y, p.x) * 180) / Math.PI + 360) % 360)
+      .sort((x, y) => x - y);
+    expect(angles[0]).toBeCloseTo(90);
+    expect(angles[1]).toBeCloseTo(180);
   });
 });
 

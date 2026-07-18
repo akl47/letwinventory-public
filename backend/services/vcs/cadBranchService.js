@@ -87,17 +87,26 @@ async function rebaseBranch(model, userId = null, { at } = {}, db) {
   const ancestry = (await vcs.walk(repo, branchRef.targetHash, db)).map((c) => c.hash);
   if (ancestry.includes(mainRef.targetHash)) return { model, rebased: false };
   const branchCommit = await vcs.getCommit(repo, branchRef.targetHash, db);
-  const newCommit = await vcs.createCommit(repo, {
-    treeHash: branchCommit.treeHash,
-    parents: [mainRef.targetHash],
-    authorUserID: userId,
-    message: `rebase ${branchName} onto main`,
-    timestamp: (at ? new Date(at) : new Date()).toISOString(),
-    meta: cadVersionInfo(),
-  }, db);
-  await vcs.updateBranch(repo, branchName, newCommit, userId, db);
-  await model.update({ baseCommitHash: newCommit });
-  return { model, rebased: true, commitHash: newCommit };
+  // Atomic + CAS (REQ 901): the branch only moves if it still points at the
+  // head this rebase was computed from.
+  return vcs.inTransaction(db, async () => {
+    const newCommit = await vcs.createCommit(repo, {
+      treeHash: branchCommit.treeHash,
+      parents: [mainRef.targetHash],
+      authorUserID: userId,
+      message: `rebase ${branchName} onto main`,
+      timestamp: (at ? new Date(at) : new Date()).toISOString(),
+      meta: cadVersionInfo(),
+    }, db);
+    try {
+      await vcs.updateBranch(repo, branchName, newCommit, userId, db, branchRef.targetHash);
+    } catch (err) {
+      if (err.code === 'REF_MOVED') throw new RestError(err.message, 409);
+      throw err;
+    }
+    await model.update({ baseCommitHash: newCommit });
+    return { model, rebased: true, commitHash: newCommit };
+  });
 }
 
 /** Merge main into a branch by reconciling at the feature level: start from
@@ -160,17 +169,28 @@ async function mergedReconcileDoc(model, branchName, sel, db) {
 async function reconcileBranch(model, sel, userId, { at } = {}, db) {
   if (model.dirty) throw new RestError('Check in your changes before merging', 409);
   const { featureTree, sketchDoc, equations, repo, branchName, mainHead } = await mergedReconcileDoc(model, model.branchName || 'main', sel, db);
+  // CAS anchor: the branch head the merged doc was computed against.
+  const branchRefAtMerge = await vcs.getRef(repo, branchName, db);
   const treeHash = await cadSerialize(repo, { featureTree, sketchDoc, equations }, db);
-  const newCommit = await vcs.createCommit(repo, {
-    treeHash,
-    parents: [mainHead],
-    authorUserID: userId,
-    message: `merge main into ${branchName}`,
-    timestamp: (at ? new Date(at) : new Date()).toISOString(),
-    meta: cadVersionInfo(),
-  }, db);
-  await vcs.updateBranch(repo, branchName, newCommit, userId, db);
-  await model.update({ featureTree, sketchDoc, equations, baseCommitHash: newCommit, dirty: false });
+  const newCommit = await vcs.inTransaction(db, async () => {
+    const commit = await vcs.createCommit(repo, {
+      treeHash,
+      parents: [mainHead],
+      authorUserID: userId,
+      message: `merge main into ${branchName}`,
+      timestamp: (at ? new Date(at) : new Date()).toISOString(),
+      meta: cadVersionInfo(),
+    }, db);
+    try {
+      await vcs.updateBranch(repo, branchName, commit, userId, db,
+        branchRefAtMerge ? branchRefAtMerge.targetHash : undefined);
+    } catch (err) {
+      if (err.code === 'REF_MOVED') throw new RestError(err.message, 409);
+      throw err;
+    }
+    await model.update({ featureTree, sketchDoc, equations, baseCommitHash: commit, dirty: false });
+    return commit;
+  });
   const selection = Array.isArray(sel) ? { featureIds: sel, sketchIds: [] } : (sel || {});
   return { model, commitHash: newCommit, applied: { featureIds: [...new Set(selection.featureIds || [])], sketchIds: [...new Set(selection.sketchIds || [])] } };
 }

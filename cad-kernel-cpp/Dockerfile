@@ -37,8 +37,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 COPY CMakeLists.txt ./
 COPY src ./src
+COPY tests ./tests
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
  && cmake --build build -j"$(nproc)" \
+ && ./build/kernel-tests \
  && cp build/cad-kernel /build/cad-kernel
 
 # ---- runtime ----

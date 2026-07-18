@@ -41,7 +41,17 @@ function parseAddr(raw) {
   return { host: raw.slice(0, idx) || DEFAULT_HOST, port: Number(raw.slice(idx + 1)) };
 }
 const DEFAULT_ADDR = parseAddr(process.env.CAD_KERNEL_ADDR);
-const DEFAULT_TIMEOUT_MS = 30_000;
+// MUST exceed the kernel's per-op timeout (CAD_KERNEL_OP_TIMEOUT_MS, default
+// 60s) plus a margin (REQ 903): with a shorter client timeout, a slow op got a
+// misleading client-side timeout while the kernel kept computing — and on a
+// shared connection the late response was silently dropped while queued
+// requests stalled behind the still-running op. 75s = 60s kernel enforcement
+// (the kernel kills the op's worker child at its own deadline) + 15s margin.
+const DEFAULT_TIMEOUT_MS = Number(process.env.CAD_KERNEL_CLIENT_TIMEOUT_MS) || 75_000;
+// Kernel connections are SERIAL (one request processed at a time per
+// connection), so cross-model concurrency comes from a pool of connections
+// dispatched least-busy-first (REQ 903).
+const DEFAULT_POOL_SIZE = Math.max(1, Number(process.env.CAD_KERNEL_POOL_SIZE) || 4);
 
 class KernelDisconnected extends Error {
   constructor(detail) { super(`CAD kernel disconnected: ${detail}`); this.name = 'KernelDisconnected'; }
@@ -68,12 +78,19 @@ class CadKernelClient {
     this.nextId = 1;
     this.connecting = null;             // Promise while a connect is in flight
     this.shuttingDown = false;
+    this.inFlight = 0;                  // synchronous counter for pool dispatch
   }
 
   // Public RPC entry point. Resolves to the `result` payload from the
   // kernel; throws KernelRpcError on remote errors and KernelDisconnected on
-  // socket errors.
-  async call(method, params = {}, { timeoutMs } = {}) {
+  // socket errors. `inFlight` is bumped SYNCHRONOUSLY so the pool's
+  // least-busy pick sees calls that are still awaiting their connection.
+  call(method, params = {}, opts = {}) {
+    this.inFlight += 1;
+    return this._callInner(method, params, opts).finally(() => { this.inFlight -= 1; });
+  }
+
+  async _callInner(method, params = {}, { timeoutMs } = {}) {
     if (this.shuttingDown) throw new KernelDisconnected('client is shut down');
     await this._ensureConnected();
     const id = this.nextId++;
@@ -209,11 +226,51 @@ class CadKernelClient {
   }
 }
 
-// Singleton — the Node API server keeps one client for its lifetime. Tests
+// Pool of single-connection clients (REQ 903). The kernel is thread-per-
+// connection but SERIAL within a connection, so one shared socket meant every
+// user's regen queued behind whatever op was in flight — a multi-user
+// head-of-line block. The pool dispatches each call to the connection with
+// the fewest in-flight requests; connections are created lazily on first use.
+// Exposes the same `{ call, shutdown }` surface as CadKernelClient so all
+// existing callers and test stubs keep working.
+class CadKernelPool {
+  constructor({ size = DEFAULT_POOL_SIZE, ...clientOpts } = {}) {
+    this.size = size;
+    this.clientOpts = clientOpts;
+    this.clients = [];
+  }
+
+  _pick() {
+    // Reuse the least-busy existing connection; open a new one only when all
+    // existing connections are busy and the pool has room. `inFlight` is
+    // maintained synchronously, so back-to-back calls in one tick fan out.
+    let best = null;
+    for (const c of this.clients) {
+      if (!best || c.inFlight < best.inFlight) best = c;
+    }
+    if ((!best || best.inFlight > 0) && this.clients.length < this.size) {
+      const fresh = new CadKernelClient(this.clientOpts);
+      this.clients.push(fresh);
+      return fresh;
+    }
+    return best;
+  }
+
+  call(method, params = {}, opts = {}) {
+    return this._pick().call(method, params, opts);
+  }
+
+  shutdown() {
+    for (const c of this.clients) c.shutdown();
+    this.clients = [];
+  }
+}
+
+// Singleton — the Node API server keeps one pool for its lifetime. Tests
 // can construct their own instances for isolation.
 let _default = null;
 function getDefaultClient() {
-  if (!_default) _default = new CadKernelClient();
+  if (!_default) _default = new CadKernelPool();
   return _default;
 }
 
@@ -235,6 +292,7 @@ function getHeartbeatClient() {
 
 module.exports = {
   CadKernelClient,
+  CadKernelPool,
   KernelDisconnected,
   KernelRpcError,
   getDefaultClient,

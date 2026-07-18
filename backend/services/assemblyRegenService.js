@@ -18,8 +18,14 @@ const { cadDeserialize } = require('./vcs/cadSerializer');
 const mateSolver = require('./assemblyMateSolver');
 const { relativePlacement, transformPoint } = require('./cadTransform');
 const { resolveEdgeRef, resolveVertexRef } = require('./cadExternalRef');
+const assemblySkeleton = require('./assemblySkeleton');
 
 const IDENTITY_PLACEMENT = { translate: [0, 0, 0], quaternion: [0, 0, 0, 1] };
+
+// REQ 915 — sentinel sourceInstanceId marking a cross-part ref whose source is
+// the ASSEMBLY's own skeleton sketch (not a component instance). Mirrors the
+// frontend constant in crossPartRef.ts.
+const SKELETON_INSTANCE_ID = '__skeleton__';
 
 // ── small vec/quat helpers (placement = translate + unit quaternion) ──────────
 function qRotate(q, v) {
@@ -413,10 +419,28 @@ function topoOrderWithCycles(nodes, edges) {
 // source edge against the source instance's current geometry, then express it in
 // the dependent's local frame via the solved poses. Returns null (→ cached
 // snapshot) for cyclic back-edges or anything that can't be resolved.
-function makeCrossPartResolver({ dependentId, childGeoById, poses, backEdges }) {
+function makeCrossPartResolver({ dependentId, childGeoById, poses, backEdges, skeletonGeo }) {
   return (externalRef) => {
     const sId = externalRef && externalRef.sourceInstanceId;
     if (!sId) return null;
+    // REQ 915/916 — skeleton refs resolve from the assembly's own sketchDoc
+    // (already in assembly WORLD frame → only the dependent's inverse pose
+    // applies). Exact key first; geometric fallback for renamed/deleted
+    // entities. The skeleton has no pose and no dependencies — no cycles.
+    if (sId === SKELETON_INSTANCE_ID) {
+      const poseD = poses[dependentId];
+      if (!skeletonGeo || !poseD) return null;
+      const geomRef = externalRef.sourceGeomRef || {};
+      const key = geomRef.edgeId || geomRef.vertexId;
+      let entry = key ? skeletonGeo.get(key) : null;
+      if (!entry) entry = assemblySkeleton.matchSkeletonFallback(skeletonGeo, externalRef.fallback);
+      if (!entry || !entry.polyline || !entry.polyline.length) return null;
+      const rel = relativePlacement(poseD, IDENTITY_PLACEMENT); // world → D-local
+      const poly = entry.polyline.length === 1
+        ? [entry.polyline[0], entry.polyline[0]]  // vertex → degenerate edge
+        : entry.polyline;
+      return { polyline: poly.map((p) => transformPoint(rel, p)), isStraight: entry.isStraight };
+    }
     if (backEdges && backEdges.has(`${dependentId}|${sId}`)) return null;
     const sourceGeo = childGeoById.get(sId);
     const poseD = poses[dependentId], poseS = poses[sId];
@@ -520,9 +544,24 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
       if (refs && refs.length) refsByInstance.set(inst.instanceId, refs);
     } catch (e) { /* instance simply has no cross-part refs */ }
   }
+  // REQ 915/916 — evaluate the assembly's own skeleton sketches once; used by
+  // the resolver for skeleton refs and returned to the client for the
+  // in-context overlay.
+  const skeletonGeo = assemblySkeleton.skeletonGeoMap(assembly.sketchDoc);
+  composed.skeleton = {
+    partID: assembly.partID,
+    edges: assemblySkeleton.skeletonEdges(assembly.sketchDoc),
+  };
   if (refsByInstance.size) {
     const { nodes, edges } = buildCrossPartDepGraph(instances, refsByInstance);
     const { order, backEdges } = topoOrderWithCycles(nodes, edges);
+    // Instances whose refs point ONLY at the skeleton have no instance
+    // dependency edges (the graph drops non-instance sources) but still
+    // need the live re-regen pass.
+    const skeletonDependents = new Set();
+    for (const [iid, refs] of refsByInstance) {
+      if (refs.some((r) => r.sourceInstanceId === SKELETON_INSTANCE_ID)) skeletonDependents.add(iid);
+    }
     // Only an UNDER-constrained assembly makes a cross-part reference
     // ambiguous: the source instance still has free DOF, so its solved pose
     // (and thus the geometry the reference projects) isn't uniquely defined.
@@ -533,17 +572,33 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
     const ambiguous = composed.constraintState && composed.constraintState.state === 'under';
     for (const instanceId of order) {
       const deps = edges.get(instanceId);
-      if (!deps || !deps.size) continue; // not a dependent
+      if ((!deps || !deps.size) && !skeletonDependents.has(instanceId)) continue; // not a dependent
       const inst = instances.find((i) => i.instanceId === instanceId);
       if (!inst) continue;
-      const externalRefResolver = makeCrossPartResolver({ dependentId: instanceId, childGeoById, poses, backEdges });
+      const externalRefResolver = makeCrossPartResolver({ dependentId: instanceId, childGeoById, poses, backEdges, skeletonGeo });
       try {
         const live = await resolver(inst, assembly, { externalRefResolver });
         if (live) childGeoById.set(instanceId, live);
       } catch (err) {
         composed.errors.push(`In-context regen of instance ${instanceId}: ${err.message}`);
       }
-      for (const s of deps) {
+      // REQ 916 — refresh each ref's cachedProjection from the LIVE resolve
+      // so the child's STANDALONE regen tracks the current source geometry
+      // (skeleton edits, moved components). The caller persists these onto
+      // the child rows when writable; a null resolve leaves the existing
+      // snapshot untouched.
+      const refreshed = [];
+      for (const r of refsByInstance.get(instanceId) || []) {
+        const resolved = externalRefResolver(r.externalRef);
+        if (resolved && Array.isArray(resolved.polyline) && resolved.polyline.length) {
+          refreshed.push({ constraintId: r.constraintId, polyline: resolved.polyline });
+        }
+      }
+      if (refreshed.length) {
+        composed.refProjections = composed.refProjections || {};
+        composed.refProjections[instanceId] = { partID: inst.partID, refs: refreshed };
+      }
+      for (const s of deps || []) {
         if (backEdges.has(`${instanceId}|${s}`)) {
           composed.errors.push(`Cyclic in-context reference ${instanceId} → ${s}: resolved from cached snapshot`);
         }

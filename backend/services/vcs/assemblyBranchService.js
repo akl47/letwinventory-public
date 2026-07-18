@@ -6,13 +6,13 @@
 const RestError = require('../../util/RestError');
 const vcs = require('./vcsService');
 const { makeBranchOps } = require('./vcsBranchOps');
-const { repoForAssembly } = require('./assemblyVcsService');
+const { repoForAssembly, applyBundle } = require('./assemblyVcsService');
 const { assemblySerialize, assemblyDeserialize } = require('./assemblySerializer');
 
 const ops = makeBranchOps({
   repoFor: repoForAssembly,
   deserialize: assemblyDeserialize,
-  applyDoc: (model, doc) => ({ assemblyDoc: doc }),
+  applyDoc: applyBundle,  // REQ 913 — restores skeleton columns too
 });
 
 const mateKey = (m) => m.mateId || m.id;
@@ -34,14 +34,20 @@ async function mergedReconcileDoc(assembly, branchName, sel, db) {
 
   const mainCommit = await vcs.getCommit(repo, mainRef.targetHash, db);
   const branchCommit = await vcs.getCommit(repo, branchRef.targetHash, db);
-  const baseDoc = await assemblyDeserialize(repo, mainCommit.treeHash, db);   // main's latest
-  const branchDoc = await assemblyDeserialize(repo, branchCommit.treeHash, db);
+  const baseBundle = await assemblyDeserialize(repo, mainCommit.treeHash, db);   // main's latest
+  const branchBundle = await assemblyDeserialize(repo, branchCommit.treeHash, db);
 
-  const doc = JSON.parse(JSON.stringify(baseDoc));
+  // Merged bundle: main's latest assemblyDoc + selected branch instance/mate
+  // changes. The SKELETON (sketchDoc/featureTree/equations) comes from the
+  // BRANCH — the merge commit lands on the branch, and the branch's skeleton
+  // work-in-progress must survive the reconcile (REQ 913). Main-side skeleton
+  // edits are branch-wins here, same last-writer semantics as the part-CAD
+  // reconcile's unselected content.
+  const doc = JSON.parse(JSON.stringify(baseBundle.assemblyDoc || {}));
   doc.instances = doc.instances || [];
   doc.mates = doc.mates || [];
-  const branchInstances = branchDoc.instances || [];
-  const branchMates = branchDoc.mates || [];
+  const branchInstances = (branchBundle.assemblyDoc && branchBundle.assemblyDoc.instances) || [];
+  const branchMates = (branchBundle.assemblyDoc && branchBundle.assemblyDoc.mates) || [];
 
   for (const iid of new Set(instanceIds)) {
     const bi = branchInstances.find((i) => i.instanceId === iid);
@@ -55,21 +61,37 @@ async function mergedReconcileDoc(assembly, branchName, sel, db) {
     if (bm) { if (idx >= 0) doc.mates[idx] = bm; else doc.mates.push(bm); }
     else if (idx >= 0) doc.mates.splice(idx, 1);
   }
-  return { doc, repo, branchName, mainHead: mainRef.targetHash };
+  const bundle = {
+    assemblyDoc: doc,
+    sketchDoc: branchBundle.sketchDoc,
+    featureTree: branchBundle.featureTree,
+    equations: branchBundle.equations,
+  };
+  return { bundle, repo, branchName, mainHead: mainRef.targetHash };
 }
 
 async function reconcileBranch(assembly, sel, userId, { at } = {}, db) {
   if (assembly.dirty) throw new RestError('Check in your changes before merging', 409);
-  const { doc, repo, branchName, mainHead } = await mergedReconcileDoc(assembly, assembly.branchName || 'main', sel, db);
-  const treeHash = await assemblySerialize(repo, doc, db);
-  const newCommit = await vcs.createCommit(repo, {
-    treeHash, parents: [mainHead], authorUserID: userId,
-    message: `merge main into ${branchName}`,
-    timestamp: (at ? new Date(at) : new Date()).toISOString(),
-  }, db);
-  await vcs.updateBranch(repo, branchName, newCommit, userId, db);
-  await assembly.update({ assemblyDoc: doc, baseCommitHash: newCommit, dirty: false });
-  return { commitHash: newCommit, assembly };
+  const { bundle, repo, branchName, mainHead } = await mergedReconcileDoc(assembly, assembly.branchName || 'main', sel, db);
+  // CAS anchor: the branch head the merged doc was computed against (REQ 901).
+  const branchRefAtMerge = await vcs.getRef(repo, branchName, db);
+  const treeHash = await assemblySerialize(repo, bundle, db);
+  return vcs.inTransaction(db, async () => {
+    const newCommit = await vcs.createCommit(repo, {
+      treeHash, parents: [mainHead], authorUserID: userId,
+      message: `merge main into ${branchName}`,
+      timestamp: (at ? new Date(at) : new Date()).toISOString(),
+    }, db);
+    try {
+      await vcs.updateBranch(repo, branchName, newCommit, userId, db,
+        branchRefAtMerge ? branchRefAtMerge.targetHash : undefined);
+    } catch (err) {
+      if (err.code === 'REF_MOVED') throw new RestError(err.message, 409);
+      throw err;
+    }
+    await assembly.update({ ...applyBundle(assembly, bundle), baseCommitHash: newCommit, dirty: false });
+    return { commitHash: newCommit, assembly };
+  });
 }
 
 // The instances/mates that differ between main and the branch (for the merge
@@ -83,8 +105,8 @@ async function reconcileChanges(assembly, db) {
   if (!mainRef || !branchRef) return [];
   const mainCommit = await vcs.getCommit(repo, mainRef.targetHash, db);
   const branchCommit = await vcs.getCommit(repo, branchRef.targetHash, db);
-  const mainDoc = await assemblyDeserialize(repo, mainCommit.treeHash, db);
-  const branchDoc = await assemblyDeserialize(repo, branchCommit.treeHash, db);
+  const mainDoc = (await assemblyDeserialize(repo, mainCommit.treeHash, db)).assemblyDoc;
+  const branchDoc = (await assemblyDeserialize(repo, branchCommit.treeHash, db)).assemblyDoc;
   const out = [];
   const im = new Map((mainDoc.instances || []).map((i) => [i.instanceId, JSON.stringify(i)]));
   const ib = new Map((branchDoc.instances || []).map((i) => [i.instanceId, JSON.stringify(i)]));

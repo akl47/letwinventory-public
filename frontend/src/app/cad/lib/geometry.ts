@@ -1,5 +1,5 @@
 import type {
-  SketchState, LineEntity, CircleEntity, ArcEntity,
+  SketchState, LineEntity, CircleEntity, ArcEntity, Plane3,
 } from './types';
 import { findPoint } from './types';
 
@@ -262,4 +262,72 @@ export function offsetLineLeft(a: Pt, b: Pt, d: number): { a: Pt; b: Pt } | null
   if (len < EPS) return null;
   const nx = -dy / len, ny = dx / len;
   return { a: { x: a.x + nx * d, y: a.y + ny * d }, b: { x: b.x + nx * d, y: b.y + ny * d } };
+}
+
+/** REQ 907 — intersection of a datum plane with the sketch plane, expressed
+ * in the SKETCH plane's 2D coordinates. Returns a point on the intersection
+ * line (the foot of the perpendicular from the sketch origin, so the segment
+ * lands near the drawing) plus a unit direction — or null when the planes
+ * are parallel (no meaningful reference line to dimension against). */
+export function planeSketchIntersection(
+  datum: Plane3,
+  sketch: Plane3,
+): { point: Pt; dir: Pt } | null {
+  const cross = (a: [number, number, number], b: [number, number, number]): [number, number, number] =>
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const dot = (a: [number, number, number], b: [number, number, number]) =>
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+  const d3 = cross(datum.normal, sketch.normal);
+  const d3len = Math.hypot(d3[0], d3[1], d3[2]);
+  if (d3len < 1e-9) return null; // parallel (or coincident) planes
+
+  // A point on both planes: P = ((n2 × d)·c1 + (d × n1)·c2) / |d|², with
+  // c_i = n_i · origin_i (plane offsets) and d = n1 × n2. (Check: t1·n1 =
+  // det[n1,n2,d] = |d|² and t1·n2 = 0, so P·n1 = c1 and P·n2 = c2.)
+  const c1 = dot(datum.normal, datum.origin);
+  const c2 = dot(sketch.normal, sketch.origin);
+  const t1 = cross(sketch.normal, d3);
+  const t2 = cross(d3, datum.normal);
+  const inv = 1 / (d3len * d3len);
+  const p3: [number, number, number] = [
+    (t1[0] * c1 + t2[0] * c2) * inv,
+    (t1[1] * c1 + t2[1] * c2) * inv,
+    (t1[2] * c1 + t2[2] * c2) * inv,
+  ];
+
+  // Into sketch 2D coordinates.
+  const rel: [number, number, number] = [
+    p3[0] - sketch.origin[0], p3[1] - sketch.origin[1], p3[2] - sketch.origin[2],
+  ];
+  const p2: Pt = { x: dot(rel, sketch.xAxis), y: dot(rel, sketch.yAxis) };
+  const dir2: Pt = { x: dot(d3, sketch.xAxis) / d3len, y: dot(d3, sketch.yAxis) / d3len };
+
+  // Re-anchor at the closest point to the sketch origin so the projected
+  // reference segment sits near the drawing, not at an arbitrary offset.
+  const t = -(p2.x * dir2.x + p2.y * dir2.y);
+  return { point: { x: p2.x + t * dir2.x, y: p2.y + t * dir2.y }, dir: dir2 };
+}
+
+/** REQ 907 — a datum AXIS orthographically projected onto the sketch plane,
+ * in sketch 2D coordinates. Anchored (like planeSketchIntersection) at the
+ * closest point to the sketch origin. Null when the axis is perpendicular to
+ * the sketch plane — its projection is a point, not a dimensionable line. */
+export function lineSketchProjection(
+  origin: [number, number, number],
+  direction: [number, number, number],
+  sketch: Plane3,
+): { point: Pt; dir: Pt } | null {
+  const dot = (a: [number, number, number], b: [number, number, number]) =>
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const dir2raw: Pt = { x: dot(direction, sketch.xAxis), y: dot(direction, sketch.yAxis) };
+  const len = Math.hypot(dir2raw.x, dir2raw.y);
+  if (len < 1e-9) return null; // axis ⟂ sketch plane
+  const dir2: Pt = { x: dir2raw.x / len, y: dir2raw.y / len };
+  const rel: [number, number, number] = [
+    origin[0] - sketch.origin[0], origin[1] - sketch.origin[1], origin[2] - sketch.origin[2],
+  ];
+  const p2: Pt = { x: dot(rel, sketch.xAxis), y: dot(rel, sketch.yAxis) };
+  const t = -(p2.x * dir2.x + p2.y * dir2.y);
+  return { point: { x: p2.x + t * dir2.x, y: p2.y + t * dir2.y }, dir: dir2 };
 }

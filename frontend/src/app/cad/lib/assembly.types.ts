@@ -132,6 +132,19 @@ export interface AssemblyRegenResponse {
   instances: ComposedInstance[];
   errors: string[];
   constraintState: ConstraintState | null;
+  /** REQ 915 — assembly skeleton sketch geometry (assembly WORLD frame), for
+   * the in-context overlay + skeleton reference picking. */
+  skeleton?: {
+    partID: number;
+    edges: Array<{
+      sketchId: string; entityId: string;
+      /** Overlay stableId AND backend resolver key: `asketch:<sid>/<eid>`. */
+      key: string;
+      polyline: [number, number, number][];
+      isStraight: boolean;
+      kind: 'line' | 'arc' | 'circle' | 'point';
+    }>;
+  };
 }
 
 /** Mate types valid for a pair of selected face surface kinds. */

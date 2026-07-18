@@ -33,6 +33,28 @@ export class AssemblyService {
     return this.http.delete<void>(`${this.apiUrl}/${id}`);
   }
 
+  /** REQ 911/914 — save the assembly's SKELETON content (sketches, datum
+   * plane features, equations). Guarded server-side like part content saves
+   * (lock ownership, main protection, DOC_CONFLICT). */
+  updateSkeleton(id: number, body: {
+    sketchDoc?: unknown; featureTree?: unknown; equations?: unknown;
+    clientSavedAt?: string | null;
+  }): Observable<Assembly> {
+    return this.http.put<Assembly>(`${this.apiUrl}/${id}/skeleton`, body);
+  }
+
+  /** REQ 918 — push assembly global variables into child part equations.
+   * Returns the per-child report. */
+  pushVariables(id: number, names?: string[]): Observable<{
+    results: Array<{ partID: number; modelId: number | null; status: string; lockedBy?: string | null; names: string[] }>;
+    unresolved: string[]; names: string[];
+  }> {
+    return this.http.post<{
+      results: Array<{ partID: number; modelId: number | null; status: string; lockedBy?: string | null; names: string[] }>;
+      unresolved: string[]; names: string[];
+    }>(`${this.apiUrl}/${id}/push-variables`, names && names.length ? { names } : {});
+  }
+
   /** REQ 764 — derive radial explode offsets from instance placements and
    * persist them on the assembly doc. */
   autoExplode(id: number, spread?: number): Observable<{ explode: NonNullable<AssemblyDoc['explode']>; assembly: Assembly }> {

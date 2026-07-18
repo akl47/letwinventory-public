@@ -29,7 +29,7 @@ describe('cadVcsService — checkout / check-in / lock', () => {
   beforeEach(async () => { uid = (await authenticatedRequest()).user.id; });
 
   test('checkout acquires the lock; check-in commits and advances the branch', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     expect(model.lockedByUserID).toBe(uid);
 
     const { commitHash } = await cadvcs.checkin(model, uid, 'first');
@@ -42,7 +42,7 @@ describe('cadVcsService — checkout / check-in / lock', () => {
   });
 
   test('a second check-in chains onto the first (DAG)', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     const r1 = await cadvcs.checkin(model, uid, 'one');
     await model.update({
       featureTree: { features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 10 }], nextFeatureSeq: 3 },
@@ -60,21 +60,21 @@ describe('cadVcsService — checkout / check-in / lock', () => {
 
   test('a second user is blocked while the lock is held (423)', async () => {
     const bob = await db.User.create({ googleID: 'g-bob', displayName: 'Bob', email: 'bob@example.com', activeFlag: true });
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     await expect(cadvcs.checkout(model, bob.id, {})).rejects.toMatchObject({ statusCode: 423 });
   });
 
   test('an expired lock no longer blocks another user', async () => {
     const cara = await db.User.create({ googleID: 'g-cara', displayName: 'Cara', email: 'cara@example.com', activeFlag: true });
     const t0 = new Date('2026-06-01T00:00:00Z');
-    const model = await cadvcs.checkout(await makeModel(uid), uid, { lockTtlMs: 1000, at: t0 });
-    const m2 = await cadvcs.checkout(model, cara.id, { at: new Date(t0.getTime() + 5000) });
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, { lockTtlMs: 1000, at: t0 });
+    const { model: m2 } = await cadvcs.checkout(model, cara.id, { at: new Date(t0.getTime() + 5000) });
     expect(m2.lockedByUserID).toBe(cara.id);
   });
 
   test('releaseLock: holder releases; non-holder cannot; admin force can', async () => {
     const dee = await db.User.create({ googleID: 'g-dee', displayName: 'Dee', email: 'dee@example.com', activeFlag: true });
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     await expect(cadvcs.releaseLock(model, dee.id, {})).rejects.toMatchObject({ statusCode: 423 });
     await cadvcs.releaseLock(model, dee.id, { force: true });
     expect(model.lockedByUserID).toBeNull();
@@ -82,7 +82,7 @@ describe('cadVcsService — checkout / check-in / lock', () => {
 
   test('sweepExpiredLocks clears stale locks', async () => {
     const t0 = new Date('2026-06-01T00:00:00Z');
-    const model = await cadvcs.checkout(await makeModel(uid), uid, { lockTtlMs: 1000, at: t0 });
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, { lockTtlMs: 1000, at: t0 });
     const cleared = await cadvcs.sweepExpiredLocks(new Date(t0.getTime() + 5000));
     expect(cleared).toBe(1);
     await model.reload();
@@ -90,7 +90,7 @@ describe('cadVcsService — checkout / check-in / lock', () => {
   });
 
   test('markDirty flags uncommitted edits; check-in clears it', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     await cadvcs.markDirty(model);
     expect(model.dirty).toBe(true);
     await cadvcs.checkin(model, uid, 'commit');
@@ -98,7 +98,7 @@ describe('cadVcsService — checkout / check-in / lock', () => {
   });
 
   test('every commit is stamped with the kernel + naming version (VC-15)', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     const { commitHash } = await cadvcs.checkin(model, uid, 'v');
     const commit = await vcs.getCommit(await cadvcs.repoForModel(model), commitHash);
     expect(commit.meta.namingVersion).toBe(NAMING_VERSION);
@@ -106,7 +106,7 @@ describe('cadVcsService — checkout / check-in / lock', () => {
   });
 
   test('undoCheckout discards changes, rolls back to the last check-in, and unlocks', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     await cadvcs.checkin(model, uid, 'base'); // base = origin only
     await model.update({
       featureTree: { features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 9 }], nextFeatureSeq: 3 },
@@ -136,7 +136,7 @@ describe('cadVcsService — checkout / check-in / lock', () => {
     }) };
     const spy = jest.spyOn(cadKernelClient, 'getDefaultClient').mockReturnValue(stub);
     try {
-      const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+      const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
       await cadvcs.checkin(model, uid, 'base');
 
       const first = await cadvcs.release(model, uid, '00', {});

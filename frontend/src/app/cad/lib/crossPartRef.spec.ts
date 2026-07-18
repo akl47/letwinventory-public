@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseScopedId, buildCrossPartExternalRef, classifyCrossPartRef, crossPartStatusLabel,
+  isSkeletonRef, SKELETON_INSTANCE_ID,
   type CrossPartExternalRef,
 } from './crossPartRef';
 
@@ -71,5 +72,33 @@ describe('crossPartStatusLabel', () => {
     expect(crossPartStatusLabel('ok')).toBe('In context');
     expect(crossPartStatusLabel('broken')).toBe('Broken reference');
     expect(crossPartStatusLabel('out-of-context')).toBe('Out of context');
+  });
+});
+
+describe('skeleton refs (REQ 915)', () => {
+  it('isSkeletonRef recognizes the sentinel source instance', () => {
+    expect(isSkeletonRef({
+      scope: 'cross-part', definingAssemblyId: 1, definingAssemblyRepoId: '1',
+      sourceInstanceId: SKELETON_INSTANCE_ID, sourcePartId: 2,
+      sourceGeomRef: { featureId: '', edgeId: 'asketch:s1/l1' },
+    })).toBe(true);
+    expect(isSkeletonRef({
+      scope: 'cross-part', definingAssemblyId: 1, definingAssemblyRepoId: '1',
+      sourceInstanceId: 'i2', sourcePartId: 2,
+      sourceGeomRef: { featureId: '', edgeId: 'e1' },
+    })).toBe(false);
+    expect(isSkeletonRef({ scope: 'local', featureId: 'f1', edgeId: 'e1' })).toBe(false);
+    expect(isSkeletonRef(null)).toBe(false);
+  });
+
+  it('classifyCrossPartRef treats skeleton refs by the same rules', () => {
+    const er = {
+      scope: 'cross-part', definingAssemblyId: 5, definingAssemblyRepoId: '5',
+      sourceInstanceId: SKELETON_INSTANCE_ID, sourcePartId: 2,
+      sourceGeomRef: { featureId: '', edgeId: 'asketch:s1/l1' },
+    } as const;
+    expect(classifyCrossPartRef(er as never, { openAssemblyId: 5 })).toBe('ok');
+    expect(classifyCrossPartRef(er as never, { openAssemblyId: 9 })).toBe('out-of-context');
+    expect(classifyCrossPartRef(er as never, { broken: true })).toBe('broken');
   });
 });

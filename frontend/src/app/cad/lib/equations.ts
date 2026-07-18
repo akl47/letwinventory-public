@@ -30,6 +30,11 @@ export interface EquationEntry {
   /** Human-readable error: cycle / undefined identifier / parse failure /
    * non-finite result. Absent when the entry resolved cleanly. */
   error?: string;
+  /** REQ 918 — the assembly model id that PUSHED this value (shared-push
+   * variables). The next push from that assembly overwrites the entry;
+   * local edits are allowed in between. Absent for locally-defined
+   * entries. */
+  fromAssembly?: number;
 }
 
 export interface ResolveResult {

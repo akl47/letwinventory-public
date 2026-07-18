@@ -4,6 +4,7 @@
 #include "op_boolean.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -80,6 +81,23 @@ std::string require_string(const json& params, const char* key) {
   return params[key].get<std::string>();
 }
 
+// Per-op stage timing (REQ 880). Lap() returns ms since the previous lap.
+// One [kernel-timing] stderr line per op → visible via docker logs, greppable.
+struct StageTimer {
+  std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point last = t0;
+  long lap() {
+    auto now = std::chrono::steady_clock::now();
+    long ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count();
+    last = now;
+    return ms;
+  }
+  long total() const {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+  }
+};
+
 // Combine the export operand BReps into a single shape: one body passes through
 // directly; multiple bodies become a cleaned compound. Mirrors the Rust
 // `export_stl` / `export_step` operand assembly.
@@ -116,14 +134,21 @@ TopoDS_Shape assemble_export_shape(const json& params) {
 // decompose. The Rust soft-clean-timeout / GlueShift fuse path is intentionally
 // dropped: we run direct OCCT here.
 json op_buildBoolean(const json& params) {
+  StageTimer timer;
   std::string feature_id =
       params.value("featureId", std::string("f_anon"));
   std::string op = require_string(params, "op");
   std::string a_brep = require_string(params, "aBrep");
   std::string b_brep = require_string(params, "bBrep");
+  // "all" (default) = top-level faces/topology AND per-solid tessellation.
+  // "solids" = per-solid only — the compose pipeline consumes solids[].faces
+  // exclusively, so skipping the top-level pass halves tessellation work.
+  const std::string want_faces = params.value("wantFaces", std::string("all"));
+  const size_t bytes_in = a_brep.size() + b_brep.size();
 
   TopoDS_Shape a = brep_from_base64(a_brep);
   TopoDS_Shape b = brep_from_base64(b_brep);
+  const long t_deser = timer.lap();
 
   // Union / Cut / Common. BuildBooleanOp serializes lowercase in protocol.rs.
   // A fuzzy tolerance (scaled to the part) absorbs the sub-1e-4 mm mismatch
@@ -152,15 +177,24 @@ json op_buildBoolean(const json& params) {
   } else {
     throw std::runtime_error("buildBoolean: unknown op '" + op + "'");
   }
+  const long t_bool = timer.lap();
 
   // Merge co-domain sub-faces the boolean introduced (incl. coaxial cylinder
   // fragments with opposite axis directions — clean_unify canonicalizes those
   // surfaces first so UnifySameDomain recognizes them as one).
   TopoDS_Shape shape = clean_unify(raw);
+  const long t_unify = timer.lap();
 
-  // Topology + generic (centroid-sorted) face tessellation.
-  json topology = extract_topology(shape);
-  Tessellated tess = tessellate_generic(shape, feature_id);
+  // Topology + generic (centroid-sorted) face tessellation. Skipped when the
+  // caller only consumes the per-solid decomposition (wantFaces:"solids") —
+  // previously the whole body was meshed here AND again per solid (REQ 878).
+  json topology = json{{"vertices", json::array()}, {"edges", json::array()}};
+  json faces = json::array();
+  if (want_faces != "solids") {
+    topology = extract_topology(shape);
+    faces = tessellate_generic(shape, feature_id).faces;
+  }
+  const long t_tess = timer.lap();
 
   // Whole-shape BRep that feeds the NEXT compose op. brep_to_base64 throws on
   // an empty/unserializable shape, matching the Rust empty-bytes guard.
@@ -171,13 +205,93 @@ json op_buildBoolean(const json& params) {
         "OCCT couldn't write the resulting shape. Likely degenerate input "
         "(e.g. cutting a body in a way that produces zero volume).");
   }
+  const long t_ser = timer.lap();
 
   // SolidWorks-style body tracking: split the result into disjoint solids.
   json solids = decompose_into_solids(shape, feature_id);
+  const long t_decomp = timer.lap();
+
+  std::fprintf(stderr,
+               "[kernel-timing] buildBoolean feature=%s op=%s wantFaces=%s inKB=%zu "
+               "deser=%ld bool=%ld unify=%ld tess=%ld ser=%ld decomp=%ld total=%ldms\n",
+               feature_id.c_str(), op.c_str(), want_faces.c_str(), bytes_in / 1024,
+               t_deser, t_bool, t_unify, t_tess, t_ser, t_decomp, timer.total());
+  std::fflush(stderr);
 
   return json{
       {"brepBytes", brep_bytes},
-      {"faces", tess.faces},
+      {"faces", faces},
+      {"topology", topology},
+      {"solids", solids},
+  };
+}
+
+// buildFuseMany — fuse N shapes in ONE boolean pass (REQ 878). The first brep
+// is the base; the rest join it as a single compound tool, so one BOP resolves
+// every seam at once instead of N-1 chained pairwise fuses, each re-parsing
+// and re-tessellating the growing accumulator. The caller supplies the SAME
+// featureId string the legacy chain's final fuse used, so per-solid face
+// persistent names are unchanged (no NAMING_SCHEMA_VERSION bump).
+json op_buildFuseMany(const json& params) {
+  StageTimer timer;
+  std::string feature_id = params.value("featureId", std::string("f_anon"));
+  const std::string want_faces = params.value("wantFaces", std::string("all"));
+  if (!params.contains("breps") || !params["breps"].is_array() || params["breps"].size() < 2) {
+    throw std::runtime_error("buildFuseMany: 'breps' must be an array of 2+ base64 BReps");
+  }
+  const auto& breps = params["breps"];
+  size_t bytes_in = 0;
+  std::vector<TopoDS_Shape> shapes;
+  shapes.reserve(breps.size());
+  for (size_t i = 0; i < breps.size(); ++i) {
+    if (!breps[i].is_string()) {
+      throw std::runtime_error("buildFuseMany: brep " + std::to_string(i) + " is not a string");
+    }
+    const std::string s = breps[i].get<std::string>();
+    bytes_in += s.size();
+    shapes.push_back(brep_from_base64(s));
+  }
+  const long t_deser = timer.lap();
+
+  TopoDS_Compound tool;
+  BRep_Builder builder;
+  builder.MakeCompound(tool);
+  for (size_t i = 1; i < shapes.size(); ++i) builder.Add(tool, shapes[i]);
+
+  BRepAlgoAPI_Fuse fuse(shapes[0], tool);
+  fuse.SetFuzzyValue(boolean_fuzzy(shapes[0], tool));
+  fuse.Build();
+  if (!fuse.IsDone()) throw std::runtime_error("buildFuseMany: Fuse failed");
+  TopoDS_Shape shape = clean_unify(fuse.Shape());
+  const long t_bool = timer.lap();
+
+  json topology = json{{"vertices", json::array()}, {"edges", json::array()}};
+  json faces = json::array();
+  if (want_faces != "solids") {
+    topology = extract_topology(shape);
+    faces = tessellate_generic(shape, feature_id).faces;
+  }
+  const long t_tess = timer.lap();
+
+  std::string brep_bytes = brep_to_base64(shape);
+  if (brep_bytes.empty()) {
+    throw std::runtime_error("buildFuseMany: result BRep serialization returned empty bytes");
+  }
+  const long t_ser = timer.lap();
+
+  json solids = decompose_into_solids(shape, feature_id);
+  const long t_decomp = timer.lap();
+
+  std::fprintf(stderr,
+               "[kernel-timing] buildFuseMany feature=%s n=%zu wantFaces=%s inKB=%zu "
+               "deser=%ld bool+unify=%ld tess=%ld ser=%ld decomp=%ld total=%ldms\n",
+               feature_id.c_str(), (size_t)breps.size(), want_faces.c_str(), bytes_in / 1024,
+               t_deser, t_bool, t_tess, t_ser, t_decomp, timer.total());
+  std::fflush(stderr);
+
+  return json{
+      {"brepBytes", brep_bytes},
+      {"faces", faces},
       {"topology", topology},
       {"solids", solids},
   };

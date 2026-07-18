@@ -33,6 +33,35 @@ describe('analyzeDeterminacy', () => {
     expect(analyzeDeterminacy(s).has(p.id)).toBe(true);
   });
 
+  it('a 90° angle dimension contributes rank (review B2 — sin residual had zero gradient at right angles)', () => {
+    // L1 fixed along +x; L2 shares the fixed vertex; a 90° angle dim + a
+    // length dim must fully determine L2's free endpoint. The old sin-based
+    // residual had Jacobian cos(90°)=0, so the endpoint read as free.
+    let s = emptySketchState();
+    const v = addPoint(s, 0, 0); s = v.state;
+    const a = addPoint(s, 10, 0); s = a.state;
+    s = addConstraint(s, 'fixed', [v.id]).state;
+    s = addConstraint(s, 'fixed', [a.id]).state;
+    const l1 = addLine(s, v.id, a.id); s = l1.state;
+    const b = addPoint(s, 0, 7); s = b.state;
+    const l2 = addLine(s, v.id, b.id); s = l2.state;
+    s = addConstraint(s, 'angle', [l1.id, l2.id], Math.PI / 2).state;
+    s = addConstraint(s, 'distance', [v.id, b.id], 7).state;
+    const det = analyzeDeterminacy(s);
+    expect(det.has(b.id)).toBe(true);
+    expect(det.has(l2.id)).toBe(true);
+  });
+
+  it('a zero-valued horizontal-distance dim contributes rank (review B8-class)', () => {
+    // "Align via 0-dim": the old squared residual (dx² − v²) had gradient 0
+    // at dx = v = 0, so the aligned point read as free on that axis.
+    let s = emptySketchState();
+    const p = addPoint(s, 0, 4); s = p.state;
+    s = addConstraint(s, 'horizontal-distance', [ORIGIN_POINT_ID, p.id], 0).state;
+    s = addConstraint(s, 'vertical-distance', [ORIGIN_POINT_ID, p.id], 4).state;
+    expect(analyzeDeterminacy(s).has(p.id)).toBe(true);
+  });
+
   it('propagates determinacy through `coincident` between two points', () => {
     let s = emptySketchState();
     const fixed = addPoint(s, 0, 0); s = fixed.state;
@@ -92,6 +121,153 @@ describe('analyzeDeterminacy', () => {
     expect(analyzeDeterminacy(s).has(c.id)).toBe(false);  // no radius dim yet
     s = addConstraint(s, 'radius', [c.id], 5).state;
     expect(analyzeDeterminacy(s).has(c.id)).toBe(true);
+  });
+
+  // ── Tangent-at-endpoint singular configuration (part 619 / p13 repro) ────
+  // A line tangent to a circle whose endpoint is ALSO coincident-on that
+  // circle: the solution set is discrete (the bimodal two-sided tangent — you
+  // can't drag between the two positions), so the sketch IS fully
+  // constrained. The generic |dist(center,line)| − r tangency residual is
+  // gradient-degenerate at the solution (parallel to the point-on-circle
+  // row), which used to report a phantom DOF.
+
+  it('line tangent to a circle at its on-circle endpoint reads fully determined', () => {
+    let s = emptySketchState();
+    const c0 = addPoint(s, 0, 0); s = c0.state;
+    s = addConstraint(s, 'fixed', [c0.id]).state;
+    const k = addCircle(s, 0, 0, 5); s = k.state;
+    const circle = s.entities.find(e => e.id === k.id) as any;
+    s = addConstraint(s, 'coincident', [circle.centerId, c0.id]).state;
+    s = addConstraint(s, 'radius', [k.id], 5).state;
+    // Horizontal tangent line touching the circle at A = (0, 5).
+    const a = addPoint(s, 0, 5); s = a.state;
+    const b = addPoint(s, 10, 5); s = b.state;
+    const l = addLine(s, a.id, b.id); s = l.state;
+    s = addConstraint(s, 'coincident', [a.id, k.id]).state;       // A on circle
+    s = addConstraint(s, 'tangent', [k.id, l.id]).state;          // line tangent
+    s = addConstraint(s, 'horizontal', [l.id]).state;             // direction pinned
+    s = addConstraint(s, 'horizontal-distance', [a.id, b.id], 10).state;  // B pinned along
+    const det = analyzeDeterminacy(s);
+    expect(det.has(a.id)).toBe(true);
+    expect(det.has(b.id)).toBe(true);
+    expect(det.has(l.id)).toBe(true);
+  });
+
+  it('generic offset tangent (no endpoint on the curve) still contributes exactly 1 row', () => {
+    // Same setup but the line's endpoints are NOT on the circle — the
+    // tangency alone pins the line's offset; endpoints stay free along it.
+    let s = emptySketchState();
+    const c0 = addPoint(s, 0, 0); s = c0.state;
+    s = addConstraint(s, 'fixed', [c0.id]).state;
+    const k = addCircle(s, 0, 0, 5); s = k.state;
+    const circle = s.entities.find(e => e.id === k.id) as any;
+    s = addConstraint(s, 'coincident', [circle.centerId, c0.id]).state;
+    s = addConstraint(s, 'radius', [k.id], 5).state;
+    const a = addPoint(s, -10, 5); s = a.state;
+    const b = addPoint(s, 10, 5); s = b.state;
+    const l = addLine(s, a.id, b.id); s = l.state;
+    s = addConstraint(s, 'tangent', [k.id, l.id]).state;
+    s = addConstraint(s, 'horizontal', [l.id]).state;
+    const det = analyzeDeterminacy(s);
+    // x of both endpoints is still free — must NOT read as determined.
+    expect(det.has(a.id)).toBe(false);
+    expect(det.has(b.id)).toBe(false);
+  });
+
+  it('line tangent to an arc at a shared endpoint (fillet pattern) reads fully determined', () => {
+    let s = emptySketchState();
+    const c0 = addPoint(s, 0, 0); s = c0.state;
+    s = addConstraint(s, 'fixed', [c0.id]).state;
+    // Arc centered at the fixed point, R5, from (5,0) to (0,5).
+    const arc = addArc(s, 0, 0, 5, 0, 0, 5, true); s = arc.state;
+    const arcEnt = s.entities.find(e => e.id === arc.id) as any;
+    s = addConstraint(s, 'coincident', [arcEnt.centerId, c0.id]).state;
+    s = addConstraint(s, 'radius', [arc.id], 5).state;
+    s = addConstraint(s, 'fixed', [arcEnt.startId]).state;
+    // Line leaving the arc's END point tangentially (horizontal at y=5).
+    const b = addPoint(s, 10, 5); s = b.state;
+    const l = addLine(s, arcEnt.endId, b.id); s = l.state;
+    s = addConstraint(s, 'tangent', [arc.id, l.id]).state;
+    s = addConstraint(s, 'horizontal', [l.id]).state;
+    s = addConstraint(s, 'horizontal-distance', [arcEnt.endId, b.id], 10).state;
+    const det = analyzeDeterminacy(s);
+    // Horizontal + tangent-at-the-shared-endpoint force the radius at the
+    // arc end vertical → the end's angular position is discrete (top or
+    // bottom of the circle), and B rides from it. Fully determined.
+    expect(det.has(arcEnt.endId)).toBe(true);
+    expect(det.has(b.id)).toBe(true);
+  });
+
+  // ── Tangent junction of two determined circles (part 619 / p1-mrphjqg2) ──
+  // A point shared by two circles that are TANGENT to each other sits at
+  // their single touch point — isolated, hence constrained — but the two
+  // point-on-circle gradients are (anti)parallel there, so plain rank
+  // analysis reported a phantom sliding DOF. The tangent-junction fixpoint
+  // pass detects the configuration and pins the point.
+
+  it('point at the tangency of two determined circles reads determined (external tangent)', () => {
+    let s = emptySketchState();
+    const c1c = addPoint(s, 0, 0); s = c1c.state;
+    s = addConstraint(s, 'fixed', [c1c.id]).state;
+    const k1 = addCircle(s, 0, 0, 5); s = k1.state;
+    const k1e = s.entities.find(e => e.id === k1.id) as any;
+    s = addConstraint(s, 'coincident', [k1e.centerId, c1c.id]).state;
+    s = addConstraint(s, 'radius', [k1.id], 5).state;
+    const c2c = addPoint(s, 8, 0); s = c2c.state;
+    s = addConstraint(s, 'fixed', [c2c.id]).state;
+    const k2 = addCircle(s, 8, 0, 3); s = k2.state;
+    const k2e = s.entities.find(e => e.id === k2.id) as any;
+    s = addConstraint(s, 'coincident', [k2e.centerId, c2c.id]).state;
+    s = addConstraint(s, 'radius', [k2.id], 3).state;
+    // Touch point at (5, 0) — coincident on BOTH circles.
+    const p = addPoint(s, 5, 0); s = p.state;
+    s = addConstraint(s, 'coincident', [p.id, k1.id]).state;
+    s = addConstraint(s, 'coincident', [p.id, k2.id]).state;
+    expect(analyzeDeterminacy(s).has(p.id)).toBe(true);
+  });
+
+  it('point on two tangent circles stays FREE when one circle is undetermined', () => {
+    let s = emptySketchState();
+    const c1c = addPoint(s, 0, 0); s = c1c.state;
+    s = addConstraint(s, 'fixed', [c1c.id]).state;
+    const k1 = addCircle(s, 0, 0, 5); s = k1.state;
+    const k1e = s.entities.find(e => e.id === k1.id) as any;
+    s = addConstraint(s, 'coincident', [k1e.centerId, c1c.id]).state;
+    s = addConstraint(s, 'radius', [k1.id], 5).state;
+    // Second circle: free-floating center, no radius dim.
+    const k2 = addCircle(s, 8, 0, 3); s = k2.state;
+    const p = addPoint(s, 5, 0); s = p.state;
+    s = addConstraint(s, 'coincident', [p.id, k1.id]).state;
+    s = addConstraint(s, 'coincident', [p.id, k2.id]).state;
+    expect(analyzeDeterminacy(s).has(p.id)).toBe(false);
+  });
+
+  it('fillet-style junction: shared endpoint of two tangent DETERMINED arcs pins, and the arcs resolve', () => {
+    // Mirrors part 619: big arc (r=5, center fixed) meets a small arc
+    // (r=3, center fixed at distance 8 → externally tangent) at a shared
+    // endpoint; each arc's OTHER endpoint is fixed, pinning both radii
+    // through the arc invariants. The junction is the touch point.
+    let s = emptySketchState();
+    const cA = addPoint(s, 0, 0); s = cA.state;
+    s = addConstraint(s, 'fixed', [cA.id]).state;
+    const cB = addPoint(s, 8, 0); s = cB.state;
+    s = addConstraint(s, 'fixed', [cB.id]).state;
+    // Arc A: center (0,0) r=5, from (0,5) to the junction (5,0), CW as ccw=false.
+    const a1 = addArc(s, 0, 0, 0, 5, 5, 0, false); s = a1.state;
+    const a1e = s.entities.find(e => e.id === a1.id) as any;
+    s = addConstraint(s, 'coincident', [a1e.centerId, cA.id]).state;
+    s = addConstraint(s, 'fixed', [a1e.startId]).state;
+    // Arc B: center (8,0) r=3, from the junction (5,0) to (8,3).
+    const b1 = addArc(s, 8, 0, 5, 0, 8, 3, true); s = b1.state;
+    const b1e = s.entities.find(e => e.id === b1.id) as any;
+    s = addConstraint(s, 'coincident', [b1e.centerId, cB.id]).state;
+    s = addConstraint(s, 'fixed', [b1e.endId]).state;
+    // Weld the junction: arc B starts where arc A ends.
+    s = addConstraint(s, 'coincident', [a1e.endId, b1e.startId]).state;
+    const det = analyzeDeterminacy(s);
+    expect(det.has(a1e.endId)).toBe(true);
+    expect(det.has(a1.id)).toBe(true);
+    expect(det.has(b1.id)).toBe(true);
   });
 
   // ── Edge cases the heuristic missed but the exact analyzer handles ───────

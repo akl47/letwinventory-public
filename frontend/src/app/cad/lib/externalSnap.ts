@@ -51,6 +51,12 @@ export interface CrossPartEdgeDescriptor {
   sourceEnd: [number, number, number];
   /** Stable id stored in sourceGeomRef.edgeId + used as the externalEdges key. */
   stableId: string;
+  /** REQ 916 — the edge's polyline in the HOST part's local frame, known at
+   * pick time. When present, the ref is minted with a `cachedProjection`
+   * snapshot so STANDALONE regen of the host part resolves the reference
+   * without the assembly (skeleton refs populate this; sibling-part refs
+   * keep the legacy no-snapshot behavior). */
+  hostLocalPolyline?: [number, number, number][];
 }
 
 export interface CrossPartVertexDescriptor {
@@ -67,7 +73,7 @@ export interface CrossPartVertexDescriptor {
  * Resolved by the backend via the fallback endpoint geometry; the stable id in
  * `sourceGeomRef.edgeId` keys its live 2D projection for solver/determinacy. */
 export function crossPartEdgeRef(d: CrossPartEdgeDescriptor): ExternalRef {
-  return {
+  const ref: ExternalRef = {
     scope: 'cross-part',
     definingAssemblyId: d.definingAssemblyId,
     definingAssemblyRepoId: d.definingAssemblyRepoId,
@@ -77,6 +83,14 @@ export function crossPartEdgeRef(d: CrossPartEdgeDescriptor): ExternalRef {
     fallback: { kind: 'edge', start: d.sourceStart, end: d.sourceEnd },
     pinnedSourceCommit: null,
   };
+  // REQ 916 — pick-time snapshot for standalone regen (see descriptor doc).
+  if (d.hostLocalPolyline && d.hostLocalPolyline.length >= 2) {
+    ref.cachedProjection = {
+      resolvedAt: Date.now(),
+      edges: [{ polyline: d.hostLocalPolyline }],
+    };
+  }
+  return ref;
 }
 
 /** Cross-part vertex ref: a point pinned to ANOTHER component's vertex.

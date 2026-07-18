@@ -91,12 +91,17 @@ export function inferLineEnd(
   state: SketchState,
   start: { x: number; y: number },
   cursor: { x: number; y: number },
+  opts?: { curveTol?: number },
 ): InferenceResult {
+  // Review B6: the hover badges and the click commit must measure "am I on
+  // this curve?" with the SAME ruler. Callers pass the zoom-adaptive pick
+  // tolerance the picker uses; the fixed default only serves legacy callers.
+  const curveTol = opts?.curveTol ?? LINE_SNAP_TOL;
   // (1) Hit-test existing curves (lines / arcs / circles, sketched OR
   // converted). Joining the end of the new line to an existing curve
   // drops a coincident-on-curve constraint so the endpoint slides
   // along it as either side moves.
-  const onCurve = nearestCurveHit(state, cursor, LINE_SNAP_TOL);
+  const onCurve = nearestCurveHit(state, cursor, curveTol);
   if (onCurve) {
     const hints: string[] = [];
     const constraints: PendingConstraint[] = [];
@@ -133,11 +138,11 @@ export function inferLineEnd(
         let pickDist = Infinity;
         if (horiz) {
           const d = Math.hypot(horiz.x - cursor.x, horiz.y - cursor.y);
-          if (d < LINE_SNAP_TOL && d < pickDist) { pickAdjust = { point: horiz, type: 'horizontal' }; pickDist = d; }
+          if (d < curveTol && d < pickDist) { pickAdjust = { point: horiz, type: 'horizontal' }; pickDist = d; }
         }
         if (vert) {
           const d = Math.hypot(vert.x - cursor.x, vert.y - cursor.y);
-          if (d < LINE_SNAP_TOL && d < pickDist) { pickAdjust = { point: vert, type: 'vertical' }; pickDist = d; }
+          if (d < curveTol && d < pickDist) { pickAdjust = { point: vert, type: 'vertical' }; pickDist = d; }
         }
         if (pickAdjust) {
           snapPoint = pickAdjust.point;
@@ -471,7 +476,8 @@ function alignmentSnap(
   return {
     snapped: best.snapped,
     constraint: null,
-    hint: best.kind === '┃' ? 'aligned' : 'aligned',
+    // Review B-dead-ternary: surface WHICH axis the cursor aligned with.
+    hint: best.kind === '┃' ? 'aligned ┃' : 'aligned ━',
     guides: [{ from: best.from, to: best.snapped }],
   };
 }
@@ -525,8 +531,9 @@ function intersectLineWithVertical(
  * the curve's intrinsic geometry only. */
 export function inferHoverOnCurve(
   state: SketchState, cursor: { x: number; y: number },
+  opts?: { curveTol?: number },
 ): { snapped: { x: number; y: number }; hints: string[] } | null {
-  const hit = nearestCurveHit(state, cursor, LINE_SNAP_TOL);
+  const hit = nearestCurveHit(state, cursor, opts?.curveTol ?? LINE_SNAP_TOL);
   if (!hit) return null;
   const hints: string[] = [];
   if (hit.curve.kind === 'line') {

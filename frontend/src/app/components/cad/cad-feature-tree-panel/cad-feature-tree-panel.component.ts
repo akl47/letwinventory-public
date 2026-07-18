@@ -268,6 +268,12 @@ export interface TreeNode {
                       (click)="emitAction({ action: 'delete-feature', featureId: n.feature.id })">
                 <mat-icon>delete</mat-icon> Delete{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
               </button>
+              <!-- REQ 899: errored features offer the full regen error text. -->
+              <button *ngIf="scope.count === 1 && featureErrors().get(n.feature.id) as errText"
+                      mat-menu-item data-testid="ctx-copy-feature-error"
+                      (click)="copyToClipboard(errText)">
+                <mat-icon>content_copy</mat-icon> Copy error text
+              </button>
               <!-- Debug: the internal feature id (hash) — what regen errors,
                    topology ids (featureId/eN), and externalRefs reference.
                    Only shown in debug mode (footer bug toggle). -->
@@ -316,6 +322,12 @@ export interface TreeNode {
               <button mat-menu-item data-testid="ctx-delete-sketch"
                       (click)="emitAction({ action: 'delete-sketch', sketchId: n.sketchId })">
                 <mat-icon>delete</mat-icon> Delete sketch{{ scope.count > 1 ? 'es (' + scope.count + ')' : '' }}
+              </button>
+              <!-- REQ 899: sketches with a warning offer its full text. -->
+              <button *ngIf="scope.count === 1 && sketchWarningText(n.sketchId) as warnText"
+                      mat-menu-item data-testid="ctx-copy-sketch-error"
+                      (click)="copyToClipboard(warnText)">
+                <mat-icon>content_copy</mat-icon> Copy error text
               </button>
               <!-- Debug: the internal sketch id (hash). Only in debug mode. -->
               <button *ngIf="scope.count === 1 && debugVisible()"
@@ -460,6 +472,12 @@ export class CadFeatureTreePanelComponent {
   /** When non-null, the panel renders THESE nodes verbatim instead of building
    * them from `features`, and routes row interactions to `externalEvent`. */
   externalNodes = input<TreeNode[] | null>(null);
+  /** Context rows (REQ 920 follow-up): prepended ABOVE the feature rows in
+   * features mode — "which assembly is this part edited in context of".
+   * Clicks emit `contextSelect` with the row key. */
+  contextNodes = input<TreeNode[]>([]);
+  /** Right-click on a context row — the host opens its context menu there. */
+  contextMenu = output<{ key: string; x: number; y: number }>();
   headerTitle = input<string>('Feature Tree');
   headerIcon = input<string>('account_tree');
   showBodies = input<boolean>(true);
@@ -642,6 +660,14 @@ export class CadFeatureTreePanelComponent {
     void navigator.clipboard?.writeText(text);
   }
 
+  /** Warning text for a sketch row (mirrors the row's warning indicator);
+   * null when the sketch is healthy — hides the Copy error text menu item. */
+  sketchWarningText(sketchId: string): string | null {
+    return this.sketchHostMissing(sketchId)
+      ? 'Reference face missing — this sketch\'s host face was deleted.'
+      : null;
+  }
+
   // What the context menu will act on, given the right-clicked node and the
   // current selection. Mirrors the OS-file-manager rule: if the right-clicked
   // item is part of the current selection, the action targets the whole
@@ -681,7 +707,7 @@ export class CadFeatureTreePanelComponent {
   nodes = computed<TreeNode[]>(() => {
     const ext = this.externalNodes();
     if (ext) return ext;
-    const out: TreeNode[] = [];
+    const out: TreeNode[] = [...this.contextNodes()];
     const features = this.features();
     const doc = this.doc();
     const expanded = this.expanded();
@@ -1430,6 +1456,8 @@ export class CadFeatureTreePanelComponent {
     // A just-completed feature drag fires a trailing click — swallow it so the
     // reorder doesn't also select the row.
     if (this._suppressNextRowClick) { this._suppressNextRowClick = false; return; }
+    // Context rows (ctxasm:<id>) — actions live on the right-click menu.
+    if (n.key.startsWith('ctxasm:')) return;
     // External-nodes mode: selectable rows select; expandable rows toggle.
     if (this.externalNodes()) {
       if (n.selectable) this.externalEvent.emit({ type: 'select', node: n, ev });
@@ -1757,6 +1785,12 @@ export class CadFeatureTreePanelComponent {
   }
 
   onRowContextMenu(ev: MouseEvent, n: TreeNode) {
+    // Context rows: the host opens the edit-context menu.
+    if (n.key.startsWith('ctxasm:')) {
+      ev.preventDefault();
+      this.contextMenu.emit({ key: n.key, x: ev.clientX, y: ev.clientY });
+      return;
+    }
     // External-nodes mode: the host owns the context menu.
     if (this.externalNodes()) { ev.preventDefault(); this.externalEvent.emit({ type: 'context', node: n, ev }); return; }
     // Origin features and datum rows have no context menu — fall through to the

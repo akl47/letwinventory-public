@@ -34,6 +34,7 @@
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Vec.hxx>
@@ -243,6 +244,37 @@ json op_buildShell(const json& params) {
   TopTools_ListOfShape closing_faces;
   for (size_t idx : matched) {
     closing_faces.Append(body_faces[idx]);
+  }
+
+  // OCCT's offset engine cannot thicken a body whose swept elbow pinches
+  // EXACTLY (bend radius == tube radius, a horn torus): ByJoin and BySimple
+  // both refuse, even though the shell is legitimate — the inner offset wall
+  // is a healthy ring torus, and Onshape/Parasolid hollow this geometry fine.
+  // Verified escape on the real body (model 45): give the pinched torus 0.1 µm
+  // of clearance (minor = major - 1e-4 mm) via a pcurve-preserving surface
+  // swap, and ByJoin hollows it cleanly. The change is far below manufacturing
+  // relevance; face/edge tolerances are raised to 2e-4 to absorb it.
+  for (TopExp_Explorer fe(body, TopAbs_FACE); fe.More(); fe.Next()) {
+    TopoDS_Face pinched = TopoDS::Face(fe.Current());
+    TopLoc_Location ploc;
+    opencascade::handle<Geom_Surface> raw = BRep_Tool::Surface(pinched, ploc);
+    opencascade::handle<Geom_ToroidalSurface> torus =
+        opencascade::handle<Geom_ToroidalSurface>::DownCast(raw);
+    if (torus.IsNull()) {
+      opencascade::handle<Geom_RectangularTrimmedSurface> trimmed =
+          opencascade::handle<Geom_RectangularTrimmedSurface>::DownCast(raw);
+      if (!trimmed.IsNull()) {
+        torus = opencascade::handle<Geom_ToroidalSurface>::DownCast(trimmed->BasisSurface());
+      }
+    }
+    if (torus.IsNull()) continue;
+    const double kClearance = 1.0e-4;  // mm
+    double major = torus->MajorRadius();
+    double minor = torus->MinorRadius();
+    if (std::fabs(major - minor) >= kClearance || major <= kClearance * 4.0) continue;
+    opencascade::handle<Geom_ToroidalSurface> fresh =
+        new Geom_ToroidalSurface(torus->Position(), major, major - kClearance);
+    replace_torus_surface(pinched, ploc, fresh, kClearance * 2.0);
   }
 
   TopoDS_Shape shape;

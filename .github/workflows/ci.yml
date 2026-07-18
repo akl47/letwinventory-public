@@ -1,8 +1,13 @@
 name: CI
 
+# REQ 904: tests gate PRs, pushes to master, AND release tags — previously
+# only PRs ran tests, so merges and v* releases shipped unverified.
 on:
   pull_request:
     branches: [master]
+  push:
+    branches: [master]
+    tags: ['v*']
 
 jobs:
   backend-tests:
@@ -176,27 +181,57 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the kernel-source change detection can diff
+          # against the PR base.
+          fetch-depth: 0
 
-      # Prebuilt OCCT kernel image (published by publish-kernel.yml on master).
-      # Started as a guarded step, NOT a service container: a service pull of a
-      # not-yet-published image fails the whole job before any step runs. Until
-      # the image is published once (merge/dispatch publish-kernel.yml) this
-      # skips verification with a notice instead of failing every PR. Note the
-      # tradeoff of the prebuilt approach: PRs changing kernel SOURCE run
-      # against the stale master image — the backend's naming-schema guard
-      # fails fast (clear error) if the schemas have diverged.
-      - name: Start CAD kernel (prebuilt image)
-        id: kernel
+      # REQ 904: PRs that change kernel source are tested against THEIR OWN
+      # kernel build (registry buildcache makes this minutes, not hours) —
+      # previously they ran against the stale master image.
+      - name: Detect kernel source changes
+        id: kernelsrc
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          IMG="ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:latest"
-          if docker pull "$IMG"; then
-            docker run -d --name cad-kernel -p 9876:9876 "$IMG"
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::Kernel image $IMG not found — run publish-kernel.yml once to enable kernel verification. Skipping."
-            echo "available=false" >> "$GITHUB_OUTPUT"
+          CHANGED=false
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            if ! git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- cad-kernel-cpp/; then
+              CHANGED=true
+            fi
           fi
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.kernelsrc.outputs.changed == 'true'
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build PR kernel image
+        if: steps.kernelsrc.outputs.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./cad-kernel-cpp
+          load: true
+          tags: letwinventory-cad-kernel:pr
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:buildcache
+            type=gha
+
+      # REQ 904: this gate FAILS when no kernel image is available — the old
+      # warn-and-skip path let PRs pass green with zero geometry verification.
+      - name: Start CAD kernel
+        run: |
+          if [ "${{ steps.kernelsrc.outputs.changed }}" = "true" ]; then
+            IMG="letwinventory-cad-kernel:pr"
+          else
+            IMG="ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:latest"
+            if ! docker pull "$IMG"; then
+              echo "::error::Kernel image $IMG could not be pulled — the real-geometry gate cannot run. Publish the kernel image (publish-kernel.yml) and retry."
+              exit 1
+            fi
+          fi
+          docker run -d --name cad-kernel -p 9876:9876 "$IMG"
 
       - uses: actions/setup-node@v4
         with:
@@ -234,7 +269,6 @@ jobs:
           done
 
       - name: Wait for CAD kernel
-        if: steps.kernel.outputs.available == 'true'
         run: |
           for i in $(seq 1 30); do
             if (echo > /dev/tcp/127.0.0.1/9876) 2>/dev/null; then echo "Kernel is ready"; break; fi
@@ -243,7 +277,6 @@ jobs:
           done
 
       - name: Verify 3D feature cases regenerate through the OCCT kernel
-        if: steps.kernel.outputs.available == 'true'
         run: node scripts/verify-cad-kernel.mjs
         env:
           CAD_E2E_API: http://localhost:3000

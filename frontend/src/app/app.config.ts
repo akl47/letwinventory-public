@@ -6,9 +6,12 @@ import { provideNativeDateAdapter } from '@angular/material/core';
 import { Title } from '@angular/platform-browser';
 import { firstValueFrom } from 'rxjs';
 
+import { MatSnackBar } from '@angular/material/snack-bar';
+
 import { routes } from './app.routes';
 import { AuthService } from './services/auth.service';
 import { authInterceptor } from './interceptors/auth.interceptor';
+import { DebugSnackBar } from './services/debug-snack-bar.service';
 
 @Injectable({ providedIn: 'root' })
 export class AppTitleStrategy extends TitleStrategy {
@@ -34,6 +37,8 @@ export const appConfig: ApplicationConfig = {
     provideAnimations(),
     provideNativeDateAdapter(),
     { provide: TitleStrategy, useClass: AppTitleStrategy },
+    // REQ 898 — every snackbar logs to the console; debug mode adds a copy button.
+    { provide: MatSnackBar, useClass: DebugSnackBar },
     provideAppInitializer(() => firstValueFrom(inject(AuthService).checkAuthStatus()))
   ]
 };

@@ -20,6 +20,8 @@
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Wire.hxx>
+#include <TopLoc_Location.hxx>
+#include <Geom_ToroidalSurface.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Dir.hxx>
 
@@ -48,6 +50,15 @@ TopoDS_Face build_profile_face(const Plane3& plane, const json& outer, const jso
 
 // Build a single (open or closed) wire from a ProfileEdge[] on `plane`.
 TopoDS_Wire build_profile_wire(const Plane3& plane, const json& edges);
+
+// Replace a (possibly trimmed) toroidal face's surface with `fresh`,
+// re-registering every edge pcurve on the new surface (seam edges keep both
+// pcurves). The UV parameterization must be unchanged — same placement/axes,
+// radii nudged only. Face + edge tolerances are raised to at least `minTol`.
+// Used by the sweep's pinched-elbow heal and the shell's clearance workaround.
+void replace_torus_surface(const TopoDS_Face& face, const TopLoc_Location& loc,
+                           const opencascade::handle<Geom_ToroidalSurface>& fresh,
+                           double minTol);
 
 // ── Tessellation + persistent naming + topology ───────────────────────────────
 // Result bundle: `faces` is a json ARRAY of FaceMesh objects; `topology` is the

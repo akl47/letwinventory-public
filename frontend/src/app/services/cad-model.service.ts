@@ -61,7 +61,10 @@ export class CadModelService {
     return this.http.get<CadModel>(`${this.apiUrl}/${id}`);
   }
 
-  update(id: number, patch: Partial<Pick<CadModel, 'name' | 'featureTree' | 'sketchDoc' | 'equations'>>): Observable<CadModel> {
+  // `clientSavedAt` is the doc-version token (REQ 905): the lastContentSavedAt
+  // this session last synced. The server 409s (DOC_CONFLICT) when it doesn't
+  // match, so two sessions of the same user can't silently clobber each other.
+  update(id: number, patch: Partial<Pick<CadModel, 'name' | 'featureTree' | 'sketchDoc' | 'equations'>> & { clientSavedAt?: string | null }): Observable<CadModel> {
     return this.http.put<CadModel>(`${this.apiUrl}/${id}`, patch);
   }
 
@@ -121,16 +124,28 @@ export class CadModelService {
 
   // ── VCS: checkout / check-in / lock / commit log (Phase 1) ──────────────────
 
-  /** Acquire the exclusive edit lock; returns the updated model. */
-  checkout(id: number): Observable<CadModel> {
-    return this.http.post<CadModel>(`${this.apiUrl}/${id}/checkout`, {});
+  /** Acquire the exclusive edit lock; returns the updated model. When a prior
+   * user's checkout expired with uncommitted changes, the backend answers 409
+   * TAKEOVER_REQUIRED until called with `takeover: true` — which stashes their
+   * work on a recoverable branch (returned as `stashedTo`). REQ 874. */
+  checkout(id: number, opts?: { takeover?: boolean }): Observable<CadModel & { stashedTo?: string }> {
+    return this.http.post<CadModel & { stashedTo?: string }>(
+      `${this.apiUrl}/${id}/checkout`, opts?.takeover ? { takeover: true } : {});
+  }
+
+  /** Extend this user's active checkout (editor heartbeat, REQ 875). */
+  renewLock(id: number): Observable<{ lockExpiresAt: string }> {
+    return this.http.post<{ lockExpiresAt: string }>(`${this.apiUrl}/${id}/renew-lock`, {});
   }
 
   /** Commit the working copy with a message; returns the new commit hash. An
    * optional low-res PNG data URL (captured from the default view) is stored
-   * with the commit for the version-history preview. */
-  checkin(id: number, message: string, thumbnail?: string | null): Observable<{ commitHash: string; model: CadModel }> {
-    return this.http.post<{ commitHash: string; model: CadModel }>(`${this.apiUrl}/${id}/checkin`, { message, thumbnail: thumbnail || undefined });
+   * with the commit for the version-history preview. `keepCheckedOut` turns the
+   * check-in into a checkpoint — the lock renews instead of releasing (REQ 876). */
+  checkin(id: number, message: string, thumbnail?: string | null, keepCheckedOut = false): Observable<{ commitHash: string; model: CadModel }> {
+    return this.http.post<{ commitHash: string; model: CadModel }>(
+      `${this.apiUrl}/${id}/checkin`,
+      { message, thumbnail: thumbnail || undefined, keepCheckedOut: keepCheckedOut || undefined });
   }
 
   /** Persist the model's default camera view (not lock-gated). */

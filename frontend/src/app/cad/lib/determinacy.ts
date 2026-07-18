@@ -1,6 +1,6 @@
 import type {
   SketchState, SketchEntity, SketchConstraint,
-  LineEntity, CircleEntity, ArcEntity,
+  LineEntity, CircleEntity, ArcEntity, EllipseEntity,
 } from './types';
 import { onEdgeLookupKey, isCenterExternalRef } from './types';
 import { ORIGIN_POINT_ID } from './store';
@@ -50,6 +50,21 @@ export function analyzeDeterminacy(state: SketchState, externalEdges: ExternalEd
     console.warn('analyzeDeterminacy: exact analyzer failed, falling back to heuristic:', err);
     return analyzeHeuristic(state);
   }
+}
+
+/** Mirror of the solver's isOtherwiseConstrained: only POSITION-determining
+ * constraints (coincident / fixed / midpoint) anchor a point's coords, so only
+ * they unpin a converted-line endpoint from its on-edge anchor (REQ 886 —
+ * that endpoint then RIDES the projected edge line instead of being pre-fixed,
+ * exactly matching the solver's line-endpoint ride pass). */
+function isOtherwiseConstrainedIn(state: SketchState, pointId: string): boolean {
+  for (const c of state.constraints) {
+    if (c.type !== 'coincident' && c.type !== 'fixed' && c.type !== 'midpoint') continue;
+    for (const t of c.targets) {
+      if (t.entityId === pointId) return true;
+    }
+  }
+  return false;
 }
 
 /** The projected edge line for an edge-ref `on-edge` constraint, or null when
@@ -108,24 +123,32 @@ function analyzeExact(state: SketchState, externalEdges: ExternalEdgeMap): Set<s
     // analyzers in lockstep). New-style center refs use concentric/coincident
     // and never reach this on-edge loop.
     const centerRef = isCenterExternalRef(c.externalRef);
+    // Solver-parity (review B17): the solver's pinPoint ALWAYS skips a point
+    // that is otherwise position-constrained — for every entity kind, whether
+    // or not the projection is available. Mirror exactly, or determinacy
+    // reports "determined" for anchors the solver actually leaves free.
+    const pin = (pid: string) => {
+      if (isOtherwiseConstrainedIn(state, pid)) return;
+      preFixed.add(`${pid}:x`); preFixed.add(`${pid}:y`);
+    };
     for (const t of c.targets) {
       const e = entityById.get(t.entityId);
       if (!e) continue;
       if (e.kind === 'line') {
-        preFixed.add(`${e.startId}:x`); preFixed.add(`${e.startId}:y`);
-        preFixed.add(`${e.endId}:x`);   preFixed.add(`${e.endId}:y`);
+        // REQ 886: an otherwise-constrained endpoint rides the projected edge
+        // (1 DOF; residual added in evalAllResiduals) instead of pinning.
+        pin(e.startId); pin(e.endId);
       } else if (e.kind === 'circle') {
-        preFixed.add(`${e.centerId}:x`); preFixed.add(`${e.centerId}:y`);
+        pin(e.centerId);
         if (!centerRef) preFixed.add(`${e.id}:radius`);
       } else if (e.kind === 'arc') {
-        preFixed.add(`${e.centerId}:x`); preFixed.add(`${e.centerId}:y`);
+        pin(e.centerId);
         if (!centerRef) {
-          preFixed.add(`${e.startId}:x`);  preFixed.add(`${e.startId}:y`);
-          preFixed.add(`${e.endId}:x`);    preFixed.add(`${e.endId}:y`);
+          pin(e.startId); pin(e.endId);
           preFixed.add(`${e.id}:radius`);
         }
       } else if (e.kind === 'point' && !ridesEdge) {
-        preFixed.add(`${e.id}:x`); preFixed.add(`${e.id}:y`);
+        pin(e.id);
       }
     }
   }
@@ -147,67 +170,181 @@ function analyzeExact(state: SketchState, externalEdges: ExternalEdgeMap): Set<s
     }
   }
 
-  // Build the free-param vector.
-  const params: FreeParam[] = [];
-  const index: EntityIndex = new Map();
-  const addParam = (entityId: string, kind: ParamKind, baseValue: number) => {
-    if (preFixed.has(`${entityId}:${kind}`)) return;
-    const i = params.length;
-    params.push({ entityId, kind, baseValue });
-    let entry = index.get(entityId);
-    if (!entry) { entry = {}; index.set(entityId, entry); }
-    entry[kind] = i;
-  };
-  for (const e of state.entities) {
-    if (e.kind === 'point') {
-      addParam(e.id, 'x', e.x);
-      addParam(e.id, 'y', e.y);
-    } else if (e.kind === 'circle' || e.kind === 'arc') {
-      addParam(e.id, 'radius', e.radius);
-    }
-  }
-
-  // Initial parameter vector.
-  const values = params.map(p => p.baseValue);
-
-  // Evaluate every constraint's residuals at the current values.
-  const baseResiduals = evalAllResiduals(state, entById, values, index, externalEdges);
-  const M = baseResiduals.length;
-  const N = params.length;
-
-  if (N === 0) {
-    // Everything is pre-fixed → every entity rolls up via pre-fixed params.
-    return rollUpToEntities(state, new Set(preFixed));
-  }
-
-  // Numerical Jacobian: M × N. Forward differences with a scaled step.
-  const J: number[][] = Array.from({ length: M }, () => new Array(N).fill(0));
-  if (M > 0) {
-    const EPS = 1e-7;
-    for (let i = 0; i < N; i++) {
-      const orig = values[i];
-      const h = EPS * (Math.abs(orig) + 1);
-      values[i] = orig + h;
-      const perturbed = evalAllResiduals(state, entById, values, index, externalEdges);
-      for (let j = 0; j < M; j++) {
-        J[j][i] = (perturbed[j] - baseResiduals[j]) / h;
+  // One rank-analysis pass with the CURRENT preFixed set. Rebuilt from
+  // scratch per call so the tangent-junction fixpoint loop below can grow
+  // preFixed between passes.
+  const runRank = (): Set<string> => {
+    // Build the free-param vector.
+    const params: FreeParam[] = [];
+    const index: EntityIndex = new Map();
+    const addParam = (entityId: string, kind: ParamKind, baseValue: number) => {
+      if (preFixed.has(`${entityId}:${kind}`)) return;
+      const i = params.length;
+      params.push({ entityId, kind, baseValue });
+      let entry = index.get(entityId);
+      if (!entry) { entry = {}; index.set(entityId, entry); }
+      entry[kind] = i;
+    };
+    for (const e of state.entities) {
+      if (e.kind === 'point') {
+        addParam(e.id, 'x', e.x);
+        addParam(e.id, 'y', e.y);
+      } else if (e.kind === 'circle' || e.kind === 'arc') {
+        addParam(e.id, 'radius', e.radius);
+      } else if (e.kind === 'ellipse') {
+        // REQ 882: the minor radius is the ellipse's own scalar DOF (center and
+        // major-axis endpoint are ordinary points). Reuses the 'radius' slot so
+        // paramR works unchanged.
+        addParam(e.id, 'radius', e.minorRadius);
       }
-      values[i] = orig;
     }
-  }
 
-  // Reduced row echelon → identify which columns are UNIQUELY determined.
-  // A pivot column is "determined" only when its pivot row has zero entries
-  // in every FREE column. Otherwise the pivot variable depends on a free
-  // variable and is not uniquely fixed by the constraint system.
-  const determinedCols = M === 0 ? new Set<number>() : determinedColumns(J);
+    // Initial parameter vector.
+    const values = params.map(p => p.baseValue);
 
-  const determinedParams = new Set<string>(preFixed);
-  for (const i of determinedCols) {
-    determinedParams.add(`${params[i].entityId}:${params[i].kind}`);
+    // Evaluate every constraint's residuals at the current values.
+    const baseResiduals = evalAllResiduals(state, entById, values, index, externalEdges);
+    const M = baseResiduals.length;
+    const N = params.length;
+
+    if (N === 0) return new Set(preFixed);
+
+    // Numerical Jacobian: M × N. Forward differences with a scaled step.
+    const J: number[][] = Array.from({ length: M }, () => new Array(N).fill(0));
+    if (M > 0) {
+      const EPS = 1e-7;
+      for (let i = 0; i < N; i++) {
+        const orig = values[i];
+        const h = EPS * (Math.abs(orig) + 1);
+        values[i] = orig + h;
+        const perturbed = evalAllResiduals(state, entById, values, index, externalEdges);
+        for (let j = 0; j < M; j++) {
+          J[j][i] = (perturbed[j] - baseResiduals[j]) / h;
+        }
+        values[i] = orig;
+      }
+    }
+
+    // Reduced row echelon → identify which columns are UNIQUELY determined.
+    // A pivot column is "determined" only when its pivot row has zero entries
+    // in every FREE column. Otherwise the pivot variable depends on a free
+    // variable and is not uniquely fixed by the constraint system.
+    const determinedCols = M === 0 ? new Set<number>() : determinedColumns(J);
+
+    const determinedParams = new Set<string>(preFixed);
+    for (const i of determinedCols) {
+      determinedParams.add(`${params[i].entityId}:${params[i].kind}`);
+    }
+    return determinedParams;
+  };
+
+  // Tangent-junction fixpoint (part 619 / fillet blends): a point shared
+  // by two DETERMINED circles that are TANGENT to each other sits at
+  // their single touch point — an isolated solution — but the two
+  // point-on-circle gradients are (anti)parallel there, so first-order
+  // rank analysis reports a phantom sliding DOF. Detect the
+  // configuration geometrically, pin the point, and re-run so the pin
+  // propagates (the arcs through it, chained junctions, …).
+  let determinedParams = runRank();
+  for (let iter = 0; iter < 4; iter++) {
+    const extra = tangentJunctionPins(state, entById, determinedParams);
+    if (extra.length === 0) break;
+    for (const k of extra) preFixed.add(k);
+    determinedParams = runRank();
   }
 
   return rollUpToEntities(state, determinedParams);
+}
+
+/** Params to pin for points sitting at a tangent junction of two fully
+ * determined circles (see the fixpoint loop above). Only fires when the
+ * current geometry shows a genuine tangency — distinct centers with
+ * center distance matching r1+r2 (external) or |r1−r2| (internal) — and
+ * the point lies on both circles. */
+function tangentJunctionPins(
+  state: SketchState, entById: Map<string, SketchEntity>, determinedParams: Set<string>,
+): string[] {
+  const out: string[] = [];
+  const pointDet = (id: string) =>
+    determinedParams.has(`${id}:x`) && determinedParams.has(`${id}:y`);
+  const curveDet = (c: CircleEntity | ArcEntity) =>
+    pointDet(c.centerId) && determinedParams.has(`${c.id}:radius`);
+  for (const p of state.entities) {
+    if (p.kind !== 'point' || pointDet(p.id)) continue;
+    // The junction may be ONE shared point or TWO points welded by a
+    // point-point coincident (arc A's end coincident with arc B's start
+    // — the common fillet pattern). Work on the whole coincidence class.
+    const cls = pointCoincidenceClass(state, entById, p.id);
+    // Curves any class member is bound to lie ON: arcs via start/end
+    // membership, circles/arcs via coincident-on-curve.
+    const curves: Array<CircleEntity | ArcEntity> = [];
+    for (const e of state.entities) {
+      if (e.kind === 'arc' && (cls.has(e.startId) || cls.has(e.endId))) curves.push(e);
+    }
+    for (const c of state.constraints) {
+      if (c.type !== 'coincident') continue;
+      const ids = c.targets.map(t => t.entityId);
+      if (!ids.some(id => cls.has(id))) continue;
+      for (const id of ids) {
+        const e = entById.get(id);
+        if (e && (e.kind === 'circle' || e.kind === 'arc') && !curves.includes(e)) curves.push(e);
+      }
+    }
+    const det = curves.filter(curveDet);
+    let pinned = false;
+    for (let i = 0; i < det.length && !pinned; i++) {
+      for (let j = i + 1; j < det.length && !pinned; j++) {
+        const c1 = findPointIn(state, det[i].centerId);
+        const c2 = findPointIn(state, det[j].centerId);
+        if (!c1 || !c2) continue;
+        const r1 = det[i].radius, r2 = det[j].radius;
+        const d = Math.hypot(c2.x - c1.x, c2.y - c1.y);
+        const tol = 1e-6 * (1 + r1 + r2);
+        if (d < tol) continue;  // concentric/coradial — NOT an isolated touch
+        const tangent = Math.abs(d - (r1 + r2)) < tol || Math.abs(d - Math.abs(r1 - r2)) < tol;
+        if (!tangent) continue;
+        const onBoth = Math.abs(Math.hypot(p.x - c1.x, p.y - c1.y) - r1) < tol
+          && Math.abs(Math.hypot(p.x - c2.x, p.y - c2.y) - r2) < tol;
+        if (!onBoth) continue;
+        // Pin every free member of the class — they're all the same
+        // touch point.
+        for (const id of cls) {
+          if (!pointDet(id)) out.push(`${id}:x`, `${id}:y`);
+        }
+        pinned = true;
+      }
+    }
+  }
+  return out;
+}
+
+/** Transitive closure of point-point `coincident` constraints from `pid`
+ * — the set of point entities welded into one geometric location. */
+function pointCoincidenceClass(
+  state: SketchState, entById: Map<string, SketchEntity>, pid: string,
+): Set<string> {
+  const cls = new Set<string>([pid]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const c of state.constraints) {
+      if (c.type !== 'coincident') continue;
+      const ids = c.targets.map(t => t.entityId);
+      if (ids.length !== 2) continue;
+      const [x, y] = ids;
+      if (entById.get(x)?.kind !== 'point' || entById.get(y)?.kind !== 'point') continue;
+      if (cls.has(x) && !cls.has(y)) { cls.add(y); grew = true; }
+      else if (cls.has(y) && !cls.has(x)) { cls.add(x); grew = true; }
+    }
+  }
+  return cls;
+}
+
+function findPointIn(state: SketchState, id: string): { x: number; y: number } | null {
+  for (const e of state.entities) {
+    if (e.kind === 'point' && e.id === id) return e;
+  }
+  return null;
 }
 
 /** Final pass: an entity is determined iff every parameter it owns is
@@ -233,6 +370,12 @@ function rollUpToEntities(state: SketchState, determinedParams: Set<string>): Se
       if (det.has(a.centerId) && det.has(a.startId) && det.has(a.endId)
           && determinedParams.has(`${a.id}:radius`)) {
         det.add(a.id);
+      }
+    } else if (e.kind === 'ellipse') {
+      // REQ 882: determined when both defining points and the minor radius are.
+      if (det.has(e.centerId) && det.has(e.majorAxisEndId)
+          && determinedParams.has(`${e.id}:radius`)) {
+        det.add(e.id);
       }
     }
   }
@@ -263,10 +406,21 @@ function evalAllResiduals(
     const len = Math.hypot(dx, dy) || 1;
     for (const t of c.targets) {
       const e = entById.get(t.entityId);
-      if (e?.kind !== 'point') continue;
-      const Px = paramX(state, entById, values, index, e.id);
-      const Py = paramY(state, entById, values, index, e.id);
-      out.push(((Px - A.x) * dy - (Py - A.y) * dx) / len);
+      if (e?.kind === 'point') {
+        const Px = paramX(state, entById, values, index, e.id);
+        const Py = paramY(state, entById, values, index, e.id);
+        out.push(((Px - A.x) * dy - (Py - A.y) * dx) / len);
+      } else if (e?.kind === 'line') {
+        // REQ 886: converted-line endpoints that ride the edge (otherwise
+        // position-constrained, so not pre-fixed) — one perpendicular-distance
+        // residual each, mirroring the solver's line-endpoint ride pass.
+        for (const pid of [e.startId, e.endId]) {
+          if (!isOtherwiseConstrainedIn(state, pid)) continue;
+          const Px = paramX(state, entById, values, index, pid);
+          const Py = paramY(state, entById, values, index, pid);
+          out.push(((Px - A.x) * dy - (Py - A.y) * dx) / len);
+        }
+      }
     }
   }
   // Point → model-edge DISTANCE dims (externalRef): the point's perpendicular
@@ -309,6 +463,46 @@ function evalAllResiduals(
     const lx = tx - sx, ly = ty - sy;  // sketch-line direction
     // parallel ⇒ cross product 0; perpendicular ⇒ dot product 0.
     out.push(c.type === 'parallel' ? (lx * ey - ly * ex) : (lx * ex + ly * ey));
+  }
+  // Sketch-line ANGLE to a model edge (externalRef, single line target) —
+  // REQ 886. 1 residual fixing the line's direction relative to the fixed
+  // projected edge: |signed angle| − |value|. Mirrors the solver's edgeAngles
+  // pass. Driven reference dims contribute none.
+  for (const c of state.constraints) {
+    if (c.type !== 'angle' || !c.externalRef || c.driven || c.value === undefined) continue;
+    const line = edgeLineForConstraint(c, externalEdges);
+    if (!line) continue;
+    const e = entById.get(c.targets[0]?.entityId);
+    if (e?.kind !== 'line') continue;
+    const [A, B] = line;
+    let ex = B.x - A.x, ey = B.y - A.y;
+    const sx = paramX(state, entById, values, index, e.startId);
+    const sy = paramY(state, entById, values, index, e.startId);
+    const tx = paramX(state, entById, values, index, e.endId);
+    const ty = paramY(state, entById, values, index, e.endId);
+    const lx = tx - sx, ly = ty - sy;
+    // Review B22 mirror: orient the edge vector into the sketch line's
+    // hemisphere so the residual is independent of the projection's
+    // regen-dependent endpoint order (matches the solver's normalization).
+    if (lx * ex + ly * ey < 0) { ex = -ex; ey = -ey; }
+    out.push(Math.abs(Math.atan2(lx * ey - ly * ex, lx * ex + ly * ey)) - Math.abs(c.value));
+  }
+  // Sketch circle/arc TANGENT to a model edge (externalRef, single curve
+  // target) — REQ 886. 1 residual: |center's perpendicular distance to the
+  // fixed edge line| − radius. Mirrors the solver's edgeTangents pass.
+  for (const c of state.constraints) {
+    if (c.type !== 'tangent' || !c.externalRef || c.driven) continue;
+    const line = edgeLineForConstraint(c, externalEdges);
+    if (!line) continue;
+    const e = entById.get(c.targets[0]?.entityId);
+    if (e?.kind !== 'circle' && e?.kind !== 'arc') continue;
+    const [A, B] = line;
+    const dx = B.x - A.x, dy = B.y - A.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const cx = paramX(state, entById, values, index, e.centerId);
+    const cy = paramY(state, entById, values, index, e.centerId);
+    const r = paramR(state, entById, values, index, e.id);
+    out.push(Math.abs(((cx - A.x) * dy - (cy - A.y) * dx) / len) - r);
   }
   // Intrinsic arc invariants (mirrors the solver's arc_rules primitive):
   // every arc's start and end MUST lie on the circle of radius R around
@@ -379,6 +573,10 @@ function appendResiduals(
         out.push(pointCurveResid(px(e0.id), py(e0.id), e1, px, py, pr));
       } else if (e1.kind === 'point' && (e0.kind === 'circle' || e0.kind === 'arc')) {
         out.push(pointCurveResid(px(e1.id), py(e1.id), e0, px, py, pr));
+      } else if (e0.kind === 'point' && e1.kind === 'ellipse') {
+        out.push(pointEllipseResid(px(e0.id), py(e0.id), e1, px, py, pr));
+      } else if (e1.kind === 'point' && e0.kind === 'ellipse') {
+        out.push(pointEllipseResid(px(e1.id), py(e1.id), e0, px, py, pr));
       }
       return;
     }
@@ -400,15 +598,18 @@ function appendResiduals(
     }
     case 'horizontal-distance': {
       if (!e0 || !e1 || e0.kind !== 'point' || e1.kind !== 'point' || c.value === undefined) return;
-      // Use squared form so the residual is smooth at d=0 and sign-agnostic.
+      // |Δx| − |v| (sign-agnostic). The earlier squared form (dx² − v²) had
+      // gradient 2·dx, which VANISHES for a zero-valued dim at its solution —
+      // a legitimate "align via 0-dim" contributed no rank (review B8-class).
+      // FD forward differencing of |Δx| at 0 still yields gradient 1.
       const dx = px(e1.id) - px(e0.id);
-      out.push(dx * dx - c.value * c.value);
+      out.push(Math.abs(dx) - Math.abs(c.value));
       return;
     }
     case 'vertical-distance': {
       if (!e0 || !e1 || e0.kind !== 'point' || e1.kind !== 'point' || c.value === undefined) return;
       const dy = py(e1.id) - py(e0.id);
-      out.push(dy * dy - c.value * c.value);
+      out.push(Math.abs(dy) - Math.abs(c.value));
       return;
     }
     case 'point-line-distance': {
@@ -437,14 +638,31 @@ function appendResiduals(
     case 'tangent': {
       if (!e0 || !e1) return;
       // line + curve
-      if (e0.kind === 'line' && (e1.kind === 'circle' || e1.kind === 'arc')) {
-        const d = pointLineDistance(px(e1.centerId), py(e1.centerId), e0, px, py);
-        out.push(d - pr(e1.id));
-        return;
-      }
-      if (e1.kind === 'line' && (e0.kind === 'circle' || e0.kind === 'arc')) {
-        const d = pointLineDistance(px(e0.centerId), py(e0.centerId), e1, px, py);
-        out.push(d - pr(e0.id));
+      const tLine = e0.kind === 'line' ? e0 : (e1.kind === 'line' ? e1 : null);
+      const tCurve = (e0.kind === 'circle' || e0.kind === 'arc') ? e0
+        : ((e1.kind === 'circle' || e1.kind === 'arc') ? e1 : null);
+      if (tLine && tCurve) {
+        // Singular-configuration guard: when one of the line's endpoints is
+        // itself constrained ONTO this curve (coincident point-on-circle, a
+        // shared arc endpoint, …), the generic |dist(center, line)| − r
+        // residual is gradient-degenerate AT the solution — its gradient at
+        // the shared point is radial (parallel to the point-on-curve row)
+        // and its gradient at the other endpoint vanishes (the perpendicular
+        // foot sits exactly on the shared point). Rank analysis then reports
+        // a phantom DOF even though the solutions are discrete (the bimodal
+        // two-sided tangent). Use the equivalent tangent-AT-the-point form
+        // instead — line direction ⊥ radius at the shared endpoint — whose
+        // gradients stay independent at the solution.
+        const anchorId = tangentAnchorPoint(state, tLine, tCurve);
+        if (anchorId) {
+          const ax = px(anchorId), ay = py(anchorId);
+          const otherId = tLine.startId === anchorId ? tLine.endId : tLine.startId;
+          const bx = px(otherId), by = py(otherId);
+          out.push((bx - ax) * (ax - px(tCurve.centerId)) + (by - ay) * (ay - py(tCurve.centerId)));
+          return;
+        }
+        const d = pointLineDistance(px(tCurve.centerId), py(tCurve.centerId), tLine, px, py);
+        out.push(d - pr(tCurve.id));
         return;
       }
       // curve + curve
@@ -544,14 +762,29 @@ function appendResiduals(
       }
       return;
     case 'angle': {
-      if (e0?.kind !== 'line' || e1?.kind !== 'line' || c.value === undefined) return;
-      // residual = cross(L1, L2)/|L1||L2| - sin(target) — angle locked.
+      if (c.value === undefined) return;
+      // Residual form: |atan2(cross, dot)| − |target| — the same shape as the
+      // edge-angle mirror. The earlier sin-based residual (sin φ − sin target)
+      // had Jacobian cos(φ)·∂φ, which VANISHES at φ = 90°: a solved right-angle
+      // dimension contributed zero rank and the coloring read the geometry as
+      // free (review 2026-07-09 finding B2). atan2's gradient is ±1 everywhere.
+      // 3-POINT vertex angle (REQ 890): targets [rayA, vertex, rayB].
+      if (c.targets.length === 3) {
+        const pA = entById.get(c.targets[0]?.entityId);
+        const v = entById.get(c.targets[1]?.entityId);
+        const pB = entById.get(c.targets[2]?.entityId);
+        if (pA?.kind !== 'point' || v?.kind !== 'point' || pB?.kind !== 'point') return;
+        const r1x = px(pA.id) - px(v.id), r1y = py(pA.id) - py(v.id);
+        const r2x = px(pB.id) - px(v.id), r2y = py(pB.id) - py(v.id);
+        if (Math.hypot(r1x, r1y) < 1e-9 || Math.hypot(r2x, r2y) < 1e-9) return;
+        out.push(Math.abs(Math.atan2(r1x * r2y - r1y * r2x, r1x * r2x + r1y * r2y)) - Math.abs(c.value));
+        return;
+      }
+      if (e0?.kind !== 'line' || e1?.kind !== 'line') return;
       const d1x = px(e0.endId) - px(e0.startId), d1y = py(e0.endId) - py(e0.startId);
       const d2x = px(e1.endId) - px(e1.startId), d2y = py(e1.endId) - py(e1.startId);
-      const len1 = Math.hypot(d1x, d1y), len2 = Math.hypot(d2x, d2y);
-      if (len1 < 1e-9 || len2 < 1e-9) return;
-      const cross = (d1x * d2y - d1y * d2x) / (len1 * len2);
-      out.push(cross - Math.sin(c.value));
+      if (Math.hypot(d1x, d1y) < 1e-9 || Math.hypot(d2x, d2y) < 1e-9) return;
+      out.push(Math.abs(Math.atan2(d1x * d2y - d1y * d2x, d1x * d2x + d1y * d2y)) - Math.abs(c.value));
       return;
     }
     case 'arc-length': {
@@ -643,6 +876,32 @@ function pointLineDistance(
   return ((bx - ax) * (pyv - ay) - (by - ay) * (pxv - ax)) / len;
 }
 
+/** For a line-curve tangency: the line-endpoint id that is constrained to
+ * lie ON the curve — directly (shared arc start/end point id, or a
+ * point-point coincident with one), or via a point-on-curve coincident with
+ * the curve entity. Null when neither endpoint touches the curve (the
+ * generic offset-tangent case). Drives the singular-configuration guard in
+ * the tangent residual above. */
+function tangentAnchorPoint(
+  state: SketchState, line: LineEntity, curve: CircleEntity | ArcEntity,
+): string | null {
+  const lineEnds = [line.startId, line.endId];
+  const curvePts = curve.kind === 'arc' ? [curve.startId, curve.endId] : [];
+  for (const le of lineEnds) {
+    if (curvePts.includes(le)) return le;
+  }
+  for (const c of state.constraints) {
+    if (c.type !== 'coincident') continue;
+    const ids = c.targets.map(t => t.entityId);
+    for (const le of lineEnds) {
+      if (!ids.includes(le)) continue;
+      if (ids.includes(curve.id)) return le;
+      if (curvePts.some(cp => ids.includes(cp))) return le;
+    }
+  }
+  return null;
+}
+
 /** Signed residual for "point lies on circle/arc". Zero when |P − C| = R. */
 function pointCurveResid(
   pxv: number, pyv: number,
@@ -652,6 +911,28 @@ function pointCurveResid(
 ): number {
   const cx = px(curve.centerId), cy = py(curve.centerId);
   return Math.hypot(pxv - cx, pyv - cy) - pr(curve.id);
+}
+
+/** Point-on-ellipse residual (REQ 882): sum of focal distances − 2a. The
+ * foci derive from center, major-axis endpoint, and the minor-radius param
+ * (`pr(ellipse.id)`), so the residual couples all of them like the solver's
+ * point_on_ellipse does. */
+function pointEllipseResid(
+  pxv: number, pyv: number,
+  ellipse: EllipseEntity,
+  px: (id: string) => number, py: (id: string) => number,
+  pr: (id: string) => number,
+): number {
+  const cx = px(ellipse.centerId), cy = py(ellipse.centerId);
+  const mx = px(ellipse.majorAxisEndId), my = py(ellipse.majorAxisEndId);
+  const a = Math.hypot(mx - cx, my - cy);
+  if (a < 1e-9) return 0;
+  const b = Math.min(pr(ellipse.id), a);
+  const f = Math.sqrt(Math.max(0, a * a - b * b));
+  const ux = (mx - cx) / a, uy = (my - cy) / a;
+  const f1x = cx + ux * f, f1y = cy + uy * f;
+  const f2x = cx - ux * f, f2y = cy - uy * f;
+  return Math.hypot(pxv - f1x, pyv - f1y) + Math.hypot(pxv - f2x, pyv - f2y) - 2 * a;
 }
 
 // ────────────────────────────────────────────────────────────────────────────

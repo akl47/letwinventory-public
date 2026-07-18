@@ -107,5 +107,15 @@ if (require.main === module) {
         // Background eviction of stale DesignBRepCache rows. Hourly sweep,
         // 14-day TTL by default — override via CAD_BREP_CACHE_TTL_DAYS.
         require('./services/cadCacheEvictionService').initialize();
+        // Garbage collection of unreachable VCS objects (REQ 902). Daily
+        // sweep, 7-day grace by default — override via VCS_GC_GRACE_DAYS.
+        require('./services/vcs/vcsGcService').initialize();
+        // Clear expired CLEAN checkout locks so stale attributions don't
+        // linger until the next checkout attempt (dirty expired locks keep
+        // their holder for the takeover+stash flow, REQ 874).
+        setInterval(() => {
+            require('./services/vcs/cadVcsService').sweepExpiredLocks()
+                .catch((err) => console.error('[CadLockSweep] failed:', err));
+        }, 10 * 60 * 1000);
     });
 }

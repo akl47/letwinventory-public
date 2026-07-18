@@ -1,18 +1,34 @@
 services:
   letwinventory-backend:
     image: akl47/letwinventory:latest
-    network_mode: bridge
     env_file:
       - .env.production
     environment:
       NODE_ENV: production
+      # Kernel is a sibling service on the compose network — reach it by
+      # service name. Overridable via .env.production if ever split out.
+      CAD_KERNEL_ADDR: ${CAD_KERNEL_ADDR:-letwinventory-cad-kernel:9876}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data/files:/data/files
     ports:
       - ${BACKEND_PORT}:${BACKEND_PORT}
+    depends_on:
+      - letwinventory-cad-kernel
     container_name: letwinventory-backend-prod
+    restart: unless-stopped
+  letwinventory-cad-kernel:
+    # Native C++/OCCT geometry kernel (REQ 900). Image is published by
+    # .github/workflows/publish-kernel.yml on every master push.
+    image: ghcr.io/akl47/letwinventory-cad-kernel:latest
+    environment:
+      CAD_KERNEL_ADDR: 0.0.0.0:9876
+    # Internal-only: no host port published. Only the backend talks to the
+    # kernel, by service name on the compose network.
+    expose:
+      - "9876"
+    container_name: letwinventory-cad-kernel-prod
     restart: unless-stopped
 #   letwinventory-pgadmin:
 #     container_name: letwinventory-pgadmin4

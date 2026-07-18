@@ -114,6 +114,139 @@ module.exports = {
     }
   },
 
+  // PUT /:id/skeleton — save the assembly's SKELETON content (REQ 911/914):
+  // sketchDoc (skeleton sketches), featureTree (assembly datum plane features),
+  // and equations (assembly global variables). Guarded exactly like part-CAD
+  // content saves: main branch protected, checkout lock required and unexpired,
+  // and same-user multi-session conflicts rejected via clientSavedAt.
+  async updateSkeleton(req, res) {
+    const id = Number(req.params.id);
+    const assembly = await fetchActive(id);
+    if (!assembly) return res.status(404).json({ error: `Assembly ${id} not found` });
+
+    if ((assembly.branchName || 'main') === 'main') {
+      return res.status(423).json({ error: 'The main branch is protected — create or switch to a draft branch to make changes' });
+    }
+    if (assembly.lockedByUserID !== req.user.id) {
+      if (assembly.lockedByUserID) {
+        const holder = await db.User.findByPk(assembly.lockedByUserID);
+        return res.status(423).json({
+          error: `Assembly ${id} is checked out by ${holder ? holder.displayName : 'another user'}`,
+        });
+      }
+      return res.status(423).json({ error: `Check out assembly ${id} before editing it` });
+    }
+    if (assembly.lockExpiresAt && new Date() > new Date(assembly.lockExpiresAt)) {
+      return res.status(423).json({
+        error: `Your checkout of assembly ${id} has expired — check out again to continue`,
+        code: 'LOCK_EXPIRED',
+      });
+    }
+    // REQ 905-parity — same-user second-session conflict detection.
+    if (req.body && req.body.clientSavedAt !== undefined) {
+      const serverTok = assembly.lastContentSavedAt ? new Date(assembly.lastContentSavedAt).getTime() : null;
+      const clientTok = req.body.clientSavedAt ? new Date(req.body.clientSavedAt).getTime() : null;
+      if (serverTok !== clientTok) {
+        return res.status(409).json({
+          error: 'This assembly was changed by another session since this window last saved — reload to continue from the latest state.',
+          code: 'DOC_CONFLICT',
+        });
+      }
+    }
+
+    const patch = {};
+    const previousSnapshot = {
+      sketchDoc: assembly.sketchDoc,
+      featureTree: assembly.featureTree,
+      equations: assembly.equations,
+    };
+    if (req.body && req.body.sketchDoc !== undefined) patch.sketchDoc = req.body.sketchDoc;
+    if (req.body && req.body.featureTree !== undefined) patch.featureTree = req.body.featureTree;
+    if (req.body && req.body.equations !== undefined) patch.equations = req.body.equations;
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ error: 'Nothing to save — provide sketchDoc, featureTree, or equations' });
+    }
+    patch.dirty = true;
+    patch.lastContentSavedAt = new Date();
+    // Successful save slides the lock expiry (REQ 875 parity).
+    patch.lockExpiresAt = new Date(Date.now() + cadVcsService.DEFAULT_LOCK_TTL_MS);
+
+    try {
+      await assembly.update(patch);
+      await recordHistory(assembly.id, req.user.id, 'updated', previousSnapshot, {
+        sketchDoc: assembly.sketchDoc,
+        featureTree: assembly.featureTree,
+        equations: assembly.equations,
+      });
+      return res.json(await withReleaseFlag(assembly));
+    } catch (err) {
+      return res.status(500).json({ error: `Failed to save skeleton: ${err.message}` });
+    }
+  },
+
+  // POST /:id/push-variables — REQ 918: push assembly GLOBAL variables into
+  // each child part's equations doc as LITERAL resolved values tagged with the
+  // source assembly (`fromAssembly`). Shared-push semantics: all instances and
+  // the standalone part see the same value. Children whose working copy can't
+  // be written (main branch, release-locked, locked by another user, no model,
+  // sub-assembly) are skipped and reported per child.
+  async pushVariables(req, res) {
+    const id = Number(req.params.id);
+    const assembly = await fetchActive(id);
+    if (!assembly) return res.status(404).json({ error: `Assembly ${id} not found` });
+    try {
+      const { resolveEquations } = require('../../../services/cadEquations');
+      const { values, errors } = resolveEquations(assembly.equations || { entries: {} });
+      const globals = Object.keys((assembly.equations && assembly.equations.entries) || {})
+        .filter((k) => !k.includes('.'));
+      const wanted = Array.isArray(req.body && req.body.names) && req.body.names.length
+        ? globals.filter((k) => req.body.names.includes(k))
+        : globals;
+      const unresolved = wanted.filter((k) => !(k in values) || !Number.isFinite(values[k]) || errors[k]);
+      const pushable = wanted.filter((k) => !unresolved.includes(k));
+      if (pushable.length === 0) {
+        return res.status(422).json({ error: 'No resolvable assembly variables to push', unresolved });
+      }
+
+      const partIds = [...new Set(((assembly.assemblyDoc || {}).instances || []).map((i) => i.partID))];
+      const results = [];
+      for (const partID of partIds) {
+        const model = await db.DesignCADModel.findOne({ where: { partID, activeFlag: true } });
+        if (!model) { results.push({ partID, modelId: null, status: 'no-model', names: [] }); continue; }
+        if (model.isAssembly) { results.push({ partID, modelId: model.id, status: 'skipped-subassembly', names: [] }); continue; }
+        if ((model.branchName || 'main') === 'main') { results.push({ partID, modelId: model.id, status: 'skipped-main', names: [] }); continue; }
+        if (model.releaseLocked) { results.push({ partID, modelId: model.id, status: 'skipped-released', names: [] }); continue; }
+        if (model.lockedByUserID && model.lockedByUserID !== req.user.id) {
+          // Expired-but-attributed locks also skip — the lock is up for grabs
+          // and a push could interleave with a takeover.
+          const holder = await db.User.findByPk(model.lockedByUserID);
+          results.push({ partID, modelId: model.id, status: 'skipped-locked', lockedBy: holder ? holder.displayName : null, names: [] });
+          continue;
+        }
+        const equations = JSON.parse(JSON.stringify(model.equations || { entries: {} }));
+        equations.entries = equations.entries || {};
+        let changed = false;
+        for (const name of pushable) {
+          const value = values[name];
+          const prev = equations.entries[name];
+          if (prev && prev.expression === String(value) && prev.fromAssembly === assembly.id) continue;
+          equations.entries[name] = { expression: String(value), lastValue: value, fromAssembly: assembly.id };
+          changed = true;
+        }
+        if (!changed) { results.push({ partID, modelId: model.id, status: 'unchanged', names: pushable }); continue; }
+        // Bumping lastContentSavedAt deliberately trips DOC_CONFLICT in any
+        // open child editor session — protecting the push from being
+        // clobbered by that session's stale in-memory doc.
+        await model.update({ equations, dirty: true, lastContentSavedAt: new Date() });
+        results.push({ partID, modelId: model.id, status: 'updated', names: pushable });
+      }
+      await recordHistory(assembly.id, req.user.id, 'variables_pushed', null, { names: pushable, results });
+      return res.json({ results, unresolved, names: pushable });
+    } catch (err) {
+      return res.status(500).json({ error: `Failed to push variables: ${err.message}` });
+    }
+  },
+
   // GET /by-part/:partID/active
   async getActiveByPart(req, res) {
     try {
@@ -430,7 +563,17 @@ module.exports = {
         return res.status(201).json({ mate, assembly: await fetchActive(assembly.id) });
       }
 
-      if (!a || !b || !a.instanceId || !b.instanceId || !a.faceId || !b.faceId) {
+      // Lock mates freeze the CURRENT relative transform of two instances —
+      // the solver never reads their faces, so face picks are optional
+      // (REQ 920: anchoring a newly created child to the component its
+      // origin point was picked on).
+      if (type === 'lock') {
+        if (!a || !b || !a.instanceId || !b.instanceId) {
+          return res.status(400).json({ error: 'Lock mate requires a.instanceId and b.instanceId' });
+        }
+        a.faceId = a.faceId || '';
+        b.faceId = b.faceId || '';
+      } else if (!a || !b || !a.instanceId || !b.instanceId || !a.faceId || !b.faceId) {
         return res.status(400).json({ error: 'Mate requires a and b, each with instanceId and faceId' });
       }
       if (a.instanceId === b.instanceId) return res.status(400).json({ error: 'A mate must reference two distinct instances' });
@@ -652,12 +795,51 @@ module.exports = {
         }
         if (changed) await assembly.update({ assemblyDoc: doc });
       }
+      // REQ 916 — persist refreshed cross-part/skeleton cachedProjections onto
+      // each dependent child row so STANDALONE regen of the child tracks the
+      // source geometry it just resolved against. Volatile metadata only:
+      // dirty / lastContentSavedAt are NOT touched (the serializer already
+      // strips resolvedAt from hashing), and unwritable children (main /
+      // locked by someone else) are skipped silently.
+      if (composed.refProjections) {
+        for (const entry of Object.values(composed.refProjections)) {
+          try {
+            const child = await db.DesignCADModel.findOne({ where: { partID: entry.partID, activeFlag: true, isAssembly: false } });
+            if (!child) continue;
+            if ((child.branchName || 'main') === 'main') continue;
+            const lockedByOther = child.lockedByUserID && child.lockedByUserID !== req.user.id
+              && !(child.lockExpiresAt && new Date() > new Date(child.lockExpiresAt));
+            if (lockedByOther) continue;
+            const byId = new Map(entry.refs.map((r) => [r.constraintId, r.polyline]));
+            const sketchDoc = JSON.parse(JSON.stringify(child.sketchDoc || { sketches: {} }));
+            let changed = false;
+            for (const sketch of Object.values(sketchDoc.sketches || {})) {
+              for (const c of (sketch.state && sketch.state.constraints) || []) {
+                const poly = byId.get(c.id);
+                if (!poly || !c.externalRef || c.externalRef.scope !== 'cross-part') continue;
+                const prev = c.externalRef.cachedProjection && c.externalRef.cachedProjection.edges;
+                const next = [{ polyline: poly }];
+                if (JSON.stringify(prev) === JSON.stringify(next)) continue;
+                c.externalRef.cachedProjection = { resolvedAt: Date.now(), edges: next };
+                changed = true;
+              }
+            }
+            if (changed) {
+              child.changed('sketchDoc', true);
+              await child.update({ sketchDoc });
+            }
+          } catch { /* snapshot refresh is best-effort */ }
+        }
+      }
       // Strip BReps from the wire payload — the viewer only needs meshes.
       const bodies = composed.bodies.map(({ brep, ...b }) => b);
       return res.json({
         faces: composed.faces, vertices: composed.vertices, edges: composed.edges,
         bodies, instances: composed.instances, errors: composed.errors,
         constraintState: composed.constraintState,
+        // REQ 915 — skeleton sketch geometry (assembly world frame) for the
+        // in-context overlay.
+        skeleton: composed.skeleton,
       });
     } catch (err) {
       if (err instanceof KernelDisconnected || err instanceof KernelRpcError) {

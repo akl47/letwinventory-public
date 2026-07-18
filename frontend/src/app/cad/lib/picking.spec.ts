@@ -2,13 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { distanceToEntity, pickEntity, entityTouchesRect } from './picking';
 import type {
   SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity, EllipseEntity, SplineEntity,
+  EllipticalArcEntity,
 } from './types';
 
 // REQ 564 — parametric closest-point-on-entity. Pick accuracy must not depend on
 // tessellation density of the renderer.
 
 function state(
-  ...entities: Array<PointEntity | LineEntity | CircleEntity | ArcEntity | EllipseEntity | SplineEntity>
+  ...entities: Array<
+    PointEntity | LineEntity | CircleEntity | ArcEntity | EllipseEntity | SplineEntity | EllipticalArcEntity
+  >
 ): SketchState {
   return { entities, constraints: [] };
 }
@@ -59,6 +62,25 @@ describe('picking: parametric closest-point-on-entity (REQ 564)', () => {
       const theta = Math.PI / 8;
       const probe = { x: 0.95 * Math.cos(theta), y: 0.95 * Math.sin(theta) };
       expect(distanceToEntity(s, k, probe)).toBeCloseTo(0.05);
+    });
+
+    it('ellipticalArc: pickable via tessellation-backed distance, respecting sweep (REQ 884)', () => {
+      const c: PointEntity = { kind: 'point', id: 'c', x: 0, y: 0 };
+      const m: PointEntity = { kind: 'point', id: 'm', x: 10, y: 0 };
+      // Quarter ellipse from parametric 0 → π/2 (major radius 10, minor 5), CCW.
+      const ea: EllipticalArcEntity = {
+        kind: 'ellipticalArc', id: 'ea', centerId: 'c', majorAxisEndId: 'm',
+        minorRadius: 5, startAngle: 0, endAngle: Math.PI / 2, ccw: true,
+      };
+      const s = state(c, m, ea);
+      // On-curve at parametric 45°: distance ≈ 0 (within chord tolerance).
+      const onCurve = { x: 10 * Math.cos(Math.PI / 4), y: 5 * Math.sin(Math.PI / 4) };
+      expect(distanceToEntity(s, ea, onCurve)).toBeLessThan(0.06);
+      // Off the sweep (parametric π → (−10, 0)): finite, resolves to nearest
+      // arc sample — must NOT be Infinity (the old unpickable behavior).
+      const offSweep = distanceToEntity(s, ea, { x: -10, y: 0 });
+      expect(Number.isFinite(offSweep)).toBe(true);
+      expect(offSweep).toBeGreaterThan(9); // nearest endpoint is (0, 5), ~11.18 away
     });
 
     it('arc: returns circle distance only when angle lies within sweep', () => {

@@ -9,6 +9,7 @@
 // PlaneGCS-backed server-side re-solving is a separate work item.
 
 const { bezierLoopsFromTextEntity } = require('./cadTextGlyphs');
+const { bezierSegsFromSpline, bezierSegsFromEllipse } = require('./cadCurveBeziers');
 const { splitAtIntersections, extractArrangementFaces, mergeFaces } = require('./cadArrangement');
 
 /**
@@ -56,6 +57,62 @@ function extractClosedLoops(state, resolve = (s) => s) {
       const edges = contour.map((seg) => ({ kind: 'bezier', points: seg.points }));
       loops.push(edges);
       sources.push({ kind: 'text' });
+    }
+  }
+
+  // REQ 883 — closed splines and ellipses become extrudable profiles as
+  // chains of cubic Bézier edges (same kernel path as text glyphs:
+  // Edge::bezier, one smooth face per curve). Emitted SECOND, ahead of the
+  // arrangement walker.
+  //
+  // EMIT-ORDER RULE (must match frontend profile.ts exactly — stored
+  // regionIndices are positional): (1) text glyph loops, then (2) curve
+  // loops — closed splines + ellipses, in sketch entity order — then
+  // (3) standalone circles, then (4) arrangement faces.
+  //
+  // v1 LIMITATION: like glyphs, curve loops are emitted unconditionally and
+  // do NOT participate in the planar arrangement (splitAtIntersections
+  // ignores spline/ellipse kinds), so an ellipse or spline crossed by other
+  // geometry is still emitted whole — the intersection does not subdivide it
+  // into sub-regions. Nesting/holes still work exactly as for glyphs:
+  // extractRegions runs its containment test over the sampled Bézier chain.
+  for (const e of state.entities) {
+    if (e.construction) continue;
+    if (e.kind === 'spline') {
+      const ids = e.controlPointIds;
+      if (!Array.isArray(ids) || ids.length < 4) continue;  // below cubic minimum
+      const pts = [];
+      let missing = false;
+      for (const id of ids) {
+        const p = findPoint(state, id);
+        if (!p) { missing = true; break; }
+        pts.push({ x: p.x, y: p.y });
+      }
+      if (missing) { errors.push(`spline ${e.id}: control point not found`); continue; }
+      // Closed iff first/last control point share an id or coincide. Open
+      // splines contribute nothing (as before REQ 883).
+      const first = pts[0];
+      const last = pts[pts.length - 1];
+      const closed = ids[0] === ids[ids.length - 1]
+        || Math.hypot(last.x - first.x, last.y - first.y) < 1e-6;
+      if (!closed) continue;
+      const segs = bezierSegsFromSpline(pts, e.degree);
+      if (!segs) continue;  // non-cubic degree — out of v1 scope
+      loops.push(segs.map((points) => ({ kind: 'bezier', points })));
+      sources.push({ kind: 'curve' });
+    } else if (e.kind === 'ellipse') {
+      const center = findPoint(state, e.centerId);
+      const majorEnd = findPoint(state, e.majorAxisEndId);
+      if (!center || !majorEnd) {
+        errors.push(`ellipse ${e.id}: center or major-axis point not found`);
+        continue;
+      }
+      const segs = bezierSegsFromEllipse(
+        { x: center.x, y: center.y }, { x: majorEnd.x, y: majorEnd.y }, e.minorRadius,
+      );
+      if (!segs) continue;  // degenerate axes
+      loops.push(segs.map((points) => ({ kind: 'bezier', points })));
+      sources.push({ kind: 'curve' });
     }
   }
 
@@ -220,47 +277,64 @@ function extractMergedRegions(state, regionIndices, resolve = (s) => s) {
   if (sel.length === 0) return { regions: [], errors };
 
   // Split the selection into mergeable arrangement faces vs standalone loops.
+  // Face-sourced selections (from an intersecting arrangement) get fused so
+  // edge-touching prisms don't hang OCCT's boolean. Standalone loops (text
+  // glyphs, disjoint sketched profiles) are NOT merged — they carry their own
+  // holes and must keep them (a letter's counter). Rebuilding holes only from
+  // the SELECTED loop set dropped those counters, because a counter's own loop
+  // is never in the selection — the "holes got filled in" bug.
   const faceSel = [];
-  const standaloneLoops = [];
+  const standaloneSel = [];
   for (const i of sel) {
     const src = sources[i];
     if (src && src.kind === 'face' && src.face) faceSel.push(src.face);
-    else standaloneLoops.push(loops[i]);
+    else standaloneSel.push(i);
   }
 
-  const resultLoops = [...standaloneLoops];
-  if (faceSel.length > 0) {
-    for (const merged of mergeFaces(faceSel)) {
-      const loop = simplifyMergedLoop(faceToProfileLoop(merged, split));
-      if (loop.length > 0) resultLoops.push(loop);
-    }
-  }
-  if (resultLoops.length === 0) return { regions: [], errors };
-
-  // Pair outer loops with their contained holes (same containment test as
-  // extractRegions). Only top-level loops become regions to extrude; contained
-  // loops are attached as holes.
-  const polys = resultLoops.map(l => tessellateProfileLoopJS(l));
-  /** @type {Set<number>[]} */
-  const insideOf = resultLoops.map(() => new Set());
-  for (let i = 0; i < resultLoops.length; i++) {
-    for (let j = 0; j < resultLoops.length; j++) {
-      if (i !== j && loopContains(polys[i], polys[j])) insideOf[i].add(j);
-    }
-  }
-  const parent = resultLoops.map((_, i) => {
-    let best = null, bestDepth = -1;
-    for (const j of insideOf[i]) { const d = insideOf[j].size; if (d > bestDepth) { best = j; bestDepth = d; } }
-    return best;
-  });
   /** @type {ProfileRegion[]} */
   const regions = [];
-  for (let i = 0; i < resultLoops.length; i++) {
-    if (insideOf[i].size > 0) continue;  // a hole of some other loop — not its own region
-    const holes = [];
-    for (let c = 0; c < resultLoops.length; c++) if (parent[c] === i) holes.push(resultLoops[c]);
-    regions.push({ outer: resultLoops[i], holes });
+
+  // Standalone regions keep the holes extractRegions attaches by containment.
+  if (standaloneSel.length > 0) {
+    const { regions: allRegions } = extractRegions(state, resolve);
+    for (const i of standaloneSel) {
+      if (allRegions[i]) regions.push(allRegions[i]);
+    }
   }
+
+  // Merged arrangement faces: fuse selected faces into combined outer loops,
+  // then pair each with any hole created by an unselected inner face (same
+  // containment test as extractRegions), scoped to the merged loops only.
+  if (faceSel.length > 0) {
+    const mergedLoops = [];
+    for (const merged of mergeFaces(faceSel)) {
+      const loop = simplifyMergedLoop(faceToProfileLoop(merged, split));
+      if (loop.length > 0) mergedLoops.push(loop);
+    }
+    if (mergedLoops.length > 0) {
+      const polys = mergedLoops.map(l => tessellateProfileLoopJS(l));
+      /** @type {Set<number>[]} */
+      const insideOf = mergedLoops.map(() => new Set());
+      for (let i = 0; i < mergedLoops.length; i++) {
+        for (let j = 0; j < mergedLoops.length; j++) {
+          if (i !== j && loopContains(polys[i], polys[j])) insideOf[i].add(j);
+        }
+      }
+      const parent = mergedLoops.map((_, i) => {
+        let best = null, bestDepth = -1;
+        for (const j of insideOf[i]) { const d = insideOf[j].size; if (d > bestDepth) { best = j; bestDepth = d; } }
+        return best;
+      });
+      for (let i = 0; i < mergedLoops.length; i++) {
+        if (insideOf[i].size > 0) continue;  // a hole of some other merged loop
+        const holes = [];
+        for (let c = 0; c < mergedLoops.length; c++) if (parent[c] === i) holes.push(mergedLoops[c]);
+        regions.push({ outer: mergedLoops[i], holes });
+      }
+    }
+  }
+
+  if (regions.length === 0) return { regions: [], errors };
   return { regions, errors };
 }
 

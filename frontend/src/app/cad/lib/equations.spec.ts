@@ -267,3 +267,20 @@ describe('equations', () => {
     });
   });
 });
+
+describe('fromAssembly passthrough (REQ 918)', () => {
+  it('resolves pushed literal entries like any global and keeps the tag through setEquation', () => {
+    const doc: EquationDoc = { entries: {
+      width: { expression: '50', lastValue: 50, fromAssembly: 7 },
+      derived: { expression: 'width * 2' },
+    } };
+    const r = resolveEquations(doc);
+    expect(r.values['width']).toBe(50);
+    expect(r.values['derived']).toBe(100);
+    // Local edit via setEquation replaces the entry (drops the tag — it's a
+    // local override until the next push rewrites it).
+    const next = setEquation(doc, 'width', '60');
+    expect(next.entries['width'].expression).toBe('60');
+    expect(doc.entries['width'].fromAssembly).toBe(7);  // original untouched (pure)
+  });
+});

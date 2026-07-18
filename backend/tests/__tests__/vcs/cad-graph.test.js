@@ -24,7 +24,7 @@ describe('cadGraphService.buildGraph', () => {
   beforeEach(async () => { uid = (await authenticatedRequest()).user.id; });
 
   test('builds nodes across branches with lanes, head, and author', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     const c0 = (await cadvcs.checkin(model, uid, 'init')).commitHash;
     await model.update({ featureTree: { features: [{ id: 'f1', type: 'origin' }, { id: 'f2', type: 'extrude', sketchId: 's1', distance: 10 }], nextFeatureSeq: 3 }, dirty: true });
     const c1 = (await cadvcs.checkin(model, uid, 'add f2')).commitHash;
@@ -47,7 +47,7 @@ describe('cadGraphService.buildGraph', () => {
   });
 
   test('release tags appear on the tagged node', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     await cadvcs.checkin(model, uid, 'init');
     const { commitHash, tag } = await cadvcs.release(model, uid, 'B', {}); // origin-only → no kernel
 

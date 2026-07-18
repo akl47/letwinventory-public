@@ -47,7 +47,7 @@ describe('cadDiffService — structural', () => {
   beforeEach(async () => { uid = (await authenticatedRequest()).user.id; });
 
   test('classifies added/removed/modified/unchanged + paramDiff (VC-31, VC-32)', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     const c0 = (await cadvcs.checkin(model, uid, 'init')).commitHash;
     await model.update({ featureTree: F2(10), sketchDoc: F2DOC, dirty: true });
     const c1 = (await cadvcs.checkin(model, uid, 'add f2')).commitHash;
@@ -97,7 +97,7 @@ describe('cadDiffService — 3D body diff', () => {
   afterEach(() => jest.restoreAllMocks());
 
   test('added / unchanged / modified bodies (VC-33)', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     const c0 = (await cadvcs.checkin(model, uid, 'init')).commitHash; // origin only → no body
     await model.update({ featureTree: F2(10), sketchDoc: F2DOC, dirty: true });
     const c1 = (await cadvcs.checkin(model, uid, 'add f2')).commitHash;
@@ -115,7 +115,7 @@ describe('cadDiffService — 3D body diff', () => {
   });
 
   test('faceNameDiff reports added / removed faces by persistent name (REQ 712)', async () => {
-    const model = await cadvcs.checkout(await makeModel(uid), uid, {});
+    const { model } = await cadvcs.checkout(await makeModel(uid), uid, {});
     const c0 = (await cadvcs.checkin(model, uid, 'init')).commitHash; // origin only → no faces
     await model.update({ featureTree: F2(10), sketchDoc: F2DOC, dirty: true });
     const c1 = (await cadvcs.checkin(model, uid, 'add f2')).commitHash; // gains face f2-f0

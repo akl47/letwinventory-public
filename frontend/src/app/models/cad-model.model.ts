@@ -28,6 +28,8 @@ export interface CadModel {
   branchName?: string;
   baseCommitHash?: string | null;
   dirty?: boolean;
+  /** Last content-changing save (REQ 877) — basis for the stale-work warning. */
+  lastContentSavedAt?: string | null;
   lockedByUserID?: number | null;
   lockedAt?: string | null;
   lockExpiresAt?: string | null;

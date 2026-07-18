@@ -6,9 +6,16 @@
 // ExportStlParams / ExportStepParams from cad-kernel/src/protocol.rs) and return
 // the matching result json:
 //   buildBoolean → {brepBytes, faces, topology, solids}
+//   buildFuseMany→ {brepBytes, faces, topology, solids}  (N-shape fuse in one BOP)
 //   bodyVolume   → {volume, centroid}
 //   exportStl    → {stlBase64}
 //   exportStep   → {step}
+//
+// buildBoolean / buildFuseMany accept optional `wantFaces`:
+//   "all" (default) — top-level faces+topology AND per-solid tessellation
+//   "solids"        — per-solid tessellation only; top-level faces/topology
+//                     are returned empty. The compose pipeline consumes only
+//                     solids[].faces, so this halves tessellation work.
 // They throw std::runtime_error on failure; the server turns that into a
 // JSON-RPC error.
 //
@@ -23,6 +30,7 @@
 namespace kernel {
 
 nlohmann::json op_buildBoolean(const nlohmann::json& params);
+nlohmann::json op_buildFuseMany(const nlohmann::json& params);
 nlohmann::json op_bodyVolume(const nlohmann::json& params);
 nlohmann::json op_exportStl(const nlohmann::json& params);
 nlohmann::json op_exportStep(const nlohmann::json& params);

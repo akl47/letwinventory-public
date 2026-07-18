@@ -15,7 +15,21 @@ import { CadModelService } from '../../../services/cad-model.service';
 import { AssemblyService } from '../../../services/assembly.service';
 import { PartCategory } from '../../../models/part-category.model';
 
-export interface CadNewPartDialogData { mode: 'part' | 'assembly'; }
+export interface CadNewPartDialogData {
+  mode: 'part' | 'assembly';
+  /** REQ 920 — create the part AS A CHILD of this assembly: after the CAD
+   * model is minted, insert an instance placed at `origin` (assembly world
+   * frame) and open the part IN CONTEXT instead of standalone. */
+  insertInto?: {
+    assemblyId: number;
+    assemblyPartId: number;
+    origin: [number, number, number];
+    /** Component the origin point was picked on — the new instance gets a
+     * LOCK mate to it so it stays anchored. Null (datum/origin pick) →
+     * the instance is grounded in the assembly frame instead. */
+    anchorInstanceId?: string | null;
+  };
+}
 
 /**
  * Reduced new-part dialog launched from the CAD landing's New Part / New
@@ -85,9 +99,12 @@ export class CadNewPartDialogComponent {
   busy = signal(false);
   error = signal('');
 
-  /** Only the two relevant categories are offered. */
+  /** Only the two relevant categories are offered; child-of-assembly mode
+   * (REQ 920) creates plain parts only. */
   pickableCategories = computed(() =>
-    this.categories().filter((c) => c.name === 'Part' || c.name === 'Assembly'));
+    this.categories().filter((c) => this.data.insertInto
+      ? c.name === 'Part'
+      : (c.name === 'Part' || c.name === 'Assembly')));
   private isAssembly = computed(() =>
     this.categories().find((c) => c.id === this.categoryId())?.name === 'Assembly');
 
@@ -133,8 +150,8 @@ export class CadNewPartDialogComponent {
             // Checkout is the unified cad-model endpoint (works for assemblies);
             // a failure shouldn't block opening — navigate regardless.
             this.cadApi.checkout(m.id).subscribe({
-              next: () => this.openEditor(assembly, part.id, m.id),
-              error: () => this.openEditor(assembly, part.id, m.id),
+              next: () => this.finish(assembly, part.id, m.id),
+              error: () => this.finish(assembly, part.id, m.id),
             });
           },
           error: (e) => { this.busy.set(false); this.error.set(e?.error?.error || 'Failed to attach a design to the new part'); },
@@ -142,6 +159,50 @@ export class CadNewPartDialogComponent {
       },
       error: (e) => { this.busy.set(false); this.error.set(e?.error?.error || 'Failed to create part'); },
     });
+  }
+
+  private finish(assembly: boolean, partId: number, modelId: number) {
+    // REQ 920 — child-of-assembly mode: insert an instance placed at the
+    // picked origin, then open the new part IN CONTEXT of that assembly.
+    const into = this.data.insertInto;
+    if (into && !assembly) {
+      this.asmApi.insertInstance(into.assemblyId, {
+        partID: partId,
+        placement: { translate: into.origin, quaternion: [0, 0, 0, 1] },
+        // Datum-picked origins anchor to the assembly frame directly.
+        ...(into.anchorInstanceId ? {} : { grounded: true }),
+      }).subscribe({
+        next: (r) => {
+          const go = () => {
+            this.ref.close(true);
+            this.router.navigate(['/parts', partId, 'cad', 'editor'], {
+              queryParams: {
+                revisionID: modelId,
+                inContext: into.assemblyId,
+                hostInstance: r.instance.instanceId,
+                asmPart: into.assemblyPartId,
+              },
+            });
+          };
+          // REQ 920 — the picked origin is a MATE: lock the new instance to
+          // the component it was picked on (freezes the current relative
+          // transform, so the new part follows that component). A mate
+          // failure shouldn't orphan the flow — open in context regardless.
+          if (into.anchorInstanceId) {
+            this.asmApi.addMate(into.assemblyId, {
+              type: 'lock',
+              a: { instanceId: r.instance.instanceId, faceId: '' },
+              b: { instanceId: into.anchorInstanceId, faceId: '' },
+            }).subscribe({ next: go, error: go });
+          } else {
+            go();
+          }
+        },
+        error: (e) => { this.busy.set(false); this.error.set(e?.error?.error || 'Part created, but inserting it into the assembly failed'); },
+      });
+      return;
+    }
+    this.openEditor(assembly, partId, modelId);
   }
 
   private openEditor(assembly: boolean, partId: number, modelId: number) {

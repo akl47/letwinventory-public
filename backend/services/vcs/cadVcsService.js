@@ -94,6 +94,7 @@ const wc = makeWorkingCopy({
 
 const seedMain = (model, userId, opts = {}, db) => wc.seedMain(model, userId, opts, db);
 const checkout = (model, userId, opts = {}, db) => wc.checkout(model, userId, opts, db);
+const renewLock = (model, userId, opts = {}) => wc.renewLock(model, userId, opts);
 const releaseLock = (model, userId, opts = {}, db) => wc.releaseLock(model, userId, opts, db);
 const undoCheckout = (model, userId, db) => wc.undoCheckout(model, userId, db);
 // REQ 774 — pin every cross-part in-context reference to the source part's CURRENT
@@ -111,6 +112,10 @@ async function pinCrossPartRefs(model, db) {
     for (const c of (sketch.state && sketch.state.constraints) || []) {
       const er = c.externalRef;
       if (c.type !== 'on-edge' || !er || er.scope !== 'cross-part') continue;
+      // REQ 915 — skeleton refs source the ASSEMBLY's own sketch; pinning is
+      // per-part-repo and doesn't apply (the isAssembly:false lookup below
+      // would skip them anyway — this makes it intentional).
+      if (er.sourceInstanceId === '__skeleton__') continue;
       const sourceModel = await D.DesignCADModel.findOne({ where: { partID: er.sourcePartId, activeFlag: true, isAssembly: false } });
       if (!sourceModel) continue;
       const repoB = await repoForModel(sourceModel, D);
@@ -217,9 +222,11 @@ const history = (model, db) => wc.history(model, db);
 async function sweepExpiredLocks(at, db) {
   const D = dbOf(db);
   const { Op } = D.Sequelize;
+  // Only CLEAN copies are swept — a dirty expired lock keeps its holder
+  // attribution so the next checkout can offer takeover + stash (REQ 874).
   const [count] = await D.DesignCADModel.update(
     { lockedByUserID: null, lockedAt: null, lockExpiresAt: null },
-    { where: { lockedByUserID: { [Op.ne]: null }, lockExpiresAt: { [Op.lt]: nowAt(at) } } },
+    { where: { lockedByUserID: { [Op.ne]: null }, lockExpiresAt: { [Op.lt]: nowAt(at) }, dirty: false } },
   );
   return count;
 }
@@ -282,6 +289,7 @@ module.exports = {
   derivedDraftRev,
   seedMain,
   checkout,
+  renewLock,
   releaseLock,
   undoCheckout,
   checkin,

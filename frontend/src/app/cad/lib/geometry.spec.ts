@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   lineLineIntersection, lineCircleIntersection, circleCircleIntersection,
   reflectAcrossLine, projectOntoSegment, projectOntoLine, offsetLineLeft,
-  angleInArcSweep, allCurveIntersections, angleQuadrant,
+  angleInArcSweep, allCurveIntersections, angleQuadrant, planeSketchIntersection,
+  lineSketchProjection,
 } from './geometry';
 import { emptySketchState, addPoint, addLine, addCircle } from './store';
+import type { Plane3 } from './types';
 
 describe('angleQuadrant (placement-driven angle, SolidWorks-style)', () => {
   // Line A along +X (0,0)->(10,0); line B at 30° (0,0)->(8.66,5). Intersect at origin.
@@ -187,5 +189,83 @@ describe('allCurveIntersections', () => {
     const c = addCircle(s, 0, 0, 5); s = c.state;
     const pts = allCurveIntersections(s);
     expect(pts).toHaveLength(2);
+  });
+});
+
+// REQ 907 — datum plane ∩ sketch plane as a 2D reference line.
+describe('planeSketchIntersection (REQ 907)', () => {
+  const XY: Plane3 = { origin: [0, 0, 0], xAxis: [1, 0, 0], yAxis: [0, 1, 0], normal: [0, 0, 1] };
+  const YZ: Plane3 = { origin: [0, 0, 0], xAxis: [0, 1, 0], yAxis: [0, 0, 1], normal: [1, 0, 0] };
+  const XZ: Plane3 = { origin: [0, 0, 0], xAxis: [1, 0, 0], yAxis: [0, 0, 1], normal: [0, -1, 0] };
+
+  it('YZ plane crosses an XY sketch along the sketch Y axis', () => {
+    const hit = planeSketchIntersection(YZ, XY)!;
+    expect(hit).not.toBeNull();
+    // The line x = 0 in sketch coords: anchored at the origin, direction ±Y.
+    expect(Math.abs(hit.point.x)).toBeLessThan(1e-9);
+    expect(Math.abs(hit.point.y)).toBeLessThan(1e-9);
+    expect(Math.abs(hit.dir.x)).toBeLessThan(1e-9);
+    expect(Math.abs(Math.abs(hit.dir.y) - 1)).toBeLessThan(1e-9);
+  });
+
+  it('an offset parallel copy of YZ lands at the offset x', () => {
+    const offsetYZ: Plane3 = { ...YZ, origin: [7, 0, 0] };
+    const hit = planeSketchIntersection(offsetYZ, XY)!;
+    expect(hit.point.x).toBeCloseTo(7, 9);
+    expect(Math.abs(hit.dir.x)).toBeLessThan(1e-9);
+  });
+
+  it('XZ plane crosses an XY sketch along the sketch X axis', () => {
+    const hit = planeSketchIntersection(XZ, XY)!;
+    expect(Math.abs(hit.point.y)).toBeLessThan(1e-9);
+    expect(Math.abs(hit.dir.y)).toBeLessThan(1e-9);
+    expect(Math.abs(Math.abs(hit.dir.x) - 1)).toBeLessThan(1e-9);
+  });
+
+  it('rejects a plane parallel to the sketch plane', () => {
+    const parallel: Plane3 = { ...XY, origin: [0, 0, 12] };
+    expect(planeSketchIntersection(parallel, XY)).toBeNull();
+    expect(planeSketchIntersection(XY, XY)).toBeNull(); // coincident too
+  });
+
+  it('anchors the reference at the closest point to the sketch origin', () => {
+    // A 45°-tilted plane whose intersection line is x + y = 10 in sketch
+    // coords: closest point to origin is (5, 5).
+    const tilted: Plane3 = {
+      origin: [10, 0, 0],
+      xAxis: [0, 0, 1],
+      yAxis: [-Math.SQRT1_2, Math.SQRT1_2, 0],
+      normal: [Math.SQRT1_2, Math.SQRT1_2, 0],
+    };
+    const hit = planeSketchIntersection(tilted, XY)!;
+    expect(hit.point.x).toBeCloseTo(5, 9);
+    expect(hit.point.y).toBeCloseTo(5, 9);
+  });
+});
+
+// REQ 907 — datum axis projected onto the sketch plane.
+describe('lineSketchProjection (REQ 907)', () => {
+  const XY: Plane3 = { origin: [0, 0, 0], xAxis: [1, 0, 0], yAxis: [0, 1, 0], normal: [0, 0, 1] };
+
+  it('projects the X axis onto an XY sketch as the sketch X axis', () => {
+    const hit = lineSketchProjection([0, 0, 0], [1, 0, 0], XY)!;
+    expect(Math.abs(hit.point.x)).toBeLessThan(1e-9);
+    expect(Math.abs(hit.point.y)).toBeLessThan(1e-9);
+    expect(Math.abs(Math.abs(hit.dir.x) - 1)).toBeLessThan(1e-9);
+    expect(Math.abs(hit.dir.y)).toBeLessThan(1e-9);
+  });
+
+  it('projects an off-plane axis orthographically', () => {
+    // Axis through (0, 4, 7) along (1, 0, 1): projection is y = 4 along X.
+    const hit = lineSketchProjection([0, 4, 7], [Math.SQRT1_2, 0, Math.SQRT1_2], XY)!;
+    expect(hit.point.y).toBeCloseTo(4, 9);
+    expect(Math.abs(Math.abs(hit.dir.x) - 1)).toBeLessThan(1e-9);
+    expect(Math.abs(hit.dir.y)).toBeLessThan(1e-9);
+    // Anchored at the closest point to the sketch origin → x = 0.
+    expect(Math.abs(hit.point.x)).toBeLessThan(1e-9);
+  });
+
+  it('rejects an axis perpendicular to the sketch plane', () => {
+    expect(lineSketchProjection([3, 3, 0], [0, 0, 1], XY)).toBeNull();
   });
 });

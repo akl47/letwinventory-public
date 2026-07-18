@@ -1,7 +1,7 @@
 import { make_gcs_wrapper, init_planegcs_module, GcsWrapper, SolveStatus, Algorithm } from '../vendor/planegcs';
 import type { SketchPrimitive, SketchParam } from '../vendor/planegcs';
 import type {
-  SketchState, SketchConstraint, SketchEntity, CircleEntity, ArcEntity,
+  SketchState, SketchConstraint, SketchEntity, CircleEntity, ArcEntity, LineEntity,
 } from './types';
 import { pointsOf, linesOf, findEntity, findPoint, onEdgeLookupKey, isCenterExternalRef } from './types';
 import { ORIGIN_POINT_ID } from './store';
@@ -16,6 +16,16 @@ export interface SolveResult {
    * participate in the conflict (mapped back from PlaneGCS's conflicting
    * primitive tags). Empty/absent when the solver names none. */
   conflicting?: string[];
+  /** REQ 887: on a SUCCESSFUL solve, the sketch-constraint ids PlaneGCS
+   * reports as redundant (over-annotating an already-determined relation).
+   * Solver-synthetic pins that are redundant by design are filtered out.
+   * Absent when nothing is redundant. */
+  redundant?: string[];
+  /** REQ 897: constraint ids whose EXTERNAL reference could not be resolved
+   * this solve (the projected edge is absent from `externalEdges`) — the
+   * constraint was silently inert. Rendered olive, SolidWorks-style. Only
+   * computed when the caller supplied an externalEdges map. */
+  dangling?: string[];
 }
 
 export type GcsModule = unknown; // retained for backward-compat call sites
@@ -161,8 +171,11 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
       // user edits. When both endpoints are pinned in extraFixed,
       // the line is fully determined by the fixed points and a
       // horizontal/vertical primitive would just be reported as a
-      // redundant constraint. Diagonal source edges aren't enforced
-      // yet; that'd require a phantom collinear reference line.
+      // redundant constraint. DIAGONAL source edges are enforced by
+      // the line-endpoint ride pass in solve() (REQ 886): a free
+      // endpoint gets synthetic fixed reference points at the live
+      // projection + point_on_line_ppp — the "phantom collinear
+      // reference line" with no new concepts.
       if (c.targets.length === 0) return [];
       const target = at(0);
       if (!target || target.kind !== 'line') return [];
@@ -200,25 +213,33 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
     }
     case 'horizontal':
       // A line target → the line is horizontal; two points → the points share
-      // a y (point-pair horizontal alignment).
-      return at(0)?.kind === 'line'
-        ? [{ id: c.id, type: 'horizontal_l', l_id: tid(0) }]
-        : [{ id: c.id, type: 'horizontal_pp', p1_id: tid(0), p2_id: tid(1) }];
+      // a y (point-pair horizontal alignment). Review B18: verify BOTH targets
+      // resolve — a dangling ref must degrade to a no-op, not emit a primitive
+      // with an unknown id (push_primitives throws, killing ALL solving).
+      if (at(0)?.kind === 'line') return [{ id: c.id, type: 'horizontal_l', l_id: tid(0) }];
+      if (!at(0) || !at(1)) return [];
+      return [{ id: c.id, type: 'horizontal_pp', p1_id: tid(0), p2_id: tid(1) }];
     case 'vertical':
-      return at(0)?.kind === 'line'
-        ? [{ id: c.id, type: 'vertical_l', l_id: tid(0) }]
-        : [{ id: c.id, type: 'vertical_pp', p1_id: tid(0), p2_id: tid(1) }];
+      if (at(0)?.kind === 'line') return [{ id: c.id, type: 'vertical_l', l_id: tid(0) }];
+      if (!at(0) || !at(1)) return [];
+      return [{ id: c.id, type: 'vertical_pp', p1_id: tid(0), p2_id: tid(1) }];
     case 'distance':
+      if (!at(0) || !at(1)) return [];
       return [{ id: c.id, type: 'p2p_distance', p1_id: tid(0), p2_id: tid(1), distance: c.value ?? 0 }];
     case 'perpendicular':
       // To a model edge (single sketch-line target + externalRef): handled by
       // the edge-orientation pass in solve() via a synthetic fixed line.
       if (c.externalRef) return [];
+      if (!at(0) || !at(1)) return [];
       return [{ id: c.id, type: 'perpendicular_ll', l1_id: tid(0), l2_id: tid(1) }];
     case 'parallel':
       if (c.externalRef) return [];
+      if (!at(0) || !at(1)) return [];
       return [{ id: c.id, type: 'parallel', l1_id: tid(0), l2_id: tid(1) }];
     case 'tangent': {
+      // To a model edge (single curve target + externalRef): handled by the
+      // edge-tangent pass in solve() via a synthetic fixed line (REQ 886).
+      if (c.externalRef) return [];
       const a = at(0), b = at(1);
       if (!a || !b) return [];
       const prim = tangentPrimitive(c.id, a, b);
@@ -233,6 +254,7 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
     case 'midpoint': {
       // Targets: [point, line]. Synthesized: point lies on the line AND on its
       // perpendicular bisector ⇒ point sits at the line's midpoint.
+      if (!at(0) || at(1)?.kind !== 'line') return [];  // review B18 — dangling-safe
       return [
         { id: `${c.id}-onl`, type: 'point_on_line_pl', p_id: tid(0), l_id: tid(1) },
         { id: `${c.id}-pb`, type: 'point_on_perp_bisector_pl', p_id: tid(0), l_id: tid(1) },
@@ -243,7 +265,19 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
       // the axis AND segment (A,B) is perpendicular to it ⇒ axis is the perp
       // bisector of (A,B), i.e. A and B are mirror images about the axis.
       const axis = at(2);
-      if (!axis || axis.kind !== 'line') return [];
+      const pA = at(0), pB = at(1);
+      if (!pA || !pB || !axis || axis.kind !== 'line') return [];  // review B18
+      // DEGENERATE pair (A ≈ B — a point ON the axis "mirrored" onto
+      // itself, from a mirror op predating the on-axis point sharing fix):
+      // the A→B segment is zero-length, so the perpendicular primitive is
+      // singular and PlaneGCS reports the whole system inconsistent.
+      // Translate as plain coincident instead — geometrically what the
+      // constraint pins at this configuration. Re-translated fresh each
+      // solve, so if the pair ever separates the full form comes back.
+      if (pA.kind === 'point' && pB.kind === 'point'
+          && Math.hypot(pA.x - pB.x, pA.y - pB.y) < 1e-9) {
+        return [{ id: c.id, type: 'p2p_coincident', p1_id: tid(0), p2_id: tid(1) }];
+      }
       return [
         { id: `${c.id}-mid`, type: 'midpoint_on_line_pppp',
           l1p1_id: tid(0), l1p2_id: tid(1), l2p1_id: axis.startId, l2p2_id: axis.endId },
@@ -338,6 +372,24 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
       //    signed angle is -45° produces a 135° rotation. Sign-correct
       //    the target so the rotation direction matches the current
       //    sense (minimum rotation).
+      //
+      // To a model edge (single line target + externalRef): handled by the
+      // edge-angle pass in solve() via synthetic fixed points (REQ 886).
+      if (c.externalRef) return [];
+      // 3-POINT vertex angle (REQ 890): targets [rayA, vertex, rayB], all
+      // points. Both rays share the vertex as their first point, so the
+      // 4-point primitive drives the angle AT the vertex directly.
+      if (c.targets.length === 3) {
+        const pA = at(0), v = at(1), pB = at(2);
+        if (!pA || !v || !pB || pA.kind !== 'point' || v.kind !== 'point' || pB.kind !== 'point') return [];
+        const angle3 = adjustAngleSignFromPoints(state, v.id, pA.id, v.id, pB.id, c.value ?? 0);
+        return [{
+          id: c.id, type: 'l2l_angle_pppp',
+          l1p1_id: v.id, l1p2_id: pA.id,
+          l2p1_id: v.id, l2p2_id: pB.id,
+          angle: angle3,
+        }];
+      }
       const a = at(0), b = at(1);
       if (!a || !b || a.kind !== 'line' || b.kind !== 'line') return [];
       const oriented = orientLinesForAngle(a, b, c.angleRays);
@@ -483,6 +535,48 @@ function buildPrimitives(
       primitives.push({ id: `_pinrad_${a.id}`, type: 'arc_radius', a_id: a.id, radius: a.radius });
     }
   }
+  // Ellipses (REQ 882): PlaneGCS's parameterization is center + focus1 +
+  // minor radius. Our entity stores center + majorAxisEnd + minorRadius, so
+  // we synthesize the focus point (center + majorDir·√(a²−b²)) and the
+  // opposite major vertex, then glue the stored major-axis endpoint to the
+  // conic via internal-alignment constraints — FreeCAD's own scheme, and the
+  // ellipse analog of the arc's arc_rules companion push above. Before this
+  // registration, `point_on_ellipse` / `tangent_le` referenced an unknown id
+  // and threw at push time, breaking the whole solve.
+  for (const e of state.entities) {
+    if (e.kind !== 'ellipse') continue;
+    const center = findPoint(state, e.centerId);
+    const majorEnd = findPoint(state, e.majorAxisEndId);
+    if (!center || !majorEnd) continue;
+    const a = Math.hypot(majorEnd.x - center.x, majorEnd.y - center.y);
+    const b = e.minorRadius;
+    // radmin must not exceed the major radius. Do NOT clamp-and-register: the
+    // clamped radmin would be persisted by readBack, silently destroying the
+    // user's minor radius when the major-axis end is dragged inside it
+    // (review B13). Skip registration for this transitional degenerate state —
+    // ellipse constraints are inert for the solve and nothing mutates.
+    if (a < 1e-9 || b < 1e-9 || b > a + 1e-9) continue;
+    const ux = (majorEnd.x - center.x) / a, uy = (majorEnd.y - center.y) / a;
+    const f = Math.sqrt(Math.max(0, a * a - b * b));
+    const focusId = `_efoc_${e.id}`;
+    const major2Id = `_emaj2_${e.id}`;
+    primitives.push({ id: focusId, type: 'point', x: center.x + ux * f, y: center.y + uy * f, fixed: false });
+    primitives.push({ id: major2Id, type: 'point', x: center.x - ux * a, y: center.y - uy * a, fixed: false });
+    primitives.push({ id: e.id, type: 'ellipse', c_id: e.centerId, focus1_id: focusId, radmin: b });
+    primitives.push({
+      id: `_erules_${e.id}`, type: 'internal_alignment_ellipse_major_diameter',
+      e_id: e.id, p1_id: e.majorAxisEndId, p2_id: major2Id,
+    });
+  }
+  // Parabolas (REQ 882): vertex + focus map 1:1 onto SketchParabola. The
+  // sample point (pointIds[2]) only shapes tessellation extent — no solver
+  // relation ties it to the curve, so it stays an ordinary free point.
+  for (const e of state.entities) {
+    if (e.kind !== 'conic' || e.conicType !== 'parabola') continue;
+    const [vertexId, focusId] = e.pointIds;
+    if (!vertexId || !focusId || !findPoint(state, vertexId) || !findPoint(state, focusId)) continue;
+    primitives.push({ id: e.id, type: 'parabola', vertex_id: vertexId, focus1_id: focusId });
+  }
   for (const c of state.constraints) {
     // Driven dimensions read geometry back; they don't drive it. Skip
     // them at primitive translation so the solver treats them as
@@ -509,6 +603,11 @@ function readBack(state: SketchState, wrapper: GcsWrapper): SketchState {
       }
       if (e.kind === 'arc' && solved.type === 'arc') {
         return { ...e, radius: solved.radius };
+      }
+      // REQ 882: minor radius solves as the ellipse's radmin; the center and
+      // major-axis points come back through the point branch above.
+      if (e.kind === 'ellipse' && solved.type === 'ellipse') {
+        return { ...e, minorRadius: solved.radmin };
       }
       return e;
     }),
@@ -603,8 +702,13 @@ export async function solveSketch(
   // geometry is appended after buildPrimitives.
   interface EdgeRidePoint { pointId: string; cid: string; line: [{ x: number; y: number }, { x: number; y: number }]; }
   const edgeRidePoints: EdgeRidePoint[] = [];
+  // On-edge constraints whose LINE target got endpoint rides this solve — their
+  // translateConstraint h/v fallback primitive (id === c.id) must be dropped,
+  // or an axis-aligned converted line is double-constrained (h/v + ride on the
+  // same axis) and the Convert link is flagged redundant forever (review B16).
+  const rideLineCids = new Set<string>();
   for (const c of state.constraints) {
-    if (c.type !== 'on-edge' || !c.externalRef) continue;
+    if (c.type !== 'on-edge' || !c.externalRef || c.driven) continue;
     // Center reference (REQ 832): the target point pins to the projected edge
     // CENTER, not the edge line. Skip the edge-ride path so it falls through to
     // the pin pass below (frozen at the snapped center; regen re-derives it).
@@ -618,6 +722,20 @@ export async function solveSketch(
     for (const t of c.targets) {
       const e = entityByIdSolver.get(t.entityId);
       if (e && e.kind === 'point') edgeRidePoints.push({ pointId: e.id, cid: c.id, line });
+      // E3 (REQ 886): a converted LINE endpoint that the pin pass will skip
+      // (it's otherwise constrained — typically a trim-point coincident) must
+      // still RIDE the projected edge line, or a DIAGONAL converted line's
+      // free endpoint drifts off the edge. Axis-aligned lines were held by
+      // translateConstraint's horizontal/vertical fallback; diagonal ones had
+      // nothing. Per-endpoint cid keeps the synthetic ids unique.
+      else if (e && e.kind === 'line') {
+        for (const pid of [e.startId, e.endId]) {
+          if (isOtherwiseConstrained(pid)) {
+            edgeRidePoints.push({ pointId: pid, cid: `${c.id}-${pid}`, line });
+            rideLineCids.add(c.id);
+          }
+        }
+      }
     }
   }
   // Point-to-model-edge DISTANCE dimensions (externalRef, single point target).
@@ -648,6 +766,48 @@ export async function solveSketch(
     const e = entityByIdSolver.get(c.targets[0]?.entityId);
     if (e && e.kind === 'line') edgeOrientations.push({ lineId: e.id, cid: c.id, line, type: c.type });
   }
+  // Sketch-line ANGLE to a model edge (externalRef, single line target) —
+  // REQ 886. Same synthetic-fixed-geometry idea as edgeOrientations, but the
+  // primitive is the signed 4-point angle used by the internal angle case.
+  interface EdgeAngle { line0: LineEntity; cid: string; line: [{ x: number; y: number }, { x: number; y: number }]; value: number; driven: boolean; }
+  const edgeAngles: EdgeAngle[] = [];
+  for (const c of state.constraints) {
+    if (c.type !== 'angle' || !c.externalRef) continue;
+    const key = onEdgeLookupKey(c.externalRef);
+    const line = key ? opts.externalEdges?.get(key) : undefined;
+    if (!line) continue;
+    const e = entityByIdSolver.get(c.targets[0]?.entityId);
+    if (e && e.kind === 'line') edgeAngles.push({ line0: e, cid: c.id, line, value: c.value ?? 0, driven: !!c.driven });
+  }
+  // Sketch-curve TANGENT to a model edge (externalRef, single circle/arc
+  // target) — REQ 886. Synthetic fixed line + the line/curve tangent primitive.
+  interface EdgeTangent { curve: CircleEntity | ArcEntity; cid: string; line: [{ x: number; y: number }, { x: number; y: number }]; }
+  const edgeTangents: EdgeTangent[] = [];
+  for (const c of state.constraints) {
+    // Driven parity (review B-driven): determinacy skips driven external
+    // tangents; the solver must too or the two disagree on DOF.
+    if (c.type !== 'tangent' || !c.externalRef || c.driven) continue;
+    const key = onEdgeLookupKey(c.externalRef);
+    const line = key ? opts.externalEdges?.get(key) : undefined;
+    if (!line) continue;
+    const e = entityByIdSolver.get(c.targets[0]?.entityId);
+    if (e && (e.kind === 'circle' || e.kind === 'arc')) edgeTangents.push({ curve: e, cid: c.id, line });
+  }
+  // REQ 897 — DANGLING external references: every synthetic pass above keys
+  // into opts.externalEdges and silently `continue`s on a miss, leaving the
+  // constraint inert. Detect and report those instead of pretending they
+  // hold (SolidWorks colors these olive with a repair affordance). Only
+  // meaningful when the caller actually supplied projections.
+  let dangling: string[] | undefined;
+  if (opts.externalEdges) {
+    const d: string[] = [];
+    for (const c of state.constraints) {
+      if (!c.externalRef) continue;
+      const key = onEdgeLookupKey(c.externalRef);
+      if (key && !opts.externalEdges.has(key)) d.push(c.id);
+    }
+    if (d.length) dangling = d;
+  }
   const ridePointIds = new Set(edgeRidePoints.map(r => r.pointId));
   for (const c of state.constraints) {
     if (c.type !== 'on-edge') continue;
@@ -675,7 +835,18 @@ export async function solveSketch(
     else if (e.kind === 'circle' || e.kind === 'arc') pinPoint(e.centerId);
   }
 
-  const { primitives } = buildPrimitives(state, extraFixed, opts.pinAllRadii ?? false);
+  const built = buildPrimitives(state, extraFixed, opts.pinAllRadii ?? false);
+  // Review B16: when a converted LINE's endpoints ride the projected edge, the
+  // translateConstraint axis-aligned h/v fallback (id === on-edge cid) is
+  // redundant with the ride on the same axis — drop it so PlaneGCS doesn't
+  // permanently flag the Convert link as redundant.
+  const primitives = rideLineCids.size
+    ? built.primitives.filter(p => {
+        const pp = p as { id?: string; type?: string };
+        return !(pp.id !== undefined && rideLineCids.has(pp.id)
+          && (pp.type === 'horizontal_l' || pp.type === 'vertical_l'));
+      })
+    : built.primitives;
   // Coradial-to-model-edge (REQ): a `coradial` constraint carrying a local
   // externalRef sub:'center' on a single circle/arc target. The center-ref pass
   // above pins its center; here we also pin its RADIUS at the entity's current
@@ -738,6 +909,47 @@ export async function solveSketch(
       ? { id: `_orientC_${r.cid}`, type: 'parallel', l1_id: r.lineId, l2_id: ln }
       : { id: `_orientC_${r.cid}`, type: 'perpendicular_ll', l1_id: r.lineId, l2_id: ln });
   }
+  // Line-to-edge ANGLE (REQ 886): fixed endpoints + the signed 4-point angle
+  // primitive, with the synthetic pair as the second line. Sign-corrected to
+  // the current geometry's sense (same convention as the internal angle case,
+  // computed inline because the synthetic points aren't sketch entities).
+  // Driven (reference) dims measure only — emit nothing.
+  for (const r of edgeAngles) {
+    if (r.driven) continue;
+    const lp1 = findPoint(state, r.line0.startId);
+    const lp2 = findPoint(state, r.line0.endId);
+    if (!lp1 || !lp2) continue;
+    const a = `_angA_${r.cid}`, b = `_angB_${r.cid}`;
+    const ax = lp2.x - lp1.x, ay = lp2.y - lp1.y;
+    // Review B22: the projected edge's ENDPOINT ORDER is regen-dependent (a
+    // re-tessellation can reverse it), and a reversed edge vector drives the
+    // SUPPLEMENT of the typed angle. Normalize: orient the edge vector into
+    // the sketch line's hemisphere so the driven angle is order-independent.
+    let e0 = r.line[0], e1 = r.line[1];
+    if (ax * (e1.x - e0.x) + ay * (e1.y - e0.y) < 0) { const t = e0; e0 = e1; e1 = t; }
+    primitives.push({ id: a, type: 'point', x: e0.x, y: e0.y, fixed: true });
+    primitives.push({ id: b, type: 'point', x: e1.x, y: e1.y, fixed: true });
+    const bx = e1.x - e0.x, by = e1.y - e0.y;
+    const signedCurrent = Math.atan2(ax * by - ay * bx, ax * bx + ay * by);
+    const angle = signedCurrent < 0 ? -Math.abs(r.value) : Math.abs(r.value);
+    primitives.push({
+      id: `_angC_${r.cid}`, type: 'l2l_angle_pppp',
+      l1p1_id: r.line0.startId, l1p2_id: r.line0.endId,
+      l2p1_id: a, l2p2_id: b,
+      angle,
+    });
+  }
+  // Curve-to-edge TANGENT (REQ 886): fixed endpoints + synthetic line + the
+  // line/curve tangent primitive against the sketch circle or arc.
+  for (const r of edgeTangents) {
+    const a = `_tanA_${r.cid}`, b = `_tanB_${r.cid}`, ln = `_tanL_${r.cid}`;
+    primitives.push({ id: a, type: 'point', x: r.line[0].x, y: r.line[0].y, fixed: true });
+    primitives.push({ id: b, type: 'point', x: r.line[1].x, y: r.line[1].y, fixed: true });
+    primitives.push({ id: ln, type: 'line', p1_id: a, p2_id: b });
+    primitives.push(r.curve.kind === 'circle'
+      ? { id: `_tanC_${r.cid}`, type: 'tangent_lc', l_id: ln, c_id: r.curve.id }
+      : { id: `_tanC_${r.cid}`, type: 'tangent_la', l_id: ln, a_id: r.curve.id });
+  }
   try {
     wrapper.push_primitives_and_params(primitives);
   } catch (e) {
@@ -751,33 +963,59 @@ export async function solveSketch(
   if (status === SolveStatus.Success || status === SolveStatus.Converged) {
     wrapper.apply_solution();
     const newState = readBack(state, wrapper);
+    // REQ 887: redundancy is reported on SUCCESSFUL solves — an extra
+    // constraint that re-states an already-determined relation. Query before
+    // clear_data. Pin-family synthetics (_pinrad_/_onedgerad_/_coradrad_)
+    // duplicate a tracked value BY DESIGN and are excluded before mapping.
+    let redundant: string[] | undefined;
+    try {
+      if (wrapper.has_gcs_redundant_constraints()) {
+        const raw = wrapper.get_gcs_redundant_constraints()
+          .filter(pid => !/^_(pinrad|onedgerad|coradrad)_/.test(pid));
+        const mapped = mapPrimitiveIdsToConstraintIds(raw, state);
+        if (mapped.length) redundant = mapped;
+      }
+    } catch { /* diagnostics only — never fail the solve path over them */ }
     wrapper.clear_data();
-    return { status: 'ok', state: newState, dof };
+    return { status: 'ok', state: newState, dof, redundant, dangling };
   }
 
   // REQ 860: map PlaneGCS's conflicting primitive ids back to sketch
-  // constraint ids. Primitive-id conventions: a plain constraint emits
-  // primitives with `id === c.id`; multi-primitive translations use
-  // `${c.id}-suffix`; solver-internal synthetics use `_prefix_${c.id}`.
+  // constraint ids.
   let conflicting: string[] | undefined;
   try {
     if (wrapper.has_gcs_conflicting_constraints()) {
-      const raw = wrapper.get_gcs_conflicting_constraints();
-      const cids = new Set(state.constraints.map(c => c.id));
-      const mapped = new Set<string>();
-      for (const pid of raw) {
-        if (cids.has(pid)) { mapped.add(pid); continue; }
-        const synthetic = pid.match(/^_[a-zA-Z]+_(.+)$/);
-        if (synthetic && cids.has(synthetic[1])) { mapped.add(synthetic[1]); continue; }
-        for (const cid of cids) {
-          if (pid.startsWith(cid + '-')) { mapped.add(cid); break; }
-        }
-      }
-      if (mapped.size) conflicting = [...mapped];
+      const mapped = mapPrimitiveIdsToConstraintIds(wrapper.get_gcs_conflicting_constraints(), state);
+      if (mapped.length) conflicting = mapped;
     }
   } catch { /* diagnostics only — never fail the solve path over them */ }
   wrapper.clear_data();
-  return { status: 'inconsistent', state, dof, conflicting };
+  return { status: 'inconsistent', state, dof, conflicting, dangling };
+}
+
+/** Map PlaneGCS primitive ids back to sketch constraint ids (REQ 860/887).
+ * Primitive-id conventions: a plain constraint emits primitives with
+ * `id === c.id`; multi-primitive translations use `${c.id}-suffix`;
+ * solver-internal synthetics use `_prefix_${c.id}`. Ids that resolve to
+ * nothing (entity-keyed synthetics like `arcrules-<arcId>`) are dropped. */
+function mapPrimitiveIdsToConstraintIds(raw: string[], state: SketchState): string[] {
+  const cids = new Set(state.constraints.map(c => c.id));
+  const mapped = new Set<string>();
+  for (const pid of raw) {
+    if (cids.has(pid)) { mapped.add(pid); continue; }
+    // Synthetic `_prefix_<rest>`: <rest> may be a bare constraint id, or a
+    // derived id like `<cid>-<pointId>` (E3 line-endpoint rides). Test the
+    // capture BOTH ways — previously the `-` suffix rule only ran on the raw
+    // pid (which starts with `_`), so E3 ride conflicts/redundancies were
+    // silently dropped from the reported set (review B15).
+    const synthetic = pid.match(/^_[a-zA-Z]+_(.+)$/);
+    const candidate = synthetic ? synthetic[1] : pid;
+    if (synthetic && cids.has(candidate)) { mapped.add(candidate); continue; }
+    for (const cid of cids) {
+      if (candidate.startsWith(cid + '-')) { mapped.add(cid); break; }
+    }
+  }
+  return [...mapped];
 }
 
 /**

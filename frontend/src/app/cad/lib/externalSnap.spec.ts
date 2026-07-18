@@ -177,3 +177,31 @@ describe('arc/circle center references (REQ 830–832)', () => {
     expect(nearestCandidateHit(cands, { x: 50, y: 50 }, 2)).toBeNull();
   });
 });
+
+describe('skeleton refs — pick-time cachedProjection writer (REQ 916)', () => {
+  it('crossPartEdgeRef writes a cachedProjection when hostLocalPolyline is provided', () => {
+    const ref = crossPartEdgeRef({
+      definingAssemblyId: 7, definingAssemblyRepoId: '7',
+      sourceInstanceId: '__skeleton__', sourcePartId: 77,
+      sourceStart: [0, 0, 0], sourceEnd: [50, 0, 0],
+      stableId: 'asketch:s1/l1',
+      hostLocalPolyline: [[-10, 0, 0], [40, 0, 0]],
+    });
+    expect(ref.scope).toBe('cross-part');
+    if (ref.scope !== 'cross-part') return;
+    expect(ref.sourceGeomRef.edgeId).toBe('asketch:s1/l1');
+    expect(ref.cachedProjection?.edges).toEqual([{ polyline: [[-10, 0, 0], [40, 0, 0]] }]);
+    expect(typeof ref.cachedProjection?.resolvedAt).toBe('number');
+  });
+
+  it('omits cachedProjection without hostLocalPolyline (legacy sibling-part behavior)', () => {
+    const ref = crossPartEdgeRef({
+      definingAssemblyId: 7, definingAssemblyRepoId: '7',
+      sourceInstanceId: 'i2', sourcePartId: 20,
+      sourceStart: [0, 0, 0], sourceEnd: [1, 0, 0],
+      stableId: 'cpe:i2:x',
+    });
+    if (ref.scope !== 'cross-part') return;
+    expect(ref.cachedProjection).toBeUndefined();
+  });
+});

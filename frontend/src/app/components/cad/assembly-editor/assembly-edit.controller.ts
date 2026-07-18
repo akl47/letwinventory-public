@@ -99,6 +99,33 @@ export class AssemblyEditController {
   // visibility (hidden by default), keyed `<instanceId>:<datumId>`.
   expandedComponents = signal<Set<string>>(new Set<string>());
   componentDatumsVisible = signal<Set<string>>(new Set<string>());
+  /** Hidden component BODIES (scoped ids `instanceId::bodyId`) — render-only,
+   * like datum visibility. */
+  hiddenComponentBodies = signal<Set<string>>(new Set<string>());
+  toggleComponentBody(scopedBodyId: string) {
+    const next = new Set(this.hiddenComponentBodies());
+    if (next.has(scopedBodyId)) next.delete(scopedBodyId); else next.add(scopedBodyId);
+    this.hiddenComponentBodies.set(next);
+  }
+  /** Per-component "Origin" group expansion (nested under the component row). */
+  expandedComponentOrigins = signal<Set<string>>(new Set<string>());
+  componentOriginExpanded = (instanceId: string) => this.expandedComponentOrigins().has(instanceId);
+  toggleComponentOriginExpand(instanceId: string) {
+    const next = new Set(this.expandedComponentOrigins());
+    if (next.has(instanceId)) next.delete(instanceId); else next.add(instanceId);
+    this.expandedComponentOrigins.set(next);
+  }
+  /** Origin-group eye: shows all of the component's datums if any are hidden,
+   * else hides them all (mirrors the assembly origin row). */
+  toggleComponentOriginVisibility(instanceId: string) {
+    const next = new Set(this.componentDatumsVisible());
+    const anyVisible = this.originDatums.some((d) => next.has(`${instanceId}:${d.id}`));
+    for (const d of this.originDatums) {
+      const key = `${instanceId}:${d.id}`;
+      if (anyVisible) next.delete(key); else next.add(key);
+    }
+    this.componentDatumsVisible.set(next);
+  }
   componentExpanded = (instanceId: string) => this.expandedComponents().has(instanceId);
   componentDatumVisible = (instanceId: string, datumId: string) =>
     this.componentDatumsVisible().has(`${instanceId}:${datumId}`);
@@ -114,10 +141,16 @@ export class AssemblyEditController {
     this.componentDatumsVisible.set(next);
   }
 
-  // The assembly's own origin datums + every component reference datum toggled on,
-  // transformed to its solved placement.
+  /** REQ 912 — skeleton datum plane features computed from the assembly's
+   * featureTree. The cad-editor owns that signal (shared with the sketch
+   * flow) and pushes the computed PlacedDatums here via an effect. */
+  skeletonDatums = signal<DatumElement[]>([]);
+
+  // The assembly's own origin datums + skeleton datum plane features + every
+  // component reference datum toggled on, transformed to its solved placement.
   assemblyDatums = computed<DatumElement[]>(() => {
     const out: DatumElement[] = assemblyOriginDatums(this.originVisibility());
+    out.push(...this.skeletonDatums());
     const visible = this.componentDatumsVisible();
     if (visible.size) {
       for (const inst of this.regen()?.instances ?? []) {
@@ -273,8 +306,10 @@ export class AssemblyEditController {
     const vertices: ModelTopology['vertices'] = [];
     const edges: ModelTopology['edges'] = [];
     let vi = 0, ei = 0;
+    const hiddenBodies = this.hiddenComponentBodies();
     for (const body of r.bodies) {
       if (hidden.has(body.instanceId)) continue;
+      if (hiddenBodies.has(body.id)) continue;
       const off = offsetFor(body.instanceId);
       const pt = (p: [number, number, number]): [number, number, number] =>
         off ? [p[0] + off[0], p[1] + off[1], p[2] + off[2]] : p;
@@ -517,6 +552,18 @@ export class AssemblyEditController {
     });
   }
 
+  /** Suppress/unsuppress a component: a suppressed instance is skipped by
+   * regen entirely (no geometry, no mates) — stronger than hiding. */
+  toggleSuppressed(inst: AssemblyInstance) {
+    const a = this.assembly();
+    if (!a) return;
+    const suppressed = !inst.suppressed;
+    this.assemblyApi.updateInstance(a.id, inst.instanceId, { suppressed }).subscribe({
+      next: (res) => { this.assembly.set(res.assembly); this.regenerate(); },
+      error: (e) => this.errors.showError(e?.error?.error || 'Failed to toggle suppression'),
+    });
+  }
+
   /** Whether the component is fixed to the assembly origin via a real origin mate. */
   isOriginMated = (inst: AssemblyInstance) =>
     this.mates().some((m) => m.type === 'origin' && m.a?.instanceId === inst.instanceId);
@@ -712,11 +759,33 @@ export class AssemblyEditController {
         iconName: 'memory', iconClass: 'part', depth: 0,
         expandable: true, expanded: exp, selectable: true, selected: sel.has(inst.instanceId),
         visibilityToggleable: true, visible: inst.visible !== false,
+        suppressed: !!inst.suppressed,
       }));
       if (exp) {
-        for (const d of this.originDatums) {
-          out.push(node({ key: `component-datum:${inst.instanceId}:${d.id}`, kind: 'datum', label: d.label, iconName: d.icon, iconClass: d.iconClass, depth: 1, visibilityToggleable: true, visible: this.componentDatumVisible(inst.instanceId, d.id) }));
+        // "Origin" group nests the seven datums, mirroring a part's own tree.
+        const originExp = this.componentOriginExpanded(inst.instanceId);
+        const anyDatumVisible = this.originDatums.some((d) => this.componentDatumVisible(inst.instanceId, d.id));
+        out.push(node({
+          key: `component-origin:${inst.instanceId}`, kind: 'feature', label: 'Origin',
+          iconName: 'trip_origin', iconClass: 'origin', depth: 1,
+          expandable: true, expanded: originExp,
+          visibilityToggleable: true, visible: anyDatumVisible,
+        }));
+        if (originExp) {
+          for (const d of this.originDatums) {
+            out.push(node({ key: `component-datum:${inst.instanceId}:${d.id}`, kind: 'datum', label: d.label, iconName: d.icon, iconClass: d.iconClass, depth: 2, visibilityToggleable: true, visible: this.componentDatumVisible(inst.instanceId, d.id) }));
+          }
         }
+        // The component's solid bodies — eye toggles render visibility
+        // (scoped body ids from the composed regen).
+        const bodies = (this.regen()?.bodies ?? []).filter((b) => b.instanceId === inst.instanceId);
+        bodies.forEach((b, bi) => {
+          out.push(node({
+            key: `component-body:${inst.instanceId}:${b.id}`, kind: 'datum',
+            label: b.name || `Body ${bi + 1}`, iconName: 'view_in_ar', iconClass: 'part', depth: 1,
+            visibilityToggleable: true, visible: !this.hiddenComponentBodies().has(b.id),
+          }));
+        });
       }
     }
     for (const p of this.patterns()) {

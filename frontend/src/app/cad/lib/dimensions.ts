@@ -87,6 +87,27 @@ export interface DimensionRender {
   /** Arrowhead style: false/undefined = inside (default), true = outside. Copied
    * from the constraint's `arrowsOutside`. */
   arrowsOutside?: boolean;
+  /** Label dragged past the dimension line's span (SolidWorks drag-past
+   * behavior): solid leader from the nearest dim-line end out to the label.
+   * The viewer trims the label end so the line doesn't run through the text. */
+  labelLeader?: [{ x: number; y: number }, { x: number; y: number }];
+  /** Set alongside labelLeader — the viewer flips the arrowheads outside
+   * (pointing inward at the witness lines) like SolidWorks does when the
+   * text no longer fits between them. */
+  labelOutside?: boolean;
+  /** Radius-style leader: single arrowhead at dimensionLine[0] (on the
+   * curve), none at the label end. The viewer draws the horizontal
+   * shoulder / landing segment into the text. */
+  leader?: boolean;
+  /** The measured curve behind a `leader` dim. The viewer re-derives the
+   * exact arc tangency point from the pixel-sized bend location (bend ≠
+   * label anchor once the text clearance + shoulder are applied), so the
+   * radial segment stays collinear with the center. */
+  curve?: { center: { x: number; y: number }; radius: number };
+  /** Angle label dragged outside the measured span: extra arc segment
+   * (same center/radius as `arc`) from the nearest span end out to the
+   * label's angle. [fromAngle, toAngle]; the label sits at toAngle. */
+  arcExtension?: [number, number];
 }
 
 const DIMENSIONAL_TYPES = new Set<ConstraintType>([
@@ -179,6 +200,23 @@ function renderConstraint(
     if (!r) return null;
     return c.driven ? { ...r, text: `(${r.text})` } : r;
   }
+  // Sketch-line ANGLE to a referenced model edge / datum line (REQ 886/907):
+  // one line target + externalRef. Rendered EXACTLY like a two-line sketch
+  // angle (arc at the intersection, quadrant from the placement) — the edge
+  // just contributes its projected segment instead of a sketch entity.
+  if (c.type === 'angle' && c.externalRef && c.targets.length === 1) {
+    const key = onEdgeLookupKey(c.externalRef);
+    const edge = key ? externalEdges?.get(key) : undefined;
+    const l = findEntity(state, c.targets[0]?.entityId);
+    if (!edge || !l || l.kind !== 'line' || c.value === undefined) return null;
+    const s = findPoint(state, l.startId);
+    const e = findPoint(state, l.endId);
+    if (!s || !e) return null;
+    const text = formatDimensionText(c.type, c.value, c.unit, defaultUnit);
+    const r = angleRenderFromSegments(c.id, text, s, e, edge[0], edge[1], c.placement, c.angleRays);
+    if (!r) return null;
+    return c.driven ? { ...r, text: `(${r.text})` } : r;
+  }
   const r = computeRender(
     state, c.id, c.type, c.targets.map(t => t.entityId), c.value!, c.placement, c.unit, defaultUnit, c.angleRays,
   );
@@ -232,6 +270,23 @@ function computeRender(
       return radialDistanceRender(constraintId, text, state, inner, outer, placement);
     }
     case 'angle': {
+      // 3-POINT vertex angle (REQ 890): [rayA, vertex, rayB]. Leader-style
+      // render (like arc-length): label sits on the ray bisector just off
+      // the vertex; no extension lines.
+      if (targetIds.length === 3) {
+        const pA = findPoint(state, targetIds[0]);
+        const v = findPoint(state, targetIds[1]);
+        const pB = findPoint(state, targetIds[2]);
+        if (!pA || !v || !pB) return null;
+        const a1 = Math.atan2(pA.y - v.y, pA.x - v.x);
+        const a2 = Math.atan2(pB.y - v.y, pB.x - v.x);
+        const mid = (a1 + a2) / 2;
+        const labelAnchor = placement ?? {
+          x: v.x + DEFAULT_OFFSET * 2 * Math.cos(mid),
+          y: v.y + DEFAULT_OFFSET * 2 * Math.sin(mid),
+        };
+        return { constraintId, text, labelAnchor, dimensionLine: null, extensionLines: [] };
+      }
       const a = findEntity(state, targetIds[0]);
       const b = findEntity(state, targetIds[1]);
       if (!a || a.kind !== 'line' || !b || b.kind !== 'line') return null;
@@ -280,6 +335,27 @@ function computeRender(
 }
 
 // ── per-kind layout helpers ──────────────────────────────────────────────
+
+/** SolidWorks-style label placement along a dimension line: the label
+ * slides along the line's axis following the user's placement/drag.
+ * Inside the span it rides the line (the viewer breaks the line around
+ * the text); dragged past an end, the dim line grows a leader out to the
+ * label and the arrowheads flip outside. No placement → midpoint. */
+function slideLabelAlong(
+  a: { x: number; y: number }, b: { x: number; y: number },
+  placement: { x: number; y: number } | undefined,
+): Pick<DimensionRender, 'labelAnchor' | 'labelLeader' | 'labelOutside'> {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  if (len < 1e-9 || !placement) return { labelAnchor: mid };
+  const ux = dx / len, uy = dy / len;
+  const t = (placement.x - a.x) * ux + (placement.y - a.y) * uy;
+  const anchor = { x: a.x + ux * t, y: a.y + uy * t };
+  if (t < 0) return { labelAnchor: anchor, labelLeader: [a, anchor], labelOutside: true };
+  if (t > len) return { labelAnchor: anchor, labelLeader: [b, anchor], labelOutside: true };
+  return { labelAnchor: anchor };
+}
 
 /**
  * Distance between two points. The dimension line is parallel to the
@@ -334,9 +410,8 @@ function distanceRender(
     aProj = { x: a.x + nx * offset, y: a.y + ny * offset };
     bProj = { x: b.x + nx * offset, y: b.y + ny * offset };
   }
-  const labelAnchor = { x: (aProj.x + bProj.x) / 2, y: (aProj.y + bProj.y) / 2 };
   return {
-    constraintId, text, labelAnchor,
+    constraintId, text, ...slideLabelAlong(aProj, bProj, placement),
     dimensionLine: [aProj, bProj],
     extensionLines: [[a, aProj], [b, bProj]],
   };
@@ -369,7 +444,10 @@ function radialDistanceRender(
     constraintId, text,
     labelAnchor: target,
     dimensionLine: [innerEdge, outerEdge],
-    extensionLines: [[outerEdge, target]],
+    extensionLines: [],
+    // Solid leader out to the label — not a witness line, so it must not
+    // pick up the witness gap/overshoot treatment in the viewer.
+    labelLeader: [outerEdge, target],
   };
 }
 
@@ -392,6 +470,10 @@ function radiusRender(
     labelAnchor: target,
     dimensionLine: [edge, target],
     extensionLines: [],
+    // SolidWorks radius convention: ONE arrowhead touching the arc, none
+    // at the text; the viewer bends the leader into a horizontal shoulder.
+    leader: true,
+    curve: { center: { x: c.x, y: c.y }, radius: e.radius },
   };
 }
 
@@ -414,9 +496,23 @@ function diameterRender(
   }
   const e1 = { x: c.x + (dx / len) * e.radius, y: c.y + (dy / len) * e.radius };
   const e2 = { x: c.x - (dx / len) * e.radius, y: c.y - (dy / len) * e.radius };
+  // Text OUTSIDE the circle → SolidWorks/Onshape draw a single-arrow
+  // radial leader with a shoulder (same layout as a radius dim, ⌀ text),
+  // NOT a full line through the circle with an extension.
+  if (len > e.radius) {
+    return {
+      constraintId, text,
+      labelAnchor: target,
+      dimensionLine: [e1, target],
+      extensionLines: [],
+      leader: true,
+      curve: { center: { x: c.x, y: c.y }, radius: e.radius },
+    };
+  }
+  // Text INSIDE → line edge-to-edge through the center, arrowheads at
+  // both edges, label riding (and breaking) the line.
   return {
-    constraintId, text,
-    labelAnchor: target,
+    constraintId, text, ...slideLabelAlong(e1, e2, target),
     dimensionLine: [e1, e2],
     extensionLines: [],
   };
@@ -436,6 +532,20 @@ function angleRender(
   const a1 = findPoint(state, la.startId), a2 = findPoint(state, la.endId);
   const b1 = findPoint(state, lb.startId), b2 = findPoint(state, lb.endId);
   if (!a1 || !a2 || !b1 || !b2) return null;
+  return angleRenderFromSegments(constraintId, text, a1, a2, b1, b2, placement, angleRays);
+}
+
+/** Segment-coordinate core of {@link angleRender} — also used for the angle
+ * to a referenced model edge / datum line (REQ 886/907), which has segment
+ * endpoints but no sketch LineEntity. Renders identically to a two-line
+ * sketch angle: arc at the intersection, quadrant from the placement. */
+function angleRenderFromSegments(
+  constraintId: string, text: string,
+  a1: { x: number; y: number }, a2: { x: number; y: number },
+  b1: { x: number; y: number }, b2: { x: number; y: number },
+  placement: { x: number; y: number } | undefined,
+  angleRays?: [number, number],
+): DimensionRender | null {
   const i = intersectLines(a1, a2, b1, b2);
   if (!i) return null;
   const target = placement ?? { x: i.x + DEFAULT_OFFSET, y: i.y + DEFAULT_OFFSET };
@@ -457,15 +567,6 @@ function angleRender(
     da = farUnit(i, a1, a2);
     db = farUnit(i, b1, b2);
   }
-  // Arc endpoints — sampled along each line at the arc radius.
-  const arcStart = { x: i.x + da.x * arcRadius, y: i.y + da.y * arcRadius };
-  const arcEnd   = { x: i.x + db.x * arcRadius, y: i.y + db.y * arcRadius };
-  // Bisector for the label placement, snapped onto the arc.
-  const bx = da.x + db.x, by = da.y + db.y;
-  const blen = Math.hypot(bx, by);
-  const bisector = blen < 1e-9
-    ? { x: i.x + arcRadius, y: i.y }
-    : { x: i.x + (bx / blen) * arcRadius, y: i.y + (by / blen) * arcRadius };
   // Arc swept from line A to line B, going the SHORT way (the measured angle is
   // ≤ π between the far-directions). startAngle/endAngle in [-π,π]; pick the
   // signed sweep whose magnitude matches the angle between da and db.
@@ -476,15 +577,64 @@ function angleRender(
   while (delta > Math.PI) delta -= 2 * Math.PI;
   while (delta < -Math.PI) delta += 2 * Math.PI;
   endAngle = startAngle + delta;
+  // Label rides the arc, following the placement's angular position (SW
+  // drag behavior). No placement → the span's mid-angle (bisector).
+  const labelAngle = placement
+    ? Math.atan2(placement.y - i.y, placement.x - i.x)
+    : startAngle + delta / 2;
+  const labelAnchor = {
+    x: i.x + arcRadius * Math.cos(labelAngle),
+    y: i.y + arcRadius * Math.sin(labelAngle),
+  };
+  // Label dragged outside the measured span → extend the arc from the
+  // nearest span end out to the label (the viewer draws it arrow-free).
+  let arcExtension: [number, number] | undefined;
+  const rel = wrapPi(labelAngle - startAngle);
+  const inside = delta >= 0 ? rel >= 0 && rel <= delta : rel <= 0 && rel >= delta;
+  if (!inside) {
+    const relEnd = wrapPi(labelAngle - endAngle);
+    arcExtension = Math.abs(rel) <= Math.abs(relEnd)
+      ? [startAngle, startAngle + rel]
+      : [endAngle, endAngle + relEnd];
+  }
+  // When the arc sits beyond a line's physical end, run an extension line
+  // along the ray from the line's end out to the arc (drafting convention —
+  // the dimension must visibly attach to the geometry it measures).
+  const extensionLines: Array<[{ x: number; y: number }, { x: number; y: number }]> = [];
+  const addRayExtension = (
+    ray: { x: number; y: number },
+    e1: { x: number; y: number }, e2: { x: number; y: number },
+  ) => {
+    const reach = Math.max(
+      0,
+      (e1.x - i.x) * ray.x + (e1.y - i.y) * ray.y,
+      (e2.x - i.x) * ray.x + (e2.y - i.y) * ray.y,
+    );
+    if (arcRadius > reach + 1e-9) {
+      extensionLines.push([
+        { x: i.x + ray.x * reach, y: i.y + ray.y * reach },
+        { x: i.x + ray.x * arcRadius, y: i.y + ray.y * arcRadius },
+      ]);
+    }
+  };
+  addRayExtension(da, a1, a2);
+  addRayExtension(db, b1, b2);
   return {
     constraintId, text,
-    labelAnchor: bisector,
-    // Just the arc between the two lines — no chord, and no extension lines back
-    // to the vertex (the arc itself conveys the angle).
+    labelAnchor,
+    // No chord — the arc itself conveys the angle.
     dimensionLine: null,
-    extensionLines: [],
+    extensionLines,
     arc: { center: { x: i.x, y: i.y }, radius: arcRadius, startAngle, endAngle },
+    ...(arcExtension ? { arcExtension } : {}),
   };
+}
+
+/** Wrap an angle into (-π, π]. */
+function wrapPi(x: number): number {
+  while (x > Math.PI) x -= 2 * Math.PI;
+  while (x < -Math.PI) x += 2 * Math.PI;
+  return x;
 }
 
 /** Perpendicular distance from point to line. Two visual layouts:
@@ -505,21 +655,75 @@ function angleRender(
  * is the measured perpendicular distance. Mirrors the committed render so the
  * preview matches the result.
  */
-export function previewPointToEdgeDimension(
+/** REQ 886/907 — THE single decision for "what dimension does this sketch
+ * entity + referenced edge/datum line produce". The Smart-Dim live preview,
+ * the Smart-Dim placement commit, and the relations-toolbar appliers all
+ * consume this, so the hover, the committed constraint, and the toolbar can
+ * never disagree (they historically did — each had its own copy).
+ *   - point → perpendicular distance (point-line-distance)
+ *   - line  → ANGLE between the lines; EXCEPT (near-)parallel, where the
+ *             angle is degenerate and the meaning is the offset distance,
+ *             measured from the line's start endpoint (SolidWorks semantics).
+ */
+export interface EdgeDimSpec {
+  type: 'point-line-distance' | 'angle';
+  /** Constraint target: the point id (distance) or the line id (angle).
+   * Also the entity whose determinacy decides driven-ness. */
+  targetId: string;
+  /** Seed value: measured distance (sketch units) or angle (radians). */
+  value: number;
+}
+
+export function resolveEdgeDim(
   state: SketchState,
-  pointId: string,
+  entity: SketchEntity,
+  edge: [{ x: number; y: number }, { x: number; y: number }],
+): EdgeDimSpec | null {
+  const [a, b] = edge;
+  const ex = b.x - a.x, ey = b.y - a.y;
+  const elen = Math.hypot(ex, ey) || 1;
+  const perp = (p: { x: number; y: number }) =>
+    Math.abs(((p.x - a.x) * ey - (p.y - a.y) * ex) / elen);
+  if (entity.kind === 'point') {
+    return { type: 'point-line-distance', targetId: entity.id, value: perp(entity) };
+  }
+  if (entity.kind === 'line') {
+    const s = findPoint(state, entity.startId);
+    const e = findPoint(state, entity.endId);
+    if (!s || !e) return null;
+    const lx = e.x - s.x, ly = e.y - s.y;
+    const cross = lx * ey - ly * ex;
+    const parallel = Math.abs(cross) < 1e-3 * Math.hypot(lx, ly) * elen;
+    if (parallel) return { type: 'point-line-distance', targetId: entity.startId, value: perp(s) };
+    return { type: 'angle', targetId: entity.id, value: Math.abs(Math.atan2(cross, lx * ex + ly * ey)) };
+  }
+  return null;
+}
+
+/** Live PREVIEW of the dimension {@link resolveEdgeDim} decides for this
+ * entity + edge — rendered with the same helpers the committed constraint
+ * uses, so the hover always matches what the placement click will create. */
+export function previewEdgeDimension(
+  state: SketchState,
+  entity: SketchEntity,
   edge: [{ x: number; y: number }, { x: number; y: number }],
   placement: { x: number; y: number },
   defaultUnit: Unit = 'mm',
 ): DimensionRender | null {
-  const p = findPoint(state, pointId);
+  const spec = resolveEdgeDim(state, entity, edge);
+  if (!spec) return null;
+  const text = formatDimensionText(spec.type, spec.value, undefined, defaultUnit);
+  if (spec.type === 'angle') {
+    const l = findEntity(state, spec.targetId);
+    if (!l || l.kind !== 'line') return null;
+    const s = findPoint(state, l.startId);
+    const e = findPoint(state, l.endId);
+    if (!s || !e) return null;
+    return angleRenderFromSegments('__preview__', text, s, e, edge[0], edge[1], placement);
+  }
+  const p = findPoint(state, spec.targetId);
   if (!p) return null;
-  const [a, b] = edge;
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const value = Math.abs(((p.x - a.x) * dy - (p.y - a.y) * dx) / len);
-  const text = formatDimensionText('point-line-distance', value, undefined, defaultUnit);
-  return pointToSegmentDimRender('__preview__', text, p, a, b, placement);
+  return pointToSegmentDimRender('__preview__', text, p, edge[0], edge[1], placement);
 }
 
 function pointToSegmentDimRender(
@@ -537,8 +741,7 @@ function pointToSegmentDimRender(
   const pProj = { x: p.x + ux * along, y: p.y + uy * along };
   const fProj = { x: foot.x + ux * along, y: foot.y + uy * along };
   return {
-    constraintId, text,
-    labelAnchor: { x: (pProj.x + fProj.x) / 2, y: (pProj.y + fProj.y) / 2 },
+    constraintId, text, ...slideLabelAlong(pProj, fProj, placement),
     dimensionLine: [pProj, fProj],
     extensionLines: [[{ x: p.x, y: p.y }, pProj], [foot, fProj]],
   };
@@ -578,8 +781,7 @@ function pointLineDistanceRender(
   const pProj = { x: p.x + ux * along, y: p.y + uy * along };
   const fProj = { x: foot.x + ux * along, y: foot.y + uy * along };
   return {
-    constraintId, text,
-    labelAnchor: { x: (pProj.x + fProj.x) / 2, y: (pProj.y + fProj.y) / 2 },
+    constraintId, text, ...slideLabelAlong(pProj, fProj, placement),
     dimensionLine: [pProj, fProj],
     extensionLines: [[p, pProj], [foot, fProj]],
   };
@@ -660,8 +862,7 @@ function parallelLinesRender(
   const attachL1 = nearerEndpoint(l1, footL1);
   const attachL2 = nearerEndpoint(l2, footL2);
   return {
-    constraintId, text,
-    labelAnchor: { x: (footL1.x + footL2.x) / 2, y: (footL1.y + footL2.y) / 2 },
+    constraintId, text, ...slideLabelAlong(footL1, footL2, placement),
     dimensionLine: [footL1, footL2],
     extensionLines: [[attachL1, footL1], [attachL2, footL2]],
   };

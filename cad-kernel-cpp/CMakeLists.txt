@@ -11,8 +11,7 @@ endif()
 find_package(OpenCASCADE REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
-add_executable(cad-kernel
-  src/main.cpp
+set(KERNEL_OP_SOURCES
   src/geom_io.cpp
   src/op_extrude.cpp
   src/op_boolean.cpp
@@ -21,12 +20,9 @@ add_executable(cad-kernel
   src/op_pattern.cpp
 )
 
-target_include_directories(cad-kernel PRIVATE ${OpenCASCADE_INCLUDE_DIR})
-target_link_directories(cad-kernel PRIVATE ${OpenCASCADE_LIBRARY_DIR})
-
 # Core OCCT toolkits we'll need as ops land. Linking them now validates the OCCT
 # 8.0 link path early; unused ones are harmless.
-target_link_libraries(cad-kernel PRIVATE
+set(KERNEL_LINK_LIBS
   nlohmann_json::nlohmann_json
   pthread
   TKernel TKMath
@@ -35,3 +31,15 @@ target_link_libraries(cad-kernel PRIVATE
   TKBO TKBool TKFillet TKOffset TKFeat
   TKXSBase TKDESTEP TKDESTL
 )
+
+add_executable(cad-kernel src/main.cpp ${KERNEL_OP_SOURCES})
+target_include_directories(cad-kernel PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+target_link_directories(cad-kernel PRIVATE ${OpenCASCADE_LIBRARY_DIR})
+target_link_libraries(cad-kernel PRIVATE ${KERNEL_LINK_LIBS})
+
+# Geometry smoke tests (REQ 904) — executed during the Docker image build so a
+# geometry regression can never ship. Assert-based, no test framework.
+add_executable(kernel-tests tests/kernel_smoke_tests.cpp ${KERNEL_OP_SOURCES})
+target_include_directories(kernel-tests PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+target_link_directories(kernel-tests PRIVATE ${OpenCASCADE_LIBRARY_DIR})
+target_link_libraries(kernel-tests PRIVATE ${KERNEL_LINK_LIBS})

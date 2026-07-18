@@ -29,7 +29,12 @@ describe('assemblySerializer round-trip (REQ — VCS binding)', () => {
     };
     const tree = await assemblySerialize(repo, doc, db);
     const back = await assemblyDeserialize(repo, tree, db);
-    expect(back).toEqual(doc);
+    // REQ 913: deserialize returns the BUNDLE; a legacy bare-doc serialize
+    // round-trips with empty skeleton defaults.
+    expect(back.assemblyDoc).toEqual(doc);
+    expect(back.sketchDoc).toEqual({ sketches: {}, nextSketchSeq: 1 });
+    expect(back.featureTree).toEqual({ features: [], nextFeatureSeq: 1 });
+    expect(back.equations).toEqual({ entries: {} });
   });
 
   it('shares structure — re-serializing identical content yields the same tree hash', async () => {

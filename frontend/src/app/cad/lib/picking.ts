@@ -154,7 +154,10 @@ export function distanceToEntity(state: SketchState, entity: SketchEntity, p: Po
     case 'ellipse': return distanceToEllipse(state, entity, p);
     case 'spline': return distanceToSpline(state, entity, p);
     case 'ellipticalArc':
-      return Infinity;
+      // Tessellation-backed, like the full ellipse — true closest-point on an
+      // elliptical arc needs iterative root-finding; polyline distance at the
+      // default chord tolerance is exact enough for click tolerances (REQ 884).
+      return distanceToPolyline(tessellateEntity(state, entity, DEFAULT_CHORD_TOLERANCE), p);
     case 'conic':
       return distanceToConic(state, entity, p);
     case 'equation':

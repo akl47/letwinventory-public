@@ -52,6 +52,7 @@
 #include <GProp_GProps.hxx>
 
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <IMeshTools_Parameters.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Poly_Triangle.hxx>
 #include <BRepLib_ToolTriangulatedShape.hxx>
@@ -213,19 +214,35 @@ struct FaceMeshArrays {
   std::vector<uint32_t> indices;
 };
 
-FaceMeshArrays mesh_face(const TopoDS_Face& face) {
-  // The BRepMesh_IncrementalMesh constructor meshes the shape (matching the
-  // opencascade-rs IncrementalMesh_new → IsDone() flow; no separate Perform()).
-  BRepMesh_IncrementalMesh mesher(face, DEFAULT_CHORD_TOLERANCE);
+// Mesh a whole shape once, in parallel (REQ 878). BRepMesh discretizes each
+// shared edge a single time and hands adjacent faces the SAME polygon, so the
+// result is watertight (per-face meshing cracked along shared edges) AND far
+// faster than N sequential single-face meshers on a 165-face body. Idempotent:
+// IncrementalMesh skips faces already meshed at this deflection, so redundant
+// calls (top-level tessellate + per-solid decompose) are cheap.
+void ensure_meshed(const TopoDS_Shape& shape) {
+  IMeshTools_Parameters params;
+  params.Deflection = DEFAULT_CHORD_TOLERANCE;
+  params.Angle = 0.5;               // radians — OCCT default angular deflection
+  params.Relative = Standard_False;
+  params.InParallel = Standard_True;  // mesh faces across threads
+  BRepMesh_IncrementalMesh mesher(shape, params);
   if (!mesher.IsDone()) {
-    throw std::runtime_error("BRepMesh failed on a face");
+    throw std::runtime_error("BRepMesh failed on the shape");
   }
+}
 
+FaceMeshArrays mesh_face(const TopoDS_Face& face) {
   FaceMeshArrays out;
   TopLoc_Location loc;
   opencascade::handle<Poly_Triangulation> tri = BRep_Tool::Triangulation(face, loc);
   if (tri.IsNull()) {
-    throw std::runtime_error("face has no triangulation after meshing");
+    // Not pre-meshed (an analytic caller that skips ensure_meshed) — mesh just
+    // this face as a fallback so the read below always has a triangulation.
+    BRepMesh_IncrementalMesh mesher(face, DEFAULT_CHORD_TOLERANCE);
+    if (!mesher.IsDone()) throw std::runtime_error("BRepMesh failed on a face");
+    tri = BRep_Tool::Triangulation(face, loc);
+    if (tri.IsNull()) throw std::runtime_error("face has no triangulation after meshing");
   }
 
   const bool reversed = (face.Orientation() == TopAbs_REVERSED);
@@ -1280,6 +1297,11 @@ Tessellated tessellate_named(const TopoDS_Shape& shape, const gp_Pnt& plane_orig
 
 // ── tessellate_generic (boolean/pattern/shell/blend) ─────────────────────────
 Tessellated tessellate_generic(const TopoDS_Shape& shape, const std::string& scope) {
+  // Mesh the whole shape once, in parallel, up front — every make_face_mesh /
+  // combine_face_meshes below then just READS the shared triangulation instead
+  // of each spinning up its own single-face mesher.
+  ensure_meshed(shape);
+
   json topology = extract_topology(shape);
   auto id_by_key = build_edge_id_lookup(topology);
 
@@ -1515,6 +1537,37 @@ TopoDS_Shape clean_unify(const TopoDS_Shape& shape) {
   if (BRepCheck_Analyzer(result).IsValid()) return result;
   if (BRepCheck_Analyzer(shape).IsValid()) return shape;
   return result;
+}
+
+void replace_torus_surface(const TopoDS_Face& face, const TopLoc_Location& loc,
+                           const opencascade::handle<Geom_ToroidalSurface>& fresh,
+                           double minTol) {
+  BRep_Builder builder;
+  // Pcurves are keyed by surface identity, so every edge must re-register its
+  // 2D curve(s) against the fresh surface BEFORE the face switches — otherwise
+  // the face loses all its pcurves and downstream meshing/offsetting breaks.
+  for (TopExp_Explorer ee(face, TopAbs_EDGE); ee.More(); ee.Next()) {
+    TopoDS_Edge edge = TopoDS::Edge(ee.Current());
+    double tol = std::max(BRep_Tool::Tolerance(edge), minTol);
+    if (BRepTools::IsReallyClosed(edge, face)) {
+      // Seam: two pcurves, one per orientation.
+      Standard_Real a1, b1, a2, b2;
+      TopoDS_Edge fwd = edge;  fwd.Orientation(TopAbs_FORWARD);
+      TopoDS_Edge rev = edge;  rev.Orientation(TopAbs_REVERSED);
+      opencascade::handle<Geom2d_Curve> c1 = BRep_Tool::CurveOnSurface(fwd, face, a1, b1);
+      opencascade::handle<Geom2d_Curve> c2 = BRep_Tool::CurveOnSurface(rev, face, a2, b2);
+      if (!c1.IsNull() && !c2.IsNull()) {
+        builder.UpdateEdge(edge, c1, c2, fresh, loc, tol);
+      }
+    } else {
+      Standard_Real a, b;
+      opencascade::handle<Geom2d_Curve> pc = BRep_Tool::CurveOnSurface(edge, face, a, b);
+      if (!pc.IsNull()) {
+        builder.UpdateEdge(edge, pc, fresh, loc, tol);
+      }
+    }
+  }
+  builder.UpdateFace(face, fresh, loc, std::max(BRep_Tool::Tolerance(face), minTol));
 }
 
 }  // namespace kernel

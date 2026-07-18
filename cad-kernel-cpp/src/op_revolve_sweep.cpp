@@ -15,6 +15,7 @@
 #include "geom_io.hpp"
 
 #include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRepBuilderAPI_TransitionMode.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
@@ -23,7 +24,13 @@
 
 #include <GC_MakeArcOfCircle.hxx>
 #include <Geom_TrimmedCurve.hxx>
+#include <Geom_ToroidalSurface.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
 
+#include <BRep_Tool.hxx>
+#include <BRepTools.hxx>
+#include <TopExp_Explorer.hxx>
+#include <gp_Ax1.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
@@ -142,6 +149,14 @@ TopoDS_Wire build_path_wire(const json& edges) {
 TopoDS_Shape sweep_wire_along(const TopoDS_Wire& profile, const TopoDS_Wire& path) {
   try {
     BRepOffsetAPI_MakePipeShell pipe(path);
+    // At a G0 corner (e.g. an L-shaped two-line path) the default
+    // Transformed transition TRANSLATES the section across the break
+    // without rotating it — the post-corner leg sweeps a profile that
+    // is coplanar with its own travel direction and degenerates into a
+    // zero-thickness sheet. RightCorner mitres the junction (profile
+    // rotated, legs extended to the bisector plane), matching how
+    // SolidWorks/Onshape sweep sharp-cornered paths.
+    pipe.SetTransitionMode(BRepBuilderAPI_RightCorner);
     pipe.Add(profile, Standard_False, Standard_False);
     pipe.Build();
     if (!pipe.IsDone()) {
@@ -154,6 +169,103 @@ TopoDS_Shape sweep_wire_along(const TopoDS_Wire& profile, const TopoDS_Wire& pat
   } catch (const Standard_Failure& f) {
     throw std::runtime_error(std::string("OCCT pipe failure: ") + f.GetMessageString());
   }
+}
+
+// Unwrap a face's surface to its toroidal basis (the pipe builder wraps the
+// elbow torus in a rectangular trimmed surface); null when not a torus.
+opencascade::handle<Geom_ToroidalSurface> torus_of(const TopoDS_Face& face,
+                                                   TopLoc_Location& loc) {
+  opencascade::handle<Geom_Surface> raw = BRep_Tool::Surface(face, loc);
+  opencascade::handle<Geom_ToroidalSurface> torus =
+      opencascade::handle<Geom_ToroidalSurface>::DownCast(raw);
+  if (torus.IsNull()) {
+    opencascade::handle<Geom_RectangularTrimmedSurface> trimmed =
+        opencascade::handle<Geom_RectangularTrimmedSurface>::DownCast(raw);
+    if (!trimmed.IsNull()) {
+      torus = opencascade::handle<Geom_ToroidalSurface>::DownCast(trimmed->BasisSurface());
+    }
+  }
+  return torus;
+}
+
+// A torus face with a DEGENERATE seam is the toxic layout: the profile
+// circle's parameter origin faced the path bend's center of curvature, so the
+// tube's seam landed exactly on the pinch point and collapsed to a null-curve
+// edge. BRepMesh strip-meshes that face (elbow renders as a flat chamfer) and
+// BRepOffset segfaults on it. With the seam anywhere else the same pinched
+// elbow meshes and offsets fine.
+bool has_degenerate_torus_seam(const TopoDS_Shape& shape) {
+  for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+    TopoDS_Face face = TopoDS::Face(ex.Current());
+    TopLoc_Location loc;
+    if (torus_of(face, loc).IsNull()) continue;
+    for (TopExp_Explorer ee(face, TopAbs_EDGE); ee.More(); ee.Next()) {
+      const TopoDS_Edge& e = TopoDS::Edge(ee.Current());
+      if (BRep_Tool::Degenerated(e) && BRepTools::IsReallyClosed(e, face)) return true;
+    }
+  }
+  return false;
+}
+
+// Lone-circle profile wire with its parameter origin rotated by `rot` about
+// the plane normal — moves the swept tube's seam away from a pinch.
+TopoDS_Wire circle_wire_rotated(const Plane3& plane, const json& circle_edge, double rot) {
+  const json& c = circle_edge.at("center");
+  double r = circle_edge.at("radius").get<double>();
+  double cx = c.at("x").get<double>(), cy = c.at("y").get<double>();
+  gp_Pnt center = plane.origin.Translated(
+      gp_Vec(plane.x_axis) * cx + gp_Vec(plane.y_axis) * cy);
+  gp_Ax2 ax2(center, plane.normal);
+  ax2.Rotate(gp_Ax1(center, plane.normal), rot);
+  gp_Circ circ(ax2, r);
+  return BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(circ).Edge()).Wire();
+}
+
+// Last-resort heal when the seam can't be moved off the pinch: nudge the horn
+// torus (major == minor to the last ulp) onto the SPINDLE side by 1e-12
+// relative — BRepMesh handles that perfectly, so the elbow at least renders
+// correctly. Offsetting such a face still fails (cleanly, post-cpp-13).
+void heal_pinched_bends(const TopoDS_Shape& shape) {
+  for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+    TopoDS_Face face = TopoDS::Face(ex.Current());
+    TopLoc_Location loc;
+    opencascade::handle<Geom_ToroidalSurface> torus = torus_of(face, loc);
+    if (torus.IsNull()) continue;
+    double major = torus->MajorRadius();
+    double minor = torus->MinorRadius();
+    if (std::fabs(major - minor) >= minor * 1e-9) continue;
+    // Constructors accept spindle radii; only the Set* methods guard, so
+    // build a fresh surface rather than mutating in place.
+    opencascade::handle<Geom_ToroidalSurface> fresh =
+        new Geom_ToroidalSurface(torus->Position(), minor * (1.0 - 1e-12), minor);
+    replace_torus_surface(face, loc, fresh, BRep_Tool::Tolerance(face));
+  }
+}
+
+// Sweep one profile loop along the path, avoiding the degenerate-seam layout:
+// when the first build lands the tube seam on a pinch (bend radius == profile
+// radius — Onshape-legal geometry), retry with the profile circle's parameter
+// origin rotated so the seam moves off the pinch. Falls back to the spindle
+// heal when rotation can't fix it (non-circle profiles, or pinch everywhere).
+TopoDS_Shape sweep_profile_along(const Plane3& plane, const json& profile,
+                                 const TopoDS_Wire& path) {
+  TopoDS_Face face = build_profile_face(plane, profile, json::array());
+  TopoDS_Shape shape = sweep_wire_along(outer_wire_of(face), path);
+  if (!has_degenerate_torus_seam(shape)) return shape;
+
+  if (profile.size() == 1 && profile.at(0).value("kind", "") == "circle") {
+    for (double rot : {kPi / 2.0, kPi / 4.0}) {
+      try {
+        TopoDS_Shape candidate =
+            sweep_wire_along(circle_wire_rotated(plane, profile.at(0), rot), path);
+        if (!has_degenerate_torus_seam(candidate)) return candidate;
+      } catch (const std::exception&) {
+        // Rotation attempt failed to build — keep the original shape.
+      }
+    }
+  }
+  heal_pinched_bends(shape);
+  return shape;
 }
 
 }  // namespace
@@ -244,18 +356,15 @@ json op_buildSweep(const json& params) {
 
   // Outer profile (no holes here — holes are swept separately and subtracted,
   // mirroring sweep.rs which can't sweep a compound face directly).
-  TopoDS_Face outer_face = build_profile_face(plane, profile, json::array());
-  TopoDS_Wire outer_wire = outer_wire_of(outer_face);
-
   TopoDS_Shape shape;
   try {
-    shape = sweep_wire_along(outer_wire, path);
+    shape = sweep_profile_along(plane, profile, path);
   } catch (const std::exception& e) {
     throw std::runtime_error(
         std::string("sweep failed: OCCT couldn't build the swept solid (") +
         e.what() +
         "). Common causes: profile coplanar with the path's start tangent, path "
-        "crosses itself, or the profile is too large for the path's first turn radius.");
+        "crosses itself, or the profile reaches/exceeds a path bend radius.");
   }
 
   // Subtract any hole-tubes one at a time: sweep each hole loop along the same
@@ -263,16 +372,9 @@ json op_buildSweep(const json& params) {
   if (holes.is_array()) {
     for (std::size_t h = 0; h < holes.size(); ++h) {
       const json& hole_edges = holes.at(h);
-      TopoDS_Wire hole_wire;
-      try {
-        TopoDS_Face hole_face = build_profile_face(plane, hole_edges, json::array());
-        hole_wire = outer_wire_of(hole_face);
-      } catch (const std::exception& e) {
-        throw std::runtime_error(std::string("sweep: hole profile invalid: ") + e.what());
-      }
       TopoDS_Shape hole_solid;
       try {
-        hole_solid = sweep_wire_along(hole_wire, path);
+        hole_solid = sweep_profile_along(plane, hole_edges, path);
       } catch (const std::exception& e) {
         throw std::runtime_error(
             std::string("sweep: hole couldn't be swept along the path (likely too "

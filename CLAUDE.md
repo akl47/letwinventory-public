@@ -4,7 +4,7 @@
 
 **Don't run builds, migrations, or type checks.** The webapp runs in Docker with hot reload — the user reports build errors. No `ng build`, `npm run build`, `sequelize db:migrate`, `tsc --noEmit`.
 
-**Always ask before running tests** (Jest, Karma, Playwright, `scripts/run-tests.sh`).
+**Always ask before running tests** (Jest, frontend unit tests, Playwright, `scripts/run-tests.sh`).
 
 **Never skip generating requirements.** If `req.js` fails or the API is unreachable, STOP and tell the user.
 
@@ -15,13 +15,16 @@
    - Create: `create '<json>'` with `description`, `rationale`, `verification`, `validation`, `parentRequirementID`. Present each to the user for approval.
    - Every requirement needs a parent. Each category has exactly one root. New categories need a root requirement under QMS clause (REQ 98) or System root (REQ 1).
    - Default to `unapproved`: run `submit <id>` after `create`. Only stay in `draft` if the user explicitly asks. If a parent is already approved, the API may auto-approve — `unapprove <id>` if needed.
-   - Key category roots: Engineering Masters (265), Work Instructions (266), Work Orders (267), Barcode (149), Inventory (123), Parts (152), Tools (174), Authentication (155), Authorization (156), Planning (161), Harness (163), Design Requirements (165), Orders (167), File Management (80).
-2. **Tests second.** Backend (Jest), frontend (Karma), E2E (Playwright). Should fail.
+   - Key category roots: Engineering Masters (265), Work Instructions (266), Work Orders (267), Barcode (149), Inventory (123), Parts (152), Tools (174), Authentication (155), Authorization (156), Planning (161), Harness (163), Design Requirements (165), Orders (167), File Management (80), CAD (512).
+2. **Tests second.** Backend (Jest), frontend (vitest via `ng test`), E2E (Playwright). Should fail.
 3. **Link tests to requirements.** `update <id>` to add test file refs to `verification`.
 4. **Implement.** Make tests pass.
 5. **Verify.** `list --project <id>` to confirm coverage.
 
 ## Behavioral Rules
+
+### Be succinct
+Keep responses and summaries SHORT. State what was fixed/changed and where in a few sentences; skip mechanism deep-dives, option lists, and restating what the user already knows. Expand only when asked.
 
 ### Think before coding
 State assumptions explicitly. If multiple interpretations exist, present them. If a simpler approach exists, push back. Stop and ask if anything is unclear.
@@ -69,7 +72,7 @@ When mousedown fires but click does not → DOM lifecycle. Common causes: templa
 ### Stack
 - **Backend:** Node.js/Express 5, Sequelize, PostgreSQL (SQLite in tests)
 - **Frontend:** Angular 19 (standalone components, signals), Angular Material
-- **Tests:** Jest backend, Karma frontend, Playwright E2E (port 4201, chromium, test-login → storageState)
+- **Tests:** Jest backend; frontend unit tests are **vitest** run through `ng test` (`@angular/build:unit-test` builder — specs import from `vitest`; the "Karma" label in run-tests.sh output is historical); Playwright E2E (port 4201, chromium, test-login → storageState)
 - **Infra:** Docker, GitHub Actions, DockerHub deploy on `v*` tag
 
 ### Environment
@@ -83,6 +86,7 @@ Auto-discovered via `backend/api/index.js`:
 - `/api/parts/{connector,cable,component,wire,wire-end,harness}/*` — harness has revision endpoints
 - `/api/planning/{task,tasklist,project,scheduled-task}/*`
 - `/api/design/{requirement,requirement-category,feature}/*`
+- `/api/design/cad-model/*` — CAD working copy + full VCS verb set (checkout/checkin/renew-lock/branches/workflow/release/diff/reconcile/regenerate); `/api/design/assembly/*` — assembly-specific verbs (instances, mates, patterns, explode, interference, BOM sync); the controller routes by `model.isAssembly` to the cad/assembly binding
 - `/api/manufacturing/{master,master-step,work-order}/*`
 - `/api/tools/{tool,tool-category,tool-subcategory}/*`
 - `/api/admin/{group,user,permission}/*` — RBAC + impersonation
@@ -90,8 +94,8 @@ Auto-discovered via `backend/api/index.js`:
 - `/api/files/*` — read-only
 
 ### Permissions
-- **Resources:** parts, inventory, equipment, tasks, projects, harness, requirements, admin, orders, tools, manufacturing_planning, manufacturing_execution, features
-- **Actions:** read, write, delete + special: requirements.approve, admin.impersonate, admin.manage_tool_categories, features.approve
+- **Resources:** parts, inventory, equipment, tasks, projects, harness, requirements, admin, orders, tools, manufacturing_planning, manufacturing_execution, features, cad (covers assemblies too — no separate assembly resource)
+- **Actions:** read, write, delete + special: requirements.approve, admin.impersonate, admin.manage_tool_categories, features.approve, cad.approve (production release + force-unlock)
 - **Enforcement:** `checkPermission(resource, action)` middleware; exempt: auth/*, config/*
 - **Frontend:** `authService.hasPermission()` signal; UI buttons disabled with tooltips
 - **Test helpers:** `authenticatedRequest` auto-grants all permissions; opt out with `{ grantPermissions: false }`
@@ -152,6 +156,7 @@ Auto-discovered via `backend/api/index.js`:
 - Parts library: `WireEnds`, `WireHarness` (release fields), `HarnessRevisionHistory`
 - Planning: `Tasks` (checklist JSONB, dueDateNotifiedAt), `Projects.keyboardShortcut`, `ScheduledTasks` (cron-parser v4.9.0)
 - Design: `DesignRequirements.approvalStatus` (+ `designFeatureID` FK), `RequirementCategories`, `RequirementHistory`, `DesignFeatures` (4-state `reviewState` workflow + GitHub linkage), `DesignFeatureHistory`
+- CAD: `DesignCADModels` (ONE table for parts AND assemblies — `isAssembly` boolean + `assemblyDoc` JSONB vs `featureTree`/`sketchDoc`/`equations`; VCS columns: branchName, baseCommitHash, dirty, lock trio, releaseLocked, lastContentSavedAt; partial unique index = one active model per part), `DesignCADModelHistory` (audit, covers assemblies), `VcsObjects` (content-addressed blob/tree/commit/geometry/component/thumbnail, keyed (repoType, repoId=lineage-root part id, hash)), `VcsRefs` (branches mutable, tags write-once), `VcsWorkflowState` (per-branch key `<lineageRoot>:<branch>`), `VcsUsage` (where-used edges, actively written), `VcsChangeset` (reserved, empty), `DesignBRepCache` (disposable regen cache keyed paramHash/upstreamHash/NAMING_VERSION)
 - Manufacturing: `EngineeringMasters` (release workflow), `EngineeringMasterSteps` (stepNumber default 10), `EngineeringMasterStepItems` (isTool flag), `EngineeringMasterStepMarkers` (x, y), `EngineeringMasterOutputParts`, `EngineeringMasterHistory`, `WorkOrders`, `WorkOrderStepCompletions`
 - Tools: `ToolCategories` (5 broad), `ToolSubcategories` (~36 leaves), `ToolCategorySubcategories` (M:N join), `Tools` (partID UNIQUE FK + dimension fields, mm)
 - Auth: `RefreshTokens.userAgent`, `ApiKeys.expiresAt`, `ApiKeyPermissions`, `PushSubscriptions`, `NotificationPreferences`
@@ -162,6 +167,7 @@ Auto-discovered via `backend/api/index.js`:
 - Orders: `/orders`, `/orders/bulk-upload`, `/orders/:id`
 - Harness: `/harness`, `/harness/editor`, `/harness/editor/:id`
 - Design: `/requirements`, `/requirements/new`, `/requirements/:id/edit`, `/features`, `/features/new`, `/features/:id/edit`, `/design/masters`, `/design/masters/new`, `/design/masters/:id/edit`
+- CAD: `/design/cad` (paginated list), `/parts/:id/cad/editor`, `/parts/:id/assembly/editor` (same `CadEditorComponent`, `assemblyMode` route flag)
 - Build: `/build`, `/build/:barcodeId`, `/build/work-orders`, `/build/work-orders/:id`
 - Tools: `/tools/outline`, `/tools/catalog`
 - Admin: `/admin/groups`, `/admin/groups/:id`, `/admin/users`, `/admin/users/:id/permissions`, `/admin/users/new`
@@ -173,6 +179,8 @@ Auto-discovered via `backend/api/index.js`:
 ## Session History
 
 Past sessions appear in `git log`. Add a new section here only when a session decision will surprise a future reader (a non-obvious tradeoff, a workaround, an architectural pivot). File-level changes belong in commit messages, not here.
+
+> **CAD entries below are historical.** The current architecture is documented in `docs/cad-system/` (start at `00-overview.md`; the NotebookLM pack under `notebooklm/` is kept current). Superseded since these entries: the kernel is **native C++ on OCCT 8.0 in `cad-kernel-cpp/`** (JSON-RPC over TCP; the browser-side pure-JS/opencascade.js kernels and the old Rust `cad-kernel/` are gone as runtime paths), assemblies were **consolidated into `DesignCADModels`** (`isAssembly` + `assemblyDoc` — no `DesignAssembly` table), and `NAMING_VERSION` is paired with the kernel's `NAMING_SCHEMA_VERSION` with a runtime ping handshake.
 
 ### 2026-05-04 — Feature Review system (REQ 300–313, parented under REQ 105 in Design Controls)
 
@@ -190,7 +198,7 @@ Past sessions appear in `git log`. Add a new section here only when a session de
 
 - **Pure-TS solver was the initial production solver** (superseded 2026-05-14 — see entry below). At session close, PlaneGCS WASM was in `package.json` and the Angular build config had the `externalDependencies` + `assets` mapping wired, but `solver.ts` was pure-TS numerical iteration. It satisfied every constraint case in the spec (incl. fully-constrained rectangle, conflicting-constraint rejection). PlaneGCS swap was noted as a follow-up when sketches outgrew the iterative solver.
 
-- **Pure-JS extrude is the default kernel.** Same story for `opencascade.js@2.0.0-beta.fdece36`: wired through `CadKernelService` with a lazy dynamic import, but not invoked at startup. Pure-JS extrude (ear-clipping caps + quad sides via `makePureJsKernel()`) handles every polygon profile. OCCT is required for curves, booleans, fillets — swap by calling `kernelService.load()` and reassigning `this.kernel` in `CadEditorComponent`.
+- **Pure-JS extrude was the initial default kernel** (superseded — geometry now comes from the native C++/OCCT 8.0 server kernel in `cad-kernel-cpp/`; see the note at the top of Session History). At session close, `opencascade.js@2.0.0-beta.fdece36` was wired through `CadKernelService` with a lazy dynamic import but not invoked at startup; pure-JS extrude (ear-clipping caps + quad sides via `makePureJsKernel()`) handled polygon profiles.
 
 - **Datum visibility persists on the Origin feature.** `OriginFeature.visibility?: Record<string, boolean>` for the seven datum ids (`origin` / `x_axis` / … / `xz_plane`). Missing keys default to visible. Stored inside the JSONB `featureTree` blob — no separate column. Visibility eyes in the tree mutate this map.
 
@@ -321,3 +329,36 @@ Past sessions appear in `git log`. Add a new section here only when a session de
 - **Migration `20260602000000-add-release-locked-to-cad-models.js` NOT yet applied** (user applies in dev). Kernel rebuild also pending.
 
 - **Status:** REQs 668–724 cover the VCS / branches / diff / workflow / freeze / dev+prod release / STL+STEP / version-history preview — but they are all still `draft` (should be normalised to `unapproved`; user gates). Code-review session 2026-05-30 added REQs 725–729 (`unapproved`): Undo Checkout, Compare-view camera-lock toggle, gravity-aligned canonical sketch orientation, 90° view-rotation controls, visible datum-plane labels — all shipped behaviour with no prior requirement. Tests: full backend suite green (749 passing); added `frontend/.../cad/lib/diffFormat.spec.ts` (new, formats version-history diff lines) + 2 backend release-workflow edge-case tests (re-release 409, numeric-revision progression 00→01→02). All uncommitted pending user signal.
+
+### 2026-07-17/18 — Assembly skeleton (top-down modeling) + variable push + create-in-context (REQs 911–920)
+
+- **Assembly skeleton**: assemblies now author sketches + datum plane features + equations on their previously-unused `sketchDoc`/`featureTree`/`equations` columns. Save via `PUT /assembly/:id/skeleton` (part-style guards: main 423, lock 423, DOC_CONFLICT 409). **`assemblySerialize/Deserialize` now round-trip the BUNDLE `{assemblyDoc, sketchDoc, featureTree, equations}`** — deserialize RETURNS the bundle (legacy commits → empty defaults); `assemblyVcsService.docOf` returns the bundle and `applyBundle` restores all four columns (branch ops, reconcile, undo-checkout all flow through it). Anything consuming `assemblyDeserialize` must read `.assemblyDoc`. Reconcile keeps the BRANCH's skeleton (branch-wins).
+- **Skeleton refs = cross-part refs with `sourceInstanceId: '__skeleton__'`** (`SKELETON_INSTANCE_ID` in `crossPartRef.ts` + `assemblyRegenService.js`), `sourceGeomRef.edgeId = 'asketch:<sid>/<eid>'` (vertices `asketchv:<sid>/<eid>/<start|end|center|self>`). `backend/services/assemblySkeleton.js` evaluates skeleton entities to world polylines; the resolver handles exact-key + geometric fallback; Phase B.5 re-regens skeleton-only dependents (FOOTGUN fixed: their `deps` set is undefined — every `for (const s of deps)` there must guard `deps || []`, an unguarded one crashed the WHOLE assembly regen). Skeleton refs are the FIRST `cachedProjection` writers: minted at pick time (host-local polyline) AND refreshed on every assembly regenerate (controller writes volatile snapshots onto writable children — no dirty/lastContentSavedAt bump), so standalone child regen tracks skeleton edits.
+- **Variable push (REQ 918, shared-push)**: `POST /assembly/:id/push-variables` writes LITERAL resolved values into child equations tagged `fromAssembly: <id>` (additive `EquationEntry` field); skip matrix = no-model / sub-assembly / main / releaseLocked / locked-by-other(incl. expired); bumps child `lastContentSavedAt` DELIBERATELY to DOC_CONFLICT open child editors.
+- **Create child part in assembly (REQ 920)**: ribbon New part → `pick-child-origin` mode accepts skeleton sketch points + body vertices (vertexPickMode armed; `sketchPickableVertices` already covers skeleton points), face points (`facePickedAt`), datums. Face/vertex pick on a component → **lock mate** anchors the new instance to it (lock mates no longer require faceIds — solver never read them); datum/skeleton pick → grounded. `cad-new-part-dialog` gained `insertInto` (insert instance at origin + navigate to edit-in-context).
+- **In-context UX**: part feature tree shows `Context - <asm>` rows (from live session + refs' definingAssemblyId) via new `contextNodes`/`contextMenu` inputs on the tree panel — right-click menu (Edit in context / Leave context / Open assembly); `leaveContext()` clears query params in place. Cross-part edge/face/vertex clicks convert ONLY when the convert-entities tool is armed (they used to auto-convert in Select mode). Assembly tree: skeleton rows top-level after Origin; components nest Origin group (7 datums at depth 2) + per-body eye rows (`hiddenComponentBodies`, render-only) + Suppress in context menu.
+- **Arrow-key "random rotation" ROOT CAUSE**: `animateOrbitTo` force-tweens `camera.up` → WORLD_UP; any view with a different up (Top/Bottom poles, after ⟳ roll buttons, normal-to) picked up an uncommanded roll — in sketch mode (theta/phi ignored) it was PURE roll. Arrow keys now use `animateScreenRotate` (rigid rotation about the camera's live up/right axes, up-vector rotated along, theta/phi resynced after; no-op in sketch mode). Turntable tween still used by nav-cube/view hotkeys — do NOT reuse it for anything that must preserve roll.
+- Assembly editor re-regenerates on `visibilitychange` → visible (stale-tab child edits). Tests written, NOT yet run: backend `assembly-skeleton`, `assembly-skeleton-refs`, `assembly-push-variables` (+ updated `assembly-vcs` bundle expectations); frontend `inContextOverlay`/`externalSnap`/`crossPartRef`/`equations` spec additions. All uncommitted; REQs 911–920 unapproved.
+
+### 2026-07-16/17 — Dimension/trim/mirror UX batch + determinacy singular configurations
+
+- **Dimension leaders restyled to SW conventions** (dimensions.ts + cad-viewer): witness gaps/overshoot, text breaks the dim line, labels slide along the line and grow a leader past the span (arrows auto-flip outside), radius/diameter = single-arrow radial leader with a bend + horizontal shoulder (`leader` + `curve` fields on DimensionRender; the viewer re-derives the tangency point from the pixel-sized bend). Arrow-flip ⇄ handles removed — arrows now live in the Dimension properties rail panel.
+- **Sketch rail is now sectioned**: Sketch Plane / TOOL SLOT / Dimension / Constraints — every section collapsible (persisted per section) with drag dividers between them. FOOTGUN: `[hidden]` loses to any authored `display:flex` — every section body needs a `[hidden] { display:none }` override. Tool slot is `flex-shrink: 0` (Constraints gives way, not the active tool) with a max-height cap. Standard tool slot renders per-tool bodies via `railTool()` — Trim (2 option toggles) and Mirror are in; Fillet/Chamfer/Offset still use the old full-column panels.
+- **Determinacy: rank analysis is blind to first-order-degenerate isolated solutions.** Two passes added: (1) explicit line-curve tangency at an on-curve endpoint swaps to the tangent-at-point residual; (2) tangent-JUNCTION fixpoint — a point on two DETERMINED circles that are tangent to each other (fillet blends; center distance = r1+r2 or |r1−r2|) is the isolated touch point → pinned, analysis re-runs so arcs through it resolve. Handles both one-shared-point and coincident-welded junctions; coradial pairs excluded (genuinely slide).
+- **Trim**: tangency now counts as a boundary (`*HitsWithTangency` wrappers rescue the discriminant≈0 touch case, TANGENT_TOL 1e-3 — slot construction used to delete the whole circle); options: keep-removed-as-construction + ignore-construction-boundaries; constraint preservation — kept-segment endpoints survive the delete cascade via keepPoints, tangent/point-line dims re-anchor to the nearest kept piece, circle/arc trims carry radius/diameter/tangent/concentric/coradial/equal onto the kept arc (one piece only when split in two).
+- **Mirror**: axis-first with auto-advance, live ghost preview (`mirrorPreviewState` — same op as commit, shared `pushGhostEntities` with offset). FOOTGUN: a point ON the mirror axis reflected onto itself → zero-length symmetric pair → PlaneGCS's perpendicular primitive is singular → whole sketch reads inconsistent. Fix: on-axis points are SHARED (welded, no pair), self-symmetric entities skipped; solver also translates degenerate symmetric pairs as p2p_coincident so pre-fix docs still solve.
+- **Smart-Dim placement clicks over a parallel datum plane** no longer eat the click with an error — viewer picks ignore unusable datums (only the explicit tree pick explains why).
+- All uncommitted; REQs not yet created for this batch (user gates). Node-verified against real part 619 data via esbuild-bundled lib in the scratchpad.
+
+### 2026-07-07/08 — Sketch feature gap batch (REQs 882–891, from docs/cad-system/sketch-feature-gap-analysis.md)
+
+- **The gap-analysis doc is the spec.** `docs/cad-system/sketch-feature-gap-analysis.md` catalogs every missing sketch feature with per-gap fix recipes + draft REQs; this session implemented its priority list 1–8 (REQs 882–891, all `unapproved`). Deferred: F1 intersection curve, F4 ordinate dims/dual units. It also RECONCILES `sw-onshape-divergence-review.md` — seven of that review's sketcher findings are fixed and must not be re-reported.
+- **The slot-extrusion "limitation" was a stale error mapper, not a kernel limit.** No code produced the string matched by errorMessages.ts's "mixing lines and arcs" entry; the C++ kernel handles mixed line+arc wires. Deleted the mapper. Lesson: error-catalog entries rot silently — verify a producer exists before shipping around a "known limit".
+- **Ellipse constraints used to BREAK the whole solve**, not no-op: `point_on_ellipse`/`tangent_le` referenced an ellipse id never pushed by `buildPrimitives` → `push_primitives_and_params` threw. Fixed by registering `SketchEllipse` (synthetic focus `_efoc_` + opposite vertex `_emaj2_` + `internal_alignment_ellipse_major_diameter`). **`radmin` is a legitimately free param** — the solver may resize the ellipse instead of moving a point, so tests must derive foci from the SOLVED minorRadius, never the fixture value.
+- **Determinacy's squared distance residuals are gradient-degenerate at zero.** `horizontal/vertical-distance` use `dx² − v²`; at dx=v=0 the FD Jacobian row vanishes and the point never reads determined. Fully Define (`fullyDefine.ts`) therefore emits point-pair `vertical`/`horizontal` ALIGNMENTS (linear residuals) for zero offsets, plus a no-progress blacklist so an unlockable entity can't spin the loop to its iteration budget.
+- **The conflict-diagnosis id mapping now serves redundancy too** (REQ 887): `get_gcs_redundant_constraints` is queried in the SUCCESS branch before `clear_data()`; pin-family synthetics (`_pinrad_`/`_onedgerad_`/`_coradrad_`) are filtered as redundant-by-design. Amber/dashed in the constraint list vs conflict red.
+- **On-edge line endpoints are pinned OR ride, never both** (REQ 886 E3): endpoints that are otherwise position-constrained (trim-point coincidents) get `_extrefA/B` + `point_on_line_ppp` ride geometry; the rest stay pinned. determinacy.ts mirrors the same pin-vs-ride split — the two files must agree or DOF coloring lies.
+- **Curve profiles ride the kernel's existing Bézier lane** (REQ 883): closed splines (exact Böhm conversion, degree 3 ONLY — other degrees return null by design so preview/solid can't drift) and ellipses (4-quadrant κ cubics, ~2.7e-4 radial error) are emitted BEFORE the arrangement walker in BOTH `profile.ts` and `cadProfile.js` (twin files `curveBeziers.ts`/`cadCurveBeziers.js`, KEEP IN SYNC). Curve loops don't participate in the DCEL — crossing geometry is a documented v1 limitation.
+- **`ConstraintTarget.sub` removed as dead data** — only `ExternalRef.sub` ('center') is live. One store.spec test existed solely to exercise the dead field; grep for `sub:` writers, not just readers, before declaring a field dead.
+- **Checkout expiry is invisible to an attributed holder** (REQ 875 extension, same session): `renewLock` now REVIVES an expired lock when `lockedByUserID` still matches (takeover/sweep/force-unlock all reassign or clear attribution, so intact attribution = unclaimed); the editor heartbeats only while the tab is visible and renews immediately on `visibilitychange`, and a failed renew attempts ONE silent recovery (patch lock metadata only — silent paths must NEVER adopt a server doc or a fast-forwarded base, else local unsaved edits or another user's release get clobbered; anything ambiguous falls to the lost banner). Save 423s retry once through renew before surfacing.
+- **Status:** backend 110 suites/951 green; frontend 139 files/2627 green (vitest via ng test). All uncommitted; REQs 882–891 await user approval; browser smoke test user-owned.
