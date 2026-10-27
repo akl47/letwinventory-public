@@ -56,6 +56,9 @@ export interface SelectionRow {
         <ul class="entity-list" *ngIf="rows().length > 0">
           <li class="entity-row"
               *ngFor="let row of rows(); let i = index"
+              [class.clickable]="rowsClickable()"
+              [class.selected]="row.id === selectedId()"
+              (click)="rowsClickable() && rowClick.emit(row.id)"
               [attr.data-testid]="testid() ? testid() + '-row-' + i : null">
             <mat-icon class="entity-row-icon">{{ row.icon || 'radio_button_unchecked' }}</mat-icon>
             <span class="entity-row-text">
@@ -67,14 +70,14 @@ export interface SelectionRow {
                     *ngIf="row.action as act"
                     [attr.data-testid]="testid() ? testid() + '-action-' + i : null"
                     [matTooltip]="act.tooltip || ''"
-                    (click)="rowAction.emit(row.id)">
+                    (click)="rowAction.emit(row.id); $event.stopPropagation()">
               <mat-icon>{{ act.icon }}</mat-icon>
             </button>
             <button class="entity-row-remove"
                     type="button"
                     [attr.data-testid]="testid() ? testid() + '-remove-' + i : null"
                     [matTooltip]="row.tooltip || 'Remove'"
-                    (click)="remove.emit(row.id)">
+                    (click)="remove.emit(row.id); $event.stopPropagation()">
               <mat-icon>close</mat-icon>
             </button>
           </li>
@@ -171,6 +174,10 @@ export interface SelectionRow {
     .section .entity-list { margin: 0; padding: 6px; }
     .section .entity-row { margin-top: 0; }
     .section .entity-row + .entity-row { margin-top: 2px; }
+    .entity-row.clickable { cursor: pointer; }
+    .entity-row.clickable:hover { background: rgba(255,255,255,0.08); }
+    /* Matches the constraint list's selected-row treatment. */
+    .entity-row.selected { border-color: #42a5f5; box-shadow: inset 2px 0 0 #42a5f5; }
     .section .field-empty { padding: 6px 10px; }
     .field-header.collapsible { cursor: pointer; user-select: none; }
     .section-chevron { font-size: 16px; width: 16px; height: 16px; opacity: 0.7; flex-shrink: 0; }
@@ -201,7 +208,14 @@ export class CadSelectionListComponent {
    * sizing / dividers off it) — this component just renders + emits. */
   collapsible = input<boolean>(false);
   collapsed = input<boolean>(false);
+  /** Highlights the matching row. Only meaningful with `rowsClickable`. */
+  selectedId = input<string | null>(null);
+  /** Make row bodies clickable (pointer cursor + hover) and emit `rowClick`. */
+  rowsClickable = input<boolean>(false);
 
+  /** Emits the row's `id` when the row body is clicked. Rows only take the
+   * clickable affordance when a host has subscribed. */
+  rowClick = output<string>();
   /** Emits the row's `id` when its X button is clicked. */
   remove = output<string>();
   /** Emits the row's `id` when its optional secondary `action` button is

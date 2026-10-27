@@ -7,6 +7,8 @@ const db = require('../../../models');
 async function partWithCad(auth) {
   const part = await createTestPart();
   const res = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({});
+  // REQ 946 — a push only writes children the pusher has checked out.
+  await auth.post(`/api/design/cad-model/${res.body.id}/checkout`).send({});
   return { part, model: res.body };
 }
 
@@ -121,6 +123,26 @@ describe('POST /api/design/assembly/:id/push-variables (REQ 918)', () => {
     const byPart = Object.fromEntries(res.body.results.map((r) => [r.partID, r.status]));
     expect(byPart[part.id]).toBe('skipped-released');
     expect(byPart[gone.part.id]).toBe('no-model');
+  });
+
+  it('skips a child the pusher has not checked out (REQ 946)', async () => {
+    const auth = await authenticatedRequest();
+    const { part, model } = await partWithCad(auth);
+    await auth.post(`/api/design/cad-model/${model.id}/undo-checkout`).send({});
+    const asmId = await assemblyWithVars(auth, [part.id], { width: { expression: '50' } });
+    const res = await auth.post(`/api/design/assembly/${asmId}/push-variables`).send({});
+    expect(res.body.results[0].status).toBe('skipped-not-checked-out');
+    const child = await db.DesignCADModel.findByPk(model.id);
+    expect(child.equations.entries.width).toBeUndefined();
+  });
+
+  it('skips a child whose checkout by the pusher has expired (REQ 946)', async () => {
+    const auth = await authenticatedRequest();
+    const { part, model } = await partWithCad(auth);
+    await db.DesignCADModel.update({ lockExpiresAt: new Date(Date.now() - 1000) }, { where: { id: model.id } });
+    const asmId = await assemblyWithVars(auth, [part.id], { width: { expression: '50' } });
+    const res = await auth.post(`/api/design/assembly/${asmId}/push-variables`).send({});
+    expect(res.body.results[0].status).toBe('skipped-not-checked-out');
   });
 
   it('422s when nothing is pushable', async () => {

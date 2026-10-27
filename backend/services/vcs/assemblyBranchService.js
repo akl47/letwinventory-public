@@ -6,6 +6,7 @@
 const RestError = require('../../util/RestError');
 const vcs = require('./vcsService');
 const { makeBranchOps } = require('./vcsBranchOps');
+const { assertEditableBy } = require('./vcsWorkingCopy');
 const { repoForAssembly, applyBundle } = require('./assemblyVcsService');
 const { assemblySerialize, assemblyDeserialize } = require('./assemblySerializer');
 
@@ -67,14 +68,14 @@ async function mergedReconcileDoc(assembly, branchName, sel, db) {
     featureTree: branchBundle.featureTree,
     equations: branchBundle.equations,
   };
-  return { bundle, repo, branchName, mainHead: mainRef.targetHash };
+  return { bundle, repo, branchName, mainHead: mainRef.targetHash, branchHead: branchRef.targetHash };
 }
 
 async function reconcileBranch(assembly, sel, userId, { at } = {}, db) {
+  assertEditableBy(assembly, userId, 'assembly'); // REQ 954
   if (assembly.dirty) throw new RestError('Check in your changes before merging', 409);
-  const { bundle, repo, branchName, mainHead } = await mergedReconcileDoc(assembly, assembly.branchName || 'main', sel, db);
-  // CAS anchor: the branch head the merged doc was computed against (REQ 901).
-  const branchRefAtMerge = await vcs.getRef(repo, branchName, db);
+  // CAS anchor (REQ 901/954): the exact branch head the merged doc was built from.
+  const { bundle, repo, branchName, mainHead, branchHead } = await mergedReconcileDoc(assembly, assembly.branchName || 'main', sel, db);
   const treeHash = await assemblySerialize(repo, bundle, db);
   return vcs.inTransaction(db, async () => {
     const newCommit = await vcs.createCommit(repo, {
@@ -83,13 +84,12 @@ async function reconcileBranch(assembly, sel, userId, { at } = {}, db) {
       timestamp: (at ? new Date(at) : new Date()).toISOString(),
     }, db);
     try {
-      await vcs.updateBranch(repo, branchName, newCommit, userId, db,
-        branchRefAtMerge ? branchRefAtMerge.targetHash : undefined);
+      await vcs.updateBranch(repo, branchName, newCommit, userId, db, branchHead);
     } catch (err) {
       if (err.code === 'REF_MOVED') throw new RestError(err.message, 409);
       throw err;
     }
-    await assembly.update({ ...applyBundle(assembly, bundle), baseCommitHash: newCommit, dirty: false });
+    await assembly.update({ ...applyBundle(assembly, bundle), baseCommitHash: newCommit, dirty: false, lastContentSavedAt: new Date() });
     return { commitHash: newCommit, assembly };
   });
 }

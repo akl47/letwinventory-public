@@ -1,3 +1,4 @@
+import { compileCurveExpr } from './safeExpr';
 import type {
   SketchState, SketchEntity, PointEntity, LineEntity, CircleEntity, ArcEntity,
   EllipseEntity, SplineEntity,
@@ -254,11 +255,10 @@ function tessellateEquationCurveExternal(
 ): Array<{ x: number; y: number }> {
   const n = Math.max(8, Math.min(2000, Math.floor(samples)));
   if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMin === tMax) return [];
-  let fx: (t: number) => number, fy: (t: number) => number;
-  try {
-    fx = new Function('t', `with (Math) { return (${xExpr}); }`) as any;
-    fy = new Function('t', `with (Math) { return (${yExpr}); }`) as any;
-  } catch { return []; }
+  // REQ 941 — sandboxed evaluator, never new Function.
+  const fx = compileCurveExpr(xExpr);
+  const fy = compileCurveExpr(yExpr);
+  if (!fx || !fy) return [];
   const out: Array<{ x: number; y: number }> = [];
   for (let i = 0; i <= n; i++) {
     const t = tMin + (i / n) * (tMax - tMin);

@@ -6,6 +6,7 @@ const cookieParser = require("cookie-parser");
 const path = require("path");
 const dotenv = require("dotenv");
 const cors = require("cors");
+const compression = require("compression");
 
 // Load environment-specific .env file BEFORE requiring modules that need env vars
 if (process.env.NODE_ENV !== 'test') {
@@ -22,6 +23,12 @@ if (!global.db) {
 }
 global.RestError = require("./util/RestError");
 global._ = require("lodash");
+
+// Gzip responses (REQ 936). Must come before the routes and the static
+// handler so both JSON payloads and build assets are compressed; JSON and JS
+// typically shrink 4-10x, which is the difference between a large lazy chunk
+// loading and its dynamic import timing out on a slow connection.
+app.use(compression());
 
 // CORS configuration
 app.use(cors({
@@ -56,11 +63,22 @@ app.use("/api", require("./api"));
 if (process.env.NODE_ENV === 'production') {
     const frontendDistPath = path.join(__dirname, 'public');
 
-    // Serve static files from the Angular build
-    app.use(express.static(frontendDistPath));
+    // Serve static files from the Angular build (REQ 936). Angular emits
+    // content-hashed filenames (outputHashing: "all"), so a rebuild produces
+    // NEW names — the hashed assets can be cached indefinitely. index.html
+    // keeps its own name across builds, so it must revalidate or clients would
+    // pin themselves to a stale bundle. `index: false` leaves the SPA fallback
+    // below as the only thing serving index.html, so the setHeaders rule
+    // governs it in one place.
+    app.use(express.static(frontendDistPath, {
+        maxAge: '1y',
+        immutable: true,
+        index: false,
+    }));
 
     // All non-API routes should serve the Angular app
     app.get('/{*path}', (req, res) => {
+        res.setHeader('Cache-Control', 'no-cache');
         res.sendFile(path.join(frontendDistPath, 'index.html'));
     });
 }

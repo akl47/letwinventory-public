@@ -13,6 +13,7 @@ describe('Assembly replace-component (REQ 762)', () => {
     const c1 = await partWithCad(auth);
     const c2 = await partWithCad(auth);
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
     await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: c1.id });
 
     const res = await auth.put(`/api/design/assembly/${asm.body.id}/instances/i1/replace`).send({ partID: c2.id });
@@ -27,6 +28,7 @@ describe('Assembly replace-component (REQ 762)', () => {
     const c1 = await partWithCad(auth);
     const bare = await createTestPart();
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
     await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: c1.id });
 
     const res = await auth.put(`/api/design/assembly/${asm.body.id}/instances/i1/replace`).send({ partID: bare.id });
@@ -38,6 +40,7 @@ describe('Assembly replace-component (REQ 762)', () => {
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const c1 = await partWithCad(auth);
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
     await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: c1.id });
 
     const add = await auth.post(`/api/design/assembly/${asm.body.id}/patterns`).send({ kind: 'linear', seedInstanceId: 'i1', count: 3, spacing: [10, 0, 0] });
@@ -54,6 +57,7 @@ describe('Assembly replace-component (REQ 762)', () => {
     const auth = await authenticatedRequest();
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
     const res = await auth.post(`/api/design/assembly/${asm.body.id}/patterns`).send({ kind: 'linear', seedInstanceId: 'iX', count: 2 });
     expect(res.status).toBe(404);
   });

@@ -2,6 +2,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule, Location } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { ProjectService } from '../../../services/project.service';
@@ -16,6 +17,7 @@ import { DataTable, DataTableColumnDef, ColumnDef, FilterSection } from '../../c
     CommonModule,
     MatButtonModule,
     MatIconModule,
+    MatProgressSpinnerModule,
     MatTooltipModule,
     MatDialogModule,
     DataTable,
@@ -30,6 +32,8 @@ export class ProjectsListView implements OnInit {
   private location = inject(Location);
 
   allProjects = signal<Project[]>([]);
+  // REQ 937 — spinner gate; starts true so the empty state can't show while loading.
+  isLoading = signal<boolean>(true);
 
   columns: ColumnDef<Project>[] = [
     { key: 'shortName', header: 'Tag', sortable: true },
@@ -62,8 +66,14 @@ export class ProjectsListView implements OnInit {
   loadData() {
     this.projectService.clearCache();
     this.projectService.getProjects().subscribe({
-      next: (projects) => this.allProjects.set(projects),
-      error: (err) => console.error('Error loading projects:', err),
+      next: (projects) => {
+        this.allProjects.set(projects);
+        this.isLoading.set(false);
+      },
+      error: (err) => {
+        console.error('Error loading projects:', err);
+        this.isLoading.set(false);
+      },
     });
   }
 

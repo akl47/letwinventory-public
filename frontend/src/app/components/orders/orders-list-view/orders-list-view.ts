@@ -3,8 +3,11 @@ import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog } from '@angular/material/dialog';
+import { forkJoin, of } from 'rxjs';
+import { catchError } from 'rxjs/operators';
 import { InventoryService } from '../../../services/inventory.service';
 import { AuthService } from '../../../services/auth.service';
 import { Order, OrderStatus } from '../../../models';
@@ -20,6 +23,7 @@ import { CategoryBadge } from '../../common/category-badge/category-badge';
     CommonModule,
     MatButtonModule,
     MatIconModule,
+    MatProgressSpinnerModule,
     MatTooltipModule,
     DataTable,
     DataTableColumnDef,
@@ -38,7 +42,9 @@ export class OrdersListView implements OnInit {
 
   allOrders = signal<Order[]>([]);
   statuses = signal<OrderStatus[]>([]);
-  statusesLoaded = signal<boolean>(false);
+  // REQ 937 — drives the spinner; starts true so the table's "No data" empty
+  // state can't render while the fetch is still in flight.
+  isLoading = signal<boolean>(true);
 
   columns: ColumnDef<Order>[] = [
     { key: 'orderID', header: 'Order #', sortable: true, sortValue: o => o.id },
@@ -79,24 +85,25 @@ export class OrdersListView implements OnInit {
   }
 
   loadOrders() {
-    this.inventoryService.getOrderStatuses().subscribe({
-      next: (statuses) => {
-        this.statuses.set(statuses);
-        this.statusesLoaded.set(true);
-        this.fetchOrders();
-      },
-      error: (err) => {
-        this.errorNotification.showHttpError(err, 'Error loading order statuses');
-        this.statusesLoaded.set(true);
-        this.fetchOrders();
-      },
-    });
-  }
-
-  fetchOrders() {
-    this.inventoryService.getAllOrders().subscribe({
-      next: (orders) => this.allOrders.set(orders),
-      error: (err) => this.errorNotification.showHttpError(err, 'Error loading orders'),
+    // Statuses and orders are independent; fetching them concurrently instead
+    // of statuses-then-orders halves the time to first row.
+    forkJoin({
+      statuses: this.inventoryService.getOrderStatuses().pipe(
+        catchError((err) => {
+          this.errorNotification.showHttpError(err, 'Error loading order statuses');
+          return of([] as OrderStatus[]);
+        }),
+      ),
+      orders: this.inventoryService.getAllOrders().pipe(
+        catchError((err) => {
+          this.errorNotification.showHttpError(err, 'Error loading orders');
+          return of([] as Order[]);
+        }),
+      ),
+    }).subscribe((res) => {
+      this.statuses.set(res.statuses);
+      this.allOrders.set(res.orders);
+      this.isLoading.set(false);
     });
   }
 

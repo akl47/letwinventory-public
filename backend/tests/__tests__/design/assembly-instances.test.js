@@ -13,6 +13,7 @@ describe('Assembly component instances (REQ 751)', () => {
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const comp = await partWithCad(auth);
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
 
     const res = await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: comp.id });
 
@@ -28,6 +29,7 @@ describe('Assembly component instances (REQ 751)', () => {
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const comp = await partWithCad(auth);
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
 
     const a = await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: comp.id });
     const b = await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: comp.id, placement: { translate: [10, 0, 0], quaternion: [0, 0, 0, 1] } });
@@ -44,6 +46,7 @@ describe('Assembly component instances (REQ 751)', () => {
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const comp = await partWithCad(auth);
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
     await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: comp.id });
 
     const res = await auth.put(`/api/design/assembly/${asm.body.id}/instances/i1`)
@@ -58,6 +61,7 @@ describe('Assembly component instances (REQ 751)', () => {
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const comp = await partWithCad(auth);
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
     await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: comp.id });
 
     const res = await auth.delete(`/api/design/assembly/${asm.body.id}/instances/i1`);
@@ -69,6 +73,7 @@ describe('Assembly component instances (REQ 751)', () => {
     const auth = await authenticatedRequest();
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
 
     const res = await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: 999999 });
     expect(res.status).toBe(404);
@@ -79,6 +84,7 @@ describe('Assembly component instances (REQ 751)', () => {
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const bare = await createTestPart(); // no CAD model
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
 
     const res = await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: bare.id });
     expect(res.status).toBe(422);
@@ -88,6 +94,7 @@ describe('Assembly component instances (REQ 751)', () => {
     const auth = await authenticatedRequest();
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
 
     // asmPart has an assembly (itself), so it passes the has-geometry gate but is cyclic.
     const res = await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: asmPart.id });

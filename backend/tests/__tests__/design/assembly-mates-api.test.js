@@ -13,6 +13,7 @@ async function twoComponentAssembly() {
   const c1 = await partWithCad(auth);
   const c2 = await partWithCad(auth);
   const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+  await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
   await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: c1.id });
   await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: c2.id });
   return { auth, asmId: asm.body.id };

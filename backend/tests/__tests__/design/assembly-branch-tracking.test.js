@@ -92,6 +92,7 @@ describe('insert + update carry the tracked branch (REQ 788)', () => {
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const { part } = await partWithCad(auth);
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
     const id = asm.body.id;
 
     const ins = await auth.post(`/api/design/assembly/${id}/instances`).send({ partID: part.id, branch: 'main' });
@@ -111,6 +112,7 @@ describe('assembly check-in pins instance branch heads (REQ 789)', () => {
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const { part, model } = await partWithCad(auth);
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
     const id = asm.body.id;
 
     await auth.post(`/api/design/cad-model/${id}/branches`).send({ name: 'draft/01' });

@@ -12,6 +12,8 @@ describe('friendlyError', () => {
   it('translates kernel-down errors', () => {
     expect(friendlyError('CAD kernel unavailable: socket closed')).toMatch(/kernel is not running/i);
     expect(friendlyError('connect ECONNREFUSED 127.0.0.1:9876')).toMatch(/kernel is not running/i);
+    // REQ 965 — the backend's sanitized offline wording.
+    expect(friendlyError('The CAD geometry kernel is offline — try again in a moment')).toMatch(/kernel is not running/i);
   });
   it('preserves unknown messages verbatim', () => {
     expect(friendlyError('something nobody planned for')).toBe('something nobody planned for');

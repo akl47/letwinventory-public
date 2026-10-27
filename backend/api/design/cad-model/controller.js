@@ -15,7 +15,10 @@ const assemblyFreezeService = require('../../../services/vcs/assemblyFreezeServi
 const { assemblySerialize } = require('../../../services/vcs/assemblySerializer');
 const partRevisionService = require('../../../services/partRevisionService');
 const { logSketchDiff } = require('../../../services/cadSketchDebug');
+const { validateSketchDocExpressions } = require('../../../services/cadSafeExpr');
+const { summarizeDocChange, historyPage } = require('../../../services/cadHistoryDiff');
 const RestError = require('../../../util/RestError');
+const { cadError, sendCadError } = require('../../../services/cadErrors');
 const { KernelDisconnected, KernelRpcError, getDefaultClient, getHeartbeatClient } = require('../../../services/cadKernelClient');
 
 const INITIAL_FEATURE_TREE = { features: [{ id: 'f1', type: 'origin' }], nextFeatureSeq: 2 };
@@ -37,7 +40,11 @@ const cadBinding = {
     featureTree: m.featureTree, sketchDoc: m.sketchDoc,
     equations: m.equations || { entries: {} }, defaultView: m.defaultView || null,
   }),
-  reconcileSel: (body) => ({ featureIds: (body && body.featureIds) || [], sketchIds: (body && body.sketchIds) || [] }),
+  reconcileSel: (body) => ({
+    featureIds: (body && body.featureIds) || [], sketchIds: (body && body.sketchIds) || [],
+    // REQ 955 — undefined (not []) means "carry branch-only variables".
+    equationNames: body && Array.isArray(body.equationNames) ? body.equationNames : undefined,
+  }),
   workingDiffBinding: null, // cadDiffService.workingDiff's default IS the CAD binding
   thumbnails: true,
 };
@@ -166,14 +173,13 @@ async function withReleaseFlag(model) {
   const tags = await vcsService.listRefs(repo, 'tag');
   const released = onMain && tags.some((t) => /^\d+$/.test(t.name));
   // A draft branch is "behind main" when main has advanced (another branch
-  // released) since it last incorporated main — it must rebase before releasing.
+  // released) since it last incorporated main — it must merge main in before releasing.
   let behindMain = false;
   if (!onMain) {
     const mainRef = await vcsService.getRef(repo, 'main');
     const branchRef = await vcsService.getRef(repo, model.branchName);
     if (mainRef && branchRef) {
-      const ancestry = (await vcsService.walk(repo, branchRef.targetHash)).map((c) => c.hash);
-      behindMain = !ancestry.includes(mainRef.targetHash);
+      behindMain = !(await vcsService.isAncestor(repo, mainRef.targetHash, branchRef.targetHash)); // REQ 969
     }
   }
   return { ...model.toJSON(), released, displayRevision, draftRevision: onMain ? null : displayRevision, behindMain };
@@ -209,9 +215,9 @@ async function exportRelease(req, res, format) {
     res.setHeader('Content-Disposition', `attachment; filename="${base}.step"`);
     return res.send(step);
   } catch (err) {
-    if (err instanceof KernelDisconnected) return res.status(503).json({ error: `CAD kernel unavailable: ${err.message}` });
-    if (err instanceof KernelRpcError) return res.status(500).json({ error: `CAD kernel error (${err.code}): ${err.message}` });
-    return res.status(err.statusCode || 500).json({ error: `Export failed: ${err.message}` });
+    if (err instanceof KernelDisconnected) return sendCadError(res, err);
+    if (err instanceof KernelRpcError) return sendCadError(res, err);
+    return sendCadError(res, err, 'Export failed');
   }
 }
 
@@ -244,7 +250,7 @@ async function workflowRepo(model) {
 // a draft branch, its checked-in work becomes the next released numeric revision
 // ON main: squash-style — main gains one release commit carrying the branch doc
 // + frozen geometry, the numeric Part revision is minted, and the draft branch
-// is archived. The branch must be up to date with main (rebase first if behind).
+// is archived. The branch must be up to date with main (merge main in first if behind).
 // NOTE: not transactional across the Part mint + VCS release (house style); the
 // write-once tag guards against a double release.
 async function releaseBranchToMain(model, userId, opts = {}) {
@@ -256,13 +262,17 @@ async function releaseBranchToMain(model, userId, opts = {}) {
   if (model.dirty || !model.baseCommitHash) {
     throw new RestError('Check in the branch before releasing it', 409);
   }
+  // REQ 956 — only the lock holder (or anyone, when nobody holds it) releases.
+  if (model.lockedByUserID && model.lockedByUserID !== userId) {
+    const holder = await db.User.findByPk(model.lockedByUserID);
+    throw new RestError(`This branch is checked out by ${holder ? holder.displayName : 'another user'} — they must check it in or release it`, 423);
+  }
   const repo = await binding.repoFor(model);
   const mainRef = await vcsService.getRef(repo, 'main');
   const branchRef = await vcsService.getRef(repo, branchName);
   if (mainRef && branchRef) {
-    const ancestry = (await vcsService.walk(repo, branchRef.targetHash)).map((c) => c.hash);
-    if (!ancestry.includes(mainRef.targetHash)) {
-      throw new RestError('Branch is behind main — rebase before releasing', 409);
+    if (!(await vcsService.isAncestor(repo, mainRef.targetHash, branchRef.targetHash))) { // REQ 969
+      throw new RestError('Branch is behind main — merge main into it before releasing', 409);
     }
   }
   // The revision this release mints = highest released TAG + 1. When the part's
@@ -290,7 +300,7 @@ async function releaseBranchToMain(model, userId, opts = {}) {
     model, userId, newPart.revision,
     { ...opts, parents: branchHead ? [branchHead] : undefined },
   );
-  await model.update({ releaseLocked: true, branchName: 'main' });
+  await model.update({ releaseLocked: true, branchName: 'main', lockedByUserID: null, lockedAt: null, lockExpiresAt: null });
   if (!newPart.revisionLocked) await newPart.update({ revisionLocked: true });
   await vcsService.deleteRef(repo, branchName);
   return { commitHash, tag, newPartID: newPart.id, branch: branchName };
@@ -343,7 +353,7 @@ module.exports = {
       }
       return res.json(out);
     } catch (err) {
-      return res.status(500).json({ error: `Failed to list parts with CAD: ${err.message}` });
+      return sendCadError(res, err, 'Failed to list parts with CAD');
     }
   },
 
@@ -356,7 +366,7 @@ module.exports = {
       });
       return res.json(rows);
     } catch (err) {
-      return res.status(500).json({ error: `Failed to list CAD models: ${err.message}` });
+      return sendCadError(res, err, 'Failed to list CAD models');
     }
   },
 
@@ -374,7 +384,7 @@ module.exports = {
       if (!model) return res.status(404).json({ error: `No CAD models found for part ${partID}` });
       return res.json(await withReleaseFlag(model));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to fetch active CAD model: ${err.message}` });
+      return sendCadError(res, err, 'Failed to fetch active CAD model');
     }
   },
 
@@ -428,7 +438,7 @@ module.exports = {
       if (err.name === 'SequelizeUniqueConstraintError') {
         return res.status(409).json({ error: `Part ${partID} already has a CAD model` });
       }
-      return res.status(500).json({ error: `Failed to create CAD model: ${err.message}` });
+      return sendCadError(res, err, 'Failed to create CAD model');
     }
   },
 
@@ -490,6 +500,12 @@ module.exports = {
       }
     }
 
+    // REQ 941 — equation-curve expressions are untrusted shared content.
+    if (req.body && req.body.sketchDoc !== undefined) {
+      const exprErr = validateSketchDocExpressions(req.body.sketchDoc);
+      if (exprErr) return res.status(400).json({ error: exprErr });
+    }
+
     const patch = {};
     const previousSnapshot = {
       featureTree: model.featureTree,
@@ -523,15 +539,14 @@ module.exports = {
       // REQ 875: a successful save slides the lock expiry forward so an
       // actively-editing session never expires mid-work.
       patch.lockExpiresAt = new Date(Date.now() + cadVcsService.DEFAULT_LOCK_TTL_MS);
+      const previousName = model.name;
       await model.update(patch);
-      await recordHistory(model.id, req.user.id, 'updated', previousSnapshot, {
-        featureTree: model.featureTree,
-        sketchDoc: model.sketchDoc,
-        equations: model.equations,
-      });
+      // REQ 959 — record what changed, not two full document snapshots.
+      await recordHistory(model.id, req.user.id, 'updated', null,
+        summarizeDocChange({ ...previousSnapshot, name: previousName }, patch));
       return res.json(await withReleaseFlag(model));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to update CAD model: ${err.message}` });
+      return sendCadError(res, err, 'Failed to update CAD model');
     }
   },
 
@@ -545,7 +560,7 @@ module.exports = {
       await recordHistory(model.id, req.user.id, 'deleted', { activeFlag: true }, { activeFlag: false });
       return res.status(204).end();
     } catch (err) {
-      return res.status(500).json({ error: `Failed to delete CAD model: ${err.message}` });
+      return sendCadError(res, err, 'Failed to delete CAD model');
     }
   },
 
@@ -566,13 +581,17 @@ module.exports = {
       if ((model.branchName || 'main') !== 'main') {
         const released = await releaseBranchToMain(model, req.user.id);
         await workflowEngine.setState(wf, 'draft', req.user.id);
+        // REQ 948 — main now carries a new, unreviewed revision: reset main's
+        // workflow key too (model.branchName is 'main' after the release).
+        await workflowEngine.setState(await workflowRepo(model), 'draft', req.user.id);
         await recordHistory(model.id, req.user.id, 'released_to_main', null, released);
         const refreshed = await fetchActiveModel(model.id);
         return res.json({ commitHash: released.commitHash, revision: released.tag, model: await withReleaseFlag(refreshed) });
       }
       // Legacy in-place release on main still requires workflow approval.
-      if (!(await workflowEngine.canRelease(wf))) {
-        return res.status(409).json({ error: 'CAD model must be approved before it can be released' });
+      // REQ 947 — the approval must be for the commit being released.
+      if (!(await workflowEngine.canRelease(wf, undefined, model.baseCommitHash))) {
+        return res.status(409).json({ error: 'CAD model must be approved at its current commit before it can be released' });
       }
       const part = model.part || await db.Part.findByPk(model.partID);
       const revision = part && part.revision;
@@ -584,66 +603,14 @@ module.exports = {
     } catch (err) {
       // Release freezes geometry through the kernel — surface kernel-down as 503,
       // not a generic 500, so the editor can show the offline notice.
-      if (err instanceof KernelDisconnected || err instanceof KernelRpcError) return res.status(503).json({ error: err.message });
-      return res.status(err.statusCode || 500).json({ error: err.message });
-    }
-  },
-
-  // Development release (REQ 715-718): self-service (cad.write). Requires the
-  // design be checked in; freezes + tags the numeric revision, then locks it.
-  async devRelease(req, res) {
-    const id = Number(req.params.id);
-    const model = await fetchActiveModel(id);
-    if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
-    if (rejectAssembly(model, res, 'Development release')) return undefined;
-    try {
-      const { commitHash, tag } = await cadVcsService.devRelease(model, req.user.id, {});
-      await recordHistory(model.id, req.user.id, 'dev_released', null, { revision: tag, commitHash });
-      return res.json({ commitHash, revision: tag, model: await withReleaseFlag(model) });
-    } catch (err) {
-      if (err instanceof KernelDisconnected) return res.status(503).json({ error: err.message });
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      if (err instanceof KernelDisconnected || err instanceof KernelRpcError) return sendCadError(res, err, undefined, { kernelStatus: 503 });
+      return sendCadError(res, err);
     }
   },
 
   // Download a released revision's frozen geometry (REQ 719).
   async exportReleaseStep(req, res) { return exportRelease(req, res, 'step'); },
   async exportReleaseStl(req, res) { return exportRelease(req, res, 'stl'); },
-
-  // New revision (REQ 720): create the next NUMERIC Part revision + a fresh
-  // editable CAD model copying this design. Used to edit a locked release.
-  async newRevision(req, res) {
-    const id = Number(req.params.id);
-    const model = await fetchActiveModel(id);
-    if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
-    // The model's included `part` has only a few attributes; revision-cloning
-    // needs the full row, so fetch it.
-    const part = await db.Part.findByPk(model.partID);
-    if (!part) return res.status(400).json({ error: 'Part not found for this model' });
-    try {
-      const newModel = await db.sequelize.transaction(async (transaction) => {
-        const newPart = await partRevisionService.createNewRevision(part, req.user.id, { transaction });
-        return db.DesignCADModel.create({
-          name: model.name, partID: newPart.id,
-          ...bindingFor(model).cloneContent(model),
-          branchName: model.branchName || 'main', baseCommitHash: model.baseCommitHash || null,
-          dirty: false, releaseLocked: false, lockedByUserID: null,
-          createdByUserID: req.user.id, activeFlag: true,
-        }, { transaction });
-      });
-      await recordHistory(newModel.id, req.user.id, 'new_revision', null, { fromModelID: model.id, fromRevision: part.revision });
-      // A new revision starts a fresh review cycle: reset the workflow to draft so
-      // the new editable revision is not carrying the prior revision's approved /
-      // in-review state. Workflow state is keyed PER BRANCH (workflowRepo), so use
-      // that composed key — setting it on the bare lineage repo would be ignored by
-      // every getState/canRelease, which read the branch-scoped key.
-      await workflowEngine.setState(await workflowRepo(newModel), 'draft', req.user.id);
-      const full = await fetchActiveModel(newModel.id);
-      return res.json(await withReleaseFlag(full));
-    } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
-    }
-  },
 
   // Production release (REQ 721/722): from a dev-released, workflow-approved
   // design, create the next LETTER Part revision + a CAD model carrying the SAME
@@ -660,12 +627,13 @@ module.exports = {
       if (!model.releaseLocked) {
         return res.status(409).json({ error: 'Create a development release before promoting to production' });
       }
-      if (!(await workflowEngine.canRelease(await workflowRepo(model)))) {
-        return res.status(409).json({ error: 'Production release requires workflow approval' });
-      }
       const devRef = await vcsService.getRef(repo, String(part.revision));
       if (!devRef) return res.status(409).json({ error: 'Development release tag not found' });
       const releaseCommit = devRef.targetHash;
+      // REQ 947 — approval must be for exactly the commit being promoted.
+      if (!(await workflowEngine.canRelease(await workflowRepo(model), undefined, releaseCommit))) {
+        return res.status(409).json({ error: `Production release requires a workflow approval of revision ${part.revision}` });
+      }
       const result = await db.sequelize.transaction(async (transaction) => {
         const prodPart = await partRevisionService.releaseToProduction(part, req.user.id, { transaction });
         const prodModel = await db.DesignCADModel.create({
@@ -685,20 +653,24 @@ module.exports = {
       const full = await fetchActiveModel(result.prodModel.id);
       return res.json({ revision: result.prodPart.revision, prodModelID: result.prodModel.id, model: await withReleaseFlag(full) });
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
   async getHistory(req, res) {
     const id = Number(req.params.id);
     try {
-      const rows = await db.DesignCADModelHistory.findAll({
+      // REQ 959 — paginated, newest first (?limit default 100 / max 500, ?offset).
+      const { limit, offset } = historyPage(req.query);
+      const { rows, count } = await db.DesignCADModelHistory.findAndCountAll({
         where: { cadModelID: id },
-        order: [['createdAt', 'ASC']],
+        order: [['createdAt', 'DESC'], ['id', 'DESC']],
+        limit, offset,
       });
+      res.set('X-Total-Count', String(count));
       return res.json(rows);
     } catch (err) {
-      return res.status(500).json({ error: `Failed to fetch CAD model history: ${err.message}` });
+      return sendCadError(res, err, 'Failed to fetch CAD model history');
     }
   },
 
@@ -718,10 +690,11 @@ module.exports = {
       const { stashedTo } = await bindingFor(model).vcs.checkout(model, req.user.id, {
         takeover: !!(req.body && req.body.takeover === true),
       });
+      await recordHistory(model.id, req.user.id, 'checked_out', null, { branch: model.branchName, ...(stashedTo ? { stashedTo } : {}) }); // REQ 958
       const json = await withReleaseFlag(model);
       return res.json(stashedTo ? { ...json, stashedTo } : json);
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message, ...(err.payload || {}) });
+      return sendCadError(res, err);
     }
   },
 
@@ -734,7 +707,7 @@ module.exports = {
       await bindingFor(model).vcs.renewLock(model, req.user.id, {});
       return res.json({ lockExpiresAt: model.lockExpiresAt });
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -763,9 +736,10 @@ module.exports = {
       } else {
         await binding.vcs.releaseLock(model, req.user.id);
       }
+      await recordHistory(model.id, req.user.id, 'checked_in', null, { branch: model.branchName, commitHash, message, keepCheckedOut }); // REQ 958
       return res.json({ commitHash, model: await withReleaseFlag(model) });
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -777,9 +751,10 @@ module.exports = {
     if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
     try {
       await bindingFor(model).vcs.undoCheckout(model, req.user.id);
+      await recordHistory(model.id, req.user.id, 'checkout_undone', null, { branch: model.branchName, baseCommitHash: model.baseCommitHash }); // REQ 958
       return res.json(await withReleaseFlag(model));
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -789,10 +764,12 @@ module.exports = {
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: `CAD model ${id} not found` });
     try {
+      const previousHolder = model.lockedByUserID;
       await bindingFor(model).vcs.releaseLock(model, req.user.id, { force: true });
+      await recordHistory(model.id, req.user.id, 'force_unlocked', { lockedByUserID: previousHolder }, { lockedByUserID: null }); // REQ 958
       return res.json(await withReleaseFlag(model));
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -803,7 +780,7 @@ module.exports = {
     try {
       return res.json(await bindingFor(model).vcs.history(model));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to fetch CAD commit log: ${err.message}` });
+      return sendCadError(res, err, 'Failed to fetch CAD commit log');
     }
   },
 
@@ -816,7 +793,7 @@ module.exports = {
       const repo = await bindingFor(model).repoFor(model);
       return res.json(await cadGraphService.buildGraphForRepo(repo, model.baseCommitHash, db));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to build CAD version graph: ${err.message}` });
+      return sendCadError(res, err, 'Failed to build CAD version graph');
     }
   },
 
@@ -826,7 +803,7 @@ module.exports = {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     try { return res.json(await bindingFor(model).branch.listBranches(model)); }
-    catch (err) { return res.status(500).json({ error: err.message }); }
+    catch (err) { return sendCadError(res, err); }
   },
 
   async createBranch(req, res) {
@@ -834,8 +811,12 @@ module.exports = {
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     const { name, fromCommit } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Branch name is required' });
-    try { return res.json(await bindingFor(model).branch.createBranch(model, name, { fromCommit }, req.user.id)); }
-    catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+    try {
+      const created = await bindingFor(model).branch.createBranch(model, name, { fromCommit }, req.user.id);
+      await recordHistory(model.id, req.user.id, 'branch_created', null, { name, fromCommit: created.targetHash }); // REQ 958
+      return res.json(created);
+    }
+    catch (err) { return sendCadError(res, err); }
   },
 
   async switchBranch(req, res) {
@@ -843,26 +824,25 @@ module.exports = {
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     const { name } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Branch name is required' });
-    try { await bindingFor(model).branch.switchBranch(model, name, req.user.id); return res.json(await withReleaseFlag(model)); }
-    catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+    try {
+      const from = model.branchName;
+      await bindingFor(model).branch.switchBranch(model, name, req.user.id);
+      await recordHistory(model.id, req.user.id, 'branch_switched', { branch: from }, { branch: name }); // REQ 958
+      return res.json(await withReleaseFlag(model));
+    }
+    catch (err) { return sendCadError(res, err); }
   },
 
   async archiveBranch(req, res) {
     const model = await fetchActiveModel(Number(req.params.id));
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     const name = req.params.name || (req.body && req.body.name);
-    try { return res.json(await bindingFor(model).branch.archiveBranch(model, name)); }
-    catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
-  },
-
-  async rebaseBranch(req, res) {
-    const model = await fetchActiveModel(Number(req.params.id));
-    if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
-    if (rejectAssembly(model, res, 'Rebase')) return undefined;
     try {
-      await cadBranchService.rebaseBranch(model, req.user.id);
-      return res.json(await withReleaseFlag(await fetchActiveModel(model.id)));
-    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+      const archived = await bindingFor(model).branch.archiveBranch(model, name);
+      await recordHistory(model.id, req.user.id, 'branch_archived', null, { name }); // REQ 958
+      return res.json(archived);
+    }
+    catch (err) { return sendCadError(res, err); }
   },
 
   // Merge main into the current branch, applying the selected branch changes
@@ -872,9 +852,10 @@ module.exports = {
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     const binding = bindingFor(model);
     try {
-      await binding.branch.reconcileBranch(model, binding.reconcileSel(req.body), req.user.id);
+      const r = await binding.branch.reconcileBranch(model, binding.reconcileSel(req.body), req.user.id);
+      await recordHistory(model.id, req.user.id, 'merged', null, { branch: model.branchName, commitHash: r.commitHash, selection: binding.reconcileSel(req.body) }); // REQ 958
       return res.json(await withReleaseFlag(await fetchActiveModel(model.id)));
-    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+    } catch (err) { return sendCadError(res, err); }
   },
 
   // The CHANGE LIST a merge would consider — main vs the current branch.
@@ -886,7 +867,7 @@ module.exports = {
     if (!model.isAssembly) return res.json({ changes: [] }); // part-CAD merge picker derives its list from commit diffs
     try {
       return res.json({ changes: await assemblyBranchService.reconcileChanges(model, db) });
-    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+    } catch (err) { return sendCadError(res, err); }
   },
 
   // 3D geometry of the HYPOTHETICAL merge result (main + selected branch
@@ -897,9 +878,10 @@ module.exports = {
     if (rejectAssembly(model, res, '3D merge preview')) return undefined;
     const featureIds = (req.body && req.body.featureIds) || [];
     const sketchIds = (req.body && req.body.sketchIds) || [];
+    const equationNames = req.body && Array.isArray(req.body.equationNames) ? req.body.equationNames : undefined;
     const branch = (req.body && req.body.branch) || model.branchName;
     try {
-      const merged = await cadBranchService.mergedReconcileDoc(model, branch, { featureIds, sketchIds });
+      const merged = await cadBranchService.mergedReconcileDoc(model, branch, { featureIds, sketchIds, equationNames });
       // Include `part` so #{partName}/#{partRevision} text placeholders resolve
       // (otherwise glyph regions — and regionIndices — come out wrong).
       const pseudo = { id: model.id, partID: model.partID, part: model.part, featureTree: merged.featureTree, sketchDoc: merged.sketchDoc, equations: merged.equations };
@@ -910,8 +892,8 @@ module.exports = {
       // Up-To-Surface extrude whose target no longer applies post-merge).
       return res.json({ ...flattenFinalGeometry(geo), errors: geo.errors || [] });
     } catch (err) {
-      if (err instanceof KernelDisconnected || err instanceof KernelRpcError) return res.status(503).json({ error: err.message });
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      if (err instanceof KernelDisconnected || err instanceof KernelRpcError) return sendCadError(res, err, undefined, { kernelStatus: 503 });
+      return sendCadError(res, err);
     }
   },
 
@@ -921,8 +903,12 @@ module.exports = {
     if (rejectAssembly(model, res, 'Cherry-pick')) return undefined;
     const { sourceCommit, featureId } = req.body || {};
     if (!sourceCommit || !featureId) return res.status(400).json({ error: 'sourceCommit and featureId are required' });
-    try { const r = await cadBranchService.cherryPick(model, sourceCommit, featureId, req.user.id); return res.json(r.model); }
-    catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+    try {
+      const r = await cadBranchService.cherryPick(model, sourceCommit, featureId, req.user.id);
+      await recordHistory(model.id, req.user.id, 'cherry_picked', null, { sourceCommit, featureId }); // REQ 958
+      return res.json(r.model);
+    }
+    catch (err) { return sendCadError(res, err); }
   },
 
   // ── VCS: diff (Phase 3) ─────────────────────────────────────────────────────
@@ -933,7 +919,7 @@ module.exports = {
     try {
       const repo = await bindingFor(model).repoFor(model);
       return res.json(await cadDiffService.commitDiff(repo, req.params.a, req.params.b));
-    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+    } catch (err) { return sendCadError(res, err); }
   },
 
   async getBodyDiff3D(req, res) {
@@ -943,8 +929,8 @@ module.exports = {
     try {
       return res.json(await cadDiffService.bodyDiff3D(model, req.params.a, req.params.b, {}));
     } catch (err) {
-      if (err instanceof KernelDisconnected) return res.status(503).json({ error: err.message });
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      if (err instanceof KernelDisconnected) return sendCadError(res, err);
+      return sendCadError(res, err);
     }
   },
 
@@ -959,8 +945,8 @@ module.exports = {
       const geo = await cadDiffService.regenCommitGeometry(repo, model, req.params.hash, {});
       return res.json(flattenFinalGeometry(geo));
     } catch (err) {
-      if (err instanceof KernelDisconnected) return res.status(503).json({ error: err.message });
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      if (err instanceof KernelDisconnected) return sendCadError(res, err);
+      return sendCadError(res, err);
     }
   },
 
@@ -985,7 +971,7 @@ module.exports = {
         message: commit.message || null,
       });
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -1016,7 +1002,7 @@ module.exports = {
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     try {
       return res.json(await cadDiffService.workingDiff(model, undefined, bindingFor(model).workingDiffBinding));
-    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+    } catch (err) { return sendCadError(res, err); }
   },
 
   // Face-level diff between two commits (REQ 712). Returns each side's persistent
@@ -1029,8 +1015,8 @@ module.exports = {
       const diff = await cadDiffService.faceNameDiff(model, req.params.a, req.params.b, {});
       return res.json(diff);
     } catch (err) {
-      if (err instanceof KernelDisconnected) return res.status(503).json({ error: err.message });
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      if (err instanceof KernelDisconnected) return sendCadError(res, err);
+      return sendCadError(res, err);
     }
   },
 
@@ -1048,8 +1034,10 @@ module.exports = {
       const isSvg = img.length > 0 && img[0] === 0x3c;
       res.set('Content-Type', isSvg ? 'image/svg+xml' : 'image/png');
       res.set('Cache-Control', 'private, max-age=31536000, immutable');
+      // REQ 966 — never let a browser sniff stored bytes into another type.
+      res.set('X-Content-Type-Options', 'nosniff');
       return res.send(img);
-    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+    } catch (err) { return sendCadError(res, err); }
   },
 
   // Persist the model's default camera view (REQ 708/709). A view preference,
@@ -1066,7 +1054,7 @@ module.exports = {
     try {
       await model.update({ defaultView: { theta: v.theta, phi: v.phi, distance: v.distance, target: v.target } });
       return res.json(await withReleaseFlag(model));
-    } catch (err) { return res.status(500).json({ error: `Failed to save default view: ${err.message}` }); }
+    } catch (err) { return sendCadError(res, err, 'Failed to save default view'); }
   },
 
   // ── VCS: review workflow (Phase 4) ──────────────────────────────────────────
@@ -1076,8 +1064,8 @@ module.exports = {
     if (!model) return res.status(404).json({ error: `CAD model ${req.params.id} not found` });
     try {
       const repo = await workflowRepo(model);
-      return res.json({ state: await workflowEngine.getState(repo), actions: await workflowEngine.availableActions(repo, req.user.id) });
-    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+      return res.json({ state: await workflowEngine.getState(repo), actions: await workflowEngine.availableActions(repo, req.user.id, undefined, req._effectivePermissions) });
+    } catch (err) { return sendCadError(res, err); }
   },
 
   // The route is read-gated; the engine enforces each transition's own permission.
@@ -1088,15 +1076,21 @@ module.exports = {
     if (!action) return res.status(400).json({ error: 'action is required' });
     try {
       const repo = await workflowRepo(model);
-      const r = await workflowEngine.transition(repo, action, req.user.id, { authorUserID: model.createdByUserID });
+      const r = await workflowEngine.transition(repo, action, req.user.id, {
+        authorUserID: model.createdByUserID,
+        permissions: req._effectivePermissions,
+        commitHash: model.baseCommitHash || null, // REQ 947 — what is under review
+        modelName: (model.part && model.part.name) || model.name || null,
+      });
+      await recordHistory(model.id, req.user.id, `workflow_${action}`.slice(0, 30), null, { state: r.state, branch: model.branchName, commitHash: model.baseCommitHash }); // REQ 958
       // Approval does NOT auto-release — the user then explicitly releases the
       // approved branch onto main via POST /:id/release (cad.approve).
       return res.json({
         state: r.state,
-        actions: await workflowEngine.availableActions(repo, req.user.id),
+        actions: await workflowEngine.availableActions(repo, req.user.id, undefined, req._effectivePermissions),
         model: await withReleaseFlag(await fetchActiveModel(model.id)),
       });
-    } catch (err) { return res.status(err.statusCode || 500).json({ error: err.message }); }
+    } catch (err) { return sendCadError(res, err); }
   },
 
   // Phase 1 — server-side regen. Walks the feature tree, looks up each
@@ -1173,15 +1167,15 @@ module.exports = {
         type: 'regenerate-complete',
         modelId: id,
         regenId,
-        errors: [err.message],
+        errors: [cadError(err, 'Regenerate failed').body.error],
       });
       if (err instanceof KernelDisconnected) {
-        return res.status(503).json({ error: `CAD kernel unavailable: ${err.message}` });
+        return sendCadError(res, err);
       }
       if (err instanceof KernelRpcError) {
-        return res.status(500).json({ error: `CAD kernel error (${err.code}): ${err.message}` });
+        return sendCadError(res, err);
       }
-      return res.status(500).json({ error: `Regenerate failed: ${err.message}` });
+      return sendCadError(res, err, 'Regenerate failed');
     }
   },
 
@@ -1209,12 +1203,12 @@ module.exports = {
       return res.send(step);
     } catch (err) {
       if (err instanceof KernelDisconnected) {
-        return res.status(503).json({ error: `CAD kernel unavailable: ${err.message}` });
+        return sendCadError(res, err);
       }
       if (err instanceof KernelRpcError) {
-        return res.status(500).json({ error: `CAD kernel error (${err.code}): ${err.message}` });
+        return sendCadError(res, err);
       }
-      return res.status(500).json({ error: `STEP export failed: ${err.message}` });
+      return sendCadError(res, err, 'STEP export failed');
     }
   },
 

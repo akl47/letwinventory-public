@@ -9,6 +9,9 @@ const { rateLimit } = require('../../../middleware/rateLimit');
 // debounced save); diff/preview/export are occasional interactive actions.
 const regenLimit = rateLimit('cad-regenerate', { max: 60, windowMs: 60_000 });
 const kernelLimit = rateLimit('cad-kernel-op', { max: 10, windowMs: 60_000 });
+// REQ 963 — per-commit 3D previews are browsed interactively in the version
+// history, so they get their own (looser) bucket.
+const previewLimit = rateLimit('cad-commit-preview', { max: 30, windowMs: 60_000 });
 
 router.get('/kernel/status', checkToken, checkPermission('cad', 'read'), controller.kernelStatus);
 router.get('/parts-with-cad', checkToken, checkPermission('cad', 'read'), controller.listPartsWithCad);
@@ -23,13 +26,13 @@ router.delete('/:id', checkToken, checkPermission('cad', 'delete'), controller.d
 // Release = commit + freeze + tag the commit with Parts.revision (VC-18).
 router.post('/:id/release', checkToken, checkPermission('cad', 'write'), controller.release);
 
-// Two-tier release workflow. Development release is self-service (cad.write);
-// release-file downloads are read-only and served from frozen geometry.
-router.post('/:id/dev-release', checkToken, checkPermission('cad', 'write'), controller.devRelease);
-router.post('/:id/new-revision', checkToken, checkPermission('cad', 'write'), controller.newRevision);
+// Production (letter) release is approval-gated (cad.approve); release-file
+// downloads are read-only and served from frozen geometry. The legacy
+// dev-release / new-revision / rebase endpoints were retired (REQ 738, 2026-10-26):
+// draft branches release via /release and catch up with main via /reconcile.
 router.post('/:id/production-release', checkToken, checkPermission('cad', 'approve'), controller.productionRelease);
-router.get('/:id/release/step', checkToken, checkPermission('cad', 'read'), controller.exportReleaseStep);
-router.get('/:id/release/stl', checkToken, checkPermission('cad', 'read'), controller.exportReleaseStl);
+router.get('/:id/release/step', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.exportReleaseStep);
+router.get('/:id/release/stl', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.exportReleaseStl);
 
 router.get('/:id/history', checkToken, checkPermission('cad', 'read'), controller.getHistory);
 
@@ -49,7 +52,6 @@ router.post('/:id/branches', checkToken, checkPermission('cad', 'write'), contro
 router.post('/:id/switch-branch', checkToken, checkPermission('cad', 'write'), controller.switchBranch);
 router.delete('/:id/branches/:name', checkToken, checkPermission('cad', 'write'), controller.archiveBranch);
 router.post('/:id/cherry-pick', checkToken, checkPermission('cad', 'write'), controller.cherryPick);
-router.post('/:id/rebase', checkToken, checkPermission('cad', 'write'), controller.rebaseBranch);
 router.post('/:id/reconcile', checkToken, checkPermission('cad', 'write'), controller.reconcileBranch);
 router.post('/:id/reconcile/preview', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.reconcilePreview);
 // Change LIST a merge would consider (assembly rows; empty for part models).
@@ -62,8 +64,8 @@ router.post('/:id/workflow', checkToken, checkPermission('cad', 'read'), control
 // VCS Phase 3: structural + 3D diff between two commits.
 router.get('/:id/commits/:a/diff/:b', checkToken, checkPermission('cad', 'read'), controller.getCommitDiff);
 router.post('/:id/commits/:a/diff/:b/regen', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.getBodyDiff3D);
-router.get('/:id/commits/:a/diff/:b/faces', checkToken, checkPermission('cad', 'read'), controller.getFaceDiff);
-router.get('/:id/commits/:hash/geometry', checkToken, checkPermission('cad', 'read'), controller.getCommitGeometry);
+router.get('/:id/commits/:a/diff/:b/faces', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.getFaceDiff);
+router.get('/:id/commits/:hash/geometry', checkToken, checkPermission('cad', 'read'), previewLimit, controller.getCommitGeometry);
 router.get('/:id/commits/:hash/doc', checkToken, checkPermission('cad', 'read'), controller.getCommitDoc);
 router.get('/:id/commits/:hash/thumbnail', checkToken, checkPermission('cad', 'read'), controller.getCommitThumbnail);
 

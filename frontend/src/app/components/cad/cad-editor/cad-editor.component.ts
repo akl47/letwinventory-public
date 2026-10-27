@@ -32,6 +32,7 @@ import { CategoryBadge } from '../../common/category-badge/category-badge';
 import { SketchDeleteWarningDialogComponent, type SketchDeleteAction } from '../sketch-delete-warning-dialog/sketch-delete-warning-dialog.component';
 import { projectTo3D, projectFrom3D } from '../../../cad/lib/plane';
 import { closestPointOnSegment, crossPartEdgeRef, crossPartVertexRef } from '../../../cad/lib/externalSnap';
+import { findProjectedBySource, listProjectedCurves } from '../../../cad/lib/projectedGeometry';
 import { extrudePreview, revolvePreview, sweepPreview } from '../../../cad/lib/preview';
 import { propagateTangentEdges } from '../../../cad/lib/tangentPropagation';
 import { CadSelectionListComponent, SelectionRow } from '../cad-selection-list/cad-selection-list.component';
@@ -47,7 +48,8 @@ import {
 import { newFeatureId } from '../../../cad/lib/ids';
 import { emptyDocument, createSketch, updateSketchState, deleteSketch, setSketchVisibility, setSketchName, projectTopologyToCandidates } from '../../../cad/lib/document';
 import { sizeOptions as holeSizeOptionsFor, defaultSizeFor as holeDefaultSizeFor, holeSpec, type HoleStandard, type HoleSizeKey } from '../../../cad/lib/holeSpecs';
-import { removeConstraint, setConstraintValue, setDimensionValue, addPoint, addLine, addCircle, addCircleByPoint, addArc, addArcByPoints, updateTextEntity, updatePictureEntity, updateEquationCurveEntity, rotateTextBox, ORIGIN_POINT_ID } from '../../../cad/lib/store';
+import { removeConstraint, setConstraintValue, setDimensionValue, addPoint, addLine, addCircle, addCircleByPoint, addArc, addArcByPoints, updateTextEntity, updatePictureEntity, updateEquationCurveEntity, rotateTextBox, deletePrimitive, ORIGIN_POINT_ID } from '../../../cad/lib/store';
+import { chainEdgeIds } from '../../../cad/lib/edgeChain';
 import { solveSketch } from '../../../cad/lib/solver';
 import { parseUserValue, formatNumber, type Unit } from '../../../cad/lib/units';
 import { migrateSketchDocument, migrateFeatureTree } from '../../../cad/lib/migration';
@@ -585,15 +587,15 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           <div class="ribbon-pane" [hidden]="activeTab() !== 'assembly'" *ngIf="assemblyMode()">
             <div class="ribbon-group">
               <div class="ribbon-group-row">
-                <button class="ribbon-button" (click)="asm.togglePicker()" [disabled]="!asm.assembly()" matTooltip="Insert a component part">
+                <button class="ribbon-button" data-testid="asm-action-insert" (click)="asm.togglePicker()" [disabled]="!asm.assembly()" matTooltip="Insert a component part">
                   <mat-icon>add_box</mat-icon><span class="ribbon-label">Insert</span>
                 </button>
                 <button class="ribbon-button" data-testid="asm-action-new-part"
                         [class.active]="mode() === 'pick-child-origin'"
                         [disabled]="!asm.assembly() || readonly()"
                         (click)="onNewChildPartAction()"
-                        matTooltip="Create a NEW part as a child of this assembly — pick its origin point first">
-                  <mat-icon>add_location</mat-icon><span class="ribbon-label">New part</span>
+                        matTooltip="Add a new part to this assembly — pick its origin point, then set its orientation">
+                  <mat-icon>add</mat-icon><span class="ribbon-label">Add part</span>
                 </button>
                 <button class="ribbon-button" [disabled]="!asm.selectedInstance()" (click)="asm.startReplace(asm.selectedInstance()!)" matTooltip="Replace the selected component">
                   <mat-icon>swap_horiz</mat-icon><span class="ribbon-label">Replace</span>
@@ -601,7 +603,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <button class="ribbon-button" [disabled]="!asm.selectedInstance()" (click)="asm.openPatternForm(asm.selectedInstance()!)" matTooltip="Pattern the selected component">
                   <mat-icon>grid_view</mat-icon><span class="ribbon-label">Pattern</span>
                 </button>
-                <button class="ribbon-button" [class.active]="asm.facePickActive()" [disabled]="asm.instances().length < 2"
+                <button class="ribbon-button" data-testid="asm-action-mate" [class.active]="asm.facePickActive()" [disabled]="asm.instances().length < 2"
                         (click)="asm.facePickActive() ? asm.cancelMate() : asm.startMate()" matTooltip="Mate two component faces">
                   <mat-icon>link</mat-icon><span class="ribbon-label">Mate</span>
                 </button>
@@ -696,13 +698,13 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           <div class="ribbon-pane" [hidden]="activeTab() !== 'analyze'" *ngIf="assemblyMode()">
             <div class="ribbon-group">
               <div class="ribbon-group-row">
-                <button class="ribbon-button" [disabled]="asm.analysisBusy()" (click)="asm.checkInterference()" matTooltip="Detect interfering components">
+                <button class="ribbon-button" data-testid="asm-action-interference" [disabled]="asm.analysisBusy()" (click)="asm.checkInterference()" matTooltip="Detect interfering components">
                   <mat-icon>warning</mat-icon><span class="ribbon-label">Interfere</span>
                 </button>
                 <button class="ribbon-button" [disabled]="asm.analysisBusy()" (click)="asm.computeMass()" matTooltip="Volume + center of mass">
                   <mat-icon>scale</mat-icon><span class="ribbon-label">Mass</span>
                 </button>
-                <button class="ribbon-button" (click)="asm.syncBom()" matTooltip="Write this assembly's BOM into inventory">
+                <button class="ribbon-button" data-testid="asm-action-sync-bom" (click)="asm.syncBom()" matTooltip="Write this assembly's BOM into inventory">
                   <mat-icon>sync</mat-icon><span class="ribbon-label">Sync BOM</span>
                 </button>
                 <button class="ribbon-button" [class.active]="measureSidebar()" (click)="onMeasureAction()" matTooltip="Measure — distance / angle between vertices, edges, or faces">
@@ -1045,6 +1047,22 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                       </button>
                     </div>
                   }
+                  @case ('convert-entities') {
+                    <label class="panel-toggle" data-testid="convert-construction">
+                      <input type="checkbox"
+                             [checked]="convertToConstruction()"
+                             (change)="setConvertOption('construction', $any($event.target).checked)" />
+                      <span>Convert as construction geometry</span>
+                    </label>
+                    <label class="panel-toggle" data-testid="convert-chain">
+                      <input type="checkbox"
+                             [checked]="convertChain()"
+                             (change)="setConvertOption('chain', $any($event.target).checked)" />
+                      <span>Select chained edges (whole connected chain)</span>
+                    </label>
+                    <p class="panel-hint">Converted geometry is listed in the
+                      <strong>Projected Geometry</strong> section below.</p>
+                  }
                 }
               </div>
             </div>
@@ -1052,6 +1070,34 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                  (same interaction as the other rail dividers). -->
             @if (!toolOptsCollapsed()) {
               <div class="rail-divider" (mousedown)="startRailResize($event, 'toolOpts')"></div>
+            }
+          }
+
+          <!-- REQ 938 — Projected Geometry: every curve in this sketch linked
+               to reference geometry by an on-edge external ref. Derived from
+               the document, so it is present whether or not Convert Entities
+               is armed and survives leaving/re-entering the sketch. -->
+          @if (projectedRows().length) {
+            <cad-selection-list
+                label="Projected Geometry"
+                headerIcon="playlist_add_check"
+                testid="projected-geometry"
+                appearance="section"
+                [collapsible]="true"
+                [collapsed]="projectedCollapsed()"
+                (toggleCollapsed)="toggleRailSection('projected')"
+                [rows]="projectedRows()"
+                [rowsClickable]="true"
+                [selectedId]="singleSelectedSketchEntityId()"
+                emptyHint="Nothing projected into this sketch yet"
+                (remove)="removeConverted($event)"
+                (rowClick)="selectProjected($event)"
+                (clear)="clearConverted()"
+                class="projected-list"
+                [style.flex]="projectedFlex()">
+            </cad-selection-list>
+            @if (!projectedCollapsed()) {
+              <div class="rail-divider" (mousedown)="startRailResize($event, 'projected')"></div>
             }
           }
 
@@ -1743,7 +1789,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <app-dim-input
                     testid="extrude-start-offset"
                     ariaLabel="Extrude start offset"
-                    unit="mm"
+                    [unit]="defaultUnit()"
                     [value]="extrudeStartOffset()"
                     [expression]="extrudeStartOffsetExpression()"
                     [equationValues]="equationValues()"
@@ -1790,7 +1836,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <app-dim-input
                     testid="extrude-start-offset-face-distance"
                     ariaLabel="Extrude start offset from face"
-                    unit="mm"
+                    [unit]="defaultUnit()"
                     [value]="extrudeStartOffsetFromFaceDistance()"
                     [expression]="extrudeStartOffsetFromFaceExpression()"
                     [equationValues]="equationValues()"
@@ -1846,7 +1892,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <app-dim-input
                   testid="extrude-input"
                   ariaLabel="Extrude distance"
-                  unit="mm"
+                  [unit]="defaultUnit()"
                   [value]="extrudeDistance()"
                   [expression]="extrudeDistanceExpression()"
                   [equationValues]="equationValues()"
@@ -1895,7 +1941,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <app-dim-input
                     testid="extrude-offset-face-distance"
                     ariaLabel="Extrude offset from face"
-                    unit="mm"
+                    [unit]="defaultUnit()"
                     [value]="extrudeOffsetFromFaceDistance()"
                     [expression]="extrudeOffsetFromFaceExpression()"
                     [equationValues]="equationValues()"
@@ -1948,7 +1994,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <app-dim-input
                   testid="extrude-dir2-distance"
                   ariaLabel="Extrude direction-2 distance"
-                  unit="mm"
+                  [unit]="defaultUnit()"
                   [value]="extrudeDir2Distance()"
                   [expression]="extrudeDir2DistanceExpression()"
                   [equationValues]="equationValues()"
@@ -2002,7 +2048,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <app-dim-input
                     testid="extrude-dir2-offset-face-distance"
                     ariaLabel="Direction-2 offset from face"
-                    unit="mm"
+                    [unit]="defaultUnit()"
                     [value]="extrudeDir2OffsetFromFaceDistance()"
                     [expression]="extrudeDir2OffsetFromFaceExpression()"
                     [equationValues]="equationValues()"
@@ -2399,7 +2445,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <app-dim-input
                 testid="edge-blend-value"
                 [ariaLabel]="ctx.kind === 'fillet' ? 'Fillet radius' : 'Chamfer distance'"
-                unit="mm"
+                [unit]="defaultUnit()"
                 [value]="edgeBlendValue()"
                 [expression]="edgeBlendValueExpression()"
                 [equationValues]="equationValues()"
@@ -2415,7 +2461,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <app-dim-input
                 testid="edge-blend-distance2"
                 ariaLabel="Chamfer secondary distance"
-                unit="mm"
+                [unit]="defaultUnit()"
                 [value]="edgeBlendDistance2()"
                 [expression]="edgeBlendDistance2Expression()"
                 [equationValues]="equationValues()"
@@ -2566,7 +2612,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <app-dim-input
                 testid="datum-plane-distance"
                 ariaLabel="Plane offset distance"
-                unit="mm"
+                [unit]="defaultUnit()"
                 [value]="datumPlaneDistance()"
                 [expression]="datumPlaneDistanceExpression()"
                 [equationValues]="equationValues()"
@@ -2887,7 +2933,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <app-dim-input
                 testid="shell-thickness"
                 ariaLabel="Wall thickness"
-                unit="mm"
+                [unit]="defaultUnit()"
                 [value]="shellThickness()"
                 [expression]="shellThicknessExpression()"
                 [equationValues]="equationValues()"
@@ -3510,7 +3556,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <app-dim-input
                   testid="pattern-dir1-spacing"
                   ariaLabel="Direction 1 spacing"
-                  unit="mm"
+                  [unit]="defaultUnit()"
                   [value]="patternDir1Spacing()"
                   [expression]="patternDir1SpacingExpression()"
                   [equationValues]="equationValues()"
@@ -3574,7 +3620,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <app-dim-input
                     testid="pattern-dir2-spacing"
                     ariaLabel="Direction 2 spacing"
-                    unit="mm"
+                    [unit]="defaultUnit()"
                     [value]="patternDir2Spacing()"
                     [expression]="patternDir2SpacingExpression()"
                     [equationValues]="equationValues()"
@@ -3929,6 +3975,15 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <li>Back on Features, click <strong>Extrude</strong> and pick that sketch</li>
               </ol>
               <p class="muted">Orbit: left-drag · Pan: shift-drag · Zoom: wheel · In sketch mode: left-click sketches, middle-drag orbits</p>
+            </div>
+
+            <!-- REQ 934 — empty-assembly call to action: prompt top-down modeling
+                 when the assembly has no components yet. -->
+            <div class="quick-start" data-testid="asm-empty-cta"
+                 *ngIf="assemblyMode() && mode() === 'idle' && activeSketchId() === null && asm.assembly() && asm.instances().length === 0">
+              <h3>Start top-down modeling</h3>
+              <p class="muted">Add a part positioned against your skeleton sketches or datums. Reference skeleton geometry with <strong>Convert Entities</strong> while modeling to link it to the assembly.</p>
+              <button class="btn" data-testid="asm-empty-cta-add" (click)="onNewChildPartAction()">Add part</button>
             </div>
 
             <!-- Floating status overlay split into two translucent pill
@@ -4318,6 +4373,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .sketch-rail .rail-divider { flex: 0 0 6px; height: 6px; background: #2a2a3e; cursor: row-resize; border-top: 1px solid #555; border-bottom: 1px solid #555; }
     .sketch-rail .rail-divider:hover { background: #3a4a6a; }
     .sketch-rail .constraint-list { flex: 1 1 auto; min-height: 0; width: auto; border-right: none; }
+    /* Fixed-height like the other rail sections — Constraints (1 1 auto)
+       remains the one that yields when the rail runs short. */
+    .sketch-rail .projected-list { flex: 0 0 auto; min-height: 0; overflow-y: auto; }
     .viewport-wrap { flex: 1; position: relative; overflow: hidden; }
 
     /* Tool panel — same column dimensions as .constraint-list so swapping
@@ -4527,6 +4585,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .quick-start ol { margin: 0; padding-left: 18px; }
     .quick-start li { margin-bottom: 4px; }
     .quick-start .muted { margin: 10px 0 0; font-size: 11px; opacity: 0.6; }
+    .quick-start button.btn { margin-top: 12px; }
     .loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; }
     /* VCS lock / check-in / history (Phase 1) */
     .vcs-dirty { color: #ffb74d; font-size: 12px; }
@@ -4608,7 +4667,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-365';
+  readonly buildMarker = 'text-375';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -6422,6 +6481,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   readonly dimPropsBasisPx = signal<number | null>(Number(localStorage.getItem('cadDimPropsBasis')) || null);
   readonly sketchPlaneBasisPx = signal<number | null>(Number(localStorage.getItem('cadSketchPlaneBasis')) || null);
   readonly toolOptsBasisPx = signal<number | null>(Number(localStorage.getItem('cadToolOptsBasis')) || null);
+  readonly projectedBasisPx = signal<number | null>(Number(localStorage.getItem('cadProjectedBasis')) || null);
   /** Per-section collapse for the sketch rail (Sketch Plane / Dimension /
    * Constraints) — same persisted-chevron pattern as the feature-tree ↔
    * bodies sections. */
@@ -6429,13 +6489,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   readonly dimPropsCollapsed = signal<boolean>(localStorage.getItem('cadDimPropsCollapsed') === '1');
   readonly constraintsCollapsed = signal<boolean>(localStorage.getItem('cadConstraintsCollapsed') === '1');
   readonly toolOptsCollapsed = signal<boolean>(localStorage.getItem('cadToolOptsCollapsed') === '1');
-  toggleRailSection(which: 'plane' | 'dim' | 'constraints' | 'toolOpts'): void {
+  readonly projectedCollapsed = signal<boolean>(localStorage.getItem('cadProjectedCollapsed') === '1');
+  toggleRailSection(which: 'plane' | 'dim' | 'constraints' | 'toolOpts' | 'projected'): void {
     const sig = which === 'plane' ? this.sketchPlaneCollapsed
       : which === 'dim' ? this.dimPropsCollapsed
-      : which === 'toolOpts' ? this.toolOptsCollapsed : this.constraintsCollapsed;
+      : which === 'toolOpts' ? this.toolOptsCollapsed
+      : which === 'projected' ? this.projectedCollapsed : this.constraintsCollapsed;
     const key = which === 'plane' ? 'cadSketchPlaneCollapsed'
       : which === 'dim' ? 'cadDimPropsCollapsed'
-      : which === 'toolOpts' ? 'cadToolOptsCollapsed' : 'cadConstraintsCollapsed';
+      : which === 'toolOpts' ? 'cadToolOptsCollapsed'
+      : which === 'projected' ? 'cadProjectedCollapsed' : 'cadConstraintsCollapsed';
     const v = !sig();
     sig.set(v);
     localStorage.setItem(key, v ? '1' : '0');
@@ -6447,9 +6510,86 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     switch (this.sketchEditorRef()?.tool()) {
       case 'trim': return { tool: 'trim', label: 'Trim', svgIcon: 'cad-trim' };
       case 'mirror': return { tool: 'mirror', label: 'Mirror Entities', icon: 'flip' };
+      case 'convert-entities': return { tool: 'convert-entities', label: 'Convert Entities', svgIcon: 'cad-convert' };
       default: return null;
     }
   });
+
+  /** Convert Entities options (REQ 921) — persisted like the Trim options. */
+  readonly convertToConstruction = signal<boolean>(localStorage.getItem('cadConvertConstruction') === '1');
+  readonly convertChain = signal<boolean>(localStorage.getItem('cadConvertChain') === '1');
+  setConvertOption(which: 'construction' | 'chain', v: boolean): void {
+    const sig = which === 'construction' ? this.convertToConstruction : this.convertChain;
+    sig.set(v);
+    localStorage.setItem(which === 'construction' ? 'cadConvertConstruction' : 'cadConvertChain', v ? '1' : '0');
+  }
+  /** REQ 938 — every projected curve in the ACTIVE sketch, derived from the
+   * document's on-edge external refs rather than a session log. Deriving it
+   * means the list survives leaving and re-entering the sketch, a reload, and
+   * a Break Link (which drops the constraint, so the row correctly leaves).
+   * Cross-part / skeleton sources are marked in the row detail. */
+  projectedRows = computed<SelectionRow[]>(() => {
+    const sid = this.activeSketchId();
+    const ed = this.sketchEditorRef();
+    const sk = sid ? this.doc().sketches[sid] : null;
+    if (!sk || !ed) return [];
+    return listProjectedCurves(sk.state).map(p => ({
+      id: p.entityId,
+      label: ed.entityShortLabel(p.entity),
+      detail: this._projectedSourceLabel(p),
+      icon: ed.entityIcon(p.entity),
+      tooltip: p.crossPart ? 'Projected from another component' : 'Projected from this part',
+    }));
+  });
+  /** Short "where did this come from" text for a projected row. */
+  private _projectedSourceLabel(p: import('../../../cad/lib/projectedGeometry').ProjectedCurve): string {
+    if (p.ref.scope === 'cross-part') {
+      const g = p.ref.sourceGeomRef ?? {} as { edgeId?: string; vertexId?: string };
+      const raw = g.edgeId ?? g.vertexId ?? '';
+      // Skeleton refs read `asketch:<sketchId>/<entityId>`; sibling-part refs
+      // are opaque quantized ids, so show the instance instead.
+      if (raw.startsWith('asketch')) return 'Assembly skeleton';
+      return `Component ${p.ref.sourceInstanceId}`;
+    }
+    return p.ref.edgeId ?? p.ref.vertexId ?? 'external edge';
+  }
+  /** Select a projected entity from the rail row (REQ 938). */
+  selectProjected(id: string): void {
+    this.sketchEditorRef()?.selected.set(new Set([id]));
+  }
+  /** The lone selected sketch entity, or null when zero/many are selected —
+   * drives the Projected Geometry row highlight. */
+  singleSelectedSketchEntityId = computed<string | null>(() => {
+    const sel = this.sketchEditorSelection();
+    return sel.size === 1 ? [...sel][0] : null;
+  });
+  private _recordConverted(_ids: string[]): void {
+    // The list is derived from the document now — nothing to record. Kept as a
+    // no-op so the several conversion call sites stay unchanged.
+  }
+  /** Remove one projected entity — deletes it from the sketch (cascade
+   * cleans its on-edge ref + orphaned points), which drops its row. */
+  removeConverted(id: string): void {
+    const sid = this.activeSketchId();
+    const sk = sid ? this.doc().sketches[sid] : null;
+    if (!sid || !sk) return;
+    this.doc.set(updateSketchState(this.doc(), sid, deletePrimitive(sk.state, id)));
+    this.save();
+  }
+  clearConverted(): void {
+    const sid = this.activeSketchId();
+    const sk = sid ? this.doc().sketches[sid] : null;
+    if (!sid || !sk) return;
+    let state = sk.state;
+    for (const row of this.projectedRows()) state = deletePrimitive(state, row.id);
+    this.doc.set(updateSketchState(this.doc(), sid, state));
+    this.save();
+  }
+  projectedFlex(): string {
+    if (this.projectedCollapsed()) return '0 0 auto';
+    const b = this.projectedBasisPx();
+    return b ? `0 0 ${b}px` : '0 0 auto';
+  }
   dimPropsFlex(): string {
     if (this.dimPropsCollapsed()) return '0 0 auto';
     const b = this.dimPropsBasisPx();
@@ -6471,13 +6611,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   /** Drag a sketch-rail section divider (Sketch Plane ↕ or Dimension ↕) —
    * same interaction as the feature-tree ↔ bodies section divider. The
    * divider resizes its PREVIOUS sibling section. */
-  startRailResize(e: MouseEvent, which: 'plane' | 'dim' | 'toolOpts'): void {
+  startRailResize(e: MouseEvent, which: 'plane' | 'dim' | 'toolOpts' | 'projected'): void {
     e.preventDefault();
     const cfg = which === 'plane'
       ? { sig: this.sketchPlaneBasisPx, key: 'cadSketchPlaneBasis', min: 60 }
       : which === 'toolOpts'
         ? { sig: this.toolOptsBasisPx, key: 'cadToolOptsBasis', min: 72 }
-        : { sig: this.dimPropsBasisPx, key: 'cadDimPropsBasis', min: 72 };
+        : which === 'projected'
+          ? { sig: this.projectedBasisPx, key: 'cadProjectedBasis', min: 72 }
+          : { sig: this.dimPropsBasisPx, key: 'cadDimPropsBasis', min: 72 };
     const handle = e.currentTarget as HTMLElement;
     const section = handle.previousElementSibling as HTMLElement | null;
     const parent = handle.parentElement;
@@ -6789,14 +6931,18 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.setMode('pick-child-origin');
   }
 
-  private openNewChildPartDialog(origin: [number, number, number], anchorInstanceId: string | null = null) {
+  private openNewChildPartDialog(
+    origin: [number, number, number],
+    anchorInstanceId: string | null = null,
+    orientNormal: [number, number, number] | null = null,
+  ) {
     const a = this.asm.assembly();
     if (!a) return;
     this.setMode('idle');
     this.dialog.open(CadNewPartDialogComponent, {
       data: {
         mode: 'part',
-        insertInto: { assemblyId: a.id, assemblyPartId: a.partID, origin, anchorInstanceId },
+        insertInto: { assemblyId: a.id, assemblyPartId: a.partID, origin, anchorInstanceId, orientNormal },
       } satisfies CadNewPartDialogData,
       width: '420px',
     });
@@ -7409,6 +7555,28 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         const sk = this.activeSketchId() ? this.doc().sketches[this.activeSketchId()!]?.state : null;
         w.__cadSketch = sk;
         w.__cadSetSelected = (id: string | null) => this.handleSelection(id);
+        // Programmatic edge/face picks for e2e (REQ 928) — same entry
+        // points the viewer raycast uses, minus the pixel-perfect click.
+        w.__cadPickEdge = (edgeId: string): boolean => {
+          const e = this.geometry()?.topology?.edges.find(x => x.id === edgeId);
+          if (!e) return false;
+          this.onEdgePicked({ edgeId: e.id, isStraight: e.isStraight, endpoints: e.endpoints, polylineLength: e.polyline?.length ?? 0 });
+          return true;
+        };
+        w.__cadPickFace = (faceId: string) => this.onFacePicked(faceId);
+        // Programmatic sketch-entity selection (REQ 926) — smart-dim and
+        // constraint tools consume the selection; pixel-perfect point
+        // clicks are flaky under grid snap.
+        w.__cadSketchSelect = (ids: string[]) => this.sketchEditorRef()?.selected.set(new Set(ids));
+        // Assembly-mode state for e2e assertions (REQ 931).
+        w.__cadAsm = this.assemblyMode() ? {
+          instances: this.asm.instances(),
+          mates: this.asm.mates(),
+          equations: this.equations(),
+          faceIds: this.asm.geometry()?.faces?.map(f => f.faceId) ?? [],
+          interference: this.asm.interferencePairs(),
+        } : null;
+        w.__cadEquations = this.equations();
       }
     });
   }
@@ -10565,7 +10733,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // the anchor — a lock mate ties the new part to it.
     if (this.mode() === 'pick-child-origin') {
       const scoped = parseScopedId(evt.faceId);
-      this.openNewChildPartDialog(evt.point, scoped ? scoped.instanceId : null);
+      // REQ 933 — carry the picked face normal so the dialog can offer
+      // "Align Z to face" for the new part's orientation.
+      this.openNewChildPartDialog(evt.point, scoped ? scoped.instanceId : null, evt.normal ?? null);
       return;
     }
     // Hole placement is points-only now (#1), so face picks no longer drop a
@@ -12200,31 +12370,108 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     let nextState = sketch.state;
     let added = 0;
+    const created: string[] = [];
+    const dupes: string[] = [];
     for (const edge of boundary) {
+      // REQ 939 — re-clicking a face converts only the edges it hasn't already.
+      const dup = this._alreadyProjected(nextState, this._localEdgeRef(edge.id));
+      if (dup) { dupes.push(dup); continue; }
       const result = this._projectOneEdgeIntoState(nextState, sketch.plane, edge);
       if (result) {
-        nextState = result;
+        nextState = result.state;
+        created.push(result.id);
         added++;
       }
     }
     if (added > 0) {
       this.doc.set(updateSketchState(this.doc(), sid, nextState));
+      this._recordConverted(created);
       this.save();
+    } else if (dupes.length) {
+      this._reportAlreadyProjected(dupes[0]);
     } else {
       this.errors.showError('Convert Entities: none of this face\'s edges could be projected (all perpendicular to the sketch plane?).');
     }
   }
 
+  /** REQ 921 — convert the WHOLE chain of body edges connected to the
+   * picked edge (shared 3D endpoints, walked transitively) in one commit. */
+  private convertEdgeChain(sid: SketchId, seedEdgeId: string): void {
+    const sketch = this.doc().sketches[sid];
+    const edges = this.geometry()?.topology?.edges ?? [];
+    if (!sketch) return;
+    // Chain within the SKETCH PLANE only: 3D vertex connectivity would
+    // crawl through corners onto perpendicular and parallel-offset loops
+    // (a box seed collects all 12 edges). In-plane edges are the face
+    // loop the user means; off-plane edges convert individually.
+    const { origin: o, normal: n } = sketch.plane;
+    const inPlane = (p: [number, number, number]) =>
+      Math.abs((p[0] - o[0]) * n[0] + (p[1] - o[1]) * n[1] + (p[2] - o[2]) * n[2]) < 1e-3;
+    const planar = edges.filter(e => {
+      const pts = (e.polyline?.length ? e.polyline : e.endpoints) as Array<[number, number, number]>;
+      return pts.every(inPlane);
+    });
+    const candidates = planar.some(e => e.id === seedEdgeId)
+      ? planar
+      : edges.filter(e => e.id === seedEdgeId);  // off-plane seed → convert alone
+    const ids = chainEdgeIds(candidates, seedEdgeId, 1e-4);
+    const byId = new Map(candidates.map(e => [e.id, e]));
+    let next = sketch.state;
+    const created: string[] = [];
+    const dupes: string[] = [];
+    for (const eid of ids) {
+      const edge = byId.get(eid);
+      if (!edge) continue;
+      // REQ 939 — note the already-projected members so an entirely-duplicate
+      // chain reports that, rather than a bogus "couldn't project" error.
+      const dup = this._alreadyProjected(next, this._localEdgeRef(edge.id));
+      if (dup) { dupes.push(dup); continue; }
+      const r = this._projectOneEdgeIntoState(next, sketch.plane, edge);
+      if (r) { next = r.state; created.push(r.id); }
+    }
+    if (!created.length) {
+      if (dupes.length) { this._reportAlreadyProjected(dupes[0]); return; }
+      this.errors.showError('Convert Entities: no edge in the chain could be projected onto the sketch plane.');
+      return;
+    }
+    this.doc.set(updateSketchState(this.doc(), sid, next));
+    this._recordConverted(created);
+    this.save();
+  }
+
+  /** REQ 939 — the entity already projected from `ref` in `state`, or null.
+   * ALWAYS pass the in-flight state: face and chain projection accumulate many
+   * entities before a single commit, so checking the committed document would
+   * let duplicates through within one batch. */
+  private _alreadyProjected(state: SketchState, ref: import('../../../cad/lib/types').ExternalRef | null | undefined): string | null {
+    return findProjectedBySource(state, ref);
+  }
+
+  /** Select an existing entity and say why nothing new was created (REQ 939). */
+  private _reportAlreadyProjected(entityId: string): void {
+    this.sketchEditorRef()?.selected.set(new Set([entityId]));
+    this.errors.showInfo('That geometry is already projected into this sketch.', 4000);
+  }
+
   /** Single-edge projection that mutates a SketchState and returns the
-   * new state (or null on degenerate / unsupported). Pulled out of
-   * projectEdgeToActiveSketch so face-boundary projection can chain
-   * many edges into one commit. */
+   * new state (or null on degenerate / unsupported / already projected).
+   * Pulled out of projectEdgeToActiveSketch so face-boundary projection can
+   * chain many edges into one commit. */
   private _projectOneEdgeIntoState(
     state: SketchState,
     plane: { origin: [number, number, number]; xAxis: [number, number, number]; yAxis: [number, number, number]; normal: [number, number, number] },
     edge: ModelTopology['edges'][number],
-  ): SketchState | null {
+  ): { state: SketchState; id: string } | null {
+    // Per-member dedupe: a re-clicked face or chain skips the members it
+    // already projected and still creates the ones it hasn't.
+    if (this._alreadyProjected(state, this._localEdgeRef(edge.id))) return null;
     return this._projectEdgeWithTag(state, plane, edge, (s, id) => this._tagProjected(s, id, edge.id));
+  }
+
+  /** The local external ref for a topology edge — the same shape `_tagProjected`
+   * stores, so dedupe keys match what was written. */
+  private _localEdgeRef(edgeId: string): import('../../../cad/lib/types').ExternalRef {
+    return { scope: 'local', featureId: edgeId.split('/')[0], edgeId };
   }
 
   /** Project a 3D edge (straight → line, circular → circle, arc → arc) into the
@@ -12236,28 +12483,38 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     plane: { origin: [number, number, number]; xAxis: [number, number, number]; yAxis: [number, number, number]; normal: [number, number, number] },
     edge: { isStraight: boolean; endpoints: [[number, number, number], [number, number, number]]; polyline?: Array<[number, number, number]> },
     tag: (state: SketchState, entityId: string) => SketchState,
-  ): SketchState | null {
+  ): { state: SketchState; id: string } | null {
+    // REQ 921 — sidebar option (OR'd with the ribbon's Draw Cons. toggle):
+    // the converted CURVE comes in flagged construction; supporting points
+    // stay as-is (matches projectEdgeToActiveSketch).
+    const asConstruction = this.convertToConstruction() || (this.sketchEditorRef()?.drawConstruction() ?? false);
+    const mark = (s: SketchState, id: string): SketchState => !asConstruction ? s : {
+      ...s, entities: s.entities.map(e => e.id === id ? { ...e, construction: true } : e),
+    };
     if (edge.isStraight) {
       const p1 = projectFrom3D(plane, edge.endpoints[0]);
       const p2 = projectFrom3D(plane, edge.endpoints[1]);
       if (Math.hypot(p2.x - p1.x, p2.y - p1.y) < 1e-6) return null;
       let next = state;
-      const a = addPoint(next, p1.x, p1.y); next = a.state;
-      const b = addPoint(next, p2.x, p2.y); next = b.state;
+      // Shared endpoints: chained/face-boundary edges meeting at a 3D
+      // vertex reuse the same projected sketch point (see _acquirePointAtCoord).
+      const a = this._acquirePointAtCoord(next, p1.x, p1.y); next = a.state;
+      const b = this._acquirePointAtCoord(next, p2.x, p2.y); next = b.state;
+      if (a.id === b.id) return null;
       const ln = addLine(next, a.id, b.id); next = ln.state;
-      return tag(next, ln.id);
+      return { state: tag(mark(next, ln.id), ln.id), id: ln.id };
     }
     if (!edge.polyline) return null;
     const poly = edge.polyline;
     const circleProj = this._circleFromPolyline(poly, plane);
     if (circleProj) {
       const r = addCircle(state, circleProj.cx, circleProj.cy, circleProj.radius);
-      return tag(r.state, r.id);
+      return { state: tag(mark(r.state, r.id), r.id), id: r.id };
     }
     const arcProj = this._arcFromPolyline(poly, plane);
     if (arcProj) {
       const r = addArc(state, arcProj.cx, arcProj.cy, arcProj.startX, arcProj.startY, arcProj.endX, arcProj.endY, arcProj.ccw);
-      return tag(r.state, r.id);
+      return { state: tag(mark(r.state, r.id), r.id), id: r.id };
     }
     return null;
   }
@@ -12302,12 +12559,44 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // geometry must not silently project it into the sketch.
     if (this.sketchEditorRef()?.tool() !== 'convert-entities') return;
     const sketch = this.doc().sketches[sid];
-    const ref = this._crossPartEdgeRef(e);
-    if (!sketch || !ref) return;
-    const edge = { isStraight: e.isStraight, endpoints: [e.polyline[0], e.polyline[e.polyline.length - 1]] as [[number, number, number], [number, number, number]], polyline: e.polyline };
-    const next = this._projectEdgeWithTag(sketch.state, sketch.plane, edge, (s, id) => this._addCrossPartOnEdge(s, id, ref));
-    if (!next) { this.errors.showError('Convert Entities: this edge could not be projected (perpendicular to the plane, or not a line/circle/arc).'); return; }
+    if (!sketch) return;
+    // REQ 921 — chained selection walks connected overlay edges of the SAME
+    // source instance; each converted piece carries its own cross-part ref.
+    const picked = this.convertChain()
+      ? (() => {
+          // Same-instance edges lying IN the sketch plane (see
+          // convertEdgeChain for why chains don't cross out of plane).
+          const { origin: po, normal: pn } = sketch.plane;
+          const inPlane = (p: [number, number, number]) =>
+            Math.abs((p[0] - po[0]) * pn[0] + (p[1] - po[1]) * pn[1] + (p[2] - po[2]) * pn[2]) < 1e-3;
+          const sameInst = (this.referenceOverlay()?.edges ?? []).filter(o => o.instanceId === e.instanceId);
+          const planar = sameInst.filter(o => o.polyline.every(inPlane));
+          const candidates = planar.some(o => o.stableId === e.stableId) ? planar : [e];
+          const ids = chainEdgeIds(candidates.map(o => ({ id: o.stableId, polyline: o.polyline })), e.stableId, 1e-4);
+          return ids.map(sidKey => candidates.find(o => o.stableId === sidKey)).filter((o): o is OverlayEdge => !!o);
+        })()
+      : [e];
+    let next = sketch.state;
+    const created: string[] = [];
+    const dupes: string[] = [];
+    for (const oe of picked) {
+      const ref = this._crossPartEdgeRef(oe);
+      if (!ref) continue;
+      // REQ 939 — per-member, against the in-flight state.
+      const dup = this._alreadyProjected(next, ref);
+      if (dup) { dupes.push(dup); continue; }
+      const edge = { isStraight: oe.isStraight, endpoints: [oe.polyline[0], oe.polyline[oe.polyline.length - 1]] as [[number, number, number], [number, number, number]], polyline: oe.polyline };
+      const r = this._projectEdgeWithTag(next, sketch.plane, edge, (s, id) => this._addCrossPartOnEdge(s, id, ref));
+      if (r) { next = r.state; created.push(r.id); }
+    }
+    if (!created.length) {
+      // Everything picked was already projected — that's not an error, so say
+      // so plainly instead of claiming the edge couldn't be projected.
+      if (dupes.length) { this._reportAlreadyProjected(dupes[0]); return; }
+      this.errors.showError('Convert Entities: this edge could not be projected (perpendicular to the plane, or not a line/circle/arc).'); return;
+    }
     this.doc.set(updateSketchState(this.doc(), sid, next));
+    this._recordConverted(created);
     this.save();
   }
 
@@ -12326,7 +12615,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const onFace = (p: [number, number, number]) =>
       facePts.some(q => Math.abs(q[0] - p[0]) < TOL && Math.abs(q[1] - p[1]) < TOL && Math.abs(q[2] - p[2]) < TOL);
     let next = sketch.state, added = 0;
+    const created: string[] = [];
     const seen = new Set<string>();
+    const dupes: string[] = [];
     for (const e of overlay.edges) {
       if (e.instanceId !== f.instanceId) continue;
       const a = e.polyline[0], b = e.polyline[e.polyline.length - 1];
@@ -12335,11 +12626,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       seen.add(e.stableId);
       const ref = this._crossPartEdgeRef(e);
       if (!ref) continue;
+      // REQ 939 — skip boundary edges already projected, keep the rest.
+      const dup = this._alreadyProjected(next, ref);
+      if (dup) { dupes.push(dup); continue; }
       const edge = { isStraight: e.isStraight, endpoints: [a, b] as [[number, number, number], [number, number, number]], polyline: e.polyline };
       const r = this._projectEdgeWithTag(next, sketch.plane, edge, (s, id) => this._addCrossPartOnEdge(s, id, ref));
-      if (r) { next = r; added++; }
+      if (r) { next = r.state; created.push(r.id); added++; }
     }
-    if (added > 0) { this.doc.set(updateSketchState(this.doc(), sid, next)); this.save(); }
+    if (added > 0) { this.doc.set(updateSketchState(this.doc(), sid, next)); this._recordConverted(created); this.save(); }
+    else if (dupes.length) this._reportAlreadyProjected(dupes[0]);
     else this.errors.showError('Convert Entities: no projectable boundary edges found on this face.');
   }
 
@@ -12352,10 +12647,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const sketch = this.doc().sketches[sid];
     const ref = this._crossPartVertexRef(v);
     if (!sketch || !ref) return;
+    // REQ 939 — a vertex is projected once; a second pick selects the point
+    // that's already there.
+    const dup = this._alreadyProjected(sketch.state, ref);
+    if (dup) { this._reportAlreadyProjected(dup); return; }
     const p = projectFrom3D(sketch.plane, v.position);
     const r = addPoint(sketch.state, p.x, p.y);
     const next = this._addCrossPartOnEdge(r.state, r.id, ref);
     this.doc.set(updateSketchState(this.doc(), sid, next));
+    this._recordConverted([r.id]);
     this.save();
   }
 
@@ -12496,7 +12796,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // user can chain conversions.
     const sid = this.activeSketchId();
     if (sid && this.sketchEditorRef()?.tool() === 'convert-entities') {
-      this.projectEdgeToActiveSketch(sid, rec);
+      if (this.convertChain()) {
+        this.convertEdgeChain(sid, rec.edgeId);
+      } else {
+        const id = this.projectEdgeToActiveSketch(sid, rec);
+        if (id) this._recordConverted([id]);
+      }
       return;
     }
     // Select mode: a clicked model edge is referenced for a point-on-edge
@@ -12588,12 +12893,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   ): string | null {
     const sketch = this.doc().sketches[sid];
     if (!sketch) return null;
-    // When the sketch editor's "Draw Cons." toggle is on while Convert
-    // is active, the converted curve comes in as a construction (dashed
-    // reference) entity. Only the CURVE itself is flagged construction
-    // — its supporting points stay as-is so shared / reused points
-    // don't inadvertently flip other entities.
-    const asConstruction = this.sketchEditorRef()?.drawConstruction() ?? false;
+    // REQ 939 — the same source edge is never projected twice. Select what's
+    // already there so it's obvious why no new geometry appeared. `silent` is
+    // the select-mode auto-convert path, which reuses the existing entity
+    // without commentary.
+    const dup = this._alreadyProjected(sketch.state, this._localEdgeRef(rec.edgeId));
+    if (dup) {
+      if (!silent) this._reportAlreadyProjected(dup);
+      return dup;
+    }
+    // The sidebar's "Convert as construction" option (REQ 921) OR the
+    // ribbon's "Draw Cons." toggle flags the converted curve as a
+    // construction (dashed reference) entity. Only the CURVE itself is
+    // flagged construction — its supporting points stay as-is so shared /
+    // reused points don't inadvertently flip other entities.
+    const asConstruction = this.convertToConstruction() || (this.sketchEditorRef()?.drawConstruction() ?? false);
     const markConstruction = (state: SketchState, entityId: string): SketchState => {
       if (!asConstruction) return state;
       return {
@@ -14607,7 +14921,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         sketchDoc: this.doc(),
         featureTree: this.featureTree(),
         equations: this.equations(),
-        clientSavedAt: m.lastContentSavedAt ?? null,
+        // REQ 942 — instance/mate/pattern edits also stamp lastContentSavedAt;
+        // their responses refresh asm.assembly (not model), so read it there.
+        clientSavedAt: (this.asm.assembly()?.lastContentSavedAt ?? m.lastContentSavedAt) ?? null,
       }).subscribe({
         next: updated => {
           this.saveInFlight = false;
@@ -15409,31 +15725,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     });
   }
 
-  // Development release — self-service; locks the design at the numeric revision.
-  onDevRelease() {
-    const m = this.model(); if (!m) return;
-    if (!window.confirm(
-      `Development release as Rev ${m.part?.revision || ''}?\n\n`
-      + 'This locks the design read-only and fixes the revision. To make further '
-      + 'changes you will create a new revision.')) return;
-    this.cadApi.devRelease(m.id).subscribe({
-      next: res => { this.model.set(res.model); this.loadCommits(); this.loadWorkflow(); },
-      error: err => this.errors.showError(err?.error?.error || 'Development release failed'),
-    });
-  }
-
-  // Create the next numeric revision (editable copy) and open it.
-  onNewRevision() {
-    const m = this.model(); if (!m) return;
-    if (!window.confirm(
-      'Create a new revision?\n\nThis copies the current design into a new editable '
-      + 'revision (the next number). The current release stays locked.')) return;
-    this.cadApi.newRevision(m.id).subscribe({
-      next: nm => this.router.navigate(['/parts', nm.partID, 'cad', 'editor'], { queryParams: { revisionID: nm.id } }),
-      error: err => this.errors.showError(err?.error?.error || 'New revision failed'),
-    });
-  }
-
   // Promote an approved dev release to a production (letter) revision.
   onProductionRelease() {
     const m = this.model(); if (!m) return;
@@ -15506,24 +15797,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         }
         this.errors.showError(err?.error?.error || 'Checkout failed');
       },
-    });
-  }
-
-  // Released-revision checkout: create the next dev revision (draft), lock it,
-  // and open it for editing.
-  private checkoutAsNewRevision(m: CadModel) {
-    if (!window.confirm(
-      `Rev ${m.part?.revision} is released and locked.\n\n`
-      + 'Check out the next revision (a draft copy) to make changes?')) return;
-    this.cadApi.newRevision(m.id).subscribe({
-      next: nm => this.cadApi.checkout(nm.id).subscribe({
-        next: () => {
-          this.errors.showSuccess(`Created Rev ${nm.part?.revision} (draft) for editing`);
-          this.router.navigate(['/parts', nm.partID, 'cad', 'editor'], { queryParams: { revisionID: nm.id } });
-        },
-        error: err => this.errors.showError(err?.error?.error || 'Checkout failed'),
-      }),
-      error: err => this.errors.showError(err?.error?.error || 'New revision failed'),
     });
   }
 
@@ -15736,7 +16009,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const m = this.model(); if (!m) return;
       // Merge main's latest in, keeping all of this branch's component/mate
       // changes (one-click; per-item selection is the version-history tool).
-      this.cadApi.reconcileChanges(m.id).subscribe({
+      const merge = () => this.cadApi.reconcileChanges(m.id).subscribe({
         next: ({ changes }) => {
           const instanceIds = changes.filter(c => c.kind === 'instance').map(c => c.id);
           const mateIds = changes.filter(c => c.kind === 'mate').map(c => c.id);
@@ -15751,6 +16024,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         },
         error: e => this.errors.showError(e?.error?.error || 'Merge failed'),
       });
+      // REQ 954 — merging needs the caller's checkout; take it first if free.
+      if (this.asm.isLockedByMe()) merge();
+      else this.cadApi.checkout(m.id).subscribe({ next: () => merge(), error: e => this.errors.showError(e?.error?.error || 'Checkout failed') });
       return;
     }
     this.openVersionHistory();

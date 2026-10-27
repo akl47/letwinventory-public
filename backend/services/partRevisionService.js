@@ -82,7 +82,9 @@ async function copyBom(sourcePartID, newPartID, { transaction } = {}) {
   const bom = await db.BillOfMaterialItem.findAll({ where: { partID: sourcePartID, activeFlag: true }, transaction });
   if (bom.length) {
     await db.BillOfMaterialItem.bulkCreate(
-      bom.map((i) => ({ partID: newPartID, componentPartID: i.componentPartID, quantity: i.quantity, activeFlag: true })),
+      // REQ 960 — keep the sync-source marker so a later assembly BOM sync
+      // still recognizes (and replaces) its own rows on the new revision.
+      bom.map((i) => ({ partID: newPartID, componentPartID: i.componentPartID, quantity: i.quantity, activeFlag: true, syncedFromAssemblyID: i.syncedFromAssemblyID || null })),
       { transaction },
     );
   }

@@ -1,3 +1,4 @@
+import { compileCurveExpr } from './safeExpr';
 import type {
   SketchState, SketchEntity, CircleEntity, ArcEntity, EllipseEntity, EllipticalArcEntity,
   PointEntity,
@@ -327,7 +328,7 @@ function tessellateParabola(
 }
 
 /** REQ — Equation curve tessellation. Compiles `x(t)` and `y(t)`
- * once per call via the Function constructor; evaluates at N samples
+ * once per call via the sandboxed evaluator (safeExpr.ts); evaluates at N samples
  * and pushes valid (finite) points into the polyline. Skips any
  * (t) value that throws or yields a non-finite result so the rest
  * of the curve still renders. */
@@ -336,16 +337,11 @@ export function tessellateEquationCurve(
 ): Array<{ x: number; y: number }> {
   const n = Math.max(8, Math.min(2000, Math.floor(samples)));
   if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMin === tMax) return [];
-  // Trusted code path — expressions come from the user's own
-  // sketch document, no remote / network input. Function ctor is
-  // appropriate here; we still try/catch in case the user types
-  // a bad expression.
-  let fx: (t: number) => number;
-  let fy: (t: number) => number;
-  try {
-    fx = new Function('t', `with (Math) { return (${xExpr}); }`) as (t: number) => number;
-    fy = new Function('t', `with (Math) { return (${yExpr}); }`) as (t: number) => number;
-  } catch { return []; }
+  // REQ 941 — expressions come from shared sketch documents and are
+  // untrusted: compile them with the sandboxed evaluator, never new Function.
+  const fx = compileCurveExpr(xExpr);
+  const fy = compileCurveExpr(yExpr);
+  if (!fx || !fy) return [];
   const out: Array<{ x: number; y: number }> = [];
   for (let i = 0; i <= n; i++) {
     const t = tMin + (i / n) * (tMax - tMin);

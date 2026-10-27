@@ -36,7 +36,8 @@ const MAPPERS: Mapper[] = [
     : null,
 
   // Kernel transport problems.
-  (raw) => /kernel unavailable|kernel disconnected|ECONNREFUSED|socket closed/i.test(raw)
+  // 'kernel is offline' = the backend's REQ 965 wording for KernelDisconnected.
+  (raw) => /kernel unavailable|kernel disconnected|kernel is offline|ECONNREFUSED|socket closed/i.test(raw)
     ? 'CAD kernel is not running. Start the kernel service and try again.'
     : null,
   (raw) => /timed out/i.test(raw)

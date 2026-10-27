@@ -134,6 +134,7 @@ class CadStreamService {
         clearTimeout(authTimeout);
         session.authenticated = true;
         session.userId = decoded.id;
+        session.apiKeyId = decoded.apiKeyId || null;
         session.displayName = decoded.displayName || decoded.email;
         ws.send(JSON.stringify({
           type: 'authenticated',
@@ -151,7 +152,15 @@ class CadStreamService {
       return;
     }
     if (msg.type === 'subscribe-model') {
-      session.modelId = Number(msg.modelId) || null;
+      const modelId = Number(msg.modelId) || null;
+      // REQ 944 — streamed events carry model geometry: require an active user
+      // holding cad.read (API-key scope applied), re-checked per subscription.
+      if (modelId && !(await this._canReadCad(session))) {
+        session.modelId = null;
+        ws.send(JSON.stringify({ type: 'subscribe-denied', modelId, reason: 'You need the cad.read permission to view this model' }));
+        return;
+      }
+      session.modelId = modelId;
       ws.send(JSON.stringify({ type: 'subscribed', modelId: session.modelId }));
       return;
     }
@@ -161,6 +170,19 @@ class CadStreamService {
     }
     // Unknown message types are dropped — Phase 1.5 will add edit-application
     // messages (`apply-edit`, `cancel-regen`, etc.) here.
+  }
+
+  async _canReadCad(session) {
+    const db = require('../models');
+    const { loadEffectivePermissions, loadApiKeyPermissions } = require('../middleware/checkPermission');
+    const user = await db.User.findOne({ where: { id: session.userId, activeFlag: true }, attributes: ['id'] });
+    if (!user) return false;
+    let perms = await loadEffectivePermissions(session.userId);
+    if (session.apiKeyId) {
+      const keyPerms = await loadApiKeyPermissions(session.apiKeyId);
+      perms = new Set([...perms].filter((p) => keyPerms.has(p)));
+    }
+    return perms.has('cad.read');
   }
 
   _sweepHeartbeats() {

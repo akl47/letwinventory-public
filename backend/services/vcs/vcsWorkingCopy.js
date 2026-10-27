@@ -95,10 +95,32 @@ function makeWorkingCopy(binding) {
     // together or not at all — a failure mid-takeover must not leave the
     // prior holder's work half-stashed with the lock already reassigned.
     return vcs.inTransaction(db, async () => {
+      const t = nowAt(at);
+      // REQ 951 — claim the lock with ONE conditional update: it succeeds only
+      // when the lock is free, already ours, or expired. Two concurrent
+      // checkouts both passing the read above can no longer both win.
+      const { Op } = (D.Sequelize || require('sequelize'));
+      const [claimed] = await model.constructor.update(
+        { lockedByUserID: userId, lockedAt: t, lockExpiresAt: new Date(t.getTime() + lockTtlMs) },
+        {
+          where: {
+            id: model.id,
+            [Op.or]: [
+              { lockedByUserID: null },
+              { lockedByUserID: userId },
+              { lockExpiresAt: { [Op.lt]: t } },
+            ],
+          },
+        },
+      );
+      if (!claimed) {
+        const fresh = await model.constructor.findByPk(model.id, { attributes: ['lockedByUserID'] });
+        const holder = fresh && fresh.lockedByUserID ? await D.User.findByPk(fresh.lockedByUserID) : null;
+        throw new RestError(`${cap(noun)} is checked out by ${holder ? holder.displayName : 'another user'}`, 423);
+      }
       const repo = await binding.repoFor(model, db);
       const branch = model.branchName || 'main';
       const ref = await vcs.getRef(repo, branch, db);
-      const t = nowAt(at);
       let stashedTo = null;
       const patch = {
         branchName: branch,
@@ -193,9 +215,20 @@ function makeWorkingCopy(binding) {
       const branch = model.branchName || 'main';
       const treeHash = await binding.serialize(repo, binding.docOf(model), db);
       const head = await vcs.getRef(repo, branch, db);
+      // REQ 952 — the working copy was built on baseCommitHash. If the branch
+      // head moved since, committing on top would silently discard that work.
+      if (head && model.baseCommitHash && head.targetHash !== model.baseCommitHash) {
+        throw new RestError(
+          `Branch "${branch}" has new commits since this ${noun} was checked out — reload, then merge or re-apply your changes before checking in`,
+          409,
+        );
+      }
+      // A missing ref (archived/deleted) re-creates the branch ON the base
+      // commit, never as a parentless root that would drop the history.
+      const parents = head ? [head.targetHash] : (model.baseCommitHash ? [model.baseCommitHash] : []);
       const commitHash = await vcs.createCommit(repo, {
         treeHash,
-        parents: head ? [head.targetHash] : [],
+        parents,
         authorUserID: userId,
         message: message || '',
         timestamp: nowAt(at).toISOString(),
@@ -224,4 +257,23 @@ function makeWorkingCopy(binding) {
   return { lockHeldByOther, seedMain, checkout, renewLock, releaseLock, undoCheckout, checkin, history };
 }
 
-module.exports = { makeWorkingCopy, DEFAULT_LOCK_TTL_MS };
+// REQ 953/954 — verbs that rewrite the working copy outside a content save
+// (cherry-pick, merge) require the caller's own unexpired checkout on a draft
+// branch, exactly like a content save.
+function assertEditableBy(model, userId, noun = 'model') {
+  if ((model.branchName || 'main') === 'main') {
+    throw new RestError('The main branch is protected — create or switch to a draft branch to make changes', 423);
+  }
+  if (model.lockedByUserID !== userId) {
+    throw new RestError(model.lockedByUserID
+      ? `This ${noun} is checked out by another user`
+      : `Check out this ${noun} before changing it`, 423);
+  }
+  if (model.lockExpiresAt && new Date() > new Date(model.lockExpiresAt)) {
+    const err = new RestError(`Your checkout of this ${noun} has expired — check out again to continue`, 423);
+    err.payload = { code: 'LOCK_EXPIRED' };
+    throw err;
+  }
+}
+
+module.exports = { makeWorkingCopy, DEFAULT_LOCK_TTL_MS, assertEditableBy };

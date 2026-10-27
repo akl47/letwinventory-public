@@ -1,3 +1,5 @@
+import { forkJoin } from 'rxjs';
+import { equationMergeRows } from '../../../cad/lib/mergeEquations';
 import { Component, inject, signal, computed, viewChild, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -415,7 +417,7 @@ export class CadRevisionListComponent implements OnInit {
   picked = signal<string[]>([]);
   // Merge reconciliation tool state.
   merging = signal<string | null>(null);
-  mergeEntries = signal<{ key: string; kind: 'feature' | 'sketch'; id: string; label: string; status: string; sign: string; cls: string; statusText: string }[]>([]);
+  mergeEntries = signal<{ key: string; kind: 'feature' | 'sketch' | 'equation'; id: string; label: string; status: string; sign: string; cls: string; statusText: string }[]>([]);
   mergeSelected = signal<Set<string>>(new Set());  // holds entry keys: "feature:<id>" / "sketch:<id>"
   mergePreviewGeo = signal<CadCommitGeometry | null>(null);
   mergePreviewKey = signal<string>('');
@@ -692,12 +694,28 @@ export class CadRevisionListComponent implements OnInit {
           });
         // Features first, then sketches; within each, by id for stability.
         entries.sort((a, b2) => (a.kind === b2.kind ? a.id.localeCompare(b2.id) : a.kind === 'feature' ? -1 : 1));
-        this.mergeEntries.set(entries);
-        // Default: take ALL of the branch's changes (a full merge); the user
-        // unticks anything they'd rather keep from main.
-        this.mergeSelected.set(new Set(entries.map(e => e.key)));
-        this.merging.set(b.name);
-        this.refreshMergePreview();
+        // REQ 955 — equations (global variables) are mergeable too: list each
+        // variable that differs, so a merge never silently drops a branch edit.
+        forkJoin([this.cadApi.getCommitDoc(m.id, mh), this.cadApi.getCommitDoc(m.id, b.head)]).subscribe({
+          next: ([mainDoc, branchDoc]) => {
+            const eqRows = equationMergeRows(mainDoc.equations as any, branchDoc.equations as any).map(r => ({
+              key: `equation:${r.name}`, kind: 'equation' as const, id: r.name,
+              label: `Variable ${r.name}`,
+              status: r.status,
+              sign: r.status === 'added' ? '+' : r.status === 'removed' ? '−' : '~',
+              cls: r.status === 'added' ? 'add' : r.status === 'removed' ? 'del' : 'mod',
+              statusText: r.status === 'added' ? 'added on branch' : r.status === 'removed' ? 'removed on branch' : 'changed on branch',
+            }));
+            const all = [...entries, ...eqRows];
+            this.mergeEntries.set(all);
+            // Default: take ALL of the branch's changes (a full merge); the user
+            // unticks anything they'd rather keep from main.
+            this.mergeSelected.set(new Set(all.map(e => e.key)));
+            this.merging.set(b.name);
+            this.refreshMergePreview();
+          },
+          error: err => this.errors.showError(err?.error?.error || 'Failed to load the merge diff'),
+        });
       },
       error: err => this.errors.showError(err?.error?.error || 'Failed to load the merge diff'),
     });
@@ -710,14 +728,15 @@ export class CadRevisionListComponent implements OnInit {
     this.refreshMergePreview();
   }
 
-  /** Split the selected entry keys into feature ids + sketch ids for the API. */
-  private selectedMerge(): { featureIds: string[]; sketchIds: string[] } {
-    const featureIds: string[] = []; const sketchIds: string[] = [];
+  /** Split the selected entry keys into feature / sketch / equation ids for the API. */
+  private selectedMerge(): { featureIds: string[]; sketchIds: string[]; equationNames: string[] } {
+    const featureIds: string[] = []; const sketchIds: string[] = []; const equationNames: string[] = [];
     for (const k of this.mergeSelected()) {
       if (k.startsWith('feature:')) featureIds.push(k.slice('feature:'.length));
       else if (k.startsWith('sketch:')) sketchIds.push(k.slice('sketch:'.length));
+      else if (k.startsWith('equation:')) equationNames.push(k.slice('equation:'.length));
     }
-    return { featureIds, sketchIds };
+    return { featureIds, sketchIds, equationNames };
   }
 
   // Regenerate the 3D preview of the merge result (debounced — each toggle would
@@ -727,8 +746,8 @@ export class CadRevisionListComponent implements OnInit {
     if (this.mergePreviewTimer) clearTimeout(this.mergePreviewTimer);
     this.mergePreviewLoading.set(true);
     this.mergePreviewTimer = setTimeout(() => {
-      const { featureIds, sketchIds } = this.selectedMerge();
-      this.cadApi.reconcilePreview(m.id, name, featureIds, sketchIds).subscribe({
+      const { featureIds, sketchIds, equationNames } = this.selectedMerge();
+      this.cadApi.reconcilePreview(m.id, name, featureIds, sketchIds, equationNames).subscribe({
         next: geo => { this.mergePreviewGeo.set(geo); this.mergePreviewErrors.set(geo.errors || []); this.mergePreviewKey.set(String(++this.previewVersion)); this.mergePreviewLoading.set(false); },
         error: () => { this.mergePreviewGeo.set(null); this.mergePreviewErrors.set([]); this.mergePreviewLoading.set(false); },
       });
@@ -741,14 +760,18 @@ export class CadRevisionListComponent implements OnInit {
     this.mergePreviewGeo.set(null); this.mergePreviewLoading.set(false); this.mergePreviewErrors.set([]);
   }
 
-  // Switch onto the branch, then merge main into it with the selected features + sketches.
+  // Switch onto the branch, check it out (merging needs the lock, REQ 954),
+  // then merge main into it with the selected features, sketches + equations.
   applyMerge() {
     const m = this.model(); const name = this.merging(); if (!m || !name) return;
-    const { featureIds, sketchIds } = this.selectedMerge();
+    const sel = this.selectedMerge();
     this.cadApi.switchBranch(m.id, name).subscribe({
-      next: () => this.cadApi.reconcile(m.id, featureIds, sketchIds).subscribe({
-        next: () => { this.errors.showSuccess(`Merged main into "${name}"`); this.cancelMerge(); this.loadModel(); },
-        error: err => this.errors.showError(err?.error?.error || 'Merge failed'),
+      next: () => this.cadApi.checkout(m.id).subscribe({
+        next: () => this.cadApi.reconcile(m.id, sel).subscribe({
+          next: () => { this.errors.showSuccess(`Merged main into "${name}"`); this.cancelMerge(); this.loadModel(); },
+          error: err => this.errors.showError(err?.error?.error || 'Merge failed'),
+        }),
+        error: err => this.errors.showError(err?.error?.error || 'Checkout failed'),
       }),
       error: err => this.errors.showError(err?.error?.error || 'Switch branch failed'),
     });

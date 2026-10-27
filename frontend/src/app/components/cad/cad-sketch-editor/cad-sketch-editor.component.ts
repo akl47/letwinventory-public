@@ -6,6 +6,7 @@ import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatMenuModule } from '@angular/material/menu';
 import { DomSanitizer } from '@angular/platform-browser';
 import { registerCadIcons } from '../cad-icons';
+import { ErrorNotificationService } from '../../../services/error-notification.service';
 import type {
   SketchDocument, SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity, SketchEntity,
   ConstraintType, ConstraintTarget, ReferenceCandidate, ExternalRef,
@@ -22,6 +23,7 @@ import {
   setConstructionFlag, setConstraintDriven, mergePoints, ORIGIN_POINT_ID,
 } from '../../../cad/lib/store';
 import { solveSketch } from '../../../cad/lib/solver';
+import { solveWithRecovery } from '../../../cad/lib/solveRecovery';
 import { extractClosedLoops } from '../../../cad/lib/profile';
 import { pickEntity, distanceToEntity, entityTouchesRect } from '../../../cad/lib/picking';
 import { inferLineEnd, inferAlignment, type InferenceResult, type PendingConstraint, type AlignmentRef } from '../../../cad/lib/inference';
@@ -1309,6 +1311,8 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (!k.has('text')) this.draftTextRect.set(null);
     if (!k.has('picture')) this.pendingPictureSrc.set(null);
   }
+
+  private errors = inject(ErrorNotificationService);
 
   constructor() {
     // Register custom CAD icons once for the whole component tree.
@@ -5262,7 +5266,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-365');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-375');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);
@@ -5465,14 +5469,25 @@ export class CadSketchEditorComponent implements OnDestroy {
         if (!m.error) next = m.state;
       }
     }
+    const prev = this.state();
     const id = ++this.latestCommitId;
     this.sketchChanged.emit(next);
-    const result = await solveSketch(next, { externalEdges: this._externalEdgeLines() });
+    // solveWithRecovery (REQ 922): detects a degenerate "success" (an
+    // undimensioned line collapsed to zero) and retries by continuation —
+    // see cad/lib/solveRecovery.ts.
+    const { result, collapsed } = await solveWithRecovery(next, { externalEdges: this._externalEdgeLines() });
     if (id !== this.latestCommitId) return;
     this._recordSolve(result);
-    const collapsedC = this._solveCollapsed(next, result.state);
-    if (result.status === 'ok' && !collapsedC) {
+    if (result.status === 'ok' && !collapsed) {
       this.sketchChanged.emit(result.state);
+    } else if (collapsed && addedIds.length === 0) {
+      // Value-edit commit (no new entities) that can only solve
+      // degenerately: REVERT instead of silently keeping the new value
+      // with unmoved geometry — that mismatch corrupts the doc (stored
+      // dim ≠ actual distance) and reads as "the edit did nothing".
+      // Draw commits keep the current keep-as-drawn behavior.
+      this.errors.showError('That value would collapse part of the sketch to a zero-length line. Dimension or constrain the affected line, then try again.');
+      this.sketchChanged.emit(prev);
     }
   }
 }

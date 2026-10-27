@@ -33,6 +33,7 @@ const SWEEP_INTERVAL_MS = ONE_DAY_MS;
 const DELETE_CHUNK = 500;
 
 const HEX64 = /\b[0-9a-f]{64}\b/g;
+const { thumbKey } = require('./vcsService');
 
 let timerHandle = null;
 
@@ -52,9 +53,12 @@ async function reachableSet(repoType, repoId, extraSeeds, db) {
     reachable.add(hash);
     const row = await D.VcsObject.findOne({
       where: { repoType, repoId, hash },
-      attributes: ['content'],
+      attributes: ['content', 'kind'],
     });
     if (!row || row.content == null) continue; // absent or binary — no outgoing refs
+    // REQ 957 — a reachable commit keeps its thumbnail (stored under a
+    // derived key that no object content references).
+    if (row.kind === 'commit') reachable.add(thumbKey(hash));
     const matches = JSON.stringify(row.content).match(HEX64);
     if (matches) for (const m of matches) queue.push(m);
   }

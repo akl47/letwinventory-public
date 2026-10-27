@@ -11,6 +11,11 @@
     </div>
   </div>
 
+  @if (isLoading()) {
+    <div class="loading-container">
+      <mat-spinner diameter="40"></mat-spinner>
+    </div>
+  } @else {
   <app-data-table
     [data]="allItems()"
     [columns]="columns"
@@ -63,4 +68,5 @@
       {{ item.lastRunAt ? (item.lastRunAt | date:'MMM d, y h:mm a') : 'Never' }}
     </ng-template>
   </app-data-table>
+  }
 </div>

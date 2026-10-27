@@ -6,7 +6,11 @@
     </h2>
   </div>
 
-  @if (statusesLoaded()) {
+  @if (isLoading()) {
+    <div class="loading-container">
+      <mat-spinner diameter="40"></mat-spinner>
+    </div>
+  } @else {
     <app-data-table
       [data]="allOrders()"
       [columns]="columns"

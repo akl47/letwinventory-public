@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { circularTransforms, linearTransforms, mirrorTransforms } from './pattern';
+import { circularTransforms, linearTransforms, mirrorTransforms, MAX_PATTERN_COPIES } from './pattern';
 import type {
   CircularPatternFeature,
   LinearPatternFeature,
@@ -136,5 +136,20 @@ describe('circularTransforms', () => {
       count: 1, mode: 'equalSpacing', angleDeg: 360,
     };
     expect(() => circularTransforms(f)).toThrow();
+  });
+});
+
+// REQ 962 — copies per pattern feature are capped (kept in sync with backend).
+describe('pattern copy limit (REQ 962)', () => {
+  it('builds a linear pattern at the limit and refuses one over', () => {
+    const at: LinearPatternFeature = { id: 'f1', type: 'linearPattern', direction1: { axisRef: { kind: 'originAxis', axisId: 'x_axis' }, axisSnapshot: xAxisSnap, spacing: 1, count: MAX_PATTERN_COPIES + 1 } };
+    expect(linearTransforms(at)).toHaveLength(MAX_PATTERN_COPIES);
+    const over: LinearPatternFeature = { ...at, direction1: { ...at.direction1, count: MAX_PATTERN_COPIES + 2 } };
+    expect(() => linearTransforms(over)).toThrow(/exceeds the limit of 1000/);
+  });
+
+  it('refuses a huge circular count', () => {
+    const f: CircularPatternFeature = { id: 'f1', type: 'circularPattern', axisRef: { kind: 'originAxis', axisId: 'z_axis' }, axisSnapshot: zAxisSnap, count: 1e9, mode: 'equalSpacing', angleDeg: 360 };
+    expect(() => circularTransforms(f)).toThrow(/exceeds the limit/);
   });
 });

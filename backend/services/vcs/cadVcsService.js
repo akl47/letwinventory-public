@@ -191,24 +191,6 @@ const { release } = makeRelease({
   commitMeta: cadVersionInfo,
 });
 
-/** Development release (REQ 715-718): self-service. The design must be checked
- * in; freeze + write-once-tag the current numeric Part revision, then lock the
- * design read-only (releaseLocked) and the Part (revisionLocked). No approval. */
-async function devRelease(model, userId, { kernelClient, at } = {}, db) {
-  const D = dbOf(db);
-  if (model.releaseLocked) throw new RestError('This revision is already released and locked', 409);
-  if (model.dirty || !model.baseCommitHash) {
-    throw new RestError('Check in the design before releasing it', 409);
-  }
-  const part = await D.Part.findByPk(model.partID);
-  const revision = part && part.revision;
-  if (!revision) throw new RestError('Part has no revision to release as', 400);
-  const { commitHash, tag } = await release(model, userId, revision, { kernelClient, at }, db);
-  await model.update({ releaseLocked: true });
-  if (!part.revisionLocked) await part.update({ revisionLocked: true });
-  return { commitHash, tag };
-}
-
 /** Flag the working copy as having uncommitted edits (autosave path, VC-13). */
 async function markDirty(model, db) {
   if (!model.dirty) await model.update({ dirty: true });
@@ -237,12 +219,8 @@ async function sweepExpiredLocks(at, db) {
 // address (deterministic per commit, not content-addressed) so the version
 // history can show each commit instantly without a kernel regeneration.
 
-// Thumbnails are keyed by their commit but must fit VcsObject.hash (varchar 64).
-// A literal `thumb-<64-char-hash>` is 70 chars and silently fails to insert on
-// Postgres, so derive a 64-char key by hashing. Deterministic per commit.
-function thumbKey(commitHash) {
-  return require('crypto').createHash('sha256').update(`thumb:${commitHash}`).digest('hex');
-}
+// Thumbnails are keyed by a derived 64-char address (vcsService.thumbKey).
+const { thumbKey } = vcs;
 
 /** Decode a `data:image/...;base64,...` URL (or a raw base64 string) to a Buffer. */
 function decodeThumbnail(dataUrl) {
@@ -257,10 +235,19 @@ function decodeThumbnail(dataUrl) {
   }
 }
 
+// REQ 966 — only real PNGs (by file signature) up to 512 KB are accepted.
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const MAX_THUMBNAIL_BYTES = 512 * 1024;
+
+function isAcceptableThumbnail(buf) {
+  return !!buf && buf.length <= MAX_THUMBNAIL_BYTES
+    && buf.length > PNG_SIGNATURE.length && buf.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
+}
+
 /** Store the thumbnail PNG for a commit (no-op on empty/invalid input). */
 async function storeThumbnail(model, commitHash, dataUrl, db) {
   const buf = decodeThumbnail(dataUrl);
-  if (!buf) return null;
+  if (!isAcceptableThumbnail(buf)) return null;
   const D = dbOf(db);
   const repo = await repoForModel(model, db);
   await D.VcsObject.findOrCreate({
@@ -294,12 +281,13 @@ module.exports = {
   undoCheckout,
   checkin,
   release,
-  devRelease,
   markDirty,
   history,
   sweepExpiredLocks,
   storeThumbnail,
   loadThumbnail,
+  isAcceptableThumbnail,
+  MAX_THUMBNAIL_BYTES,
   // cross-part in-context pinning + historical resolution (REQ 774)
   pinCrossPartRefs,
   makePinnedResolver,

@@ -18,6 +18,7 @@ set(KERNEL_OP_SOURCES
   src/op_revolve_sweep.cpp
   src/op_shell_blend.cpp
   src/op_pattern.cpp
+  src/server_limits.cpp
 )
 
 # Core OCCT toolkits we'll need as ops land. Linking them now validates the OCCT

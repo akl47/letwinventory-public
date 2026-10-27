@@ -79,6 +79,38 @@ export interface ParsedValue {
  * Returns null on garbage input. Whitespace + case-insensitive on the
  * unit suffix.
  */
+/** What a numeric field should do with the text the user left in it. */
+export type FieldEntry =
+  | { kind: 'noop' }
+  | { kind: 'reject' }
+  /** `value` is millimetres for a length field, the raw number otherwise.
+   * `unitOverride` is the unit the user typed explicitly, or null for a bare
+   * number (which reverts the field to the model default). */
+  | { kind: 'value'; value: number; unitOverride: Unit | null };
+
+/**
+ * Decide the outcome of a numeric-field edit.
+ *
+ * `pristine` MUST be the field's text as derived from its inputs — never the
+ * live edit buffer, or an unchanged-check compares the typed text with itself
+ * and every commit is silently dropped.
+ *
+ * `unit` null means the field isn't a length (angles, counts): parsed with
+ * plain parseFloat and no unit conversion, matching how a sketch dimension
+ * treats angle entry.
+ */
+export function resolveFieldEntry(typed: string, pristine: string, unit: Unit | null): FieldEntry {
+  const text = typed.trim();
+  if (text === pristine.trim()) return { kind: 'noop' };
+  if (unit === null) {
+    const n = parseFloat(text);
+    return isFinite(n) ? { kind: 'value', value: n, unitOverride: null } : { kind: 'reject' };
+  }
+  const parsed = parseUserValue(text, unit);
+  if (!parsed) return { kind: 'reject' };
+  return { kind: 'value', value: parsed.valueMm, unitOverride: parsed.unit };
+}
+
 export function parseUserValue(raw: string, defaultUnit: Unit): ParsedValue | null {
   const m = raw.trim().match(/^([+-]?\d*\.?\d+)\s*(mm|um|µm|in|")?$/i);
   if (!m) return null;

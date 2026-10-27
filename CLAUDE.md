@@ -80,24 +80,25 @@ When mousedown fires but click does not → DOM lifecycle. Common causes: templa
 - Frontend env files swapped via `angular.json` `fileReplacements`; E2E uses `/api` via proxy
 
 ### API Structure
-Auto-discovered via `backend/api/index.js`:
-- `/api/auth/{google,user,api-key}/*` — OAuth, sessions, API keys
-- `/api/inventory/{part,barcode,trace,location,box,equipment,order,order-item,bom}/*`
+Auto-discovered via `backend/api/index.js` (mount path = literal folder name).
+- `/api/auth/{google,user,api-key,addon}/*` — OAuth, sessions, API keys
+- `/api/inventory/{part,barcode,barcodehistory,trace,location,box,equipment,order,orderitem,bom,unitofmeasure}/*`
 - `/api/parts/{connector,cable,component,wire,wire-end,harness}/*` — harness has revision endpoints
-- `/api/planning/{task,tasklist,project,scheduled-task}/*`
+- `/api/planning/{task,tasklist,project,scheduled-task,task-time-tracking,taskhistory}/*`
 - `/api/design/{requirement,requirement-category,feature}/*`
 - `/api/design/cad-model/*` — CAD working copy + full VCS verb set (checkout/checkin/renew-lock/branches/workflow/release/diff/reconcile/regenerate); `/api/design/assembly/*` — assembly-specific verbs (instances, mates, patterns, explode, interference, BOM sync); the controller routes by `model.isAssembly` to the cad/assembly binding
 - `/api/manufacturing/{master,master-step,work-order}/*`
 - `/api/tools/{tool,tool-category,tool-subcategory}/*`
 - `/api/admin/{group,user,permission}/*` — RBAC + impersonation
-- `/api/config/*` — push subscriptions, notification prefs, VAPID
+- `/api/config/*` — push subscriptions, printers, notification prefs, VAPID
+- `/api/tts/*` — owner/requirement text-to-speech
 - `/api/files/*` — read-only
 
 ### Permissions
 - **Resources:** parts, inventory, equipment, tasks, projects, harness, requirements, admin, orders, tools, manufacturing_planning, manufacturing_execution, features, cad (covers assemblies too — no separate assembly resource)
-- **Actions:** read, write, delete + special: requirements.approve, admin.impersonate, admin.manage_tool_categories, features.approve, cad.approve (production release + force-unlock)
+- **Actions:** read, write, delete + special (7): requirements.approve, admin.impersonate, admin.manage_tool_categories, features.approve, cad.approve (production release + force-unlock), manufacturing_execution.work_order_delete, manufacturing_execution.work_order_undelete
 - **Enforcement:** `checkPermission(resource, action)` middleware; exempt: auth/*, config/*
-- **Frontend:** `authService.hasPermission()` signal; UI buttons disabled with tooltips
+- **Frontend:** `authService.hasPermission(resource, action)` method (reads the `permissions` computed signal internally); UI buttons disabled with tooltips
 - **Test helpers:** `authenticatedRequest` auto-grants all permissions; opt out with `{ grantPermissions: false }`
 - **API keys:** scoped at creation (immutable); intersection with user perms at token exchange; `expiresAt` rejected on exchange
 
@@ -156,7 +157,7 @@ Auto-discovered via `backend/api/index.js`:
 - Parts library: `WireEnds`, `WireHarness` (release fields), `HarnessRevisionHistory`
 - Planning: `Tasks` (checklist JSONB, dueDateNotifiedAt), `Projects.keyboardShortcut`, `ScheduledTasks` (cron-parser v4.9.0)
 - Design: `DesignRequirements.approvalStatus` (+ `designFeatureID` FK), `RequirementCategories`, `RequirementHistory`, `DesignFeatures` (4-state `reviewState` workflow + GitHub linkage), `DesignFeatureHistory`
-- CAD: `DesignCADModels` (ONE table for parts AND assemblies — `isAssembly` boolean + `assemblyDoc` JSONB vs `featureTree`/`sketchDoc`/`equations`; VCS columns: branchName, baseCommitHash, dirty, lock trio, releaseLocked, lastContentSavedAt; partial unique index = one active model per part), `DesignCADModelHistory` (audit, covers assemblies), `VcsObjects` (content-addressed blob/tree/commit/geometry/component/thumbnail, keyed (repoType, repoId=lineage-root part id, hash)), `VcsRefs` (branches mutable, tags write-once), `VcsWorkflowState` (per-branch key `<lineageRoot>:<branch>`), `VcsUsage` (where-used edges, actively written), `VcsChangeset` (reserved, empty), `DesignBRepCache` (disposable regen cache keyed paramHash/upstreamHash/NAMING_VERSION)
+- CAD: `DesignCADModels` (ONE table for parts AND assemblies — `isAssembly` boolean + `assemblyDoc` JSONB vs `featureTree`/`sketchDoc`/`equations`; VCS columns: branchName, baseCommitHash, dirty, lock trio, releaseLocked, lastContentSavedAt; partial unique index = one active model per part), `DesignCADModelHistory` (audit, covers assemblies), `VcsObjects` (content-addressed blob/tree/commit/geometry/component/thumbnail, keyed (repoType, repoId=lineage-root part id, hash)), `VcsRefs` (branches mutable, tags write-once), `VcsWorkflowState` (per-branch key `<lineageRoot>:<branch>`), `VcsUsage` (where-used edges, actively written), `VcsChangeset` (reserved, empty), `DesignBRepCache` (disposable regen cache; unique key `(cadModelID, featureID, paramHash, upstreamHash)`; `namingVersion` is a stored match/eviction filter column, NOT part of the key — rows below current `NAMING_VERSION` stop matching)
 - Manufacturing: `EngineeringMasters` (release workflow), `EngineeringMasterSteps` (stepNumber default 10), `EngineeringMasterStepItems` (isTool flag), `EngineeringMasterStepMarkers` (x, y), `EngineeringMasterOutputParts`, `EngineeringMasterHistory`, `WorkOrders`, `WorkOrderStepCompletions`
 - Tools: `ToolCategories` (5 broad), `ToolSubcategories` (~36 leaves), `ToolCategorySubcategories` (M:N join), `Tools` (partID UNIQUE FK + dimension fields, mm)
 - Auth: `RefreshTokens.userAgent`, `ApiKeys.expiresAt`, `ApiKeyPermissions`, `PushSubscriptions`, `NotificationPreferences`
@@ -167,12 +168,12 @@ Auto-discovered via `backend/api/index.js`:
 - Orders: `/orders`, `/orders/bulk-upload`, `/orders/:id`
 - Harness: `/harness`, `/harness/editor`, `/harness/editor/:id`
 - Design: `/requirements`, `/requirements/new`, `/requirements/:id/edit`, `/features`, `/features/new`, `/features/:id/edit`, `/design/masters`, `/design/masters/new`, `/design/masters/:id/edit`
-- CAD: `/design/cad` (paginated list), `/parts/:id/cad/editor`, `/parts/:id/assembly/editor` (same `CadEditorComponent`, `assemblyMode` route flag)
-- Build: `/build`, `/build/:barcodeId`, `/build/work-orders`, `/build/work-orders/:id`
+- CAD: `/design/cad` (`CadLandingComponent`), `/parts/:id/cad` (revision list), `/parts/:id/cad/editor`, `/parts/:id/assembly/editor` (same `CadEditorComponent`, `assemblyMode` route flag)
+- Build/kits: `/kits`, `/kits/:barcodeId`, `/build/work-orders`, `/build/work-orders/new`, `/build/work-orders/:id`
 - Tools: `/tools/outline`, `/tools/catalog`
-- Admin: `/admin/groups`, `/admin/groups/:id`, `/admin/users`, `/admin/users/:id/permissions`, `/admin/users/new`
+- Admin: `/admin/groups`, `/admin/groups/new`, `/admin/groups/:id`, `/admin/users`, `/admin/users/:id`
 - Other: `/inventory/barcode-history/:id`, `/settings`, `/mobile`
-- All non-`/home` routes use `authGuard`; admin routes also use `adminGuard`
+- Most protected routes use `authGuard` + `permissionGuard` (with `data.resource`); admin routes gate on `permissionGuard` `resource: 'admin'` (there is no `adminGuard`). `/tools/outline` is unguarded.
 
 ---
 
@@ -181,6 +182,27 @@ Auto-discovered via `backend/api/index.js`:
 Past sessions appear in `git log`. Add a new section here only when a session decision will surprise a future reader (a non-obvious tradeoff, a workaround, an architectural pivot). File-level changes belong in commit messages, not here.
 
 > **CAD entries below are historical.** The current architecture is documented in `docs/cad-system/` (start at `00-overview.md`; the NotebookLM pack under `notebooklm/` is kept current). Superseded since these entries: the kernel is **native C++ on OCCT 8.0 in `cad-kernel-cpp/`** (JSON-RPC over TCP; the browser-side pure-JS/opencascade.js kernels and the old Rust `cad-kernel/` are gone as runtime paths), assemblies were **consolidated into `DesignCADModels`** (`isAssembly` + `assemblyDoc` — no `DesignAssembly` table), and `NAMING_VERSION` is paired with the kernel's `NAMING_SCHEMA_VERSION` with a runtime ping handshake.
+
+### 2026-10-26 — CAD security + VCS integrity review (REQs 941–986; 738/769/697/716–718 rewritten)
+
+- **Equation curves never touch `new Function`.** `cad/lib/safeExpr.ts` (twin: `backend/services/cadSafeExpr.js`) compiles x(t)/y(t) with expr-eval (member access/assignment/fndef/arrays off) PLUS a lexical identifier allow-list — expr-eval resolves inherited Object keys (`constructor`, `toString`) as operators, so its own symbol list is not enough. Saves with a disallowed expression are 400.
+- **Every assembly mutation needs a checkout** (`editGuard` in the assembly controller, same rules as the skeleton save). Tests must `POST /cad-model/:id/checkout` before editing an assembly. Edits stamp `lastContentSavedAt`; the editor's skeleton save reads its token from `asm.assembly()`, not `model()`, because instance/mate responses only refresh the former.
+- **Reviews are independent and commit-bound.** The submitter can't approve/reject (`independent` transitions); approval stores `approvedCommitHash` and `canRelease(repo, db, commitHash)` must match; a branch release resets BOTH the draft key and `<root>:main`. Tests need a second user to approve. Workflow transitions use `req._effectivePermissions` (API-key scope), not a fresh permission load.
+- **Retired:** `/rebase`, `/dev-release`, `/new-revision` endpoints and their dead editor handlers + services. Behind-main branches catch up only via merge (`/reconcile`), which now needs the caller's lock and merges equations (`equationNames`; omitted = carry branch-only variables).
+- **Check-in rejects a moved head (409)** instead of committing on top; checkout claims the lock with one conditional UPDATE.
+- **BOM sync touches only its own rows** (`BillOfMaterialItems.syncedFromAssemblyID`) and refuses revision-locked Parts — which means a draft branch whose Part is the last *released* revision cannot sync (open question: sync into the new revision at release time).
+- **Prod kernel image is pinned:** `CAD_KERNEL_IMAGE_TAG` (commit sha) is REQUIRED by `docker-compose.prod.yml` and `deploy-update.sh` — set it in the prod `.env` before the next deploy or the deploy aborts.
+- **Pending user actions:** apply migration `20261026000000-cad-review-hardening.js`; rebuild the kernel (cpp-16: request cap, child RLIMIT_AS 8 GiB default, temp sweep — validate the rlimit doesn't starve OCCT's threads); delete REQs 720/553 (the claude account lacks requirements.delete); run the suites.
+
+### 2026-07-24 — Degenerate-solve recovery + dims-match-geometry invariant + CAD e2e suite (REQs 921–932)
+
+- **A solver "ok" can silently destroy a sketch (REQ 922, found via part 623).** A big dimension jump on a partially-dimensioned rectangle satisfies every constraint by collapsing the undimensioned side to zero (a zero vector is parallel to anything). The sketch editor's collapse guard rejected the solve but SILENTLY — the typed value stayed stored, so stored dims disagreed with geometry and every later dim edit re-hit the same collapse (the doc was "poisoned"). Users saw "typing a value does nothing."
+- **Recovery = continuation, not constraint-holding.** Holding the collapsed line at its old length is WRONG (in a closed parallelogram the undimmed side's length is geometrically forced by the new dims → inconsistent). `cad/lib/solveRecovery.ts` instead seeds every measurable dim at its MEASURED value and re-solves while stepping values to their targets (4, then 12 steps) — small steps keep Newton off the degenerate branch. All three PlaneGCS algorithms (DogLeg/LM/BFGS) fall into the collapse from a cold jump, so algorithm-switching is NOT a fix. Unrecoverable value-edit commits now revert + toast instead of storing a value that disagrees with geometry.
+- **REQ 923 invariant:** `cad/lib/solveInvariant.ts` `dimensionalViolations()` — after every 'ok' solve, stored dim values must match measured geometry and no non-construction line may collapse. Wired into the three solver spec files by SHADOWING the `solveSketch` import with an asserting wrapper (covers every call site, zero per-test edits). Driven dims are exempt (they report without pinning).
+- **CAD e2e suite (REQs 924–932):** `e2e/cad/{helpers,constraints-dims,sketch-tools,sketch-edit-ops,features,vcs,equations,assembly,export-measure}.spec.ts`. Each spec file creates its own disposable fixture part and runs `mode: 'serial'` (the suite is `fullyParallel` — shared-part tests would interleave locally). Canvas gestures click real screen coords (camera is static in sketch mode, so drawn-corner coords stay valid for later picks); assertions read the debug hooks, not pixels. New hooks for e2e: `__cadPickEdge/__cadPickFace` (programmatic picks through the same entry points as the viewer raycast — 3D edge/face raycast clicks are not pixel-stable), `__cadAsm` (instances/mates/faceIds/interference), `__cadEquations`. Dim labels/editors are reachable via `[data-constraint-id]` (CSS2D DOM).
+- **Why the bug survived every existing test:** solver unit specs asserted status + constraint satisfaction (a degenerate solution satisfies both); the collapse guard lived in component glue (untested by convention); the old CAD e2e file never edited a dimension. The invariant + the constraints-dims spec close all three gaps.
+- **E2E footguns catalogued while driving the suite to 66/66 green** (each cost a debug round): several CAD flows use NATIVE dialogs (`window.confirm`: undo-checkout, push-variables, over-define pre-flight; `window.prompt`: rename feature/sketch/body, new branch) — Playwright auto-DISMISSES these, so tests must `page.once('dialog', d => d.accept(...))`; the mat-menu backdrop swallows the first canvas click during its close animation (pickTool waits for the item to detach + 250ms); clicks landing ON datum axes / the origin get hijacked (axis becomes a smart-dim edge operand via `_nearestEdgeCandidate`, points snap to origin, on-edge-to-axis constraints get inferred) — keep test geometry off the axes; ribbon tabs are conditional (`tab-features` hidden in sketch mode AND in assembly mode — assemblies use `tab-assembly`, interference/BOM-sync live on `tab-analyze`, explode/section on `tab-visualize`; assembly mode does NOT auto-switch to the Sketch tab on sketch entry); tool side panels RESIZE the canvas, shifting every previously-computed screen coordinate (anchor geometry on the origin and probe vertically, or recompute the center); assembly instances tracking the default branch (`main`) compose NO geometry until the child is released — pick the draft branch in the insert sidebar; checkin dialogs have a message textbox + a "keep checked out" checkbox (`dialog.locator('input')` is ambiguous).
+- **Convert-chain semantics changed by an e2e finding:** vertex-connected 3D chaining crawled a box seed through corners onto perpendicular/parallel loops (12 edges, 8 converted lines). Chains now stay IN the sketch plane (`convertEdgeChain` + the cross-part variant filter candidates by plane distance < 1e-3); off-plane seeds convert alone. REQ 921 updated.
 
 ### 2026-05-04 — Feature Review system (REQ 300–313, parented under REQ 105 in Design Controls)
 

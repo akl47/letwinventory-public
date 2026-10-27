@@ -77,16 +77,6 @@ export class CadModelService {
     return this.http.post<{ commitHash: string; revision: string; model: CadModel }>(`${this.apiUrl}/${id}/release`, {});
   }
 
-  /** Development release (self-service): freeze + tag the numeric revision + lock. */
-  devRelease(id: number): Observable<{ commitHash: string; revision: string; model: CadModel }> {
-    return this.http.post<{ commitHash: string; revision: string; model: CadModel }>(`${this.apiUrl}/${id}/dev-release`, {});
-  }
-
-  /** Create the next numeric revision + a fresh editable model copy. Returns it. */
-  newRevision(id: number): Observable<CadModel> {
-    return this.http.post<CadModel>(`${this.apiUrl}/${id}/new-revision`, {});
-  }
-
   /** Promote a dev-released, approved design to a production (letter) revision. */
   productionRelease(id: number): Observable<{ revision: string; prodModelID: number; model: CadModel }> {
     return this.http.post<{ revision: string; prodModelID: number; model: CadModel }>(`${this.apiUrl}/${id}/production-release`, {});
@@ -225,16 +215,11 @@ export class CadModelService {
     return this.http.post<CadModel>(`${this.apiUrl}/${id}/cherry-pick`, { sourceCommit, featureId });
   }
 
-  /** Rebase a behind-main draft branch onto main's head (bumps its draft rev). */
-  rebase(id: number): Observable<CadModel> {
-    return this.http.post<CadModel>(`${this.apiUrl}/${id}/rebase`, {});
-  }
-
   /** Merge main into the current branch, applying the selected branch changes —
    * features + sketches for part CAD, or instances + mates for assemblies. */
   reconcile(
     id: number,
-    sel: string[] | { featureIds?: string[]; sketchIds?: string[]; instanceIds?: string[]; mateIds?: string[] },
+    sel: string[] | { featureIds?: string[]; sketchIds?: string[]; equationNames?: string[]; instanceIds?: string[]; mateIds?: string[] },
     sketchIds: string[] = [],
   ): Observable<CadModel> {
     const body = Array.isArray(sel) ? { featureIds: sel, sketchIds } : sel;
@@ -248,8 +233,8 @@ export class CadModelService {
 
   /** Geometry of the hypothetical merge result (main + selected branch features +
    * sketches), regenerated without committing — for the merge tool's 3D preview. */
-  reconcilePreview(id: number, branch: string, featureIds: string[], sketchIds: string[] = []): Observable<CadCommitGeometry> {
-    return this.http.post<CadCommitGeometry>(`${this.apiUrl}/${id}/reconcile/preview`, { branch, featureIds, sketchIds });
+  reconcilePreview(id: number, branch: string, featureIds: string[], sketchIds: string[] = [], equationNames?: string[]): Observable<CadCommitGeometry> {
+    return this.http.post<CadCommitGeometry>(`${this.apiUrl}/${id}/reconcile/preview`, { branch, featureIds, sketchIds, equationNames });
   }
 
   // ── VCS: diff (Phase 3) ─────────────────────────────────────────────────────

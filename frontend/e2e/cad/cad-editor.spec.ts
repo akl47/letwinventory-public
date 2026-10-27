@@ -1,4 +1,5 @@
 import { test, expect, request as pwRequest, Page, APIRequestContext } from '@playwright/test';
+import { createFixturePart, waitForCameraSettled } from './helpers';
 
 // ───────────────────────────────────────────────────────────────────────────
 // E2E coverage for the Part CAD Modeler — rewritten for the current UI:
@@ -18,6 +19,10 @@ import { test, expect, request as pwRequest, Page, APIRequestContext } from '@pl
 //   window.__cadSketch      — active sketch's entity-model state ({ entities, constraints })
 //   window.__cadSetSelected(id) — programmatic selection (avoids raycaster ambiguity)
 // ───────────────────────────────────────────────────────────────────────────
+
+// Serial: the release test permanently locks the fixture and depends on
+// earlier tests' state; fullyParallel would interleave them locally.
+test.describe.configure({ mode: 'serial' });
 
 let PART_ID = 0;
 let api: APIRequestContext;
@@ -51,14 +56,14 @@ test.afterAll(async () => {
   await api?.dispose();
 });
 
-async function openCadTab(page: Page) {
-  await page.goto(`/#/parts/${PART_ID}/cad`);
+async function openCadTab(page: Page, partId = PART_ID) {
+  await page.goto(`/#/parts/${partId}/cad`);
   await page.waitForLoadState('domcontentloaded');
 }
 
 /** Open the editor: create the CAD model on first use, or open the existing one. */
-async function openEditor(page: Page) {
-  await openCadTab(page);
+async function openEditor(page: Page, partId = PART_ID) {
+  await openCadTab(page, partId);
   const create = page.locator('[data-testid="cad-create-button"]');
   const open = page.locator('[data-testid="open-editor"]');
   await expect(create.or(open)).toBeVisible({ timeout: 10_000 });
@@ -91,12 +96,18 @@ async function enterSketchOnXY(page: Page) {
   await page.locator('[data-testid="action-sketch"]').click();
   await page.evaluate(() => (window as any).__cadSetSelected('datum:xy_plane'));
   await expect(page.locator('[data-testid="sketch-toolbar"]')).toBeVisible({ timeout: 10_000 });
+  await waitForCameraSettled(page);
 }
 
 /** Activate the Line tool via the primitives split-button menu. */
 async function activateLineTool(page: Page) {
   await page.locator('[data-testid="group-primitives-chevron"]').click();
-  await page.locator('[data-testid="tool-line"]').click();
+  const item = page.locator('[data-testid="tool-line"]');
+  await item.click();
+  // The mat-menu backdrop can swallow the NEXT canvas click while the
+  // close animation runs — wait for the menu to fully detach.
+  await expect(item).toBeHidden({ timeout: 5_000 });
+  await page.waitForTimeout(250);
 }
 
 /** The MAIN viewer canvas — `.first()` because the nav-cube is a second,
@@ -189,7 +200,11 @@ test.describe('Sketch tools', () => {
   });
 
   test('Line tool chains clicks into a closed 4-line loop', async ({ page }) => {
-    await openEditor(page);
+    // Own part: the shared one now holds the point test's sketch, and
+    // reopening frames it — the origin drifts under the click points.
+    const fx = await createFixturePart('line-loop');
+    await fx.api.dispose();
+    await openEditor(page, fx.partId);
     await enterSketchOnXY(page);
     await drawClosedRectangle(page);
     await expect.poll(() => sketchEntityCount(page, 'line'), { timeout: 5_000 }).toBe(4);
@@ -198,7 +213,9 @@ test.describe('Sketch tools', () => {
 
 test.describe('Extrude', () => {
   test('Extrude button appears only once the sketch has a closed profile', async ({ page }) => {
-    await openEditor(page);
+    const fx = await createFixturePart('extrude');
+    await fx.api.dispose();
+    await openEditor(page, fx.partId);
     await enterSketchOnXY(page);
     await expect(page.locator('[data-testid="extrude-button"]')).not.toBeVisible();
     await drawClosedRectangle(page);
@@ -206,7 +223,9 @@ test.describe('Extrude', () => {
   });
 
   test('Extruding a closed profile adds a feature and exits sketch mode', async ({ page }) => {
-    await openEditor(page);
+    const fx = await createFixturePart('extrude');
+    await fx.api.dispose();
+    await openEditor(page, fx.partId);
     const before = await page.locator('[data-testid="feature-tree-row"]').count();
     await enterSketchOnXY(page);
     await drawClosedRectangle(page);
@@ -242,7 +261,7 @@ test.describe('Branch release workflow (VCS model)', () => {
     await openFileTab(page);
     await page.locator('[data-testid="action-checkin"]').click();
     const dialog = page.getByRole('dialog');
-    await dialog.locator('input').fill('e2e: geometry for release');
+    await dialog.getByRole('textbox').first().fill('e2e: geometry for release');
     await dialog.getByRole('button', { name: 'Check in' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 10_000 });
 

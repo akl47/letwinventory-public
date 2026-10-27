@@ -81,3 +81,23 @@ describe('VCS garbage collection (REQ 902)', () => {
     expect(await objectExists(dangling)).toBe(false);
   });
 });
+
+// REQ 957 — a reachable commit's thumbnail (stored under a derived key no
+// object references) survives the sweep; an unreachable commit's does not.
+describe('VCS GC keeps commit thumbnails (REQ 957)', () => {
+  test('thumbnail of a reachable commit survives; orphaned commit thumbnail is swept', async () => {
+    const tree = await vcs.writeTree(REPO, []);
+    const kept = await vcs.createCommit(REPO, { treeHash: tree, parents: [], message: 'kept', timestamp: new Date().toISOString() });
+    await vcs.createBranch(REPO, 'main', kept);
+    const orphan = await vcs.createCommit(REPO, { treeHash: tree, parents: [], message: 'orphan', timestamp: new Date(Date.now() + 1).toISOString() });
+
+    for (const c of [kept, orphan]) {
+      await db.VcsObject.create({ repoType: REPO.repoType, repoId: REPO.repoId, hash: vcs.thumbKey(c), kind: 'thumbnail', content: null, bytes: Buffer.from('PNG'), size: 3 });
+    }
+    for (const h of [tree, kept, orphan, vcs.thumbKey(kept), vcs.thumbKey(orphan)]) await ageObject(h, 30);
+
+    await gc.sweepUnreachableObjects();
+    expect(await objectExists(vcs.thumbKey(kept))).toBe(true);
+    expect(await objectExists(vcs.thumbKey(orphan))).toBe(false);
+  });
+});

@@ -47,7 +47,8 @@ describe('CAD release export (frozen)', () => {
     await auth.post(url(model.id, '/checkout')).send({});
     await auth.put(url(model.id, '')).send({ featureTree: F2, sketchDoc: F2DOC });
     await auth.post(url(model.id, '/checkin')).send({ message: 'add f2' });
-    expect((await auth.post(url(model.id, '/dev-release')).send({})).status).toBe(200);
+    // Branch release onto main (the retired /dev-release endpoint's successor).
+    expect((await auth.post(url(model.id, '/release')).send({})).status).toBe(200);
     return model;
   }
 

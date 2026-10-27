@@ -34,6 +34,7 @@
 #include "op_revolve_sweep.hpp"
 #include "op_shell_blend.hpp"
 #include "op_pattern.hpp"
+#include "server_limits.hpp"
 
 using json = nlohmann::json;
 
@@ -42,7 +43,11 @@ using json = nlohmann::json;
 //     the backend's connection POOL (REQ 903) that unlocked cross-model
 //     concurrency; the cap bounds thread/fd exhaustion from a runaway client.
 //     No geometry change — NAMING stays 48.
-static constexpr const char* KERNEL_BUILD = "cpp-15";
+// cpp-16: resource limits (REQ 963/964) — request lines are capped
+//     (CAD_KERNEL_MAX_REQUEST_BYTES), each forked op child gets an address-space
+//     rlimit (CAD_KERNEL_CHILD_MEM_MB), and stale cad-export-* temp files are
+//     swept at startup. Behavior-only — NAMING stays 48.
+static constexpr const char* KERNEL_BUILD = "cpp-16";
 // 30: native C++/OCCT 8.0 kernel; binary BinTools BReps invalidate the old
 // text-BRep cache (must match NAMING_VERSION in backend cadRegenService.js).
 // 31: tessellation normal off-by-one fix (zero-normal last node → dark
@@ -229,6 +234,7 @@ static json run_op_isolated(const std::string& method, const json& params) {
     // parent atexit handlers or shared stdio flushing runs twice. EOF on the
     // pipe (via _Exit closing it) is the message terminator — no framing.
     close(pfd[0]);
+    kernel::apply_child_memory_limit();  // REQ 963 — bad_alloc, not an OOM kill
     std::string out;
     try {
       json result = handle_method(method, params);
@@ -367,10 +373,22 @@ static void handle_connection(int fd) {
   setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
   std::string buf;
   char chunk[8192];
+  const size_t max_line = kernel::max_request_bytes();
   for (;;) {
     ssize_t n = recv(fd, chunk, sizeof(chunk), 0);
     if (n <= 0) break;
     buf.append(chunk, static_cast<size_t>(n));
+    // REQ 963 — an unterminated line past the cap is refused and the client
+    // disconnected; the buffer never grows without bound.
+    if (buf.size() > max_line && buf.find('\n') == std::string::npos) {
+      std::string err = make_error(nullptr, -32600,
+          "request exceeds " + std::to_string(max_line) + " bytes (CAD_KERNEL_MAX_REQUEST_BYTES)").dump() + "\n";
+      send(fd, err.data(), err.size(), MSG_NOSIGNAL);
+      std::fprintf(stderr, "[server] request over %zu bytes — connection closed\n", max_line);
+      std::fflush(stderr);
+      close(fd);
+      return;
+    }
     size_t pos;
     while ((pos = buf.find('\n')) != std::string::npos) {
       std::string line = buf.substr(0, pos);
@@ -410,6 +428,9 @@ int main() {
   // via SIGPIPE; socket sends already use MSG_NOSIGNAL.
   signal(SIGPIPE, SIG_IGN);
   start_watchdog();
+  // REQ 964 — exports killed at the op timeout never unlink their temp file.
+  int swept = kernel::sweep_stale_exports(kernel::export_temp_dir());
+  if (swept > 0) std::fprintf(stderr, "[startup] removed %d stale cad-export temp file(s)\n", swept);
 
   std::string addr = "0.0.0.0:9876";
   if (const char* a = std::getenv("CAD_KERNEL_ADDR")) addr = a;

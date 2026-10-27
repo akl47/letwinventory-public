@@ -69,3 +69,4 @@ function checkPermission(resource, action) {
 
 module.exports = checkPermission;
 module.exports.loadEffectivePermissions = loadEffectivePermissions;
+module.exports.loadApiKeyPermissions = loadApiKeyPermissions;

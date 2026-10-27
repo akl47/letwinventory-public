@@ -12,6 +12,10 @@ module.exports = (sequelize, DataTypes) => {
     repoId: { type: DataTypes.STRING(64), primaryKey: true, allowNull: false },
     state: { type: DataTypes.STRING(32), allowNull: false },
     updatedByUserID: { type: DataTypes.INTEGER, allowNull: true },
+    // REQ 947 — the commit an approval reviewed; release requires a match.
+    approvedCommitHash: { type: DataTypes.STRING(64), allowNull: true },
+    // REQ 949 — who submitted the current review (may not approve it).
+    submittedByUserID: { type: DataTypes.INTEGER, allowNull: true },
     updatedAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
   }, {
     sequelize,

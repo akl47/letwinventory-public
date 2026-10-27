@@ -66,6 +66,7 @@ describe('Assembly BOM sync to inventory (REQ 769)', () => {
     const c1 = await partWithCad(auth);
     const c2 = await partWithCad(auth);
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
     const id = asm.body.id;
     await auth.post(`/api/design/assembly/${id}/instances`).send({ partID: c1.id });
     await auth.post(`/api/design/assembly/${id}/instances`).send({ partID: c1.id });

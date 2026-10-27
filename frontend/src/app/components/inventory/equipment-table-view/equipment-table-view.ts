@@ -2,6 +2,7 @@ import { Component, OnInit, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog } from '@angular/material/dialog';
 import { InventoryService } from '../../../services/inventory.service';
@@ -18,6 +19,7 @@ import { DataTable, DataTableColumnDef, ColumnDef, FilterSection } from '../../c
     CommonModule,
     MatButtonModule,
     MatIconModule,
+    MatProgressSpinnerModule,
     MatTooltipModule,
     BarcodeTag,
     DataTable,
@@ -33,6 +35,8 @@ export class EquipmentTableView implements OnInit {
   canWrite = computed(() => this.authService.hasPermission('equipment', 'write'));
 
   allEquipment = signal<Equipment[]>([]);
+  // REQ 937 — spinner gate; starts true so the empty state can't show while loading.
+  isLoading = signal<boolean>(true);
 
   columns: ColumnDef<Equipment>[] = [
     { key: 'name', header: 'Name', sortable: true },
@@ -60,8 +64,14 @@ export class EquipmentTableView implements OnInit {
 
   loadEquipment() {
     this.inventoryService.getAllEquipment().subscribe({
-      next: (equipment) => this.allEquipment.set(equipment),
-      error: (err) => console.error('Error loading equipment:', err),
+      next: (equipment) => {
+        this.allEquipment.set(equipment);
+        this.isLoading.set(false);
+      },
+      error: (err) => {
+        console.error('Error loading equipment:', err);
+        this.isLoading.set(false);
+      },
     });
   }
 

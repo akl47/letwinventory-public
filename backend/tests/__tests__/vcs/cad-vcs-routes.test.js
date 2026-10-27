@@ -94,3 +94,43 @@ describe('CAD VCS routes', () => {
     expect(fu.body.lockedByUserID).toBeNull();
   });
 });
+
+// REQ 952 — check-in never silently overwrites newer work or drops history.
+describe('Check-in base-commit guard (REQ 952)', () => {
+  const vcs = require('../../../services/vcs/vcsService');
+  const cadvcs = require('../../../services/vcs/cadVcsService');
+
+  test('409 when the branch head moved since checkout', async () => {
+    const auth = await authenticatedRequest();
+    const part = await createTestPart();
+    const model = await createModel(auth, part.id);
+    await auth.post(`/api/design/cad-model/${model.id}/checkout`).send({});
+    // Something else advances the branch (e.g. a second working copy).
+    const row = await db.DesignCADModel.findByPk(model.id);
+    const repo = await cadvcs.repoForModel(row);
+    const head = await vcs.getRef(repo, row.branchName);
+    const other = await vcs.createCommit(repo, { treeHash: (await vcs.getCommit(repo, head.targetHash)).treeHash, parents: [head.targetHash], message: 'elsewhere', timestamp: new Date().toISOString() });
+    await vcs.updateBranch(repo, row.branchName, other);
+
+    const ci = await auth.post(`/api/design/cad-model/${model.id}/checkin`).send({ message: 'stale' });
+    expect(ci.status).toBe(409);
+    expect(ci.body.error).toMatch(/new commits since/);
+    expect((await vcs.getRef(repo, row.branchName)).targetHash).toBe(other);
+  });
+
+  test('a missing branch ref is re-created on the base commit, not as a root', async () => {
+    const auth = await authenticatedRequest();
+    const part = await createTestPart();
+    const model = await createModel(auth, part.id);
+    await auth.post(`/api/design/cad-model/${model.id}/checkout`).send({});
+    const row = await db.DesignCADModel.findByPk(model.id);
+    const repo = await cadvcs.repoForModel(row);
+    const base = row.baseCommitHash;
+    await vcs.deleteRef(repo, row.branchName);
+
+    const ci = await auth.post(`/api/design/cad-model/${model.id}/checkin`).send({ message: 'after archive' });
+    expect(ci.status).toBe(200);
+    const commit = await vcs.getCommit(repo, ci.body.commitHash);
+    expect(commit.parents).toEqual([base]);
+  });
+});

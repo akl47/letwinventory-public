@@ -58,6 +58,48 @@ describe('workflowEngine', () => {
     expect(calls).toEqual([{ action: 'submit', actor: writer.id }]);
   });
 
+  test('the submitter cannot approve or reject their own submission (REQ 949)', async () => {
+    await wf.transition(REPO, 'submit', approver.id);
+    await expect(wf.transition(REPO, 'approve', approver.id)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(wf.transition(REPO, 'reject', approver.id)).rejects.toMatchObject({ statusCode: 403 });
+    expect((await wf.availableActions(REPO, approver.id)).map(a => a.action)).toEqual([]);
+    const second = await createTestUser({ displayName: 'wf-approver-2' });
+    await grant(second.id, ['read', 'write', 'approve']);
+    expect((await wf.transition(REPO, 'approve', second.id)).state).toBe('approved');
+  });
+
+  test('approval is bound to the reviewed commit (REQ 947)', async () => {
+    const H1 = 'a'.repeat(64);
+    const H2 = 'b'.repeat(64);
+    await wf.transition(REPO, 'submit', writer.id, { commitHash: H1 });
+    await wf.transition(REPO, 'approve', approver.id, { commitHash: H1 });
+    expect(await wf.canRelease(REPO, undefined, H1)).toBe(true);
+    expect(await wf.canRelease(REPO, undefined, H2)).toBe(false);
+    // A reset clears the approval binding.
+    await wf.setState(REPO, 'draft', writer.id);
+    expect(await wf.canRelease(REPO, undefined, H1)).toBe(false);
+  });
+
+  test('submit notifies every active cad.approve holder except the submitter (REQ 950)', async () => {
+    const notificationService = require('../../../services/notificationService');
+    const sent = [];
+    const spy = jest.spyOn(notificationService, 'sendPushToUser').mockImplementation(async (id, payload) => { sent.push({ id, payload }); });
+    const inactive = await createTestUser({ displayName: 'wf-inactive', activeFlag: false });
+    await grant(inactive.id, ['approve']);
+    // Group-granted reviewer.
+    const grouped = await createTestUser({ displayName: 'wf-grouped' });
+    const group = await db.UserGroup.create({ name: `Reviewers ${Date.now()}`, activeFlag: true });
+    await db.UserGroupMember.create({ userID: grouped.id, groupID: group.id });
+    const approve = await db.Permission.findOne({ where: { resource: 'cad', action: 'approve' } });
+    await db.GroupPermission.create({ groupID: group.id, permissionID: approve.id });
+
+    await wf.transition(REPO, 'submit', approver.id, { modelName: 'Bracket' });
+    const ids = sent.map((x) => x.id).sort();
+    expect(ids).toEqual([grouped.id].sort()); // approver submitted; inactive skipped; writer lacks approve
+    expect(sent[0].payload.body).toMatch(/Bracket was submitted for review/);
+    spy.mockRestore();
+  });
+
   test('canRelease only when approved (VC-37)', async () => {
     expect(await wf.canRelease(REPO)).toBe(false);
     await wf.transition(REPO, 'submit', writer.id);

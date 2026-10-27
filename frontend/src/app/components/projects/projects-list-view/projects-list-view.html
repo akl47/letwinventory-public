@@ -11,6 +11,11 @@
     </div>
   </div>
 
+  @if (isLoading()) {
+    <div class="loading-container">
+      <mat-spinner diameter="40"></mat-spinner>
+    </div>
+  } @else {
   <app-data-table
     [data]="allProjects()"
     [columns]="columns"
@@ -49,4 +54,5 @@
 
     <ng-template appColumn="createdAt" let-project>{{ project.createdAt | date:'MMM d, y' }}</ng-template>
   </app-data-table>
+  }
 </div>

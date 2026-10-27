@@ -42,6 +42,16 @@ export function mirrorTransforms(feature: MirrorFeatureFeature): PatternTransfor
  * cell in the grid EXCEPT the source seed at (0,0). For a 1D pattern
  * (no direction2) returns count1 − 1 entries; for 2D returns
  * count1 * count2 − 1. Throws on count < 1 or spacing == 0. */
+/** REQ 962 — upper bound on copies per pattern feature. KEEP IN SYNC with
+ * MAX_PATTERN_COPIES in backend/services/cadRegenService.js. */
+export const MAX_PATTERN_COPIES = 1000;
+
+function assertPatternCopies(kind: string, copies: number): void {
+  if (copies > MAX_PATTERN_COPIES) {
+    throw new Error(`${kind} pattern: ${copies} copies exceeds the limit of ${MAX_PATTERN_COPIES} — reduce the instance count.`);
+  }
+}
+
 export function linearTransforms(feature: LinearPatternFeature): PatternTransform[] {
   const d1 = feature.direction1;
   if (d1.count < 1) throw new Error('Linear pattern: direction 1 count must be ≥ 1.');
@@ -56,6 +66,7 @@ export function linearTransforms(feature: LinearPatternFeature): PatternTransfor
     }
   }
 
+  assertPatternCopies('Linear', d1.count * (d2 ? d2.count : 1) - 1);
   const v1 = scaledStep(d1.axisSnapshot.direction, d1.spacing, d1.flipped === true);
   const v2 = d2 ? scaledStep(d2.axisSnapshot.direction, d2.spacing, d2.flipped === true) : null;
 
@@ -78,6 +89,7 @@ export function circularTransforms(feature: CircularPatternFeature): PatternTran
   if (feature.count < 2) {
     throw new Error('Circular pattern: count must be ≥ 2 (one of the slots is the source).');
   }
+  assertPatternCopies('Circular', feature.count - 1);
   // equalSpacing distributes the user-supplied total sweep across all
   // `count` slots — step = total / count. Matches SolidWorks's "Equal
   // spacing" with the default 360° sweep producing N evenly-spaced

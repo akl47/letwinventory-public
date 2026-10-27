@@ -12,6 +12,7 @@ import { TaskService } from '../../../services/task.service';
 import { TaskList } from '../../../models/task-list.model';
 import { ProjectService } from '../../../services/project.service';
 import { Project } from '../../../models/project.model';
+import { generateUUID } from '../../../utils/uuid';
 
 export interface TaskCardDialogData {
   task: Task;
@@ -156,7 +157,7 @@ export class TaskCardDialog implements OnInit, OnDestroy {
     if (!text) return;
 
     const item: ChecklistItem = {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       text,
       checked: false
     };

@@ -60,8 +60,15 @@ log "[$(date)] Backup complete"
 # --- Pull new images ---
 log "[$(date)] Pulling latest app image..."
 docker pull akl47/letwinventory:latest
-log "[$(date)] Pulling latest CAD kernel image..."
-docker pull ghcr.io/akl47/letwinventory-cad-kernel:latest
+# REQ 968 — the kernel runs a PINNED image tag (never :latest).
+CAD_KERNEL_IMAGE_TAG="${CAD_KERNEL_IMAGE_TAG:-$(grep -hE '^CAD_KERNEL_IMAGE_TAG=' "${PROJECT_DIR}/.env" "${PROJECT_DIR}/.env.production" 2>/dev/null | head -1 | cut -d= -f2-)}"
+if [ -z "$CAD_KERNEL_IMAGE_TAG" ] || [ "$CAD_KERNEL_IMAGE_TAG" = "latest" ]; then
+  log "[$(date)] ERROR: CAD_KERNEL_IMAGE_TAG must be set to a published kernel commit sha (not 'latest'), aborting deploy"
+  exit 1
+fi
+export CAD_KERNEL_IMAGE_TAG
+log "[$(date)] Pulling CAD kernel image ${CAD_KERNEL_IMAGE_TAG}..."
+docker pull "ghcr.io/akl47/letwinventory-cad-kernel:${CAD_KERNEL_IMAGE_TAG}"
 log "[$(date)] Pulls complete"
 
 # --- Restart containers ---

@@ -5,6 +5,7 @@
 // production-letter release, not the numeric release onto main.
 
 const { authenticatedRequest, createTestPart } = require('../../helpers');
+const { createTestUser } = require('../../setup');
 
 describe('CAD workflow routes', () => {
   test('review transitions work on a draft branch; release-to-main is self-service', async () => {
@@ -16,7 +17,12 @@ describe('CAD workflow routes', () => {
     // Review transitions still function on the draft branch (used for the
     // production gate once on main).
     expect((await auth.post(`/api/design/cad-model/${model.id}/workflow`).send({ action: 'submit' })).body.state).toBe('in_review');
-    expect((await auth.post(`/api/design/cad-model/${model.id}/workflow`).send({ action: 'reject' })).body.state).toBe('draft');
+    // REQ 949 — the submitter may not review their own submission.
+    const selfReject = await auth.post(`/api/design/cad-model/${model.id}/workflow`).send({ action: 'reject' });
+    expect(selfReject.status).toBe(403);
+    expect(selfReject.body.error).toMatch(/different reviewer/);
+    const reviewer = await authenticatedRequest(await createTestUser({ displayName: 'Reviewer' }));
+    expect((await reviewer.post(`/api/design/cad-model/${model.id}/workflow`).send({ action: 'reject' })).body.state).toBe('draft');
 
     // Release straight from the draft branch — no submit/approve required.
     expect((await auth.post(`/api/design/cad-model/${model.id}/release`)).status).toBe(200);

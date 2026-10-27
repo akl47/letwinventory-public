@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { solveSketch } from './solver';
+import { solveSketch as rawSolveSketch } from './solver';
+import { dimensionalViolations } from './solveInvariant';
+
+// REQ 923 — every 'ok' solve in this suite must uphold the dims-match-
+// geometry invariant (stored dim values match measured geometry; no
+// non-construction line collapsed to zero). Shadowing the import covers
+// every call site in the file without touching individual tests.
+const solveSketch: typeof rawSolveSketch = async (state, opts) => {
+  const res = await rawSolveSketch(state, opts);
+  expect(dimensionalViolations(state, res)).toEqual([]);
+  return res;
+};
 import type { SketchState, SketchEntity, SketchConstraint, CircleEntity, ArcEntity } from './types';
 import { pointsOf, findEntity, findPoint } from './types';
 

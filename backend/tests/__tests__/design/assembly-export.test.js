@@ -11,6 +11,7 @@ describe('Assembly export (REQ 754)', () => {
     const auth = await authenticatedRequest();
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
 
     const res = await auth.get(`/api/design/assembly/${asm.body.id}/export/step`);
     expect(res.status).toBe(422);
@@ -22,6 +23,7 @@ describe('Assembly export (REQ 754)', () => {
     const asmPart = await createTestPart({ partCategoryID: 4 });
     const comp = await partWithCad(auth);
     const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    await auth.post(`/api/design/cad-model/${asm.body.id}/checkout`).send({}); // REQ 942 — edits need a checkout
     await auth.post(`/api/design/assembly/${asm.body.id}/instances`).send({ partID: comp.id });
 
     // No CAD kernel runs in the test environment, so composing/exporting fails

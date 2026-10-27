@@ -7,6 +7,8 @@
 // (checkout/branch/workflow/release/diff) are served by the cad-model API.
 
 const db = require('../../../models');
+const RestError = require('../../../util/RestError');
+const { cadError, sendCadError } = require('../../../services/cadErrors');
 const assemblyRegenService = require('../../../services/assemblyRegenService');
 const assemblyAnalysisService = require('../../../services/assemblyAnalysisService');
 const assemblyVcsService = require('../../../services/vcs/assemblyVcsService');
@@ -15,6 +17,8 @@ const cadVcsService = require('../../../services/vcs/cadVcsService');
 const vcsService = require('../../../services/vcs/vcsService');
 const cadRegenService = require('../../../services/cadRegenService');
 const { KernelDisconnected, KernelRpcError, getDefaultClient } = require('../../../services/cadKernelClient');
+const { validateSketchDocExpressions } = require('../../../services/cadSafeExpr');
+const { summarizeDocChange, historyPage } = require('../../../services/cadHistoryDiff');
 
 // Augment an assembly with the VCS display fields the File ribbon reads:
 // `released`, `displayRevision`, `draftRevision`, `behindMain`. Revision numbers
@@ -33,8 +37,7 @@ async function withReleaseFlag(assembly) {
     const mainRef = await vcsService.getRef(repo, 'main');
     const branchRef = await vcsService.getRef(repo, assembly.branchName);
     if (mainRef && branchRef) {
-      const ancestry = (await vcsService.walk(repo, branchRef.targetHash)).map((c) => c.hash);
-      behindMain = !ancestry.includes(mainRef.targetHash);
+      behindMain = !(await vcsService.isAncestor(repo, mainRef.targetHash, branchRef.targetHash)); // REQ 969
     }
   }
   return { ...assembly.toJSON(), released, displayRevision, draftRevision: onMain ? null : displayRevision, behindMain };
@@ -64,11 +67,77 @@ async function fetchActive(id) {
 }
 
 // Normalize a client-supplied placement to { translate:[3], quaternion:[4] }.
+// REQ 961 — a supplied placement must be finite numbers (3-element translate,
+// non-zero 4-element quaternion, normalized on save); otherwise 400 naming the
+// field. A missing placement defaults to identity.
 function sanitizePlacement(p) {
-  if (!p || typeof p !== 'object') return { ...IDENTITY_PLACEMENT };
-  const t = Array.isArray(p.translate) && p.translate.length === 3 ? p.translate.map(Number) : [0, 0, 0];
-  const q = Array.isArray(p.quaternion) && p.quaternion.length === 4 ? p.quaternion.map(Number) : [0, 0, 0, 1];
+  if (p === undefined || p === null) return { ...IDENTITY_PLACEMENT };
+  if (typeof p !== 'object') throw new RestError('placement must be an object with translate and quaternion', 400);
+  let t = [0, 0, 0];
+  if (p.translate !== undefined) {
+    if (!Array.isArray(p.translate) || p.translate.length !== 3 || !p.translate.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+      throw new RestError('placement.translate must be an array of 3 finite numbers', 400);
+    }
+    t = [...p.translate];
+  }
+  let q = [0, 0, 0, 1];
+  if (p.quaternion !== undefined) {
+    if (!Array.isArray(p.quaternion) || p.quaternion.length !== 4 || !p.quaternion.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+      throw new RestError('placement.quaternion must be an array of 4 finite numbers', 400);
+    }
+    const len = Math.hypot(...p.quaternion);
+    if (len < 1e-12) throw new RestError('placement.quaternion must not be all zeros', 400);
+    q = p.quaternion.map((n) => n / len);
+  }
   return { translate: t, quaternion: q };
+}
+
+// REQ 942 — every mutating assembly endpoint enforces the same guards as the
+// skeleton save (REQ 914): main protected, caller's unexpired checkout
+// required, release-locked rejected, and stale clientSavedAt rejected. Sends
+// the error response and returns false when the edit is not allowed.
+async function editGuard(assembly, req, res) {
+  const id = assembly.id;
+  if ((assembly.branchName || 'main') === 'main') {
+    res.status(423).json({ error: 'The main branch is protected — create or switch to a draft branch to make changes' });
+    return false;
+  }
+  if (assembly.releaseLocked) {
+    res.status(423).json({ error: `Assembly ${id} is released and read-only — create a draft branch to make changes` });
+    return false;
+  }
+  if (assembly.lockedByUserID !== req.user.id) {
+    if (assembly.lockedByUserID) {
+      const holder = await db.User.findByPk(assembly.lockedByUserID);
+      res.status(423).json({ error: `Assembly ${id} is checked out by ${holder ? holder.displayName : 'another user'}` });
+    } else {
+      res.status(423).json({ error: `Check out assembly ${id} before editing it` });
+    }
+    return false;
+  }
+  if (assembly.lockExpiresAt && new Date() > new Date(assembly.lockExpiresAt)) {
+    res.status(423).json({ error: `Your checkout of assembly ${id} has expired — check out again to continue`, code: 'LOCK_EXPIRED' });
+    return false;
+  }
+  // REQ 905-parity — same-user second-session conflict detection.
+  if (req.body && req.body.clientSavedAt !== undefined) {
+    const serverTok = assembly.lastContentSavedAt ? new Date(assembly.lastContentSavedAt).getTime() : null;
+    const clientTok = req.body.clientSavedAt ? new Date(req.body.clientSavedAt).getTime() : null;
+    if (serverTok !== clientTok) {
+      res.status(409).json({
+        error: 'This assembly was changed by another session since this window last saved — reload to continue from the latest state.',
+        code: 'DOC_CONFLICT',
+      });
+      return false;
+    }
+  }
+  return true;
+}
+
+// A content edit stamps lastContentSavedAt (so other sessions detect it) and
+// slides the lock expiry, like part content saves (REQ 875).
+function contentPatch(patch) {
+  return { ...patch, lastContentSavedAt: new Date(), lockExpiresAt: new Date(Date.now() + cadVcsService.DEFAULT_LOCK_TTL_MS) };
 }
 
 // Push an "origin" mate (a component fixed to the assembly origin) onto the doc
@@ -110,7 +179,7 @@ module.exports = {
         hasAssembly: hasAssembly.has(p.id),
       })));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to list eligible parts: ${err.message}` });
+      return sendCadError(res, err, 'Failed to list eligible parts');
     }
   },
 
@@ -124,34 +193,12 @@ module.exports = {
     const assembly = await fetchActive(id);
     if (!assembly) return res.status(404).json({ error: `Assembly ${id} not found` });
 
-    if ((assembly.branchName || 'main') === 'main') {
-      return res.status(423).json({ error: 'The main branch is protected — create or switch to a draft branch to make changes' });
-    }
-    if (assembly.lockedByUserID !== req.user.id) {
-      if (assembly.lockedByUserID) {
-        const holder = await db.User.findByPk(assembly.lockedByUserID);
-        return res.status(423).json({
-          error: `Assembly ${id} is checked out by ${holder ? holder.displayName : 'another user'}`,
-        });
-      }
-      return res.status(423).json({ error: `Check out assembly ${id} before editing it` });
-    }
-    if (assembly.lockExpiresAt && new Date() > new Date(assembly.lockExpiresAt)) {
-      return res.status(423).json({
-        error: `Your checkout of assembly ${id} has expired — check out again to continue`,
-        code: 'LOCK_EXPIRED',
-      });
-    }
-    // REQ 905-parity — same-user second-session conflict detection.
-    if (req.body && req.body.clientSavedAt !== undefined) {
-      const serverTok = assembly.lastContentSavedAt ? new Date(assembly.lastContentSavedAt).getTime() : null;
-      const clientTok = req.body.clientSavedAt ? new Date(req.body.clientSavedAt).getTime() : null;
-      if (serverTok !== clientTok) {
-        return res.status(409).json({
-          error: 'This assembly was changed by another session since this window last saved — reload to continue from the latest state.',
-          code: 'DOC_CONFLICT',
-        });
-      }
+    if (!(await editGuard(assembly, req, res))) return undefined;
+
+    // REQ 941 — equation-curve expressions are untrusted shared content.
+    if (req.body && req.body.sketchDoc !== undefined) {
+      const exprErr = validateSketchDocExpressions(req.body.sketchDoc);
+      if (exprErr) return res.status(400).json({ error: exprErr });
     }
 
     const patch = {};
@@ -173,14 +220,11 @@ module.exports = {
 
     try {
       await assembly.update(patch);
-      await recordHistory(assembly.id, req.user.id, 'updated', previousSnapshot, {
-        sketchDoc: assembly.sketchDoc,
-        featureTree: assembly.featureTree,
-        equations: assembly.equations,
-      });
+      // REQ 959 — record what changed, not two full document snapshots.
+      await recordHistory(assembly.id, req.user.id, 'updated', null, summarizeDocChange(previousSnapshot, patch));
       return res.json(await withReleaseFlag(assembly));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to save skeleton: ${err.message}` });
+      return sendCadError(res, err, 'Failed to save skeleton');
     }
   },
 
@@ -223,6 +267,12 @@ module.exports = {
           results.push({ partID, modelId: model.id, status: 'skipped-locked', lockedBy: holder ? holder.displayName : null, names: [] });
           continue;
         }
+        // REQ 946 — content changes require the pusher's own unexpired checkout.
+        if (model.lockedByUserID !== req.user.id
+            || (model.lockExpiresAt && new Date() > new Date(model.lockExpiresAt))) {
+          results.push({ partID, modelId: model.id, status: 'skipped-not-checked-out', names: [] });
+          continue;
+        }
         const equations = JSON.parse(JSON.stringify(model.equations || { entries: {} }));
         equations.entries = equations.entries || {};
         let changed = false;
@@ -243,7 +293,7 @@ module.exports = {
       await recordHistory(assembly.id, req.user.id, 'variables_pushed', null, { names: pushable, results });
       return res.json({ results, unresolved, names: pushable });
     } catch (err) {
-      return res.status(500).json({ error: `Failed to push variables: ${err.message}` });
+      return sendCadError(res, err, 'Failed to push variables');
     }
   },
 
@@ -259,7 +309,7 @@ module.exports = {
       if (!assembly) return res.status(404).json({ error: `No assembly found for part ${partID}` });
       return res.json(await withReleaseFlag(assembly));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to fetch assembly: ${err.message}` });
+      return sendCadError(res, err, 'Failed to fetch assembly');
     }
   },
 
@@ -299,7 +349,7 @@ module.exports = {
       } catch (_) { /* seeded lazily on first checkin */ }
       return res.status(201).json(await fetchActive(assembly.id));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to create assembly: ${err.message}` });
+      return sendCadError(res, err, 'Failed to create assembly');
     }
   },
 
@@ -310,7 +360,7 @@ module.exports = {
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
       return res.json(await withReleaseFlag(assembly));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to fetch assembly: ${err.message}` });
+      return sendCadError(res, err, 'Failed to fetch assembly');
     }
   },
 
@@ -319,6 +369,7 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const previous = { name: assembly.name, assemblyDoc: assembly.assemblyDoc };
       const patch = {};
       if (req.body.name !== undefined) patch.name = req.body.name;
@@ -327,12 +378,13 @@ module.exports = {
         await assemblyRegenService.assertAcyclic({ partID: assembly.partID, assemblyDoc: req.body.assemblyDoc }, db);
         patch.assemblyDoc = req.body.assemblyDoc;
         patch.dirty = true;
+        Object.assign(patch, contentPatch({}));
       }
       await assembly.update(patch);
       await recordHistory(assembly.id, req.user.id, 'updated', previous, patch);
       return res.json(await fetchActive(assembly.id));
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -345,7 +397,7 @@ module.exports = {
       await recordHistory(assembly.id, req.user.id, 'deleted', { activeFlag: true }, { activeFlag: false });
       return res.status(204).end();
     } catch (err) {
-      return res.status(500).json({ error: `Failed to delete assembly: ${err.message}` });
+      return sendCadError(res, err, 'Failed to delete assembly');
     }
   },
 
@@ -354,6 +406,7 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const partID = Number(req.body.partID);
       if (!partID) return res.status(400).json({ error: 'partID is required' });
 
@@ -400,11 +453,11 @@ module.exports = {
       // Reject a self/cyclic reference before persisting.
       await assemblyRegenService.assertAcyclic({ partID: assembly.partID, assemblyDoc: doc }, db);
 
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'instance_added', null, { instanceId, partID });
       return res.status(201).json({ instance, assembly: await fetchActive(assembly.id) });
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -413,6 +466,7 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
       const inst = (doc.instances || []).find((i) => i.instanceId === req.params.instanceId);
       if (!inst) return res.status(404).json({ error: `Instance ${req.params.instanceId} not found` });
@@ -434,11 +488,11 @@ module.exports = {
         else delete inst.configurationId;
       }
 
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'instance_updated', null, { instanceId: inst.instanceId });
       return res.json({ instance: inst, assembly: await fetchActive(assembly.id) });
     } catch (err) {
-      return res.status(500).json({ error: `Failed to update instance: ${err.message}` });
+      return sendCadError(res, err, 'Failed to update instance');
     }
   },
 
@@ -447,15 +501,16 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
       const before = (doc.instances || []).length;
       doc.instances = (doc.instances || []).filter((i) => i.instanceId !== req.params.instanceId);
       if (doc.instances.length === before) return res.status(404).json({ error: `Instance ${req.params.instanceId} not found` });
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'instance_removed', null, { instanceId: req.params.instanceId });
       return res.json(await fetchActive(assembly.id));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to remove instance: ${err.message}` });
+      return sendCadError(res, err, 'Failed to remove instance');
     }
   },
 
@@ -464,6 +519,7 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const partID = Number(req.body.partID);
       if (!partID) return res.status(400).json({ error: 'partID is required' });
       const part = await db.Part.findByPk(partID);
@@ -478,12 +534,12 @@ module.exports = {
       inst.ref = { kind: childRow.isAssembly ? 'assembly' : 'cad' };
       // Reject if the swap introduces a cycle (e.g. replacing with this assembly's part).
       await assemblyRegenService.assertAcyclic({ partID: assembly.partID, assemblyDoc: doc }, db);
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'instance_replaced', null, { instanceId: inst.instanceId, partID });
       // Mates keep their face references; incompatible faces surface as regen errors.
       return res.json({ instance: inst, assembly: await fetchActive(assembly.id) });
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -492,6 +548,7 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const { kind, seedInstanceId } = req.body || {};
       if (!['linear', 'circular', 'mirror'].includes(kind)) return res.status(400).json({ error: `Unknown pattern kind "${kind}"` });
 
@@ -510,11 +567,11 @@ module.exports = {
       doc.patterns.push(pattern);
       doc.nextPatternSeq = (doc.nextPatternSeq || doc.patterns.length) + 1;
 
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'pattern_added', null, { patternId, kind });
       return res.status(201).json({ pattern, assembly: await fetchActive(assembly.id) });
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -523,15 +580,16 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
       const before = (doc.patterns || []).length;
       doc.patterns = (doc.patterns || []).filter((p) => p.patternId !== req.params.patternId);
       if (doc.patterns.length === before) return res.status(404).json({ error: `Pattern ${req.params.patternId} not found` });
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'pattern_removed', null, { patternId: req.params.patternId });
       return res.json(await fetchActive(assembly.id));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to remove pattern: ${err.message}` });
+      return sendCadError(res, err, 'Failed to remove pattern');
     }
   },
 
@@ -540,6 +598,7 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const { type, a, b, value, flip } = req.body || {};
       const MATE_TYPES = ['coincident', 'concentric', 'parallel', 'perpendicular', 'distance', 'angle', 'tangent', 'lock', 'origin'];
       if (!MATE_TYPES.includes(type)) return res.status(400).json({ error: `Unknown mate type "${type}"` });
@@ -557,7 +616,7 @@ module.exports = {
           return res.status(409).json({ error: 'Component is already mated to the assembly origin' });
         }
         const mateId = pushOriginMate(doc, a.instanceId);
-        await assembly.update({ assemblyDoc: doc, dirty: true });
+        await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
         await recordHistory(assembly.id, req.user.id, 'mate_added', null, { mateId, type });
         const mate = (doc.mates || []).find((m) => m.mateId === mateId);
         return res.status(201).json({ mate, assembly: await fetchActive(assembly.id) });
@@ -595,11 +654,11 @@ module.exports = {
       doc.mates.push(mate);
       doc.nextMateSeq = (doc.nextMateSeq || doc.mates.length) + 1;
 
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'mate_added', null, { mateId, type });
       return res.status(201).json({ mate, assembly: await fetchActive(assembly.id) });
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -608,6 +667,7 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
       const removed = (doc.mates || []).find((m) => (m.mateId || m.id) === req.params.mateId);
       const before = (doc.mates || []).length;
@@ -619,11 +679,11 @@ module.exports = {
         const inst = (doc.instances || []).find((i) => i.instanceId === removed.a.instanceId);
         if (inst) inst.grounded = false;
       }
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'mate_removed', null, { mateId: req.params.mateId });
       return res.json(await fetchActive(assembly.id));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to remove mate: ${err.message}` });
+      return sendCadError(res, err, 'Failed to remove mate');
     }
   },
 
@@ -634,6 +694,7 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
       const mate = (doc.mates || []).find((m) => (m.mateId || m.id) === req.params.mateId);
       if (!mate) return res.status(404).json({ error: `Mate ${req.params.mateId} not found` });
@@ -658,11 +719,11 @@ module.exports = {
       }
       if (req.body.value !== undefined) mate.value = Number(req.body.value);
       if (req.body.flip !== undefined) mate.flip = !!req.body.flip;
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'mate_updated', null, { mateId: mate.mateId || mate.id });
       return res.json(await fetchActive(assembly.id));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to update mate: ${err.message}` });
+      return sendCadError(res, err, 'Failed to update mate');
     }
   },
 
@@ -671,6 +732,7 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
       const insts = (doc.instances || []).filter((i) => !i.suppressed);
       const spread = Number(req.body && req.body.spread) || 1.5;
@@ -692,11 +754,11 @@ module.exports = {
       });
 
       doc.explode = { offsets, factor: (doc.explode && doc.explode.factor) || 1 };
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'auto_exploded', null, { count: insts.length });
       return res.json({ explode: doc.explode, assembly: await fetchActive(assembly.id) });
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -705,14 +767,15 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
       doc.explode = doc.explode || { offsets: {}, factor: 1 };
       if (req.body.factor !== undefined) doc.explode.factor = Math.max(0, Math.min(1, Number(req.body.factor)));
       if (req.body.offsets !== undefined) doc.explode.offsets = req.body.offsets;
-      await assembly.update({ assemblyDoc: doc });
+      await assembly.update(contentPatch({ assemblyDoc: doc }));
       return res.json({ explode: doc.explode, assembly: await fetchActive(assembly.id) });
     } catch (err) {
-      return res.status(500).json({ error: `Failed to set explode: ${err.message}` });
+      return sendCadError(res, err, 'Failed to set explode');
     }
   },
 
@@ -721,6 +784,7 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const name = (req.body && req.body.name && String(req.body.name).trim()) || '';
       if (!name) return res.status(400).json({ error: 'A display state name is required' });
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
@@ -730,11 +794,11 @@ module.exports = {
       const state = { id, name, hidden };
       doc.displayStates.push(state);
       doc.nextDisplayStateSeq = (doc.nextDisplayStateSeq || doc.displayStates.length) + 1;
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'display_state_saved', null, { id, name });
       return res.status(201).json({ state, assembly: await fetchActive(assembly.id) });
     } catch (err) {
-      return res.status(500).json({ error: `Failed to save display state: ${err.message}` });
+      return sendCadError(res, err, 'Failed to save display state');
     }
   },
 
@@ -743,15 +807,16 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
       const state = (doc.displayStates || []).find((s) => s.id === req.params.stateId);
       if (!state) return res.status(404).json({ error: `Display state ${req.params.stateId} not found` });
       const hidden = new Set(state.hidden || []);
       for (const inst of doc.instances || []) inst.visible = !hidden.has(inst.instanceId);
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       return res.json(await fetchActive(assembly.id));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to apply display state: ${err.message}` });
+      return sendCadError(res, err, 'Failed to apply display state');
     }
   },
 
@@ -760,14 +825,15 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      if (!(await editGuard(assembly, req, res))) return undefined;
       const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || INITIAL_ASSEMBLY_DOC));
       const before = (doc.displayStates || []).length;
       doc.displayStates = (doc.displayStates || []).filter((s) => s.id !== req.params.stateId);
       if (doc.displayStates.length === before) return res.status(404).json({ error: `Display state ${req.params.stateId} not found` });
-      await assembly.update({ assemblyDoc: doc, dirty: true });
+      await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       return res.json(await fetchActive(assembly.id));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to delete display state: ${err.message}` });
+      return sendCadError(res, err, 'Failed to delete display state');
     }
   },
 
@@ -780,7 +846,8 @@ module.exports = {
       // Persist the solved placements back into the doc when the requester holds
       // the edit lock — keeps the stored assembly truthful to its mated state and
       // warm-starts the next solve. (Read-only viewers just get the result.)
-      if (composed.constraintState && assembly.lockedByUserID === req.user.id) {
+      if (composed.constraintState && assembly.lockedByUserID === req.user.id
+          && req._effectivePermissions && req._effectivePermissions.has('cad.write')) {
         const doc = JSON.parse(JSON.stringify(assembly.assemblyDoc || {}));
         let changed = false;
         for (const ci of composed.instances) {
@@ -801,14 +868,17 @@ module.exports = {
       // dirty / lastContentSavedAt are NOT touched (the serializer already
       // strips resolvedAt from hashing), and unwritable children (main /
       // locked by someone else) are skipped silently.
-      if (composed.refProjections) {
+      // REQ 945 — this route is cad.read; only a cad.write requester may
+      // persist anything, and never onto a child someone else has checked out
+      // (expired-but-attributed included — that lock is still theirs).
+      const canWrite = !!(req._effectivePermissions && req._effectivePermissions.has('cad.write'));
+      if (composed.refProjections && canWrite) {
         for (const entry of Object.values(composed.refProjections)) {
           try {
             const child = await db.DesignCADModel.findOne({ where: { partID: entry.partID, activeFlag: true, isAssembly: false } });
             if (!child) continue;
             if ((child.branchName || 'main') === 'main') continue;
-            const lockedByOther = child.lockedByUserID && child.lockedByUserID !== req.user.id
-              && !(child.lockExpiresAt && new Date() > new Date(child.lockExpiresAt));
+            const lockedByOther = child.lockedByUserID && child.lockedByUserID !== req.user.id;
             if (lockedByOther) continue;
             const byId = new Map(entry.refs.map((r) => [r.constraintId, r.polyline]));
             const sketchDoc = JSON.parse(JSON.stringify(child.sketchDoc || { sketches: {} }));
@@ -843,9 +913,9 @@ module.exports = {
       });
     } catch (err) {
       if (err instanceof KernelDisconnected || err instanceof KernelRpcError) {
-        return res.status(503).json({ error: err.message });
+        return sendCadError(res, err, undefined, { kernelStatus: 503 });
       }
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err);
     }
   },
 
@@ -857,8 +927,8 @@ module.exports = {
       const composed = await assemblyRegenService.regenerateAssembly(assembly, { db, kernelClient: getDefaultClient() });
       return res.json({ ...assemblyAnalysisService.massProperties(composed), errors: composed.errors });
     } catch (err) {
-      if (err instanceof KernelDisconnected || err instanceof KernelRpcError) return res.status(503).json({ error: err.message });
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      if (err instanceof KernelDisconnected || err instanceof KernelRpcError) return sendCadError(res, err, undefined, { kernelStatus: 503 });
+      return sendCadError(res, err);
     }
   },
 
@@ -872,8 +942,8 @@ module.exports = {
       const pairs = await assemblyAnalysisService.interference(composed, { kernelClient: client });
       return res.json({ pairs, errors: composed.errors });
     } catch (err) {
-      if (err instanceof KernelDisconnected || err instanceof KernelRpcError) return res.status(503).json({ error: err.message });
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      if (err instanceof KernelDisconnected || err instanceof KernelRpcError) return sendCadError(res, err, undefined, { kernelStatus: 503 });
+      return sendCadError(res, err);
     }
   },
 
@@ -882,16 +952,24 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      // REQ 960 — a released (revision-locked) Part's BOM is immutable.
+      const part = await db.Part.findByPk(assembly.partID);
+      if (part && part.revisionLocked) {
+        return res.status(409).json({ error: `Part ${part.name} revision ${part.revision} is released, so its bill of materials cannot be changed` });
+      }
       const lines = assemblyRegenService.assemblyBom(assembly); // [{ partID(component), quantity }]
-      // Replace prior BOM items for this assembly part.
-      await db.BillOfMaterialItem.destroy({ where: { partID: assembly.partID }, force: true });
-      const rows = await db.BillOfMaterialItem.bulkCreate(lines.map((l) => ({
-        partID: assembly.partID, componentPartID: l.partID, quantity: l.quantity, activeFlag: true,
-      })));
+      // Replace ONLY rows a previous sync of this assembly wrote; manually
+      // entered rows are preserved. One transaction: never a half-empty BOM.
+      const rows = await db.sequelize.transaction(async (transaction) => {
+        await db.BillOfMaterialItem.destroy({ where: { partID: assembly.partID, syncedFromAssemblyID: assembly.id }, force: true, transaction });
+        return db.BillOfMaterialItem.bulkCreate(lines.map((l) => ({
+          partID: assembly.partID, componentPartID: l.partID, quantity: l.quantity, activeFlag: true, syncedFromAssemblyID: assembly.id,
+        })), { transaction });
+      });
       await recordHistory(assembly.id, req.user.id, 'bom_synced', null, { count: rows.length });
       return res.json({ count: rows.length, items: rows.map((r) => ({ componentPartID: r.componentPartID, quantity: r.quantity })) });
     } catch (err) {
-      return res.status(err.statusCode || 500).json({ error: err.message });
+      return sendCadError(res, err, 'Failed to sync the bill of materials');
     }
   },
 
@@ -915,7 +993,7 @@ module.exports = {
         part: byId.get(l.partID) || null,
       })));
     } catch (err) {
-      return res.status(500).json({ error: `Failed to build BOM: ${err.message}` });
+      return sendCadError(res, err, 'Failed to build BOM');
     }
   },
 
@@ -928,14 +1006,17 @@ module.exports = {
     try {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
-      const history = await db.DesignCADModelHistory.findAll({
+      // REQ 959 — paginated, newest first (?limit default 100 / max 500, ?offset).
+      const { limit, offset } = historyPage(req.query);
+      const { rows, count } = await db.DesignCADModelHistory.findAndCountAll({
         where: { cadModelID: assembly.id },
-        order: [['createdAt', 'DESC']],
-        limit: 100,
+        order: [['createdAt', 'DESC'], ['id', 'DESC']],
+        limit, offset,
       });
-      return res.json(history);
+      res.set('X-Total-Count', String(count));
+      return res.json(rows);
     } catch (err) {
-      return res.status(500).json({ error: `Failed to fetch history: ${err.message}` });
+      return sendCadError(res, err, 'Failed to fetch history');
     }
   },
 };
@@ -1003,8 +1084,8 @@ async function exportAssembly(req, res, format) {
     return res.send(out.step);
   } catch (err) {
     if (err instanceof KernelDisconnected || err instanceof KernelRpcError) {
-      return res.status(503).json({ error: err.message });
+      return sendCadError(res, err, undefined, { kernelStatus: 503 });
     }
-    return res.status(err.statusCode || 500).json({ error: err.message });
+    return sendCadError(res, err);
   }
 }

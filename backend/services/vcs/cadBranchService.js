@@ -10,6 +10,7 @@ const vcs = require('./vcsService');
 const { repoForModel, cadVersionInfo } = require('./cadVcsService');
 const { cadDeserialize, cadSerialize } = require('./cadSerializer');
 const { makeBranchOps } = require('./vcsBranchOps');
+const { assertEditableBy } = require('./vcsWorkingCopy');
 
 // create / list / switch / archive are written once in vcsBranchOps; bind them
 // to the CAD document. cherry-pick / reconcile / rebase below are feature-specific.
@@ -34,6 +35,7 @@ function referencedSketchIds(feature) {
  * splice the feature (replacing one with the same id, else appended) and the
  * sketches it references, and mark dirty. No merge of histories (VC-28/29). */
 async function cherryPick(model, sourceCommit, featureId, userId = null, db) {
+  assertEditableBy(model, userId); // REQ 953
   const repo = await repoForModel(model, db);
   const commit = await vcs.getCommit(repo, sourceCommit, db);
   if (!commit) throw new RestError(`Commit ${sourceCommit} not found`, 404);
@@ -53,7 +55,9 @@ async function cherryPick(model, sourceCommit, featureId, userId = null, db) {
     if (srcSketches[sid]) sketches[sid] = srcSketches[sid];
   }
 
-  await model.update({ featureTree, sketchDoc, dirty: true });
+  // lastContentSavedAt — open editor sessions see the change (DOC_CONFLICT)
+  // instead of overwriting it with their stale in-memory doc.
+  await model.update({ featureTree, sketchDoc, dirty: true, lastContentSavedAt: new Date() });
   return { model, feature: featureId };
 }
 
@@ -67,46 +71,7 @@ async function behindMain(model, db) {
   const mainRef = await vcs.getRef(repo, 'main', db);
   const branchRef = await vcs.getRef(repo, branchName, db);
   if (!mainRef || !branchRef) return false;
-  const ancestry = (await vcs.walk(repo, branchRef.targetHash, db)).map((c) => c.hash);
-  return !ancestry.includes(mainRef.targetHash);
-}
-
-/** Rebase a behind-main draft branch onto main's head: create a new commit
- * carrying the branch's current tree with main's head as its parent, advance the
- * branch ref, and re-base the working copy. Last-writer-wins on the doc —
- * conflict detection is out of scope. The branch's derived draft revision bumps
- * automatically (a newer released numeric tag now sits on main). */
-async function rebaseBranch(model, userId = null, { at } = {}, db) {
-  if (model.dirty) throw new RestError('Check in your changes before rebasing', 409);
-  const branchName = model.branchName || 'main';
-  if (branchName === 'main') throw new RestError('main cannot be rebased', 409);
-  const repo = await repoForModel(model, db);
-  const mainRef = await vcs.getRef(repo, 'main', db);
-  const branchRef = await vcs.getRef(repo, branchName, db);
-  if (!mainRef || !branchRef) throw new RestError('main or branch not found', 404);
-  const ancestry = (await vcs.walk(repo, branchRef.targetHash, db)).map((c) => c.hash);
-  if (ancestry.includes(mainRef.targetHash)) return { model, rebased: false };
-  const branchCommit = await vcs.getCommit(repo, branchRef.targetHash, db);
-  // Atomic + CAS (REQ 901): the branch only moves if it still points at the
-  // head this rebase was computed from.
-  return vcs.inTransaction(db, async () => {
-    const newCommit = await vcs.createCommit(repo, {
-      treeHash: branchCommit.treeHash,
-      parents: [mainRef.targetHash],
-      authorUserID: userId,
-      message: `rebase ${branchName} onto main`,
-      timestamp: (at ? new Date(at) : new Date()).toISOString(),
-      meta: cadVersionInfo(),
-    }, db);
-    try {
-      await vcs.updateBranch(repo, branchName, newCommit, userId, db, branchRef.targetHash);
-    } catch (err) {
-      if (err.code === 'REF_MOVED') throw new RestError(err.message, 409);
-      throw err;
-    }
-    await model.update({ baseCommitHash: newCommit });
-    return { model, rebased: true, commitHash: newCommit };
-  });
+  return !(await vcs.isAncestor(repo, mainRef.targetHash, branchRef.targetHash, db)); // REQ 969
 }
 
 /** Merge main into a branch by reconciling at the feature level: start from
@@ -129,6 +94,11 @@ async function mergedReconcileDoc(model, branchName, sel, db) {
   const selection = Array.isArray(sel) ? { featureIds: sel, sketchIds: [] } : (sel || {});
   const featureIds = selection.featureIds || [];
   const sketchIds = selection.sketchIds || [];
+  // REQ 955 — equations (global variables) are mergeable too. `equationNames`
+  // = differing variables the user chose to take from the branch. When the
+  // caller sends no list, branch-ONLY variables are still carried (they can't
+  // be a main-side change), so a merge never silently drops a new variable.
+  const equationNames = Array.isArray(selection.equationNames) ? selection.equationNames : null;
   if (!branchName || branchName === 'main') throw new RestError('Cannot merge into main directly', 409);
   const repo = await repoForModel(model, db);
   const mainRef = await vcs.getRef(repo, 'main', db);
@@ -163,14 +133,26 @@ async function mergedReconcileDoc(model, branchName, sel, db) {
     if (branchSketches[sid]) sketches[sid] = branchSketches[sid];
     else if (sketches[sid]) delete sketches[sid];
   }
-  return { featureTree, sketchDoc, equations: baseDoc.equations, repo, branchName, mainHead: mainRef.targetHash };
+  const equations = JSON.parse(JSON.stringify(baseDoc.equations || { entries: {} }));
+  equations.entries = equations.entries || {};
+  const branchEntries = (branchDoc.equations && branchDoc.equations.entries) || {};
+  const names = equationNames || Object.keys(branchEntries).filter((n) => !(n in equations.entries));
+  for (const name of new Set(names)) {
+    if (name in branchEntries) equations.entries[name] = branchEntries[name];
+    else delete equations.entries[name]; // branch removed it → apply the removal
+  }
+  return {
+    featureTree, sketchDoc, equations, repo, branchName,
+    mainHead: mainRef.targetHash,
+    // REQ 954 — the CAS anchor is the branch head this doc was built from.
+    branchHead: branchRef.targetHash,
+  };
 }
 
 async function reconcileBranch(model, sel, userId, { at } = {}, db) {
+  assertEditableBy(model, userId); // REQ 954
   if (model.dirty) throw new RestError('Check in your changes before merging', 409);
-  const { featureTree, sketchDoc, equations, repo, branchName, mainHead } = await mergedReconcileDoc(model, model.branchName || 'main', sel, db);
-  // CAS anchor: the branch head the merged doc was computed against.
-  const branchRefAtMerge = await vcs.getRef(repo, branchName, db);
+  const { featureTree, sketchDoc, equations, repo, branchName, mainHead, branchHead } = await mergedReconcileDoc(model, model.branchName || 'main', sel, db);
   const treeHash = await cadSerialize(repo, { featureTree, sketchDoc, equations }, db);
   const newCommit = await vcs.inTransaction(db, async () => {
     const commit = await vcs.createCommit(repo, {
@@ -182,17 +164,16 @@ async function reconcileBranch(model, sel, userId, { at } = {}, db) {
       meta: cadVersionInfo(),
     }, db);
     try {
-      await vcs.updateBranch(repo, branchName, commit, userId, db,
-        branchRefAtMerge ? branchRefAtMerge.targetHash : undefined);
+      await vcs.updateBranch(repo, branchName, commit, userId, db, branchHead);
     } catch (err) {
       if (err.code === 'REF_MOVED') throw new RestError(err.message, 409);
       throw err;
     }
-    await model.update({ featureTree, sketchDoc, equations, baseCommitHash: commit, dirty: false });
+    await model.update({ featureTree, sketchDoc, equations, baseCommitHash: commit, dirty: false, lastContentSavedAt: new Date() });
     return commit;
   });
   const selection = Array.isArray(sel) ? { featureIds: sel, sketchIds: [] } : (sel || {});
-  return { model, commitHash: newCommit, applied: { featureIds: [...new Set(selection.featureIds || [])], sketchIds: [...new Set(selection.sketchIds || [])] } };
+  return { model, commitHash: newCommit, applied: { featureIds: [...new Set(selection.featureIds || [])], sketchIds: [...new Set(selection.sketchIds || [])], equationNames: [...new Set(selection.equationNames || [])] } };
 }
 
-module.exports = { createBranch, listBranches, switchBranch, archiveBranch, cherryPick, referencedSketchIds, behindMain, rebaseBranch, reconcileBranch, mergedReconcileDoc };
+module.exports = { createBranch, listBranches, switchBranch, archiveBranch, cherryPick, referencedSketchIds, behindMain, reconcileBranch, mergedReconcileDoc };

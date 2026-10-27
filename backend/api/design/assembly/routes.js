@@ -2,6 +2,13 @@ const router = require('express').Router();
 const controller = require('./controller');
 const checkToken = require('../../../middleware/checkToken.js');
 const checkPermission = require('../../../middleware/checkPermission');
+const { rateLimit } = require('../../../middleware/rateLimit');
+
+// REQ 963 — every kernel-driving assembly endpoint is rate-limited per user
+// (same buckets as the part-CAD routes, so the two can't be combined to
+// exceed the budget).
+const regenLimit = rateLimit('cad-regenerate', { max: 60, windowMs: 60_000 });
+const kernelLimit = rateLimit('cad-kernel-op', { max: 10, windowMs: 60_000 });
 
 // Assemblies reuse the `cad` permission resource. Domain-only routes — all VCS
 // operations (checkout/branch/workflow/release/diff) live on the cad-model API.
@@ -43,15 +50,15 @@ router.post('/:id/display-states/:stateId/apply', checkToken, checkPermission('c
 router.delete('/:id/display-states/:stateId', checkToken, checkPermission('cad', 'write'), controller.deleteDisplayState);
 
 // Composite regenerate + BOM + whole-assembly export.
-router.post('/:id/regenerate', checkToken, checkPermission('cad', 'read'), controller.regenerate);
+router.post('/:id/regenerate', checkToken, checkPermission('cad', 'read'), regenLimit, controller.regenerate);
 router.get('/:id/bom', checkToken, checkPermission('cad', 'read'), controller.getBom);
 
 // Analysis + documentation: interference, mass properties, BOM sync.
-router.post('/:id/interference', checkToken, checkPermission('cad', 'read'), controller.interference);
-router.get('/:id/mass-properties', checkToken, checkPermission('cad', 'read'), controller.massProperties);
+router.post('/:id/interference', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.interference);
+router.get('/:id/mass-properties', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.massProperties);
 router.post('/:id/bom/sync', checkToken, checkPermission('cad', 'write'), controller.syncBom);
-router.get('/:id/export/step', checkToken, checkPermission('cad', 'read'), controller.exportStep);
-router.get('/:id/export/stl', checkToken, checkPermission('cad', 'read'), controller.exportStl);
+router.get('/:id/export/step', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.exportStep);
+router.get('/:id/export/stl', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.exportStl);
 
 router.get('/:id/history', checkToken, checkPermission('cad', 'read'), controller.getHistory);
 

@@ -2343,6 +2343,18 @@ async function _dispatchEdgeBlend(feature, bodies, model, client, dbClient, resu
  * two in sync. Returns one transform per *copy* (the source seed is
  * implicit). For 1D linear: count − 1 entries. For 2D linear:
  * count1 * count2 − 1. For circular: count − 1. For mirror: 1. */
+// REQ 962 — a pattern feature produces at most this many copies. Without a
+// bound, a huge count builds a multi-million-entry transform list in the
+// single backend process and takes the service down for everyone. KEEP IN
+// SYNC with MAX_PATTERN_COPIES in frontend/src/app/cad/lib/pattern.ts.
+const MAX_PATTERN_COPIES = 1000;
+
+function _assertPatternCopies(kind, copies) {
+  if (copies > MAX_PATTERN_COPIES) {
+    throw new Error(`${kind} pattern: ${copies} copies exceeds the limit of ${MAX_PATTERN_COPIES} — reduce the instance count.`);
+  }
+}
+
 function _computePatternTransforms(feature) {
   if (feature.type === 'mirror') {
     if (!feature.planeSnapshot || !feature.planeSnapshot.origin || !feature.planeSnapshot.normal) {
@@ -2369,6 +2381,7 @@ function _computePatternTransforms(feature) {
         throw new Error('Linear pattern: direction 2 spacing must be non-zero when count ≥ 2.');
       }
     }
+    _assertPatternCopies('Linear', d1.count * (d2 ? d2.count : 1) - 1);
     const sign1 = d1.flipped ? -1 : 1;
     const v1 = [d1.axisSnapshot.direction[0] * d1.spacing * sign1,
                 d1.axisSnapshot.direction[1] * d1.spacing * sign1,
@@ -2399,6 +2412,7 @@ function _computePatternTransforms(feature) {
     if (!(Number.isInteger(feature.count) && feature.count >= 2)) {
       throw new Error('Circular pattern: count must be ≥ 2.');
     }
+    _assertPatternCopies('Circular', feature.count - 1);
     const stepDeg = feature.mode === 'equalSpacing'
       ? Number(feature.angleDeg) / feature.count
       : Number(feature.angleDeg);
@@ -4215,4 +4229,6 @@ module.exports = {
   _buildExternalEdges, // exported for unit tests (REQ 770/773)
   _danglingHostFaceWarnings, // exported for unit tests (host-face resolution / dangling detection)
   _carryFaceOwners, // exported for unit tests (REQ 892 — face ownership carry)
+  _computePatternTransforms, // exported for unit tests (REQ 962 — copy limit)
+  MAX_PATTERN_COPIES,
 };

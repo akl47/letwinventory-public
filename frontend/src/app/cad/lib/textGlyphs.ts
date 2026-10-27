@@ -28,7 +28,11 @@ async function loadFont(): Promise<Font> {
       if (!resp.ok) throw new Error(`Roboto font fetch failed (${resp.status})`);
       const buf = await resp.arrayBuffer();
       return opentype.parse(buf);
-    })();
+    })().catch((err) => {
+      // Don't cache a failed load — let the next call retry.
+      fontPromise = null;
+      throw err;
+    });
   }
   return fontPromise;
 }

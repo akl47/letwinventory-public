@@ -294,3 +294,14 @@
     box-shadow: none;
   }
 }
+
+/* Global navigation progress bar — pinned to the very top of the viewport,
+   above the toolbar, nav rail, and any CAD editor overlay, so it's visible
+   during a slow route/chunk load even when the nav is hidden (fullscreen). */
+.route-loading-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 2000;
+}

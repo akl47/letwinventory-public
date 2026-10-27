@@ -62,6 +62,7 @@ class KernelRpcError extends Error {
     super(`CAD kernel ${method} failed (code ${code}): ${message}`);
     this.name = 'KernelRpcError';
     this.code = code;
+    this.kernelMessage = message; // the kernel's own wording (REQ 965 surfaces this)
     this.method = method;
     this.data = data;
   }

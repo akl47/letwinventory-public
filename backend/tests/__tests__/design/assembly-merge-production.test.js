@@ -1,4 +1,5 @@
 const { authenticatedRequest, createTestPart } = require('../../helpers');
+const { createTestUser } = require('../../setup');
 
 async function partWithCad(auth) {
   const part = await createTestPart();
@@ -16,7 +17,9 @@ describe('Assembly production release + compare + merge (full parity)', () => {
     await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'd1' });
     await auth.post(`/api/design/cad-model/${id}/release`).send({}); // → main, rev 01, releaseLocked
     await auth.post(`/api/design/cad-model/${id}/workflow`).send({ action: 'submit' });
-    await auth.post(`/api/design/cad-model/${id}/workflow`).send({ action: 'approve' });
+    // REQ 949 — an independent reviewer approves.
+    const reviewer = await authenticatedRequest(await createTestUser({ displayName: 'Reviewer' }));
+    expect((await reviewer.post(`/api/design/cad-model/${id}/workflow`).send({ action: 'approve' })).status).toBe(200);
 
     const prod = await auth.post(`/api/design/cad-model/${id}/production-release`).send({});
     expect(prod.status).toBe(200);
@@ -63,7 +66,8 @@ describe('Assembly production release + compare + merge (full parity)', () => {
     // "merge main into main" is rejected and the change list is empty.
     await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'main' });
     const merge = await auth.post(`/api/design/cad-model/${id}/reconcile`).send({});
-    expect(merge.status).toBe(409);
+    expect(merge.status).toBe(423); // REQ 954 — main is protected
+    expect(merge.body.error).toMatch(/main branch is protected/);
     const preview = await auth.get(`/api/design/cad-model/${id}/reconcile/preview`);
     expect(preview.status).toBe(200);
     expect(preview.body.changes).toEqual([]);

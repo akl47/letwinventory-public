@@ -1,14 +1,14 @@
 import { ChangeDetectionStrategy, Component, inject, signal, computed, OnInit, OnDestroy, ElementRef, HostListener } from '@angular/core';
-import { Router, RouterLink, RouterLinkActive, RouterOutlet, NavigationEnd } from '@angular/router';
+import { Router, RouterLink, RouterLinkActive, RouterOutlet, NavigationStart, NavigationEnd, NavigationCancel, NavigationError } from '@angular/router';
 import { MatSidenavModule } from '@angular/material/sidenav';
 import { MatListModule } from '@angular/material/list';
 import { MatIconModule } from '@angular/material/icon';
 import { MatToolbarModule } from '@angular/material/toolbar';
 import { MatButtonModule } from '@angular/material/button';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { DOCUMENT } from '@angular/common';
 import { Subscription } from 'rxjs';
-import { filter } from 'rxjs/operators';
 import { AuthService } from '../../../services/auth.service';
 import { TaskViewPreferencesService } from '../../../services/task-view-preferences.service';
 import { CadUiStateService } from '../../../services/cad-ui-state.service';
@@ -32,6 +32,7 @@ type NavGroup = 'inventory' | 'design' | 'tools' | 'build' | 'admin';
         MatToolbarModule,
         MatButtonModule,
         MatTooltipModule,
+        MatProgressBarModule,
     ],
 })
 export class NavComponent implements OnInit, OnDestroy {
@@ -47,6 +48,10 @@ export class NavComponent implements OnInit, OnDestroy {
     private routerSub?: Subscription;
     protected readonly isSidenavCollapsed = signal(false);
     protected readonly isMobileRoute = signal(false);
+    // True while the router is mid-navigation — drives a top progress bar so a
+    // slow lazy-chunk load (e.g. the large CAD editor) shows the user that a
+    // click registered and work is in flight.
+    protected readonly isNavigating = signal(false);
     protected readonly isAuthenticated = this.authService.isAuthenticated;
     protected readonly currentUser = this.authService.currentUser;
     protected readonly isDev = !environment.production;
@@ -81,12 +86,19 @@ export class NavComponent implements OnInit, OnDestroy {
             this.isSidenavCollapsed.set(true);
         }
         this.isMobileRoute.set(this.router.url.startsWith('/mobile'));
-        this.routerSub = this.router.events
-            .pipe(filter((e): e is NavigationEnd => e instanceof NavigationEnd))
-            .subscribe((e) => {
+        this.routerSub = this.router.events.subscribe((e) => {
+            if (e instanceof NavigationStart) {
+                this.isNavigating.set(true);
+            } else if (e instanceof NavigationEnd) {
                 this.isMobileRoute.set(e.urlAfterRedirects.startsWith('/mobile'));
                 this.openGroup.set(null);
-            });
+                this.isNavigating.set(false);
+            } else if (e instanceof NavigationCancel || e instanceof NavigationError) {
+                // Cancelled (guard redirect) or failed (chunk load error) —
+                // clear the indicator so it never sticks on.
+                this.isNavigating.set(false);
+            }
+        });
     }
 
     ngOnDestroy() {

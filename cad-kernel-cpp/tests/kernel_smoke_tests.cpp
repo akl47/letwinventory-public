@@ -24,6 +24,11 @@
 #include "../src/op_boolean.hpp"
 #include "../src/op_revolve_sweep.hpp"
 #include "../src/op_shell_blend.hpp"
+#include "../src/server_limits.hpp"
+
+#include <fstream>
+#include <sys/stat.h>
+#include <unistd.h>
 
 using json = nlohmann::json;
 
@@ -136,10 +141,38 @@ int main() {
   double v4 = volume_of(shell.at("brepBytes").get<std::string>());
   CHECK(v4 > 0 && v4 < v3, "shell volume must be positive and below the solid's (got %.4f)", v4);
 
+  // 6. REQ 964 — stale export temp files are swept; other files are kept.
+  {
+    char tmpl[] = "/tmp/kernel-sweep-XXXXXX";
+    const char* dir = mkdtemp(tmpl);
+    CHECK(dir != nullptr, "mkdtemp failed");
+    if (dir) {
+      std::ofstream(std::string(dir) + "/cad-export-1-stl-0.stl") << "x";
+      std::ofstream(std::string(dir) + "/cad-export-2-step-1.step") << "x";
+      std::ofstream(std::string(dir) + "/keep-me.txt") << "x";
+      int removed = kernel::sweep_stale_exports(dir);
+      CHECK(removed == 2, "sweep removed %d files, want 2", removed);
+      struct stat st{};
+      CHECK(stat((std::string(dir) + "/keep-me.txt").c_str(), &st) == 0, "sweep must keep unrelated files");
+      unlink((std::string(dir) + "/keep-me.txt").c_str());
+      rmdir(dir);
+    }
+  }
+
+  // 7. REQ 963 — limit defaults and env overrides.
+  CHECK(kernel::max_request_bytes() == 512ull * 1024 * 1024, "default request cap should be 512 MiB");
+  setenv("CAD_KERNEL_MAX_REQUEST_BYTES", "1024", 1);
+  CHECK(kernel::max_request_bytes() == 1024, "request cap env override");
+  unsetenv("CAD_KERNEL_MAX_REQUEST_BYTES");
+  setenv("CAD_KERNEL_CHILD_MEM_MB", "0", 1);
+  CHECK(kernel::child_address_space_bytes() == 0, "CHILD_MEM_MB=0 disables the child limit");
+  unsetenv("CAD_KERNEL_CHILD_MEM_MB");
+  CHECK(kernel::child_address_space_bytes() == 8192ull * 1024 * 1024, "default child limit should be 8 GiB");
+
   if (g_failures > 0) {
     std::fprintf(stderr, "kernel smoke tests: %d FAILURE(S)\n", g_failures);
     return 1;
   }
-  std::printf("kernel smoke tests OK (extrude, boolean, pinched sweep, pinched shell)\n");
+  std::printf("kernel smoke tests OK (extrude, boolean, pinched sweep, pinched shell, limits)\n");
   return 0;
 }

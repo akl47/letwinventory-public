@@ -1705,10 +1705,16 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   }
 
   /** The orbit target + distance that frames the whole model, or null when
-   * there's no solid geometry. orbitDistance doubles as the ortho half-height;
-   * the 0.75 factor pads so the part doesn't touch the frustum edges. */
+   * there's nothing to frame. orbitDistance doubles as the ortho half-height;
+   * the 0.75 factor pads so the part doesn't touch the frustum edges.
+   *
+   * Falls back to the visible sketch overlays when there's no solid geometry:
+   * a skeleton/sketch-only doc (common in assemblies, whose main-branch
+   * instances compose no geometry) would otherwise leave `faceGroup` empty and
+   * make Zoom-to-fit silently no-op. */
   private computeFrame(): { center: THREE.Vector3; distance: number } | null {
     const box = new THREE.Box3().setFromObject(this.faceGroup);
+    if (box.isEmpty() && this.sketchGroup.visible) box.setFromObject(this.sketchGroup);
     if (box.isEmpty()) return null;
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -3393,10 +3399,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
           while (o && !(o.userData as { datumId?: string }).datumId) o = o.parent;
           if (!o) continue;
           const ud = o.userData as { datumId?: string; datumPlane?: boolean };
-          if (ud.datumPlane === true && dh.distance < bestDist) {
-            next = `datum:${ud.datumId}`;
-          }
-          break; // only consider the nearest datum hit
+          if (ud.datumPlane !== true) continue; // axes/points in front don't block the plane behind
+          if (dh.distance < bestDist) next = `datum:${ud.datumId}`;
+          break; // only consider the nearest datum plane
         }
         if (this.hovered() !== next) this.hovered.set(next);
         return;
@@ -3550,7 +3555,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const end = center.clone().add(dir.clone().multiplyScalar(60));
       const start = center.clone().add(dir.clone().multiplyScalar(-60));
       const geom = new THREE.BufferGeometry().setFromPoints([start, end]);
-      const mat = new THREE.LineBasicMaterial({ color });
+      const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: selected ? 1 : 0.55 });
       const line = new THREE.Line(geom, mat);
       const group = new THREE.Group();
       group.add(line);
@@ -3569,7 +3574,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const color = selected ? hi : base;
       const geom = new THREE.PlaneGeometry(80, 80);
       const mat = new THREE.MeshBasicMaterial({
-        color, transparent: true, opacity: selected ? 0.4 : 0.18, side: THREE.DoubleSide,
+        color, transparent: true, opacity: selected ? 0.4 : 0.12, side: THREE.DoubleSide,
         depthWrite: false,
       });
       const mesh = new THREE.Mesh(geom, mat);
@@ -3593,6 +3598,17 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         mesh.quaternion.copy(quat);
       }
       mesh.userData = { datumId: d.id, datumBaseColor: base, datumPlane: true };
+      // Plane border — recolored with the fill on hover/select.
+      const border = new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(-40, -40, 0), new THREE.Vector3(40, -40, 0),
+          new THREE.Vector3(40, 40, 0), new THREE.Vector3(-40, 40, 0),
+        ]),
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity: selected ? 1 : 0.4 }),
+      );
+      border.raycast = () => {};
+      border.userData = { datumBorder: true };
+      mesh.add(border);
       // Small corner label with the plane name (REQ — shown only for visible
       // planes, since `datums` is already visibility-filtered upstream). Added
       // as a child of the quad so it tracks the plane's position/orientation.
@@ -3639,7 +3655,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const mat = target.material as THREE.MeshBasicMaterial | THREE.LineBasicMaterial;
       mat.color.setHex(pend ? PDIM : hot ? HOVC : on ? SELC : ud.datumBaseColor);
       if (ud.datumPlane && mat instanceof THREE.MeshBasicMaterial) {
-        mat.opacity = (hot || on || pend) ? 0.4 : 0.18;
+        mat.opacity = (hot || on || pend) ? 0.4 : 0.12;
+        const border = obj.children.find(c => (c.userData as { datumBorder?: boolean }).datumBorder) as THREE.LineLoop | undefined;
+        if (border) {
+          const bm = border.material as THREE.LineBasicMaterial;
+          bm.color.copy(mat.color);
+          bm.opacity = (hot || on || pend) ? 1 : 0.4;
+        }
+      } else if (mat instanceof THREE.LineBasicMaterial) {
+        mat.opacity = (hot || on || pend) ? 1 : 0.55;
       }
     }
   }

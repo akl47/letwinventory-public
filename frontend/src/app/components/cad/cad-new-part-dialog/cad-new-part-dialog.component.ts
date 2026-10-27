@@ -14,6 +14,9 @@ import { InventoryService } from '../../../services/inventory.service';
 import { CadModelService } from '../../../services/cad-model.service';
 import { AssemblyService } from '../../../services/assembly.service';
 import { PartCategory } from '../../../models/part-category.model';
+import {
+  Quat, IDENTITY_QUAT, rotateAboutAssemblyAxis, alignZToNormal, axisMappingLabel,
+} from '../../../cad/lib/insertOrientation';
 
 export interface CadNewPartDialogData {
   mode: 'part' | 'assembly';
@@ -28,6 +31,9 @@ export interface CadNewPartDialogData {
      * LOCK mate to it so it stays anchored. Null (datum/origin pick) →
      * the instance is grounded in the assembly frame instead. */
     anchorInstanceId?: string | null;
+    /** Assembly-frame normal of the face the origin was picked on, when any.
+     * Enables the "Align to face" orientation shortcut (REQ 933). */
+    orientNormal?: [number, number, number] | null;
   };
 }
 
@@ -67,6 +73,22 @@ export interface CadNewPartDialogData {
 
       <mat-checkbox [ngModel]="internalPart()" (ngModelChange)="internalPart.set($event)" data-testid="npd-internal">Internal part</mat-checkbox>
 
+      @if (data.insertInto) {
+        <div class="npd-orient" data-testid="npd-orient">
+          <div class="npd-orient-head">Orientation (relative to assembly axes)</div>
+          <div class="npd-orient-btns">
+            <button mat-stroked-button type="button" (click)="rot('x')" data-testid="npd-rot-x">Rotate X 90°</button>
+            <button mat-stroked-button type="button" (click)="rot('y')" data-testid="npd-rot-y">Rotate Y 90°</button>
+            <button mat-stroked-button type="button" (click)="rot('z')" data-testid="npd-rot-z">Rotate Z 90°</button>
+            @if (data.insertInto.orientNormal) {
+              <button mat-stroked-button type="button" (click)="alignFace()" data-testid="npd-align-face">Align Z to face</button>
+            }
+            <button mat-button type="button" (click)="resetOrient()" data-testid="npd-orient-reset">Reset</button>
+          </div>
+          <div class="npd-orient-map" data-testid="npd-orient-map">{{ orientLabel() }}</div>
+        </div>
+      }
+
       @if (error()) { <p class="npd-err">{{ error() }}</p> }
     </mat-dialog-content>
     <mat-dialog-actions align="end">
@@ -81,6 +103,11 @@ export interface CadNewPartDialogData {
     .npd .full { width: 100%; }
     .npd-err { color: #e57373; font-size: 12px; margin: 4px 0 0; }
     mat-dialog-actions button mat-spinner { display: inline-block; }
+    .npd-orient { border: 1px solid rgba(0,0,0,0.12); border-radius: 6px; padding: 8px; margin-top: 4px; }
+    .npd-orient-head { font-size: 12px; font-weight: 600; opacity: 0.75; margin-bottom: 6px; }
+    .npd-orient-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+    .npd-orient-btns button { min-width: 0; line-height: 28px; }
+    .npd-orient-map { font-size: 12px; font-family: monospace; opacity: 0.8; margin-top: 8px; }
   `],
 })
 export class CadNewPartDialogComponent {
@@ -98,6 +125,13 @@ export class CadNewPartDialogComponent {
   categoryId = signal<number | null>(null);
   busy = signal(false);
   error = signal('');
+
+  // REQ 933 — orientation of the new instance relative to the assembly axes.
+  orientQuat = signal<Quat>(IDENTITY_QUAT);
+  orientLabel = computed(() => axisMappingLabel(this.orientQuat()));
+  rot(axis: 'x' | 'y' | 'z') { this.orientQuat.set(rotateAboutAssemblyAxis(this.orientQuat(), axis, 90)); }
+  alignFace() { const n = this.data.insertInto?.orientNormal; if (n) this.orientQuat.set(alignZToNormal(n)); }
+  resetOrient() { this.orientQuat.set(IDENTITY_QUAT); }
 
   /** Only the two relevant categories are offered; child-of-assembly mode
    * (REQ 920) creates plain parts only. */
@@ -168,7 +202,7 @@ export class CadNewPartDialogComponent {
     if (into && !assembly) {
       this.asmApi.insertInstance(into.assemblyId, {
         partID: partId,
-        placement: { translate: into.origin, quaternion: [0, 0, 0, 1] },
+        placement: { translate: into.origin, quaternion: this.orientQuat() },
         // Datum-picked origins anchor to the assembly frame directly.
         ...(into.anchorInstanceId ? {} : { grounded: true }),
       }).subscribe({

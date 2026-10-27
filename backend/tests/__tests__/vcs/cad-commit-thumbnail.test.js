@@ -62,3 +62,46 @@ describe('CAD commit thumbnails', () => {
     expect(ci.body.commitHash).toBeTruthy();
   });
 });
+
+// REQ 966 — only PNGs (by signature) up to 512 KB are stored, and the
+// thumbnail endpoint sends nosniff.
+describe('Commit thumbnail validation (REQ 966)', () => {
+  const cadvcs = require('../../../services/vcs/cadVcsService');
+
+  async function checkinWith(auth, thumbnail) {
+    const part = await createTestPart();
+    const model = await createModel(auth, part.id);
+    await auth.post(`/api/design/cad-model/${model.id}/checkout`).send({});
+    const ci = await auth.post(`/api/design/cad-model/${model.id}/checkin`).send({ message: 'x', thumbnail });
+    expect(ci.status).toBe(200); // a rejected thumbnail never fails the check-in
+    return { model, hash: ci.body.commitHash };
+  }
+
+  test('an SVG (script-capable) upload is not stored', async () => {
+    const auth = await authenticatedRequest();
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>').toString('base64');
+    const { model, hash } = await checkinWith(auth, `data:image/svg+xml;base64,${svg}`);
+    expect((await auth.get(`/api/design/cad-model/${model.id}/commits/${hash}/thumbnail`)).status).toBe(404);
+  });
+
+  test('an oversized PNG is not stored', async () => {
+    const auth = await authenticatedRequest();
+    const big = Buffer.concat([Buffer.from(PNG_1PX, 'base64'), Buffer.alloc(cadvcs.MAX_THUMBNAIL_BYTES)]);
+    const { model, hash } = await checkinWith(auth, `data:image/png;base64,${big.toString('base64')}`);
+    expect((await auth.get(`/api/design/cad-model/${model.id}/commits/${hash}/thumbnail`)).status).toBe(404);
+  });
+
+  test('a valid PNG is served with nosniff', async () => {
+    const auth = await authenticatedRequest();
+    const { model, hash } = await checkinWith(auth, DATA_URL);
+    const res = await auth.get(`/api/design/cad-model/${model.id}/commits/${hash}/thumbnail`);
+    expect(res.status).toBe(200);
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  test('signature check unit cases', () => {
+    expect(cadvcs.isAcceptableThumbnail(Buffer.from(PNG_1PX, 'base64'))).toBe(true);
+    expect(cadvcs.isAcceptableThumbnail(Buffer.from('GIF89a....'))).toBe(false);
+    expect(cadvcs.isAcceptableThumbnail(null)).toBe(false);
+  });
+});

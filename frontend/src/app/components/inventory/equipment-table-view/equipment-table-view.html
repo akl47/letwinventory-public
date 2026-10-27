@@ -6,6 +6,11 @@
     </h2>
   </div>
 
+  @if (isLoading()) {
+    <div class="loading-container">
+      <mat-spinner diameter="40"></mat-spinner>
+    </div>
+  } @else {
   <app-data-table
     [data]="allEquipment()"
     [columns]="columns"
@@ -48,4 +53,5 @@
       </span>
     </ng-template>
   </app-data-table>
+  }
 </div>
