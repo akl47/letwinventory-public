@@ -34,7 +34,7 @@
                 "output": "/assets/planegcs/"
               }
             ],
-            "externalDependencies": [],
+            "externalDependencies": ["module"],
             "styles": [
               "src/custom-theme.scss",
               "src/styles.css"
