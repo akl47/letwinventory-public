@@ -1,0 +1,75 @@
+const { authenticatedRequest, createTestPart } = require('../../helpers');
+const { createTestUser } = require('../../setup');
+
+async function partWithCad(auth) {
+  const part = await createTestPart();
+  await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({});
+  return part;
+}
+
+describe('Assembly production release + compare + merge (full parity)', () => {
+  it('promotes a released assembly to a production letter revision', async () => {
+    const auth = await authenticatedRequest();
+    const part = await createTestPart({ partCategoryID: 4 }); // rev "00"
+    const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
+    const id = asm.body.id;
+    await auth.post(`/api/design/cad-model/${id}/branches`).send({ name: 'd1' });
+    await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'd1' });
+    await auth.post(`/api/design/cad-model/${id}/release`).send({}); // → main, rev 01, releaseLocked
+    await auth.post(`/api/design/cad-model/${id}/workflow`).send({ action: 'submit' });
+    // REQ 949 — an independent reviewer approves.
+    const reviewer = await authenticatedRequest(await createTestUser({ displayName: 'Reviewer' }));
+    expect((await reviewer.post(`/api/design/cad-model/${id}/workflow`).send({ action: 'approve' })).status).toBe(200);
+
+    const prod = await auth.post(`/api/design/cad-model/${id}/production-release`).send({});
+    expect(prod.status).toBe(200);
+    expect(prod.body.revision).toBe('A');
+    expect(prod.body.prodModelID).toBeDefined();
+  });
+
+  it('rejects production without a release', async () => {
+    const auth = await authenticatedRequest();
+    const part = await createTestPart({ partCategoryID: 4 });
+    const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
+    const res = await auth.post(`/api/design/cad-model/${asm.body.id}/production-release`).send({});
+    expect(res.status).toBe(409);
+  });
+
+  it('diffs two commits, showing component-level changes', async () => {
+    const auth = await authenticatedRequest();
+    const part = await createTestPart({ partCategoryID: 4 });
+    const comp = await partWithCad(auth);
+    const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
+    const id = asm.body.id;
+    // `main` is protected on the unified surface — work on a draft branch.
+    await auth.post(`/api/design/cad-model/${id}/branches`).send({ name: 'd1' });
+    await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'd1' });
+    await auth.post(`/api/design/cad-model/${id}/checkout`).send({});
+    await auth.post(`/api/design/assembly/${id}/instances`).send({ partID: comp.id });
+    await auth.post(`/api/design/cad-model/${id}/checkin`).send({ message: 'add comp' });
+
+    const commits = await auth.get(`/api/design/cad-model/${id}/commits`);
+    expect(commits.body.length).toBe(2);
+    const newest = commits.body[0].hash;
+    const oldest = commits.body[1].hash;
+    const diff = await auth.get(`/api/design/cad-model/${id}/commits/${oldest}/diff/${newest}`);
+    expect(diff.status).toBe(200);
+    expect(diff.body.entries.some((e) => e.name.startsWith('instance:') && e.status === 'added')).toBe(true);
+  });
+
+  it('rejects merge on main and previews no changes there', async () => {
+    const auth = await authenticatedRequest();
+    const part = await createTestPart({ partCategoryID: 4 });
+    const asm = await auth.post(`/api/design/assembly/by-part/${part.id}`).send({});
+    const id = asm.body.id;
+    // Creation auto-lands on draft/01; switch to the protected main line, where
+    // "merge main into main" is rejected and the change list is empty.
+    await auth.post(`/api/design/cad-model/${id}/switch-branch`).send({ name: 'main' });
+    const merge = await auth.post(`/api/design/cad-model/${id}/reconcile`).send({});
+    expect(merge.status).toBe(423); // REQ 954 — main is protected
+    expect(merge.body.error).toMatch(/main branch is protected/);
+    const preview = await auth.get(`/api/design/cad-model/${id}/reconcile/preview`);
+    expect(preview.status).toBe(200);
+    expect(preview.body.changes).toEqual([]);
+  });
+});

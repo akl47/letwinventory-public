@@ -1,0 +1,324 @@
+/**
+ * Backend mirror of frontend/src/app/cad/lib/equations.ts. Same JSON
+ * shapes (EquationDoc / EquationEntry), same algorithm. We can't share
+ * a single source file because the frontend is TypeScript ESM and the
+ * backend is plain CJS — the cadProfile module follows this same
+ * pattern. The test suite asserts both implementations produce
+ * identical output for shared fixtures.
+ *
+ * The public API the regen pipeline consumes is `applyEquationsToModel`:
+ * given a DesignCADModel (with featureTree, sketchDoc, equations), it
+ * returns a NEW featureTree + sketchDoc with every drivable numeric
+ * parameter overwritten by the resolved value, plus an `equationErrors`
+ * array surfacing cycles and other resolution failures so they reach
+ * the regen response.
+ */
+
+const { Parser } = require('expr-eval-fork');
+
+// Equations are user-edited and evaluated server-side on regen — lock the
+// grammar down to arithmetic + math functions (same options as safeExpr).
+// expr-eval's defaults allow member access / assignment / fndef, the vectors
+// behind its prototype-pollution and code-execution advisories.
+const parser = new Parser({
+  allowMemberAccess: false,
+  operators: { assignment: false, fndef: false, array: false, concatenate: false },
+});
+
+// Clear expr-eval's built-in math constants (E, PI, LN2, etc.) so
+// user-defined variables aren't silently shadowed by them. Without
+// this a user equation `E = 100` is ignored — `E` parses as
+// Euler's number. Functions (sin, cos, sqrt, …) stay intact since
+// they're callable and don't shadow variable lookups.
+// Mirrors the frontend equations.ts; same set is exposed via
+// `RESERVED_EQUATION_NAMES` there for the equations-panel warning.
+parser.consts = {};
+
+/** Resolve every entry in the equation document. See equations.ts for
+ * the algorithm description. */
+function resolveEquations(doc) {
+  const values = {};
+  const errors = {};
+  const order = [];
+  const entries = (doc && doc.entries) || {};
+
+  // User-defined names win over built-in expr-eval operators/functions, the
+  // same way clearing `parser.consts` makes them win over built-in constants.
+  // expr-eval spreads built-ins across several surfaces — `length`, `sin`,
+  // `abs`, … are unary operators; `min`, `max`, … are functions — so a variable
+  // named after any of them tokenizes as that built-in and an expression like
+  // `length / 4` fails to parse ("unexpected TOP: /"). Remove any shadowed
+  // built-in for the duration of parsing, then restore it so it stays usable in
+  // expressions that don't redefine it. resolveEquations runs synchronously, so
+  // the shared parser is never observed mid-mutation. (Symbol operators like
+  // `+`/`/` can never collide with identifier-shaped entry keys.)
+  const opSurfaces = [parser.functions, parser.unaryOps, parser.binaryOps];
+  const shadowed = [];
+  for (const name of Object.keys(entries)) {
+    for (const surface of opSurfaces) {
+      if (Object.prototype.hasOwnProperty.call(surface, name)) {
+        shadowed.push({ surface, name, value: surface[name] });
+        delete surface[name];
+      }
+    }
+  }
+
+  const parsed = new Map();
+  // The shadow stays in effect for the WHOLE resolve (parse AND eval): expr-eval
+  // re-resolves operator tokens at evaluate time, so restoring before evaluation
+  // would turn a name like `length` back into an operator mid-eval. The finally
+  // guard restores the built-ins even if resolution throws, so a stray error
+  // never leaves the shared parser corrupted for later calls.
+  try {
+    for (const [key, entry] of Object.entries(entries)) {
+      try {
+        const ast = parser.parse(entry.expression);
+        parsed.set(key, { deps: ast.variables(), evaluate: ctx => ast.evaluate(ctx) });
+      } catch (e) {
+        errors[key] = e.message;
+      }
+    }
+
+  const color = new Map();  // 0=WHITE, 1=GRAY, 2=BLACK
+  const stack = [];
+  const visit = (key) => {
+    if (errors[key]) return;
+    const c = color.get(key) || 0;
+    if (c === 2) return;
+    if (c === 1) {
+      const cycleStart = stack.indexOf(key);
+      const cyclePath = stack.slice(cycleStart).concat(key);
+      const errMsg = `cycle: ${cyclePath.join(' → ')}`;
+      for (const k of cyclePath) if (!errors[k]) errors[k] = errMsg;
+      return;
+    }
+    color.set(key, 1);
+    stack.push(key);
+    const node = parsed.get(key);
+    if (node) {
+      for (const dep of node.deps) {
+        if (parsed.has(dep)) visit(dep);
+      }
+    }
+    stack.pop();
+    color.set(key, 2);
+    order.push(key);
+  };
+  for (const key of parsed.keys()) {
+    if ((color.get(key) || 0) === 0) visit(key);
+  }
+
+  for (const key of order) {
+    if (errors[key]) continue;
+    const node = parsed.get(key);
+    if (!node) continue;
+    try {
+      const result = node.evaluate(values);
+      if (typeof result !== 'number' || !isFinite(result)) {
+        errors[key] = `not a finite number (got ${JSON.stringify(result)})`;
+        continue;
+      }
+      values[key] = result;
+    } catch (e) {
+      errors[key] = e.message;
+    }
+  }
+  } finally {
+    for (const s of shadowed) s.surface[s.name] = s.value;
+  }
+
+  return { values, errors, order };
+}
+
+/** Look up a target key in the equations doc + resolved values map. If
+ * the key has a resolved value, return it; if the key has an error,
+ * return { error }; otherwise return undefined (no equation drives this
+ * target — caller keeps the existing literal value). */
+function _targetValue(equations, values, errors, key) {
+  if (!equations || !equations.entries || !(key in equations.entries)) return undefined;
+  if (key in errors) return { error: errors[key] };
+  if (key in values) return { value: values[key] };
+  return undefined;
+}
+
+/** Resolve the configuration a regen should apply: an explicit
+ * `configurationId` option wins (assembly per-instance selection),
+ * otherwise the document's activeConfigurationId. Returns null for the
+ * implicit base/Default (no overrides). Configurations live on the
+ * featureTree doc (REQ: configurations) so they ride VCS commits via the
+ * serializer's featureTreeMeta passthrough. */
+function _activeConfiguration(featureTree, configurationId) {
+  const configs = Array.isArray(featureTree.configurations) ? featureTree.configurations : [];
+  if (configs.length === 0) return null;
+  const wanted = configurationId !== undefined && configurationId !== null
+    ? configurationId
+    : featureTree.activeConfigurationId;
+  if (!wanted) return null;
+  return configs.find(c => c && c.id === wanted) || null;
+}
+
+/** Walk the model's featureTree + sketchDoc, applying any equation
+ * matching a numeric parameter's target key. Returns a NEW tree + doc
+ * with the resolved values written in (shallow-clones where mutation
+ * happens). Equation errors that match a target key surface in the
+ * returned `equationErrors` array, formatted with the parameter path
+ * so the user can tell which feature failed.
+ *
+ * `opts.configurationId` selects a configuration explicitly (assembly
+ * per-instance); otherwise the doc's active configuration applies. A
+ * configuration's `values` override equation entries as literal numbers
+ * BEFORE resolution (so expressions referencing overridden globals pick
+ * up the config value), and its `suppressed` map overrides per-feature
+ * suppression flags. */
+function applyEquationsToModel(model, opts = {}) {
+  const baseEquations = model.equations || { entries: {} };
+  const featureTree = model.featureTree || { features: [] };
+  const sketchDoc = model.sketchDoc || { sketches: {} };
+
+  const config = _activeConfiguration(featureTree, opts.configurationId);
+  let equations = baseEquations;
+  if (config && config.values && Object.keys(config.values).length > 0) {
+    const entries = { ...(baseEquations.entries || {}) };
+    for (const [key, value] of Object.entries(config.values)) {
+      if (typeof value !== 'number' || !isFinite(value)) continue;
+      // Literal-number expression: replaces (or creates) the entry, so
+      // both the variable itself and everything referencing it resolve
+      // against the configuration's value.
+      entries[key] = { expression: String(value) };
+    }
+    equations = { entries };
+  }
+  const { values, errors } = resolveEquations(equations);
+
+  const equationErrors = [];
+  const configSuppressed = (config && config.suppressed) || null;
+
+  // Track which equation entry keys we actually CONSUMED so we can
+  // surface only errors for keys that drive something. Pure globals
+  // (consumed by other equations) appear in `errors` too — those are
+  // pushed without a path prefix because they're not parameter-bound.
+  const consumedTargetKeys = new Set();
+
+  const resolvedFeatures = featureTree.features.map(f => {
+    if (!f || f.type === 'origin') return f;
+    const next = { ...f };
+
+    // Configuration suppression override — explicit true/false wins over
+    // the feature's own flag; absent keys inherit the base state.
+    if (configSuppressed && typeof configSuppressed[next.id] === 'boolean') {
+      next.suppressed = configSuppressed[next.id];
+    }
+
+    // ExtrudeFeature / CutExtrudeFeature: distance.
+    if (typeof next.distance === 'number') {
+      const key = `feature.${next.id}.distance`;
+      const hit = _targetValue(equations, values, errors, key);
+      if (hit) {
+        consumedTargetKeys.add(key);
+        if (hit.error) {
+          equationErrors.push(`feature ${next.id} distance equation: ${hit.error}`);
+        } else {
+          next.distance = hit.value;
+        }
+      }
+    }
+
+    // RevolveFeature / CutRevolveFeature: angle.
+    if (typeof next.angle === 'number') {
+      const key = `feature.${next.id}.angle`;
+      const hit = _targetValue(equations, values, errors, key);
+      if (hit) {
+        consumedTargetKeys.add(key);
+        if (hit.error) {
+          equationErrors.push(`feature ${next.id} angle equation: ${hit.error}`);
+        } else {
+          next.angle = hit.value;
+        }
+      }
+    }
+
+    // ExtrudeStartCondition (kind=offset) carries a distance. Only
+    // drivable when the start condition is the offset variant.
+    if (next.startCondition && next.startCondition.kind === 'offset') {
+      const key = `feature.${next.id}.startCondition.distance`;
+      const hit = _targetValue(equations, values, errors, key);
+      if (hit) {
+        consumedTargetKeys.add(key);
+        if (hit.error) {
+          equationErrors.push(`feature ${next.id} start-offset equation: ${hit.error}`);
+        } else {
+          next.startCondition = { ...next.startCondition, distance: hit.value };
+        }
+      }
+    }
+
+    // ExtrudeDirection (direction 2) carries a distance.
+    if (next.direction2 && typeof next.direction2.distance === 'number') {
+      const key = `feature.${next.id}.direction2.distance`;
+      const hit = _targetValue(equations, values, errors, key);
+      if (hit) {
+        consumedTargetKeys.add(key);
+        if (hit.error) {
+          equationErrors.push(`feature ${next.id} direction-2 equation: ${hit.error}`);
+        } else {
+          next.direction2 = { ...next.direction2, distance: hit.value };
+        }
+      }
+    }
+
+    return next;
+  });
+
+  // Sketch constraints: walk each visible sketch's state.constraints
+  // and overwrite the `value` field of any constraint that has a
+  // matching equation entry.
+  const resolvedSketches = {};
+  for (const [sid, sketch] of Object.entries(sketchDoc.sketches || {})) {
+    if (!sketch || !sketch.state || !Array.isArray(sketch.state.constraints)) {
+      resolvedSketches[sid] = sketch;
+      continue;
+    }
+    let mutated = false;
+    const nextConstraints = sketch.state.constraints.map(c => {
+      if (!c || typeof c.value !== 'number' || !c.id) return c;
+      const key = `sketch.${sid}.constraint.${c.id}`;
+      const hit = _targetValue(equations, values, errors, key);
+      if (!hit) return c;
+      consumedTargetKeys.add(key);
+      if (hit.error) {
+        equationErrors.push(`sketch ${sid} constraint ${c.id} equation: ${hit.error}`);
+        return c;
+      }
+      mutated = true;
+      return { ...c, value: hit.value };
+    });
+    resolvedSketches[sid] = mutated
+      ? { ...sketch, state: { ...sketch.state, constraints: nextConstraints } }
+      : sketch;
+  }
+
+  // Surface remaining (pure-global) errors so the user sees them in the
+  // panel as well as in the regen response.
+  for (const [key, msg] of Object.entries(errors)) {
+    if (consumedTargetKeys.has(key)) continue;  // already pushed with parameter-path prefix
+    // Only surface top-level (no-dot) entries as "global" errors —
+    // dotted target keys without a matching parameter mean a stale
+    // equation pointing at a deleted feature, which we treat as a
+    // benign condition (no error surfaced; UI panel still shows them).
+    if (!key.includes('.')) {
+      equationErrors.push(`equation ${key}: ${msg}`);
+    }
+  }
+
+  return {
+    featureTree: { ...featureTree, features: resolvedFeatures },
+    sketchDoc: { ...sketchDoc, sketches: resolvedSketches },
+    equationErrors,
+    resolvedValues: values,
+  };
+}
+
+module.exports = {
+  resolveEquations,
+  applyEquationsToModel,
+};

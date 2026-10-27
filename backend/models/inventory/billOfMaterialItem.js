@@ -43,6 +43,12 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.FLOAT,
       allowNull: false
     },
+    // REQ 960 — set when the row was written by an assembly BOM sync; sync
+    // replaces only its own rows and never touches manually entered ones.
+    syncedFromAssemblyID: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
     activeFlag: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

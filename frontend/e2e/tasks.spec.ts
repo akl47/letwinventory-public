@@ -78,8 +78,10 @@ test.describe('Task Checklist', () => {
     expect(taskId).toBeTruthy();
     createdTaskId = taskId;
 
-    // Reload and open the task dialog
-    await page.goto('/#/tasks');
+    // Reload and open the task dialog. A real reload — goto('/#/tasks') while
+    // already on /#/tasks is a same-document hash navigation that doesn't
+    // refetch, so the card only showed if the initial load lost the race.
+    await page.reload();
     const card = page.locator('app-task-card', { hasText: 'CL Test Task' }).first();
     await expect(card).toBeVisible({ timeout: 10000 });
     await card.click();

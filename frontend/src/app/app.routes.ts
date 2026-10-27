@@ -4,6 +4,7 @@ import { map } from 'rxjs';
 import { authGuard } from './guards/auth.guard';
 import { permissionGuard } from './guards/permission.guard';
 import { AuthService } from './services/auth.service';
+import { lazyRetry } from './utils/lazy-retry';
 
 /** Redirects authenticated users to /tasks */
 const guestGuard: CanActivateFn = () => {
@@ -129,6 +130,40 @@ export const routes: Routes = [
             import('./components/inventory/part-edit-page/part-edit-page').then((m) => m.PartEditPage),
         canActivate: [authGuard, permissionGuard],
         data: { resource: 'parts' },
+    },
+    {
+        path: 'design/cad',
+        title: 'CAD Models',
+        loadComponent: () =>
+            import('./components/cad/cad-landing/cad-landing.component').then((m) => m.CadLandingComponent),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'cad' },
+    },
+    {
+        path: 'parts/:id/cad',
+        title: 'Part CAD',
+        loadComponent: () =>
+            import('./components/cad/cad-revision-list/cad-revision-list.component').then((m) => m.CadRevisionListComponent),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'cad' },
+    },
+    {
+        path: 'parts/:id/cad/editor',
+        title: 'CAD Editor',
+        // Retry the import: the CAD editor chunk is large and served no-cache,
+        // so a flaky connection can drop the download mid-stream.
+        loadComponent: lazyRetry(() =>
+            import('./components/cad/cad-editor/cad-editor.component').then((m) => m.CadEditorComponent)),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'cad' },
+    },
+    {
+        path: 'parts/:id/assembly/editor',
+        title: 'Assembly Editor',
+        loadComponent: lazyRetry(() =>
+            import('./components/cad/cad-editor/cad-editor.component').then((m) => m.CadEditorComponent)),
+        canActivate: [authGuard, permissionGuard],
+        data: { resource: 'cad', assemblyMode: true },
     },
     {
         path: 'equipment',

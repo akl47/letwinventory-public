@@ -57,15 +57,26 @@ log "[$(date)] Running database backup..."
 }
 log "[$(date)] Backup complete"
 
-# --- Pull new image ---
-log "[$(date)] Pulling latest image..."
+# --- Pull new images ---
+log "[$(date)] Pulling latest app image..."
 docker pull akl47/letwinventory:latest
-log "[$(date)] Pull complete"
+# REQ 968 — the kernel runs a PINNED image tag (never :latest).
+CAD_KERNEL_IMAGE_TAG="${CAD_KERNEL_IMAGE_TAG:-$(grep -hE '^CAD_KERNEL_IMAGE_TAG=' "${PROJECT_DIR}/.env" "${PROJECT_DIR}/.env.production" 2>/dev/null | head -1 | cut -d= -f2-)}"
+if [ -z "$CAD_KERNEL_IMAGE_TAG" ] || [ "$CAD_KERNEL_IMAGE_TAG" = "latest" ]; then
+  log "[$(date)] ERROR: CAD_KERNEL_IMAGE_TAG must be set to a published kernel commit sha (not 'latest'), aborting deploy"
+  exit 1
+fi
+export CAD_KERNEL_IMAGE_TAG
+log "[$(date)] Pulling CAD kernel image ${CAD_KERNEL_IMAGE_TAG}..."
+docker pull "ghcr.io/akl47/letwinventory-cad-kernel:${CAD_KERNEL_IMAGE_TAG}"
+log "[$(date)] Pulls complete"
 
-# --- Restart container ---
-log "[$(date)] Restarting container..."
+# --- Restart containers ---
+# --force-recreate swaps BOTH services onto the freshly pulled images — a
+# `docker pull` alone never restarts a running container (recurring footgun).
+log "[$(date)] Restarting containers..."
 docker compose -f "$COMPOSE_FILE" up -d --force-recreate
-log "[$(date)] Container restarted"
+log "[$(date)] Containers restarted"
 
 # --- Wait for container to be ready ---
 log "[$(date)] Waiting for container to start..."
@@ -102,6 +113,30 @@ for i in $(seq 1 6); do
   sleep 5
 done
 
+# --- CAD kernel handshake (REQ 900) ---
+# The kernel must be reachable from the backend AND agree on the naming schema
+# version, or every CAD regenerate will fail (mismatch = cache-poison guard).
+log "[$(date)] Verifying CAD kernel handshake..."
+KERNEL_CHECK=$(docker exec "$CONTAINER_NAME" node -e '
+const net = require("net");
+const NAMING = require("/usr/src/services/cadRegenService").NAMING_VERSION;
+const addr = (process.env.CAD_KERNEL_ADDR || "letwinventory-cad-kernel:9876").split(":");
+const s = net.connect(Number(addr[1] || 9876), addr[0], () =>
+  s.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", params: {} }) + "\n"));
+s.on("data", (d) => {
+  const r = JSON.parse(d.toString()).result || {};
+  if (r.namingSchemaVersion === NAMING) { console.log(`OK build=${r.build} naming=${r.namingSchemaVersion}`); process.exit(0); }
+  console.log(`MISMATCH kernel=${r.namingSchemaVersion} backend=${NAMING} build=${r.build}`); process.exit(1);
+});
+s.on("error", (e) => { console.log(`UNREACHABLE ${e.message}`); process.exit(1); });
+setTimeout(() => { console.log("TIMEOUT"); process.exit(1); }, 5000);
+' 2>&1) || {
+  log "[$(date)] ERROR: CAD kernel handshake failed: ${KERNEL_CHECK}"
+  exit 1
+}
+log "[$(date)] CAD kernel handshake: ${KERNEL_CHECK}"
+
 IMAGE_ID=$(docker inspect --format='{{.Image}}' "$CONTAINER_NAME" 2>/dev/null | cut -c8-19)
-log "[$(date)] Deploy complete. Image: ${IMAGE_ID}"
+KERNEL_IMAGE_ID=$(docker inspect --format='{{.Image}}' letwinventory-cad-kernel-prod 2>/dev/null | cut -c8-19)
+log "[$(date)] Deploy complete. App image: ${IMAGE_ID}, kernel image: ${KERNEL_IMAGE_ID}"
 send_email "[OK] Deploy Update - $(date '+%Y-%m-%d %H:%M')"

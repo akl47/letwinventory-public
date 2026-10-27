@@ -13,6 +13,11 @@ import { PartEditDialog } from '../../inventory/part-edit-dialog/part-edit-dialo
 import { Part } from '../../../models';
 import { DataTable, DataTableColumnDef, ColumnDef, FilterSection } from '../../common/data-table/data-table';
 
+/** Page size used to pull the whole harness list in one request (REQ 935).
+ * The endpoint is paginated; this view needs every row because it searches and
+ * paginates client-side. */
+const ALL_HARNESSES_LIMIT = 1000;
+
 @Component({
   selector: 'app-harness-list-view',
   standalone: true,
@@ -68,7 +73,12 @@ export class HarnessListView implements OnInit {
 
   loadHarnesses() {
     this.isLoading.set(true);
-    this.harnessService.getAllHarnesses().subscribe({
+    // Search and pagination here are CLIENT-side (app-data-table filters the
+    // rows it is given), so this view needs the full set. Calling
+    // getAllHarnesses() bare took the service's default limit of 20, which
+    // silently hid every harness past the first page from both the list and
+    // its search box.
+    this.harnessService.getAllHarnesses(1, ALL_HARNESSES_LIMIT).subscribe({
       next: (response) => {
         this.allHarnesses.set(response.harnesses);
         this.isLoading.set(false);

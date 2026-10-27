@@ -9,6 +9,12 @@
         }
         <span class="spacer"></span>
         @if (isDataLoaded()) {
+        @if (isEditMode && currentPart && !isFormEditMode()) {
+        <a mat-stroked-button [routerLink]="['/parts', currentPart.id, 'cad']" matTooltip="Open CAD models for this part">
+            <mat-icon>view_in_ar</mat-icon>
+            CAD
+        </a>
+        }
         @if (isEditMode && isFormEditMode() && currentPart) {
         <button mat-icon-button (click)="toggleLock()" [disabled]="!canWrite()"
             [matTooltip]="currentPart.revisionLocked ? 'Unlock revision' : 'Lock revision'">

@@ -1,8 +1,13 @@
 name: CI
 
+# REQ 904: tests gate PRs, pushes to master, AND release tags — previously
+# only PRs ran tests, so merges and v* releases shipped unverified.
 on:
   pull_request:
     branches: [master]
+  push:
+    branches: [master]
+    tags: ['v*']
 
 jobs:
   backend-tests:
@@ -50,7 +55,12 @@ jobs:
 
   e2e-tests:
     name: E2E Tests
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, which Playwright 1.59 can't install
+    # chromium deps for.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     env:
       BACKEND_PORT: 3000
       DB_HOST: localhost
@@ -65,6 +75,8 @@ jobs:
       GOOGLE_CLIENT_ID: ci-placeholder
       GOOGLE_CLIENT_SECRET: ci-placeholder
       GOOGLE_CALLBACK_URL: http://localhost:3000/api/auth/google/callback
+      # CAD specs (features, export, assembly, convert-edge) need real geometry.
+      CAD_KERNEL_ADDR: 127.0.0.1:9876
     services:
       postgres:
         image: postgres:16
@@ -81,6 +93,52 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Same kernel selection as cad-kernel-e2e: the PR's own build when it
+      # changes cad-kernel-cpp/, else the published master image.
+      - name: Detect kernel source changes
+        id: kernelsrc
+        run: |
+          CHANGED=false
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            if ! git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- cad-kernel-cpp/; then
+              CHANGED=true
+            fi
+          fi
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.kernelsrc.outputs.changed == 'true'
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build PR kernel image
+        if: steps.kernelsrc.outputs.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./cad-kernel-cpp
+          load: true
+          tags: letwinventory-cad-kernel:pr
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:buildcache
+            type=gha
+
+      - name: Start CAD kernel
+        run: |
+          if [ "${{ steps.kernelsrc.outputs.changed }}" = "true" ]; then
+            IMG="letwinventory-cad-kernel:pr"
+          else
+            IMG="ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:latest"
+            if ! docker pull "$IMG"; then
+              echo "::error::Kernel image $IMG could not be pulled — CAD e2e specs need it. Publish the kernel image (publish-kernel.yml) and retry."
+              exit 1
+            fi
+          fi
+          docker run -d --name cad-kernel -p 9876:9876 "$IMG"
 
       - uses: actions/setup-node@v4
         with:
@@ -94,9 +152,27 @@ jobs:
         run: npm ci
         working-directory: backend
 
+      - name: Create database schema (migrations)
+        run: npx sequelize-cli db:migrate
+        working-directory: backend
+
+      # Migrations only create Kit/Assembly; 'Part' etc. come from this seeder.
+      # The CAD new-part dialog needs 'Part' (else it falls back to Assembly).
+      - name: Seed part categories
+        run: npx sequelize-cli db:seed --seed 20210727105200-create-part-categories.js
+        working-directory: backend
+
       - name: Start backend
         run: nohup node index.js > /tmp/backend.log 2>&1 &
         working-directory: backend
+
+      - name: Wait for CAD kernel
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/9876) 2>/dev/null; then echo "Kernel is ready"; break; fi
+            echo "Waiting for kernel... ($i/30)"; sleep 2
+            if [ "$i" = "30" ]; then echo "Kernel never became ready"; exit 1; fi
+          done
 
       - name: Wait for backend
         run: |
@@ -107,6 +183,7 @@ jobs:
             fi
             echo "Waiting for backend... ($i/30)"
             sleep 2
+            if [ "$i" = "30" ]; then echo "Backend never became ready"; exit 1; fi
           done
 
       - name: Install frontend dependencies
@@ -128,6 +205,148 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 14
+
+      - name: Show backend logs
+        if: ${{ failure() }}
+        run: cat /tmp/backend.log 2>/dev/null || true
+
+  cad-kernel-e2e:
+    name: CAD Kernel E2E (3D features)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      BACKEND_PORT: 3000
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: letwinventory_test
+      DB_USERNAME: testuser
+      DB_PASSWORD: testpass
+      DB_DIALECT: postgres
+      DB_LOGGING: "false"
+      JWT_SECRET: kernel-e2e-secret
+      FRONTEND_URL: http://localhost:4201
+      GOOGLE_CLIENT_ID: ci-placeholder
+      GOOGLE_CLIENT_SECRET: ci-placeholder
+      GOOGLE_CALLBACK_URL: http://localhost:3000/api/auth/google/callback
+      # Backend dials the kernel service on the mapped port.
+      CAD_KERNEL_ADDR: 127.0.0.1:9876
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: letwinventory_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the kernel-source change detection can diff
+          # against the PR base.
+          fetch-depth: 0
+
+      # REQ 904: PRs that change kernel source are tested against THEIR OWN
+      # kernel build (OCCT comes prebuilt from the letwinventory-occt base) —
+      # previously they ran against the stale master image.
+      - name: Detect kernel source changes
+        id: kernelsrc
+        run: |
+          CHANGED=false
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            if ! git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- cad-kernel-cpp/; then
+              CHANGED=true
+            fi
+          fi
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.kernelsrc.outputs.changed == 'true'
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build PR kernel image
+        if: steps.kernelsrc.outputs.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./cad-kernel-cpp
+          load: true
+          tags: letwinventory-cad-kernel:pr
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:buildcache
+            type=gha
+
+      # REQ 904: this gate FAILS when no kernel image is available — the old
+      # warn-and-skip path let PRs pass green with zero geometry verification.
+      - name: Start CAD kernel
+        run: |
+          if [ "${{ steps.kernelsrc.outputs.changed }}" = "true" ]; then
+            IMG="letwinventory-cad-kernel:pr"
+          else
+            IMG="ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:latest"
+            if ! docker pull "$IMG"; then
+              echo "::error::Kernel image $IMG could not be pulled — the real-geometry gate cannot run. Publish the kernel image (publish-kernel.yml) and retry."
+              exit 1
+            fi
+          fi
+          docker run -d --name cad-kernel -p 9876:9876 "$IMG"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Create database schema (migrations)
+        run: npx sequelize-cli db:migrate
+        working-directory: backend
+
+      # The 3D-case generator bundles the frontend CAD sketch lib via esbuild.
+      - name: Install frontend dependencies
+        run: npm install
+        working-directory: frontend
+
+      - name: Start backend
+        run: nohup node index.js > /tmp/backend.log 2>&1 &
+        working-directory: backend
+
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 30); do
+            if curl -so /dev/null http://localhost:3000/api/auth/user/checkToken 2>/dev/null; then
+              echo "Backend is ready"; break
+            fi
+            echo "Waiting for backend... ($i/30)"; sleep 2
+            if [ "$i" = "30" ]; then echo "Backend never became ready"; exit 1; fi
+          done
+
+      - name: Wait for CAD kernel
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/9876) 2>/dev/null; then echo "Kernel is ready"; break; fi
+            echo "Waiting for kernel... ($i/30)"; sleep 2
+            if [ "$i" = "30" ]; then echo "Kernel never became ready"; exit 1; fi
+          done
+
+      - name: Verify 3D feature cases regenerate through the OCCT kernel
+        run: node scripts/verify-cad-kernel.mjs
+        env:
+          CAD_E2E_API: http://localhost:3000
 
       - name: Show backend logs
         if: ${{ failure() }}

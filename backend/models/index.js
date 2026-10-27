@@ -9,6 +9,15 @@ if (process.env.NODE_ENV === 'test' && global.db && global.db.sequelize) {
   const Sequelize = require("sequelize");
   const dotenv = require("dotenv");
 
+  // CLS transaction propagation (REQ 901): every query issued inside a
+  // `sequelize.transaction(async () => { ... })` callback automatically joins
+  // that transaction without threading `{ transaction }` through call chains.
+  // This is what makes the multi-write VCS verbs (check-in, release, branch
+  // ops) atomic end to end — including deep service helpers that only receive
+  // a `db` handle. Must run before any Sequelize instance is constructed.
+  const cls = require("cls-hooked");
+  Sequelize.useCLS(cls.createNamespace("letwinventory-sequelize"));
+
   // Load environment-specific .env file
   const envFile = process.env.NODE_ENV === 'production'
     ? '.env.production'

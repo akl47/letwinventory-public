@@ -11,5 +11,13 @@
   "include": [
     "src/**/*.d.ts",
     "src/**/*.spec.ts"
+  ],
+  "exclude": [
+    // textGlyphs.spec.ts is a node-only drift guard: it reads a .ttf from disk
+    // via node:fs, which can't run in the browser-target unit-test builder. Its
+    // byte-for-byte counterpart runs in the backend Jest suite
+    // (backend/tests/__tests__/design/cadTextGlyphs.test.js). Re-include here if
+    // a node-environment frontend runner is added.
+    "src/app/cad/lib/textGlyphs.spec.ts"
   ]
 }

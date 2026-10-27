@@ -1,0 +1,21 @@
+[package]
+name = "opencascade"
+description = "A high level Rust wrapper to build 3D models in code, using the OpenCascade CAD kernel"
+authors = ["Brian Schwind <brianmschwind@gmail.com>"]
+license = "LGPL-2.1"
+version = "0.2.0"
+edition = "2021"
+repository = "https://github.com/bschwind/opencascade-rs"
+
+[dependencies]
+cxx = "1"
+opencascade-sys = { version = "0.2", path = "../opencascade-sys" }
+glam = { version = "0.24", features = ["bytemuck"] }
+# kicad-parser removed in this vendored copy — cad-kernel doesn't use the
+# kicad-import feature and pulling it in would require vendoring the
+# kicad-parser sibling crate too.
+thiserror = "1"
+
+[features]
+default = ["builtin"]
+builtin = ["opencascade-sys/builtin"]

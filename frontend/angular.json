@@ -29,11 +29,12 @@
                 "input": "public"
               },
               {
-                "glob": "pdf.worker.min.mjs",
-                "input": "node_modules/pdfjs-dist/build/",
-                "output": "/assets/"
+                "glob": "**/*.wasm",
+                "input": "src/app/cad/vendor/planegcs/planegcs_dist/",
+                "output": "/assets/planegcs/"
               }
             ],
+            "externalDependencies": ["module"],
             "styles": [
               "src/custom-theme.scss",
               "src/styles.css"

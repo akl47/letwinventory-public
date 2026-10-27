@@ -15,6 +15,11 @@ process.env.GOOGLE_CALLBACK_URL = 'http://localhost:3999/api/auth/google/callbac
 process.env.FILE_STORAGE_PATH = path.join(os.tmpdir(), 'letwinventory-test-files');
 fs.mkdirSync(process.env.FILE_STORAGE_PATH, { recursive: true });
 
+// CLS transaction propagation — mirrors models/index.js (REQ 901) so the
+// transactional VCS verbs behave the same under test as in production.
+const cls = require('cls-hooked');
+Sequelize.useCLS(cls.createNamespace('letwinventory-sequelize-test'));
+
 // Create SQLite in-memory Sequelize instance
 const sequelize = new Sequelize({
   dialect: 'sqlite',
@@ -125,7 +130,7 @@ async function seedReferenceData() {
   ]);
 
   // Permissions (resources x 3 actions + extras)
-  const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin', 'manufacturing_planning', 'manufacturing_execution', 'tools', 'features'];
+  const resources = ['tasks', 'projects', 'parts', 'inventory', 'equipment', 'orders', 'harness', 'requirements', 'admin', 'manufacturing_planning', 'manufacturing_execution', 'tools', 'features', 'cad'];
   const actions = ['read', 'write', 'delete'];
   let permId = 1;
   const permRows = [];
@@ -140,6 +145,7 @@ async function seedReferenceData() {
   permRows.push({ id: permId++, resource: 'manufacturing_execution', action: 'work_order_undelete' });
   permRows.push({ id: permId++, resource: 'admin', action: 'manage_tool_categories' });
   permRows.push({ id: permId++, resource: 'features', action: 'approve' });
+  permRows.push({ id: permId++, resource: 'cad', action: 'approve' });
   await db.Permission.bulkCreate(permRows);
 
   // Tool Categories (5 broad groupings — must match migration seed)
@@ -210,7 +216,11 @@ beforeAll(async () => {
 // Clean up user-created data between tests (keep reference data)
 afterEach(async () => {
   const tablesToClean = [
-    'UserPermission', 'GroupPermission', 'UserGroupMember', 'UserGroup',
+    'VcsWorkflowState', 'VcsChangeset', 'VcsUsage', 'VcsRef', 'VcsObject', 'UserPermission', 'GroupPermission', 'UserGroupMember', 'UserGroup',
+    // DesignBRepCache cascades from DesignCADModel, but listing it first
+    // keeps the cleanup explicit + insulates against accidental ordering
+    // flips in future edits.
+    'DesignBRepCache', 'DesignCADModelHistory', 'DesignCADModel',
     'DesignFeatureHistory', 'DesignFeature',
     'RequirementHistory', 'DesignRequirement', 'RequirementCategory',
     'HarnessRevisionHistory', 'WireHarness', 'WireEnd',

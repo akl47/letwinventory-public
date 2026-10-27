@@ -6,6 +6,7 @@ const cookieParser = require("cookie-parser");
 const path = require("path");
 const dotenv = require("dotenv");
 const cors = require("cors");
+const compression = require("compression");
 
 // Load environment-specific .env file BEFORE requiring modules that need env vars
 if (process.env.NODE_ENV !== 'test') {
@@ -22,6 +23,12 @@ if (!global.db) {
 }
 global.RestError = require("./util/RestError");
 global._ = require("lodash");
+
+// Gzip responses (REQ 936). Must come before the routes and the static
+// handler so both JSON payloads and build assets are compressed; JSON and JS
+// typically shrink 4-10x, which is the difference between a large lazy chunk
+// loading and its dynamic import timing out on a slow connection.
+app.use(compression());
 
 // CORS configuration
 app.use(cors({
@@ -56,8 +63,18 @@ app.use("/api", require("./api"));
 if (process.env.NODE_ENV === 'production') {
     const frontendDistPath = path.join(__dirname, 'public');
 
-    // Serve static files from the Angular build
-    app.use(express.static(frontendDistPath));
+    // Serve static files from the Angular build (REQ 936). Angular emits
+    // content-hashed filenames (outputHashing: "all"), so a rebuild produces
+    // NEW names — the hashed assets can be cached indefinitely. index.html
+    // keeps its own name across builds, so it must revalidate or clients would
+    // pin themselves to a stale bundle. `index: false` leaves the SPA fallback
+    // below as the only thing serving index.html, so the setHeaders rule
+    // governs it in one place.
+    app.use(express.static(frontendDistPath, {
+        maxAge: '1y',
+        immutable: true,
+        index: false,
+    }));
 
     // Serve the Angular app for SPA navigation routes only. Requests for
     // missing static assets (e.g. a JS chunk renamed by a later deploy) must
@@ -65,10 +82,7 @@ if (process.env.NODE_ENV === 'production') {
     // receives HTML with content-type text/html for a missing module and
     // reports a confusing "error loading dynamically imported module".
     app.get('/{*path}', (req, res) => {
-        const lastSegment = req.path.split('/').pop() || '';
-        if (lastSegment.includes('.')) {
-            return res.status(404).send('Not Found');
-        }
+        res.setHeader('Cache-Control', 'no-cache');
         res.sendFile(path.join(frontendDistPath, 'index.html'));
     });
 }
@@ -83,16 +97,47 @@ if (require.main === module) {
     const printAgentService = require("./services/printAgentService");
     const scheduledTaskService = require("./services/scheduledTaskService");
     const notificationService = require("./services/notificationService");
+    const cadStreamService = require("./services/cadStreamService");
+    const cadKernelSupervisor = require("./services/cadKernelSupervisor");
     const port = process.env.BACKEND_PORT;
 
     const server = http.createServer(app);
     printAgentService.initialize(server);
+    // REQ 700 (Phase 1) — CAD WebSocket session manager for regenerate
+    // progress events and (Phase 1.5) incremental mesh deltas. The Rust
+    // kernel sidecar on TCP (default 127.0.0.1:9876; override with
+    // CAD_KERNEL_ADDR) is consumed by cadKernelClient on-demand — no eager
+    // handshake here.
+    cadStreamService.initialize(server);
+    // Opt-in: when CAD_KERNEL_AUTOSPAWN=1 the supervisor owns the kernel's
+    // lifecycle (spawn + log piping + crash-restart). Defaults off so the
+    // current `cargo run` dev workflow keeps working.
+    cadKernelSupervisor.initialize();
 
     server.listen(port, () => {
-        db.sequelize.sync().then(() => {
-            console.log(`Server listening on the port:${port}`);
-            scheduledTaskService.initialize();
-            notificationService.initialize();
-        });
+        // Migrations are the sole source of truth for schema. We previously
+        // called `sequelize.sync()` here, which races the migration system —
+        // sync() auto-creates tables (and named indexes) from any model that
+        // doesn't have a corresponding table yet, leaving `SequelizeMeta`
+        // with no record. The next `db:migrate` run then collides on the
+        // already-existing relations. New models MUST ship with a paired
+        // migration; the backend will fail loudly at first query against an
+        // unmigrated table, which is the correct behaviour.
+        console.log(`Server listening on the port:${port}`);
+        scheduledTaskService.initialize();
+        notificationService.initialize();
+        // Background eviction of stale DesignBRepCache rows. Hourly sweep,
+        // 14-day TTL by default — override via CAD_BREP_CACHE_TTL_DAYS.
+        require('./services/cadCacheEvictionService').initialize();
+        // Garbage collection of unreachable VCS objects (REQ 902). Daily
+        // sweep, 7-day grace by default — override via VCS_GC_GRACE_DAYS.
+        require('./services/vcs/vcsGcService').initialize();
+        // Clear expired CLEAN checkout locks so stale attributions don't
+        // linger until the next checkout attempt (dirty expired locks keep
+        // their holder for the takeover+stash flow, REQ 874).
+        setInterval(() => {
+            require('./services/vcs/cadVcsService').sweepExpiredLocks()
+                .catch((err) => console.error('[CadLockSweep] failed:', err));
+        }, 10 * 60 * 1000);
     });
 }

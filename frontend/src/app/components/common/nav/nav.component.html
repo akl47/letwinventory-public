@@ -1,5 +1,8 @@
+@if (isNavigating()) {
+    <mat-progress-bar class="route-loading-bar" mode="indeterminate" data-testid="route-loading-bar"></mat-progress-bar>
+}
 <mat-sidenav-container class="sidenav-container" autosize>
-    <mat-sidenav mode="side" [opened]="!isMobileRoute()" class="nav-rail" [class.collapsed]="isSidenavCollapsed()">
+    <mat-sidenav mode="side" [opened]="!isMobileRoute() && !isCadFullscreen()" class="nav-rail" [class.collapsed]="isSidenavCollapsed()">
         <div class="nav-rail-wrapper" (click)="$event.stopPropagation()">
             <!-- Rail -->
             <div class="rail">
@@ -149,6 +152,12 @@
                         <span matListItemTitle>Engineering Masters</span>
                     </a>
                     }
+                    @if (hasCadAccess()) {
+                    <a mat-list-item routerLink="/design/cad" routerLinkActive="active-link" (click)="closePanel()">
+                        <mat-icon matListItemIcon>view_in_ar</mat-icon>
+                        <span matListItemTitle>CAD</span>
+                    </a>
+                    }
                     }
                     @if (openGroup() === 'tools') {
                     <a mat-list-item routerLink="/tools/outline" routerLinkActive="active-link" (click)="closePanel()">
@@ -194,7 +203,7 @@
 
     <mat-sidenav-content class="sidenav-content">
         <mat-toolbar class="nav-header" [class.dev]="isDev" [class.impersonating]="isImpersonating()"
-            [class.hidden]="isMobileRoute()">
+            [class.hidden]="isMobileRoute() || isCadFullscreen()">
             <button mat-icon-button (click)="toggleSidenav()" aria-label="Toggle sidenav">
                 <mat-icon>menu</mat-icon>
             </button>

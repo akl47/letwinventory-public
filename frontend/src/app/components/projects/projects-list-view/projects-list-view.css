@@ -172,3 +172,9 @@ mat-paginator {
         padding: 8px 4px;
     }
 }
+
+.loading-container {
+  display: flex;
+  justify-content: center;
+  padding: 48px 0;
+}

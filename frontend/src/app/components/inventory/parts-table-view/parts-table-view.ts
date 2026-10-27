@@ -3,7 +3,10 @@ import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { forkJoin, of } from 'rxjs';
+import { catchError } from 'rxjs/operators';
 import { InventoryService } from '../../../services/inventory.service';
 import { AuthService } from '../../../services/auth.service';
 import { Part, PartCategory } from '../../../models';
@@ -18,6 +21,7 @@ import { DataTable, DataTableColumnDef, ColumnDef, FilterSection } from '../../c
     CommonModule,
     MatButtonModule,
     MatIconModule,
+    MatProgressSpinnerModule,
     MatTooltipModule,
     AuthImgDirective,
     CategoryBadge,
@@ -37,7 +41,9 @@ export class PartsTableView implements OnInit {
   allParts = signal<Part[]>([]);
   stockLevels = signal<Record<number, number>>({});
   categories = signal<PartCategory[]>([]);
-  categoriesLoaded = signal<boolean>(false);
+  // REQ 937 — drives the spinner. Starts true so the table (and its "No data"
+  // empty state) never renders before the first response lands.
+  isLoading = signal<boolean>(true);
   imageTooltipStyle: Record<string, string> = {};
 
   columns: ColumnDef<Part>[] = [
@@ -102,28 +108,26 @@ export class PartsTableView implements OnInit {
   }
 
   loadData() {
-    this.inventoryService.getPartCategories().subscribe({
-      next: (categories) => {
-        this.categories.set(categories);
-        this.categoriesLoaded.set(true);
-        this.loadParts();
-      },
-      error: (err) => {
-        console.error('Error loading categories:', err);
-        this.categoriesLoaded.set(true);
-        this.loadParts();
-      },
-    });
-  }
-
-  loadParts() {
-    this.inventoryService.getAllParts().subscribe({
-      next: (parts) => this.allParts.set(parts),
-      error: (err) => console.error('Error loading parts:', err),
-    });
-    this.inventoryService.getStockLevels().subscribe({
-      next: (levels) => this.stockLevels.set(levels),
-      error: (err) => console.error('Error loading stock levels:', err),
+    // The three calls are independent — categories used to gate the parts
+    // fetch, which serialized two round-trips and roughly doubled the time to
+    // first row. forkJoin runs them concurrently and gives one place to clear
+    // the spinner. Each stream swallows its own error so one failure doesn't
+    // blank the whole page.
+    forkJoin({
+      categories: this.inventoryService.getPartCategories().pipe(
+        catchError((err) => { console.error('Error loading categories:', err); return of([] as PartCategory[]); }),
+      ),
+      parts: this.inventoryService.getAllParts().pipe(
+        catchError((err) => { console.error('Error loading parts:', err); return of([] as Part[]); }),
+      ),
+      stockLevels: this.inventoryService.getStockLevels().pipe(
+        catchError((err) => { console.error('Error loading stock levels:', err); return of({} as Record<number, number>); }),
+      ),
+    }).subscribe((res) => {
+      this.categories.set(res.categories);
+      this.allParts.set(res.parts);
+      this.stockLevels.set(res.stockLevels);
+      this.isLoading.set(false);
     });
   }
 

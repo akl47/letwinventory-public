@@ -6,9 +6,12 @@ import { provideNativeDateAdapter } from '@angular/material/core';
 import { Title } from '@angular/platform-browser';
 import { firstValueFrom } from 'rxjs';
 
+import { MatSnackBar } from '@angular/material/snack-bar';
+
 import { routes } from './app.routes';
 import { AuthService } from './services/auth.service';
 import { authInterceptor } from './interceptors/auth.interceptor';
+import { DebugSnackBar } from './services/debug-snack-bar.service';
 
 @Injectable({ providedIn: 'root' })
 export class AppTitleStrategy extends TitleStrategy {
@@ -34,27 +37,8 @@ export const appConfig: ApplicationConfig = {
     provideAnimations(),
     provideNativeDateAdapter(),
     { provide: TitleStrategy, useClass: AppTitleStrategy },
-    provideAppInitializer(() => firstValueFrom(inject(AuthService).checkAuthStatus())),
-    provideAppInitializer(() => {
-      // Stale tabs left open across a deploy reference lazy chunks that no
-      // longer exist. Detect the chunk-load error from a router navigation
-      // and reload once to pull the current bundle. sessionStorage guards
-      // against reload loops when the failure is not deploy-related.
-      const router = inject(Router);
-      const RELOAD_FLAG = 'chunkReloadAttempted';
-      router.events.subscribe((event) => {
-        if (event instanceof NavigationError) {
-          const message = String((event.error as { message?: string })?.message ?? event.error ?? '');
-          if (/dynamically imported module|ChunkLoadError|Loading chunk \d+ failed/i.test(message)) {
-            if (!sessionStorage.getItem(RELOAD_FLAG)) {
-              sessionStorage.setItem(RELOAD_FLAG, '1');
-              window.location.reload();
-            }
-          }
-        } else if (event instanceof NavigationEnd) {
-          sessionStorage.removeItem(RELOAD_FLAG);
-        }
-      });
-    })
+    // REQ 898 — every snackbar logs to the console; debug mode adds a copy button.
+    { provide: MatSnackBar, useClass: DebugSnackBar },
+    provideAppInitializer(() => firstValueFrom(inject(AuthService).checkAuthStatus()))
   ]
 };

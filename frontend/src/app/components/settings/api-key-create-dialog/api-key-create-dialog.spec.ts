@@ -135,7 +135,10 @@ describe('ApiKeyCreateDialog', () => {
 
     describe('expiration picker', () => {
         function daysFromNow(days: number): number {
-            return Date.now() + days * 86400000;
+            // Calendar days, like computeExpiresAt — a DST change makes one day 23/25h.
+            const d = new Date();
+            d.setDate(d.getDate() + days);
+            return d.getTime();
         }
 
         it.each([

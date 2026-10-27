@@ -2,6 +2,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule, Location } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { ScheduledTaskService } from '../../../services/scheduled-task.service';
@@ -16,6 +17,7 @@ import { DataTable, DataTableColumnDef, ColumnDef, FilterSection } from '../../c
     CommonModule,
     MatButtonModule,
     MatIconModule,
+    MatProgressSpinnerModule,
     MatTooltipModule,
     MatDialogModule,
     DataTable,
@@ -30,6 +32,9 @@ export class ScheduledTasksListView implements OnInit {
   private location = inject(Location);
 
   allItems = signal<ScheduledTask[]>([]);
+  // REQ 937 — spinner gate for the FIRST load only; refetches (filter toggle,
+  // post-dialog refresh) swap data in place rather than blanking the table.
+  isLoading = signal<boolean>(true);
   showInactiveLoaded = signal<boolean>(false);
 
   columns: ColumnDef<ScheduledTask>[] = [
@@ -75,8 +80,12 @@ export class ScheduledTasksListView implements OnInit {
       next: (items) => {
         this.allItems.set(items);
         this.showInactiveLoaded.set(includeInactive);
+        this.isLoading.set(false);
       },
-      error: (err) => console.error('Error loading scheduled tasks:', err),
+      error: (err) => {
+        console.error('Error loading scheduled tasks:', err);
+        this.isLoading.set(false);
+      },
     });
   }
 
