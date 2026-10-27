@@ -58,6 +58,9 @@ jobs:
     # Pinned: ubuntu-latest moved to 26.04, which Playwright 1.59 can't install
     # chromium deps for.
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     env:
       BACKEND_PORT: 3000
       DB_HOST: localhost
@@ -72,6 +75,8 @@ jobs:
       GOOGLE_CLIENT_ID: ci-placeholder
       GOOGLE_CLIENT_SECRET: ci-placeholder
       GOOGLE_CALLBACK_URL: http://localhost:3000/api/auth/google/callback
+      # CAD specs (features, export, assembly, convert-edge) need real geometry.
+      CAD_KERNEL_ADDR: 127.0.0.1:9876
     services:
       postgres:
         image: postgres:16
@@ -88,6 +93,52 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Same kernel selection as cad-kernel-e2e: the PR's own build when it
+      # changes cad-kernel-cpp/, else the published master image.
+      - name: Detect kernel source changes
+        id: kernelsrc
+        run: |
+          CHANGED=false
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            if ! git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- cad-kernel-cpp/; then
+              CHANGED=true
+            fi
+          fi
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.kernelsrc.outputs.changed == 'true'
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build PR kernel image
+        if: steps.kernelsrc.outputs.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./cad-kernel-cpp
+          load: true
+          tags: letwinventory-cad-kernel:pr
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:buildcache
+            type=gha
+
+      - name: Start CAD kernel
+        run: |
+          if [ "${{ steps.kernelsrc.outputs.changed }}" = "true" ]; then
+            IMG="letwinventory-cad-kernel:pr"
+          else
+            IMG="ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:latest"
+            if ! docker pull "$IMG"; then
+              echo "::error::Kernel image $IMG could not be pulled — CAD e2e specs need it. Publish the kernel image (publish-kernel.yml) and retry."
+              exit 1
+            fi
+          fi
+          docker run -d --name cad-kernel -p 9876:9876 "$IMG"
 
       - uses: actions/setup-node@v4
         with:
@@ -108,6 +159,14 @@ jobs:
       - name: Start backend
         run: nohup node index.js > /tmp/backend.log 2>&1 &
         working-directory: backend
+
+      - name: Wait for CAD kernel
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/9876) 2>/dev/null; then echo "Kernel is ready"; break; fi
+            echo "Waiting for kernel... ($i/30)"; sleep 2
+            if [ "$i" = "30" ]; then echo "Kernel never became ready"; exit 1; fi
+          done
 
       - name: Wait for backend
         run: |
