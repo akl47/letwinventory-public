@@ -27,7 +27,13 @@ async function loadFont(): Promise<Font> {
       const resp = await fetch(FONT_URL);
       if (!resp.ok) throw new Error(`Roboto font fetch failed (${resp.status})`);
       const buf = await resp.arrayBuffer();
-      return opentype.parse(buf);
+      const f = opentype.parse(buf);
+      // Set the sync handle here (not in a one-shot at import) so a retry
+      // after a failed first load still unblocks the try* accessors.
+      font = f;
+      const cbs = fontReadyCbs.splice(0);
+      for (const cb of cbs) { try { cb(); } catch { /* consumer error — ignore */ } }
+      return f;
     })().catch((err) => {
       // Don't cache a failed load — let the next call retry.
       fontPromise = null;
@@ -60,11 +66,7 @@ let font: Font | null = null;
  * the viewer's sketch overlay) register here so they can re-render once Roboto
  * is available — `tryGlyphLoopsForText` returns null until then. */
 const fontReadyCbs: Array<() => void> = [];
-loadFont().then(f => {
-  font = f;
-  const cbs = fontReadyCbs.splice(0);
-  for (const cb of cbs) { try { cb(); } catch { /* consumer error — ignore */ } }
-}).catch(() => { /* network failure — leave null */ });
+loadFont().catch(() => { /* network failure — leave null */ });
 
 /** Register a callback fired once Roboto has parsed. Fires synchronously if the
  * font is already loaded; otherwise queued and invoked one time when the load
