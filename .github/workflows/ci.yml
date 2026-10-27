@@ -156,6 +156,12 @@ jobs:
         run: npx sequelize-cli db:migrate
         working-directory: backend
 
+      # Migrations only create Kit/Assembly; 'Part' etc. come from this seeder.
+      # The CAD new-part dialog needs 'Part' (else it falls back to Assembly).
+      - name: Seed part categories
+        run: npx sequelize-cli db:seed --seed 20210727105200-create-part-categories.js
+        working-directory: backend
+
       - name: Start backend
         run: nohup node index.js > /tmp/backend.log 2>&1 &
         working-directory: backend
