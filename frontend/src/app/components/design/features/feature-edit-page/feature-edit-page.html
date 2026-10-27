@@ -342,7 +342,6 @@
                     <span class="req-desc">
                       <span class="req-desc-text">{{ r.description }}</span>
                       <span class="req-tts-row" (click)="$event.stopPropagation()">
-                        <app-tts-play-button [reqId]="r.id" field="description" />
                         <app-tts-play-button [reqId]="r.id" field="all" />
                       </span>
                     </span>

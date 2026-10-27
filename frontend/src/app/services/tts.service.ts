@@ -22,6 +22,12 @@ export class TtsService {
     private statusByReq = new Map<number, ReturnType<typeof signal<Record<string, boolean | null>>>>();
     private statusFetched = new Set<number>();
     private sequenceToken = 0;
+    /** Per-key synthesis progress (0–100), updated by the SSE event stream. */
+    private progressByKey = new Map<string, ReturnType<typeof signal<number>>>();
+    private eventSources = new Map<string, EventSource>();
+    /** Tracks an in-progress queueRequirementAll run so each per-field SSE
+     *  update can also bubble an aggregated 0–100 to the parent allKey. */
+    private activeAllRun: { reqId: number; total: number; completed: number } | null = null;
 
     /** Fields used for "play all" sequential playback, in spoken order. */
     static readonly REQUIREMENT_FIELDS = ['description', 'rationale', 'parameter', 'verification', 'validation'];
@@ -102,36 +108,68 @@ export class TtsService {
      * order. As each field's wav arrives, its blob URL is cached and its
      * per-field status flips to true.
      *
-     * Returns when every queued field has resolved (success or failure). No
-     * playback is triggered; the user clicks Play after generation completes.
+     * Returns the list of fields that failed (with their errors) so callers
+     * can surface them. No playback is triggered; the user clicks Play after
+     * generation completes.
      */
-    async queueRequirementAll(reqId: number, fields: string[] = TtsService.REQUIREMENT_FIELDS): Promise<void> {
+    async queueRequirementAll(
+        reqId: number,
+        opts: { fields?: string[]; onError?: (failure: { field: string; error: unknown }) => void } = {},
+    ): Promise<Array<{ field: string; error: unknown }>> {
+        const fields = opts.fields ?? TtsService.REQUIREMENT_FIELDS;
         const status = this.statusByReq.get(reqId)?.() ?? {};
         // Only queue fields that have text (status !== null) and aren't
         // already cached.
         const todo = fields.filter(f => status[f] !== null && status[f] !== true);
-        if (todo.length === 0) return;
+        if (todo.length === 0) return [];
 
         const allKey = this.requirementFieldKey(reqId, 'all');
+        console.log(`[TTS] queueRequirementAll req=${reqId} todo=`, todo);
         this.loadingKeySig.set(allKey);
+        this.getProgress(allKey).set(0);
+        this.activeAllRun = { reqId, total: todo.length, completed: 0 };
+        const failures: Array<{ field: string; error: unknown }> = [];
         try {
             // Serialize the fetches: chatterbox-tts has a known tensor-
             // batching bug that crashes 500s when multiple synthesis
             // requests overlap. Sequential is slightly slower but reliable.
             for (const field of todo) {
                 const fieldKey = this.requirementFieldKey(reqId, field);
-                if (this.blobUrls.has(fieldKey)) continue;
+                if (this.blobUrls.has(fieldKey)) {
+                    console.log(`[TTS] queueRequirementAll skip ${field} — already has blob`);
+                    continue;
+                }
+                console.log(`[TTS] queueRequirementAll starting ${field} (${this.activeAllRun.completed}/${this.activeAllRun.total} done)`);
                 try {
                     const blob = await firstValueFrom(this.fetchRequirementField(reqId, field));
                     this.blobUrls.set(fieldKey, URL.createObjectURL(blob));
                     this.markCached(reqId, field, true);
+                    console.log(`[TTS] queueRequirementAll finished ${field}`);
                 } catch (err) {
-                    console.warn(`TTS queue failed for ${field}:`, err);
+                    console.warn(`[TTS] queueRequirementAll failed ${field}`, err);
+                    const failure = { field, error: err };
+                    failures.push(failure);
+                    // Surface each error as it happens so the caller can show
+                    // a toast immediately rather than waiting for the batch.
+                    if (opts.onError) {
+                        try { opts.onError(failure); } catch { /* never block the queue */ }
+                    }
                 }
+                this.activeAllRun.completed++;
+                // Snap aggregated progress to the boundary so the bar doesn't
+                // linger at the previous field's last reported value while the
+                // next field's SSE warms up.
+                this.getProgress(allKey).set(
+                    Math.round(this.activeAllRun.completed / this.activeAllRun.total * 100),
+                );
             }
         } finally {
+            console.log(`[TTS] queueRequirementAll done req=${reqId} failures=${failures.length}`);
             this.loadingKeySig.set(null);
+            this.activeAllRun = null;
+            this.getProgress(allKey).set(0);
         }
+        return failures;
     }
 
     /**
@@ -214,18 +252,120 @@ export class TtsService {
     }
 
     fetchRequirementField(reqId: number, field: string): Observable<Blob> {
-        return this.http.get(`${environment.apiUrl}/tts/requirement/${reqId}/${field}`, {
-            responseType: 'blob',
+        // Open a progress SSE alongside the audio fetch so the UI can show a
+        // percentage during synthesis. The backend coalesces both requests onto
+        // the same in-flight job — no duplicate work.
+        console.log(`[TTS] fetchRequirementField req=${reqId} field=${field} — opening SSE + audio fetch`);
+        this.openProgressStream(reqId, field);
+        const t0 = performance.now();
+        return new Observable<Blob>(subscriber => {
+            const sub = this.http.get(`${environment.apiUrl}/tts/requirement/${reqId}/${field}`, {
+                responseType: 'blob',
+            }).subscribe({
+                next: (blob) => {
+                    console.log(`[TTS] audio fetch resolved req=${reqId} field=${field} bytes=${blob.size} after=${Math.round(performance.now() - t0)}ms`);
+                    subscriber.next(blob);
+                },
+                error: (err) => {
+                    console.warn(`[TTS] audio fetch failed req=${reqId} field=${field} after=${Math.round(performance.now() - t0)}ms`, err);
+                    subscriber.error(err);
+                },
+                complete: () => subscriber.complete(),
+            });
+            return () => {
+                console.log(`[TTS] audio fetch unsubscribed req=${reqId} field=${field} after=${Math.round(performance.now() - t0)}ms`);
+                sub.unsubscribe();
+            };
         });
+    }
+
+    /** Signal carrying the synthesis progress (0–100) for a given key. */
+    getProgress(key: string) {
+        let sig = this.progressByKey.get(key);
+        if (!sig) {
+            sig = signal(0);
+            this.progressByKey.set(key, sig);
+        }
+        return sig;
+    }
+
+    private openProgressStream(reqId: number, field: string) {
+        if (typeof EventSource === 'undefined') {
+            console.warn(`[TTS] EventSource unavailable in this environment`);
+            return;
+        }
+        const key = this.requirementFieldKey(reqId, field);
+        // Close any pre-existing stream for this key (e.g. retry).
+        if (this.eventSources.has(key)) {
+            console.log(`[TTS] closing stale SSE for ${key}`);
+            this.eventSources.get(key)?.close();
+        }
+        const token = localStorage.getItem('auth_token');
+        if (!token) {
+            console.warn(`[TTS] no auth_token — skipping SSE for ${key}`);
+            return;
+        }
+        const url = `${environment.apiUrl}/tts/requirement/${reqId}/${field}/events?token=${encodeURIComponent(token)}`;
+        console.log(`[TTS] SSE opening ${key}`);
+        const t0 = performance.now();
+        const es = new EventSource(url);
+        this.eventSources.set(key, es);
+        const progress = this.getProgress(key);
+        progress.set(0);
+        const close = () => {
+            if (!this.eventSources.has(key)) return; // already closed
+            es.close();
+            this.eventSources.delete(key);
+            progress.set(0);
+        };
+        es.addEventListener('open', () => {
+            console.log(`[TTS] SSE opened ${key} after=${Math.round(performance.now() - t0)}ms readyState=${es.readyState}`);
+        });
+        es.addEventListener('progress', (ev: MessageEvent) => {
+            try {
+                const data = JSON.parse(ev.data);
+                console.log(`[TTS] SSE progress ${key}`, data);
+                if (typeof data.progress !== 'number') return;
+                const rounded = Math.round(data.progress);
+                progress.set(rounded);
+                if (this.activeAllRun && this.activeAllRun.reqId === reqId) {
+                    const { total, completed } = this.activeAllRun;
+                    const aggregated = Math.round((completed * 100 + rounded) / total);
+                    this.getProgress(this.requirementFieldKey(reqId, 'all')).set(aggregated);
+                }
+            } catch (err) {
+                console.warn(`[TTS] SSE progress parse error ${key}`, err, ev.data);
+            }
+        });
+        es.addEventListener('completed', (ev: MessageEvent) => {
+            console.log(`[TTS] SSE completed ${key} after=${Math.round(performance.now() - t0)}ms data=`, ev.data);
+            close();
+        });
+        es.addEventListener('error', (ev: MessageEvent) => {
+            console.warn(`[TTS] SSE 'error' event ${key} after=${Math.round(performance.now() - t0)}ms data=`, ev.data);
+            close();
+        });
+        es.onerror = (ev) => {
+            console.warn(`[TTS] SSE onerror ${key} after=${Math.round(performance.now() - t0)}ms readyState=${es.readyState}`, ev);
+            close();
+        };
     }
 
     /** Convenience: toggle playback for a requirement field. Marks the
      *  field cached on first successful fetch so the UI flips to the speaker
      *  icon. */
     toggleRequirementField(reqId: number, field: string): Promise<void> {
+        console.log(`[TTS] toggleRequirementField req=${reqId} field=${field}`);
         const key = this.requirementFieldKey(reqId, field);
         return this.toggle(key, () => this.fetchRequirementField(reqId, field))
-            .then(() => this.markCached(reqId, field, true));
+            .then(() => {
+                console.log(`[TTS] toggleRequirementField done — marking cached req=${reqId} field=${field}`);
+                this.markCached(reqId, field, true);
+            })
+            .catch(err => {
+                console.warn(`[TTS] toggleRequirementField failed req=${reqId} field=${field}`, err);
+                throw err;
+            });
     }
 
     requirementFieldKey(reqId: number, field: string): string {
@@ -245,8 +385,8 @@ export class TtsService {
             this.http.get<Record<string, boolean | null>>(
                 `${environment.apiUrl}/tts/requirement/${reqId}/status`,
             ).subscribe({
-                next: (s) => sig!.set(s),
-                error: () => { /* leave empty; treated as not-cached */ },
+                next: (s) => { console.log(`[TTS] status fetched req=${reqId}`, s); sig!.set(s); },
+                error: (err) => { console.warn(`[TTS] status fetch failed req=${reqId}`, err); },
             });
         }
         return sig;
@@ -267,11 +407,33 @@ export class TtsService {
     }
 
     /** Update the status for a single field — used after a successful fetch
-     *  or to invalidate when the user edits the field. */
+     *  or to invalidate when the user edits the field. Also recomputes the
+     *  `all` aggregate (true when every populated field is cached), mirroring
+     *  the backend's `status.all` logic so the parent "play all" icon flips
+     *  without a page refresh. */
     markCached(reqId: number, field: string, cached: boolean) {
+        console.log(`[TTS] markCached req=${reqId} field=${field} cached=${cached}`);
         const sig = this.statusByReq.get(reqId);
-        if (!sig) return;
-        sig.update(s => ({ ...s, [field]: cached }));
+        if (!sig) {
+            console.warn(`[TTS] markCached: no status signal for req=${reqId}`);
+            return;
+        }
+        sig.update(s => {
+            const next = { ...s, [field]: cached };
+            if (field !== 'all') {
+                let anyText = false;
+                let allCached: boolean | null = null;
+                for (const f of TtsService.REQUIREMENT_FIELDS) {
+                    if (next[f] === null || next[f] === undefined) continue;
+                    anyText = true;
+                    if (next[f] !== true) { allCached = false; break; }
+                }
+                if (allCached === null) allCached = anyText ? true : null;
+                next['all'] = allCached;
+            }
+            console.log(`[TTS] markCached recomputed status req=${reqId}`, next);
+            return next;
+        });
     }
 
     /** Clear cached blob URL for a (req, field) — call after the requirement

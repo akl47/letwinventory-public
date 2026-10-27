@@ -57,6 +57,60 @@ exports.listForOwner = async (req, res) => {
   }
 };
 
+/**
+ * SSE stream of synthesis progress for one requirement field. Emits the same
+ * shape the upstream wrapper does: `progress`, `completed`, `error` events.
+ */
+exports.requirementFieldEvents = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const field = req.params.field;
+    if (!REQUIREMENT_FIELDS.has(field)) {
+      return res.status(400).json({ error: `Unsupported field '${field}'` });
+    }
+    const attrs = field === 'all'
+      ? ['id', 'activeFlag', ...ttsCache.REQUIREMENT_TTS_FIELDS]
+      : ['id', 'activeFlag', field];
+    const requirement = await db.DesignRequirement.findByPk(id, { attributes: attrs });
+    if (!requirement || !requirement.activeFlag) {
+      return res.status(404).json({ error: 'Requirement not found' });
+    }
+    const text = field === 'all'
+      ? ttsCache.buildCombinedRequirementText(requirement)
+      : (requirement[field] || '').toString().trim() || null;
+    if (!text) {
+      return res.status(404).json({ error: `Requirement ${id} has no ${field} text` });
+    }
+
+    res.set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.flushHeaders();
+
+    const emitter = ttsCache.subscribeToProgress(text, { voice: 'alloy' });
+    const send = (event, data) => {
+      try { res.write(`event: ${event}\ndata: ${JSON.stringify(data || {})}\n\n`); }
+      catch { /* socket already closed */ }
+    };
+    emitter.on('progress', (data) => send('progress', data));
+    emitter.on('completed', (data) => { send('completed', data); try { res.end(); } catch {} });
+    emitter.on('error', (data) => { send('error', data); try { res.end(); } catch {} });
+    req.on('close', () => {
+      emitter.removeAllListeners();
+      try { res.end(); } catch {}
+    });
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(err.status || 500).json({ error: err.message || 'TTS events error' });
+    } else {
+      try { res.end(); } catch {}
+    }
+  }
+};
+
 exports.requirementField = async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -87,7 +141,7 @@ exports.requirementField = async (req, res) => {
     ttsCache.recordOwnerLink({
       ownerType: 'design_requirement', ownerID: id, field, text,
     }).catch(() => {/* logged inside */});
-    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Cache-Control', 'private, max-age=86400');
     res.setHeader('X-TTS-Cached', result.cached ? '1' : '0');
     fs.createReadStream(result.path).pipe(res);

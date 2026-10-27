@@ -76,7 +76,11 @@ if (process.env.NODE_ENV === 'production') {
         index: false,
     }));
 
-    // All non-API routes should serve the Angular app
+    // Serve the Angular app for SPA navigation routes only. Requests for
+    // missing static assets (e.g. a JS chunk renamed by a later deploy) must
+    // 404 rather than fall through to index.html — otherwise the browser
+    // receives HTML with content-type text/html for a missing module and
+    // reports a confusing "error loading dynamically imported module".
     app.get('/{*path}', (req, res) => {
         res.setHeader('Cache-Control', 'no-cache');
         res.sendFile(path.join(frontendDistPath, 'index.html'));

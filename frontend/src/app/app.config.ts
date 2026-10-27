@@ -1,5 +1,5 @@
 import { ApplicationConfig, provideBrowserGlobalErrorListeners, provideAppInitializer, inject, Injectable } from '@angular/core';
-import { provideRouter, withHashLocation, TitleStrategy, RouterStateSnapshot } from '@angular/router';
+import { provideRouter, withHashLocation, TitleStrategy, RouterStateSnapshot, Router, NavigationError, NavigationEnd } from '@angular/router';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { provideAnimations } from '@angular/platform-browser/animations';
 import { provideNativeDateAdapter } from '@angular/material/core';
