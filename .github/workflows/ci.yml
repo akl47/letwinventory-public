@@ -55,7 +55,9 @@ jobs:
 
   e2e-tests:
     name: E2E Tests
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, which Playwright 1.59 can't install
+    # chromium deps for.
+    runs-on: ubuntu-24.04
     env:
       BACKEND_PORT: 3000
       DB_HOST: localhost
@@ -187,7 +189,7 @@ jobs:
           fetch-depth: 0
 
       # REQ 904: PRs that change kernel source are tested against THEIR OWN
-      # kernel build (registry buildcache makes this minutes, not hours) —
+      # kernel build (OCCT comes prebuilt from the letwinventory-occt base) —
       # previously they ran against the stale master image.
       - name: Detect kernel source changes
         id: kernelsrc

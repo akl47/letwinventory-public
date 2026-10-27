@@ -14,9 +14,16 @@
  * the regen response.
  */
 
-const { Parser } = require('expr-eval');
+const { Parser } = require('expr-eval-fork');
 
-const parser = new Parser();
+// Equations are user-edited and evaluated server-side on regen — lock the
+// grammar down to arithmetic + math functions (same options as safeExpr).
+// expr-eval's defaults allow member access / assignment / fndef, the vectors
+// behind its prototype-pollution and code-execution advisories.
+const parser = new Parser({
+  allowMemberAccess: false,
+  operators: { assignment: false, fndef: false, array: false, concatenate: false },
+});
 
 // Clear expr-eval's built-in math constants (E, PI, LN2, etc.) so
 // user-defined variables aren't silently shadowed by them. Without

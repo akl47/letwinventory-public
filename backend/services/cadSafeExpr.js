@@ -7,7 +7,7 @@
 // definition, or arrays, and identifiers limited to `t`, math functions, and
 // math constants. KEEP IN SYNC with the frontend module.
 
-const { Parser } = require('expr-eval');
+const { Parser } = require('expr-eval-fork');
 
 const parser = new Parser({
   allowMemberAccess: false,

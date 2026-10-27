@@ -9,7 +9,7 @@
 //
 // KEEP IN SYNC with backend/services/cadSafeExpr.js.
 
-import { Parser } from 'expr-eval';
+import { Parser } from 'expr-eval-fork';
 
 // `array` is a real runtime option (expr-eval maps '[' → 'array') that its
 // .d.ts omits, hence the cast.

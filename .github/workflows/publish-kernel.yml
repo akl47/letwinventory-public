@@ -2,9 +2,9 @@ name: Publish CAD Kernel Image
 
 # Builds the C++/OCCT CAD kernel image and pushes it to GHCR so the per-PR
 # `cad-kernel-e2e` job in ci.yml can pull it as a service container instead of
-# building OCCT from source (which takes hours). Runs on master when the kernel
-# sources change, or on demand. The OCCT layer is cached via the GitHub Actions
-# cache so re-publishes after a source-only change are fast.
+# building it. Runs on master when the kernel sources change, or on demand.
+# OCCT itself comes prebuilt from the letwinventory-occt base image
+# (publish-occt.yml), so this only compiles the kernel sources.
 
 on:
   push:
@@ -41,10 +41,8 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:latest
             ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:${{ github.sha }}
-          # Registry cache (a :buildcache tag on GHCR) — the OCCT layer is
-          # multi-GB and would be evicted from the 10 GB GitHub Actions cache;
-          # the registry has no such cap, so re-publishes after source-only
-          # changes stay fast. GHA cache kept as a secondary hit.
+          # Registry cache (a :buildcache tag on GHCR) for the kernel compile
+          # layers; GHA cache kept as a secondary hit.
           cache-from: |
             type=registry,ref=ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:buildcache
             type=gha

@@ -13,7 +13,7 @@
 // any cycles / parse errors / undefined identifiers as per-entry errors
 // without taking down the rest of the document.
 
-import { Parser } from 'expr-eval';
+import { Parser } from 'expr-eval-fork';
 
 /** Document persisted on DesignCADModels.equations (REQ 635). */
 export interface EquationDoc {
@@ -212,7 +212,15 @@ export function resolveEquations(doc: EquationDoc): ResolveResult {
   return { values, errors, order };
 }
 
-const parser = new Parser();
+// Equations are user-edited and evaluated server-side on regen — lock the
+// grammar down to arithmetic + math functions (same options as safeExpr).
+// expr-eval's defaults allow member access / assignment / fndef, the vectors
+// behind its prototype-pollution and code-execution advisories. (`array` is a
+// real runtime option its .d.ts omits, hence the cast — see safeExpr.ts.)
+const parser = new Parser({
+  allowMemberAccess: false,
+  operators: { assignment: false, fndef: false, array: false, concatenate: false } as Record<string, boolean>,
+});
 
 // expr-eval ships with built-in math constants (`E`, `PI`, `LN2`,
 // `LN10`, `LOG2E`, `LOG10E`, `SQRT1_2`, `SQRT2`, `true`, `false`)

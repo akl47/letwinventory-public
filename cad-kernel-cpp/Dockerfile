@@ -1,35 +1,14 @@
 # syntax=docker/dockerfile:1.7
 # C++ CAD kernel on OCCT 8.0 (native — no Rust, no opencascade-rs/FFI).
-#
-# The OCCT 8.0 build below is byte-identical to cad-kernel/Dockerfile's so
-# BuildKit reuses the already-compiled layer instead of recompiling OCCT.
 
 # ---- builder ----
-# Same base + apt + OCCT build as the Rust kernel image, purely so the
-# (hours-long) OCCT 8.0 layer is a cache hit. We don't use the Rust toolchain.
-FROM rust:1.85-bookworm AS builder
+# OCCT 8.0 + toolchain come prebuilt from the base image (occt.Dockerfile,
+# published by .github/workflows/publish-occt.yml) — compiling OCCT here took
+# hours whenever the build cache missed.
+ARG OCCT_IMAGE=ghcr.io/akl47/letwinventory-occt:8.0.0
+FROM ${OCCT_IMAGE} AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      cmake clang pkg-config git ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-
-ARG OCCT_TAG=V8_0_0
-RUN git clone --depth 1 --branch ${OCCT_TAG} \
-      https://github.com/Open-Cascade-SAS/OCCT.git /tmp/occt-src \
- && cmake -S /tmp/occt-src -B /tmp/occt-build \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_INSTALL_PREFIX=/usr/local \
-      -DBUILD_LIBRARY_TYPE=Shared \
-      -DUSE_VTK=OFF -DUSE_FREETYPE=OFF -DUSE_TK=OFF \
-      -DUSE_OPENGL=OFF -DUSE_GLES2=OFF -DUSE_FREEIMAGE=OFF \
-      -DUSE_TBB=OFF -DUSE_RAPIDJSON=OFF -DUSE_DRACO=OFF \
-      -DBUILD_MODULE_Draw=OFF -DBUILD_MODULE_Visualization=OFF \
-      -DBUILD_DOC_Overview=OFF \
- && cmake --build /tmp/occt-build --target install -j"$(nproc)" \
- && rm -rf /tmp/occt-src /tmp/occt-build \
- && ldconfig
-
-# C++ kernel deps + build (this part is new; OCCT layer above stays cached).
+# C++ kernel deps + build.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       nlohmann-json3-dev \
  && rm -rf /var/lib/apt/lists/*
