@@ -12,6 +12,7 @@ import type {
   ConstraintType, ConstraintTarget, ReferenceCandidate, ExternalRef,
 } from '../../../cad/lib/types';
 import { pointsOf, linesOf, findPoint, onEdgeLookupKey, isCenterExternalRef } from '../../../cad/lib/types';
+import { DISABLED_REASON } from '../../../cad/lib/disabledReason';
 import { nearestCandidateHit, externalRefForCandidate, parseCandidateId, closestPointOnSegment, closestPointOnPolyline } from '../../../cad/lib/externalSnap';
 import { angleQuadrant } from '../../../cad/lib/geometry';
 import {
@@ -333,7 +334,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
       <div class="split-button" [class.active]="isInGroup('primitive')" data-testid="group-primitives">
         <button class="ribbon-button split-main"
                 [class.active]="isInGroup('primitive')"
-                [matTooltip]="primitiveCurrent().tooltip"
+                [matTooltip]="(readonly() ? readonlyReason() : null) || (primitiveCurrent().tooltip)"
                 (click)="setTool(lastPrimitiveTool())"
                 [disabled]="readonly()">
           <mat-icon [svgIcon]="primitiveCurrent().icon"></mat-icon>
@@ -341,7 +342,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
         </button>
         <button class="split-chevron"
                 [matMenuTriggerFor]="primitivesMenu"
-                matTooltip="More sketch primitives"
+                [matTooltip]="(readonly() ? readonlyReason() : null) || 'More sketch primitives'"
                 [disabled]="readonly()"
                 data-testid="group-primitives-chevron">
           <mat-icon>arrow_drop_down</mat-icon>
@@ -361,7 +362,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
       <div class="split-button" [class.active]="isInGroup('circle')" data-testid="group-circles">
         <button class="ribbon-button split-main"
                 [class.active]="isInGroup('circle')"
-                [matTooltip]="circleCurrent().tooltip"
+                [matTooltip]="(readonly() ? readonlyReason() : null) || (circleCurrent().tooltip)"
                 (click)="setTool(lastCircleTool())"
                 [disabled]="readonly()">
           <mat-icon [svgIcon]="circleCurrent().icon"></mat-icon>
@@ -369,7 +370,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
         </button>
         <button class="split-chevron"
                 [matMenuTriggerFor]="circlesMenu"
-                matTooltip="More circle &amp; arc tools"
+                [matTooltip]="(readonly() ? readonlyReason() : null) || 'More circle &amp; arc tools'"
                 [disabled]="readonly()"
                 data-testid="group-circles-chevron">
           <mat-icon>arrow_drop_down</mat-icon>
@@ -389,7 +390,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
       <div class="split-button" [class.active]="isInGroup('shape')" data-testid="group-shapes">
         <button class="ribbon-button split-main"
                 [class.active]="isInGroup('shape')"
-                [matTooltip]="shapeCurrent().tooltip"
+                [matTooltip]="(readonly() ? readonlyReason() : null) || (shapeCurrent().tooltip)"
                 (click)="setTool(lastShapeTool())"
                 [disabled]="readonly()">
           <mat-icon [svgIcon]="shapeCurrent().icon"></mat-icon>
@@ -397,7 +398,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
         </button>
         <button class="split-chevron"
                 [matMenuTriggerFor]="shapesMenu"
-                matTooltip="More composite shapes"
+                [matTooltip]="(readonly() ? readonlyReason() : null) || 'More composite shapes'"
                 [disabled]="readonly()"
                 data-testid="group-shapes-chevron">
           <mat-icon>arrow_drop_down</mat-icon>
@@ -417,7 +418,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
       <div class="split-button" [class.active]="isInGroup('edit')" data-testid="group-edit">
         <button class="ribbon-button split-main"
                 [class.active]="isInGroup('edit')"
-                [matTooltip]="editCurrent().tooltip"
+                [matTooltip]="(readonly() ? readonlyReason() : null) || (editCurrent().tooltip)"
                 (click)="setTool(lastEditTool())"
                 [disabled]="readonly()">
           <mat-icon [svgIcon]="editCurrent().icon"></mat-icon>
@@ -425,7 +426,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
         </button>
         <button class="split-chevron"
                 [matMenuTriggerFor]="editMenu"
-                matTooltip="More edit tools"
+                [matTooltip]="(readonly() ? readonlyReason() : null) || 'More edit tools'"
                 [disabled]="readonly()"
                 data-testid="group-edit-chevron">
           <mat-icon>arrow_drop_down</mat-icon>
@@ -446,7 +447,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
       <div class="split-button" [class.active]="isInGroup('transform')" data-testid="group-transform">
         <button class="ribbon-button split-main"
                 [class.active]="isInGroup('transform')"
-                [matTooltip]="transformCurrent().tooltip"
+                [matTooltip]="(readonly() ? readonlyReason() : null) || (transformCurrent().tooltip)"
                 (click)="setTool(lastTransformTool())"
                 [disabled]="readonly()">
           <mat-icon [svgIcon]="transformCurrent().icon"></mat-icon>
@@ -454,7 +455,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
         </button>
         <button class="split-chevron"
                 [matMenuTriggerFor]="transformMenu"
-                matTooltip="More transform tools"
+                [matTooltip]="(readonly() ? readonlyReason() : null) || 'More transform tools'"
                 [disabled]="readonly()"
                 data-testid="group-transform-chevron">
           <mat-icon>arrow_drop_down</mat-icon>
@@ -476,7 +477,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               data-testid="tool-smart-dim"
               [class.active]="tool() === 'smart-dim'"
               (click)="setTool('smart-dim')"
-              matTooltip="Smart Dimension — click entities; constraint inferred from selection"
+              [matTooltip]="(readonly() ? readonlyReason() : null) || 'Smart Dimension — click entities; constraint inferred from selection'"
               [disabled]="readonly()">
         <mat-icon svgIcon="cad-smart-dim"></mat-icon>
         <span class="ribbon-label">Smart Dim</span>
@@ -492,7 +493,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               data-testid="toggle-construction"
               [disabled]="readonly() || selectedEntities().length === 0"
               (click)="toggleConstruction()"
-              [matTooltip]="constructionTooltip()">
+              [matTooltip]="(readonly() ? readonlyReason() : selectedEntities().length === 0 ? DISABLED_REASON.selectGeometry : null) || (constructionTooltip())">
         <mat-icon [svgIcon]="constructionIcon()"></mat-icon>
         <span class="ribbon-label">{{ constructionLabel() }}</span>
       </button>
@@ -500,7 +501,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               data-testid="toggle-draw-construction"
               [class.active]="drawConstruction()"
               (click)="drawConstruction.set(!drawConstruction())"
-              matTooltip="Draw as Construction — when on, new geometry comes in as construction (dashed reference)"
+              [matTooltip]="(readonly() ? readonlyReason() : null) || 'Draw as Construction — when on, new geometry comes in as construction (dashed reference)'"
               [disabled]="readonly()">
         <mat-icon svgIcon="cad-construction"></mat-icon>
         <span class="ribbon-label">Draw Cons.</span>
@@ -509,7 +510,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               data-testid="break-projection-link"
               [disabled]="readonly() || !hasProjectedSelection()"
               (click)="breakProjectionLink()"
-              matTooltip="Break Link — selected projected entity stops tracking its source edge and becomes editable like any other sketch entity">
+              [matTooltip]="(readonly() ? readonlyReason() : !hasProjectedSelection() ? DISABLED_REASON.selectProjected : null) || 'Break Link — selected projected entity stops tracking its source edge and becomes editable like any other sketch entity'">
         <mat-icon svgIcon="cad-break-link"></mat-icon>
         <span class="ribbon-label">Break Link</span>
       </button>
@@ -541,7 +542,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               [attr.data-testid]="'constraint-' + spec.type"
               [disabled]="readonly() || !constraintEnabled(spec)"
               (click)="applyConstraint(spec)"
-              [matTooltip]="spec.label">
+              [matTooltip]="(readonly() ? readonlyReason() : !constraintEnabled(spec) ? DISABLED_REASON.selectGeometry : null) || (spec.label)">
         <mat-icon [svgIcon]="spec.icon"></mat-icon>
       </button>
       <!-- REQ 889 — Fully Define Sketch: auto-dimension every free point
@@ -550,7 +551,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               data-testid="fully-define"
               [disabled]="readonly() || dof() === 0"
               (click)="fullyDefine()"
-              matTooltip="Fully Define Sketch — auto-dimension free geometry from the origin">
+              [matTooltip]="(readonly() ? readonlyReason() : dof() === 0 ? DISABLED_REASON.fullyDefined : null) || 'Fully Define Sketch — auto-dimension free geometry from the origin'">
         <mat-icon>lock</mat-icon>
       </button>
 
@@ -621,6 +622,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               data-testid="extrude-button"
               *ngIf="canExtrude()"
               [disabled]="readonly()"
+              [matTooltip]="(readonly() ? readonlyReason() : null)"
               (click)="extrudeRequested.emit()">
         <mat-icon>vertical_align_top</mat-icon>
         <span class="ribbon-label">Extrude</span>
@@ -630,7 +632,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               *ngIf="canExtrude()"
               [disabled]="readonly()"
               (click)="cutExtrudeRequested.emit()"
-              matTooltip="Cut Extrude — subtract the sketched profile from the existing body">
+              [matTooltip]="(readonly() ? readonlyReason() : null) || 'Cut Extrude — subtract the sketched profile from the existing body'">
         <mat-icon>vertical_align_bottom</mat-icon>
         <span class="ribbon-label">Cut</span>
       </button>
@@ -639,7 +641,7 @@ function orderTargetsForConstraint(type: ConstraintType, entities: SketchEntity[
               *ngIf="canExtrude()"
               [disabled]="readonly()"
               (click)="revolveRequested.emit()"
-              matTooltip="Revolve — rotate the profile around a sketched line">
+              [matTooltip]="(readonly() ? readonlyReason() : null) || 'Revolve — rotate the profile around a sketched line'">
         <mat-icon>360</mat-icon>
         <span class="ribbon-label">Revolve</span>
       </button>
@@ -778,6 +780,9 @@ export class CadSketchEditorComponent implements OnDestroy {
   sketchId = input<string>('');
   doc = input<SketchDocument>({ sketches: {}, nextSketchSeq: 1 });
   readonly = input<boolean>(false);
+  /** REQ 989 — why the toolbar is read-only, shown on hover over disabled tools. */
+  readonlyReason = input<string>('');
+  readonly DISABLED_REASON = DISABLED_REASON;
   /** Live 2D projections of model vertices/straight edges onto the active
    * sketch plane (computed by cad-editor from the current topology). Used as
    * implicit snap targets so a placed point can reference model geometry
@@ -5266,7 +5271,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-375');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-379');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);

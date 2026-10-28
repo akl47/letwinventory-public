@@ -779,7 +779,7 @@ export class CadRevisionListComponent implements OnInit {
 
   onCreate() {
     this.creating.set(true);
-    this.cadApi.createForPart(this.partID()).subscribe({
+    this.cadApi.checkoutCreated(this.cadApi.createForPart(this.partID())).subscribe({
       next: created => { this.creating.set(false); this.router.navigate(['editor'], { relativeTo: this.route, queryParams: { revisionID: created.id, branch: created.branchName || 'main' } }); },
       error: err => { this.creating.set(false); this.errors.showError(err?.error?.error || 'Failed to create CAD model'); },
     });

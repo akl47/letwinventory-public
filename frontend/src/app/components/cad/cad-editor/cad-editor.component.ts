@@ -31,6 +31,7 @@ import { CadDimensionPropertiesComponent } from '../cad-dimension-properties/cad
 import { CategoryBadge } from '../../common/category-badge/category-badge';
 import { SketchDeleteWarningDialogComponent, type SketchDeleteAction } from '../sketch-delete-warning-dialog/sketch-delete-warning-dialog.component';
 import { projectTo3D, projectFrom3D } from '../../../cad/lib/plane';
+import { disabledReason, DISABLED_REASON } from '../../../cad/lib/disabledReason';
 import { closestPointOnSegment, crossPartEdgeRef, crossPartVertexRef } from '../../../cad/lib/externalSnap';
 import { findProjectedBySource, listProjectedCurves } from '../../../cad/lib/projectedGeometry';
 import { extrudePreview, revolvePreview, sweepPreview } from '../../../cad/lib/preview';
@@ -143,6 +144,10 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   *ngIf="!assemblyMode() && activeSketchId() === null"
                   [class.active]="activeTab() === 'features'"
                   (click)="setActiveTab('features')">Features</button>
+          <button class="tab" data-testid="tab-tools"
+                  *ngIf="!assemblyMode() && activeSketchId() === null"
+                  [class.active]="activeTab() === 'tools'"
+                  (click)="setActiveTab('tools')">Tools</button>
           <!-- REQ 911: the Sketch tab also appears in assembly mode while a
                skeleton sketch is active. -->
           <button class="tab" data-testid="tab-sketch"
@@ -167,25 +172,25 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <div class="ribbon-group">
               <div class="ribbon-group-row">
                 <button class="ribbon-button" data-testid="action-checkout"
-                        *ngIf="model() && canWrite()" [disabled]="!!model()?.lockedByUserID"
-                        [matTooltip]="onMainBranch() ? 'main is protected — check out creates a draft branch to edit' : 'Check out — acquire the exclusive edit lock'"
+                        *ngIf="model() && canWrite()" [disabled]="!!checkoutBlock()"
+                        [matTooltip]="checkoutBlock() || (onMainBranch() ? 'main is protected — check out creates a draft branch to edit' : 'Check out — acquire the exclusive edit lock')"
                         (click)="onCheckout()">
                   <mat-icon svgIcon="cad-checkout"></mat-icon><span class="ribbon-label">Check out</span>
                 </button>
                 <button class="ribbon-button" data-testid="action-branches"
                         [disabled]="!model()" [class.active]="showBranches()"
-                        matTooltip="Branches + cherry-pick" (click)="toggleBranches()">
+                        [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || 'Branches + cherry-pick'" (click)="toggleBranches()">
                   <mat-icon svgIcon="cad-branch"></mat-icon><span class="ribbon-label">{{ currentBranch() }}</span>
                 </button>
                 <button class="ribbon-button" data-testid="action-checkin"
-                        [disabled]="!isLockedByMe()"
-                        matTooltip="Check in — commit the working copy"
+                        [disabled]="!!lockedByMeBlock()"
+                        [matTooltip]="lockedByMeBlock() || 'Check in — commit the working copy'"
                         (click)="onCheckin()">
                   <mat-icon svgIcon="cad-checkin"></mat-icon><span class="ribbon-label">Check in</span>
                 </button>
                 <button class="ribbon-button" data-testid="action-undo-checkout"
-                        [disabled]="!isLockedByMe()"
-                        matTooltip="Undo checkout — discard uncommitted changes + unlock"
+                        [disabled]="!!lockedByMeBlock()"
+                        [matTooltip]="lockedByMeBlock() || 'Undo checkout — discard uncommitted changes + unlock'"
                         (click)="onUndoCheckout()">
                   <mat-icon svgIcon="cad-reopen"></mat-icon><span class="ribbon-label">Undo checkout</span>
                 </button>
@@ -197,12 +202,12 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <div class="ribbon-group-row">
                 <button class="ribbon-button" data-testid="action-history"
                         *ngIf="!assemblyMode()" [disabled]="!model()"
-                        matTooltip="Open the part's full version history" (click)="openVersionHistory()">
+                        [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || 'Open the full version history of this part'" (click)="openVersionHistory()">
                   <mat-icon svgIcon="cad-history"></mat-icon><span class="ribbon-label">History</span>
                 </button>
                 <button class="ribbon-button" data-testid="action-compare"
                         [disabled]="commits().length < 2" [class.active]="showCompare()"
-                        matTooltip="Compare two commits" (click)="toggleCompare()">
+                        [matTooltip]="(commits().length < 2 ? DISABLED_REASON.needsTwoCommits : null) || 'Compare two commits'" (click)="toggleCompare()">
                   <mat-icon svgIcon="cad-compare"></mat-icon><span class="ribbon-label">Compare</span>
                 </button>
               </div>
@@ -270,9 +275,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <div class="ribbon-group-row">
                 <button class="ribbon-button"
                         data-testid="action-sketch"
-                        [disabled]="readonly() || activeSketchId() !== null"
+                        [disabled]="!!editBlock()"
                         [class.active]="mode() === 'pick-plane'"
-                        matTooltip="Start a new sketch on a datum plane"
+                        [matTooltip]="editBlock() || 'Start a new sketch on a datum plane'"
                         (click)="onSketchAction()">
                   <mat-icon svgIcon="cad-new-sketch"></mat-icon>
                   <span class="ribbon-label">Sketch</span>
@@ -282,9 +287,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <div class="ribbon-split">
                   <button class="ribbon-button"
                           data-testid="action-extrude"
-                          [disabled]="readonly() || activeSketchId() !== null || (extrudeMode() === 'cut' && !hasAdditiveBody())"
+                          [disabled]="!!extrudeBlock()"
                           [class.active]="mode() === 'pick-extrude-target' || mode() === 'pick-cut-extrude-target' || extrudeSidebar() !== null"
-                          [matTooltip]="extrudeMode() === 'cut' ? 'Cut Extrude — subtract the sketched profile from the existing body' : 'Extrude an existing sketch, or start a new one on a plane'"
+                          [matTooltip]="extrudeBlock() || (extrudeMode() === 'cut' ? 'Cut Extrude — subtract the sketched profile from the existing body' : 'Extrude an existing sketch, or start a new one on a plane')"
                           (click)="invokeExtrude()">
                     <mat-icon [svgIcon]="extrudeMode() === 'cut' ? 'cad-cut-extrude' : 'cad-extrude'"></mat-icon>
                     <span class="ribbon-label">{{ extrudeMode() === 'cut' ? 'Cut Extrude' : 'Extrude' }}</span>
@@ -299,7 +304,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                     <button mat-menu-item (click)="extrudeMode.set('boss'); onExtrudeAction()">
                       <mat-icon svgIcon="cad-extrude"></mat-icon> Boss Extrude
                     </button>
-                    <button mat-menu-item [disabled]="!hasAdditiveBody()" (click)="extrudeMode.set('cut'); onCutExtrudeAction()">
+                    <button mat-menu-item [disabled]="!hasAdditiveBody()" [matTooltip]="hasAdditiveBody() ? '' : DISABLED_REASON.noBody" (click)="extrudeMode.set('cut'); onCutExtrudeAction()">
                       <mat-icon svgIcon="cad-cut-extrude"></mat-icon> Cut Extrude
                     </button>
                   </mat-menu>
@@ -308,9 +313,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <div class="ribbon-split">
                   <button class="ribbon-button"
                           data-testid="action-revolve"
-                          [disabled]="readonly() || activeSketchId() !== null || (revolveMode() === 'cut' && !hasAdditiveBody())"
+                          [disabled]="!!revolveBlock()"
                           [class.active]="mode() === 'pick-revolve-target' || mode() === 'pick-cut-revolve-target'"
-                          [matTooltip]="revolveMode() === 'cut' ? 'Cut Revolve — subtract a revolved profile' : 'Revolve a sketch around a sketched axis line'"
+                          [matTooltip]="revolveBlock() || (revolveMode() === 'cut' ? 'Cut Revolve — subtract a revolved profile' : 'Revolve a sketch around a sketched axis line')"
                           (click)="invokeRevolve()">
                     <mat-icon [svgIcon]="revolveMode() === 'cut' ? 'cad-cut-revolve' : 'cad-revolve'"></mat-icon>
                     <span class="ribbon-label">{{ revolveMode() === 'cut' ? 'Cut Revolve' : 'Revolve' }}</span>
@@ -325,7 +330,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                     <button mat-menu-item (click)="revolveMode.set('boss'); onRevolveAction()">
                       <mat-icon svgIcon="cad-revolve"></mat-icon> Boss Revolve
                     </button>
-                    <button mat-menu-item [disabled]="!hasAdditiveBody()" (click)="revolveMode.set('cut'); onCutRevolveAction()">
+                    <button mat-menu-item [disabled]="!hasAdditiveBody()" [matTooltip]="hasAdditiveBody() ? '' : DISABLED_REASON.noBody" (click)="revolveMode.set('cut'); onCutRevolveAction()">
                       <mat-icon svgIcon="cad-cut-revolve"></mat-icon> Cut Revolve
                     </button>
                   </mat-menu>
@@ -334,9 +339,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <div class="ribbon-split">
                   <button class="ribbon-button"
                           data-testid="action-sweep"
-                          [disabled]="readonly() || activeSketchId() !== null || doc().nextSketchSeq < 3 || (sweepMode() === 'cut' && !hasAdditiveBody())"
+                          [disabled]="!!sweepBlock()"
                           [class.active]="mode() === 'pick-sweep-target' || mode() === 'pick-cut-sweep-target'"
-                          [matTooltip]="sweepMode() === 'cut' ? 'Cut Sweep — subtract a swept profile' : 'Sweep — drag a profile sketch along a path sketch'"
+                          [matTooltip]="sweepBlock() || (sweepMode() === 'cut' ? 'Cut Sweep — subtract a swept profile' : 'Sweep — drag a profile sketch along a path sketch')"
                           (click)="invokeSweep()">
                     <mat-icon [svgIcon]="sweepMode() === 'cut' ? 'cad-cut-sweep' : 'cad-sweep'"></mat-icon>
                     <span class="ribbon-label">{{ sweepMode() === 'cut' ? 'Cut Sweep' : 'Sweep' }}</span>
@@ -351,25 +356,25 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                     <button mat-menu-item (click)="sweepMode.set('boss'); onSweepAction()">
                       <mat-icon svgIcon="cad-sweep"></mat-icon> Boss Sweep
                     </button>
-                    <button mat-menu-item [disabled]="!hasAdditiveBody()" (click)="sweepMode.set('cut'); onCutSweepAction()">
+                    <button mat-menu-item [disabled]="!hasAdditiveBody()" [matTooltip]="hasAdditiveBody() ? '' : DISABLED_REASON.noBody" (click)="sweepMode.set('cut'); onCutSweepAction()">
                       <mat-icon svgIcon="cad-cut-sweep"></mat-icon> Cut Sweep
                     </button>
                   </mat-menu>
                 </div>
                 <button class="ribbon-button"
                         data-testid="action-loft"
-                        [disabled]="readonly() || activeSketchId() !== null || doc().nextSketchSeq < 3"
+                        [disabled]="!!loftBlock()"
                         [class.active]="loftSidebar() !== null"
-                        matTooltip="Loft — blend a solid through 2+ profile sketches"
+                        [matTooltip]="loftBlock() || 'Loft — blend a solid through 2+ profile sketches'"
                         (click)="onLoftAction()">
                   <mat-icon svgIcon="cad-loft"></mat-icon>
                   <span class="ribbon-label">Loft</span>
                 </button>
                 <button class="ribbon-button"
                         data-testid="action-hole"
-                        [disabled]="readonly() || activeSketchId() !== null || !hasAdditiveBody()"
+                        [disabled]="!!bodyBlock()"
                         [class.active]="holeSidebar() !== null"
-                        matTooltip="Hole Wizard — click points (vertices) to drop standardized hardware holes"
+                        [matTooltip]="bodyBlock() || 'Hole Wizard — click points (vertices) to drop standardized hardware holes'"
                         (click)="onHoleAction()">
                   <mat-icon svgIcon="cad-hole"></mat-icon>
                   <span class="ribbon-label">Hole</span>
@@ -385,54 +390,54 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <div class="ribbon-group-row">
                 <button class="ribbon-button"
                         data-testid="action-fillet"
-                        [disabled]="readonly() || activeSketchId() !== null || !hasAdditiveBody()"
+                        [disabled]="!!bodyBlock()"
                         [class.active]="edgeBlendSidebar()?.kind === 'fillet'"
-                        matTooltip="Fillet — round edges of the existing body"
+                        [matTooltip]="bodyBlock() || 'Fillet — round edges of the existing body'"
                         (click)="onFilletAction()">
                   <mat-icon svgIcon="cad-fillet"></mat-icon>
                   <span class="ribbon-label">Fillet</span>
                 </button>
                 <button class="ribbon-button"
                         data-testid="action-chamfer"
-                        [disabled]="readonly() || activeSketchId() !== null || !hasAdditiveBody()"
+                        [disabled]="!!bodyBlock()"
                         [class.active]="edgeBlendSidebar()?.kind === 'chamfer'"
-                        matTooltip="Chamfer — bevel edges of the existing body"
+                        [matTooltip]="bodyBlock() || 'Chamfer — bevel edges of the existing body'"
                         (click)="onChamferAction()">
                   <mat-icon svgIcon="cad-chamfer"></mat-icon>
                   <span class="ribbon-label">Chamfer</span>
                 </button>
                 <button class="ribbon-button"
                         data-testid="action-shell"
-                        [disabled]="readonly() || activeSketchId() !== null || !hasAdditiveBody()"
+                        [disabled]="!!bodyBlock()"
                         [class.active]="shellSidebar() !== null"
-                        matTooltip="Shell — hollow the body by removing faces"
+                        [matTooltip]="bodyBlock() || 'Shell — hollow the body by removing faces'"
                         (click)="onShellAction()">
                   <mat-icon svgIcon="cad-shell"></mat-icon>
                   <span class="ribbon-label">Shell</span>
                 </button>
                 <button class="ribbon-button"
                         data-testid="action-combine"
-                        [disabled]="readonly() || activeSketchId() !== null || bodies().length < 2"
+                        [disabled]="!!combineBlock()"
                         [class.active]="combineSidebar() !== null"
-                        matTooltip="Combine — boolean operation between bodies (add / subtract / common)"
+                        [matTooltip]="combineBlock() || 'Combine — boolean operation between bodies (add / subtract / common)'"
                         (click)="onCombineAction()">
                   <mat-icon svgIcon="cad-combine"></mat-icon>
                   <span class="ribbon-label">Combine</span>
                 </button>
                 <button class="ribbon-button"
                         data-testid="action-mirror-body"
-                        [disabled]="readonly() || activeSketchId() !== null || !hasAdditiveBody()"
+                        [disabled]="!!bodyBlock()"
                         [class.active]="mirrorBodySidebar() !== null"
-                        matTooltip="Mirror Body — reflect bodies across a plane"
+                        [matTooltip]="bodyBlock() || 'Mirror Body — reflect bodies across a plane'"
                         (click)="onMirrorBodyAction()">
                   <mat-icon svgIcon="cad-mirror"></mat-icon>
                   <span class="ribbon-label">Mirror Body</span>
                 </button>
                 <button class="ribbon-button"
                         data-testid="action-move-copy-body"
-                        [disabled]="readonly() || activeSketchId() !== null || !hasAdditiveBody()"
+                        [disabled]="!!bodyBlock()"
                         [class.active]="moveCopyBodySidebar() !== null"
-                        matTooltip="Move/Copy Body — translate and/or rotate selected bodies"
+                        [matTooltip]="bodyBlock() || 'Move/Copy Body — translate and/or rotate selected bodies'"
                         (click)="onMoveCopyBodyAction()">
                   <mat-icon svgIcon="cad-move"></mat-icon>
                   <span class="ribbon-label">Move/Copy</span>
@@ -448,27 +453,27 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <div class="ribbon-group-row">
                 <button class="ribbon-button"
                         data-testid="action-datum-plane"
-                        [disabled]="readonly() || activeSketchId() !== null"
+                        [disabled]="!!editBlock()"
                         [class.active]="datumPlaneSidebar() !== null"
-                        matTooltip="Plane — create a user-defined reference plane (offset, three-point, angled, etc.)"
+                        [matTooltip]="editBlock() || 'Plane — create a user-defined reference plane (offset, three-point, angled, etc.)'"
                         (click)="onDatumPlaneAction()">
                   <mat-icon svgIcon="cad-datum-plane"></mat-icon>
                   <span class="ribbon-label">Plane</span>
                 </button>
                 <button class="ribbon-button"
                         data-testid="action-datum-axis"
-                        [disabled]="readonly() || activeSketchId() !== null"
+                        [disabled]="!!editBlock()"
                         [class.active]="datumAxisSidebar() !== null"
-                        matTooltip="Axis — create a user-defined reference axis"
+                        [matTooltip]="editBlock() || 'Axis — create a user-defined reference axis'"
                         (click)="onDatumAxisAction()">
                   <mat-icon svgIcon="cad-datum-axis"></mat-icon>
                   <span class="ribbon-label">Axis</span>
                 </button>
                 <button class="ribbon-button"
                         data-testid="action-datum-point"
-                        [disabled]="readonly() || activeSketchId() !== null"
+                        [disabled]="!!editBlock()"
                         [class.active]="datumPointSidebar() !== null"
-                        matTooltip="Point — create a user-defined reference point"
+                        [matTooltip]="editBlock() || 'Point — create a user-defined reference point'"
                         (click)="onDatumPointAction()">
                   <mat-icon svgIcon="cad-datum-point"></mat-icon>
                   <span class="ribbon-label">Point</span>
@@ -484,27 +489,27 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <div class="ribbon-group-row">
                 <button class="ribbon-button"
                         data-testid="action-mirror"
-                        [disabled]="readonly() || activeSketchId() !== null || !hasAdditiveBody()"
+                        [disabled]="!!bodyBlock()"
                         [class.active]="patternSidebar()?.kind === 'mirror'"
-                        matTooltip="Mirror — reflect the body across a plane"
+                        [matTooltip]="bodyBlock() || 'Mirror — reflect the body across a plane'"
                         (click)="onMirrorAction()">
                   <mat-icon svgIcon="cad-mirror"></mat-icon>
                   <span class="ribbon-label">Mirror</span>
                 </button>
                 <button class="ribbon-button"
                         data-testid="action-linear-pattern"
-                        [disabled]="readonly() || activeSketchId() !== null || !hasAdditiveBody()"
+                        [disabled]="!!bodyBlock()"
                         [class.active]="patternSidebar()?.kind === 'linearPattern'"
-                        matTooltip="Linear Pattern — copy the body along one or two directions"
+                        [matTooltip]="bodyBlock() || 'Linear Pattern — copy the body along one or two directions'"
                         (click)="onLinearPatternAction()">
                   <mat-icon svgIcon="cad-pattern-linear"></mat-icon>
                   <span class="ribbon-label">Linear</span>
                 </button>
                 <button class="ribbon-button"
                         data-testid="action-circular-pattern"
-                        [disabled]="readonly() || activeSketchId() !== null || !hasAdditiveBody()"
+                        [disabled]="!!bodyBlock()"
                         [class.active]="patternSidebar()?.kind === 'circularPattern'"
-                        matTooltip="Circular Pattern — rotate copies of the body around an axis"
+                        [matTooltip]="bodyBlock() || 'Circular Pattern — rotate copies of the body around an axis'"
                         (click)="onCircularPatternAction()">
                   <mat-icon svgIcon="cad-pattern-circular"></mat-icon>
                   <span class="ribbon-label">Circular</span>
@@ -513,39 +518,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <div class="ribbon-group-label">Pattern</div>
             </div>
 
-            <div class="ribbon-divider"></div>
-
-            <!-- ── Tools ──────────────────────────────────────────── -->
-            <div class="ribbon-group">
-              <div class="ribbon-group-row">
-                <button class="ribbon-button"
-                        data-testid="action-measure"
-                        [disabled]="activeSketchId() !== null"
-                        [class.active]="measureSidebar()"
-                        matTooltip="Measure — distance / angle between vertices, edges, or faces"
-                        (click)="onMeasureAction()">
-                  <mat-icon svgIcon="cad-measure"></mat-icon>
-                  <span class="ribbon-label">Measure</span>
-                </button>
-                <button class="ribbon-button"
-                        data-testid="action-equations"
-                        [disabled]="!model()"
-                        [matTooltip]="readonly() ? 'Equations — view variables (check out to edit)' : 'Equations — define global variables and drive dimensions by expression'"
-                        (click)="openEquationsPanel()">
-                  <mat-icon svgIcon="cad-equations"></mat-icon>
-                  <span class="ribbon-label">Equations</span>
-                </button>
-                <button class="ribbon-button"
-                        data-testid="action-configurations"
-                        [disabled]="!model()"
-                        [matTooltip]="readonly() ? 'Configurations — view the design table (check out to edit)' : 'Configurations — named variants overriding variable values and feature suppression'"
-                        (click)="openConfigurationsPanel()">
-                  <mat-icon>tune</mat-icon>
-                  <span class="ribbon-label">{{ activeConfigName() || 'Configurations' }}</span>
-                </button>
-              </div>
-              <div class="ribbon-group-label">Tools</div>
-            </div>
 
             <!-- Cancel (Esc) — sits outside any group; only shows
                  while a pick-mode is active. -->
@@ -556,6 +528,39 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <mat-icon>close</mat-icon>
               <span class="ribbon-label">Cancel</span>
             </button>
+          </div>
+          <!-- Tools tab: measurement + design variables (moved off Features). -->
+          <div class="ribbon-pane" [hidden]="activeTab() !== 'tools'">
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button"
+                        data-testid="action-measure"
+                        [disabled]="activeSketchId() !== null"
+                        [class.active]="measureSidebar()"
+                        [matTooltip]="(activeSketchId() !== null ? DISABLED_REASON.inSketch : null) || 'Measure — distance / angle between vertices, edges, or faces'"
+                        (click)="onMeasureAction()">
+                  <mat-icon svgIcon="cad-measure"></mat-icon>
+                  <span class="ribbon-label">Measure</span>
+                </button>
+                <button class="ribbon-button"
+                        data-testid="action-equations"
+                        [disabled]="!model()"
+                        [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || (readonly() ? 'Equations — view variables (check out to edit)' : 'Equations — define global variables and drive dimensions by expression')"
+                        (click)="openEquationsPanel()">
+                  <mat-icon svgIcon="cad-equations"></mat-icon>
+                  <span class="ribbon-label">Equations</span>
+                </button>
+                <button class="ribbon-button"
+                        data-testid="action-configurations"
+                        [disabled]="!model()"
+                        [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || (readonly() ? 'Configurations — view the design table (check out to edit)' : 'Configurations — named variants overriding variable values and feature suppression')"
+                        (click)="openConfigurationsPanel()">
+                  <mat-icon>tune</mat-icon>
+                  <span class="ribbon-label">{{ activeConfigName() || 'Configurations' }}</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Tools</div>
+            </div>
           </div>
           <div class="ribbon-pane" [hidden]="activeTab() !== 'sketch'">
             <!-- Sketch-editor renders the sketch toolbar (tools + constraints
@@ -571,6 +576,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [frontendBuild]="buildMarker"
               [kernelBuild]="kernelBuild()"
               [readonly]="readonly() || activeSketchId() === null"
+              [readonlyReason]="activeSketchId() === null ? DISABLED_REASON.noSketch : readonlyHint()"
               (sketchChanged)="onSketchChanged($event)"
               (exitSketch)="onExitSketch()"
               (extrudeRequested)="onExtrudeRequested()"
@@ -587,24 +593,24 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           <div class="ribbon-pane" [hidden]="activeTab() !== 'assembly'" *ngIf="assemblyMode()">
             <div class="ribbon-group">
               <div class="ribbon-group-row">
-                <button class="ribbon-button" data-testid="asm-action-insert" (click)="asm.togglePicker()" [disabled]="!asm.assembly()" matTooltip="Insert a component part">
+                <button class="ribbon-button" data-testid="asm-action-insert" (click)="asm.togglePicker()" [disabled]="!asm.assembly()" [matTooltip]="(!asm.assembly() ? DISABLED_REASON.loading : null) || 'Insert a component part'">
                   <mat-icon>add_box</mat-icon><span class="ribbon-label">Insert</span>
                 </button>
                 <button class="ribbon-button" data-testid="asm-action-new-part"
                         [class.active]="mode() === 'pick-child-origin'"
-                        [disabled]="!asm.assembly() || readonly()"
+                        [disabled]="!!asmEditBlock()"
                         (click)="onNewChildPartAction()"
-                        matTooltip="Add a new part to this assembly — pick its origin point, then set its orientation">
+                        [matTooltip]="asmEditBlock() || 'Add a new part to this assembly — pick its origin point, then set its orientation'">
                   <mat-icon>add</mat-icon><span class="ribbon-label">Add part</span>
                 </button>
-                <button class="ribbon-button" [disabled]="!asm.selectedInstance()" (click)="asm.startReplace(asm.selectedInstance()!)" matTooltip="Replace the selected component">
+                <button class="ribbon-button" [disabled]="!asm.selectedInstance()" (click)="asm.startReplace(asm.selectedInstance()!)" [matTooltip]="(!asm.selectedInstance() ? DISABLED_REASON.selectComponent : null) || 'Replace the selected component'">
                   <mat-icon>swap_horiz</mat-icon><span class="ribbon-label">Replace</span>
                 </button>
-                <button class="ribbon-button" [disabled]="!asm.selectedInstance()" (click)="asm.openPatternForm(asm.selectedInstance()!)" matTooltip="Pattern the selected component">
+                <button class="ribbon-button" [disabled]="!asm.selectedInstance()" (click)="asm.openPatternForm(asm.selectedInstance()!)" [matTooltip]="(!asm.selectedInstance() ? DISABLED_REASON.selectComponent : null) || 'Pattern the selected component'">
                   <mat-icon>grid_view</mat-icon><span class="ribbon-label">Pattern</span>
                 </button>
                 <button class="ribbon-button" data-testid="asm-action-mate" [class.active]="asm.facePickActive()" [disabled]="asm.instances().length < 2"
-                        (click)="asm.facePickActive() ? asm.cancelMate() : asm.startMate()" matTooltip="Mate two component faces">
+                        (click)="asm.facePickActive() ? asm.cancelMate() : asm.startMate()" [matTooltip]="(asm.instances().length < 2 ? DISABLED_REASON.twoComponents : null) || 'Mate two component faces'">
                   <mat-icon>link</mat-icon><span class="ribbon-label">Mate</span>
                 </button>
               </div>
@@ -618,14 +624,14 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                         [class.active]="mode() === 'pick-plane'"
                         [disabled]="readonly()"
                         (click)="onSketchAction()"
-                        matTooltip="Skeleton sketch — click an assembly datum plane to host it">
+                        [matTooltip]="(readonly() ? readonlyHint() : null) || 'Skeleton sketch — click an assembly datum plane to host it'">
                   <mat-icon>draw</mat-icon><span class="ribbon-label">Sketch</span>
                 </button>
                 <button class="ribbon-button" data-testid="asm-action-datum-plane"
                         [class.active]="datumPlaneSidebar() !== null"
                         [disabled]="readonly()"
                         (click)="onDatumPlaneAction()"
-                        matTooltip="Datum plane from assembly datums">
+                        [matTooltip]="(readonly() ? readonlyHint() : null) || 'Datum plane from assembly datums'">
                   <mat-icon svgIcon="cad-datum-plane"></mat-icon><span class="ribbon-label">Plane</span>
                 </button>
                 <button class="ribbon-button" data-testid="asm-action-variables"
@@ -636,7 +642,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <button class="ribbon-button" data-testid="asm-action-push-variables"
                         [disabled]="readonly() || pushVariablesBusy()"
                         (click)="onPushVariables()"
-                        matTooltip="Push assembly variables into child part equations (shared values)">
+                        [matTooltip]="(readonly() ? readonlyHint() : pushVariablesBusy() ? DISABLED_REASON.busy : null) || 'Push assembly variables into child part equations (shared values)'">
                   <mat-icon>publish</mat-icon><span class="ribbon-label">Push vars</span>
                 </button>
               </div>
@@ -659,7 +665,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <button class="ribbon-button" [class.active]="asm.sectionEnabled()" (click)="asm.sectionEnabled.set(!asm.sectionEnabled())" matTooltip="Section view">
                   <mat-icon>content_cut</mat-icon><span class="ribbon-label">Section</span>
                 </button>
-                <button class="ribbon-button" data-testid="asm-explode" [class.active]="asm.explodeEnabled()" [disabled]="asm.explodeBusy()" (click)="asm.toggleExplode()" matTooltip="Exploded view — components spread radially from the assembly center">
+                <button class="ribbon-button" data-testid="asm-explode" [class.active]="asm.explodeEnabled()" [disabled]="asm.explodeBusy()" (click)="asm.toggleExplode()" [matTooltip]="(asm.explodeBusy() ? DISABLED_REASON.busy : null) || 'Exploded view — components spread radially from the assembly center'">
                   <mat-icon>open_with</mat-icon><span class="ribbon-label">Explode</span>
                 </button>
                 <button class="ribbon-button" (click)="asm.saveDisplayState()" matTooltip="Save current visibility as a display state">
@@ -698,10 +704,10 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           <div class="ribbon-pane" [hidden]="activeTab() !== 'analyze'" *ngIf="assemblyMode()">
             <div class="ribbon-group">
               <div class="ribbon-group-row">
-                <button class="ribbon-button" data-testid="asm-action-interference" [disabled]="asm.analysisBusy()" (click)="asm.checkInterference()" matTooltip="Detect interfering components">
+                <button class="ribbon-button" data-testid="asm-action-interference" [disabled]="asm.analysisBusy()" (click)="asm.checkInterference()" [matTooltip]="(asm.analysisBusy() ? DISABLED_REASON.busy : null) || 'Detect interfering components'">
                   <mat-icon>warning</mat-icon><span class="ribbon-label">Interfere</span>
                 </button>
-                <button class="ribbon-button" [disabled]="asm.analysisBusy()" (click)="asm.computeMass()" matTooltip="Volume + center of mass">
+                <button class="ribbon-button" [disabled]="asm.analysisBusy()" (click)="asm.computeMass()" [matTooltip]="(asm.analysisBusy() ? DISABLED_REASON.busy : null) || 'Volume + center of mass'">
                   <mat-icon>scale</mat-icon><span class="ribbon-label">Mass</span>
                 </button>
                 <button class="ribbon-button" data-testid="asm-action-sync-bom" (click)="asm.syncBom()" matTooltip="Write this assembly's BOM into inventory">
@@ -3967,7 +3973,11 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <button class="btn" data-testid="exit-sketch" (click)="onExitSketch()">Exit sketch</button>
             </div>
 
-            <div class="quick-start" *ngIf="!assemblyMode() && mode() === 'idle' && activeSketchId() === null && featureTree().features.length === 1 && sketchCount() === 0">
+            <div class="quick-start" data-testid="quick-start" *ngIf="!quickStartDismissed() && !assemblyMode() && mode() === 'idle' && activeSketchId() === null && featureTree().features.length === 1 && sketchCount() === 0">
+              <!-- REQ 988 — dismiss for this editor session. -->
+              <button class="quick-start-close" data-testid="quick-start-close" aria-label="Close" matTooltip="Close" (click)="quickStartDismissed.set(true)">
+                <mat-icon>close</mat-icon>
+              </button>
               <h3>To get started</h3>
               <ol>
                 <li>Click <strong>Sketch</strong> on the Features ribbon, then click a datum plane</li>
@@ -4282,10 +4292,14 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .unit-field .mat-mdc-form-field-subscript-wrapper { display: none; }
     .display-mode-field ::ng-deep .mat-mdc-form-field-infix { padding-top: 6px !important; padding-bottom: 6px !important; min-height: 0; }
     .ribbon { background: #25253a; border-bottom: 1px solid #444; flex-shrink: 0; }
-    .ribbon-content { height: 76px; padding: 4px 12px; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid #333; }
+    /* Bottom padding reserves room for the horizontal scrollbar, which is drawn
+       inside the strip — without it the bar covers the group labels. Panes are
+       a fixed height pinned to the top: the scrollbar shrinks the strip's inner
+       box, and a stretched/centred pane would shift the buttons when it appears. */
+    .ribbon-content { height: 76px; padding: 4px 12px 12px; display: flex; align-items: flex-start; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid #333; scrollbar-width: thin; scrollbar-color: #444 transparent; }
     .ribbon-content::-webkit-scrollbar { height: 6px; }
     .ribbon-content::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
-    .ribbon-pane { display: flex; align-items: center; gap: 4px; width: 100%; min-width: max-content; }
+    .ribbon-pane { display: flex; align-items: center; gap: 4px; width: 100%; min-width: max-content; height: 76px; flex-shrink: 0; }
     .ribbon-pane[hidden] { display: none !important; }
     .ribbon-hint { font-size: 12px; opacity: 0.7; margin-left: 12px; align-self: center; }
     .ribbon-button {
@@ -4581,7 +4595,10 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .mode-prompt { position: absolute; bottom: 56px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: rgba(66, 165, 245, 0.92); color: #0a0a14; border-radius: 8px; font-weight: 500; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
     .mode-prompt .prompt-text { font-size: 13px; }
     .quick-start { position: absolute; top: 160px; right: 16px; max-width: 320px; padding: 16px 18px; background: rgba(0,0,0,0.55); border-radius: 8px; font-size: 13px; }
-    .quick-start h3 { margin: 0 0 8px; font-size: 14px; }
+    .quick-start h3 { margin: 0 0 8px; padding-right: 20px; font-size: 14px; }
+    .quick-start-close { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; padding: 0; border: none; border-radius: 4px; background: transparent; color: inherit; opacity: 0.7; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .quick-start-close:hover { opacity: 1; background: rgba(255,255,255,0.12); }
+    .quick-start-close mat-icon { font-size: 18px; width: 18px; height: 18px; }
     .quick-start ol { margin: 0; padding-left: 18px; }
     .quick-start li { margin-bottom: 4px; }
     .quick-start .muted { margin: 10px 0 0; font-size: 11px; opacity: 0.6; }
@@ -4667,7 +4684,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-375';
+  readonly buildMarker = 'text-379';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -5355,7 +5372,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   pendingExtrude = signal<boolean>(false);
   // REQ 616 — ribbon tab. Auto-switches to 'sketch' when activeSketchId becomes
   // non-null and back to 'features' when it clears; user can manually override.
-  activeTab = signal<'file' | 'features' | 'sketch' | 'assembly' | 'visualize' | 'analyze'>('features');
+  activeTab = signal<'file' | 'features' | 'tools' | 'sketch' | 'assembly' | 'visualize' | 'analyze'>('features');
   // REQ 619 — display mode for the 3D viewer (session state, not persisted).
   displayMode = signal<DisplayMode>('visible-edges');
   /** REQ 872 — display modes exposed in the viewport context menu. */
@@ -7201,6 +7218,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // or force-unlocked). Forces read-only with a persistent explanatory banner;
   // cleared by a successful re-checkout.
   checkoutLost = signal<string | null>(null);
+  // REQ 988 — "To get started" card closed for this editor session.
+  quickStartDismissed = signal(false);
   lockHolderId = computed(() => this.model()?.lockedByUserID ?? null);
   isLockedByMe = computed(() => {
     const id = this.lockHolderId();
@@ -7256,6 +7275,35 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       f.type === 'extrude' || f.type === 'revolve' || f.type === 'sweep',
     ),
   );
+
+  // REQ 989 — why ribbon actions are unavailable (null = available). Bound to
+  // both [disabled] and the tooltip, so the two can't disagree.
+  readonly DISABLED_REASON = DISABLED_REASON;
+  editBlock = computed(() => disabledReason(
+    [this.readonly(), this.readonlyHint()],
+    [this.activeSketchId() !== null, DISABLED_REASON.inSketch],
+  ));
+  bodyBlock = computed(() => this.editBlock() ?? disabledReason([!this.hasAdditiveBody(), DISABLED_REASON.noBody]));
+  extrudeBlock = computed(() => this.editBlock()
+    ?? disabledReason([this.extrudeMode() === 'cut' && !this.hasAdditiveBody(), DISABLED_REASON.noBody]));
+  revolveBlock = computed(() => this.editBlock()
+    ?? disabledReason([this.revolveMode() === 'cut' && !this.hasAdditiveBody(), DISABLED_REASON.noBody]));
+  sweepBlock = computed(() => this.editBlock() ?? disabledReason(
+    [this.doc().nextSketchSeq < 3, DISABLED_REASON.twoSketches],
+    [this.sweepMode() === 'cut' && !this.hasAdditiveBody(), DISABLED_REASON.noBody],
+  ));
+  loftBlock = computed(() => this.editBlock() ?? disabledReason([this.doc().nextSketchSeq < 3, DISABLED_REASON.twoSketches]));
+  combineBlock = computed(() => this.editBlock() ?? disabledReason([this.bodies().length < 2, DISABLED_REASON.twoBodies]));
+  checkoutBlock = computed(() => {
+    if (!this.model()?.lockedByUserID) return null;
+    return this.isLockedByMe() ? DISABLED_REASON.lockedByMe : DISABLED_REASON.lockedByOther;
+  });
+  lockedByMeBlock = computed(() => disabledReason([!this.isLockedByMe(), DISABLED_REASON.notCheckedOutByMe]));
+  // Skeleton/Add-part actions in assembly mode — read-only only.
+  asmEditBlock = computed(() => disabledReason(
+    [!this.asm.assembly(), DISABLED_REASON.loading],
+    [this.readonly(), this.readonlyHint()],
+  ));
 
   promptIcon = computed(() => {
     const m = this.mode();
@@ -7934,7 +7982,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   // REQ 616 — manual tab switch from the ribbon. Independent of activeSketchId.
-  setActiveTab(t: 'file' | 'features' | 'sketch' | 'assembly' | 'visualize' | 'analyze') { this.activeTab.set(t); }
+  setActiveTab(t: 'file' | 'features' | 'tools' | 'sketch' | 'assembly' | 'visualize' | 'analyze') { this.activeTab.set(t); }
 
   /** File-data URL for an insert-picker part's image, or null when it has none.
    * Shown as a hover preview in the assembly insert sidebar. */

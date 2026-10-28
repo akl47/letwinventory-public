@@ -69,7 +69,7 @@ test('STEP export downloads a non-empty file', async ({ page }) => {
 
 test('measure sidebar reports an edge length', async ({ page }) => {
   await openEditor(page, PART_ID);
-  await page.locator('[data-testid="tab-features"]').click();
+  await page.locator('[data-testid="tab-tools"]').click();
   await page.locator('[data-testid="action-measure"]').click();
   await expect(page.locator('[data-testid="measure-sidebar"]')).toBeVisible({ timeout: 5_000 });
   // Pick a body edge programmatically (same entry point as a canvas click).

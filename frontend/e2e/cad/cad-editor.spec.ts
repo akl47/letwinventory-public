@@ -156,6 +156,9 @@ test.describe('CAD module routing and shell', () => {
     expect(page.url()).toMatch(/\/parts\/\d+\/cad\/editor/);
     // New models start on an auto-created draft branch, not main.
     await expect(page.locator('[data-testid="cad-branch-badge"]')).toContainText(/draft/i);
+    // REQ 987 — the new working copy is already checked out to the creator.
+    await openFileTab(page);
+    await expect(page.locator('[data-testid="action-checkin"]')).toBeEnabled({ timeout: 10_000 });
   });
 });
 
@@ -173,6 +176,24 @@ test.describe('CAD editor initial state', () => {
   test('the feature tree lists exactly the origin feature', async ({ page }) => {
     await openEditor(page);
     await expect(page.locator('[data-testid="feature-tree-row"]')).toHaveCount(1);
+  });
+
+  test('the getting-started card closes with its x button (REQ 988)', async ({ page }) => {
+    await openEditor(page);
+    const card = page.locator('[data-testid="quick-start"]');
+    await expect(card).toBeVisible({ timeout: 10_000 });
+    await page.locator('[data-testid="quick-start-close"]').click();
+    await expect(card).toBeHidden();
+  });
+
+  test('a disabled ribbon button explains why on hover (REQ 989)', async ({ page }) => {
+    await openEditor(page);
+    await page.locator('[data-testid="tab-features"]').click();
+    // No solid body yet → Fillet is disabled with a reason.
+    const fillet = page.locator('[data-testid="action-fillet"]');
+    await expect(fillet).toBeDisabled();
+    await fillet.hover();
+    await expect(page.locator('.mat-mdc-tooltip')).toContainText(/extrude a sketch first/i, { timeout: 5_000 });
   });
 });
 
