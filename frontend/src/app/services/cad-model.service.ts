@@ -1,6 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { Observable, of } from 'rxjs';
+import { catchError, map, switchMap } from 'rxjs/operators';
 import { CadModel, CadBranch, CadCommit, CadCommitDiff, CadBodyDiff, CadFaceDiff, CadWorkflow, CadVersionGraph, CadCommitGeometry, CadDefaultView, CadModelHistoryEntry, PartWithCadSummary } from '../models/cad-model.model';
 import { environment } from '../../environments/environment';
 
@@ -121,6 +122,19 @@ export class CadModelService {
   checkout(id: number, opts?: { takeover?: boolean }): Observable<CadModel & { stashedTo?: string }> {
     return this.http.post<CadModel & { stashedTo?: string }>(
       `${this.apiUrl}/${id}/checkout`, opts?.takeover ? { takeover: true } : {});
+  }
+
+  /** REQ 987 — check a freshly created model/assembly out to its creator so it
+   * opens editable. Emits the created record; a failed checkout doesn't block
+   * opening it (the editor just starts read-only). Works for assemblies too —
+   * checkout is the unified cad-model endpoint. The lock fields from the
+   * checkout response are merged in so callers that render the returned record
+   * (the assembly editor) see it as checked out. */
+  checkoutCreated<T extends { id: number }>(created$: Observable<T>): Observable<T> {
+    return created$.pipe(switchMap(m => this.checkout(m.id).pipe(
+      map(r => ({ ...m, lockedByUserID: r.lockedByUserID, lockedAt: r.lockedAt, lockExpiresAt: r.lockExpiresAt })),
+      catchError(() => of(m)),
+    )));
   }
 
   /** Extend this user's active checkout (editor heartbeat, REQ 875). */

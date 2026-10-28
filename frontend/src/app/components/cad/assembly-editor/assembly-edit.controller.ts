@@ -363,7 +363,7 @@ export class AssemblyEditController {
   }
 
   createAssembly() {
-    this.assemblyApi.createForPart(this.partID()).subscribe({
+    this.cadApi.checkoutCreated(this.assemblyApi.createForPart(this.partID())).subscribe({
       next: (a) => { this.assembly.set(a); this.regenerate(); },
       error: (e) => this.errors.showError(e?.error?.error || 'Failed to create assembly'),
     });

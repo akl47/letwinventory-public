@@ -237,7 +237,7 @@ export class CadLandingComponent implements OnInit {
       this.router.navigate(['/parts', partID, 'assembly', 'editor']);
       return;
     }
-    this.assemblyApi.createForPart(partID).subscribe({
+    this.cadApi.checkoutCreated(this.assemblyApi.createForPart(partID)).subscribe({
       next: () => this.router.navigate(['/parts', partID, 'assembly', 'editor']),
       error: e => this.errors.showError(e?.error?.error || 'Failed to create assembly'),
     });

@@ -17,7 +17,7 @@ test.beforeAll(async () => {
 });
 
 async function openEquationsPanel(page: Page) {
-  await page.locator('[data-testid="tab-features"]').click();
+  await page.locator('[data-testid="tab-tools"]').click();
   await page.locator('[data-testid="action-equations"]').click();
 }
 
