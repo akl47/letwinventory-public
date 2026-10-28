@@ -4,16 +4,13 @@ name: Publish OCCT Base Image
 # publish-kernel.yml, local compose — only compile the kernel sources.
 # cad-kernel-cpp/Dockerfile pins this image by tag (OCCT_IMAGE).
 #
-# Runs on ANY branch when occt.Dockerfile changes (so a new OCCT version can
-# be published before its branch merges), or on demand. Public repo only (the
-# private mirror gets this file via sync-to-private), and skipped when the tag
-# is already published — the merge push re-triggers it otherwise.
+# Called by ci.yml as a gate job so the E2E jobs wait for it (seconds when the
+# tag is already published, hours when OCCT_TAG / the image tag is new), or run
+# on demand. Public repo only (the private mirror gets this file via
+# sync-to-private) — callers must tolerate a skipped result.
 
 on:
-  push:
-    paths:
-      - 'cad-kernel-cpp/occt.Dockerfile'
-      - '.github/workflows/publish-occt.yml'
+  workflow_call:
   workflow_dispatch:
 
 jobs:
@@ -22,6 +19,10 @@ jobs:
     if: github.repository == 'akl47/letwinventory-public'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    # One build at a time; a queued run re-checks and skips once the first lands.
+    concurrency:
+      group: publish-occt
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
