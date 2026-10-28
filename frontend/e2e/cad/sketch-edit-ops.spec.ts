@@ -203,16 +203,17 @@ test.describe('Convert Entities (REQ 921 sidebar)', () => {
     await expect(page.locator('[data-testid="convert-entities-sidebar"]')).toBeVisible({ timeout: 5_000 });
 
     // Single conversion: pick a bottom-loop straight edge via the debug
-    // hook (raycast clicks have sub-pixel margins under grid snap).
-    const firstEdge = await page.evaluate(() => {
+    // hook (raycast clicks have sub-pixel margins under grid snap). Wait for
+    // the extruded body's topology to land first — slow runners lag the regen.
+    const findBottomEdge = () => page.evaluate(() => {
       const g = (window as any).__cadApp?.geometry;
       const e = (g?.topology?.edges ?? []).find((x: any) =>
         x.isStraight && Math.abs(x.endpoints[0][2]) < 1e-6 && Math.abs(x.endpoints[1][2]) < 1e-6);
-      if (!e) return null;
-      (window as any).__cadPickEdge(e.id);
-      return e.id;
+      return e?.id ?? null;
     });
-    expect(firstEdge).not.toBeNull();
+    await expect.poll(findBottomEdge, { timeout: 20_000 }).not.toBeNull();
+    const firstEdge = await findBottomEdge();
+    await page.evaluate((eid) => (window as any).__cadPickEdge(eid), firstEdge);
     await expect.poll(() => sketchEntityCount(page, 'line'), { timeout: 10_000 }).toBe(1);
     const cons = await sketchConstraints(page);
     expect(cons.some(c => c.type === 'on-edge')).toBe(true);
