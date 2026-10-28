@@ -17,6 +17,8 @@ on:
 jobs:
   publish:
     name: Build & push cad-kernel
+    # Public repo only — the private mirror gets this file via sync-to-private.
+    if: github.repository == 'akl47/letwinventory-public'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,7 +26,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
+      # Content key for the kernel sources: identical in the public and private
+      # repos (unlike commit shas), so deploy-update.sh derives the same tag
+      # from whatever it deploys and prod always runs the matching kernel.
+      - name: Kernel source tree hash
+        id: src
+        run: echo "tree=$(git rev-parse HEAD:cad-kernel-cpp)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -33,7 +40,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # src-<tree> is WRITE-ONCE: the kernel version is locked when its sources
+      # first merge to master. A re-run (or a push that only touches this
+      # workflow) never replaces the image prod already pins.
+      - name: Skip if these sources are already published
+        id: exists
+        run: |
+          IMG="ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:src-${{ steps.src.outputs.tree }}"
+          if docker manifest inspect "$IMG" > /dev/null 2>&1; then
+            echo "$IMG already published — locked, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.exists.outputs.skip != 'true'
+
       - name: Build and push
+        if: steps.exists.outputs.skip != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./cad-kernel-cpp
@@ -41,6 +64,7 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:latest
             ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/letwinventory-cad-kernel:src-${{ steps.src.outputs.tree }}
           # Registry cache (a :buildcache tag on GHCR) for the kernel compile
           # layers; GHA cache kept as a secondary hit.
           cache-from: |

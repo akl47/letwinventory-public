@@ -2,7 +2,7 @@
   "main": "index.js",
   "scripts": {
     "start": "nodemon index -L",
-    "test": "jest --runInBand --silent",
+    "test": "jest -w 1 --workerIdleMemoryLimit=1G --silent",
     "test:watch": "jest --watch --runInBand",
     "test:coverage": "jest --coverage --runInBand"
   },
