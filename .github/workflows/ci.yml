@@ -53,8 +53,20 @@ jobs:
         run: npx ng test --watch=false
         working-directory: frontend
 
+  # Kernel builds start FROM the OCCT base image; publish it first when it's
+  # missing (no-op in seconds when already published).
+  occt-base:
+    name: OCCT base image
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-occt.yml
+
   e2e-tests:
     name: E2E Tests
+    needs: occt-base
+    # Skipped (private mirror) is fine; only a failed OCCT build blocks.
+    if: ${{ !cancelled() && needs.occt-base.result != 'failure' }}
     # Pinned: ubuntu-latest moved to 26.04, which Playwright 1.59 can't install
     # chromium deps for.
     runs-on: ubuntu-24.04
@@ -212,6 +224,8 @@ jobs:
 
   cad-kernel-e2e:
     name: CAD Kernel E2E (3D features)
+    needs: occt-base
+    if: ${{ !cancelled() && needs.occt-base.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -60,15 +60,24 @@ log "[$(date)] Backup complete"
 # --- Pull new images ---
 log "[$(date)] Pulling latest app image..."
 docker pull akl47/letwinventory:latest
-# REQ 968 — the kernel runs a PINNED image tag (never :latest).
-CAD_KERNEL_IMAGE_TAG="${CAD_KERNEL_IMAGE_TAG:-$(grep -hE '^CAD_KERNEL_IMAGE_TAG=' "${PROJECT_DIR}/.env" "${PROJECT_DIR}/.env.production" 2>/dev/null | head -1 | cut -d= -f2-)}"
-if [ -z "$CAD_KERNEL_IMAGE_TAG" ] || [ "$CAD_KERNEL_IMAGE_TAG" = "latest" ]; then
-  log "[$(date)] ERROR: CAD_KERNEL_IMAGE_TAG must be set to a published kernel commit sha (not 'latest'), aborting deploy"
+# REQ 968 — the kernel runs a PINNED image tag (never :latest). Default: the
+# tree hash of the deployed cad-kernel-cpp/ sources, which publish-kernel.yml
+# tags every image with — so prod tracks the deployed code automatically. An
+# explicit CAD_KERNEL_IMAGE_TAG (env or .env) still overrides it.
+CAD_KERNEL_IMAGE_TAG="${CAD_KERNEL_IMAGE_TAG:-$(grep -hE '^CAD_KERNEL_IMAGE_TAG=' "${PROJECT_DIR}/.env" "${PROJECT_DIR}/.env.production" 2>/dev/null | head -1 | cut -d= -f2- || true)}"
+if [ -z "$CAD_KERNEL_IMAGE_TAG" ]; then
+  CAD_KERNEL_IMAGE_TAG="src-$(git -C "$PROJECT_DIR" rev-parse HEAD:cad-kernel-cpp)"
+fi
+if [ "$CAD_KERNEL_IMAGE_TAG" = "latest" ]; then
+  log "[$(date)] ERROR: CAD_KERNEL_IMAGE_TAG must be a pinned tag, not 'latest', aborting deploy"
   exit 1
 fi
 export CAD_KERNEL_IMAGE_TAG
 log "[$(date)] Pulling CAD kernel image ${CAD_KERNEL_IMAGE_TAG}..."
-docker pull "ghcr.io/akl47/letwinventory-cad-kernel:${CAD_KERNEL_IMAGE_TAG}"
+if ! docker pull "ghcr.io/akl47/letwinventory-cad-kernel:${CAD_KERNEL_IMAGE_TAG}"; then
+  log "[$(date)] ERROR: kernel image ${CAD_KERNEL_IMAGE_TAG} not found — publish-kernel.yml hasn't built these kernel sources yet (or GHCR login is missing), aborting deploy"
+  exit 1
+fi
 log "[$(date)] Pulls complete"
 
 # --- Restart containers ---

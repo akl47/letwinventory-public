@@ -21,10 +21,10 @@ services:
   letwinventory-cad-kernel:
     # Native C++/OCCT geometry kernel (REQ 900). Image is published by
     # .github/workflows/publish-kernel.yml on every master push, tagged :latest
-    # AND :<commit sha>. REQ 968 — production runs a PINNED tag (the commit
-    # sha), never :latest, so a deploy can't silently pick up an untested
-    # kernel. Set CAD_KERNEL_IMAGE_TAG in .env.production.
-    image: ghcr.io/akl47/letwinventory-cad-kernel:${CAD_KERNEL_IMAGE_TAG:?Set CAD_KERNEL_IMAGE_TAG (a published kernel commit sha) in .env.production}
+    # AND :<commit sha> AND :src-<cad-kernel-cpp tree hash>. REQ 968 —
+    # production runs a PINNED tag, never :latest; deploy-update.sh derives the
+    # src-<tree> tag from the deployed sources so the kernel tracks the code.
+    image: ghcr.io/akl47/letwinventory-cad-kernel:${CAD_KERNEL_IMAGE_TAG:?Run via scripts/deploy-update.sh (derives the kernel tag) or set CAD_KERNEL_IMAGE_TAG}
     environment:
       CAD_KERNEL_ADDR: 0.0.0.0:9876
     # Internal-only: no host port published. Only the backend talks to the

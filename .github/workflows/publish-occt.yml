@@ -4,28 +4,33 @@ name: Publish OCCT Base Image
 # publish-kernel.yml, local compose — only compile the kernel sources.
 # cad-kernel-cpp/Dockerfile pins this image by tag (OCCT_IMAGE).
 #
-# Runs on ANY branch when occt.Dockerfile changes (so a new OCCT version can
-# be published before its branch merges), or on demand.
+# Called by ci.yml as a gate job so the E2E jobs wait for it (seconds when the
+# tag is already published, hours when OCCT_TAG / the image tag is new), or run
+# on demand. Public repo only (the private mirror gets this file via
+# sync-to-private) — callers must tolerate a skipped result.
 
 on:
-  push:
-    paths:
-      - 'cad-kernel-cpp/occt.Dockerfile'
-      - '.github/workflows/publish-occt.yml'
+  workflow_call:
   workflow_dispatch:
 
 jobs:
   publish:
     name: Build & push OCCT base
+    if: github.repository == 'akl47/letwinventory-public'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    # One build at a time; a queued run re-checks and skips once the first lands.
+    concurrency:
+      group: publish-occt
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
+    env:
+      # Keep in sync with OCCT_IMAGE in cad-kernel-cpp/Dockerfile.
+      IMAGE: ghcr.io/${{ github.repository_owner }}/letwinventory-occt:8.0.0
     steps:
       - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -34,11 +39,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Tags are write-once by convention: a new OCCT build means a new tag.
+      - name: Skip if already published
+        id: exists
+        run: |
+          if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "$IMAGE already published — skipping (bump the tag to rebuild)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.exists.outputs.skip != 'true'
+
       - name: Build and push
+        if: steps.exists.outputs.skip != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./cad-kernel-cpp
           file: ./cad-kernel-cpp/occt.Dockerfile
           push: true
-          # Keep in sync with OCCT_IMAGE in cad-kernel-cpp/Dockerfile.
-          tags: ghcr.io/${{ github.repository_owner }}/letwinventory-occt:8.0.0
+          tags: ${{ env.IMAGE }}

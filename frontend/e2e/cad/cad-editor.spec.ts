@@ -193,7 +193,9 @@ test.describe('Sketch tools', () => {
     await page.locator('[data-testid="group-primitives-chevron"]').click();
     await page.locator('[data-testid="tool-point"]').click();
     const box = (await viewerCanvas(page).boundingBox())!;
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    // Off-centre: the canvas centre is the sketch origin, and clicks on the
+    // origin / datum axes snap to them instead of placing a new point.
+    await page.mouse.click(box.x + box.width / 2 + 60, box.y + box.height / 2 - 40);
     await expect
       .poll(() => sketchEntityCount(page, 'point'), { timeout: 5_000 })
       .toBeGreaterThanOrEqual(2); // origin + the placed point
