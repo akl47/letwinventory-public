@@ -24,3 +24,23 @@ jobs:
             echo "  - version:major (breaking changes)"
             exit 1
           fi
+
+  # CI's PR gate fails while the label is missing. When a version label is
+  # added, re-run that failed CI run for the current head so the tests start.
+  rerun-ci:
+    needs: check-version-label
+    if: github.event.action == 'labeled' && startsWith(github.event.label.name, 'version:')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Re-run CI for this PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          RUN=$(gh run list -R "$REPO" --workflow ci.yml --event pull_request --commit "$HEAD_SHA" \
+                  --limit 1 --json databaseId,status,conclusion \
+                  --jq '.[0] | select(.status == "completed" and .conclusion != "success") | .databaseId')
+          if [ -n "$RUN" ]; then gh run rerun "$RUN" -R "$REPO"; else echo "No failed CI run to re-run"; fi
