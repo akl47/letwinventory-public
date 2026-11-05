@@ -10,10 +10,61 @@ on:
     tags: ['v*']
 
 jobs:
+  # PRs only: no tests run until the branch merges cleanly into master AND has
+  # a version label (same rule as require-version-label.yml). Labels are read
+  # from the API, not the event payload, so a re-run after labeling (triggered
+  # by require-version-label.yml) sees the new label. Skipped on pushes/tags.
+  pr-gate:
+    name: PR Gate (mergeable + version label)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Require a version label
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LABELS=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels" --jq '.[].name')
+          if echo "$LABELS" | grep -qE '^version:(major|minor|patch)$'; then
+            echo "Version label found"
+          else
+            echo "::error::Missing version label (version:patch | version:minor | version:major) — tests will start once one is added"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Require a clean merge with master
+        run: |
+          git config user.name ci && git config user.email ci@localhost
+          git fetch --no-tags origin master
+          if git merge --no-commit --no-ff origin/master >/dev/null 2>&1; then
+            echo "Merges cleanly with master"
+          else
+            echo "::error::Branch conflicts with master — merge master in and push to run the tests"
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+
   backend-tests:
     name: Backend Tests
+    needs: pr-gate
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
+      # A failed PR gate fails this job instead of skipping it: GitHub counts
+      # skipped required checks as passing, so a red job is what blocks the merge.
+      - name: Stop unless the PR gate passed
+        if: ${{ needs.pr-gate.result == 'failure' }}
+        run: |
+          echo "::error::PR gate failed — add a version label and/or merge master in; tests did not run"
+          exit 1
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -35,8 +86,18 @@ jobs:
 
   frontend-tests:
     name: Frontend Tests
+    needs: pr-gate
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
+      # A failed PR gate fails this job instead of skipping it: GitHub counts
+      # skipped required checks as passing, so a red job is what blocks the merge.
+      - name: Stop unless the PR gate passed
+        if: ${{ needs.pr-gate.result == 'failure' }}
+        run: |
+          echo "::error::PR gate failed — add a version label and/or merge master in; tests did not run"
+          exit 1
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -57,6 +118,8 @@ jobs:
   # missing (no-op in seconds when already published).
   occt-base:
     name: OCCT base image
+    needs: pr-gate
+    if: ${{ !cancelled() && needs.pr-gate.result != 'failure' }}
     permissions:
       contents: read
       packages: write
@@ -64,7 +127,7 @@ jobs:
 
   e2e-tests:
     name: E2E Tests
-    needs: occt-base
+    needs: [pr-gate, occt-base]
     # Skipped (private mirror) is fine; only a failed OCCT build blocks.
     if: ${{ !cancelled() && needs.occt-base.result != 'failure' }}
     # Pinned: ubuntu-latest moved to 26.04, which Playwright 1.59 can't install
@@ -104,6 +167,14 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
+      # A failed PR gate fails this job instead of skipping it: GitHub counts
+      # skipped required checks as passing, so a red job is what blocks the merge.
+      - name: Stop unless the PR gate passed
+        if: ${{ needs.pr-gate.result == 'failure' }}
+        run: |
+          echo "::error::PR gate failed — add a version label and/or merge master in; tests did not run"
+          exit 1
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -218,13 +289,23 @@ jobs:
           path: frontend/playwright-report/
           retention-days: 14
 
+      # Screenshots, traces and error-context.md for failed tests (the CI
+      # reporter is 'github', so playwright-report alone has none of these).
+      - name: Upload Playwright test results
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: frontend/test-results/
+          retention-days: 14
+
       - name: Show backend logs
         if: ${{ failure() }}
         run: cat /tmp/backend.log 2>/dev/null || true
 
   cad-kernel-e2e:
     name: CAD Kernel E2E (3D features)
-    needs: occt-base
+    needs: [pr-gate, occt-base]
     if: ${{ !cancelled() && needs.occt-base.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
@@ -261,6 +342,14 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
+      # A failed PR gate fails this job instead of skipping it: GitHub counts
+      # skipped required checks as passing, so a red job is what blocks the merge.
+      - name: Stop unless the PR gate passed
+        if: ${{ needs.pr-gate.result == 'failure' }}
+        run: |
+          echo "::error::PR gate failed — add a version label and/or merge master in; tests did not run"
+          exit 1
+
       - uses: actions/checkout@v4
         with:
           # Full history so the kernel-source change detection can diff
