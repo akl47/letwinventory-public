@@ -351,7 +351,7 @@ describe('point-line-distance render — non-parallel case (leader lines)', () =
     expect(wp0).toMatchObject({ x: 4, y: 6 });   // from the point
     expect(wp1.x).toBeCloseTo(12, 6);            // out to the dim line
     expect(wp1.y).toBeCloseTo(6, 6);             // still at the point's level (horizontal witness)
-    expect(wf0).toMatchObject({ x: 4, y: 0 });   // from the foot on the line
+    expect(wf0).toMatchObject({ x: 10, y: 0 });  // past the end → from the nearer endpoint (REQ 996)
     expect(wf1.x).toBeCloseTo(12, 6);
     expect(wf1.y).toBeCloseTo(0, 6);
   });
@@ -458,5 +458,67 @@ describe('previewEdgeDimension', () => {
     expect(r).not.toBeNull();
     expect(r!.arc).toBeTruthy();       // full angle render, not a distance layout
     expect(r!.text).toContain('45');   // 45° measured live
+  });
+});
+
+// REQ 996 — SolidWorks-style extension lines: none where the dim line already
+// lands on the measured line, else from its nearer endpoint; datums never.
+describe('smart extension lines (REQ 996)', () => {
+  const la: PointEntity = { kind: 'point', id: 'la', x: 0, y: 0 };
+  const lb: PointEntity = { kind: 'point', id: 'lb', x: 10, y: 0 };
+  const l: LineEntity = { kind: 'line', id: 'l', startId: 'la', endId: 'lb' };
+  const p: PointEntity = { kind: 'point', id: 'p', x: 4, y: 6 };
+
+  it('point → line: no line-side extension when the dim lands on the line', () => {
+    const r = previewDimension(state(la, lb, p, l), 'point-line-distance', ['p', 'l'], 6, { x: 8, y: 3 })!;
+    expect(r.extensionLines).toHaveLength(1);
+    expect(r.extensionLines[0][0]).toMatchObject({ x: 4, y: 6 });
+  });
+
+  it('point → line: past the end, the extension starts at the nearer endpoint', () => {
+    const r = previewDimension(state(la, lb, p, l), 'point-line-distance', ['p', 'l'], 6, { x: -3, y: 3 })!;
+    expect(r.extensionLines).toHaveLength(2);
+    expect(r.extensionLines[1][0]).toMatchObject({ x: 0, y: 0 });
+    expect(r.extensionLines[1][1].x).toBeCloseTo(-3, 6);
+  });
+
+  it('line → line: extensions only on lines the dim does not land on', () => {
+    const a1: PointEntity = { kind: 'point', id: 'a1', x: 0, y: 10 };
+    const b1: PointEntity = { kind: 'point', id: 'b1', x: 5, y: 10 };
+    const l1: LineEntity = { kind: 'line', id: 'l1', startId: 'a1', endId: 'b1' };
+    const st = state(la, lb, l, a1, b1, l1);
+    const within = previewDimension(st, 'point-line-distance', ['a1', 'l'], 10, { x: 3, y: 5 })!;
+    expect(within.extensionLines).toHaveLength(0);
+    const partial = previewDimension(st, 'point-line-distance', ['a1', 'l'], 10, { x: 8, y: 5 })!;
+    expect(partial.extensionLines).toHaveLength(1);
+    expect(partial.extensionLines[0][0]).toMatchObject({ x: 5, y: 10 });
+    expect(partial.extensionLines[0][1].x).toBeCloseTo(8, 6);
+  });
+
+  const edgeDim = (edgeId: string, x: number): SketchConstraint => ({
+    id: 'cpe', type: 'point-line-distance', targets: [{ entityId: 'p' }],
+    value: 6, placement: { x, y: 3 },
+    externalRef: { scope: 'local', featureId: 'f1', edgeId },
+  });
+  const seg: [{ x: number; y: number }, { x: number; y: number }] = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
+
+  it('point → model edge follows the same finite-segment rule', () => {
+    const edges = new Map([['f1/e0', seg]]);
+    expect(dimensionRenders(state(p, edgeDim('f1/e0', 8)), 'mm', edges)[0].extensionLines).toHaveLength(1);
+    const past = dimensionRenders(state(p, edgeDim('f1/e0', 12)), 'mm', edges)[0];
+    expect(past.extensionLines).toHaveLength(2);
+    expect(past.extensionLines[1][0]).toMatchObject({ x: 10, y: 0 });
+  });
+
+  it('point → datum never draws a datum-side extension', () => {
+    const edges = new Map([['datum:xz_plane', seg]]);
+    const r = dimensionRenders(state(p, edgeDim('datum:xz_plane', 40)), 'mm', edges)[0];
+    expect(r.extensionLines).toHaveLength(1);
+    expect(r.extensionLines[0][0]).toMatchObject({ x: 4, y: 6 });
+  });
+
+  it('the datum preview matches the committed render', () => {
+    const r = previewEdgeDimension(state(p), p, seg, { x: 40, y: 3 }, 'mm', true)!;
+    expect(r.extensionLines).toHaveLength(1);
   });
 });

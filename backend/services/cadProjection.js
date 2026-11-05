@@ -121,9 +121,11 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
         // A center reference (coincident-to-center, REQ 832) is what DRIVES the
         // point's re-projection — it must not count as a user pin that blocks it.
         if (c.externalRef && c.externalRef.scope !== 'cross-part' && c.externalRef.sub === 'center') continue;
-        for (const t of (c.targets || [])) {
-          if (t.entityId === pointId) return true;
-        }
+        if (!(c.targets || []).some(t => t.entityId === pointId)) continue;
+        // Point-to-point coincidents don't unpin — the other point follows.
+        if (c.type !== 'coincident') return true;
+        if ((c.targets || []).some(t => t.entityId !== pointId
+          && (sketch.state.entities || []).find(e => e.id === t.entityId)?.kind !== 'point')) return true;
       }
       return false;
     };

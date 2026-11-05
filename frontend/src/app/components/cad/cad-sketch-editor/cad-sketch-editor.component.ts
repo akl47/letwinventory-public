@@ -13,6 +13,7 @@ import type {
 } from '../../../cad/lib/types';
 import { pointsOf, linesOf, findPoint, onEdgeLookupKey, isCenterExternalRef } from '../../../cad/lib/types';
 import { DISABLED_REASON } from '../../../cad/lib/disabledReason';
+import { multiConstraintGroups } from '../../../cad/lib/multiConstraint';
 import { nearestCandidateHit, externalRefForCandidate, parseCandidateId, closestPointOnSegment, closestPointOnPolyline } from '../../../cad/lib/externalSnap';
 import { angleQuadrant } from '../../../cad/lib/geometry';
 import {
@@ -788,6 +789,8 @@ export class CadSketchEditorComponent implements OnDestroy {
    * implicit snap targets so a placed point can reference model geometry
    * without Convert Entities (SolidWorks-style inference). */
   candidates = input<ReferenceCandidate[]>([]);
+  /** Candidates the canvas can click/snap to (hidden datums excluded). */
+  private pickCandidates = computed(() => this.candidates().filter(c => !c.hidden));
   /** Debug overlay visibility + build markers (owned by the editor; the
    * pick-debug panel and the build/kernel marker row render only when on). */
   debugVisible = input<boolean>(false);
@@ -1818,7 +1821,9 @@ export class CadSketchEditorComponent implements OnDestroy {
     // segment that would be removed/added); a full-entity cyan highlight on top
     // would read as "the entire entity is affected", so suppress hover for them.
     const t = this.tool();
-    if (t === 'trim' || t === 'extend') {
+    // Convert Entities: the viewer's own 3D edge raycast drives the hover (it
+    // reaches every body edge, not just the projected candidates).
+    if (t === 'trim' || t === 'extend' || t === 'convert-entities') {
       if (this.hoveredEntityId() !== null) this.hoveredEntityId.set(null);
       if (this.sketchHoverWins()) this.sketchHoverWins.set(false);
       if (this.hoveredProjectedEdgeId() !== null) this.hoveredProjectedEdgeId.set(null);
@@ -1862,7 +1867,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     let edgeDist = Infinity;
     let edgeKey: string | null = null;
     let edgeSpan = Infinity;
-    for (const c of this.candidates()) {
+    for (const c of this.pickCandidates()) {
       if (c.kind !== 'edge' || c.points.length < 2) continue;
       const d = closestPointOnPolyline(c.points, p).dist;
       if (d > this.lastEdgeTolerance) continue;
@@ -2694,7 +2699,14 @@ export class CadSketchEditorComponent implements OnDestroy {
    * or anchors the curve via a coincident constraint (circle
    * circumference / arc end). */
   private _snapClickToPoint(x: number, y: number, opts?: { skipAlign?: boolean }): PendingPoint {
-    const picked = pickEntity(this.state(), { x, y }, this.lastPickTolerance, this.lastPointPickTolerance);
+    // Hit-test geometry at the RAW cursor of this click. The grid-rounded x/y
+    // can sit up to ~0.7 units off a curve — more than the zoom-scaled pick
+    // tolerance — so a click the hover snap showed ON a line used to miss it
+    // and the new point floated free (REQ 992). Open space still lands on the
+    // grid-rounded x/y below.
+    const raw = this._lastRawClick;
+    const at = raw && this._snap(raw.x) === x && this._snap(raw.y) === y ? raw : { x, y };
+    const picked = pickEntity(this.state(), at, this.lastPickTolerance, this.lastPointPickTolerance);
     if (picked?.kind === 'point') {
       // Use the existing point's authoritative coords so the new
       // entity lands precisely on it rather than at the cursor's
@@ -2707,9 +2719,9 @@ export class CadSketchEditorComponent implements OnDestroy {
     // an edge ranks below a sketch curve. The snapped point carries the
     // externalRef so the placing tool attaches the on-edge constraint to the
     // point it creates — uniform across every tool/click, no commit-time map.
-    const cands = this.candidates();
+    const cands = this.pickCandidates();
     const candHit = cands.length
-      ? nearestCandidateHit(cands, { x, y }, this.lastPointPickTolerance)
+      ? nearestCandidateHit(cands, at, this.lastPointPickTolerance)
       : null;
     const takeCandidate = (): PendingPoint => {
       const ref = externalRefForCandidate(candHit!.candidate) ?? undefined;
@@ -2722,7 +2734,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     // Curve hit (sketched or converted line/arc/circle) — project the
     // click onto the curve and remember which curve we hit. The
     // entity commit then anchors the new point to it via coincident.
-    const onCurve = this._projectClickOntoCurve(picked, x, y);
+    const onCurve = this._projectClickOntoCurve(picked, at.x, at.y);
     if (onCurve) return onCurve;
     if (candHit) return takeCandidate();  // edge candidate (below sketch curves)
     // Open space — nothing concrete to snap to. Infer horizontal/vertical
@@ -3085,7 +3097,7 @@ export class CadSketchEditorComponent implements OnDestroy {
    * the already-converted one — repeated dims to the same edge reuse it), or
    * null when no edge candidate is in range. Commits the new geometry. */
   private _convertCandidateEdgeForDim(x: number, y: number): SketchEntity | null {
-    const cands = this.candidates();
+    const cands = this.pickCandidates();
     if (!cands.length) return null;
     const hit = nearestCandidateHit(cands, { x, y }, this._edgePickTol());
     if (!hit || hit.kind !== 'edge') return null;
@@ -3133,7 +3145,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const tol = this._edgePickTol();
     let best: ReferenceCandidate | null = null;
     let bestD = Infinity;
-    for (const c of this.candidates()) {
+    for (const c of this.pickCandidates()) {
       // Straight edges only for dimensioning — an arc's chord endpoints would
       // give a wrong driven distance. Curved-edge dimensions are REQ 830–832.
       if (c.kind !== 'edge' || c.points.length !== 2) continue;
@@ -3158,7 +3170,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (!a || !b) return null;
     // Same decision function the commit uses (resolveEdgeDim) — the hover
     // is what the placement click will create, by construction.
-    return previewEdgeDimension(this.state(), selEntity, [a, b], cursor);
+    return previewEdgeDimension(this.state(), selEntity, [a, b], cursor, 'mm', pendingEdge.startsWith('datum:'));
   }
 
   /** THE single commit for an entity ↔ edge/datum dimension. What gets
@@ -4538,7 +4550,21 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (spec.type === 'tangent' && this.selectedExternalEdgeId() && this._applyTangentToEdge(entities)) {
       return;
     }
-    if (!spec.predicate(entities)) return;
+    if (!spec.predicate(entities)) {
+      // REQ 990 — multi-select: relate the whole selection in one click.
+      const groups = this._multiGroups(spec, entities);
+      if (!groups) return;
+      let next = this.state();
+      let lastId: string | null = null;
+      for (const g of groups) {
+        const r = addConstraint(next, spec.type, g, spec.implicitValue);
+        next = r.state;
+        lastId = r.constraint.id;
+      }
+      if (lastId) this.commitAfterAdd(next, lastId);
+      this.selected.set(new Set());
+      return;
+    }
     // One-shot actions short-circuit the persisted-constraint path.
     // Merge Points collapses the second-picked point into the first;
     // no constraint record gets created.
@@ -4581,6 +4607,13 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (spec.requiresValue && spec.implicitValue === undefined && !redundant) {
       this.dimensionCreated.emit(constraint.id);
     }
+  }
+
+  /** REQ 990 — target groups for a multi-select apply, or null. Value dims
+   * (other than the value-0 Equal X/Y shortcuts) and actions stay pairwise. */
+  private _multiGroups(spec: ConstraintSpec, entities: SketchEntity[]): string[][] | null {
+    if (spec.action || (spec.requiresValue && spec.implicitValue === undefined)) return null;
+    return multiConstraintGroups(this.state(), spec.type, entities);
   }
 
   /** REQ 862: the as-drawn value a new dimension would measure — seeds the
@@ -4674,6 +4707,7 @@ export class CadSketchEditorComponent implements OnDestroy {
   constraintEnabled(spec: ConstraintSpec): boolean {
     const entities = this.selectedEntities();
     if (spec.predicate(entities)) return true;
+    if (this._multiGroups(spec, entities)) return true;
     const edge = this.selectedExternalEdgeId();
     // Concentric / Coincident / Coradial between a sketch circle·arc and a
     // CIRCULAR model edge → tie the sketch circle's center to the model edge's
@@ -4878,27 +4912,34 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (!first) { this.draftRectCorner.set(this._snapClickToPoint(x, y, { skipAlign: true })); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1) return;
     const second = this._snapClickToPoint(x, y, { skipAlign: true });
-    const rect = addRectangleCorners(this.state(), first.x, first.y, second.x, second.y);
-    let s = rect.state;
-    // Pin the two CLICKED corners to the edge they snapped onto (if any). The
-    // other two derived corners are positioned by the rectangle's own
-    // perpendicular/parallel constraints and aren't independently on-edge.
-    s = this._pinRectCornerToEdge(s, rect.corners, first.x, first.y, first.externalRef);
-    s = this._pinRectCornerToEdge(s, rect.corners, second.x, second.y, second.externalRef);
+    const before = this.state();
+    let s = addRectangleCorners(before, first.x, first.y, second.x, second.y).state;
+    // Relate the two CLICKED corners to whatever they snapped onto. The other
+    // two derived corners are positioned by the rectangle's own
+    // perpendicular/parallel constraints.
+    s = this._relateNewCornerToSnap(before, s, first);
+    s = this._relateNewCornerToSnap(before, s, second);
     this.commit(s);
     this.draftRectCorner.set(null);
   }
 
-  /** Attach an on-edge external reference to the rectangle corner that sits at
-   * (cx, cy), so a corner clicked on a model edge rides that edge. No-op when
-   * the click didn't snap to an edge. */
-  private _pinRectCornerToEdge(
-    s: SketchState, corners: Array<{ id: string; x: number; y: number }>,
-    cx: number, cy: number, externalRef?: ExternalRef,
-  ): SketchState {
-    if (!externalRef) return s;
-    const corner = corners.find(c => Math.abs(c.x - cx) < 1e-9 && Math.abs(c.y - cy) < 1e-9);
-    return corner ? this._addOnEdge(s, corner.id, externalRef) : s;
+  /** REQ 992 — a shape corner clicked onto existing geometry gets the same
+   * relation the Line tool gives an endpoint: coincident with a sketch point
+   * or curve, midpoint, quadrant, or a model on-edge / center reference. The
+   * corner is the point the shape created exactly at the snapped coords. */
+  private _relateNewCornerToSnap(before: SketchState, s: SketchState, snap: PendingPoint): SketchState {
+    const existing = new Set(before.entities.map(e => e.id));
+    const corner = s.entities.find((e): e is PointEntity => e.kind === 'point' && !existing.has(e.id)
+      && Math.abs(e.x - snap.x) < 1e-6 && Math.abs(e.y - snap.y) < 1e-6);
+    if (!corner) return s;
+    if (snap.pointId) s = addConstraint(s, 'coincident', [corner.id, snap.pointId]).state;
+    else s = this._anchorPointToCurve(s, corner.id, snap);
+    if (snap.externalRef) {
+      s = isCenterExternalRef(snap.externalRef)
+        ? this._addCenterRelation(s, corner.id, snap.externalRef, 'coincident')
+        : this._addOnEdge(s, corner.id, snap.externalRef);
+    }
+    return this._applyQuadrant(s, corner.id, snap);
   }
 
   private handleRectCenterClick(x: number, y: number) {
@@ -4912,9 +4953,10 @@ export class CadSketchEditorComponent implements OnDestroy {
       return;
     }
     if (Math.hypot(x - center.x, y - center.y) < 1) return;
-    this.commit(addRectangleCenter(
-      this.state(), center.x, center.y, x, y, center.pointId,
-    ).state);
+    const corner = this._snapClickToPoint(x, y, { skipAlign: true });
+    const before = this.state();
+    const s = addRectangleCenter(before, center.x, center.y, corner.x, corner.y, center.pointId).state;
+    this.commit(this._relateNewCornerToSnap(before, s, corner));
     this.draftRectCenter.set(null);
   }
 
@@ -4995,11 +5037,16 @@ export class CadSketchEditorComponent implements OnDestroy {
   /** 3-point corner rectangle: click 1 sets corner A, click 2 sets corner
    * B along one edge, click 3 picks the offset to the opposite side. */
   private handleRect3PtCornerClick(x: number, y: number) {
-    const pts = [...this.draftRect3Corner(), { x, y }];
+    // Clicks 1-2 are corners (snapped); click 3 only sets the offset.
+    const drafts = this.draftRect3Corner();
+    const pts = [...drafts, drafts.length < 2 ? this._snapClickToPoint(x, y, { skipAlign: true }) : { x, y }];
     if (pts.length < 3) { this.draftRect3Corner.set(pts); return; }
-    const r = addRectangle3PtCorner(this.state(),
+    const before = this.state();
+    const r = addRectangle3PtCorner(before,
       pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
-    if (r.ids.length > 0) this.commit(r.state);
+    if (r.ids.length > 0) {
+      this.commit(this._relateNewCornerToSnap(before, this._relateNewCornerToSnap(before, r.state, pts[0]), pts[1]));
+    }
     this.draftRect3Corner.set([]);
   }
 
@@ -5017,11 +5064,12 @@ export class CadSketchEditorComponent implements OnDestroy {
 
   /** Parallelogram: 3 corners (4th derived from closure rule). */
   private handleParallelogramClick(x: number, y: number) {
-    const pts = [...this.draftParallelogram(), { x, y }];
+    const pts = [...this.draftParallelogram(), this._snapClickToPoint(x, y, { skipAlign: true })];
     if (pts.length < 3) { this.draftParallelogram.set(pts); return; }
-    const r = addParallelogram(this.state(),
+    const before = this.state();
+    const r = addParallelogram(before,
       pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y);
-    if (r.ids.length > 0) this.commit(r.state);
+    if (r.ids.length > 0) this.commit(pts.reduce((s, p) => this._relateNewCornerToSnap(before, s, p), r.state));
     this.draftParallelogram.set([]);
   }
 
@@ -5271,7 +5319,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-379');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-412');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);

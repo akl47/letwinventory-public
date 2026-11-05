@@ -89,12 +89,13 @@ export interface TreeNode {
   host: { '[class.embedded]': 'externalNodes() !== null' },
   imports: [CommonModule, MatIconModule, MatTooltipModule, MatMenuModule],
   template: `
-    <div class="panel">
+    <div class="panel" [class.compact]="compact()">
       <div class="section features-section" [class.collapsed]="featuresCollapsed()" [class.with-bodies]="showBodies() && !bodiesCollapsed()" [style.flex]="featuresFlex()">
-        <header class="panel-header collapsible" (click)="toggleFeaturesCollapsed()">
-          <mat-icon class="section-chevron">{{ featuresCollapsed() ? 'chevron_right' : 'expand_more' }}</mat-icon>
+        <header class="panel-header collapsible" (click)="toggleFeaturesCollapsed()"
+                [matTooltip]="compact() ? headerTitle() : ''" matTooltipPosition="right">
+          <mat-icon class="section-chevron" *ngIf="!compact()">{{ featuresCollapsed() ? 'chevron_right' : 'expand_more' }}</mat-icon>
           <mat-icon>{{ headerIcon() }}</mat-icon>
-          <span>{{ headerTitle() }}</span>
+          <span *ngIf="!compact()">{{ headerTitle() }}</span>
         </header>
         <ul class="tree" #treeList *ngIf="!featuresCollapsed()">
         <li *ngFor="let n of nodes()"
@@ -115,9 +116,14 @@ export interface TreeNode {
             [class.drag-target-above]="(dragTargetIndex() !== null && n.featureIndex === dragTargetIndex()) || (dropBeforeKey() !== null && n.key === dropBeforeKey())"
             [class.dragging-feature]="dragFeatureIndex() !== null && n.featureIndex === dragFeatureIndex()"
             [class.selected]="isRowSelected(n)"
+            [matTooltip]="compact() ? n.label : ''" matTooltipPosition="right"
+            [attr.aria-label]="compact() ? n.label : null"
+            [style.padding-left.px]="compact() ? 8 + n.depth * 6 : null"
             (mousedown)="onRowMouseDown($event, n)"
             (click)="onRowClick(n, $event)"
             (contextmenu)="onRowContextMenu($event, n)">
+          <mat-icon class="kind-icon" *ngIf="compact()" [ngClass]="n.iconClass">{{ n.iconName }}</mat-icon>
+          <ng-container *ngIf="!compact()">
           <span class="chevron" *ngIf="n.expandable" (click)="toggleExpand(n, $event)">
             <mat-icon>{{ n.expanded ? 'expand_more' : 'chevron_right' }}</mat-icon>
           </span>
@@ -150,37 +156,43 @@ export interface TreeNode {
             <mat-icon>{{ n.visible ? 'visibility' : 'visibility_off' }}</mat-icon>
           </button>
           <mat-icon *ngIf="n.selectable && n.kind === 'sketch'" class="pick-hint">arrow_forward</mat-icon>
+          </ng-container>
         </li>
         </ul>
       </div>
 
       <!-- Drag to resize the split between the feature tree and bodies. -->
-      <div class="section-resize" *ngIf="showBodies() && !featuresCollapsed() && !bodiesCollapsed()"
+      <div class="section-resize" *ngIf="!compact() && showBodies() && !featuresCollapsed() && !bodiesCollapsed()"
            (mousedown)="startSectionResize($event)"></div>
 
       <!-- Bodies section. Lists every body in the part (1 per additive
            feature with merge=false, plus a default body for merge=true
            additive chains). Each row has a visibility toggle. -->
       <div class="section bodies-section" *ngIf="showBodies()" [class.collapsed]="bodiesCollapsed()">
-        <header class="panel-header collapsible" (click)="toggleBodiesCollapsed()">
-          <mat-icon class="section-chevron">{{ bodiesCollapsed() ? 'chevron_right' : 'expand_more' }}</mat-icon>
+        <header class="panel-header collapsible" (click)="toggleBodiesCollapsed()"
+                [matTooltip]="compact() ? 'Bodies' : ''" matTooltipPosition="right">
+          <mat-icon class="section-chevron" *ngIf="!compact()">{{ bodiesCollapsed() ? 'chevron_right' : 'expand_more' }}</mat-icon>
           <mat-icon>category</mat-icon>
+          <ng-container *ngIf="!compact()">
           <span>Bodies</span>
           <span class="count" *ngIf="bodiesView().length > 0">({{ bodiesView().length }})</span>
+          </ng-container>
         </header>
         <ul class="tree" *ngIf="!bodiesCollapsed()">
-          <li *ngIf="bodiesView().length === 0" class="row empty-row">
+          <li *ngIf="bodiesView().length === 0 && !compact()" class="row empty-row">
             <span class="label muted">No body yet — add an Extrude or Revolve.</span>
           </li>
           <li *ngFor="let b of bodiesView(); let i = index"
               class="row depth-0"
               [class.hidden-feature]="!b.visible"
               [attr.data-testid]="'body-' + b.id"
+              [matTooltip]="compact() ? b.label : ''" matTooltipPosition="right"
+              [attr.aria-label]="compact() ? b.label : null"
               (contextmenu)="onBodyContextMenu($event, b)">
-            <span class="chevron-spacer"></span>
+            <span class="chevron-spacer" *ngIf="!compact()"></span>
             <mat-icon class="kind-icon extrude">deployed_code</mat-icon>
-            <span class="label">{{ b.label }}</span>
-            <button class="visibility-toggle"
+            <span class="label" *ngIf="!compact()">{{ b.label }}</span>
+            <button class="visibility-toggle" *ngIf="!compact()"
                     [attr.data-testid]="'body-visibility-' + b.id"
                     [matTooltip]="b.visible ? 'Hide' : 'Show'"
                     (click)="onBodyVisibilityClick(b, $event)">
@@ -355,6 +367,11 @@ export interface TreeNode {
     :host(.embedded) .section .tree { flex: 0 0 auto; overflow: visible; }
     :host(.embedded) .panel-header { padding: 8px 12px; }
     .panel { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
+    /* REQ 995 — minimized: a narrow icon column. */
+    .panel.compact .panel-header { justify-content: center; padding: 10px 0; }
+    .panel.compact .row { gap: 0; padding-top: 6px; padding-bottom: 6px; padding-right: 0; }
+    .panel.compact .row.depth-1 { padding-left: 14px; }
+    .panel.compact .row.rollback-bar { padding: 0; min-height: 3px; }
     /* Two equal-height sections stacked vertically. Each section scrolls its
        own list independently so a long feature tree doesn't push bodies
        off-screen, and a long bodies list doesn't push features off-screen. */
@@ -481,6 +498,9 @@ export class CadFeatureTreePanelComponent {
   headerTitle = input<string>('Feature Tree');
   headerIcon = input<string>('account_tree');
   showBodies = input<boolean>(true);
+  /** REQ 995 — minimized sidebar: icon-only rows with every feature group
+   * expanded (consumed sketches visible) and names in hover tooltips. */
+  compact = input<boolean>(false);
 
   // ── Section collapse / vertical resize (feature tree ↔ bodies) ───────────────
   readonly featuresCollapsed = signal<boolean>(localStorage.getItem('cadTreeFeaturesCollapsed') === '1');
@@ -537,6 +557,8 @@ export class CadFeatureTreePanelComponent {
    * handles Edit / Delete / Hide. The parent decides multi-select policy. */
   sketchSelect = output<SketchSelectEvent>();
   visibilityToggled = output<string>(); // datum id
+  /** REQ 997 — eye on a `ctxasm:<id>` context row (show/hide the assembly ghosts). */
+  contextVisibilityToggled = output<string>();
   actionRequested = output<FeatureTreeAction>();
   // REQ 626 — selected feature ids drive row highlighting; the click event
   // lets the parent apply set/toggle policy based on modifier keys.
@@ -710,7 +732,11 @@ export class CadFeatureTreePanelComponent {
     const out: TreeNode[] = [...this.contextNodes()];
     const features = this.features();
     const doc = this.doc();
-    const expanded = this.expanded();
+    // Compact: every group open except the Origin's datum rows (noise in an
+    // icon column).
+    const expanded: Pick<Set<string>, 'has'> = this.compact()
+      ? { has: (k: string) => k !== 'origin-children' }
+      : this.expanded();
     const sketchesUsed = new Set<string>();
     const rollback = this.rollbackBeforeIndex();
 
@@ -828,6 +854,28 @@ export class CadFeatureTreePanelComponent {
       });
     }
 
+    // Compact: flat dependency order — each feature's sketches move up ahead
+    // of it, and a sketch reused by a later feature isn't repeated.
+    if (this.compact() && !pickMode) {
+      const flat: TreeNode[] = [];
+      const shown = new Set<string>();
+      for (let i = 0; i < out.length; i++) {
+        const n = out[i];
+        if (n.kind !== 'feature') { flat.push(n); continue; }
+        let j = i + 1;
+        for (; j < out.length && out[j].depth > 0 && out[j].kind === 'sketch'; j++) {
+          const c = out[j];
+          if (c.sketchId && shown.has(c.sketchId)) continue;
+          if (c.sketchId) shown.add(c.sketchId);
+          flat.push({ ...c, depth: 0 });
+        }
+        flat.push(n);
+        i = j - 1;
+      }
+      out.length = 0;
+      out.push(...flat);
+    }
+
     // Tag each sketch row with its constraint state (DOF 0 → fully constrained)
     // so the tree can show a lock indicator. Computed once per render; memoized
     // by sketch-state reference so expand/collapse doesn't re-run the analysis.
@@ -876,7 +924,7 @@ export class CadFeatureTreePanelComponent {
    * loop stays readable. The original logic lives unchanged below. */
   private _appendFeatureNodes(
     f: Feature, idx: number, rollback: number | null,
-    expanded: Set<string>,
+    expanded: Pick<Set<string>, 'has'>,
     doc: SketchDocument | null,
     sketchesUsed: Set<string>,
     out: TreeNode[],
@@ -1551,6 +1599,7 @@ export class CadFeatureTreePanelComponent {
   onVisibilityToggleClick(n: TreeNode, ev: MouseEvent) {
     ev.stopPropagation();
     if (this.externalNodes()) { this.externalEvent.emit({ type: 'visibility', node: n, ev }); return; }
+    if (n.key.startsWith('ctxasm:')) { this.contextVisibilityToggled.emit(n.key); return; }
     if (n.kind === 'datum' && n.datumId) {
       this.visibilityToggled.emit(n.datumId);
     } else if (n.kind === 'sketch' && n.sketchId) {

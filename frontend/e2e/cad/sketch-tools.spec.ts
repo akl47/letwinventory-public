@@ -4,7 +4,7 @@
 import { test, expect } from '@playwright/test';
 import {
   createFixturePart, openEditor, enterSketchOnXY, pickTool, clickSequence,
-  canvasCenter, sketchEntityCount, sketchEntities, drawClosedRectangle,
+  canvasCenter, sketchEntityCount, sketchEntities, drawClosedRectangle, sketchToScreen,
 } from './helpers';
 
 // A fresh fixture part per test: reopening a part frames its existing
@@ -124,6 +124,39 @@ test.describe('Shape tools', () => {
     expect(constraints).toContain('horizontal');
     expect(constraints).toContain('perpendicular');
     expect(constraints.filter((t: string) => t === 'parallel').length).toBeGreaterThanOrEqual(2);
+  });
+
+  // REQ 992 — a corner clicked ON an existing sketch line is coincident with it.
+  test('corner rectangle clicked on an existing line is coincident with it', async ({ page }) => {
+    await openEditor(page, PART_ID);
+    await enterSketchOnXY(page);
+    const { cx, cy } = await canvasCenter(page);
+    await pickTool(page, 'primitives', 'line');
+    await clickSequence(page, [[cx + 40, cy - 60], [cx + 240, cy - 100]]);
+    await page.keyboard.press('Escape');
+    const line = await page.evaluate(() => {
+      const ents = (window as any).__cadSketch?.entities ?? [];
+      const l = ents.find((e: any) => e.kind === 'line');
+      const at = (id: string) => ents.find((e: any) => e.id === id);
+      return l && { id: l.id, a: at(l.startId), b: at(l.endId) };
+    });
+    expect(line).toBeTruthy();
+    const lineId = line.id;
+    // 30% along the line's REAL (grid-snapped) geometry — off its midpoint
+    // and endpoints — then a corner in open space.
+    const onLine = await sketchToScreen(page,
+      line.a.x + 0.3 * (line.b.x - line.a.x), line.a.y + 0.3 * (line.b.y - line.a.y));
+
+    await pickTool(page, 'shapes', 'rect-corner');
+    await clickSequence(page, [onLine, [cx + 200, cy + 60]]);
+    await expect.poll(() => sketchEntityCount(page, 'line'), { timeout: 5_000 }).toBe(5);
+
+    const coincident = await page.evaluate((lid) => {
+      const sk = (window as any).__cadSketch;
+      return (sk?.constraints ?? []).filter((c: any) => c.type === 'coincident'
+        && c.targets.some((t: any) => t.entityId === lid)).length;
+    }, lineId);
+    expect(coincident).toBe(1);
   });
 
   test('center rectangle draws 4 solid sides (+ construction diagonal)', async ({ page }) => {

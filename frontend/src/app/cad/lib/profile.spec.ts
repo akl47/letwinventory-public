@@ -432,6 +432,23 @@ describe('Profile extraction (CAD-038, REQ 560, REQ 617)', () => {
       expect((a.holes[0][0] as any).radius).toBe(20);
     });
 
+    // REQ 994 — a rectangle drawn against the outer edge shares a stretch of
+    // it; the overlapping collinear pieces must not block either region.
+    it('a rectangle sharing part of the outer edge is its own region (REQ 994)', () => {
+      const pts: [number, number][] = [[0, 0], [100, 0], [100, 50], [0, 50], [20, 30], [40, 30], [40, 50], [20, 50]];
+      const state: SketchState = {
+        entities: [
+          ...pts.map(([x, y], i) => ({ kind: 'point' as const, id: `p${i + 1}`, x, y })),
+          ...[[1, 2], [2, 3], [3, 4], [4, 1], [5, 6], [6, 7], [7, 8], [8, 5]]
+            .map(([a, b], i) => ({ kind: 'line' as const, id: `l${i + 1}`, startId: `p${a}`, endId: `p${b}` })),
+        ],
+        constraints: [],
+      };
+      const { regions, errors } = extractRegions(state);
+      expect(errors).toEqual([]);
+      expect(regions.length).toBe(2);
+    });
+
     it('single loop → 1 region with no holes', () => {
       const state: SketchState = {
         entities: [

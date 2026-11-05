@@ -2,7 +2,7 @@ import type {
   SketchState, SketchEntity, SketchConstraint,
   LineEntity, CircleEntity, ArcEntity, EllipseEntity,
 } from './types';
-import { onEdgeLookupKey, isCenterExternalRef } from './types';
+import { onEdgeLookupKey, isCenterExternalRef, coincidentOnCurve } from './types';
 import { ORIGIN_POINT_ID } from './store';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -60,9 +60,8 @@ export function analyzeDeterminacy(state: SketchState, externalEdges: ExternalEd
 function isOtherwiseConstrainedIn(state: SketchState, pointId: string): boolean {
   for (const c of state.constraints) {
     if (c.type !== 'coincident' && c.type !== 'fixed' && c.type !== 'midpoint') continue;
-    for (const t of c.targets) {
-      if (t.entityId === pointId) return true;
-    }
+    if (!c.targets.some(t => t.entityId === pointId)) continue;
+    if (c.type !== 'coincident' || coincidentOnCurve(state, c, pointId)) return true;
   }
   return false;
 }

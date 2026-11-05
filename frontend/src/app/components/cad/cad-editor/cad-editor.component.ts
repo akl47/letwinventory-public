@@ -29,9 +29,12 @@ import { CadSketchEditorComponent } from '../cad-sketch-editor/cad-sketch-editor
 import { CadConstraintListComponent } from '../cad-constraint-list/cad-constraint-list.component';
 import { CadDimensionPropertiesComponent } from '../cad-dimension-properties/cad-dimension-properties.component';
 import { CategoryBadge } from '../../common/category-badge/category-badge';
+import { CadContextOrphanDialogComponent, type CadContextOrphanResult } from '../cad-context-orphan-dialog/cad-context-orphan-dialog.component';
 import { SketchDeleteWarningDialogComponent, type SketchDeleteAction } from '../sketch-delete-warning-dialog/sketch-delete-warning-dialog.component';
 import { projectTo3D, projectFrom3D } from '../../../cad/lib/plane';
 import { disabledReason, DISABLED_REASON } from '../../../cad/lib/disabledReason';
+import { sameSavedContent, type SavedContent } from '../../../cad/lib/savedContent';
+import type { Observable } from 'rxjs';
 import { closestPointOnSegment, crossPartEdgeRef, crossPartVertexRef } from '../../../cad/lib/externalSnap';
 import { findProjectedBySource, listProjectedCurves } from '../../../cad/lib/projectedGeometry';
 import { extrudePreview, revolvePreview, sweepPreview } from '../../../cad/lib/preview';
@@ -52,6 +55,7 @@ import { sizeOptions as holeSizeOptionsFor, defaultSizeFor as holeDefaultSizeFor
 import { removeConstraint, setConstraintValue, setDimensionValue, addPoint, addLine, addCircle, addCircleByPoint, addArc, addArcByPoints, updateTextEntity, updatePictureEntity, updateEquationCurveEntity, rotateTextBox, deletePrimitive, ORIGIN_POINT_ID } from '../../../cad/lib/store';
 import { chainEdgeIds } from '../../../cad/lib/edgeChain';
 import { solveSketch } from '../../../cad/lib/solver';
+import { coincidentOnCurve } from '../../../cad/lib/types';
 import { parseUserValue, formatNumber, type Unit } from '../../../cad/lib/units';
 import { migrateSketchDocument, migrateFeatureTree } from '../../../cad/lib/migration';
 import { friendlyError } from '../../../cad/lib/errorMessages';
@@ -725,7 +729,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
 
       <div class="editor-body">
         <!-- Assembly component panel (replaces the feature tree in assembly mode) -->
-        <div class="feature-tree asm-panel" *ngIf="assemblyMode()">
+        <div class="feature-tree asm-panel" *ngIf="assemblyMode()"
+             [class.mini]="sidebarMode() === 'mini'" [class.collapsed]="sidebarMode() === 'hidden'">
           @if (asm.loading()) {
             <div class="asm-loading"><mat-spinner diameter="28"></mat-spinner></div>
           } @else if (!asm.assembly()) {
@@ -772,6 +777,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [externalNodes]="asmTreeNodes()"
               headerTitle="Assembly"
               [showBodies]="false"
+              [compact]="sidebarMode() === 'mini'"
               (externalEvent)="onAsmTreeEvent($event)">
             </app-cad-feature-tree-panel>
             @if (asm.mateNodes().length) {
@@ -779,6 +785,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 [externalNodes]="asm.mateNodes()"
                 headerTitle="Mates" headerIcon="link"
                 [showBodies]="false"
+                [compact]="sidebarMode() === 'mini'"
                 (externalEvent)="onAsmTreeEvent($event)">
               </app-cad-feature-tree-panel>
             }
@@ -865,6 +872,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           [features]="featureTree().features"
           [contextNodes]="contextNodes()"
           (contextMenu)="onContextRowMenu($event)"
+          (contextVisibilityToggled)="toggleContextVisible($event)"
           [doc]="doc()"
           [selectableSketches]="mode() === 'pick-extrude-target' || mode() === 'pick-revolve-target' || mode() === 'pick-cut-extrude-target' || mode() === 'pick-cut-revolve-target'"
           [selectedFeatures]="selectedFeatures()"
@@ -894,8 +902,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           (bodyRenamed)="onRenameBody($event)"
           (bodyDeleted)="onDeleteBody($event)"
           class="feature-tree"
-          [class.collapsed]="sidebarCollapsed()"
-          [style.width.px]="sidebarCollapsed() ? 0 : sidebarWidth()">
+          [compact]="sidebarMode() === 'mini'"
+          [class.collapsed]="sidebarMode() === 'hidden'"
+          [style.width.px]="sidebarMode() === 'hidden' ? 0 : sidebarMode() === 'mini' ? SIDEBAR_MINI_WIDTH : sidebarWidth()">
         </app-cad-feature-tree-panel>
         <!-- Context-row right-click menu (REQ 920 follow-up). -->
         <div class="ctx-anchor" #ctxRowAnchor *ngIf="!assemblyMode()"
@@ -909,15 +918,20 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <button mat-menu-item data-testid="ctxrow-edit" (click)="enterContext(aid)"><mat-icon>edit_note</mat-icon> Edit in context</button>
             }
             <button mat-menu-item data-testid="ctxrow-open" (click)="openContextAssembly(aid)"><mat-icon>open_in_new</mat-icon> Open assembly</button>
+            @if (canRemoveContext(aid)) {
+              <button mat-menu-item data-testid="ctxrow-remove" (click)="removeContext(aid)"><mat-icon>link_off</mat-icon> Remove context</button>
+            }
           }
         </mat-menu>
-        <!-- Drag the bar to resize the feature-tree sidebar; the button collapses it. -->
-        <div class="sidebar-resize" *ngIf="!assemblyMode()" (mousedown)="startSidebarResize($event)">
-          <button class="sidebar-toggle" type="button"
+        <!-- Drag the bar to resize the feature-tree sidebar (part mode); the
+             button cycles full → minimized → hidden → full (REQ 995). -->
+        <div class="sidebar-resize" [class.no-resize]="assemblyMode()"
+             (mousedown)="!assemblyMode() && startSidebarResize($event)">
+          <button class="sidebar-toggle" type="button" data-testid="sidebar-toggle"
                   (mousedown)="$event.stopPropagation()"
                   (click)="toggleSidebar()"
-                  [title]="sidebarCollapsed() ? 'Show feature tree' : 'Hide feature tree'">
-            <mat-icon>{{ sidebarCollapsed() ? 'chevron_right' : 'chevron_left' }}</mat-icon>
+                  [title]="sidebarMode() === 'full' ? 'Minimize sidebar' : sidebarMode() === 'mini' ? 'Hide sidebar' : 'Show sidebar'">
+            <mat-icon>{{ sidebarMode() === 'hidden' ? 'chevron_right' : 'chevron_left' }}</mat-icon>
           </button>
         </div>
 
@@ -3793,11 +3807,56 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <div class="koo-title">CAD kernel offline</div>
             <div class="koo-sub">Geometry can’t be generated. Reconnecting…</div>
           </div>
+          <!-- Status banners — short label, the full hint in the tooltip. -->
+          <div class="viewport-banners" data-fit-avoid
+               *ngIf="activeSketchId() !== null || readonly() || showStaleDirtyBanner() || lockedByOther() || inContextAssemblyId()">
+            <!-- Active-sketch banner with quick exit -->
+            <span class="vp-banner tone-info" data-testid="sketch-mode-banner" *ngIf="activeSketchId() !== null"
+                  matTooltip="Editing a sketch — right-drag orbits, middle-drag pans" matTooltipPosition="below">
+              <mat-icon>draw</mat-icon>Sketch mode
+              <button class="vp-banner-action" data-testid="exit-sketch" (click)="onExitSketch()"
+                      matTooltip="Exit the sketch">Exit</button>
+            </span>
+            <span class="vp-banner tone-info" data-testid="in-context-banner" *ngIf="inContextAssemblyId()"
+                  matTooltip="Editing this part inside its assembly — other components show as ghosts"
+                  matTooltipPosition="below">
+              <mat-icon>account_tree</mat-icon>In context
+              <button class="vp-banner-action" data-testid="exit-in-context" (click)="exitInContext()"
+                      matTooltip="Return to the assembly editor">Back</button>
+              <button class="vp-banner-action" data-testid="toggle-context-visibility" (click)="toggleContextVisible()"
+                      [matTooltip]="contextVisible() ? 'Hide the assembly context' : 'Show the assembly context'"
+                      [attr.aria-label]="contextVisible() ? 'Hide context' : 'Show context'">
+                <mat-icon>{{ contextVisible() ? 'visibility' : 'visibility_off' }}</mat-icon>
+              </button>
+              <button class="vp-banner-action" data-testid="leave-context" (click)="leaveContext()"
+                      matTooltip="Drop the assembly ghosts and keep editing this part standalone">Leave</button>
+            </span>
+            <span class="vp-banner" data-testid="readonly-banner" *ngIf="readonly()"
+                  [ngClass]="'tone-' + readonlyBanner().tone"
+                  [matTooltip]="readonlyHint()" matTooltipPosition="below">
+              <mat-icon>{{ readonlyBanner().icon }}</mat-icon>{{ readonlyBanner().label }}
+              <button class="vp-banner-action" data-testid="exit-commit-view" *ngIf="viewingCommit()"
+                      (click)="exitCommitView()" matTooltip="Return to the live working copy">Exit</button>
+            </span>
+            <!-- REQ 877 — stale uncommitted work: dirty + no content save for 4 h -->
+            <span class="vp-banner tone-warn" data-testid="vcs-stale-dirty" *ngIf="showStaleDirtyBanner()"
+                  [matTooltip]="'Uncommitted changes for ' + staleAgeLabel() + ' — check in to protect your work'"
+                  matTooltipPosition="below">
+              <mat-icon>schedule</mat-icon>Unchecked-in · {{ staleAgeLabel() }}
+              <button class="vp-banner-action" (click)="onCheckin()">Check in</button>
+              <button class="vp-banner-action" (click)="dismissStaleDirty()" matTooltip="Dismiss" aria-label="Dismiss">✕</button>
+            </span>
+            <span class="vp-banner tone-error" data-testid="vcs-lock-foreign"
+                  *ngIf="lockedByOther() && readonlyBanner().label !== 'Checked out by other'"
+                  matTooltip="Checked out by another user — read-only until they check in" matTooltipPosition="below">
+              <mat-icon>lock_person</mat-icon>Checked out by other
+            </span>
+          </div>
           <ng-container *ngIf="!loading(); else loadingTpl">
             <app-cad-viewer
               #viewer
               [geometry]="displayedGeometry()"
-              [referenceGeometry]="referenceOverlay()"
+              [referenceGeometry]="contextVisible() ? referenceOverlay() : null"
               [selected]="selected()"
               [normalToPlane]="normalToPlane()"
               [selectedFeatures]="viewerSelectedFeatures()"
@@ -3966,12 +4025,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <button class="btn btn-text" (click)="setMode('idle')">Cancel</button>
             </div>
 
-            <!-- Active-sketch banner with quick exit -->
-            <div class="mode-prompt" *ngIf="activeSketchId() !== null" data-testid="sketch-mode-banner">
-              <mat-icon>draw</mat-icon>
-              <span class="prompt-text">Sketch mode</span>
-              <button class="btn" data-testid="exit-sketch" (click)="onExitSketch()">Exit sketch</button>
-            </div>
 
             <div class="quick-start" data-testid="quick-start" *ngIf="!quickStartDismissed() && !assemblyMode() && mode() === 'idle' && activeSketchId() === null && featureTree().features.length === 1 && sketchCount() === 0">
               <!-- REQ 988 — dismiss for this editor session. -->
@@ -4001,7 +4054,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                  them. Same HUD treatment as before — semi-transparent
                  plates sitting on the viewport rather than a strip
                  outside it. -->
-            <div class="editor-footer" data-testid="cad-hud-ready">
+            <div class="editor-footer" data-testid="cad-hud-ready" data-fit-avoid>
               <div class="footer-group footer-group-left">
                 <app-category-badge data-testid="revision-badge" *ngIf="model()?.displayRevision"
                   [label]="'Rev ' + model()!.displayRevision + (model()?.released ? '' : '*')"
@@ -4025,23 +4078,10 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                       *ngIf="activeSketchId() !== null && debugVisible()">
                   sketch · x: {{ formatCursorCoord(sketchCursor()?.x) }} · y: {{ formatCursorCoord(sketchCursor()?.y) }}
                 </span>
-                <span class="readonly-banner" data-testid="readonly-banner" *ngIf="readonly()">{{ readonlyHint() }}</span>
-                <button class="readonly-exit" data-testid="exit-commit-view" *ngIf="viewingCommit()"
-                        (click)="exitCommitView()" matTooltip="Return to the live working copy">
-                  <mat-icon>logout</mat-icon> Exit version
-                </button>
 
                 <!-- VCS status (actions live in the File ribbon tab) -->
                 <span class="vcs-dirty" data-testid="vcs-dirty" *ngIf="isDirty()"
                       matTooltip="Uncommitted changes since the last check-in">● unsaved</span>
-                <!-- REQ 877 — stale uncommitted work: dirty + no content save for 4 h -->
-                <span class="vcs-stale-dirty" data-testid="vcs-stale-dirty" *ngIf="showStaleDirtyBanner()">
-                  Uncommitted changes for {{ staleAgeLabel() }} — check in to protect your work
-                  <button class="stale-checkin" (click)="onCheckin()">Check in</button>
-                  <button class="stale-dismiss" (click)="dismissStaleDirty()" matTooltip="Dismiss">×</button>
-                </span>
-                <span class="vcs-lock" data-testid="vcs-lock-foreign" *ngIf="lockedByOther()"
-                      matTooltip="Checked out by another user">🔒 checked out</span>
                 <div class="vcs-commits-panel" data-testid="vcs-branches-panel" *ngIf="showBranches()">
                   <div class="vcs-commits-head">
                     <span>Branches</span>
@@ -4101,14 +4141,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <span class="cstate-badge" [class.under]="cs.state === 'under'" [class.fully]="cs.state === 'fully'" [class.over]="cs.state === 'over'">
                     {{ cs.state === 'fully' ? 'Fully constrained' : cs.state === 'over' ? 'Over-constrained' : ('Under-constrained · ' + cs.dof + ' DOF') }}
                   </span>
-                }
-                @if (inContextAssemblyId()) {
-                  <button class="readonly-exit" data-testid="exit-in-context" (click)="exitInContext()" matTooltip="Return to the assembly editor">
-                    <mat-icon>arrow_back</mat-icon> In-context · back to assembly
-                  </button>
-                  <button class="readonly-exit" data-testid="leave-context" (click)="leaveContext()" matTooltip="Drop the assembly ghosts and keep editing this part standalone">
-                    <mat-icon>visibility_off</mat-icon> Leave context
-                  </button>
                 }
               </div>
 
@@ -4265,14 +4297,19 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .editor-footer .unit-field ::ng-deep .mat-mdc-form-field-subscript-wrapper { display: none; }
     .spacer { flex: 1; }
     .revision-badge { padding: 4px 10px; background: #3a3a52; border-radius: 4px; font-weight: 600; }
-    .state-badge { padding: 4px 10px; border-radius: 4px; font-size: 12px; text-transform: uppercase; font-weight: 600; }
+    .state-badge { padding: 4px 10px; border-radius: 4px; font-size: 12px; text-transform: uppercase; font-weight: 600; white-space: nowrap; }
     .state-badge.draft { background: #fff3e0; color: #e65100; }
     .state-badge.review { background: #e3f2fd; color: #1565c0; }
     .state-badge.released { background: #e8f5e9; color: #2e7d32; }
-    .readonly-banner { padding: 4px 10px; background: #ffebee; color: #c62828; border-radius: 4px; font-size: 12px; font-weight: 600; }
-    .readonly-exit { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; background: #c62828; color: #fff; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; }
-    .readonly-exit mat-icon { font-size: 15px; width: 15px; height: 15px; }
-    .readonly-exit:hover { background: #a31515; }
+    .viewport-banners { position: absolute; top: 8px; left: 8px; z-index: 6; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; max-width: 45%; }
+    .vp-banner { --tone: #9e9e9e; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px 0 8px; background: rgba(30,30,30,0.88); border-left: 3px solid var(--tone); border-radius: 4px; color: #eee; font-size: 12px; font-weight: 500; white-space: nowrap; cursor: default; }
+    .vp-banner:not(:has(.vp-banner-action)) { padding-right: 10px; }
+    .vp-banner mat-icon { font-size: 16px; width: 16px; height: 16px; color: var(--tone); }
+    .vp-banner.tone-info { --tone: #42a5f5; }
+    .vp-banner.tone-warn { --tone: #ffb74d; }
+    .vp-banner.tone-error { --tone: #ef5350; }
+    .vp-banner-action { background: none; border: none; color: var(--tone); font-size: 12px; font-weight: 600; padding: 2px 6px; border-radius: 3px; cursor: pointer; display: inline-flex; align-items: center; }
+    .vp-banner-action:hover { background: rgba(255,255,255,0.08); }
     .branch-badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; background: rgba(66,165,245,0.18); color: #8fc6f5; border-radius: 4px; font-size: 12px; font-weight: 500; }
     .branch-badge-ico { font-size: 14px; width: 14px; height: 14px; }
     .kernel-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: #1b3a1b; color: #b5e0b5; border-radius: 4px; font-size: 12px; font-weight: 500; }
@@ -4354,6 +4391,10 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .editor-body { display: flex; flex: 1; min-height: 0; }
     .feature-tree { width: 240px; background: #25253a; border-right: 1px solid #444; flex: 0 0 auto; overflow: hidden; }
     .feature-tree.collapsed { width: 0 !important; border-right: none; }
+    /* REQ 995 — minimized assembly panel: only the tree panels, as icons. */
+    .asm-panel.mini { width: 44px; overflow-x: hidden; }
+    .asm-panel.mini > :not(app-cad-feature-tree-panel) { display: none; }
+    .sidebar-resize.no-resize { cursor: default; }
     /* Resize handle + collapse toggle for the feature-tree sidebar. */
     .sidebar-resize { position: relative; flex: 0 0 6px; width: 6px; background: #2a2a3e; border-right: 1px solid #444; cursor: col-resize; }
     .sidebar-resize:hover { background: #3a4a6a; }
@@ -4607,9 +4648,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     /* VCS lock / check-in / history (Phase 1) */
     .vcs-dirty { color: #ffb74d; font-size: 12px; }
     /* REQ 877 — stale uncommitted-work warning chip */
-    .vcs-stale-dirty { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; background: rgba(255, 183, 77, 0.15); border: 1px solid #ffb74d; border-radius: 4px; color: #ffb74d; font-size: 12px; font-weight: 600; }
-    .vcs-stale-dirty .stale-checkin { background: #ffb74d; color: #1e1e1e; border: none; border-radius: 3px; padding: 2px 8px; font-size: 11px; font-weight: 600; cursor: pointer; }
-    .vcs-stale-dirty .stale-dismiss { background: none; border: none; color: #ffb74d; font-size: 14px; cursor: pointer; padding: 0 2px; line-height: 1; }
     .vcs-lock { color: #e57373; font-size: 12px; }
     .vcs-commits-panel { position: absolute; top: 112px; left: 16px; width: 360px; max-height: 320px; overflow: auto;
       background: rgba(0,0,0,0.82); border: 1px solid rgba(255,255,255,0.14); border-radius: 8px; padding: 10px 12px; font-size: 12px; z-index: 30; }
@@ -4684,21 +4722,31 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-379';
+  readonly buildMarker = 'text-412';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
   readonly sidebarWidth = signal<number>(Number(localStorage.getItem('cadSidebarWidth')) || 240);
-  /** Collapsed = width 0 (the divider's toggle re-opens it); persisted. */
-  readonly sidebarCollapsed = signal<boolean>(localStorage.getItem('cadSidebarCollapsed') === '1');
+  /** REQ 995 — full / minimized (icon column) / hidden (width 0); the
+   * divider's toggle cycles them in that order; persisted. A pre-existing
+   * collapsed preference reads as hidden. */
+  readonly SIDEBAR_MINI_WIDTH = 44;
+  readonly sidebarMode = signal<'full' | 'mini' | 'hidden'>((() => {
+    const m = localStorage.getItem('cadSidebarMode');
+    if (m === 'full' || m === 'mini' || m === 'hidden') return m;
+    return localStorage.getItem('cadSidebarCollapsed') === '1' ? 'hidden' : 'full';
+  })());
   toggleSidebar(): void {
-    const v = !this.sidebarCollapsed();
-    this.sidebarCollapsed.set(v);
-    localStorage.setItem('cadSidebarCollapsed', v ? '1' : '0');
+    const next = ({ full: 'mini', mini: 'hidden', hidden: 'full' } as const)[this.sidebarMode()];
+    this.setSidebarMode(next);
+  }
+  private setSidebarMode(m: 'full' | 'mini' | 'hidden'): void {
+    this.sidebarMode.set(m);
+    localStorage.setItem('cadSidebarMode', m);
   }
   startSidebarResize(e: MouseEvent): void {
     e.preventDefault();
-    if (this.sidebarCollapsed()) this.toggleSidebar();  // dragging a collapsed bar re-opens it
+    if (this.sidebarMode() !== 'full') this.setSidebarMode('full');  // dragging a minimized/hidden bar re-opens it
     const startX = e.clientX, startW = this.sidebarWidth();
     const move = (ev: MouseEvent) => {
       const w = Math.max(160, Math.min(560, startW + (ev.clientX - startX)));
@@ -4909,11 +4957,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private _datumCandidates(plane: import('../../../cad/lib/types').Plane3): ReferenceCandidate[] {
     const out: ReferenceCandidate[] = [];
     const HALF = 100; // reference-line half-extent (sketch units)
+    // Datums missing from the render list are hidden — tree-pickable only.
+    const shown = new Set(((this.assemblyMode() ? this.asm.geometry() : this.geometry())?.datums ?? []).map(d => d.id));
     const add = (datumId: string, hit: { point: { x: number; y: number }; dir: { x: number; y: number } } | null) => {
       if (!hit) return;
       out.push({
         id: `cand-e-datum:${datumId}`,
         kind: 'edge',
+        ...(shown.has(datumId) ? {} : { hidden: true }),
         points: [
           { x: hit.point.x - hit.dir.x * HALF, y: hit.point.y - hit.dir.y * HALF },
           { x: hit.point.x + hit.dir.x * HALF, y: hit.point.y + hit.dir.y * HALF },
@@ -4959,6 +5010,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       if (Math.hypot(a.x - b.x, a.y - b.y) < 1e-9) continue;  // perpendicular to plane → skip
       out.push({
         id: `cand-cpe-${e.stableId}`, kind: 'edge', points: [a, b],
+        ...(this.contextVisible() ? {} : { hidden: true }),
         crossPart: {
           definingAssemblyId: aid, definingAssemblyRepoId: repoId,
           sourceInstanceId: e.instanceId, sourcePartId: e.partID,
@@ -6897,7 +6949,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   /** REQ 919 — skeleton sketches + planes fold INTO the assembly tree as
    * top-level rows right after the Origin block (like a part's own tree). */
   asmTreeNodes = computed<TreeNode[]>(() => {
-    const base = this.asm.treeNodes();
+    const base = this.sidebarMode() === 'mini' ? this.asm.treeNodesExpanded() : this.asm.treeNodes();
     const skel = this.skeletonNodes();
     if (!skel.length) return base;
     // Insert after the origin row + its expanded datum children.
@@ -7038,17 +7090,87 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * cross-part refs. */
   contextAssemblyIds = computed<number[]>(() => {
     if (this.assemblyMode()) return [];
-    const ids = new Set<number>();
+    const ids = new Set<number>([...this._referencedContextIds(), ...this._retainedContextIds()]);
     const live = this.inContextAssemblyId();
     if (live) ids.add(live);
+    // Deleting the last ref mid-sketch keeps the row until exit (prompted then).
+    for (const id of this._sketchEntryContextIds() ?? []) ids.add(id);
+    return [...ids];
+  });
+  private _referencedContextIds(): Set<number> {
+    const ids = new Set<number>();
     for (const sk of Object.values(this.doc().sketches)) {
       for (const c of sk.state.constraints) {
         const er = c.externalRef;
         if (er && er.scope === 'cross-part' && er.definingAssemblyId) ids.add(er.definingAssemblyId);
       }
     }
-    return [...ids];
+    return ids;
+  }
+  private _retainedContextIds(): number[] {
+    const origin = this.featureTree().features.find(f => f.type === 'origin') as { contextAssemblies?: number[] } | undefined;
+    return origin?.contextAssemblies ?? [];
+  }
+  private _setRetainedContextIds(ids: number[]): void {
+    const tree = this.featureTree();
+    this.featureTree.set({ ...tree, features: tree.features.map(f => f.type !== 'origin' ? f : { ...f, contextAssemblies: ids }) });
+  }
+  /** Contexts referenced when the active sketch was entered (null outside a sketch). */
+  private _sketchEntryContextIds = signal<number[] | null>(null);
+  private _contextExitWatch = effect(() => {
+    const sid = this.activeSketchId();
+    untracked(() => {
+      const entry = this._sketchEntryContextIds();
+      if (sid && !entry) this._sketchEntryContextIds.set([...this._referencedContextIds()]);
+      else if (!sid && entry) {
+        this._sketchEntryContextIds.set(null);
+        queueMicrotask(() => this._promptOrphanedContexts(entry));
+      }
+    });
   });
+  /** On sketch exit: a context whose last reference was deleted asks Keep / Remove. */
+  private _promptOrphanedContexts(entry: number[]): void {
+    const referenced = this._referencedContextIds();
+    const retained = this._retainedContextIds();
+    const orphans = entry.filter(id => !referenced.has(id) && !retained.includes(id));
+    if (!orphans.length) return;
+    // "Don't ask again" remembers the choice per part for this browser session.
+    const storeKey = `cadCtxOrphanChoice:${this.model()?.partID}`;
+    let remembered: string | null = null;
+    try { remembered = sessionStorage.getItem(storeKey); } catch { /* storage blocked */ }
+    if (remembered) { this._applyOrphanChoice(orphans, retained, remembered === 'keep'); return; }
+    const names = this._ctxAsmNames();
+    this.dialog.open(CadContextOrphanDialogComponent, {
+      data: { names: orphans.map(id => names[id] || `Assembly ${id}`) },
+      width: '400px',
+    }).afterClosed().subscribe((r: CadContextOrphanResult | undefined) => {
+      // Dismissed (Esc / backdrop) keeps — the non-destructive choice.
+      const keep = r?.keep ?? true;
+      if (r?.dontAskAgain) { try { sessionStorage.setItem(storeKey, keep ? 'keep' : 'remove'); } catch { /* storage blocked */ } }
+      this._applyOrphanChoice(orphans, this._retainedContextIds(), keep);
+    });
+  }
+  private _applyOrphanChoice(orphans: number[], retained: number[], keep: boolean): void {
+    if (!keep) {
+      if (orphans.includes(this.contextViewAssemblyId() ?? -1)) {
+        this.contextViewAssemblyId.set(null);
+        this.referenceOverlay.set(null);
+      }
+      return;
+    }
+    this._setRetainedContextIds([...retained, ...orphans]);
+    if (!this.readonly()) this.save({ skipRegen: true });
+  }
+  /** Remove a kept context that no sketch references (tree row menu). */
+  canRemoveContext(aid: number): boolean {
+    return this._retainedContextIds().includes(aid) && !this._referencedContextIds().has(aid);
+  }
+  removeContext(aid: number): void {
+    if (this.inContextAssemblyId() === aid) this.leaveContext();
+    if (this.contextViewAssemblyId() === aid) { this.contextViewAssemblyId.set(null); this.referenceOverlay.set(null); }
+    this._setRetainedContextIds(this._retainedContextIds().filter(id => id !== aid));
+    if (!this.readonly()) this.save({ skipRegen: true });
+  }
   contextNodes = computed<TreeNode[]>(() => {
     const live = this.inContextAssemblyId();
     const names = this._ctxAsmNames();
@@ -7058,8 +7180,39 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       iconName: live === id ? 'hub' : 'link',
       iconClass: 'part', depth: 0,
       expandable: false, expanded: false, selectable: false, selected: live === id,
+      // REQ 997 — the live context hides/shows its ghosts; any other context
+      // row loads that assembly's ghosts for viewing only.
+      visibilityToggleable: true,
+      visible: live === id ? this.contextVisible() : this.contextViewAssemblyId() === id,
     }));
   });
+  /** REQ 997 — show/hide the in-context assembly ghosts (session only). */
+  contextVisible = signal(true);
+  /** REQ 997 — a non-live context assembly whose ghosts are shown read-only. */
+  contextViewAssemblyId = signal<number | null>(null);
+  toggleContextVisible(key?: string): void {
+    const aid = key ? Number(key.split(':')[1]) : this.inContextAssemblyId();
+    if (!aid) return;
+    if (aid === this.inContextAssemblyId()) { this.contextVisible.set(!this.contextVisible()); return; }
+    if (this.contextViewAssemblyId() === aid) {
+      this.contextViewAssemblyId.set(null);
+      this.referenceOverlay.set(null);
+      return;
+    }
+    this.contextViewAssemblyId.set(aid);
+    this.contextVisible.set(true);
+    const partID = this.model()?.partID;
+    this.asm.regenerateById(aid).subscribe({
+      next: (r) => {
+        if (this.contextViewAssemblyId() !== aid) return;
+        // Frame the ghosts around this part's first instance in the assembly.
+        const host = r.instances.find(i => i.partID === partID);
+        if (!host) { this.contextViewAssemblyId.set(null); this.errors.showError('This part is no longer in that assembly.'); return; }
+        this.referenceOverlay.set(buildInContextOverlay(r, host.instanceId));
+      },
+      error: () => { if (this.contextViewAssemblyId() === aid) this.contextViewAssemblyId.set(null); },
+    });
+  }
   private _ctxNamesFetched = new Set<number>();
   private _ctxNameEffect = effect(() => {
     for (const id of this.contextAssemblyIds()) {
@@ -7156,6 +7309,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private loadInContextOverlay() {
     const aid = this.inContextAssemblyId();
     const host = this.inContextHostInstance();
+    this.contextViewAssemblyId.set(null);
     if (!aid || !host) { this.referenceOverlay.set(null); return; }
     this.asm.regenerateById(aid).subscribe({
       next: (r) => this.referenceOverlay.set(buildInContextOverlay(r, host)),
@@ -7246,6 +7400,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // changes happen on a draft branch and reach main via submit → approve.
   onMainBranch = computed(() => (this.model()?.branchName || 'main') === 'main');
 
+  /** Short read-only banner (icon + label); `readonlyHint` is its tooltip. */
+  readonlyBanner = computed<{ icon: string; label: string; tone: 'neutral' | 'info' | 'warn' | 'error' }>(() => {
+    const lost = this.checkoutLost();
+    if (lost) return /another window|tab/.test(lost)
+      ? { icon: 'sync_problem', label: 'Not saved — reload', tone: 'error' }
+      : { icon: 'lock_clock', label: 'Checkout lost', tone: 'error' };
+    const vc = this.viewingCommit();
+    if (vc) return { icon: 'history', label: `Viewing ${vc.hash.slice(0, 8)}`, tone: 'info' };
+    if (this.onMainBranch()) return { icon: 'lock', label: 'main · read-only', tone: 'neutral' };
+    if (!this.model() || !this.canWrite()) return { icon: 'visibility', label: 'View only', tone: 'neutral' };
+    if (this.lockedByOther()) return { icon: 'lock_person', label: 'Checked out by other', tone: 'error' };
+    if (!this.isLockedByMe()) return { icon: 'edit_off', label: 'Check out to edit', tone: 'warn' };
+    return { icon: 'visibility', label: 'View only', tone: 'neutral' };
+  });
+
   // Helpful banner text explaining why the editor is read-only.
   readonlyHint = computed(() => {
     const lost = this.checkoutLost();
@@ -7256,7 +7425,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (this.onMainBranch()) return 'main is protected — create or switch to a draft branch to edit';
     if (!m || !this.canWrite()) return 'View only';
     if (this.lockedByOther()) return 'Checked out by another user';
-    if (!this.isLockedByMe()) return 'Check out to edit';
+    if (!this.isLockedByMe()) return 'Check out (File tab) to take the edit lock';
     return 'View only';
   });
 
@@ -8195,6 +8364,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private _arbitrateSketchHover(editor: CadSketchEditorComponent): void {
     const viewer = this.viewerRef();
     if (!viewer) return;
+    // Convert Entities keeps the viewer's 3D edge hover — the edge it will convert.
+    if (editor.tool() === 'convert-entities') return;
     if (editor.sketchHoverWins()) {
       viewer.clearProjectedEdgeHover();
     } else if (editor.hoveredProjectedEdgeId()) {
@@ -12574,7 +12745,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   private _crossPartEdgeRef(e: OverlayEdge): import('../../../cad/lib/types').ExternalRef | null {
-    const aid = this.inContextAssemblyId();
+    const aid = this.inContextAssemblyId() ?? this.contextViewAssemblyId();
     if (aid === null) return null;
     return crossPartEdgeRef({
       definingAssemblyId: aid, definingAssemblyRepoId: String(aid),
@@ -12588,7 +12759,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   private _crossPartVertexRef(v: OverlayVertex): import('../../../cad/lib/types').ExternalRef | null {
-    const aid = this.inContextAssemblyId();
+    const aid = this.inContextAssemblyId() ?? this.contextViewAssemblyId();
     if (aid === null) return null;
     return crossPartVertexRef({
       definingAssemblyId: aid, definingAssemblyRepoId: String(aid),
@@ -13279,9 +13450,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const isPointPinned = (pointId: string): boolean => {
         for (const c of sketch.state.constraints) {
           if (c.type !== 'coincident' && c.type !== 'fixed' && c.type !== 'midpoint') continue;
-          for (const t of c.targets) {
-            if (t.entityId === pointId) return true;
-          }
+          if (!c.targets.some(t => t.entityId === pointId)) continue;
+          if (c.type !== 'coincident' || coincidentOnCurve(sketch.state, c, pointId)) return true;
         }
         return false;
       };
@@ -14920,11 +15090,68 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private pendingSaveOpts: { skipRegen?: boolean } | null = null;
   /** True while a save PATCH is on the wire (REQ 905 unsaved-work tracking). */
   private saveInFlight = false;
+  /** A debounced save fired while another was in flight; sent once it settles. */
+  private saveQueued = false;
+
+  /** REQ 991 — a save got no response, so whether it landed is unknown. Re-read
+   * the model: server holds exactly what we sent → it landed, adopt its token;
+   * server still at our token → it never landed, resend; anything else is a
+   * real conflict. Unreachable → retry, keeping the save in flight (queued
+   * saves wait, tab close warns). */
+  private _recoverLostSave(id: number, sent: SavedContent, sentToken: string | null, skipRegen: boolean) {
+    const asm = this.assemblyMode();
+    const fetch$: Observable<CadModel> = asm ? this.assemblyApi.getById(id) : this.cadApi.getById(id);
+    fetch$.subscribe({
+      next: fresh => {
+        if (this.model()?.id !== id) return;
+        const tok = (t: string | null | undefined) => (t ? new Date(t).getTime() : null);
+        if (sameSavedContent(fresh, sent)) {
+          const patch = { lastContentSavedAt: fresh.lastContentSavedAt, lockExpiresAt: fresh.lockExpiresAt, dirty: fresh.dirty };
+          this.model.update(cur => (cur ? { ...cur, ...patch } : cur));
+          if (asm) this.asm.assembly.update(a => (a ? { ...a, ...patch } : a));
+          this._saveSettled();
+          if (!skipRegen && this.activeSketchId() === null) {
+            if (asm) this.asm.regenerate(); else this.regenerate('save');
+          }
+        } else if (tok(fresh.lastContentSavedAt) === tok(sentToken)) {
+          this.saveInFlight = false;
+          this.saveQueued = false;
+          this.pendingSaveOpts = skipRegen ? { skipRegen } : null;
+          this._commitSave();
+        } else {
+          this.saveInFlight = false;
+          this.saveQueued = false;
+          this.checkoutLost.set(
+            `This ${asm ? 'assembly' : 'model'} was changed in another window or tab — your last edit was not saved. Reload to continue from the latest state.`,
+          );
+        }
+      },
+      error: err => {
+        if (err?.status === 0) {
+          window.setTimeout(() => this._recoverLostSave(id, sent, sentToken, skipRegen), 3000);
+          return;
+        }
+        this.saveInFlight = false;
+        this.saveQueued = false;
+        this.errors.showError(err?.error?.error || 'Save failed');
+      },
+    });
+  }
+
+  /** Mark the in-flight save done (model already holds its fresh token) and
+   * send a save that queued behind it. */
+  private _saveSettled() {
+    this.saveInFlight = false;
+    if (this.saveQueued) {
+      this.saveQueued = false;
+      this._commitSave();
+    }
+  }
 
   /** Whether closing the tab now would lose work: a save is scheduled in the
    * debounce window or currently on the wire. */
   hasUnsavedWork(): boolean {
-    return this.debouncedSave !== null || this.saveInFlight;
+    return this.debouncedSave !== null || this.saveInFlight || this.saveQueued;
   }
 
   /** REQ 905 — run any scheduled debounced save NOW and resolve once no save
@@ -14957,34 +15184,40 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private _commitSave() {
     const m = this.model();
     if (!m) return;
+    this.debouncedSave = null;
+    // One save on the wire at a time: a second PUT would carry the token from
+    // BEFORE the first's response and trip DOC_CONFLICT against ourselves.
+    // It runs when the in-flight one settles, reading the then-current doc.
+    if (this.saveInFlight) { this.saveQueued = true; return; }
     const opts = this.pendingSaveOpts ?? undefined;
     const skipRegen = opts?.skipRegen === true;
-    this.debouncedSave = null;
+    const sent = { featureTree: this.featureTree(), sketchDoc: this.doc(), equations: this.equations() };
+    // REQ 942 — instance/mate/pattern edits also stamp lastContentSavedAt;
+    // their responses refresh asm.assembly (not model), so read it there.
+    const sentToken = ((this.assemblyMode() ? this.asm.assembly()?.lastContentSavedAt : undefined) ?? m.lastContentSavedAt) ?? null;
     this.saveInFlight = true;
     // REQ 911 — assembly SKELETON saves go to the assembly endpoint (the
     // part update endpoint rejects assemblies). Same lock/conflict error
     // handling as the part path below.
     if (this.assemblyMode()) {
-      this.assemblyApi.updateSkeleton(m.id, {
-        sketchDoc: this.doc(),
-        featureTree: this.featureTree(),
-        equations: this.equations(),
-        // REQ 942 — instance/mate/pattern edits also stamp lastContentSavedAt;
-        // their responses refresh asm.assembly (not model), so read it there.
-        clientSavedAt: (this.asm.assembly()?.lastContentSavedAt ?? m.lastContentSavedAt) ?? null,
-      }).subscribe({
+      this.assemblyApi.updateSkeleton(m.id, { ...sent, clientSavedAt: sentToken }).subscribe({
         next: updated => {
-          this.saveInFlight = false;
           // Keep the sync key current so the mirror effect doesn't re-adopt
           // (branch/baseCommit unchanged by a content save).
           this.asm.assembly.set(updated);
           this.model.set(updated as unknown as CadModel);
+          this._saveSettled();
           // Skeleton sketches need no kernel work; refresh the composed view
           // only after leaving the sketch (Phase 2 dependents resolve then).
           if (!skipRegen && this.activeSketchId() === null) this.asm.regenerate();
         },
         error: err => {
+          // REQ 991 — no response: the server may have applied it. Resolve
+          // that before anything else; the save stays "in flight" meanwhile.
+          if (err?.status === 0) { this._recoverLostSave(m.id, sent, sentToken, skipRegen); return; }
           this.saveInFlight = false;
+          const queued = this.saveQueued;
+          this.saveQueued = false;
           if (err?.status === 423) {
             this.cadApi.renewLock(m.id).subscribe({
               next: () => this.save(opts),
@@ -15001,23 +15234,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
             );
             return;
           }
+          if (queued) this.save(opts);
           this.errors.showError(err?.error?.error || 'Save failed');
         },
       });
       return;
     }
-    this.cadApi.update(m.id, {
-      featureTree: this.featureTree(),
-      sketchDoc: this.doc(),
-      equations: this.equations(),
-      // REQ 905 — doc-version token: the server rejects this save with 409
-      // DOC_CONFLICT if another session (e.g. a second tab of the same user,
-      // which passes the lock check) saved content since we last synced.
-      clientSavedAt: m.lastContentSavedAt ?? null,
-    }).subscribe({
+    // REQ 905 — doc-version token: the server rejects this save with 409
+    // DOC_CONFLICT if another session (e.g. a second tab of the same user,
+    // which passes the lock check) saved content since we last synced.
+    this.cadApi.update(m.id, { ...sent, clientSavedAt: sentToken }).subscribe({
         next: updated => {
-          this.saveInFlight = false;
           this.model.set(updated);
+          this._saveSettled();
           // Regen is skipped while the user is inside a sketch — the
           // model's body geometry can't change from sketch edits alone
           // (only sketch state changes; the body that consumes it
@@ -15028,7 +15257,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           if (this.activeSketchId() === null) this.regenerate('save');
         },
         error: err => {
+          // REQ 991 — no response: the server may have applied it. Resolve
+          // that before anything else; the save stays "in flight" meanwhile.
+          if (err?.status === 0) { this._recoverLostSave(m.id, sent, sentToken, skipRegen); return; }
           this.saveInFlight = false;
+          const queued = this.saveQueued;
+          this.saveQueued = false;
           // 423 = lock expired since our last save (REQ 875). The edit was NOT
           // applied. Before surfacing anything: if we are still the attributed
           // holder (nobody took the lock — just a heartbeat that slept through
@@ -15053,6 +15287,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
             );
             return;
           }
+          if (queued) this.save(opts);
           this.errors.showError(err?.error?.error || 'Save failed');
         },
       });

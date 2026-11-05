@@ -449,6 +449,9 @@ export interface ReferenceCandidate {
   // For vertex/center: a single 2D point. For edge: a 2D polyline (≥2 points;
   // a straight edge is its two endpoints, a curved edge its projected samples).
   points: Array<{ x: number; y: number }>;
+  /** A hidden datum: still resolves existing refs and feature-tree picks, but
+   * canvas clicks/snaps skip it. */
+  hidden?: boolean;
   /** Present when this candidate is ANOTHER component's edge, projected into
    * the host part's sketch plane while editing in-context. Carries everything
    * needed to build a cross-part on-edge ExternalRef (resolved by the backend
@@ -507,6 +510,9 @@ export interface OriginFeature {
    * | 'xy_plane' | 'yz_plane' | 'xz_plane'. Missing keys default to true.
    */
   visibility?: Record<string, boolean>;
+  /** Assembly contexts the user chose to keep after their last cross-part
+   * reference was deleted (shown in the tree with no refs). */
+  contextAssemblies?: number[];
   /** Creation timestamp — see Sketch.createdAt. Origin is always 0
    * so it sorts to the top of the feature tree regardless of when the
    * model was created. */
@@ -1378,4 +1384,12 @@ export interface ModelGeometry {
 export interface RegenerateResult {
   geometry: ModelGeometry;
   errors: string[];
+}
+
+/** A coincident anchors a projected point only when it ties it to a CURVE (the
+ * trim-point case). Point-to-point coincidents (a line drawn from a converted
+ * endpoint) leave it pinned — the other point follows, SolidWorks-style. */
+export function coincidentOnCurve(state: SketchState, c: SketchConstraint, pointId: string): boolean {
+  return c.targets.some(t => t.entityId !== pointId
+    && state.entities.find(e => e.id === t.entityId)?.kind !== 'point');
 }
