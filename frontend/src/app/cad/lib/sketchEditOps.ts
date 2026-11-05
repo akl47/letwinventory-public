@@ -3198,7 +3198,7 @@ function reconcileCorner(
   // circles) → pure convex gap. Either fill or skip.
   if (!best) {
     if (fillCorners) {
-      const res = addCornerArc(state, V, aNear, bNear);
+      const res = addCornerArc(state, V, aOrig, aNear, bNear, aOff, bOff);
       return res;
     }
     return { state };
@@ -3240,7 +3240,7 @@ function reconcileCorner(
     return { state: s };
   }
   if (fillCorners) {
-    return addCornerArc(state, V, aNear, bNear);
+    return addCornerArc(state, V, aOrig, aNear, bNear, aOff, bOff);
   }
   // Sharp miter: extend both to the intersection, then merge into a
   // single shared corner point. Same rationale as the concave branch.
@@ -3386,8 +3386,9 @@ function pointInAngularWedge(V: Pt, a: Pt, b: Pt, q: Pt): boolean {
  *
  * Returns the (possibly mutated) state + the new arc's id. */
 function addCornerArc(
-  state: SketchState, V: Pt,
+  state: SketchState, V: Pt, aOrig: SketchEntity,
   aNear: { id: string; pt: Pt }, bNear: { id: string; pt: Pt },
+  aOff: SketchEntity, bOff: SketchEntity,
 ): { state: SketchState; newArcId?: string } {
   // If the two near-V endpoints have coincidentally collapsed onto
   // each other (e.g., a tiny tessellation rounding error), there's
@@ -3404,6 +3405,14 @@ function addCornerArc(
   const centerR = addPoint(s, V.x, V.y); s = centerR.state;
   const arcR = addArcByPoints(s, centerR.id, aNear.id, bNear.id, ccw);
   s = arcR.state;
+  // Constrain the filler: each endpoint anchored at its tangent foot (same
+  // anchors as the Fillet tool) plus the center ON one source curve. With the
+  // offsets' distance dims that lands the center on the source vertex with
+  // radius = offset distance. (Coincident-to-vertex would over-constrain by
+  // one per arc — the arc rules already imply the second foot distance.)
+  s = addConstraint(s, 'coincident', [centerR.id, aOrig.id]).state;
+  s = anchorFilletTangentPoint(s, centerR.id, aNear.id, aOff);
+  s = anchorFilletTangentPoint(s, centerR.id, bNear.id, bOff);
   return { state: s, newArcId: arcR.id };
 }
 

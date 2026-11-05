@@ -230,7 +230,25 @@ function splitAtIntersections(state) {
     }
   }
 
-  return { entities: out, constraints: [] };
+  return { entities: dropDuplicateEdges(out), constraints: [] };
+}
+
+// REQ 994 — collinear/co-circular overlaps (a rectangle drawn against an
+// existing edge) split into IDENTICAL pieces between the same two vertices;
+// the doubled edge pinches the face walk and loses both adjacent regions.
+// Keep one copy of each non-construction line / arc. Mirrors arrangement.ts.
+function dropDuplicateEdges(entities) {
+  const seen = new Set();
+  return entities.filter(e => {
+    if (e.construction) return true;
+    let key;
+    if (e.kind === 'line') key = `l|${[e.startId, e.endId].sort().join('|')}`;
+    else if (e.kind === 'arc') key = e.ccw ? `a|${e.centerId}|${e.startId}|${e.endId}` : `a|${e.centerId}|${e.endId}|${e.startId}`;
+    else return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function canonicalizePoints(state, spatialTol = 1e-4) {

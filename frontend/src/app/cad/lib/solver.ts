@@ -3,7 +3,7 @@ import type { SketchPrimitive, SketchParam } from '../vendor/planegcs';
 import type {
   SketchState, SketchConstraint, SketchEntity, CircleEntity, ArcEntity, LineEntity,
 } from './types';
-import { pointsOf, linesOf, findEntity, findPoint, onEdgeLookupKey, isCenterExternalRef } from './types';
+import { pointsOf, linesOf, findEntity, findPoint, onEdgeLookupKey, isCenterExternalRef, coincidentOnCurve } from './types';
 import { ORIGIN_POINT_ID } from './store';
 
 export type SolveStatus_ = 'ok' | 'inconsistent';
@@ -135,9 +135,8 @@ function equalPrimitive(id: string, a: SketchEntity, b: SketchEntity): SketchPri
 function isAnchorPoint(state: SketchState, pointId: string): boolean {
   for (const c of state.constraints) {
     if (c.type !== 'coincident' && c.type !== 'fixed' && c.type !== 'midpoint') continue;
-    for (const t of c.targets) {
-      if (t.entityId === pointId) return true;
-    }
+    if (!c.targets.some(t => t.entityId === pointId)) continue;
+    if (c.type !== 'coincident' || coincidentOnCurve(state, c, pointId)) return true;
   }
   return false;
 }
@@ -682,15 +681,7 @@ export async function solveSketch(
   // orientation constraints don't, so they shouldn't unpin a point
   // from its on-edge anchor — otherwise adding a smart dim to a
   // converted line silently lets the solver drift its endpoints.
-  const isOtherwiseConstrained = (pointId: string): boolean => {
-    for (const c of state.constraints) {
-      if (c.type !== 'coincident' && c.type !== 'fixed' && c.type !== 'midpoint') continue;
-      for (const t of c.targets) {
-        if (t.entityId === pointId) return true;
-      }
-    }
-    return false;
-  };
+  const isOtherwiseConstrained = (pointId: string): boolean => isAnchorPoint(state, pointId);
   const pinPoint = (pointId: string): void => {
     if (isOtherwiseConstrained(pointId)) return;
     if (!extraFixed) extraFixed = new Set<string>();

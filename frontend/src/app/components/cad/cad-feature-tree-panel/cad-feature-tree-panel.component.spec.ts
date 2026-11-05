@@ -88,3 +88,115 @@ describe('CadFeatureTreePanelComponent — copy error text (REQ 899)', () => {
     expect(component.sketchWarningText('s1')).toContain('Reference face missing');
   });
 });
+
+// REQ 995 — minimized (compact) sidebar: icon-only rows, every feature group
+// expanded so consumed sketches show, names in tooltips.
+describe('CadFeatureTreePanelComponent — compact mode (REQ 995)', () => {
+  let fixture: ComponentFixture<CadFeatureTreePanelComponent>;
+  let component: CadFeatureTreePanelComponent;
+
+  const features = [
+    { id: 'f1', type: 'origin', createdAt: 0 },
+    { id: 'e1', type: 'extrude', name: 'Extrude 1', sketchId: 's1', distance: 10, createdAt: 2 },
+  ] as never;
+  const doc = {
+    nextSketchSeq: 2,
+    sketches: {
+      s1: {
+        id: 's1', name: 'Sketch 1', hostId: 'datum:xy_plane', createdAt: 1, visible: false,
+        plane: { origin: [0, 0, 0], normal: [0, 0, 1], xAxis: [1, 0, 0], yAxis: [0, 1, 0] },
+        state: { entities: [], constraints: [] },
+      },
+    },
+  } as never;
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      imports: [CadFeatureTreePanelComponent],
+      providers: [provideNoopAnimations()],
+    });
+    fixture = TestBed.createComponent(CadFeatureTreePanelComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('features', features);
+    fixture.componentRef.setInput('doc', doc);
+    fixture.detectChanges();
+  });
+
+  const keys = () => component.nodes().map(n => n.key);
+
+  it('compact mode lists a reused sketch once, before the first feature that uses it', () => {
+    fixture.componentRef.setInput('features', [
+      ...(features as unknown as object[]),
+      { id: 'c1', type: 'cutExtrude', name: 'Cut 1', sketchId: 's1', distance: 2, createdAt: 3 },
+    ] as never);
+    fixture.componentRef.setInput('compact', true);
+    fixture.detectChanges();
+    const ks = keys();
+    expect(ks.filter(k => k === 'child:s1')).toHaveLength(1);
+    expect(ks.indexOf('child:s1')).toBeLessThan(ks.indexOf('e1'));
+    expect(ks.indexOf('e1')).toBeLessThan(ks.indexOf('c1'));
+    expect(component.nodes().every(n => n.depth === 0)).toBe(true);
+  });
+
+  it('full mode keeps a consumed sketch folded under its feature', () => {
+    expect(keys()).not.toContain('child:s1');
+  });
+
+  it('compact mode expands every feature so the sketch row shows, origin datums stay folded', () => {
+    fixture.componentRef.setInput('compact', true);
+    fixture.detectChanges();
+    const ks = keys();
+    expect(ks).toContain('child:s1');
+    expect(ks.indexOf('child:s1')).toBeLessThan(ks.indexOf('e1'));
+    expect(component.nodes().some(n => n.kind === 'datum')).toBe(false);
+  });
+
+  it('compact rows render icons only, with the name as the tooltip', () => {
+    fixture.componentRef.setInput('compact', true);
+    fixture.detectChanges();
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('.panel.compact')).not.toBeNull();
+    const row = el.querySelector('[data-node-key="child:s1"]') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.querySelector('.label')).toBeNull();
+    expect(row.querySelector('.kind-icon')).not.toBeNull();
+    expect(row.getAttribute('aria-label')).toBe('Sketch 1');
+  });
+});
+
+describe('CadFeatureTreePanelComponent — context visibility (REQ 997)', () => {
+  let fixture: ComponentFixture<CadFeatureTreePanelComponent>;
+
+  const ctxNode = (visible: boolean) => ({
+    key: 'ctxasm:7', kind: 'feature', label: 'Context - Asm (active)', iconName: 'hub', iconClass: 'part',
+    depth: 0, expandable: false, expanded: false, selectable: false, selected: true,
+    visibilityToggleable: true, visible,
+  }) as never;
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      imports: [CadFeatureTreePanelComponent],
+      providers: [provideNoopAnimations()],
+    });
+    fixture = TestBed.createComponent(CadFeatureTreePanelComponent);
+    fixture.componentRef.setInput('features', [{ id: 'f1', type: 'origin', createdAt: 0 }] as never);
+    fixture.componentRef.setInput('contextNodes', [ctxNode(true)]);
+    fixture.detectChanges();
+  });
+
+  it('the active context row has an eye that emits contextVisibilityToggled', () => {
+    const emitted: string[] = [];
+    fixture.componentInstance.contextVisibilityToggled.subscribe(k => emitted.push(k));
+    const btn = fixture.nativeElement.querySelector('[data-node-key="ctxasm:7"] .visibility-toggle') as HTMLButtonElement;
+    expect(btn).toBeTruthy();
+    btn.click();
+    expect(emitted).toEqual(['ctxasm:7']);
+  });
+
+  it('shows the hidden icon when the context is hidden', () => {
+    fixture.componentRef.setInput('contextNodes', [ctxNode(false)]);
+    fixture.detectChanges();
+    const btn = fixture.nativeElement.querySelector('[data-node-key="ctxasm:7"] .visibility-toggle') as HTMLElement;
+    expect(btn.textContent).toContain('visibility_off');
+  });
+});

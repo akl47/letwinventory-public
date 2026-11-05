@@ -200,4 +200,38 @@ test.describe('Geometric constraints', () => {
       return Math.abs(e2.y - s.y);
     }, lineId), { timeout: 5_000 }).toBeLessThan(1e-4);
   });
+
+  // REQ 990 — SolidWorks-style: one Horizontal click levels every selected line.
+  test('horizontal on several selected lines levels them all', async ({ page }) => {
+    await openEditor(page, PART_ID);
+    await enterSketchOnXY(page);
+    const { cx, cy } = await canvasCenter(page);
+    await pickTool(page, 'primitives', 'line');
+    await clickSequence(page, [[cx + 60, cy + 90], [cx + 170, cy + 130]]);
+    await page.keyboard.press('Escape');
+    await pickTool(page, 'primitives', 'line');
+    await clickSequence(page, [[cx + 60, cy - 40], [cx + 170, cy - 90]]);
+    await page.keyboard.press('Escape');
+    await pickTool(page, 'primitives', 'line');
+    await clickSequence(page, [[cx - 170, cy - 60], [cx - 60, cy - 120]]);
+    await page.keyboard.press('Escape');
+
+    const ids = await page.evaluate(() =>
+      ((window as any).__cadSketch?.entities ?? []).filter((e: any) => e.kind === 'line').slice(-3).map((e: any) => e.id));
+    expect(ids).toHaveLength(3);
+    await page.locator('[data-testid="tool-select"]').click();
+    await page.evaluate((sel) => (window as any).__cadSketchSelect(sel), ids);
+    const btn = page.locator('[data-testid="constraint-horizontal"]');
+    await expect(btn).toBeEnabled({ timeout: 5_000 });
+    await btn.click();
+
+    await expect.poll(() => page.evaluate((sel) => {
+      const ents = (window as any).__cadSketch?.entities ?? [];
+      const at = (id: string) => ents.find((e: any) => e.id === id);
+      return Math.max(...sel.map((id: string) => {
+        const l = at(id);
+        return l ? Math.abs(at(l.endId).y - at(l.startId).y) : NaN;
+      }));
+    }, ids), { timeout: 5_000 }).toBeLessThan(1e-4);
+  });
 });

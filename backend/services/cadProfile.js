@@ -325,10 +325,24 @@ function extractMergedRegions(state, regionIndices, resolve = (s) => s) {
         for (const j of insideOf[i]) { const d = insideOf[j].size; if (d > bestDepth) { best = j; bestDepth = d; } }
         return best;
       });
+      // REQ 994 — UNSELECTED standalone loops (a mounting-hole circle) inside
+      // a merged outline are holes too; without them the fused profile fills
+      // them in. Only direct children: skip one nested in another candidate
+      // or inside one of the merged loop's own holes.
+      const selSet = new Set(sel);
+      const cand = loops.map((l, c) => c)
+        .filter(c => !selSet.has(c) && !(sources[c] && sources[c].kind === 'face'));
+      const candPolys = new Map(cand.map(c => [c, tessellateProfileLoopJS(loops[c])]));
       for (let i = 0; i < mergedLoops.length; i++) {
         if (insideOf[i].size > 0) continue;  // a hole of some other merged loop
         const holes = [];
-        for (let c = 0; c < mergedLoops.length; c++) if (parent[c] === i) holes.push(mergedLoops[c]);
+        const holeIdx = [];
+        for (let c = 0; c < mergedLoops.length; c++) if (parent[c] === i) { holes.push(mergedLoops[c]); holeIdx.push(c); }
+        const inside = cand.filter(c => loopContains(candPolys.get(c), polys[i])
+          && !holeIdx.some(h => loopContains(candPolys.get(c), polys[h])));
+        for (const c of inside) {
+          if (!inside.some(o => o !== c && loopContains(candPolys.get(c), candPolys.get(o)))) holes.push(loops[c]);
+        }
         regions.push({ outer: mergedLoops[i], holes });
       }
     }

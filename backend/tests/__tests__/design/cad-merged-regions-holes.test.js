@@ -55,3 +55,29 @@ describe('extractMergedRegions — hole preservation for text glyphs', () => {
     expect(merged[0].holes.length).toBe(1);
   });
 });
+
+// REQ 994 — fusing edge-adjacent faces (an outer profile + a rectangle drawn
+// against its edge) must keep the holes of UNSELECTED standalone loops inside
+// the merged outline (mounting-hole circles), not fill them in.
+describe('extractMergedRegions — standalone holes inside merged faces', () => {
+  it('keeps an unselected circle inside a fused outer + notch region as a hole', () => {
+    const pts = [[0, 0], [100, 0], [100, 50], [0, 50], [20, 30], [40, 30], [40, 50], [20, 50]];
+    const state = {
+      entities: [
+        ...pts.map(([x, y], i) => ({ kind: 'point', id: `p${i + 1}`, x, y })),
+        ...[[1, 2], [2, 3], [3, 4], [4, 1], [5, 6], [6, 7], [7, 8], [8, 5]]
+          .map(([a, b], i) => ({ kind: 'line', id: `l${i + 1}`, startId: `p${a}`, endId: `p${b}` })),
+        { kind: 'point', id: 'c', x: 70, y: 20 },
+        { kind: 'circle', id: 'hole', centerId: 'c', radius: 5 },
+      ],
+      constraints: [],
+    };
+    const { regions } = extractRegions(state);
+    const faceIdx = regions.map((r, i) => i).filter(i => regions[i].outer[0].kind !== 'circle');
+    expect(faceIdx.length).toBe(2);
+    const { regions: merged } = extractMergedRegions(state, faceIdx);
+    expect(merged.length).toBe(1);
+    expect(merged[0].holes.length).toBe(1);
+    expect(merged[0].holes[0][0].kind).toBe('circle');
+  });
+});

@@ -101,21 +101,23 @@ describe('sketch circle/arc TANGENT to a model edge (REQ 886)', () => {
 
 describe('DIAGONAL on-edge line endpoints ride the edge (REQ 886 / E3)', () => {
   // Converted line on a diagonal model edge (projection: y=x). One endpoint
-  // carries a trim-point coincident with a free cutter point — the solver's
-  // pin pass skips it, so the ride pass must hold it ON the edge line.
+  // carries a trim-point coincident with a free cutter LINE (what Trim emits) —
+  // the solver's pin pass skips it, so the ride pass must hold it ON the edge
+  // line. (A point-to-point coincident does NOT unpin: the other point follows.)
   const edges: EdgeMap = new Map([['f1/e7', [{ x: 0, y: 0 }, { x: 10, y: 10 }]]]);
   const state = (): SketchState => ({
     entities: [
       pt('s', 0, 0), pt('e', 6, 6.5),   // endpoint 'e' starts OFF the y=x edge line
       { kind: 'line', id: 'l', startId: 's', endId: 'e' },
-      pt('q', 6, 7),                     // free cutter point coincident with 'e'
+      pt('q', 6, 7), pt('r', 6, 12),     // free cutter line through 'e'
+      { kind: 'line', id: 'cut', startId: 'q', endId: 'r' },
     ],
     constraints: [
       {
         id: 'oe', type: 'on-edge', targets: [{ entityId: 'l' }],
         externalRef: { scope: 'local', featureId: 'f1', edgeId: 'f1/e7' },
       } as SketchConstraint,
-      { id: 'co', type: 'coincident', targets: [{ entityId: 'e' }, { entityId: 'q' }] },
+      { id: 'co', type: 'coincident', targets: [{ entityId: 'e' }, { entityId: 'cut' }] },
     ],
   });
 
@@ -123,10 +125,8 @@ describe('DIAGONAL on-edge line endpoints ride the edge (REQ 886 / E3)', () => {
     const res = await solveSketch(state(), { externalEdges: edges });
     expect(res.status).toBe('ok');
     const e = findPoint(res.state, 'e')!;
-    const q = findPoint(res.state, 'q')!;
-    // On the y=x line, dragged there through the coincident cutter too.
+    // On the y=x line (the cutter line moves to keep passing through it).
     expect(e.y).toBeCloseTo(e.x, 5);
-    expect(q.y).toBeCloseTo(q.x, 5);
     // The un-constrained endpoint stays pinned at the projection.
     const s = findPoint(res.state, 's')!;
     expect([s.x, s.y]).toEqual([0, 0]);
@@ -139,15 +139,18 @@ describe('DIAGONAL on-edge line endpoints ride the edge (REQ 886 / E3)', () => {
   });
 
   it('a conflict involving the ride maps back to the on-edge constraint id (review B15)', async () => {
-    // Pin the riding endpoint OFF the edge line via a fixed cutter — the ride
-    // (point-on-line) and the coincident-to-fixed-point now contradict. The
+    // Fix the cutter PARALLEL to and off the edge line — the ride
+    // (point-on-line) and the coincident-to-fixed-cutter now contradict. The
     // ride's synthetic id is `_extrefC_<cid>-<pid>`; the mapper must resolve
     // it back to 'oe' (previously the derived suffix was never re-tested and
     // the on-edge constraint vanished from the conflict set).
     const st = state();
     const conflicted: SketchState = {
       ...st,
-      constraints: [...st.constraints, { id: 'fx', type: 'fixed', targets: [{ entityId: 'q' }] } as SketchConstraint],
+      entities: st.entities.map(en => en.id === 'q' ? { ...en, x: 0, y: 1 } : en.id === 'r' ? { ...en, x: 10, y: 11 } : en),
+      constraints: [...st.constraints,
+        { id: 'fx', type: 'fixed', targets: [{ entityId: 'q' }] } as SketchConstraint,
+        { id: 'fx2', type: 'fixed', targets: [{ entityId: 'r' }] } as SketchConstraint],
     };
     const res = await solveSketch(conflicted, { externalEdges: edges });
     expect(res.status).toBe('inconsistent');
@@ -157,7 +160,7 @@ describe('DIAGONAL on-edge line endpoints ride the edge (REQ 886 / E3)', () => {
 
 describe('axis-aligned converted line with an endpoint ride (review B16)', () => {
   // Horizontal edge projection; the converted line's far endpoint is pinned by
-  // the on-edge pass, the near endpoint is coincident-anchored (trim point) so
+  // the on-edge pass, the near endpoint is coincident with a cutter line (trim point) so
   // it RIDES. The h/v fallback must be suppressed — h + ride on the same axis
   // is rank-1 redundant and used to flag the Convert link amber forever.
   const edges: EdgeMap = new Map([['f1/e0', [{ x: 0, y: 5 }, { x: 10, y: 5 }]]]);
@@ -165,14 +168,15 @@ describe('axis-aligned converted line with an endpoint ride (review B16)', () =>
     entities: [
       pt('s', 0, 5), pt('e', 6, 5),
       { kind: 'line', id: 'l', startId: 's', endId: 'e' },
-      pt('q', 6, 5),
+      pt('q', 6, 0), pt('r', 6, 10),
+      { kind: 'line', id: 'cut', startId: 'q', endId: 'r' },
     ],
     constraints: [
       {
         id: 'oe', type: 'on-edge', targets: [{ entityId: 'l' }],
         externalRef: { scope: 'local', featureId: 'f1', edgeId: 'f1/e0' },
       } as SketchConstraint,
-      { id: 'co', type: 'coincident', targets: [{ entityId: 'e' }, { entityId: 'q' }] },
+      { id: 'co', type: 'coincident', targets: [{ entityId: 'e' }, { entityId: 'cut' }] },
     ],
   });
 

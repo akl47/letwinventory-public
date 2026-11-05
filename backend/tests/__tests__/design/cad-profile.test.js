@@ -213,3 +213,17 @@ describe('cadProfile.extractClosedLoops (multi-component)', () => {
     expect(loops.length).toBe(0);
   });
 });
+
+// REQ 994 — collinear overlap: a rectangle whose top edge lies on the outer
+// rectangle's top edge must still extract as its own loop.
+describe('cadProfile — overlapping collinear edges (REQ 994)', () => {
+  it('a rectangle sharing part of the outer edge yields two loops', () => {
+    const state = build(
+      [[0, 0], [100, 0], [100, 50], [0, 50], [20, 30], [40, 30], [40, 50], [20, 50]],
+      [[1, 2], [2, 3], [3, 4], [4, 1], [5, 6], [6, 7], [7, 8], [8, 5]],
+    );
+    const { loops, errors } = extractClosedLoops(state);
+    expect(errors).toEqual([]);
+    expect(loops.length).toBe(2);
+  });
+});

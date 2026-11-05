@@ -119,10 +119,11 @@ import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-tabl
 
         <ng-template appColumn="actions" let-r>
           <div class="row-actions" (click)="$event.stopPropagation()">
-            <a mat-stroked-button
+            <a mat-icon-button
                [routerLink]="['/parts', r.partID, 'cad']"
+               aria-label="Show history"
                matTooltip="View the version history — graph, branches, diffs">
-              <mat-icon>history</mat-icon> Show history
+              <mat-icon>history</mat-icon>
             </a>
             <a mat-stroked-button
                [routerLink]="r.isAssembly ? ['/parts', r.partID, 'assembly', 'editor'] : ['/parts', r.partID, 'cad', 'editor']"
@@ -149,8 +150,8 @@ import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-tabl
     .part-rev { opacity: 0.6; font-size: 12px; }
     .part-desc { font-size: 12px; opacity: 0.6; max-width: 380px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .rev-tag { display: inline-block; padding: 2px 8px; background: #e8eaf0; color: #2a2a3a; border: 1px solid #c8ccd8; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; font-weight: 600; margin-right: 8px; }
-    .row-actions { display: flex; gap: 8px; justify-content: flex-end; }
-    .state-badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; text-transform: uppercase; font-weight: 600; }
+    .row-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+    .state-badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; text-transform: uppercase; font-weight: 600; white-space: nowrap; display: inline-block; }
     .state-badge.draft { background: #fff3e0; color: #e65100; }
     .state-badge.review { background: #e3f2fd; color: #1565c0; }
     .state-badge.released { background: #e8f5e9; color: #2e7d32; }

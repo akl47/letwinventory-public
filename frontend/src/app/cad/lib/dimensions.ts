@@ -196,7 +196,7 @@ function renderConstraint(
     const p = findPoint(state, c.targets[0]?.entityId);
     if (!line || !p || c.value === undefined) return null;
     const text = formatDimensionText(c.type, c.value, c.unit, defaultUnit);
-    const r = pointToSegmentDimRender(c.id, text, p, line[0], line[1], c.placement);
+    const r = pointToSegmentDimRender(c.id, text, p, line[0], line[1], c.placement, key!.startsWith('datum:'));
     if (!r) return null;
     return c.driven ? { ...r, text: `(${r.text})` } : r;
   }
@@ -709,6 +709,8 @@ export function previewEdgeDimension(
   edge: [{ x: number; y: number }, { x: number; y: number }],
   placement: { x: number; y: number },
   defaultUnit: Unit = 'mm',
+  /** The edge is a datum (infinite) — no edge-side extension line. */
+  infinite = false,
 ): DimensionRender | null {
   const spec = resolveEdgeDim(state, entity, edge);
   if (!spec) return null;
@@ -723,13 +725,31 @@ export function previewEdgeDimension(
   }
   const p = findPoint(state, spec.targetId);
   if (!p) return null;
-  return pointToSegmentDimRender('__preview__', text, p, edge[0], edge[1], placement);
+  return pointToSegmentDimRender('__preview__', text, p, edge[0], edge[1], placement, infinite);
+}
+
+/** REQ 996 — SolidWorks-style extension line from segment a–b out to `hit`,
+ * where the dim line meets the segment's (infinite) line. None when `hit`
+ * already lies on the segment or the target is infinite (a datum); otherwise
+ * from the nearer endpoint. */
+function segmentExtension(
+  a: { x: number; y: number }, b: { x: number; y: number }, hit: { x: number; y: number },
+  infinite = false,
+): Array<[{ x: number; y: number }, { x: number; y: number }]> {
+  if (infinite) return [];
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const l2 = dx * dx + dy * dy;
+  const t = l2 > 1e-18 ? ((hit.x - a.x) * dx + (hit.y - a.y) * dy) / l2 : 0;
+  if (t >= -1e-9 && t <= 1 + 1e-9) return [];
+  const end = t < 0 ? a : b;
+  return [[{ x: end.x, y: end.y }, hit]];
 }
 
 function pointToSegmentDimRender(
   constraintId: string, text: string,
   p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number },
   placement: { x: number; y: number } | undefined,
+  infinite = false,
 ): DimensionRender | null {
   const dx = b.x - a.x, dy = b.y - a.y;
   const len = Math.hypot(dx, dy);
@@ -743,7 +763,7 @@ function pointToSegmentDimRender(
   return {
     constraintId, text, ...slideLabelAlong(pProj, fProj, placement),
     dimensionLine: [pProj, fProj],
-    extensionLines: [[{ x: p.x, y: p.y }, pProj], [foot, fProj]],
+    extensionLines: [[{ x: p.x, y: p.y }, pProj], ...segmentExtension(a, b, fProj, infinite)],
   };
 }
 
@@ -783,7 +803,7 @@ function pointLineDistanceRender(
   return {
     constraintId, text, ...slideLabelAlong(pProj, fProj, placement),
     dimensionLine: [pProj, fProj],
-    extensionLines: [[p, pProj], [foot, fProj]],
+    extensionLines: [[p, pProj], ...segmentExtension(a, b, fProj)],
   };
 }
 
@@ -850,21 +870,12 @@ function parallelLinesRender(
   // point on l1.
   const l1Offset = (a1.x - a2.x) * nx + (a1.y - a2.y) * ny;
   const footL1 = { x: footL2.x + nx * l1Offset, y: footL2.y + ny * l1Offset };
-  // Extension lines: along each source line FROM whichever endpoint is
-  // nearer the foot OUT to the foot itself. Picking the nearer endpoint
-  // keeps the extension line short when the dim sits next to the line,
-  // and grows naturally when the user drags the dim past the line's end.
-  const nearerEndpoint = (line: LineEntity, foot: { x: number; y: number }) => {
-    const s = findPoint(state, line.startId)!;
-    const e = findPoint(state, line.endId)!;
-    return Math.hypot(s.x - foot.x, s.y - foot.y) <= Math.hypot(e.x - foot.x, e.y - foot.y) ? s : e;
-  };
-  const attachL1 = nearerEndpoint(l1, footL1);
-  const attachL2 = nearerEndpoint(l2, footL2);
+  // Extension lines run along each source line from its nearer endpoint,
+  // only once the dim is dragged past that line's end (REQ 996).
   return {
     constraintId, text, ...slideLabelAlong(footL1, footL2, placement),
     dimensionLine: [footL1, footL2],
-    extensionLines: [[attachL1, footL1], [attachL2, footL2]],
+    extensionLines: [...segmentExtension(a1, b1, footL1), ...segmentExtension(a2, b2, footL2)],
   };
 }
 

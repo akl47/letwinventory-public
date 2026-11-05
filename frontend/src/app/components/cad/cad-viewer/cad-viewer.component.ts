@@ -60,6 +60,7 @@ import { tryGlyphLoopsForText, onFontReady, applyTextTransform } from '../../../
 import { singleLineStrokesForText } from '../../../cad/lib/singleLineFont';
 import { exceedsDragThreshold, screenDeltaToWorld } from '../../../cad/lib/assemblyDrag';
 import { WORLD_UP as WORLD_UP_AXIS, orbitDir, dirToOrbit } from '../../../cad/lib/viewAxis';
+import { fitFrame, type FitViewport } from '../../../cad/lib/fitFrame';
 import { originPlaneLabel } from '../../../cad/lib/datum';
 
 /** World up-axis for the 3D VIEW convention (Z-up, right-handed), as a Three
@@ -224,14 +225,14 @@ const DIM_SHOULDER_FRAC = 5 / 180;         // radius-leader horizontal landing l
           }
         </div>
       }
-      <div #cubeMount class="nav-cube" data-testid="nav-cube"
+      <div #cubeMount class="nav-cube" data-testid="nav-cube" data-fit-avoid
            (pointerdown)="onCubePointerDown($event)"
            (pointermove)="onCubePointerMove($event)"
            (pointerup)="onCubePointerUp($event)"
            (pointerleave)="onCubePointerUp($event)"
            (click)="onCubeClick($event)"></div>
       <!-- Onshape/Fusion-style 60° roll arcs hugging the cube's top corners. -->
-      <button type="button" class="rot-btn rot-ccw"
+      <button type="button" class="rot-btn rot-ccw" data-fit-avoid
               title="Rotate view 90° counter-clockwise" aria-label="Rotate counter-clockwise"
               (click)="rotateView(1)">
         <svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -239,7 +240,7 @@ const DIM_SHOULDER_FRAC = 5 / 180;         // radius-leader horizontal landing l
           <path d="M4.7 23.9 L6.4 27.5 L9.2 24.7"/>
         </svg>
       </button>
-      <button type="button" class="rot-btn rot-cw"
+      <button type="button" class="rot-btn rot-cw" data-fit-avoid
               title="Rotate view 90° clockwise" aria-label="Rotate clockwise"
               (click)="rotateView(-1)">
         <svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -248,7 +249,7 @@ const DIM_SHOULDER_FRAC = 5 / 180;         // radius-leader horizontal landing l
         </svg>
       </button>
       <!-- View controls beneath the orientation cube: nav modes + default view. -->
-      <div class="view-controls">
+      <div class="view-controls" data-fit-avoid>
         <button type="button" class="vc-btn" [class.on]="navMode()==='select'" title="Select (drag for box selection — left-to-right window, right-to-left crossing)" aria-label="Box select"
                 data-testid="nav-select" (click)="setNav('select')"><mat-icon>highlight_alt</mat-icon></button>
         <button type="button" class="vc-btn" [class.on]="navMode()==='orbit'" title="Orbit (drag to rotate)" aria-label="Orbit"
@@ -778,6 +779,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // a part in the context of an assembly.
   private referenceGroup!: THREE.Group;
   private referenceMeshes: THREE.Object3D[] = [];
+  /** In-context overlay edge lines by hover key (`ref:<instanceId>/<edgeId>`). */
+  private overlayEdgeLines = new Map<string, THREE.Line>();
   // REQ 631 — selected sketch lines use Line2 with a real pixel linewidth.
   // Shared across all selected entities; resolution updated on canvas resize.
   // syncSketches' disposal loop skips this so it survives across rebuilds.
@@ -953,6 +956,23 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const ref = this.referenceGeometry();
       if (this.scene) this.syncReference(ref);
+    });
+    // A ghost edge that a sketch entity is linked to (Convert Entities) hides,
+    // so it can't show through the gaps of a dashed construction line.
+    effect(() => {
+      const doc = this.sketchDoc();
+      void this.referenceGeometry();
+      const linked = new Set<string>();
+      for (const sk of Object.values(doc?.sketches ?? {})) {
+        if (sk.visible === false) continue;
+        for (const c of sk.state.constraints) {
+          const er = c.externalRef;
+          if (c.type === 'on-edge' && er?.scope === 'cross-part' && er.sourceGeomRef?.edgeId) linked.add(er.sourceGeomRef.edgeId);
+        }
+      }
+      for (const line of this.overlayEdgeLines.values()) {
+        line.visible = !linked.has((line.userData as { overlayEdge: OverlayEdge }).overlayEdge.stableId);
+      }
     });
     // Section view (REQ 766) — a single global clipping plane on the renderer.
     effect(() => {
@@ -1685,7 +1705,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       this.animateOrbitTo(v.theta, v.phi, 480);
     } else {
       // Z-up isometric: φ = true iso tilt (54.7°) from +Z, θ over the front-right (+X,-Y) corner.
-      this.animateOrbitTo(-Math.PI / 4, Math.acos(1 / Math.sqrt(3)), 480, this.computeFrame());
+      this.animateOrbitTo(-Math.PI / 4, Math.acos(1 / Math.sqrt(3)), 480, true);
     }
   }
 
@@ -1704,21 +1724,80 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (f) this.animateFrameTo(f.center, f.distance, durationMs);
   }
 
-  /** The orbit target + distance that frames the whole model, or null when
-   * there's nothing to frame. orbitDistance doubles as the ortho half-height;
-   * the 0.75 factor pads so the part doesn't touch the frustum edges.
+  /** The orbit target + distance that frames the whole model as seen along
+   * `dir` (target → camera) with screen-up `up` — the current view when
+   * omitted — or null when there's nothing to frame. orbitDistance doubles
+   * as the ortho half-height; fitFrame (REQ 993) sizes it against both the
+   * canvas height and width / aspect.
    *
+   * Dimension leaders/labels (tagged `fitInclude`) are framed with the solid.
    * Falls back to the visible sketch overlays when there's no solid geometry:
    * a skeleton/sketch-only doc (common in assemblies, whose main-branch
    * instances compose no geometry) would otherwise leave `faceGroup` empty and
    * make Zoom-to-fit silently no-op. */
-  private computeFrame(): { center: THREE.Vector3; distance: number } | null {
-    const box = new THREE.Box3().setFromObject(this.faceGroup);
-    if (box.isEmpty() && this.sketchGroup.visible) box.setFromObject(this.sketchGroup);
-    if (box.isEmpty()) return null;
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    return { center, distance: Math.max(size.x, size.y, size.z, 1) * 0.75 };
+  private computeFrame(dir?: THREE.Vector3, up?: THREE.Vector3): { center: THREE.Vector3; distance: number } | null {
+    // Visits every vertex under `root` (only `fitInclude`-tagged objects when
+    // `tagged`); geometry-less tagged objects (dimension labels) count by
+    // their position.
+    const each = (root: THREE.Object3D, tagged = false) => (visit: (x: number, y: number, z: number) => void) => {
+      if (!root.visible) return;
+      root.updateMatrixWorld(true);
+      const v = new THREE.Vector3();
+      root.traverseVisible(o => {
+        if (tagged && !o.userData['fitInclude']) return;
+        const pos = (o as THREE.Mesh).geometry?.attributes?.['position'] as THREE.BufferAttribute | undefined;
+        if (!pos) {
+          if (tagged) { v.setFromMatrixPosition(o.matrixWorld); visit(v.x, v.y, v.z); }
+          return;
+        }
+        for (let i = 0; i < pos.count; i++) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+          visit(v.x, v.y, v.z);
+        }
+      });
+    };
+    const d = dir ?? this.camera.position.clone().sub(this.orbitTarget).normalize();
+    const u = up ?? this.camera.up;
+    const view = this.fitViewport();
+    // The solid plus the active sketch's dimension leaders and labels, plus
+    // the assembly-context ghosts when shown (hidden context = empty group).
+    // With no solid (sketch-only part), frame every visible sketch entity —
+    // dims alone would otherwise zoom onto just the labels.
+    let hasSolid = false;
+    each(this.faceGroup)(() => { hasSolid = true; });
+    const solidAndDims = (visit: (x: number, y: number, z: number) => void) => {
+      each(this.faceGroup)(visit);
+      each(this.sketchGroup, hasSolid)(visit);
+      if (this.referenceGroup) each(this.referenceGroup)(visit);
+    };
+    const f = fitFrame(solidAndDims, d, u, view);
+    if (!f) return null;
+    return { center: new THREE.Vector3(f.center.x, f.center.y, f.center.z), distance: f.halfHeight };
+  }
+
+  /** Canvas size plus the edge bands covered by overlays marked
+   * `data-fit-avoid` (nav cube, view buttons, the editor footer). Each overlay
+   * claims the canvas edge it costs the least to clear, plus a small gap. */
+  private fitViewport(): FitViewport {
+    const canvas = this.renderer?.domElement;
+    const c = canvas?.getBoundingClientRect();
+    if (!c || !c.width || !c.height) return { width: 800, height: 600 };
+    const view: Required<FitViewport> = { width: c.width, height: c.height, top: 0, right: 0, bottom: 0, left: 0 };
+    const scope = this.mountRef.nativeElement.closest('.viewport-wrap') ?? this.mountRef.nativeElement.parentElement;
+    const GAP = 8;
+    scope?.querySelectorAll<HTMLElement>('[data-fit-avoid]').forEach(el => {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height || r.right <= c.left || r.left >= c.right || r.bottom <= c.top || r.top >= c.bottom) return;
+      const sides = [
+        ['top', (r.bottom - c.top) / c.height, r.bottom - c.top],
+        ['bottom', (c.bottom - r.top) / c.height, c.bottom - r.top],
+        ['left', (r.right - c.left) / c.width, r.right - c.left],
+        ['right', (c.right - r.left) / c.width, c.right - r.left],
+      ] as const;
+      const [side, , px] = sides.reduce((a, b) => (b[1] < a[1] ? b : a));
+      view[side] = Math.max(view[side], px + GAP);
+    });
+    return view;
   }
 
   /** Smoothly tween the orbit target + distance to a framed view (orientation
@@ -2117,7 +2196,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // A nav-cube view selection (not a drag-rotate) also frames the model:
     // tween the fit target/distance alongside the orientation for a smooth
     // rotate-and-zoom-to-fit.
-    this.animateOrbitTo(target.theta, target.phi, 480, this.computeFrame());
+    this.animateOrbitTo(target.theta, target.phi, 480, true);
   }
 
   /** REQ 868 — orient to a named view (keyboard shortcuts). Same animated
@@ -2132,7 +2211,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     let { theta, phi } = dirToOrbit(dx / len, dy / len, dz / len);
     if (phi < 0.001) phi = 0.001;
     if (phi > Math.PI - 0.001) phi = Math.PI - 0.001;
-    this.animateOrbitTo(theta, phi, 480, this.computeFrame());
+    this.animateOrbitTo(theta, phi, 480, true);
   }
 
   /** Convert a hit point on the beveled cube (in local cube space) to a
@@ -2166,7 +2245,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * Cancels any in-flight cube animation. Uses a simple cubic ease-in-out
    * so face transitions feel intentional rather than mechanical. */
   private animateOrbitTo(targetTheta: number, targetPhi: number, durationMs: number,
-                          frame?: { center: THREE.Vector3; distance: number } | null) {
+                          fit = false) {
     if (this.cubeAnimHandle) cancelAnimationFrame(this.cubeAnimHandle);
     const startTheta = this.orbitTheta;
     const startPhi   = this.orbitPhi;
@@ -2185,6 +2264,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       : targetPhi > Math.PI - 0.01
         ? new THREE.Vector3(0, -1, 0)
         : WORLD_UP.clone();
+    // Optional zoom-to-fit, framed for the DESTINATION orientation.
+    const td = orbitDir(targetTheta, targetPhi);
+    const frame = fit ? this.computeFrame(new THREE.Vector3(td.x, td.y, td.z), tu) : null;
     // Shortest-arc theta: pick whichever direction (±) is closer.
     let deltaTheta = targetTheta - startTheta;
     while (deltaTheta >  Math.PI) deltaTheta -= 2 * Math.PI;
@@ -3055,10 +3137,13 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     for (const set of this.faceEdges.values()) {
       if ((set.front.userData as { edgeId?: string }).edgeId) candidates.push(set.front);
     }
+    // In-context: other components' edges are Convert targets too.
+    if (this.activeSketchId() !== null) candidates.push(...this.overlayEdgeLines.values());
     const hits = this.raycaster.intersectObjects(candidates, false);
     this.raycaster.params.Line = { threshold: prevThreshold };
     const next = hits.length > 0
-      ? ((hits[0].object.userData as { edgeId?: string }).edgeId ?? null)
+      ? ((hits[0].object.userData as { edgeId?: string; overlayKey?: string }).edgeId
+        ?? (hits[0].object.userData as { overlayKey?: string }).overlayKey ?? null)
       : null;
     if (this.hoveredEdgeId() !== next) this.hoveredEdgeId.set(next);
   }
@@ -3706,6 +3791,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       });
     }
     this.referenceMeshes = [];
+    this.overlayEdgeLines.clear();
     if (!ref) return;
     for (const f of ref.faces) {
       const geom = new THREE.BufferGeometry();
@@ -3728,8 +3814,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       if (pts.length < 2) continue;
       const geom = new THREE.BufferGeometry().setFromPoints(pts);
       const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0x8a96a6, transparent: true, opacity: 0.55 }));
+      const overlayKey = `ref:${e.instanceId}/${e.id}`;
+      this.overlayEdgeLines.set(overlayKey, line);
       line.userData = {
-        reference: true, instanceId: e.instanceId, overlayEdge: e,
+        reference: true, instanceId: e.instanceId, overlayEdge: e, overlayKey,
         edgeRecord: { edgeId: e.id, isStraight: e.isStraight, endpoints: [e.polyline[0], e.polyline[e.polyline.length - 1]], polylineLength: e.polyline.length },
       };
       this.referenceGroup.add(line);
@@ -3980,6 +4068,21 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       this.sketchGroup.add(group);
       this.sketchOverlays.set(sketch.id, group);
     }
+    this.drawAboveGhosts(this.sketchGroup);
+  }
+
+  /** In-context ghosts are translucent, and three.js draws every translucent
+   * object AFTER every opaque one — so an opaque sketch line ends up tinted
+   * underneath them. Moving sketch materials into the translucent pass lets
+   * their higher renderOrder put them on top, as over a normal part. */
+  private drawAboveGhosts(root: THREE.Object3D): void {
+    root.traverse(o => {
+      const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+      if (!m) return;
+      for (const x of Array.isArray(m) ? m : [m]) {
+        if (!x.transparent) { x.transparent = true; x.needsUpdate = true; }
+      }
+    });
   }
 
   // REQ 629 — preview overlay. Clears the group, then rebuilds the rubber-band
@@ -4009,6 +4112,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const obj = this.buildPreviewItem(item, sketch.plane, project);
       if (obj) this.sketchPreviewGroup.add(obj);
     }
+    this.drawAboveGhosts(this.sketchPreviewGroup);
   }
 
   private buildPreviewItem(
@@ -4635,9 +4739,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // material; otherwise a thin LineBasicMaterial in `color`. Returns silently
     // if the edge id isn't in faceEdges (e.g. between regens).
     const addOverlay = (id: string, color: number, opacity: number, thickMat?: LineMaterial) => {
-      const stored = this.faceEdges.get(`edge:${id}`);
-      if (!stored) return;
-      const src = stored.front.geometry as THREE.BufferGeometry;
+      const src = (this.faceEdges.get(`edge:${id}`)?.front ?? this.overlayEdgeLines.get(id))
+        ?.geometry as THREE.BufferGeometry | undefined;
+      if (!src) return;
       const positionAttr = src.getAttribute('position');
       if (!positionAttr) return;
       const positions = new Float32Array(positionAttr.array as ArrayLike<number>);
@@ -4675,6 +4779,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       addOverlay(id, 0x1976d2, 0.95, inSketch ? this.selectedSketchMaterial : undefined);
     }
     if (edgeId) addOverlay(edgeId, 0xff8a00, 0.95, inSketch ? this.hoverSketchMaterial : undefined);
+    this.drawAboveGhosts(this.edgeHoverHighlightGroup);
   }
 
   /** Apply / clear sticky highlight on picked vertex markers. Markers
@@ -5032,6 +5137,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const line = new THREE.Line(geom, mat);
       if (dashed) line.computeLineDistances();
       line.renderOrder = 3;
+      line.userData['fitInclude'] = true;  // zoom-to-fit frames dimensions too
       return line;
     };
     // Half-width of the text clearance, in sketch units. The label is a
@@ -5384,6 +5490,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
           : this.buildDimensionLabelElement(dim.constraintId, dim.text, drivenExpr);
         const obj = new CSS2DObject(el);
         obj.position.copy(this.project2DTo3D(sketch, dim.labelAnchor));
+        obj.userData['fitInclude'] = true;
         group.add(obj);
       }
       // In-progress Smart Dim preview — orange/dashed render of the
@@ -5715,13 +5822,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // Convert Entities link — projected entities render in a distinct
     // violet so the user can tell at a glance which sketch lines track
     // body edges. Overrides the regular DOF coloring (those entities
-    // are inherently determined by the source). Construction style
-    // (dashed grey) still wins if both flags are set. Source is the
-    // on-edge constraint list (SolidWorks-style link).
+    // are inherently determined by the source). A projected construction
+    // entity stays violet, dashed. Source is the on-edge constraint list
+    // (SolidWorks-style link).
     const isProjected = isProjectedEntity(sketch.state, e.id);
     let color: number;
-    if (e.construction) color = 0x666666;
+    // Sketches not being edited read as plain grey reference (SolidWorks).
+    if (!isActive) color = 0x9e9e9e;
     else if (isProjected) color = 0xab47bc;
+    else if (e.construction) color = 0x666666;
     else color = baseColor;
     const dashed = !!e.construction;
     const selected = selectedSet.has(e.id);
@@ -5752,7 +5861,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
           ? 0xffb74d
           : hovered
             ? 0x40c4ff
-            : e.construction
+            : e.construction || !isActive
               ? 0x888888
               : isDeterminedNow
                 ? 0x4caf50

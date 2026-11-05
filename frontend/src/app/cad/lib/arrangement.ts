@@ -236,7 +236,25 @@ export function splitAtIntersections(state: SketchState): SketchState {
   }
 
   // Constraints aren't relevant to face extraction — drop them.
-  return { entities: out, constraints: [] };
+  return { entities: dropDuplicateEdges(out), constraints: [] };
+}
+
+/** REQ 994 — collinear/co-circular overlaps (a rectangle drawn against an
+ * existing edge) split into IDENTICAL pieces between the same two vertices;
+ * the doubled edge pinches the face walk and loses both adjacent regions.
+ * Keep one copy of each non-construction line / arc. */
+function dropDuplicateEdges(entities: SketchEntity[]): SketchEntity[] {
+  const seen = new Set<string>();
+  return entities.filter(e => {
+    if (e.construction) return true;
+    let key: string;
+    if (e.kind === 'line') key = `l|${[e.startId, e.endId].sort().join('|')}`;
+    else if (e.kind === 'arc') key = e.ccw ? `a|${e.centerId}|${e.startId}|${e.endId}` : `a|${e.centerId}|${e.endId}|${e.startId}`;
+    else return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Merge point ids that the sketch treats as the same vertex. Two sources

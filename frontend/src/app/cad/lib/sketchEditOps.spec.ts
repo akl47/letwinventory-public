@@ -1830,12 +1830,17 @@ describe('offsetChain', () => {
     // 2 perpendicular construction lines (one per chain end) +
     // 2 perpendicular constraints.
     expect(r.state.constraints.filter(co => co.type === 'perpendicular').length).toBe(2);
+    // + 2 more anchoring the filler arc's endpoints at their tangent feet
+    // (vertical / horizontal here, since the offsets are axis-aligned).
     const construction = r.state.entities.filter(e => e.kind === 'line' && e.construction);
-    expect(construction.length).toBe(2);
+    expect(construction.length).toBe(4);
     // The convex corner is implicitly coincident via the filler
-    // arc sharing point ids with the adjacent offsets — no
-    // explicit coincident constraint needed. (Concave corners
-    // would add one in reconcileCorner.)
+    // arc sharing point ids with the adjacent offsets; its center sits
+    // on a source line (point-on-curve coincident).
+    const arc = r.state.entities.find(e => e.kind === 'arc')!;
+    expect(r.state.constraints.some(co => co.type === 'coincident'
+      && co.targets.some(t => t.entityId === (arc as { centerId: string }).centerId)
+      && co.targets.some(t => t.entityId === l1.id))).toBe(true);
   });
 
   it('chain offset: CONCAVE corner merges the two offset corners into one shared endpoint', () => {

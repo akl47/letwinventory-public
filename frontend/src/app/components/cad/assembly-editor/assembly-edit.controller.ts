@@ -737,7 +737,11 @@ export class AssemblyEditController {
   /** Assembly section of the tree — origin + components + patterns + display
    * states — rendered through the shared feature-tree panel (external nodes).
    * Keys encode kind + id so the editor's event handler can dispatch. */
-  treeNodes = computed<TreeNode[]>(() => {
+  treeNodes = computed<TreeNode[]>(() => this.buildTreeNodes(false));
+  /** REQ 995 — the minimized sidebar shows every component expanded (bodies
+   * visible); Origin datum groups stay folded. */
+  treeNodesExpanded = computed<TreeNode[]>(() => this.buildTreeNodes(true));
+  private buildTreeNodes(expandAll: boolean): TreeNode[] {
     const node = this.mkNode.bind(this);
     const out: TreeNode[] = [];
     out.push(node({
@@ -751,7 +755,7 @@ export class AssemblyEditController {
     }
     const sel = this.selectedIds();
     for (const inst of this.instances()) {
-      const exp = this.componentExpanded(inst.instanceId);
+      const exp = expandAll || this.componentExpanded(inst.instanceId);
       const branch = inst.ref?.branch;
       out.push(node({
         key: `component:${inst.instanceId}`, kind: 'feature',
@@ -795,7 +799,7 @@ export class AssemblyEditController {
       out.push(node({ key: `displaystate:${s.id}`, kind: 'feature', label: s.name, iconName: 'bookmark', iconClass: 'mate', depth: 0, selectable: true }));
     }
     return out;
-  });
+  }
 
   /** Mates section of the tree — a separate feature-tree panel. */
   mateNodes = computed<TreeNode[]>(() =>
