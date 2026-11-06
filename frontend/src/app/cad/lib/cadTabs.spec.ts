@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CadTab, closeTab, openTab, parseTabs, tabLabel, tabLink } from './cadTabs';
+import { CadTab, closeTab, moveTab, openTab, parseTabs, tabLabel, tabLink } from './cadTabs';
 
 const a: CadTab = { partID: 1, assembly: false, revisionID: 10, name: 'Bracket' };
 const b: CadTab = { partID: 2, assembly: true, name: 'Frame' };
@@ -33,9 +33,15 @@ describe('CAD editor tab strip (REQ 1002)', () => {
     expect(tabLink(b)).toEqual({ commands: ['/parts', 2, 'assembly', 'editor'], queryParams: {} });
   });
 
-  it('shows the part revision after the name', () => {
-    expect(tabLabel({ ...a, rev: '02*' })).toBe('Bracket rev 02*');
+  it('labels tabs PN-rev', () => {
+    expect(tabLabel({ ...a, rev: '02*' })).toBe('Bracket-02*');
     expect(tabLabel(a)).toBe('Bracket');
+  });
+
+  it('drag-reorders tabs', () => {
+    expect(moveTab([a, b, c], 0, 2)).toEqual([b, c, a]);
+    expect(moveTab([a, b, c], 2, 0)).toEqual([c, a, b]);
+    expect(moveTab([a, b, c], 1, 1)).toEqual([a, b, c]);
   });
 
   it('restores persisted tabs and ignores corrupt storage', () => {

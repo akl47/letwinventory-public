@@ -2766,15 +2766,14 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * about the live screen axes preserves the orientation the user sees and
    * has no pole/gimbal special cases.
    *
-   * Skipped when focus is in a text input, and in sketch mode (the view is
-   * pinned to the sketch plane — updateCamera ignores theta/phi there, so
-   * the old path degenerated to a pure up-vector roll). */
+   * Skipped when focus is in a text input. In sketch mode the rotation
+   * releases the head-on pin, exactly like an orbit drag does ("Normal to"
+   * re-orients to the sketch plane). */
   @HostListener('document:keydown', ['$event'])
   onViewerKeydown(ev: KeyboardEvent) {
     const t = ev.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
-    if (this.sketchPlaneNormal) return;  // sketch view is pinned to its plane
     const step = ev.shiftKey ? Math.PI / 2 : Math.PI / 12;
     const dir = new THREE.Vector3().subVectors(this.orbitTarget, this.camera.position).normalize();
     const up = this.camera.up.clone().normalize();
@@ -2795,6 +2794,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       default: return;
     }
     ev.preventDefault();  // stop arrows from also scrolling the surrounding page
+    this.sketchPlaneNormal = null;  // leave the pinned sketch view (as orbit drags do)
     this.animateScreenRotate(axis, angle, 340);
   }
 
