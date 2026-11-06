@@ -1,5 +1,5 @@
 import { test, expect, request as pwRequest, Page, APIRequestContext } from '@playwright/test';
-import { createFixturePart, waitForCameraSettled } from './helpers';
+import { createFixturePart, waitForCameraSettled, pickTool } from './helpers';
 
 // ───────────────────────────────────────────────────────────────────────────
 // E2E coverage for the Part CAD Modeler — rewritten for the current UI:
@@ -211,8 +211,8 @@ test.describe('Sketch tools', () => {
   test('Point tool places a point at the click location', async ({ page }) => {
     await openEditor(page);
     await enterSketchOnXY(page);
-    await page.locator('[data-testid="group-primitives-chevron"]').click();
-    await page.locator('[data-testid="tool-point"]').click();
+    // pickTool waits out the menu close — its backdrop eats the next click.
+    await pickTool(page, 'primitives', 'point');
     const box = (await viewerCanvas(page).boundingBox())!;
     // Off-centre: the canvas centre is the sketch origin, and clicks on the
     // origin / datum axes snap to them instead of placing a new point.

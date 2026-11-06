@@ -29,7 +29,11 @@ import { tabLabel } from '../../../cad/lib/cadTabs';
     </div>
   `,
   styles: [`
-    .part-tabs { display: flex; flex-shrink: 0; overflow-x: auto; background: #181825; border-bottom: 1px solid #333; }
+    /* Fixed height: the strip must never change size as tabs come and go —
+       a shifting viewer offsets every canvas click (sketch picks miss). */
+    :host { display: block; flex: 0 0 auto; }
+    .part-tabs { display: flex; box-sizing: border-box; height: 29px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; background: #181825; border-bottom: 1px solid #333; }
+    .part-tab, .part-tab-add { box-sizing: border-box; height: 28px; flex-shrink: 0; }
     .part-tab { display: flex; align-items: center; gap: 6px; max-width: 240px; padding: 4px 4px 4px 10px; font-size: 12px; color: #aaa; cursor: pointer; border-right: 1px solid #333; white-space: nowrap; }
     .part-tab:hover, .part-tab-add:hover { background: #24243a; color: #ddd; }
     .part-tab.active, .part-tab-add.active { background: #1e1e2e; color: #fff; box-shadow: inset 0 2px 0 #42a5f5; cursor: default; }

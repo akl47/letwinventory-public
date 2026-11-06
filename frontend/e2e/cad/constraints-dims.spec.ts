@@ -5,7 +5,7 @@
 import { test, expect, Page } from '@playwright/test';
 import {
   createFixturePart, openEditor, enterSketchOnXY, pickTool, clickSequence,
-  canvasCenter, drawClosedRectangle, sketchConstraints, pointDistance,
+  canvasCenter, drawClosedRectangle, sketchConstraints, pointDistance, sketchToScreen,
 } from './helpers';
 
 // Tests share one fixture part — run serially even when the suite is
@@ -19,6 +19,17 @@ test.beforeAll(async () => {
   PART_ID = fx.partId;
   await fx.api.dispose();
 });
+
+/** A placement point above the rectangle's top edge, offset 45px sideways
+ * AWAY from the sketch's Y datum axis — a click near a datum axis picks the
+ * axis instead of placing the dim (the side that's clear depends on how the
+ * canvas framed the sketch). */
+async function dimPlacement(page: Page, corners: Array<[number, number]>): Promise<[number, number]> {
+  const [ox] = await sketchToScreen(page, 0, 0);
+  const mid = (corners[0][0] + corners[1][0]) / 2;
+  const x = Math.abs(mid + 45 - ox) >= Math.abs(mid - 45 - ox) ? mid + 45 : mid - 45;
+  return [x, corners[0][1] - 40];
+}
 
 /** Smart-dim the FIRST drawn line's two endpoints, placing the dim at
  * `place`. Selection is set programmatically (__cadSketchSelect) — grid
@@ -52,9 +63,7 @@ test.describe('Smart dimension + inline value edit', () => {
     const corners = await drawClosedRectangle(page);
 
     // Dimension the first drawn edge (top edge of the rectangle).
-    const dim = await smartDimFirstLine(
-      page, [(corners[0][0] + corners[1][0]) / 2 + 45, corners[0][1] - 40],
-    );
+    const dim = await smartDimFirstLine(page, await dimPlacement(page, corners));
     expect(dim.targets).toHaveLength(2);
     const [aId, bId] = dim.targets.map((t: any) => t.entityId);
     const measuredBefore = await pointDistance(page, aId, bId);
@@ -82,9 +91,7 @@ test.describe('Smart dimension + inline value edit', () => {
     await openEditor(page, PART_ID);
     await enterSketchOnXY(page);  // each entry creates a FRESH sketch
     const corners = await drawClosedRectangle(page);
-    const dim = await smartDimFirstLine(
-      page, [(corners[0][0] + corners[1][0]) / 2 + 45, corners[0][1] - 40],
-    );
+    const dim = await smartDimFirstLine(page, await dimPlacement(page, corners));
     const [aId, bId] = dim.targets.map((t: any) => t.entityId);
     await page.locator(`div[data-constraint-id="${dim.id}"]`).dblclick();
     const editor = page.locator(`input[data-constraint-id="${dim.id}"]`);
@@ -104,9 +111,7 @@ test.describe('Dimension context menu', () => {
     await openEditor(page, PART_ID);
     await enterSketchOnXY(page);  // fresh sketch — mint our own dim
     const corners = await drawClosedRectangle(page);
-    const dim = await smartDimFirstLine(
-      page, [(corners[0][0] + corners[1][0]) / 2 + 45, corners[0][1] - 40],
-    );
+    const dim = await smartDimFirstLine(page, await dimPlacement(page, corners));
     const label = page.locator(`div[data-constraint-id="${dim.id}"]`);
 
     await label.click({ button: 'right' });

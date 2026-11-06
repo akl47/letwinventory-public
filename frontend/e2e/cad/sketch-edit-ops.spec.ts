@@ -49,8 +49,15 @@ test.describe('Trim / Extend', () => {
     });
 
     // Trim the horizontal line's RIGHT segment (right of the crossing).
+    // Aim at the COMMITTED line — grid snap moves it a few pixels off the
+    // raw draw click, enough to miss the pick on a shorter canvas.
+    const rightEnd = await page.evaluate(() => {
+      const ents = (window as any).__cadSketch?.entities ?? [];
+      const xs = ents.filter((e: any) => e.kind === 'point' && e.id !== 'origin').map((p: any) => p.x);
+      return Math.max(...xs);
+    });
     await pickTool(page, 'edit', 'trim');
-    await clickSequence(page, [[cx + 45, cy + dy]], 400);
+    await clickSequence(page, [await sketchToScreen(page, (cross.x + rightEnd) / 2, cross.y)], 400);
     // The right piece is gone: no near-horizontal endpoint extends past
     // the crossing x.
     await expect.poll(() => page.evaluate((crossX) => {
