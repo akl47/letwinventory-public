@@ -82,13 +82,27 @@ const perpComponent = (delta, d) => vsub(delta, vscale(d, vdot(delta, d)));
 
 const lockTargets = new Map();
 
+// '+x' | '-y' | … → unit vector in the local frame.
+function frameAxisVec(axis) {
+  const v = [0, 0, 0];
+  v['xyz'.indexOf(axis[1])] = axis[0] === '-' ? -1 : 1;
+  return v;
+}
+
 function mateResiduals(mate, poseA, poseB) {
   switch (mate.type) {
     case 'coincident': {
-      // Origin-point pair → coincident points (3 residuals).
+      // Origin-point pair → coincident points (3 residuals). With a frame
+      // (REQ 998) B's X/Y axes must also land on the chosen signed axes of A.
       if (mate.a.geom.kind === 'point' && mate.b.geom.kind === 'point') {
         const a = worldPoint(poseA, mate.a.geom); const b = worldPoint(poseB, mate.b.geom);
-        return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        const r = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        if (mate.frame) {
+          const ex = vsub(qRotate(poseB.quaternion, [1, 0, 0]), qRotate(poseA.quaternion, frameAxisVec(mate.frame.x)));
+          const ey = vsub(qRotate(poseB.quaternion, [0, 1, 0]), qRotate(poseA.quaternion, frameAxisVec(mate.frame.y)));
+          r.push(...ex, ...ey);
+        }
+        return r;
       }
       const pa = worldPlane(poseA, mate.a.geom); const pb = worldPlane(poseB, mate.b.geom);
       const orient = mate.flip ? vsub(pa.normal, pb.normal) : vadd(pa.normal, pb.normal);

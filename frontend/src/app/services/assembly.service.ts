@@ -1,16 +1,28 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { MonoTypeOperatorFunction, Observable, retry, throwError } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
   Assembly, AssemblyDoc, AssemblyInstance, AssemblyRegenResponse, BomLine, Placement, Mate, MateType, MateRef, EligiblePart,
-  AssemblyPattern, PatternKind, DisplayState, MassProperties, InterferencePair,
+  AssemblyPattern, PatternKind, DisplayState, MassProperties, InterferencePair, MateFrame,
 } from '../cad/lib/assembly.types';
 
 @Injectable({ providedIn: 'root' })
 export class AssemblyService {
   private http = inject(HttpClient);
   private apiUrl = `${environment.apiUrl}/design/assembly`;
+
+  /** REQ 875 parity — an edit rejected because this user's checkout lapsed
+   * (idle/background tab) renews — which revives a still-attributed lock —
+   * and retries once, so expiry stays invisible like part saves. */
+  private renewOnExpiry<T>(id: number): MonoTypeOperatorFunction<T> {
+    return retry({
+      count: 1,
+      delay: (err) => err?.status === 423 && err.error?.code === 'LOCK_EXPIRED'
+        ? this.http.post(`${environment.apiUrl}/design/cad-model/${id}/renew-lock`, {})
+        : throwError(() => err),
+    });
+  }
 
   /** Parts in the "Assembly" category — candidates for an assembly CAD model. */
   eligibleParts(): Observable<EligiblePart[]> {
@@ -40,7 +52,7 @@ export class AssemblyService {
     sketchDoc?: unknown; featureTree?: unknown; equations?: unknown;
     clientSavedAt?: string | null;
   }): Observable<Assembly> {
-    return this.http.put<Assembly>(`${this.apiUrl}/${id}/skeleton`, body);
+    return this.http.put<Assembly>(`${this.apiUrl}/${id}/skeleton`, body).pipe(this.renewOnExpiry(id));
   }
 
   /** REQ 918 — push assembly global variables into child part equations.
@@ -52,73 +64,73 @@ export class AssemblyService {
     return this.http.post<{
       results: Array<{ partID: number; modelId: number | null; status: string; lockedBy?: string | null; names: string[] }>;
       unresolved: string[]; names: string[];
-    }>(`${this.apiUrl}/${id}/push-variables`, names && names.length ? { names } : {});
+    }>(`${this.apiUrl}/${id}/push-variables`, names && names.length ? { names } : {}).pipe(this.renewOnExpiry(id));
   }
 
   /** REQ 764 — derive radial explode offsets from instance placements and
    * persist them on the assembly doc. */
   autoExplode(id: number, spread?: number): Observable<{ explode: NonNullable<AssemblyDoc['explode']>; assembly: Assembly }> {
     return this.http.post<{ explode: NonNullable<AssemblyDoc['explode']>; assembly: Assembly }>(
-      `${this.apiUrl}/${id}/explode/auto`, spread !== undefined ? { spread } : {});
+      `${this.apiUrl}/${id}/explode/auto`, spread !== undefined ? { spread } : {}).pipe(this.renewOnExpiry(id));
   }
 
   insertInstance(id: number, body: { partID: number; placement?: Placement; grounded?: boolean; originMate?: boolean; branch?: string }):
     Observable<{ instance: AssemblyInstance; assembly: Assembly }> {
-    return this.http.post<{ instance: AssemblyInstance; assembly: Assembly }>(`${this.apiUrl}/${id}/instances`, body);
+    return this.http.post<{ instance: AssemblyInstance; assembly: Assembly }>(`${this.apiUrl}/${id}/instances`, body).pipe(this.renewOnExpiry(id));
   }
 
   updateInstance(id: number, instanceId: string, patch: Partial<Pick<AssemblyInstance, 'placement' | 'grounded' | 'suppressed' | 'visible'>> & { branch?: string | null; configurationId?: string | null }):
     Observable<{ instance: AssemblyInstance; assembly: Assembly }> {
-    return this.http.put<{ instance: AssemblyInstance; assembly: Assembly }>(`${this.apiUrl}/${id}/instances/${instanceId}`, patch);
+    return this.http.put<{ instance: AssemblyInstance; assembly: Assembly }>(`${this.apiUrl}/${id}/instances/${instanceId}`, patch).pipe(this.renewOnExpiry(id));
   }
 
   removeInstance(id: number, instanceId: string): Observable<Assembly> {
-    return this.http.delete<Assembly>(`${this.apiUrl}/${id}/instances/${instanceId}`);
+    return this.http.delete<Assembly>(`${this.apiUrl}/${id}/instances/${instanceId}`).pipe(this.renewOnExpiry(id));
   }
 
   replaceInstance(id: number, instanceId: string, partID: number): Observable<{ instance: AssemblyInstance; assembly: Assembly }> {
-    return this.http.put<{ instance: AssemblyInstance; assembly: Assembly }>(`${this.apiUrl}/${id}/instances/${instanceId}/replace`, { partID });
+    return this.http.put<{ instance: AssemblyInstance; assembly: Assembly }>(`${this.apiUrl}/${id}/instances/${instanceId}/replace`, { partID }).pipe(this.renewOnExpiry(id));
   }
 
   addPattern(id: number, body: { kind: PatternKind; seedInstanceId: string } & Partial<AssemblyPattern>):
     Observable<{ pattern: AssemblyPattern; assembly: Assembly }> {
-    return this.http.post<{ pattern: AssemblyPattern; assembly: Assembly }>(`${this.apiUrl}/${id}/patterns`, body);
+    return this.http.post<{ pattern: AssemblyPattern; assembly: Assembly }>(`${this.apiUrl}/${id}/patterns`, body).pipe(this.renewOnExpiry(id));
   }
 
   removePattern(id: number, patternId: string): Observable<Assembly> {
-    return this.http.delete<Assembly>(`${this.apiUrl}/${id}/patterns/${patternId}`);
+    return this.http.delete<Assembly>(`${this.apiUrl}/${id}/patterns/${patternId}`).pipe(this.renewOnExpiry(id));
   }
 
-  addMate(id: number, body: { type: MateType; a: MateRef; b: MateRef; value?: number; flip?: boolean }):
+  addMate(id: number, body: { type: MateType; a: MateRef; b: MateRef; value?: number; flip?: boolean; frame?: MateFrame | null }):
     Observable<{ mate: Mate; assembly: Assembly }> {
-    return this.http.post<{ mate: Mate; assembly: Assembly }>(`${this.apiUrl}/${id}/mates`, body);
+    return this.http.post<{ mate: Mate; assembly: Assembly }>(`${this.apiUrl}/${id}/mates`, body).pipe(this.renewOnExpiry(id));
   }
 
   updateMate(
     id: number, mateId: string,
-    body: { type?: string; a?: { instanceId: string; faceId: string }; b?: { instanceId: string; faceId: string }; value?: number; flip?: boolean },
+    body: { type?: string; a?: { instanceId: string; faceId: string }; b?: { instanceId: string; faceId: string }; value?: number; flip?: boolean; frame?: MateFrame | null },
   ): Observable<Assembly> {
-    return this.http.put<Assembly>(`${this.apiUrl}/${id}/mates/${mateId}`, body);
+    return this.http.put<Assembly>(`${this.apiUrl}/${id}/mates/${mateId}`, body).pipe(this.renewOnExpiry(id));
   }
 
   removeMate(id: number, mateId: string): Observable<Assembly> {
-    return this.http.delete<Assembly>(`${this.apiUrl}/${id}/mates/${mateId}`);
+    return this.http.delete<Assembly>(`${this.apiUrl}/${id}/mates/${mateId}`).pipe(this.renewOnExpiry(id));
   }
 
   saveDisplayState(id: number, name: string): Observable<{ state: DisplayState; assembly: Assembly }> {
-    return this.http.post<{ state: DisplayState; assembly: Assembly }>(`${this.apiUrl}/${id}/display-states`, { name });
+    return this.http.post<{ state: DisplayState; assembly: Assembly }>(`${this.apiUrl}/${id}/display-states`, { name }).pipe(this.renewOnExpiry(id));
   }
 
   applyDisplayState(id: number, stateId: string): Observable<Assembly> {
-    return this.http.post<Assembly>(`${this.apiUrl}/${id}/display-states/${stateId}/apply`, {});
+    return this.http.post<Assembly>(`${this.apiUrl}/${id}/display-states/${stateId}/apply`, {}).pipe(this.renewOnExpiry(id));
   }
 
   deleteDisplayState(id: number, stateId: string): Observable<Assembly> {
-    return this.http.delete<Assembly>(`${this.apiUrl}/${id}/display-states/${stateId}`);
+    return this.http.delete<Assembly>(`${this.apiUrl}/${id}/display-states/${stateId}`).pipe(this.renewOnExpiry(id));
   }
 
   regenerate(id: number): Observable<AssemblyRegenResponse> {
-    return this.http.post<AssemblyRegenResponse>(`${this.apiUrl}/${id}/regenerate`, {});
+    return this.http.post<AssemblyRegenResponse>(`${this.apiUrl}/${id}/regenerate`, {}).pipe(this.renewOnExpiry(id));
   }
 
   bom(id: number): Observable<BomLine[]> {
@@ -130,11 +142,11 @@ export class AssemblyService {
   }
 
   interference(id: number): Observable<{ pairs: InterferencePair[]; errors: string[] }> {
-    return this.http.post<{ pairs: InterferencePair[]; errors: string[] }>(`${this.apiUrl}/${id}/interference`, {});
+    return this.http.post<{ pairs: InterferencePair[]; errors: string[] }>(`${this.apiUrl}/${id}/interference`, {}).pipe(this.renewOnExpiry(id));
   }
 
   syncBom(id: number): Observable<{ count: number; items: Array<{ componentPartID: number; quantity: number }> }> {
-    return this.http.post<{ count: number; items: Array<{ componentPartID: number; quantity: number }> }>(`${this.apiUrl}/${id}/bom/sync`, {});
+    return this.http.post<{ count: number; items: Array<{ componentPartID: number; quantity: number }> }>(`${this.apiUrl}/${id}/bom/sync`, {}).pipe(this.renewOnExpiry(id));
   }
 
   exportStep(id: number): Observable<string> {

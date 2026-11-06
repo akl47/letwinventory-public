@@ -744,6 +744,9 @@ function faceSurfaceMap(childGeo) {
   return map;
 }
 
+// REQ 999 — mate-ref instance id for the assembly's own origin datums.
+const ASSEMBLY_REF_ID = '__assembly__';
+
 // Canonical solver geometry for a component's origin datums, in its LOCAL frame
 // (REQ: mate against planes/origins). Keyed by datum id.
 const DATUM_GEOM = {
@@ -781,9 +784,17 @@ function solveAssemblyMates(instances, mates, childGeoById, errors) {
     const { t, q } = placementOf(inst);
     return { id: inst.instanceId, grounded: !!inst.grounded, translate: t, quaternion: q };
   });
-  if (solverInstances.length && !solverInstances.some((i) => i.grounded)) solverInstances[0].grounded = true;
+  // REQ 999 — mates may reference the assembly origin: a virtual grounded
+  // instance at identity. When one does, it provides the ground instead of
+  // auto-grounding the first component.
+  const refsAssembly = mates.some((m) => m.a.instanceId === ASSEMBLY_REF_ID || m.b.instanceId === ASSEMBLY_REF_ID);
+  if (refsAssembly) solverInstances.push({ id: ASSEMBLY_REF_ID, grounded: true, translate: [0, 0, 0], quaternion: [0, 0, 0, 1] });
+  else if (solverInstances.length && !solverInstances.some((i) => i.grounded)) solverInstances[0].grounded = true;
 
   const resolveRef = (ref) => {
+    if (ref.instanceId === ASSEMBLY_REF_ID) {
+      return DATUM_GEOM[ref.faceId] ? { geom: { ...DATUM_GEOM[ref.faceId] } } : { error: 'only assembly origin datums can be mated to' };
+    }
     const m = surfacesByInstance.get(ref.instanceId);
     if (!m) return { error: `mate references unknown instance ${ref.instanceId}` };
     // Datum references (origin point / axis / plane) have canonical geometry in
@@ -806,6 +817,7 @@ function solveAssemblyMates(instances, mates, childGeoById, errors) {
       a: { instanceId: mate.a.instanceId, geom: a.geom },
       b: { instanceId: mate.b.instanceId, geom: b.geom },
       value: mate.value, flip: mate.flip,
+      ...(mate.frame ? { frame: mate.frame } : {}),
     });
   }
 

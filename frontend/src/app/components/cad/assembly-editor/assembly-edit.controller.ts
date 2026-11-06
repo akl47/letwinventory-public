@@ -9,9 +9,12 @@ import { assemblyOriginDatums, placedOriginDatums, ORIGIN_DATUM_DESCRIPTORS } fr
 import { defaultDatumVisibility } from '../../../cad/lib/featureTree';
 import { formatPartNumber } from '../../../pipes/part-number.pipe';
 import type { TreeNode } from '../cad-feature-tree-panel/cad-feature-tree-panel.component';
+import type { SelectionRow } from '../cad-selection-list/cad-selection-list.component';
 import {
   Assembly, AssemblyInstance, AssemblyRegenResponse, BomLine, Mate, MateType, ConstraintState, AssemblyPattern, PatternKind,
-  DisplayState, MassProperties, InterferencePair, validMateTypes,
+  DisplayState, MassProperties, InterferencePair,
+  ASSEMBLY_REF_ID, FrameAxis, MateFrame, frameYOptions, isOriginRef,
+  MATE_TYPES, availableMateTypes, mateAllows, datumRowMateRef,
 } from '../../../cad/lib/assembly.types';
 import { canDragInstance, translatedPlacement } from '../../../cad/lib/assemblyDrag';
 
@@ -210,7 +213,8 @@ export class AssemblyEditController {
   matePickStage = signal<null | 'a' | 'b'>(null);
   faceA = signal<string | null>(null);
   faceB = signal<string | null>(null);
-  showMateChooser = signal(false);
+  /** The mate sidebar is open (creating or editing). */
+  mateOpen = signal(false);
   mateValue = signal(0);
   mateFlip = signal(false);
   /** When re-picking ONE existing slot (vs the initial a→b sequence), this
@@ -230,7 +234,31 @@ export class AssemblyEditController {
     const f = this.regen()?.faces.find((x) => (x.persistentName || x.faceId) === scopedFaceId);
     return f?.surface?.kind;
   }
-  chooserTypes = computed<MateType[]>(() => validMateTypes(this.surfaceKindOf(this.faceA()), this.surfaceKindOf(this.faceB())));
+  /** Picked ref → mateable kind; null = slot empty, 'other' = only lock. */
+  private refKind(ref: string | null): string | null {
+    return ref ? (this.surfaceKindOf(ref) ?? 'other') : null;
+  }
+  // REQ 1000 — every type is listed; only those still completable are enabled.
+  readonly mateTypes = MATE_TYPES;
+  availableTypes = computed<MateType[]>(() => availableMateTypes(this.refKind(this.faceA()), this.refKind(this.faceB())));
+  typeAvailable = (t: MateType) => this.availableTypes().includes(t);
+  // REQ 998 — origin-pair coincident: optional axis alignment with a
+  // remappable X/Y (Z follows by the right-hand rule).
+  originPair = computed(() => isOriginRef(this.faceA()) && isOriginRef(this.faceB()));
+  alignAxes = signal(true);
+  frameX = signal<FrameAxis>('+x');
+  frameY = signal<FrameAxis>('+y');
+  frameYChoices = computed(() => frameYOptions(this.frameX()));
+  showFrame = computed(() => this.originPair() && this.selectedMateType() === 'coincident');
+  setFrameX(x: FrameAxis) {
+    this.frameX.set(x);
+    if (!frameYOptions(x).includes(this.frameY())) this.frameY.set(frameYOptions(x)[0]);
+  }
+  private resetFrame(f?: MateFrame) {
+    this.alignAxes.set(!!f || !this.editingMate());
+    this.frameX.set(f?.x ?? '+x');
+    this.frameY.set(f?.y ?? '+y');
+  }
   valueMates: MateType[] = ['distance', 'angle'];
   // Mate types whose normal direction can be flipped (the solver consumes
   // mate.flip for these). Plane mates coincident/distance + the tangent mate.
@@ -258,25 +286,33 @@ export class AssemblyEditController {
     const v = m.value ?? 0;
     this.mateValue.set(m.type === 'angle' ? (v * 180) / Math.PI : v);
     this.mateFlip.set(!!m.flip);
+    this.resetFrame(m.frame);
     this.matePickStage.set(null);
     this.mateRepick.set(null);
-    this.showMateChooser.set(true);  // jump straight to the type/value/flip panel
+    this.mateOpen.set(true);
   }
   // Mate property-panel state (select a type, then OK — matching the feature
   // sidebars). `mateActive` drives the secondary-sidebar visibility for the
   // whole mate operation (face-picking through type selection).
   selectedMateType = signal<MateType | null>(null);
-  mateActive = computed(() => this.facePickActive() || this.showMateChooser());
+  mateActive = computed(() => this.mateOpen());
   needsMateValue = computed(() => { const t = this.selectedMateType(); return !!t && this.valueMates.includes(t); });
-  needsMateFlip = computed(() => { const t = this.selectedMateType(); return !!t && this.flipMates.includes(t); });
-  canCreateMate = computed(() => this.showMateChooser() && this.selectedMateType() !== null);
-  matePrompt = computed(() => {
-    if (this.matePickStage() === 'a') return 'Select the first face.';
-    if (this.matePickStage() === 'b') return 'Select a face on another component.';
-    if (this.showMateChooser()) return 'Choose how the two faces relate, then click OK.';
-    return '';
+  needsMateFlip = computed(() => { const t = this.selectedMateType(); return !!t && this.flipMates.includes(t) && !this.originPair(); });
+  canCreateMate = computed(() => {
+    const t = this.selectedMateType();
+    return !!t && !!this.faceA() && !!this.faceB() && this.typeAvailable(t);
   });
-  selectMateType(t: MateType) { this.selectedMateType.set(t); }
+  matePrompt = computed(() => {
+    const t = this.selectedMateType();
+    if (this.matePickStage() === 'a') return t ? `Select the first reference for a ${t} mate.` : 'Select a face, axis, plane or origin — or choose a mate type first.';
+    if (this.matePickStage() === 'b') return 'Select a reference on another component.';
+    return t ? 'Click OK to create the mate.' : 'Choose a mate type, then click OK.';
+  });
+  /** Click a type to choose it (limits further picks); click again to clear. */
+  selectMateType(t: MateType) {
+    if (!this.typeAvailable(t)) return;
+    this.selectedMateType.set(this.selectedMateType() === t ? null : t);
+  }
   confirmMate() { const t = this.selectedMateType(); if (t) this.createMate(t); }
 
   filteredParts = computed(() => {
@@ -576,10 +612,18 @@ export class AssemblyEditController {
       error: (e) => this.errors.showError(e?.error?.error || 'Failed to mate to origin'),
     });
   }
-  /** Remove the component's origin mate (frees it for dragging / mating). */
+  /** Remove the component's origin mate (frees it for dragging / mating).
+   * Components grounded without one (created in context at a datum) are
+   * un-grounded directly. */
   freeFromOrigin(inst: AssemblyInstance) {
     const m = this.mates().find((x) => x.type === 'origin' && x.a?.instanceId === inst.instanceId);
-    if (m) this.removeMate(m);
+    if (m) { this.removeMate(m); return; }
+    const a = this.assembly();
+    if (!a) return;
+    this.assemblyApi.updateInstance(a.id, inst.instanceId, { grounded: false }).subscribe({
+      next: (res) => { this.assembly.set(res.assembly); this.regenerate(); },
+      error: (e) => this.errors.showError(e?.error?.error || 'Failed to free component'),
+    });
   }
 
   select(instanceId: string) {
@@ -668,42 +712,65 @@ export class AssemblyEditController {
   }
 
   // ── mate creation flow ──────────────────────────────────────────────────────
-  startMate() { this.editingMate.set(null); this.faceA.set(null); this.faceB.set(null); this.showMateChooser.set(false); this.selectedMateType.set(null); this.mateValue.set(0); this.mateFlip.set(false); this.mateRepick.set(null); this.matePickStage.set('a'); }
-  cancelMate() { this.matePickStage.set(null); this.faceA.set(null); this.faceB.set(null); this.showMateChooser.set(false); this.selectedMateType.set(null); this.mateFlip.set(false); this.mateRepick.set(null); this.editingMate.set(null); }
+  startMate() { this.editingMate.set(null); this.faceA.set(null); this.faceB.set(null); this.mateOpen.set(true); this.selectedMateType.set(null); this.mateValue.set(0); this.mateFlip.set(false); this.mateRepick.set(null); this.resetFrame(); this.matePickStage.set('a'); }
+  cancelMate() { this.matePickStage.set(null); this.faceA.set(null); this.faceB.set(null); this.mateOpen.set(false); this.selectedMateType.set(null); this.mateFlip.set(false); this.mateRepick.set(null); this.editingMate.set(null); }
+  /** Clear one slot and re-arm picking for it. */
+  clearFace(slot: 'a' | 'b') {
+    (slot === 'a' ? this.faceA : this.faceB).set(null);
+    const other = slot === 'a' ? this.faceB() : this.faceA();
+    this.mateRepick.set(other ? slot : null);
+    this.matePickStage.set(slot);
+  }
+  // Memoized so the selection boxes don't rebuild their rows every render.
+  mateRowsA = computed(() => this.mateRefRows(this.faceA()));
+  mateRowsB = computed(() => this.mateRefRows(this.faceB()));
+  /** The picked reference as a selection-box row: what it is + which component. */
+  private mateRefRows(ref: string | null): SelectionRow[] {
+    if (!ref) return [];
+    const { instanceId, faceId } = splitScoped(ref);
+    const datum = ORIGIN_DATUM_DESCRIPTORS.find((d) => d.id === faceId);
+    let label = 'Face'; let icon = 'crop_square';
+    if (datum) { label = datum.label; icon = datum.icon; }
+    else {
+      const surf = this.regen()?.faces.find((x) => (x.persistentName || x.faceId) === ref)?.surface;
+      if (surf?.kind === 'plane') label = 'Planar face';
+      else if (surf?.kind === 'cylinder') { label = `Cylindrical face Ø${+(2 * (surf.radius ?? 0)).toFixed(3)}`; icon = 'radio_button_unchecked'; }
+      else if (surf?.kind) label = `${surf.kind[0].toUpperCase()}${surf.kind.slice(1)} face`;
+    }
+    return [{ id: ref, label, icon, detail: this.refName(instanceId) }];
+  }
   /** Re-arm picking for a single slot (editing / correcting one surface). */
   repickFace(slot: 'a' | 'b') { this.mateRepick.set(slot); this.matePickStage.set(slot); }
   /** @returns true if the pick was consumed by the mate flow. */
   onFacePicked(faceId: string): boolean {
     const stage = this.matePickStage();
     if (stage === null) return false;
-    // Re-picking ONE slot (edit / correction): replace that face, validate it's
-    // on a different component than the OTHER slot, and return to the chooser.
+    // A re-pick replaces just that slot; otherwise fill a, then b.
     const repick = this.mateRepick();
-    if (repick) {
-      const other = repick === 'a' ? this.faceB() : this.faceA();
-      if (other && splitScoped(faceId).instanceId === splitScoped(other).instanceId) {
-        this.errors.showError('Pick a face on a different component.'); return true;
-      }
-      (repick === 'a' ? this.faceA : this.faceB).set(faceId);
-      this.mateRepick.set(null); this.matePickStage.set(null); this.showMateChooser.set(true); return true;
+    const slot = repick ?? stage;
+    const other = slot === 'a' ? this.faceB() : this.faceA();
+    if (other && splitScoped(faceId).instanceId === splitScoped(other).instanceId) {
+      this.errors.showError('Pick a reference on a different component.'); return true;
     }
-    if (stage === 'a') {
-      this.faceA.set(faceId); this.matePickStage.set('b'); return true;
+    // REQ 1000 — a chosen mate type only accepts references valid for it.
+    const type = this.selectedMateType();
+    if (!mateAllows(type, this.refKind(faceId)!, this.refKind(other))) {
+      this.errors.showError(`That reference can't be used for a ${type} mate.`); return true;
     }
-    // stage === 'b'
-    if (splitScoped(faceId).instanceId === splitScoped(this.faceA()!).instanceId) {
-      this.errors.showError('Pick a face on a different component.'); return true;
-    }
-    this.faceB.set(faceId); this.matePickStage.set(null); this.mateValue.set(0); this.showMateChooser.set(true); return true;
+    (slot === 'a' ? this.faceA : this.faceB).set(faceId);
+    this.mateRepick.set(null);
+    this.matePickStage.set(!repick && slot === 'a' && !this.faceB() ? 'b' : null);
+    return true;
   }
   createMate(type: MateType) {
     const a = this.assembly();
     const fa = this.faceA(); const fb = this.faceB();
     if (!a || !fa || !fb) return;
     const refA = splitScoped(fa); const refB = splitScoped(fb);
-    const body: { type: MateType; a: typeof refA; b: typeof refB; value?: number; flip?: boolean } = { type, a: refA, b: refB };
+    const body: { type: MateType; a: typeof refA; b: typeof refB; value?: number; flip?: boolean; frame?: MateFrame | null } = { type, a: refA, b: refB };
     if (this.valueMates.includes(type)) body.value = type === 'angle' ? (this.mateValue() * Math.PI) / 180 : this.mateValue();
-    if (this.flipMates.includes(type)) body.flip = this.mateFlip();
+    if (this.needsMateFlip()) body.flip = this.mateFlip();
+    if (this.showFrame()) body.frame = this.alignAxes() ? { x: this.frameX(), y: this.frameY() } : null;
     const em = this.editingMate();
     const done = (asm: Assembly) => { this.assembly.set(asm); this.cancelMate(); this.regenerate(); };
     if (em) {
@@ -750,7 +817,7 @@ export class AssemblyEditController {
     }));
     if (this.originExpanded()) {
       for (const d of this.originDatums) {
-        out.push(node({ key: `origin-datum:${d.id}`, kind: 'datum', label: d.label, iconName: d.icon, iconClass: d.iconClass, depth: 1, visibilityToggleable: true, visible: this.originDatumVisible(d.id) }));
+        out.push(this.datumRow(node({ key: `origin-datum:${d.id}`, kind: 'datum', label: d.label, iconName: d.icon, iconClass: d.iconClass, depth: 1, visibilityToggleable: true, visible: this.originDatumVisible(d.id) })));
       }
     }
     const sel = this.selectedIds();
@@ -777,7 +844,7 @@ export class AssemblyEditController {
         }));
         if (originExp) {
           for (const d of this.originDatums) {
-            out.push(node({ key: `component-datum:${inst.instanceId}:${d.id}`, kind: 'datum', label: d.label, iconName: d.icon, iconClass: d.iconClass, depth: 2, visibilityToggleable: true, visible: this.componentDatumVisible(inst.instanceId, d.id) }));
+            out.push(this.datumRow(node({ key: `component-datum:${inst.instanceId}:${d.id}`, kind: 'datum', label: d.label, iconName: d.icon, iconClass: d.iconClass, depth: 2, visibilityToggleable: true, visible: this.componentDatumVisible(inst.instanceId, d.id) })));
           }
         }
         // The component's solid bodies — eye toggles render visibility
@@ -806,11 +873,20 @@ export class AssemblyEditController {
     this.mates().map((m) => this.mkNode({ key: `mate:${m.mateId}`, kind: 'feature', label: this.mateLabel(m), iconName: 'link', iconClass: 'mate', depth: 0 })),
   );
 
+  /** REQ 1001 — datum rows are clickable mate references while picking. */
+  private datumRow(n: TreeNode): TreeNode {
+    if (!this.facePickActive()) return n;
+    return { ...n, selectable: true, selected: this.pickedFaceIds().has(datumRowMateRef(n.key)!) };
+  }
+
   mateLabel(m: Mate): string {
     if (m.type === 'origin') {
       return `origin: ${this.partName(this.instanceOf(m.a.instanceId)?.partID ?? 0)} → Assembly origin`;
     }
-    return `${m.type}: ${this.partName(this.instanceOf(m.a.instanceId)?.partID ?? 0)} ↔ ${this.partName(this.instanceOf(m.b.instanceId)?.partID ?? 0)}`;
+    return `${m.type}: ${this.refName(m.a.instanceId)} ↔ ${this.refName(m.b.instanceId)}`;
+  }
+  private refName(instanceId: string): string {
+    return instanceId === ASSEMBLY_REF_ID ? 'Assembly' : this.partName(this.instanceOf(instanceId)?.partID ?? 0);
   }
   private instanceOf(instanceId: string) { return this.instances().find((i) => i.instanceId === instanceId); }
   patternSeedName(p: AssemblyPattern): string { return this.partName(this.instanceOf(p.seedInstanceId)?.partID ?? 0); }

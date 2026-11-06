@@ -140,6 +140,25 @@ function contentPatch(patch) {
   return { ...patch, lastContentSavedAt: new Date(), lockExpiresAt: new Date(Date.now() + cadVcsService.DEFAULT_LOCK_TTL_MS) };
 }
 
+// REQ 999 — a mate ref may point at the assembly's own origin datums.
+const ASSEMBLY_REF_ID = '__assembly__';
+const ORIGIN_DATUM_IDS = ['origin', 'x_axis', 'y_axis', 'z_axis', 'xy_plane', 'yz_plane', 'xz_plane'];
+// REQ 998 — origin-pair frame: B's X/Y onto two non-parallel signed axes of A.
+const FRAME_AXES = ['+x', '-x', '+y', '-y', '+z', '-z'];
+function frameError(frame) {
+  if (frame === undefined || frame === null) return null;
+  if (!FRAME_AXES.includes(frame.x) || !FRAME_AXES.includes(frame.y)) return 'Axis alignment must map X and Y to one of +x, -x, +y, -y, +z, -z';
+  if (frame.x[1] === frame.y[1]) return 'Axis alignment cannot map X and Y onto the same axis';
+  return null;
+}
+// Validate a mate ref's instance: a doc instance, or the assembly origin.
+function refError(ref, has) {
+  if (ref.instanceId === ASSEMBLY_REF_ID) {
+    return ORIGIN_DATUM_IDS.includes(ref.faceId) ? null : { status: 400, error: 'Only the assembly origin datums (origin, axes, planes) can be used as an assembly mate reference' };
+  }
+  return has(ref.instanceId) ? null : { status: 404, error: `Instance ${ref.instanceId} not found` };
+}
+
 // Push an "origin" mate (a component fixed to the assembly origin) onto the doc
 // and ground that instance at identity. The solver skips origin mates; the
 // grounded flag + identity placement hold the component at the assembly origin.
@@ -599,7 +618,7 @@ module.exports = {
       const assembly = await fetchActive(Number(req.params.id));
       if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
       if (!(await editGuard(assembly, req, res))) return undefined;
-      const { type, a, b, value, flip } = req.body || {};
+      const { type, a, b, value, flip, frame } = req.body || {};
       const MATE_TYPES = ['coincident', 'concentric', 'parallel', 'perpendicular', 'distance', 'angle', 'tangent', 'lock', 'origin'];
       if (!MATE_TYPES.includes(type)) return res.status(400).json({ error: `Unknown mate type "${type}"` });
 
@@ -636,8 +655,10 @@ module.exports = {
         return res.status(400).json({ error: 'Mate requires a and b, each with instanceId and faceId' });
       }
       if (a.instanceId === b.instanceId) return res.status(400).json({ error: 'A mate must reference two distinct instances' });
-      if (!has(a.instanceId)) return res.status(404).json({ error: `Instance ${a.instanceId} not found` });
-      if (!has(b.instanceId)) return res.status(404).json({ error: `Instance ${b.instanceId} not found` });
+      const badRef = refError(a, has) || refError(b, has);
+      if (badRef) return res.status(badRef.status).json({ error: badRef.error });
+      const badFrame = frameError(frame);
+      if (badFrame) return res.status(400).json({ error: badFrame });
 
       doc.mates = doc.mates || [];
       const mateId = `m${doc.nextMateSeq || (doc.mates.length + 1)}`;
@@ -647,6 +668,7 @@ module.exports = {
         b: { instanceId: b.instanceId, faceId: b.faceId },
         ...(value !== undefined ? { value: Number(value) } : {}),
         ...(flip !== undefined ? { flip: !!flip } : {}),
+        ...(frame ? { frame: { x: frame.x, y: frame.y } } : {}),
         suppressed: false,
       };
       // The solver keys mates by `id`; carry it alongside `mateId`.
@@ -712,13 +734,19 @@ module.exports = {
         }
         if (newA.instanceId === newB.instanceId) return res.status(400).json({ error: 'A mate must reference two distinct instances' });
         const has = (id) => (doc.instances || []).some((i) => i.instanceId === id);
-        if (!has(newA.instanceId)) return res.status(404).json({ error: `Instance ${newA.instanceId} not found` });
-        if (!has(newB.instanceId)) return res.status(404).json({ error: `Instance ${newB.instanceId} not found` });
+        const badRef = refError(newA, has) || refError(newB, has);
+        if (badRef) return res.status(badRef.status).json({ error: badRef.error });
         mate.a = { instanceId: newA.instanceId, faceId: newA.faceId };
         mate.b = { instanceId: newB.instanceId, faceId: newB.faceId };
       }
       if (req.body.value !== undefined) mate.value = Number(req.body.value);
       if (req.body.flip !== undefined) mate.flip = !!req.body.flip;
+      if (req.body.frame !== undefined) {
+        const badFrame = frameError(req.body.frame);
+        if (badFrame) return res.status(400).json({ error: badFrame });
+        if (req.body.frame) mate.frame = { x: req.body.frame.x, y: req.body.frame.y };
+        else delete mate.frame;
+      }
       await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
       await recordHistory(assembly.id, req.user.id, 'mate_updated', null, { mateId: mate.mateId || mate.id });
       return res.json(await fetchActive(assembly.id));
