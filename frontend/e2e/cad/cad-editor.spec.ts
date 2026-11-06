@@ -193,7 +193,7 @@ test.describe('CAD editor initial state', () => {
     const fillet = page.locator('[data-testid="action-fillet"]');
     await expect(fillet).toBeDisabled();
     await fillet.hover();
-    await expect(page.locator('.mat-mdc-tooltip')).toContainText(/extrude a sketch first/i, { timeout: 5_000 });
+    await expect(page.locator('.mat-mdc-tooltip-show')).toContainText(/extrude a sketch first/i, { timeout: 5_000 });
   });
 });
 
