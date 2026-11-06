@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildOriginDatums, computeDatumPlane, planeForDatum, resolvePlaneRef } from './datum';
-import type { DatumPlaneFeature, ModelGeometry } from './types';
+import { buildOriginDatums, computeDatumPlane, computeDatumPoint, intersectThreePlanes, planeForDatum, resolvePlaneRef } from './datum';
+import type { DatumPlaneFeature, DatumPointFeature, ModelGeometry } from './types';
 
 describe('buildOriginDatums (CAD-035)', () => {
   it('produces exactly seven datum elements', () => {
@@ -327,5 +327,23 @@ describe('resolvePlaneRef', () => {
     }, emptyGeom());
     expect(p).not.toBeNull();
     expect(p?.origin).toEqual([1, 2, 3]);
+  });
+});
+
+describe('point on 3 planes (REQ 1006)', () => {
+  const plane = (origin: [number, number, number], normal: [number, number, number]) => ({ origin, normal, xAxis: [1, 0, 0] as [number, number, number], yAxis: [0, 1, 0] as [number, number, number] });
+  it('intersects three non-parallel planes', () => {
+    expect(intersectThreePlanes(plane([2, 0, 0], [1, 0, 0]), plane([0, 3, 0], [0, 1, 0]), plane([0, 0, 4], [0, 0, 1]))).toEqual([2, 3, 4]);
+  });
+  it('returns null when two planes are parallel', () => {
+    expect(intersectThreePlanes(plane([0, 0, 0], [1, 0, 0]), plane([5, 0, 0], [1, 0, 0]), plane([0, 0, 0], [0, 0, 1]))).toBeNull();
+  });
+  it('computes a threePlanes point from datum and face refs', () => {
+    const geometry = { datums: buildOriginDatums(), faces: [], topology: { vertices: [], edges: [] } } as unknown as ModelGeometry;
+    const f = { id: 'p', type: 'datumPoint', method: { kind: 'threePlanes', planeRefs: [
+      { kind: 'datum', datumId: 'xy_plane' }, { kind: 'datum', datumId: 'yz_plane' },
+      { kind: 'face', faceId: 'i1::f3', fallbackPlane: plane([0, 7, 0], [0, 1, 0]) },
+    ] } } as unknown as DatumPointFeature;
+    expect(computeDatumPoint(f, geometry)).toEqual({ ok: true, position: [0, 7, 0] });
   });
 });

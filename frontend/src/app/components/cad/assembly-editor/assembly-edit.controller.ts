@@ -14,7 +14,7 @@ import {
   Assembly, AssemblyInstance, AssemblyRegenResponse, BomLine, Mate, MateType, ConstraintState, AssemblyPattern, PatternKind,
   DisplayState, MassProperties, InterferencePair,
   ASSEMBLY_REF_ID, FrameAxis, MateFrame, frameYOptions, isOriginRef,
-  MATE_TYPES, availableMateTypes, mateAllows, datumRowMateRef,
+  MATE_TYPES, availableMateTypes, mateAllows, datumRowMateRef, csysDatumOf,
 } from '../../../cad/lib/assembly.types';
 import { canDragInstance, translatedPlacement } from '../../../cad/lib/assemblyDrag';
 
@@ -227,7 +227,7 @@ export class AssemblyEditController {
   private surfaceKindOf(scopedFaceId: string | null): string | undefined {
     if (!scopedFaceId) return undefined;
     // Datum references (origin/axis/plane) report a mateable kind directly.
-    const local = scopedFaceId.includes('::') ? scopedFaceId.split('::')[1] : scopedFaceId;
+    const local = csysDatumOf(scopedFaceId.includes('::') ? scopedFaceId.split('::')[1] : scopedFaceId);
     if (local === 'xy_plane' || local === 'yz_plane' || local === 'xz_plane') return 'plane';
     if (local === 'x_axis' || local === 'y_axis' || local === 'z_axis') return 'cylinder';
     if (local === 'origin') return 'point';
@@ -600,31 +600,6 @@ export class AssemblyEditController {
     });
   }
 
-  /** Whether the component is fixed to the assembly origin via a real origin mate. */
-  isOriginMated = (inst: AssemblyInstance) =>
-    this.mates().some((m) => m.type === 'origin' && m.a?.instanceId === inst.instanceId);
-  /** Create an origin mate fixing the component to the assembly origin. */
-  fixToOrigin(inst: AssemblyInstance) {
-    const a = this.assembly();
-    if (!a || this.isOriginMated(inst)) return;
-    this.assemblyApi.addMate(a.id, { type: 'origin', a: { instanceId: inst.instanceId, faceId: '' }, b: { instanceId: '', faceId: '' } }).subscribe({
-      next: (res) => { this.assembly.set(res.assembly); this.regenerate(); },
-      error: (e) => this.errors.showError(e?.error?.error || 'Failed to mate to origin'),
-    });
-  }
-  /** Remove the component's origin mate (frees it for dragging / mating).
-   * Components grounded without one (created in context at a datum) are
-   * un-grounded directly. */
-  freeFromOrigin(inst: AssemblyInstance) {
-    const m = this.mates().find((x) => x.type === 'origin' && x.a?.instanceId === inst.instanceId);
-    if (m) { this.removeMate(m); return; }
-    const a = this.assembly();
-    if (!a) return;
-    this.assemblyApi.updateInstance(a.id, inst.instanceId, { grounded: false }).subscribe({
-      next: (res) => { this.assembly.set(res.assembly); this.regenerate(); },
-      error: (e) => this.errors.showError(e?.error?.error || 'Failed to free component'),
-    });
-  }
 
   select(instanceId: string) {
     this.selectedId.set(instanceId);
@@ -728,9 +703,9 @@ export class AssemblyEditController {
   private mateRefRows(ref: string | null): SelectionRow[] {
     if (!ref) return [];
     const { instanceId, faceId } = splitScoped(ref);
-    const datum = ORIGIN_DATUM_DESCRIPTORS.find((d) => d.id === faceId);
+    const datum = ORIGIN_DATUM_DESCRIPTORS.find((d) => d.id === csysDatumOf(faceId));
     let label = 'Face'; let icon = 'crop_square';
-    if (datum) { label = datum.label; icon = datum.icon; }
+    if (datum) { label = faceId.startsWith('csys:') ? `Point ${datum.label.toLowerCase()}` : datum.label; icon = datum.icon; }
     else {
       const surf = this.regen()?.faces.find((x) => (x.persistentName || x.faceId) === ref)?.surface;
       if (surf?.kind === 'plane') label = 'Planar face';
@@ -874,7 +849,11 @@ export class AssemblyEditController {
   );
 
   /** REQ 1001 — datum rows are clickable mate references while picking. */
+  /** REQ 1003/1006 — set by the editor while datum rows are pick targets
+   * (new child part origin, reference point planes/axes). */
+  datumTreePickActive = signal(false);
   private datumRow(n: TreeNode): TreeNode {
+    if (this.datumTreePickActive()) return { ...n, selectable: true };
     if (!this.facePickActive()) return n;
     return { ...n, selectable: true, selected: this.pickedFaceIds().has(datumRowMateRef(n.key)!) };
   }

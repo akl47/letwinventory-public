@@ -414,6 +414,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   /** Live preview of a datum plane being constructed in the sidebar
    * (REQ 657). Renders a translucent quad at the computed plane;
    * null clears the overlay. */
+  /** REQ 1007 — reference point preview: marker + optional X/Y/Z triad. */
+  datumPointPreview = input<{ position: [number, number, number]; quaternion?: [number, number, number, number] } | null>(null);
   datumPlanePreview = input<{ origin: [number, number, number]; xAxis: [number, number, number]; yAxis: [number, number, number]; normal: [number, number, number] } | null>(null);
   /** Live preview of a Shell feature being constructed in the sidebar
    * (REQ 659). Paints each picked face in a red translucent overlay
@@ -867,6 +869,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * quad oriented to the computed plane; rebuilt on every preview input
    * change. */
   private datumPlanePreviewGroup!: THREE.Group;
+  private datumPointPreviewGroup!: THREE.Group;
   /** Overlay for the in-progress pattern feature (REQ 658). Holds N
    * ghost clones of the current body's meshes — one per pattern
    * transform. Rebuilt on every preview input change. */
@@ -1188,6 +1191,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const pv = this.datumPlanePreview();
       if (this.scene) this._rebuildDatumPlanePreview(pv);
     });
+    effect(() => {
+      const pv = this.datumPointPreview();
+      if (this.scene) this._rebuildDatumPointPreview(pv);
+    });
     // REQ 658 — pattern preview overlay. Clones the current body's
     // face meshes and applies each transform in the preview's list to
     // render ghost copies of where the pattern will land. Reads
@@ -1487,6 +1494,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.scene.add(this.edgeBlendPreviewGroup);
     this.datumPlanePreviewGroup = new THREE.Group();
     this.scene.add(this.datumPlanePreviewGroup);
+    this.datumPointPreviewGroup = new THREE.Group();
+    this.scene.add(this.datumPointPreviewGroup);
     this.patternPreviewGroup = new THREE.Group();
     this.scene.add(this.patternPreviewGroup);
     this.shellPreviewGroup = new THREE.Group();
@@ -3627,18 +3636,22 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       // (REQ 660) draw in amber and use the sidecar `axis.origin`
       // for their midpoint.
       const sidecarAxis = (d as { axis?: { origin: [number, number, number]; direction: [number, number, number] } }).axis;
-      const isUserAxis = !!sidecarAxis;
+      // REQ 1006 — a reference point's coordinate-system triad: X/Y/Z
+      // coloured, drawn one way from the point.
+      const triad = (d as { triad?: 'x' | 'y' | 'z' }).triad;
+      const isUserAxis = !!sidecarAxis && !triad;
+      const axisKey = triad ? `${triad}_axis` : d.id;
       const base = isUserAxis ? 0xffb74d
-        : d.id === 'x_axis' ? 0xe53935
-        : d.id === 'y_axis' ? 0x43a047
+        : axisKey === 'x_axis' ? 0xe53935
+        : axisKey === 'y_axis' ? 0x43a047
         : 0x1e88e5;
       const color = selected ? hi : base;
       const center = sidecarAxis
         ? new THREE.Vector3(sidecarAxis.origin[0], sidecarAxis.origin[1], sidecarAxis.origin[2])
         : new THREE.Vector3();
       const dir = new THREE.Vector3(...(sidecarAxis?.direction ?? d.direction)).normalize();
-      const end = center.clone().add(dir.clone().multiplyScalar(60));
-      const start = center.clone().add(dir.clone().multiplyScalar(-60));
+      const end = center.clone().add(dir.clone().multiplyScalar(triad ? 15 : 60));
+      const start = triad ? center.clone() : center.clone().add(dir.clone().multiplyScalar(-60));
       const geom = new THREE.BufferGeometry().setFromPoints([start, end]);
       const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: selected ? 1 : 0.55 });
       const line = new THREE.Line(geom, mat);
@@ -4805,6 +4818,33 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   /** Rebuild the datum-plane preview overlay. One translucent square
    * oriented to the computed plane, sized relative to the model. Null
    * input clears the overlay. */
+  /** REQ 1007 — amber marker at the would-be point, plus its coordinate
+   * triad (X red / Y green / Z blue) when an orientation is given. */
+  private _rebuildDatumPointPreview(pv: { position: [number, number, number]; quaternion?: [number, number, number, number] } | null): void {
+    const g = this.datumPointPreviewGroup;
+    while (g.children.length > 0) {
+      const child = g.children.pop()! as THREE.Mesh | THREE.Line;
+      child.geometry?.dispose();
+      (child.material as THREE.Material)?.dispose();
+    }
+    if (!pv) return;
+    const p = new THREE.Vector3(...pv.position);
+    const marker = new THREE.Mesh(new THREE.SphereGeometry(1.6, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0xffb74d, transparent: true, opacity: 0.85, depthTest: false }));
+    marker.position.copy(p);
+    marker.renderOrder = 12;
+    g.add(marker);
+    if (!pv.quaternion) return;
+    const q = new THREE.Quaternion(...pv.quaternion);
+    for (const [v, color] of [[[1, 0, 0], 0xe53935], [[0, 1, 0], 0x43a047], [[0, 0, 1], 0x1e88e5]] as const) {
+      const end = p.clone().add(new THREE.Vector3(...v).applyQuaternion(q).multiplyScalar(15));
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([p, end]),
+        new THREE.LineBasicMaterial({ color, depthTest: false }));
+      line.renderOrder = 12;
+      g.add(line);
+    }
+  }
+
   private _rebuildDatumPlanePreview(
     pv: { origin: [number, number, number]; xAxis: [number, number, number]; yAxis: [number, number, number]; normal: [number, number, number] } | null,
   ): void {

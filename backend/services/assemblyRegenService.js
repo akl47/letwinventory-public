@@ -509,7 +509,7 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
   // stored placements are used unchanged (Phase 1 behavior).
   let poses;
   if (mates.length) {
-    const solved = solveAssemblyMates(instances, mates, childGeoById, composed.errors);
+    const solved = solveAssemblyMates(instances, mates, childGeoById, composed.errors, assembly.featureTree);
     poses = solved.poses;
     composed.constraintState = {
       state: solved.state, dof: solved.dof, converged: solved.converged, residualNorm: solved.residualNorm,
@@ -775,7 +775,31 @@ function surfaceToGeom(surface) {
 // Resolves each mate's face references to analytic surfaces from the resolved
 // child geometry; mates with a missing instance/face/surface are skipped with an
 // error so the rest of the assembly still solves.
-function solveAssemblyMates(instances, mates, childGeoById, errors) {
+// REQ 1006 — a skeleton reference point's coordinate system as solver
+// geometry in its OWNER's local frame: `csys:<pointId>:<origin|x_axis|…>`.
+// Center-of-face points re-resolve from the owner's face mesh.
+function csysGeom(faceId, ownerId, featureTree, childGeo) {
+  const [, pointId, datum] = faceId.split(':');
+  const pt = ((featureTree && featureTree.features) || []).find((f) => f.id === pointId && f.type === 'datumPoint');
+  if (!pt || !pt.anchor || pt.anchor.instanceId !== ownerId) return null;
+  let origin = pt.anchor.local;
+  if (pt.method && pt.method.kind === 'centerOfFace') {
+    const localId = String(pt.method.faceId).split('::').pop();
+    for (const body of (childGeo && childGeo.bodies) || []) {
+      const f = (body.faces || []).find((x) => (x.faceId || x.persistentName) === localId);
+      const n = f && f.positions ? f.positions.length / 3 : 0;
+      if (!n) continue;
+      origin = [0, 1, 2].map((k) => { let s = 0; for (let i = 0; i < n; i++) s += f.positions[i * 3 + k]; return s / n; });
+      break;
+    }
+  }
+  const q = pt.anchor.quat || [0, 0, 0, 1];
+  if (datum === 'origin') return { kind: 'point', origin, frameQ: q };
+  const e = { x_axis: [1, 0, 0], y_axis: [0, 1, 0], z_axis: [0, 0, 1] }[datum];
+  return e ? { kind: 'axis', origin, direction: qRotate(q, e), radius: 0 } : null;
+}
+
+function solveAssemblyMates(instances, mates, childGeoById, errors, featureTree) {
   const surfacesByInstance = new Map();
   for (const inst of instances) surfacesByInstance.set(inst.instanceId, faceSurfaceMap(childGeoById.get(inst.instanceId)));
 
@@ -792,6 +816,10 @@ function solveAssemblyMates(instances, mates, childGeoById, errors) {
   else if (solverInstances.length && !solverInstances.some((i) => i.grounded)) solverInstances[0].grounded = true;
 
   const resolveRef = (ref) => {
+    if (String(ref.faceId).startsWith('csys:')) {
+      const geom = csysGeom(ref.faceId, ref.instanceId, featureTree, childGeoById.get(ref.instanceId));
+      return geom ? { geom } : { error: `reference point ${ref.faceId} no longer exists on ${ref.instanceId}` };
+    }
     if (ref.instanceId === ASSEMBLY_REF_ID) {
       return DATUM_GEOM[ref.faceId] ? { geom: { ...DATUM_GEOM[ref.faceId] } } : { error: 'only assembly origin datums can be mated to' };
     }
@@ -808,9 +836,14 @@ function solveAssemblyMates(instances, mates, childGeoById, errors) {
     return { geom };
   };
 
+  // Lock mates freeze the relative transform and never read geometry — a
+  // faceless lock (REQ 920/1003) only needs both instances to exist.
+  const resolveLockRef = (ref) => (ref.instanceId === ASSEMBLY_REF_ID || surfacesByInstance.has(ref.instanceId)
+    ? { geom: null } : { error: `mate references unknown instance ${ref.instanceId}` });
   const solverMates = [];
   for (const mate of mates) {
-    const a = resolveRef(mate.a); const b = resolveRef(mate.b);
+    const resolve = mate.type === 'lock' && (!mate.a.faceId || !mate.b.faceId) ? resolveLockRef : resolveRef;
+    const a = resolve(mate.a); const b = resolve(mate.b);
     if (a.error || b.error) { errors.push(`Mate ${mate.id}: ${a.error || b.error}`); continue; }
     solverMates.push({
       id: mate.id, type: mate.type,

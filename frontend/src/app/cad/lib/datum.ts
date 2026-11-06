@@ -256,6 +256,17 @@ export type DatumPointResult =
   | { ok: true; position: [number, number, number] }
   | { ok: false; error: string };
 
+/** REQ 1006 — the single point shared by three planes; null when any two
+ * are parallel (or all three share a line). */
+export function intersectThreePlanes(a: Plane3, b: Plane3, c: Plane3): [number, number, number] | null {
+  const n1 = unit3(a.normal as V3), n2 = unit3(b.normal as V3), n3 = unit3(c.normal as V3);
+  const c23 = cross3(n2, n3), c31 = cross3(n3, n1), c12 = cross3(n1, n2);
+  const det = dot3(n1, c23);
+  if (Math.abs(det) < 1e-6) return null;
+  const d1 = dot3(n1, a.origin as V3), d2 = dot3(n2, b.origin as V3), d3 = dot3(n3, c.origin as V3);
+  return [0, 1, 2].map(i => (d1 * c23[i] + d2 * c31[i] + d3 * c12[i]) / det) as [number, number, number];
+}
+
 /** Look up a face mesh in geometry.faces by its faceId. */
 function findFaceMesh(geometry: ModelGeometry, faceId: string) {
   return geometry.faces.find(f => f.faceId === faceId) ?? null;
@@ -416,6 +427,12 @@ export function computeDatumPoint(feature: DatumPointFeature, geometry: ModelGeo
       // the live centroid lives on the body record but isn't part of
       // ModelGeometry yet, so today we always use the snapshot.
       return { ok: true, position: m.fallbackPosition };
+    }
+    case 'threePlanes': {
+      const planes = m.planeRefs.map(r => resolvePlaneRef(r, geometry));
+      if (planes.some(p => !p)) return { ok: false, error: 'Reference plane/face no longer exists. Re-pick.' };
+      const p = intersectThreePlanes(planes[0]!, planes[1]!, planes[2]!);
+      return p ? { ok: true, position: p } : { ok: false, error: 'The three planes don’t meet at a single point (two are parallel).' };
     }
     case 'alongEdge': {
       const t = Math.max(0, Math.min(1, m.t));
