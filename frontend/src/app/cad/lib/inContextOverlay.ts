@@ -119,7 +119,22 @@ export function buildInContextOverlay(regen: AssemblyRegenResponse, hostInstance
         stableId: cpEdgeStableId(body.instanceId, sourceStart, sourceEnd),
       });
     }
+    // A closed edge's (circle / full ellipse) seam vertex is an arbitrary
+    // point on the curve, not a corner — offering it as a reference vertex
+    // made clicks on small holes convert to a lone point instead of the
+    // circle. Corners are endpoints of OPEN edges; keep only those.
+    // Round to 1e-4; tiny negatives must not print as "-0.0000" (a circle
+    // starting at y=0 often ends at y=-1e-17).
+    const key = (p: number[]) => p.slice(0, 3).map((c) => (Math.abs(c) < 5e-5 ? 0 : c).toFixed(4)).join(',');
+    const seams = new Set<string>(), corners = new Set<string>();
+    for (const e of body.edges || []) {
+      const pl = e.polyline as number[][];
+      if (pl.length < 2) continue;
+      const a = key(pl[0]), b = key(pl[pl.length - 1]);
+      if (a === b) seams.add(a); else { corners.add(a); corners.add(b); }
+    }
     for (const v of body.vertices || []) {
+      if (seams.has(key(v)) && !corners.has(key(v))) continue;
       const world: Vec3 = [v[0], v[1], v[2]];
       const position = transformPoint(inv, world);
       const sourcePosition = transformPoint(toSource, world);

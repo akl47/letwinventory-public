@@ -1,6 +1,6 @@
 import { Injectable, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
-import { CadTab, closeTab, openTab, parseTabs, tabLink } from '../cad/lib/cadTabs';
+import { CadTab, closeTab, moveTab, openTab, parseTabs, tabLink } from '../cad/lib/cadTabs';
 
 const STORAGE_KEY = 'cad-editor-tabs';
 
@@ -11,6 +11,8 @@ export class CadTabsService {
   readonly tabs = signal<CadTab[]>(this.restore());
 
   open(tab: CadTab) { this.set(openTab(this.tabs(), tab)); }
+
+  move(from: number, to: number) { this.set(moveTab(this.tabs(), from, to)); }
 
   close(partID: number, activePartID: number | null) {
     const r = closeTab(this.tabs(), partID, activePartID);

@@ -117,6 +117,21 @@ describe('cross-part overlay vertices', () => {
   });
 });
 
+describe('circle seam vertices are not reference vertices (REQ 790)', () => {
+  const ID = { translate: [0, 0, 0], quaternion: [0, 0, 0, 1] };
+  it('drops a vertex used only as a closed edge seam, keeps real corners', () => {
+    const circle = [[3, 0, 0], [0, 3, 0], [-3, 0, 0], [0, -3, 0], [3, -1e-17, 0]];  // closes at -0
+    const other: any = body('i2', ID, [0, 0, 0, 1, 0, 0, 0, 1, 0], circle);
+    other.edges.push({ polyline: [[10, 0, 0], [20, 0, 0]] });
+    other.vertices = [[3, 0, 0], [10, 0, 0], [20, 0, 0]];
+    const r = regen([body('host', ID, [0, 0, 0, 1, 0, 0, 0, 1, 0], []), other],
+      [{ instanceId: 'host', partID: 1, placement: ID, bodyIds: [] }, { instanceId: 'i2', partID: 1, placement: ID, bodyIds: [] }]);
+    const ov = buildInContextOverlay(r, 'host');
+    expect(ov.vertices.map((v) => v.position[0])).toEqual([10, 20]);
+    expect(ov.edges).toHaveLength(2);  // the circle edge itself stays pickable
+  });
+});
+
 describe('skeleton overlay entries (REQ 915)', () => {
   const ID = { translate: [0, 0, 0] as [number, number, number], quaternion: [0, 0, 0, 1] as [number, number, number, number] };
   it('appends skeleton edges/vertices in host-local frame with asketch keys', () => {

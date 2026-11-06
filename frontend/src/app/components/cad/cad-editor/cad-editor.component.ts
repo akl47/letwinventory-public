@@ -4809,7 +4809,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-431';
+  readonly buildMarker = 'text-433';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -7042,6 +7042,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       case 'select':
         // REQ 1001 — datum rows feed the mate picker.
         if (this.asm.facePickActive() && datumRowMateRef(e.node.key)) { this.asm.onFacePicked(datumRowMateRef(e.node.key)!); break; }
+        // Picking a skeleton sketch plane: assembly origin planes host it.
+        if (this.mode() === 'pick-plane' && e.node.key.startsWith('origin-datum:')
+            && this._pickSketchPlaneFromTree(e.node.key.slice('origin-datum:'.length))) break;
         // REQ 1006 — datum rows feed the reference point's planes / axes and
         // the datum plane sidebar's plane refs.
         if (this.datumPointSidebar() && this._datumIdOfRow(e.node.key)) { this.addDatumPointDatumPick(this._datumIdOfRow(e.node.key)!); break; }
@@ -7111,6 +7114,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         // REQ 1006 — skeleton planes/points as references for the active pick.
         if (this.datumPointSidebar()) { this.addDatumPointDatumPick(n.datumId); return; }
         if (this.datumPlaneSidebar()) { this.addDatumPlaneDatumPick(n.datumId); return; }
+        if (this.mode() === 'pick-plane') { this._pickSketchPlaneFromTree(n.datumId); return; }
         if (this.asm.facePickActive()) { const ref = this._csysMateRef(n.datumId); if (ref) this.asm.onFacePicked(ref); return; }
         if (this.mode() === 'pick-child-origin') { this._childOriginAtPoint(n.datumId); return; }
       }
@@ -7672,7 +7676,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   promptText = computed(() => {
     const m = this.mode();
-    if (m === 'pick-plane') return 'Click a datum plane or flat face in the viewer to start a sketch on it.';
+    if (m === 'pick-plane') return 'Click a datum plane or flat face (in the viewer or feature tree) to start a sketch on it.';
     if (m === 'pick-child-origin') return 'Click a skeleton sketch point, a component vertex or face point, or a datum (in the viewer or tree) — that becomes the new part’s origin.';
     if (m === 'pick-sketch-host') return 'Click a datum plane or flat face in the viewer to set the sketch’s new reference.';
     if (m === 'pick-extrude-target') {
@@ -7761,7 +7765,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     });
     // Datum tree rows are pick targets while choosing a new part's origin or
     // building a reference point / plane.
-    effect(() => this.asm.datumTreePickActive.set(this.mode() === 'pick-child-origin'
+    effect(() => this.asm.datumTreePickActive.set(this.mode() === 'pick-child-origin' || this.mode() === 'pick-plane'
       || this.datumPointSidebar() !== null || this.datumPlaneSidebar() !== null));
     // History capture — debounced 500ms. Watches the two mutable model
     // signals (featureTree + doc) and records a snapshot once they settle.
@@ -8400,6 +8404,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // REQ 626 — feature-tree row click. Shared multi-select policy with the
   // viewer click path.
   onFeatureTreeSelect(ev: FeatureSelectEvent) {
+    // Picking a sketch plane: a user datum plane row hosts the sketch.
+    if (this.mode() === 'pick-plane' && this._pickSketchPlaneFromTree(ev.featureId)) return;
     // Selecting in the tree supersedes a transient 3D face pick — clear it so a
     // previously-clicked face doesn't stay highlighted blue in the viewer.
     if (this.selected() !== null) this.selected.set(null);
@@ -9534,6 +9540,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // Single-click on an origin datum row (point / axis / plane) selects it,
   // unified into the same feature-tree selection model (shift range, ctrl toggle).
   onTreeDatumSelect(ev: { datumId: string; shiftKey: boolean; ctrlKey: boolean }) {
+    // Picking a sketch plane: an origin plane row hosts the sketch.
+    if (this.mode() === 'pick-plane' && this._pickSketchPlaneFromTree(ev.datumId)) return;
     // REQ 907 — with a sketch open and the dimension tool armed, a datum
     // plane pick from the tree becomes a dimension reference: project the
     // plane into the sketch as a pinned construction line and select it.
@@ -9542,6 +9550,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     if (this.selected() !== null) this.selected.set(null);
     this.applyTreeSelection('datum', ev.datumId, ev.shiftKey, ev.ctrlKey);
+  }
+
+  /** A datum plane clicked in the feature tree while picking a sketch plane
+   * starts the sketch on it (same path as clicking it in the viewer). */
+  private _pickSketchPlaneFromTree(datumId: string): boolean {
+    if (!this._resolveDatumPlane(`datum:${datumId}`)) return false;
+    this.startSketchOnDatum(`datum:${datumId}`);
+    return true;
   }
 
   /** REQ 907 — select a datum PLANE or AXIS as the pending dimension

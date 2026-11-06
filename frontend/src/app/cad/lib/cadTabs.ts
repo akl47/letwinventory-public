@@ -6,12 +6,22 @@ export interface CadTab {
   /** Part-CAD model id (the editor's `revisionID` query param). */
   revisionID?: number;
   name: string;
-  /** Revision shown after the name (e.g. "02*" for a draft). */
+  /** Revision shown after the part number (e.g. "02*" for a draft). */
   rev?: string;
 }
 
+/** `PN-rev`, e.g. "Bracket-02*". */
 export function tabLabel(tab: CadTab): string {
-  return tab.rev ? `${tab.name} rev ${tab.rev}` : tab.name;
+  return tab.rev ? `${tab.name}-${tab.rev}` : tab.name;
+}
+
+/** Move the tab at `from` to index `to` (drag reorder). */
+export function moveTab(tabs: CadTab[], from: number, to: number): CadTab[] {
+  if (from === to || from < 0 || from >= tabs.length) return tabs;
+  const next = tabs.slice();
+  const [t] = next.splice(from, 1);
+  next.splice(Math.max(0, Math.min(to, next.length)), 0, t);
+  return next;
 }
 
 /** Add a tab, or refresh an existing one in place. */
