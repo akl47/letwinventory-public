@@ -10,6 +10,8 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { CadNewPartDialogComponent } from '../cad-new-part-dialog/cad-new-part-dialog.component';
+import { CadPartTabsComponent } from '../cad-part-tabs/cad-part-tabs.component';
+import { CadTabsService } from '../../../services/cad-tabs.service';
 import { CadModelService } from '../../../services/cad-model.service';
 import { AssemblyService } from '../../../services/assembly.service';
 import { PartWithCadSummary } from '../../../models/cad-model.model';
@@ -25,9 +27,11 @@ import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-tabl
     CommonModule, RouterLink, FormsModule,
     MatButtonModule, MatIconModule,
     MatFormFieldModule, MatInputModule, MatProgressSpinnerModule, MatTooltipModule, MatDialogModule,
-    DataTable, DataTableColumnDef,
+    DataTable, DataTableColumnDef, CadPartTabsComponent,
   ],
   template: `
+    <!-- REQ 1002 — keep the editor's open-parts tabs reachable from here. -->
+    @if (cadTabs.tabs().length) { <app-cad-part-tabs /> }
     <div class="cad-landing" data-testid="cad-landing">
       <header class="page-header">
         <mat-icon class="page-icon">view_in_ar</mat-icon>
@@ -178,6 +182,7 @@ export class CadLandingComponent implements OnInit {
   private errors = inject(ErrorNotificationService);
   private router = inject(Router);
   private dialog = inject(MatDialog);
+  readonly cadTabs = inject(CadTabsService);
 
   /** Open the reduced new-part dialog (CAD part or assembly), then refresh on
    * close in case the user cancels navigation. */

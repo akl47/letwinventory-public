@@ -20,6 +20,8 @@ export interface AssemblyInstance {
   configurationId?: string;
   grounded?: boolean;
   placement: Placement;
+  /** REQ 1007 — insert time (ms) for the creation-ordered tree; absent on legacy instances. */
+  createdAt?: number;
   suppressed?: boolean;
   visible?: boolean;
 }
@@ -46,7 +48,17 @@ export function frameYOptions(x: FrameAxis): FrameAxis[] {
 }
 /** True for a scoped ref to a component origin or the assembly origin. */
 export function isOriginRef(scopedId: string | null): boolean {
-  return !!scopedId && scopedId.endsWith('::origin');
+  return !!scopedId && (scopedId.endsWith('::origin') || /::csys:[^:]+:origin$/.test(scopedId));
+}
+
+/** REQ 1006 — mate-ref face id for a skeleton point's coordinate system:
+ * `csys:<pointFeatureId>:<origin|x_axis|y_axis|z_axis>`. */
+export function csysRefId(pointId: string, datum: 'origin' | 'x_axis' | 'y_axis' | 'z_axis'): string {
+  return `csys:${pointId}:${datum}`;
+}
+/** The datum part of a csys ref face id (`origin`, `x_axis`, …), or the id itself. */
+export function csysDatumOf(faceId: string): string {
+  return faceId.startsWith('csys:') ? faceId.split(':')[2] : faceId;
 }
 
 export interface Mate {

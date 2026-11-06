@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { FRAME_AXES, MATE_TYPES, availableMateTypes, datumRowMateRef, frameYOptions, isOriginRef, mateAllows, validMateTypes } from './assembly.types';
+import { csysDatumOf, FRAME_AXES, MATE_TYPES, availableMateTypes, datumRowMateRef, frameYOptions, isOriginRef, mateAllows, validMateTypes } from './assembly.types';
 
 describe('origin mate helpers (REQ 998/999)', () => {
   it('recognises component and assembly origin refs', () => {
@@ -53,5 +53,14 @@ describe('tree datum rows as mate refs (REQ 1001)', () => {
     expect(datumRowMateRef('origin-datum:xy_plane')).toBe('__assembly__::xy_plane');
     expect(datumRowMateRef('component-datum:i3:z_axis')).toBe('i3::z_axis');
     expect(datumRowMateRef('component:i3')).toBeNull();
+  });
+});
+
+describe('point coordinate-system refs (REQ 1006)', () => {
+  it('treats a point coordinate-system origin as an origin ref', () => {
+    expect(isOriginRef('i1::csys:pt1:origin')).toBe(true);
+    expect(isOriginRef('__assembly__::csys:pt1:x_axis')).toBe(false);
+    expect(csysDatumOf('csys:pt1:z_axis')).toBe('z_axis');
+    expect(csysDatumOf('xy_plane')).toBe('xy_plane');
   });
 });

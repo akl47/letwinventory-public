@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   IDENTITY_QUAT, Quat, Vec3,
-  rotateAboutAssemblyAxis, alignZToNormal, qRotate, axisMappingLabel,
+  rotateAboutAssemblyAxis, alignZToNormal, qRotate, axisMappingLabel, originMateFrame, csysQuat,
 } from './insertOrientation';
 
 // Canonical, axis-aligned rotation matrix as a comparable key. Each column is
@@ -86,5 +86,44 @@ describe('insertOrientation', () => {
     expect(axisMappingLabel(IDENTITY_QUAT)).toBe('+X→+X · +Y→+Y · +Z→+Z');
     const q = rotateAboutAssemblyAxis(IDENTITY_QUAT, 'x', 90);
     expect(axisMappingLabel(q)).toBe('+X→+X · +Y→+Z · +Z→−Y');
+  });
+});
+
+describe('origin mate frame for a new child part (REQ 1003)', () => {
+  it('identity orientation aligns X and Y', () => {
+    expect(originMateFrame(IDENTITY_QUAT, IDENTITY_QUAT)).toEqual({ x: '+x', y: '+y' });
+  });
+
+  it('maps the part axes onto the anchor axes they land on', () => {
+    const q = rotateAboutAssemblyAxis(IDENTITY_QUAT, 'z', 90); // part X → +Y, part Y → -X
+    expect(originMateFrame(IDENTITY_QUAT, q)).toEqual({ x: '+y', y: '-x' });
+  });
+
+  it('is relative to a rotated anchor component', () => {
+    const anchor = rotateAboutAssemblyAxis(IDENTITY_QUAT, 'z', 90);
+    expect(originMateFrame(anchor, anchor)).toEqual({ x: '+x', y: '+y' });
+  });
+
+  it('returns null when the orientation is not axis-aligned', () => {
+    expect(originMateFrame(IDENTITY_QUAT, alignZToNormal([1, 1, 0]))).toBeNull();
+  });
+});
+
+describe('point coordinate-system orientation (REQ 1006)', () => {
+  const r = (v: number[]) => v.map((n) => Math.round(n * 1e6) / 1e6 + 0);
+  it('keeps the base axes with no overrides', () => {
+    const base = rotateAboutAssemblyAxis(IDENTITY_QUAT, 'z', 90);
+    expect(csysQuat(base, null, null)).toEqual(base);
+  });
+  it('Z override wins and X is made perpendicular to it', () => {
+    const q = csysQuat(IDENTITY_QUAT, [1, 1, 0], [0, 1, 0]);
+    expect(r(qRotate(q, [0, 0, 1]))).toEqual([0, 1, 0]);
+    expect(r(qRotate(q, [1, 0, 0]))).toEqual([1, 0, 0]);
+    expect(r(qRotate(q, [0, 1, 0]))).toEqual([0, 0, -1]);
+  });
+  it('X override alone keeps Z as close to the base Z as possible', () => {
+    const q = csysQuat(IDENTITY_QUAT, [0, 1, 0], null);
+    expect(r(qRotate(q, [1, 0, 0]))).toEqual([0, 1, 0]);
+    expect(r(qRotate(q, [0, 0, 1]))).toEqual([0, 0, 1]);
   });
 });

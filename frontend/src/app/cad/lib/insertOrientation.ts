@@ -9,6 +9,8 @@
 //
 // Quaternion convention matches the rest of the assembly code: [x, y, z, w].
 
+import type { FrameAxis, MateFrame } from './assembly.types';
+
 export type Quat = [number, number, number, number];
 export type Vec3 = [number, number, number];
 
@@ -101,4 +103,52 @@ export function axisMappingLabel(q: Quat): string {
   const y = nearestAsmAxis(qRotate(q, [0, 1, 0]));
   const z = nearestAsmAxis(qRotate(q, [0, 0, 1]));
   return `+X→${x} · +Y→${y} · +Z→${z}`;
+}
+
+/** Quaternion whose rotation maps +X/+Y/+Z onto the orthonormal columns x/y/z. */
+export function quatFromBasis(x: Vec3, y: Vec3, z: Vec3): Quat {
+  const [m00, m10, m20] = x, [m01, m11, m21] = y, [m02, m12, m22] = z;
+  const tr = m00 + m11 + m22;
+  let q: Quat;
+  if (tr > 0) { const s = Math.sqrt(tr + 1) * 2; q = [(m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, s / 4]; }
+  else if (m00 > m11 && m00 > m22) { const s = Math.sqrt(1 + m00 - m11 - m22) * 2; q = [s / 4, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s]; }
+  else if (m11 > m22) { const s = Math.sqrt(1 + m11 - m00 - m22) * 2; q = [(m01 + m10) / s, s / 4, (m12 + m21) / s, (m02 - m20) / s]; }
+  else { const s = Math.sqrt(1 + m22 - m00 - m11) * 2; q = [(m02 + m20) / s, (m12 + m21) / s, s / 4, (m10 - m01) / s]; }
+  return qNorm(q);
+}
+
+/** REQ 1006 — coordinate-system orientation: start from `base`'s axes and
+ * override Z and/or X with picked directions (Z wins; X is made
+ * perpendicular to it). Null overrides keep the base axis. */
+export function csysQuat(base: Quat, x: Vec3 | null, z: Vec3 | null): Quat {
+  const unit = (v: Vec3): Vec3 => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  // Make `v` perpendicular to unit `n`, falling back when they're parallel.
+  const perp = (v: Vec3, n: Vec3, fallback: Vec3): Vec3 => {
+    const p: Vec3 = [v[0] - n[0] * dot(v, n), v[1] - n[1] * dot(v, n), v[2] - n[2] * dot(v, n)];
+    return Math.hypot(p[0], p[1], p[2]) > 1e-6 ? unit(p) : perp(fallback, n, [n[1], n[2], n[0]]);
+  };
+  const bx = qRotate(base, [1, 0, 0]), by = qRotate(base, [0, 1, 0]), bz = qRotate(base, [0, 0, 1]);
+  let zz: Vec3, xx: Vec3;
+  if (z) { zz = unit(z); xx = perp(x ?? bx, zz, by); }
+  else if (x) { xx = unit(x); zz = perp(bz, xx, by); }
+  else return base;
+  return quatFromBasis(xx, cross(zz, xx), zz);
+}
+
+const SIGNED_AXES: Array<[FrameAxis, Vec3]> = [
+  ['+x', [1, 0, 0]], ['-x', [-1, 0, 0]], ['+y', [0, 1, 0]], ['-y', [0, -1, 0]], ['+z', [0, 0, 1]], ['-z', [0, 0, -1]],
+];
+
+/** REQ 1003 — the coincident origin-mate frame (`second X → first <x>`,
+ * `second Y → first <y>`) that holds a part at `partQ` relative to an anchor
+ * at `anchorQ`. Null when the relative orientation isn't axis-aligned. */
+export function originMateFrame(anchorQ: Quat, partQ: Quat): MateFrame | null {
+  const [ax, ay, az, aw] = anchorQ;
+  const rel = qMul([-ax, -ay, -az, aw], partQ);
+  const axisOf = (v: Vec3) => SIGNED_AXES.find(([, a]) => Math.abs(a[0] - v[0]) + Math.abs(a[1] - v[1]) + Math.abs(a[2] - v[2]) < 1e-6)?.[0];
+  const x = axisOf(qRotate(rel, [1, 0, 0]));
+  const y = axisOf(qRotate(rel, [0, 1, 0]));
+  return x && y ? { x, y } : null;
 }

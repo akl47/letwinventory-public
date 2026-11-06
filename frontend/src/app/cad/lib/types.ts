@@ -967,7 +967,17 @@ export interface DatumPointFeature {
     | { kind: 'centerOfFace'; faceId: string; fallbackPosition: [number, number, number] }
     | { kind: 'centerOfCircularEdge'; edgeRef: EdgeRef3D }
     | { kind: 'centerOfMass'; bodyId: string; fallbackPosition: [number, number, number] }
-    | { kind: 'alongEdge'; edgeRef: EdgeRef3D; t: number };
+    | { kind: 'alongEdge'; edgeRef: EdgeRef3D; t: number }
+    /** REQ 1006 — assembly skeleton points: intersection of three planes. */
+    | { kind: 'threePlanes'; planeRefs: [PlaneRef, PlaneRef, PlaneRef] };
+  /** REQ 1005/1006 — assembly skeleton points only: the owner the point is
+   * attached to (a component instance id or `__assembly__`), the point in
+   * the owner's frame, and its coordinate-system orientation in that frame
+   * ([x, y, z, w]; absent = the owner's axes). */
+  anchor?: { instanceId: string; local: [number, number, number]; quat?: [number, number, number, number] };
+  /** REQ 1006 — datum axes the user picked to orient the coordinate system
+   * (kept for editing; resolved into `anchor.quat` on commit). */
+  orient?: { z?: string; zFlip?: boolean; x?: string; xFlip?: boolean };
   visible?: boolean;
   name?: string;
   createdAt?: number;

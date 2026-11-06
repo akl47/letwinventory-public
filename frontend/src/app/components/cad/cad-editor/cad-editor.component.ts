@@ -17,6 +17,8 @@ import { MatSelectModule } from '@angular/material/select';
 import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import { CadModelService } from '../../../services/cad-model.service';
 import { InventoryService } from '../../../services/inventory.service';
+import { CadTabsService } from '../../../services/cad-tabs.service';
+import { CadPartTabsComponent } from '../cad-part-tabs/cad-part-tabs.component';
 import { Part } from '../../../models/part.model';
 import { CadModel, CadCommit, CadBranch, CadCommitDiff, CadWorkflow, CadDefaultView, CadCommitGeometry, PartWithCadSummary } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
@@ -60,6 +62,8 @@ import { parseUserValue, formatNumber, type Unit } from '../../../cad/lib/units'
 import { migrateSketchDocument, migrateFeatureTree } from '../../../cad/lib/migration';
 import { friendlyError } from '../../../cad/lib/errorMessages';
 import { planeForDatum, buildOriginDatums, computeDatumPlane, computeDatumAxis, computeDatumPoint, resolvePlaneRef } from '../../../cad/lib/datum';
+import { inverseTransform, transformPoint } from '../../../cad/lib/placementMath';
+import { csysQuat, qMul, type Quat } from '../../../cad/lib/insertOrientation';
 import { circularTransforms, linearTransforms } from '../../../cad/lib/pattern';
 import { inferLineEnd, inferHoverOnCurve, inferAlignment } from '../../../cad/lib/inference';
 import { allCurveIntersections, angleInArcSweep, planeSketchIntersection, lineSketchProjection } from '../../../cad/lib/geometry';
@@ -74,9 +78,10 @@ import { CadConfigurationsPanelComponent } from '../cad-configurations-panel/cad
 import { CadFeatureDeleteDialogComponent, type FeatureDeleteResult } from '../cad-feature-delete-dialog/cad-feature-delete-dialog.component';
 import { AssemblyEditController } from '../assembly-editor/assembly-edit.controller';
 import { AssemblyService } from '../../../services/assembly.service';
-import { computeSkeletonDatums, ORIGIN_DATUM_DESCRIPTORS } from '../../../cad/lib/assemblyDatums';
+import { creationOrderTree } from '../../../cad/lib/assemblyTreeOrder';
+import { computeSkeletonDatums, meshFacePlane, placedOriginDatums, ORIGIN_DATUM_DESCRIPTORS, type PlacedDatum } from '../../../cad/lib/assemblyDatums';
 import type { Assembly, AssemblyInstance, Mate, AssemblyPattern, DisplayState } from '../../../cad/lib/assembly.types';
-import { ASSEMBLY_REF_ID, FRAME_AXES, datumRowMateRef } from '../../../cad/lib/assembly.types';
+import { ASSEMBLY_REF_ID, FRAME_AXES, datumRowMateRef, csysRefId } from '../../../cad/lib/assembly.types';
 import { buildInContextOverlay, SKELETON_INSTANCE_ID, type InContextOverlay, type OverlayEdge, type OverlayFace, type OverlayVertex } from '../../../cad/lib/inContextOverlay';
 
 /** Snap kinds. Drives the viewer's snap-indicator glyph: square for
@@ -123,7 +128,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     MatSelectModule, MatMenuModule,
     CadViewerComponent, CadFeatureTreePanelComponent, CadSketchEditorComponent, CadConstraintListComponent,
     CadDimensionPropertiesComponent,
-    CategoryBadge, DimInputComponent, CadSelectionListComponent,
+    CategoryBadge, DimInputComponent, CadSelectionListComponent, CadPartTabsComponent,
   ],
   // Assembly mode state is scoped per editor instance.
   providers: [AssemblyEditController],
@@ -136,6 +141,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
         <mat-icon>screen_rotation</mat-icon>
         <p>Rotate your device to landscape to use the CAD editor.</p>
       </div>
+      <!-- REQ 1002 — open parts/assemblies tab strip. -->
+      <app-cad-part-tabs [activePartID]="partID()" />
       <!-- REQ 616 — tabbed ribbon. Toolbar content swaps with the active tab.
            Active tab follows the editor context (auto-switches to Sketch when a
            sketch is active) but the user can manually click tabs to override.
@@ -639,6 +646,13 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                         [matTooltip]="(readonly() ? readonlyHint() : null) || 'Datum plane from assembly datums'">
                   <mat-icon svgIcon="cad-datum-plane"></mat-icon><span class="ribbon-label">Plane</span>
                 </button>
+                <button class="ribbon-button" data-testid="asm-action-datum-point"
+                        [class.active]="datumPointSidebar() !== null"
+                        [disabled]="readonly()"
+                        (click)="onDatumPointAction()"
+                        [matTooltip]="(readonly() ? readonlyHint() : null) || 'Reference point from component geometry'">
+                  <mat-icon>place</mat-icon><span class="ribbon-label">Point</span>
+                </button>
                 <button class="ribbon-button" data-testid="asm-action-variables"
                         (click)="openEquationsPanel()"
                         matTooltip="Assembly variables and equations">
@@ -796,16 +810,12 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <mat-menu #asmCtxMenu="matMenu">
               @if (asmCtxItem(); as item) {
                 @if (item.kind === 'component') {
+                  <button mat-menu-item (click)="openPartInTab(item.inst)"><mat-icon>tab</mat-icon> Open in new tab</button>
                   <button mat-menu-item (click)="openPartInNewTab(item.inst)"><mat-icon>open_in_new</mat-icon> Open part</button>
                   <button mat-menu-item (click)="editInContext(item.inst)"><mat-icon>edit_note</mat-icon> Edit in context</button>
                   <button mat-menu-item (click)="asm.startReplace(item.inst)"><mat-icon>swap_horiz</mat-icon> Replace…</button>
                   <button mat-menu-item (click)="asm.openTrackBranch(item.inst)"><mat-icon svgIcon="cad-branch"></mat-icon> Track branch…</button>
                   <button mat-menu-item (click)="asm.openInstanceConfig(item.inst)"><mat-icon>tune</mat-icon> Configuration…</button>
-                  @if (item.inst.grounded || asm.isOriginMated(item.inst)) {
-                    <button mat-menu-item (click)="asm.freeFromOrigin(item.inst)"><mat-icon>link_off</mat-icon> Free from origin</button>
-                  } @else {
-                    <button mat-menu-item (click)="asm.fixToOrigin(item.inst)"><mat-icon>my_location</mat-icon> Mate to origin</button>
-                  }
                   <button mat-menu-item (click)="asm.toggleSuppressed(item.inst)">
                     <mat-icon>{{ item.inst.suppressed ? 'play_arrow' : 'block' }}</mat-icon>
                     {{ item.inst.suppressed ? 'Unsuppress' : 'Suppress' }}
@@ -823,7 +833,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <button mat-menu-item [disabled]="readonly()" (click)="renameSkeletonSketch(item.sketchId)"><mat-icon>drive_file_rename_outline</mat-icon> Rename…</button>
                   <button mat-menu-item [disabled]="readonly()" (click)="deleteSkeletonSketch(item.sketchId)"><mat-icon>delete</mat-icon> Delete sketch</button>
                 } @else if (item.kind === 'skeleton-plane') {
-                  <button mat-menu-item [disabled]="readonly()" (click)="deleteSkeletonPlane(item.featureId)"><mat-icon>delete</mat-icon> Delete plane</button>
+                  <button mat-menu-item [disabled]="readonly()" (click)="editSkeletonFeature(item.featureId)"><mat-icon>edit</mat-icon> Edit</button>
+                  <button mat-menu-item [disabled]="readonly()" (click)="deleteSkeletonPlane(item.featureId)"><mat-icon>delete</mat-icon> Delete</button>
                 } @else {
                   <button mat-menu-item (click)="asm.applyDisplayState(item.state)"><mat-icon>visibility</mat-icon> Apply</button>
                   <button mat-menu-item (click)="asm.deleteDisplayState(item.state)"><mat-icon>delete</mat-icon> Delete display state</button>
@@ -2856,8 +2867,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <option value="onVertex">On Vertex</option>
                 <option value="centerOfFace">Center of Face</option>
                 <option value="centerOfCircularEdge">Center of Circular Edge</option>
-                <option value="centerOfMass">Center of Mass (Body)</option>
+                <option value="centerOfMass" *ngIf="!assemblyMode()">Center of Mass (Body)</option>
                 <option value="alongEdge">Along Edge (parametric)</option>
+                <option value="threePlanes" *ngIf="assemblyMode()">On 3 Planes</option>
               </select>
             </div>
 
@@ -2922,6 +2934,47 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                        [value]="datumPointT()"
                        (input)="datumPointT.set(_clamp01(+$any($event.target).value))" />
               </div>
+            </ng-container>
+
+            <ng-container *ngIf="dpCtx2.method === 'threePlanes'">
+              <cad-selection-list label="Planes" headerIcon="crop_din"
+                  testid="datum-point-planes"
+                  [rows]="datumPointPlaneRows()"
+                  [active]="datumPointPlanes().length < 3"
+                  emptyHint="Click 3 planes or flat faces (viewer or tree)"
+                  (remove)="datumPointPlanes.set(datumPointPlanes().filter((_, i) => i !== +$event))"
+                  (clear)="datumPointPlanes.set([])">
+              </cad-selection-list>
+            </ng-container>
+
+            <!-- REQ 1006 — coordinate-system axes (default: the owner's axes). -->
+            <ng-container *ngIf="assemblyMode()">
+              <cad-selection-list label="Z axis (optional)" headerIcon="north" style="cursor:pointer"
+                  testid="datum-point-z"
+                  [rows]="datumPointZRows()" [showCount]="false"
+                  [active]="datumPointOrientSlot() === 'z'"
+                  emptyHint="Default: component Z — click an axis to override"
+                  (click)="datumPointOrientSlot.set('z')"
+                  (remove)="datumPointOrient.set({ x: datumPointOrient().x, xFlip: datumPointOrient().xFlip })"
+                  (clear)="datumPointOrient.set({ x: datumPointOrient().x, xFlip: datumPointOrient().xFlip })">
+              </cad-selection-list>
+              <label class="panel-checkbox" *ngIf="datumPointOrient().z">
+                <input type="checkbox" [checked]="!!datumPointOrient().zFlip"
+                       (change)="datumPointOrient.set({ ...datumPointOrient(), zFlip: $any($event.target).checked })" /> Reverse Z
+              </label>
+              <cad-selection-list label="X axis (optional)" headerIcon="east" style="cursor:pointer"
+                  testid="datum-point-x"
+                  [rows]="datumPointXRows()" [showCount]="false"
+                  [active]="datumPointOrientSlot() === 'x'"
+                  emptyHint="Default: component X — click an axis to override"
+                  (click)="datumPointOrientSlot.set('x')"
+                  (remove)="datumPointOrient.set({ z: datumPointOrient().z, zFlip: datumPointOrient().zFlip })"
+                  (clear)="datumPointOrient.set({ z: datumPointOrient().z, zFlip: datumPointOrient().zFlip })">
+              </cad-selection-list>
+              <label class="panel-checkbox" *ngIf="datumPointOrient().x">
+                <input type="checkbox" [checked]="!!datumPointOrient().xFlip"
+                       (change)="datumPointOrient.set({ ...datumPointOrient(), xFlip: $any($event.target).checked })" /> Reverse X
+              </label>
             </ng-container>
 
             <div class="panel-actions">
@@ -3927,7 +3980,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [profileFillsHovered]="extrudeHoveredRegion()"
               [vertexPickMode]="vertexPickMode() || mode() === 'pick-child-origin'"
               [extraPickableVertices]="sketchPickableVertices()"
-              [facePickMode]="assemblyMode() ? (asm.facePickActive() || mode() === 'pick-child-origin') : facePickActive()"
+              [facePickMode]="assemblyMode() ? (asm.facePickActive() || mode() === 'pick-child-origin' || datumPlaneSidebar() !== null || datumPointSidebar() !== null) : facePickActive()"
               [planePickMode]="sketchPlanePickActive()"
               [facePickExcludeFeatureId]="extrudeSidebar()?.editingFeatureId ?? null"
               [axisPickMode]="axisPickMode()"
@@ -3938,6 +3991,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [featurePreview]="featurePreview()"
               [edgeBlendPreview]="edgeBlendPreviewSig()"
               [datumPlanePreview]="datumPlanePreview()"
+              [datumPointPreview]="datumPointPreview()"
               [patternPreview]="patternPreview()"
               [shellPreview]="shellPreview()"
               (profileFillClick)="toggleExtrudeRegion($event)"
@@ -4755,7 +4809,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-418';
+  readonly buildMarker = 'text-430';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -4829,6 +4883,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private hostEl = inject(ElementRef) as ElementRef<HTMLElement>;
   private cadApi = inject(CadModelService);
   private inventory = inject(InventoryService);
+  private cadTabs = inject(CadTabsService);
   private auth = inject(AuthService);
   private errors = inject(ErrorNotificationService);
   private dialog = inject(MatDialog);
@@ -5942,9 +5997,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       | 'centerOfFace'
       | 'centerOfCircularEdge'
       | 'centerOfMass'
-      | 'alongEdge';
+      | 'alongEdge'
+      | 'threePlanes';
     editingFeatureId?: string;
   } | null>(null);
+  /** REQ 1006 — On 3 planes picks, and the coordinate-system axis overrides
+   * (datum axis ids) with the slot the next axis pick fills. */
+  datumPointPlanes = signal<PlaneRef[]>([]);
+  datumPointOrient = signal<{ z?: string; zFlip?: boolean; x?: string; xFlip?: boolean }>({});
+  datumPointOrientSlot = signal<'z' | 'x'>('z');
   datumPointVertex = signal<VertexRef | null>(null);
   /** Center-Of-Face: picked face id + centroid snapshot for renumber survival. */
   datumPointFaceId = signal<string | null>(null);
@@ -5989,6 +6050,30 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   });
   datumPointEdgeRows = computed<SelectionRow[]>(() =>
     this.datumPointEdge() ? [{ id: 'edge', label: 'Edge', icon: 'timeline' }] : []);
+  datumPointPlaneRows = computed<SelectionRow[]>(() => this.datumPointPlanes().map((r, i) => ({
+    id: String(i),
+    label: r.kind === 'datum' ? this._datumLabel(r.datumId) : this._shortFaceLabel(r.faceId),
+    icon: r.kind === 'datum' ? 'crop_din' : 'crop_square',
+  })));
+  datumPointZRows = computed<SelectionRow[]>(() => {
+    const z = this.datumPointOrient().z;
+    return z ? [{ id: 'z', label: this._datumLabel(z), icon: 'north' }] : [];
+  });
+  datumPointXRows = computed<SelectionRow[]>(() => {
+    const x = this.datumPointOrient().x;
+    return x ? [{ id: 'x', label: this._datumLabel(x), icon: 'east' }] : [];
+  });
+  /** Readable name for an assembly datum id (origin / component / skeleton). */
+  _datumLabel(id: string): string {
+    const parts = id.split(':');
+    const datum = parts[parts.length - 1];
+    const desc = ORIGIN_DATUM_DESCRIPTORS.find(d => d.id === datum);
+    if (parts[0] === 'inst') return `${this.asm.partName(this.asm.instances().find(i => i.instanceId === parts[1])?.partID ?? 0)} · ${desc?.label ?? datum}`;
+    const feat = this.featureTree().features.find(f => f.id === parts[0]);
+    const name = (feat as { name?: string } | undefined)?.name;
+    if (feat) return parts.length > 1 ? `${name || 'Point'} · ${desc?.label ?? datum}` : (name || id);
+    return desc?.label ?? id;
+  }
   datumPointBodyRows = computed<SelectionRow[]>(() => {
     const bid = this.datumPointBodyId();
     return bid ? [{ id: 'body', label: `Body ${bid}`, icon: 'view_in_ar' }] : [];
@@ -6243,11 +6328,33 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!draft) return null;
     // REQ 912 — in assembly mode, resolve against the composed assembly
     // datums (origin + skeleton planes), not the (empty) part geometry.
+    // REQ 1007 — include every component's datums (shown or not) so tree picks preview.
     const geo = this.assemblyMode()
-      ? (this.asm.geometry() ?? { datums: [], faces: [], topology: { vertices: [], edges: [] } })
+      ? { ...this.asm.geometry(), datums: this._asmPickDatums() }
       : (this.geometry() ?? { datums: [], faces: [], topology: { vertices: [], edges: [] } });
     const res = computeDatumPlane(draft, geo);
     return res.ok ? res.plane : null;
+  });
+
+  /** REQ 1007 — where the point being built will land (and, in an assembly,
+   * its coordinate-system axes), updated live as picks change. */
+  datumPointPreview = computed<{ position: [number, number, number]; quaternion?: [number, number, number, number] } | null>(() => {
+    const ctx = this.datumPointSidebar();
+    if (!ctx) return null;
+    const draft = this._buildDatumPointFeature(ctx.editingFeatureId || '__preview__');
+    if (!draft) return null;
+    if (!this.assemblyMode()) {
+      const res = computeDatumPoint(draft, this.geometry() ?? { datums: [], faces: [], topology: { vertices: [], edges: [] } });
+      return res.ok ? { position: res.position as [number, number, number] } : null;
+    }
+    const anchor = this._skeletonPointAnchor(draft);
+    if (!anchor) return null;
+    const placement = this.asm.regen()?.instances.find(i => i.instanceId === anchor.instanceId)?.placement;
+    const ownerQ = (placement?.quaternion ?? [0, 0, 0, 1]) as Quat;
+    return {
+      position: placement ? transformPoint(placement, anchor.local) : anchor.local,
+      quaternion: qMul(ownerQ, anchor.quat),
+    };
   });
 
   /** Remove dispatcher used by every datum-plane selection list.
@@ -6935,6 +7042,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       case 'select':
         // REQ 1001 — datum rows feed the mate picker.
         if (this.asm.facePickActive() && datumRowMateRef(e.node.key)) { this.asm.onFacePicked(datumRowMateRef(e.node.key)!); break; }
+        // REQ 1006 — datum rows feed the reference point's planes / axes and
+        // the datum plane sidebar's plane refs.
+        if (this.datumPointSidebar() && this._datumIdOfRow(e.node.key)) { this.addDatumPointDatumPick(this._datumIdOfRow(e.node.key)!); break; }
+        if (this.datumPlaneSidebar() && this._datumIdOfRow(e.node.key)) { this.addDatumPlaneDatumPick(this._datumIdOfRow(e.node.key)!); break; }
+        // REQ 1003 — origin datum rows feed the new-child-part origin pick.
+        if (this.mode() === 'pick-child-origin' && datumRowMateRef(e.node.key)) { this.pickChildOriginRef(datumRowMateRef(e.node.key)!); break; }
         if (kind === 'component') this.asm.selectInstance(parts[1], !!e.ev?.shiftKey, !!(e.ev?.ctrlKey || e.ev?.metaKey));
         else if (kind === 'displaystate') { const s = this.asm.displayStates().find(x => x.id === parts[1]); if (s) this.asm.applyDisplayState(s); }
         break;
@@ -6957,13 +7070,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!this.assemblyMode()) return [];
     const out: TreeNode[] = [];
     for (const f of this.featureTree().features) {
-      if (f.type !== 'datumPlane') continue;
+      if (f.type !== 'datumPlane' && f.type !== 'datumPoint') continue;
+      const point = f.type === 'datumPoint';
       out.push({
-        key: `skelplane:${f.id}`, kind: 'datum', label: f.name || 'Datum plane',
-        iconName: 'rectangle', iconClass: 'datum-plane-xy', depth: 0,
+        key: `skelplane:${f.id}`, kind: 'datum', label: f.name || (point ? 'Point' : 'Datum plane'),
+        iconName: point ? 'place' : 'rectangle', iconClass: point ? 'datum-point' : 'datum-plane-xy', depth: 0,
         expandable: false, expanded: false, selectable: true,
         visibilityToggleable: true, visible: (f as DatumPlaneFeature).visible !== false,
-        datumId: f.id,
+        datumId: f.id, createdAt: (f as { createdAt?: number }).createdAt,
       });
     }
     const doc = this.doc();
@@ -6985,17 +7099,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * top-level rows right after the Origin block (like a part's own tree). */
   asmTreeNodes = computed<TreeNode[]>(() => {
     const base = this.sidebarMode() === 'mini' ? this.asm.treeNodesExpanded() : this.asm.treeNodes();
-    const skel = this.skeletonNodes();
-    if (!skel.length) return base;
-    // Insert after the origin row + its expanded datum children.
-    let insertAt = 0;
-    while (insertAt < base.length && base[insertAt].key.startsWith('origin')) insertAt++;
-    return [...base.slice(0, insertAt), ...skel, ...base.slice(insertAt)];
+    // REQ 1007 — components and skeleton rows interleave in creation order.
+    const created = Object.fromEntries(this.asm.instances().map(i => [i.instanceId, i.createdAt]));
+    return creationOrderTree(base, this.skeletonNodes(), created);
   });
 
   onSkeletonTreeEvent(e: ExternalTreeEvent) {
     const n = e.node;
     if (e.type === 'select') {
+      if (n.datumId) {
+        // REQ 1006 — skeleton planes/points as references for the active pick.
+        if (this.datumPointSidebar()) { this.addDatumPointDatumPick(n.datumId); return; }
+        if (this.datumPlaneSidebar()) { this.addDatumPlaneDatumPick(n.datumId); return; }
+        if (this.asm.facePickActive()) { const ref = this._csysMateRef(n.datumId); if (ref) this.asm.onFacePicked(ref); return; }
+        if (this.mode() === 'pick-child-origin') { this._childOriginAtPoint(n.datumId); return; }
+      }
       if (n.sketchId && !this.readonly()) this.activeSketchId.set(n.sketchId);
       return;
     }
@@ -7035,10 +7153,24 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.setMode('pick-child-origin');
   }
 
+  /** REQ 1003 — a datum row from the assembly tree as the new part's origin.
+   * Every origin datum (point, axes, planes) passes through its owner's
+   * origin: the assembly's [0,0,0] or the component's placement. */
+  private pickChildOriginRef(ref: string) {
+    const [instanceId, datumId] = ref.split('::');
+    const originDatum = datumId === 'origin';
+    if (instanceId === ASSEMBLY_REF_ID) { this.openNewChildPartDialog([0, 0, 0], null, null, { originDatum }); return; }
+    const inst = this.asm.instances().find((i) => i.instanceId === instanceId);
+    if (!inst) return;
+    this.openNewChildPartDialog([...inst.placement.translate] as [number, number, number], instanceId, null,
+      { originDatum, anchorQuat: inst.placement.quaternion as [number, number, number, number] });
+  }
+
   private openNewChildPartDialog(
     origin: [number, number, number],
     anchorInstanceId: string | null = null,
     orientNormal: [number, number, number] | null = null,
+    opts: { originDatum?: boolean; anchorQuat?: [number, number, number, number]; anchorFaceId?: string } = {},
   ) {
     const a = this.asm.assembly();
     if (!a) return;
@@ -7046,7 +7178,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.dialog.open(CadNewPartDialogComponent, {
       data: {
         mode: 'part',
-        insertInto: { assemblyId: a.id, assemblyPartId: a.partID, origin, anchorInstanceId, orientNormal },
+        insertInto: { assemblyId: a.id, assemblyPartId: a.partID, origin, anchorInstanceId, orientNormal, ...opts },
       } satisfies CadNewPartDialogData,
       width: '420px',
     });
@@ -7106,6 +7238,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (this.activeSketchId() === sketchId) this.activeSketchId.set(null);
     this.doc.set(deleteSketch(this.doc(), sketchId));
     this.save();
+  }
+
+  /** Reopen a skeleton plane / point in its sidebar for editing. */
+  editSkeletonFeature(featureId: string) {
+    const f = this.featureTree().features.find(x => x.id === featureId);
+    if (f?.type === 'datumPlane') { this.cancelDatumPointSidebar(); this._editDatumPlane(f); }
+    else if (f?.type === 'datumPoint') { this.cancelDatumPlaneSidebar(); this._editDatumPoint(f); }
   }
 
   deleteSkeletonPlane(featureId: string) {
@@ -7322,6 +7461,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       queryParamsHandling: 'merge',
     });
   }
+  /** REQ 1002 — open a component in the editor's tab strip, or switch to its
+   * tab when already open. The destination editor registers the tab. */
+  openPartInTab(inst: AssemblyInstance) {
+    const open = this.cadTabs.tabs().find((t) => t.partID === inst.partID);
+    if (open) { this.cadTabs.switchTo(open); return; }
+    this.cadApi.getActiveByPart(inst.partID).subscribe({
+      next: (m) => this.cadTabs.switchTo({ partID: inst.partID, assembly: !!m.isAssembly, revisionID: m.id, name: '' }),
+      error: () => this.errors.showError('Component has no editable CAD model'),
+    });
+  }
   /** Open a component's own part-CAD editor in a NEW browser tab (standalone,
    * not in-context). Resolves the part's active CAD model id for the
    * revisionID query param, mirroring the in-context navigation. */
@@ -7524,7 +7673,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   promptText = computed(() => {
     const m = this.mode();
     if (m === 'pick-plane') return 'Click a datum plane or flat face in the viewer to start a sketch on it.';
-    if (m === 'pick-child-origin') return 'Click a skeleton sketch point, a component vertex or face point, or an assembly datum — that becomes the new part’s origin.';
+    if (m === 'pick-child-origin') return 'Click a skeleton sketch point, a component vertex or face point, or a datum (in the viewer or tree) — that becomes the new part’s origin.';
     if (m === 'pick-sketch-host') return 'Click a datum plane or flat face in the viewer to set the sketch’s new reference.';
     if (m === 'pick-extrude-target') {
       return this.sketchCount() > 0
@@ -7590,12 +7739,30 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         this.loadCommits(); this.loadBranches(); this.loadWorkflow();
       }
     });
+    // REQ 1002 — register the open part/assembly in the tab strip.
+    let tabKey = '';
+    effect(() => {
+      const p = this.part();
+      const m = this.model();
+      if (!p || !m || p.id !== this.partID()) return;
+      const asm = this.assemblyMode();
+      const rev = m.displayRevision ? m.displayRevision + (m.released ? '' : '*') : (p.revision ?? '');
+      const key = `${p.id}:${asm}:${m.id}:${p.name}:${rev}`;
+      if (key === tabKey) return;
+      tabKey = key;
+      untracked(() => this.cadTabs.open({ partID: p.id, assembly: asm, ...(asm ? {} : { revisionID: m.id }), name: p.name, rev }));
+    });
     // REQ 912 — feed the assembly viewer the skeleton datum plane features
     // computed from the (editor-owned) featureTree signal.
     effect(() => {
       if (!this.assemblyMode()) return;
-      this.asm.skeletonDatums.set(computeSkeletonDatums(this.featureTree()));
+      // REQ 1004 — the composed regen lets skeleton planes follow component faces/datums.
+      this.asm.skeletonDatums.set(computeSkeletonDatums(this.featureTree(), this.asm.regen()));
     });
+    // Datum tree rows are pick targets while choosing a new part's origin or
+    // building a reference point / plane.
+    effect(() => this.asm.datumTreePickActive.set(this.mode() === 'pick-child-origin'
+      || this.datumPointSidebar() !== null || this.datumPlaneSidebar() !== null));
     // History capture — debounced 500ms. Watches the two mutable model
     // signals (featureTree + doc) and records a snapshot once they settle.
     // Skipped when replayingHistory is true (i.e. an undo/redo just set
@@ -8181,6 +8348,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   setMode(m: EditorMode) {
     this.mode.set(m);
+
     if (m === 'idle') {
       this.pendingExtrude.set(false);
     }
@@ -9289,6 +9457,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (this.assemblyMode() && this.asm.facePickActive() && id.startsWith('datum:')) {
       const datumId = id.slice('datum:'.length);
       if (ORIGIN_DATUM_DESCRIPTORS.some(d => d.id === datumId)) { this.asm.onFacePicked(`${ASSEMBLY_REF_ID}::${datumId}`); return; }
+      const csys = this._csysMateRef(datumId);
+      if (csys) { this.asm.onFacePicked(csys); return; }
+    }
+    if (this.assemblyMode() && this.datumPointSidebar() && id.startsWith('datum:')) {
+      if (this.addDatumPointDatumPick(id.slice('datum:'.length))) return;
     }
     // Datum Plane sidebar: a click on an existing datum (origin or
     // user) becomes a plane-ref pick for the active method's slot.
@@ -9307,7 +9480,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // their computed origin). The origin point datum maps to [0,0,0].
     if (m === 'pick-child-origin' && id.startsWith('datum:')) {
       const datumId = id.substring('datum:'.length);
-      if (datumId === 'origin') { this.openNewChildPartDialog([0, 0, 0]); return; }
+      if (datumId === 'origin') { this.openNewChildPartDialog([0, 0, 0], null, null, { originDatum: true }); return; }
+      if (this.assemblyMode() && this._childOriginAtPoint(datumId.split(':')[0])) return;
       const plane = this._resolveDatumPlane(id);
       if (plane) { this.openNewChildPartDialog(plane.origin as [number, number, number]); return; }
       this.errors.showError('Pick a face point or a datum plane for the new part’s origin');
@@ -10065,15 +10239,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   addDatumPlaneDatumPick(datumId: string): boolean {
     const ctx = this.datumPlaneSidebar();
     if (!ctx) return false;
-    // REQ 912 — skeleton datum planes reference assembly-owned datums only;
-    // a component's datums move with mate solutions.
-    if (this.assemblyMode() && datumId.startsWith('inst:')) {
-      this.errors.showError('Skeleton planes can only reference assembly datums — not a component’s datums');
-      return true;
-    }
     // Only plane datums qualify — clicking a datum axis or the origin
     // point must not fill a plane-ref slot.
-    if (!this._resolveDatumPlane(`datum:${datumId}`)) return false;
+    // In an assembly, any component's datum planes count, shown or not.
+    const isPlane = this.assemblyMode()
+      ? this._asmPickDatums().some(d => d.id === datumId && d.kind === 'plane')
+      : !!this._resolveDatumPlane(`datum:${datumId}`);
+    if (!isPlane) return false;
     const ref: PlaneRef = { kind: 'datum', datumId };
     switch (ctx.method) {
       case 'offset':
@@ -10171,7 +10343,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const feature = this._buildDatumPlaneFeature(id);
     if (!feature) return;
     if (ctx.editingFeatureId) {
-      this.featureTree.set(updateFeatureParam<any>(this.featureTree(), id, feature as any));
+      // Edits keep the feature's existing name / creation time.
+      const { name: _n, createdAt: _c, ...patch } = feature as { name?: string; createdAt?: number };
+      this.featureTree.set(updateFeatureParam<any>(this.featureTree(), id, patch as any));
     } else {
       this.featureTree.set(this._commitNewFeature(tree, feature, seq));
     }
@@ -10378,6 +10552,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.datumPointT.set(0.5);
     this.datumPointBodyId.set(null);
     this.datumPointBodyFallback.set(null);
+    this.datumPointPlanes.set([]);
+    this.datumPointOrient.set({});
+    this.datumPointOrientSlot.set('z');
   }
   private _armDatumPointPicks(): void {
     this.vertexPickMode.set(true);
@@ -10451,7 +10628,107 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       case 'centerOfCircularEdge': return !!this.datumPointEdge();
       case 'centerOfMass': return !!this.datumPointBodyId() && !!this.datumPointBodyFallback();
       case 'alongEdge': return !!this.datumPointEdge();
+      case 'threePlanes': return this.datumPointPlanes().length === 3;
     }
+  }
+
+  /** Every datum a skeleton point can reference: the assembly's composed
+   * datums plus each component's origin datums (shown or not). */
+  private _asmPickDatums(): PlacedDatum[] {
+    const out: PlacedDatum[] = [...this.asm.geometry().datums];
+    for (const inst of this.asm.regen()?.instances ?? []) out.push(...placedOriginDatums(inst.placement, `inst:${inst.instanceId}:`));
+    return out;
+  }
+  /** World direction of a datum axis id (assembly, component or point triad). */
+  private _asmAxisDirection(id: string): [number, number, number] | null {
+    const d = this._asmPickDatums().find(x => x.id === id && x.kind === 'axis');
+    return (d?.axis?.direction ?? d?.direction ?? null) as [number, number, number] | null;
+  }
+
+  /** REQ 1005/1006 — attach a skeleton point to its owner: the component it
+   * was picked on (all picks on one component), else the assembly. Stores
+   * the point and its coordinate-system orientation in the owner's frame. */
+  private _skeletonPointAnchor(f: import('../../../cad/lib/types').DatumPointFeature): { instanceId: string; local: [number, number, number]; quat: [number, number, number, number] } | undefined {
+    const geometry = { ...this.asm.geometry(), datums: this._asmPickDatums() };
+    const res = computeDatumPoint(f, geometry);
+    if (!res.ok) return undefined;
+    const bodies = this.asm.regen()?.bodies ?? [];
+    const m = f.method;
+    const near = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 1e-6;
+    const ownerOfPoints = (pts: number[][]) => bodies.find(b => pts.some(p => b.vertices.some(v => near(v, p))
+      || b.edges.some(e => e.polyline.length > 0 && (near(e.polyline[0], p) || near(e.polyline[e.polyline.length - 1], p)))))?.instanceId;
+    let owner: string | undefined;
+    if (m.kind === 'centerOfFace') owner = bodies.find(b => b.faces.some(x => x.faceId === m.faceId))?.instanceId;
+    else if (m.kind === 'onVertex') owner = ownerOfPoints([res.position]);
+    else if (m.kind === 'threePlanes') {
+      const owners = new Set(m.planeRefs.map(r => r.kind === 'face' ? r.faceId.split('::')[0]
+        : r.datumId.startsWith('inst:') ? r.datumId.split(':')[1] : ASSEMBLY_REF_ID));
+      owner = owners.size === 1 ? [...owners][0] : ASSEMBLY_REF_ID;
+    } else if ('edgeRef' in m) owner = ownerOfPoints([m.edgeRef.start, m.edgeRef.end]);
+    const placement = owner && owner !== ASSEMBLY_REF_ID ? this.asm.regen()?.instances.find(i => i.instanceId === owner)?.placement : undefined;
+    const ownerId = placement ? owner! : ASSEMBLY_REF_ID;
+    const baseQ = (placement?.quaternion ?? [0, 0, 0, 1]) as Quat;
+    // Orientation overrides from picked datum axes (optionally flipped).
+    const o = this.datumPointOrient();
+    const dir = (id: string | undefined, flip?: boolean) => {
+      const d = id ? this._asmAxisDirection(id) : null;
+      return d ? (flip ? [-d[0], -d[1], -d[2]] : d) as [number, number, number] : null;
+    };
+    const worldQ = csysQuat(baseQ, dir(o.x, o.xFlip), dir(o.z, o.zFlip));
+    const quat = qMul([-baseQ[0], -baseQ[1], -baseQ[2], baseQ[3]], worldQ);
+    const local = placement ? transformPoint(inverseTransform(placement), res.position as [number, number, number]) : res.position as [number, number, number];
+    return { instanceId: ownerId, local, quat };
+  }
+
+  /** REQ 1006 — route a datum pick (viewer or tree) into the point sidebar:
+   * planes fill On 3 planes, axes fill the active orientation slot. */
+  addDatumPointDatumPick(datumId: string): boolean {
+    const ctx = this.datumPointSidebar();
+    if (!ctx || !this.assemblyMode()) return false;
+    const d = this._asmPickDatums().find(x => x.id === datumId);
+    if (!d) return false;
+    if (d.kind === 'axis') {
+      const slot = this.datumPointOrientSlot();
+      this.datumPointOrient.set({ ...this.datumPointOrient(), [slot]: datumId });
+      if (slot === 'z') this.datumPointOrientSlot.set('x');
+      return true;
+    }
+    if (d.kind === 'plane' && ctx.method === 'threePlanes') {
+      const cur = this.datumPointPlanes();
+      if (cur.length < 3) this.datumPointPlanes.set([...cur, { kind: 'datum', datumId }]);
+      return true;
+    }
+    return false;
+  }
+
+  /** Datum id for an assembly-tree datum row (`origin-datum:<d>` /
+   * `component-datum:<inst>:<d>`). */
+  private _datumIdOfRow(key: string): string | null {
+    if (key.startsWith('origin-datum:')) return key.slice('origin-datum:'.length);
+    const m = /^component-datum:([^:]+):(.+)$/.exec(key);
+    return m ? `inst:${m[1]}:${m[2]}` : null;
+  }
+
+  /** REQ 1006 — a skeleton point's coordinate system as a mate ref
+   * (`<owner>::csys:<pt>:<datum>`), or null when the id isn't a point. */
+  private _csysMateRef(datumId: string): string | null {
+    const [pid, axis] = datumId.split(':');
+    const pt = this.featureTree().features.find(f => f.id === pid && f.type === 'datumPoint') as import('../../../cad/lib/types').DatumPointFeature | undefined;
+    if (!pt?.anchor) return null;
+    const datum = (axis ?? 'origin') as 'origin' | 'x_axis' | 'y_axis' | 'z_axis';
+    return `${pt.anchor.instanceId}::${csysRefId(pid, datum)}`;
+  }
+
+  /** REQ 1006 — create a new child part at a skeleton point's coordinate system. */
+  private _childOriginAtPoint(pointId: string): boolean {
+    const d = this.asm.skeletonDatums().find(x => x.id === pointId && x.kind === 'point') as PlacedDatum | undefined;
+    const pt = this.featureTree().features.find(f => f.id === pointId) as import('../../../cad/lib/types').DatumPointFeature | undefined;
+    if (!d?.position || !pt?.anchor) return false;
+    const owner = pt.anchor.instanceId;
+    this.openNewChildPartDialog(d.position, owner === ASSEMBLY_REF_ID ? null : owner, null, {
+      originDatum: true, anchorQuat: d.quaternion, anchorFaceId: csysRefId(pointId, 'origin'),
+    });
+    return true;
   }
 
   private _buildDatumPointFeature(id: string): import('../../../cad/lib/types').DatumPointFeature | null {
@@ -10484,6 +10761,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         if (!e) return null;
         return { ...base, method: { kind: 'alongEdge', edgeRef: e, t: this.datumPointT() } };
       }
+      case 'threePlanes': {
+        const ps = this.datumPointPlanes();
+        if (ps.length !== 3) return null;
+        return { ...base, method: { kind: 'threePlanes', planeRefs: [ps[0], ps[1], ps[2]] } };
+      }
     }
   }
 
@@ -10495,6 +10777,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const id = ctx.editingFeatureId || newFeatureId();
     const feature = this._buildDatumPointFeature(id);
     if (!feature) return;
+    if (this.assemblyMode()) {
+      const anchor = this._skeletonPointAnchor(feature);
+      if (!anchor) { this.errors.showError('Couldn’t place the point — check the picks'); return; }
+      feature.anchor = anchor;
+      const orient = this.datumPointOrient();
+      feature.orient = orient.z || orient.x ? orient : undefined;
+      if (!ctx.editingFeatureId) feature.name = `Point ${this._countFeaturesByType('datumPoint') + 1}`;
+    }
     if (ctx.editingFeatureId) {
       this.featureTree.set(updateFeatureParam<any>(this.featureTree(), id, feature as any));
     } else {
@@ -10526,7 +10816,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         this.datumPointEdge.set(m.edgeRef);
         this.datumPointT.set(m.t);
         break;
+      case 'threePlanes':
+        this.datumPointPlanes.set([...m.planeRefs]);
+        break;
     }
+    this.datumPointOrient.set(feature.orient ?? {});
     this.datumPointSidebar.set({ method: m.kind, editingFeatureId: feature.id });
     this._armDatumPointPicks();
   }
@@ -12336,22 +12630,28 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   /** Called by the viewer when the user clicks a vertex marker. Routes
    * to start / direction-1 / direction-2 signal based on extrudePickTarget. */
+  /** Topology the viewer's vertex ids refer to: the composed assembly in
+   * assembly mode, else the part. */
+  private pickTopology() {
+    return this.assemblyMode() ? this.asm.geometry().topology : this.geometry()?.topology;
+  }
+
   onVertexPicked(vertexId: string): void {
     // Datum Plane sidebar gets first crack — its methods consume
     // vertex picks for three-points / parallel-through-point / etc.
     if (this.datumPlaneSidebar()) {
-      const v = this.geometry()?.topology.vertices.find(vx => vx.id === vertexId);
+      const v = this.pickTopology()?.vertices.find(vx => vx.id === vertexId);
       const pos: [number, number, number] = v ? (v.position as [number, number, number]) : [0, 0, 0];
       if (this.addDatumPlaneVertexPick({ vertexId, fallbackPosition: pos })) return;
     }
     // REQ 660/661 — datum axis + datum point vertex routing.
     if (this.datumAxisSidebar()) {
-      const v = this.geometry()?.topology.vertices.find(vx => vx.id === vertexId);
+      const v = this.pickTopology()?.vertices.find(vx => vx.id === vertexId);
       const pos: [number, number, number] = v ? (v.position as [number, number, number]) : [0, 0, 0];
       if (this.addDatumAxisVertexPick({ vertexId, fallbackPosition: pos })) return;
     }
     if (this.datumPointSidebar()) {
-      const v = this.geometry()?.topology.vertices.find(vx => vx.id === vertexId);
+      const v = this.pickTopology()?.vertices.find(vx => vx.id === vertexId);
       const pos: [number, number, number] = v ? (v.position as [number, number, number]) : [0, 0, 0];
       if (this.addDatumPointVertexPick({ vertexId, fallbackPosition: pos })) return;
     }
@@ -12392,6 +12692,25 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       if (this.measureSidebar()) {
         const face = this.displayedGeometry()?.faces.find(f => f.faceId === faceId);
         this.addMeasureItem(face ? this._measureItemFromFace(faceId, face) : { kind: 'face', id: faceId, isFlat: false });
+        return;
+      }
+      // REQ 1004 — component faces feed skeleton datum planes. Snapshot from
+      // the un-exploded composed mesh; the plane re-resolves live on regen.
+      if (this.datumPlaneSidebar()) {
+        const f = this.asm.regen()?.bodies.flatMap(b => b.faces).find(x => x.faceId === faceId);
+        const fb = f && meshFacePlane(f.positions, f.normals);
+        if (fb) this.addDatumPlaneFacePick(faceId, { ...fb, xAxis: [1, 0, 0], yAxis: [0, 1, 0] });
+        return;
+      }
+      // REQ 1005 — skeleton reference point at a component face center.
+      if (this.datumPointSidebar()) {
+        const f = this.asm.regen()?.bodies.flatMap(b => b.faces).find(x => x.faceId === faceId);
+        const fb = f && meshFacePlane(f.positions, f.normals);
+        if (!fb) return;
+        if (this.datumPointSidebar()!.method === 'threePlanes') {
+          const cur = this.datumPointPlanes();
+          if (cur.length < 3) this.datumPointPlanes.set([...cur, { kind: 'face', faceId, fallbackPlane: { ...fb, xAxis: [1, 0, 0], yAxis: [0, 1, 0] } }]);
+        } else this.addDatumPointFacePick(faceId, fb.origin, null);
         return;
       }
       this.asm.onFacePicked(faceId);
@@ -12931,30 +13250,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const g = this.geometry();
     if (!g) return null;
     const f = g.faces.find(face => face.faceId === faceId);
-    if (!f) return null;
-    const verts = f.positions;
-    const norms = f.normals;
-    if (verts.length < 3 || norms.length < 3) return null;
-    const vertCount = verts.length / 3;
-    let cx = 0, cy = 0, cz = 0;
-    for (let i = 0; i < vertCount; i++) {
-      cx += verts[i * 3];
-      cy += verts[i * 3 + 1];
-      cz += verts[i * 3 + 2];
-    }
-    cx /= vertCount; cy /= vertCount; cz /= vertCount;
-    let nx = 0, ny = 0, nz = 0;
-    for (let i = 0; i < vertCount; i++) {
-      nx += norms[i * 3];
-      ny += norms[i * 3 + 1];
-      nz += norms[i * 3 + 2];
-    }
-    const len = Math.hypot(nx, ny, nz);
-    if (len < 1e-9) return null;
-    return {
-      origin: [cx, cy, cz],
-      normal: [nx / len, ny / len, nz / len],
-    };
+    return f ? meshFacePlane(f.positions, f.normals) : null;
   }
 
   /** Enter axis-pick mode for the Revolve sidebar. Mutually exclusive with
@@ -14713,6 +15009,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   private bootstrap(m: CadModel) {
+    // An assembly opened through a part-editor URL (history page, stale tab):
+    // hand it to the assembly editor instead of regenerating a feature tree.
+    if (m.isAssembly && !this.assemblyMode()) {
+      this.loading.set(false);
+      this.router.navigate(['/parts', m.partID, 'assembly', 'editor'], { replaceUrl: true });
+      return;
+    }
     this.model.set(m);
     this.viewingCommit.set(null);  // a normal load is the live working copy, not a historical view
     // Keep the URL's ?branch= in sync with the working copy's actual branch, so
@@ -15421,6 +15724,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // in-flight regens are dropped by `regenGeneration` so a stale response
   // can't overwrite a newer one.
   private regenerate(reason = '?') {
+    // Assemblies compose through the assembly endpoints; `model()` only
+    // mirrors the assembly row (undo/redo and kernel-recovery land here too).
+    if (this.assemblyMode()) { this.asm.regenerate(); return; }
     const m = this.model();
     if (!m) return;
     const genId = ++this.regenGeneration;

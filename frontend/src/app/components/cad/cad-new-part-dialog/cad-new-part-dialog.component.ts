@@ -15,8 +15,9 @@ import { CadModelService } from '../../../services/cad-model.service';
 import { AssemblyService } from '../../../services/assembly.service';
 import { PartCategory } from '../../../models/part-category.model';
 import {
-  Quat, IDENTITY_QUAT, rotateAboutAssemblyAxis, alignZToNormal, axisMappingLabel,
+  Quat, IDENTITY_QUAT, rotateAboutAssemblyAxis, alignZToNormal, axisMappingLabel, originMateFrame,
 } from '../../../cad/lib/insertOrientation';
+import { ASSEMBLY_REF_ID } from '../../../cad/lib/assembly.types';
 
 export interface CadNewPartDialogData {
   mode: 'part' | 'assembly';
@@ -27,10 +28,18 @@ export interface CadNewPartDialogData {
     assemblyId: number;
     assemblyPartId: number;
     origin: [number, number, number];
-    /** Component the origin point was picked on — the new instance gets a
-     * LOCK mate to it so it stays anchored. Null (datum/origin pick) →
-     * the instance is grounded in the assembly frame instead. */
+    /** Component the origin point was picked on — the new instance is mated
+     * to it. Null (assembly datum / skeleton pick) → mated to the assembly. */
     anchorInstanceId?: string | null;
+    /** REQ 1003 — the pick was an ORIGIN point: mate origin-to-origin with an
+     * axis frame instead of a lock. */
+    originDatum?: boolean;
+    /** Orientation of the anchor component (identity for the assembly). */
+    anchorQuat?: Quat | null;
+    /** REQ 1006 — the anchor's origin ref when it isn't the owner's own
+     * origin (a reference point coordinate system, `csys:<pt>:origin`). The
+     * new part starts aligned with that coordinate system. */
+    anchorFaceId?: string;
     /** Assembly-frame normal of the face the origin was picked on, when any.
      * Enables the "Align to face" orientation shortcut (REQ 933). */
     orientNormal?: [number, number, number] | null;
@@ -127,7 +136,7 @@ export class CadNewPartDialogComponent {
   error = signal('');
 
   // REQ 933 — orientation of the new instance relative to the assembly axes.
-  orientQuat = signal<Quat>(IDENTITY_QUAT);
+  orientQuat = signal<Quat>(this.data.insertInto?.anchorFaceId ? (this.data.insertInto.anchorQuat ?? IDENTITY_QUAT) : IDENTITY_QUAT);
   orientLabel = computed(() => axisMappingLabel(this.orientQuat()));
   rot(axis: 'x' | 'y' | 'z') { this.orientQuat.set(rotateAboutAssemblyAxis(this.orientQuat(), axis, 90)); }
   alignFace() { const n = this.data.insertInto?.orientNormal; if (n) this.orientQuat.set(alignZToNormal(n)); }
@@ -203,8 +212,8 @@ export class CadNewPartDialogComponent {
       this.asmApi.insertInstance(into.assemblyId, {
         partID: partId,
         placement: { translate: into.origin, quaternion: this.orientQuat() },
-        // Datum-picked origins anchor to the assembly frame directly.
-        ...(into.anchorInstanceId ? {} : { grounded: true }),
+        // Held by a mate below, never grounded (REQ 1003).
+        grounded: false,
       }).subscribe({
         next: (r) => {
           const go = () => {
@@ -218,19 +227,18 @@ export class CadNewPartDialogComponent {
               },
             });
           };
-          // REQ 920 — the picked origin is a MATE: lock the new instance to
-          // the component it was picked on (freezes the current relative
-          // transform, so the new part follows that component). A mate
-          // failure shouldn't orphan the flow — open in context regardless.
-          if (into.anchorInstanceId) {
-            this.asmApi.addMate(into.assemblyId, {
-              type: 'lock',
-              a: { instanceId: r.instance.instanceId, faceId: '' },
-              b: { instanceId: into.anchorInstanceId, faceId: '' },
-            }).subscribe({ next: go, error: go });
-          } else {
-            go();
-          }
+          // REQ 920/1003 — the picked origin is a MATE to the component it
+          // was picked on (or the assembly): origin points mate origin-to-
+          // origin with the chosen axes; anything else (or a non-axis-aligned
+          // orientation) locks the current relative transform. A mate failure
+          // shouldn't orphan the flow — open in context regardless.
+          const anchor = into.anchorInstanceId || ASSEMBLY_REF_ID;
+          const child = r.instance.instanceId;
+          const frame = into.originDatum ? originMateFrame(into.anchorQuat ?? IDENTITY_QUAT, this.orientQuat()) : null;
+          this.asmApi.addMate(into.assemblyId, frame
+            ? { type: 'coincident', a: { instanceId: anchor, faceId: into.anchorFaceId ?? 'origin' }, b: { instanceId: child, faceId: 'origin' }, frame }
+            : { type: 'lock', a: { instanceId: child, faceId: '' }, b: { instanceId: anchor, faceId: '' } },
+          ).subscribe({ next: go, error: go });
         },
         error: (e) => { this.busy.set(false); this.error.set(e?.error?.error || 'Part created, but inserting it into the assembly failed'); },
       });

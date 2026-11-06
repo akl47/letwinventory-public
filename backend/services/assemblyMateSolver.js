@@ -98,8 +98,12 @@ function mateResiduals(mate, poseA, poseB) {
         const a = worldPoint(poseA, mate.a.geom); const b = worldPoint(poseB, mate.b.geom);
         const r = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
         if (mate.frame) {
-          const ex = vsub(qRotate(poseB.quaternion, [1, 0, 0]), qRotate(poseA.quaternion, frameAxisVec(mate.frame.x)));
-          const ey = vsub(qRotate(poseB.quaternion, [0, 1, 0]), qRotate(poseA.quaternion, frameAxisVec(mate.frame.y)));
+          // REQ 1006 — a point coordinate system carries its own axes (frameQ)
+          // on top of its owner's pose.
+          const qa = mate.a.geom.frameQ ? qMul(poseA.quaternion, mate.a.geom.frameQ) : poseA.quaternion;
+          const qb = mate.b.geom.frameQ ? qMul(poseB.quaternion, mate.b.geom.frameQ) : poseB.quaternion;
+          const ex = vsub(qRotate(qb, [1, 0, 0]), qRotate(qa, frameAxisVec(mate.frame.x)));
+          const ey = vsub(qRotate(qb, [0, 1, 0]), qRotate(qa, frameAxisVec(mate.frame.y)));
           r.push(...ex, ...ey);
         }
         return r;

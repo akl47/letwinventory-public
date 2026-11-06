@@ -152,11 +152,28 @@ function frameError(frame) {
   return null;
 }
 // Validate a mate ref's instance: a doc instance, or the assembly origin.
-function refError(ref, has) {
+// `faceless` — lock mates need no face; a lock may anchor to the assembly itself (REQ 1003).
+function refError(ref, has, faceless = false) {
   if (ref.instanceId === ASSEMBLY_REF_ID) {
-    return ORIGIN_DATUM_IDS.includes(ref.faceId) ? null : { status: 400, error: 'Only the assembly origin datums (origin, axes, planes) can be used as an assembly mate reference' };
+    // REQ 1006 — skeleton reference point coordinate systems owned by the assembly.
+    return (faceless && !ref.faceId) || ORIGIN_DATUM_IDS.includes(ref.faceId) || String(ref.faceId).startsWith('csys:') ? null : { status: 400, error: 'Only the assembly origin datums (origin, axes, planes) can be used as an assembly mate reference' };
   }
   return has(ref.instanceId) ? null : { status: 404, error: `Instance ${ref.instanceId} not found` };
+}
+
+// REQ 1003 — mate a component's origin to the assembly origin with aligned
+// axes (a real, deletable coincident mate; the instance stays un-grounded).
+function pushAssemblyOriginMate(doc, instanceId) {
+  doc.mates = doc.mates || [];
+  const mateId = `m${doc.nextMateSeq || (doc.mates.length + 1)}`;
+  doc.mates.push({
+    mateId, id: mateId, type: 'coincident',
+    a: { instanceId: ASSEMBLY_REF_ID, faceId: 'origin' },
+    b: { instanceId, faceId: 'origin' },
+    frame: { x: '+x', y: '+y' },
+    suppressed: false,
+  });
+  doc.nextMateSeq = (doc.nextMateSeq || doc.mates.length) + 1;
 }
 
 // Push an "origin" mate (a component fixed to the assembly origin) onto the doc
@@ -446,7 +463,7 @@ module.exports = {
       let grounded;
       if (req.body.originMate !== undefined) {
         wantOriginMate = !!req.body.originMate;
-        grounded = wantOriginMate;
+        grounded = false;
       } else {
         grounded = req.body.grounded !== undefined ? !!req.body.grounded : doc.instances.length === 0;
       }
@@ -461,13 +478,15 @@ module.exports = {
         },
         pinnedCommitHash: null,
         grounded,
+        // REQ 1007 — creation-ordered assembly tree.
+        createdAt: Date.now(),
         placement: wantOriginMate ? { ...IDENTITY_PLACEMENT } : sanitizePlacement(req.body.placement),
         suppressed: false,
         visible: true,
       };
       doc.instances.push(instance);
       doc.nextInstanceSeq = (doc.nextInstanceSeq || doc.instances.length) + 1;
-      if (wantOriginMate) pushOriginMate(doc, instanceId);
+      if (wantOriginMate) pushAssemblyOriginMate(doc, instanceId);
 
       // Reject a self/cyclic reference before persisting.
       await assemblyRegenService.assertAcyclic({ partID: assembly.partID, assemblyDoc: doc }, db);
@@ -655,7 +674,7 @@ module.exports = {
         return res.status(400).json({ error: 'Mate requires a and b, each with instanceId and faceId' });
       }
       if (a.instanceId === b.instanceId) return res.status(400).json({ error: 'A mate must reference two distinct instances' });
-      const badRef = refError(a, has) || refError(b, has);
+      const badRef = refError(a, has, type === 'lock') || refError(b, has, type === 'lock');
       if (badRef) return res.status(badRef.status).json({ error: badRef.error });
       const badFrame = frameError(frame);
       if (badFrame) return res.status(400).json({ error: badFrame });
