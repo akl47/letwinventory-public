@@ -74,8 +74,9 @@ import { CadConfigurationsPanelComponent } from '../cad-configurations-panel/cad
 import { CadFeatureDeleteDialogComponent, type FeatureDeleteResult } from '../cad-feature-delete-dialog/cad-feature-delete-dialog.component';
 import { AssemblyEditController } from '../assembly-editor/assembly-edit.controller';
 import { AssemblyService } from '../../../services/assembly.service';
-import { computeSkeletonDatums } from '../../../cad/lib/assemblyDatums';
+import { computeSkeletonDatums, ORIGIN_DATUM_DESCRIPTORS } from '../../../cad/lib/assemblyDatums';
 import type { Assembly, AssemblyInstance, Mate, AssemblyPattern, DisplayState } from '../../../cad/lib/assembly.types';
+import { ASSEMBLY_REF_ID, FRAME_AXES, datumRowMateRef } from '../../../cad/lib/assembly.types';
 import { buildInContextOverlay, SKELETON_INSTANCE_ID, type InContextOverlay, type OverlayEdge, type OverlayFace, type OverlayVertex } from '../../../cad/lib/inContextOverlay';
 
 /** Snap kinds. Drives the viewer's snap-indicator glyph: square for
@@ -800,7 +801,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <button mat-menu-item (click)="asm.startReplace(item.inst)"><mat-icon>swap_horiz</mat-icon> Replace…</button>
                   <button mat-menu-item (click)="asm.openTrackBranch(item.inst)"><mat-icon svgIcon="cad-branch"></mat-icon> Track branch…</button>
                   <button mat-menu-item (click)="asm.openInstanceConfig(item.inst)"><mat-icon>tune</mat-icon> Configuration…</button>
-                  @if (asm.isOriginMated(item.inst)) {
+                  @if (item.inst.grounded || asm.isOriginMated(item.inst)) {
                     <button mat-menu-item (click)="asm.freeFromOrigin(item.inst)"><mat-icon>link_off</mat-icon> Free from origin</button>
                   } @else {
                     <button mat-menu-item (click)="asm.fixToOrigin(item.inst)"><mat-icon>my_location</mat-icon> Mate to origin</button>
@@ -1210,25 +1211,31 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           <div class="tool-panel" data-testid="asm-mate-sidebar">
             <h3 class="panel-title"><mat-icon>link</mat-icon> {{ asm.editingMate() ? 'Edit mate' : 'Mate' }}</h3>
             <p class="panel-hint">{{ asm.matePrompt() }}</p>
-            <!-- Click a slot to re-pick that surface (works for new + edit). -->
-            <div class="panel-field" [class.active]="asm.faceA()" data-testid="asm-mate-face-a"
-                 style="cursor:pointer" (click)="asm.repickFace('a')">
-              <div class="field-header"><mat-icon class="field-icon">filter_1</mat-icon><span class="field-label">First face</span></div>
-              <div class="sub-label">{{ asm.matePickStage() === 'a' ? 'Click a face…' : (asm.faceA() ? 'Selected (click to change)' : 'Not selected') }}</div>
+            <!-- REQ 1000 — every type up front; unavailable ones disable as
+                 references are picked. Choosing one limits further picks. -->
+            <div class="panel-field active">
+              <div class="field-header"><mat-icon class="field-icon">link</mat-icon><span class="field-label">Mate type</span></div>
+              <div class="asm-chips" data-testid="asm-mate-types">
+                @for (t of asm.mateTypes; track t) {
+                  <button class="asm-chip" [class.on]="asm.selectedMateType() === t" [disabled]="!asm.typeAvailable(t)" (click)="asm.selectMateType(t)">{{ t }}</button>
+                }
+              </div>
             </div>
-            <div class="panel-field" [class.active]="asm.faceB()" data-testid="asm-mate-face-b"
-                 style="cursor:pointer" (click)="asm.repickFace('b')">
-              <div class="field-header"><mat-icon class="field-icon">filter_2</mat-icon><span class="field-label">Second face</span></div>
-              <div class="sub-label">{{ asm.matePickStage() === 'b' ? 'Click a face…' : (asm.faceB() ? 'Selected (click to change)' : 'Not selected') }}</div>
-            </div>
-            @if (asm.showMateChooser()) {
+            <!-- Click a slot to re-pick that reference (works for new + edit). -->
+            <cad-selection-list style="cursor:pointer" (click)="asm.repickFace('a')"
+                label="First reference" headerIcon="filter_1" testid="asm-mate-face-a"
+                [rows]="asm.mateRowsA()" [showCount]="false" [active]="asm.matePickStage() === 'a'"
+                [emptyHint]="asm.matePickStage() === 'a' ? 'Click a face, or a datum in the viewer or tree' : 'Not selected'"
+                (remove)="asm.clearFace('a')" (clear)="asm.clearFace('a')">
+            </cad-selection-list>
+            <cad-selection-list style="cursor:pointer" (click)="asm.repickFace('b')"
+                label="Second reference" headerIcon="filter_2" testid="asm-mate-face-b"
+                [rows]="asm.mateRowsB()" [showCount]="false" [active]="asm.matePickStage() === 'b'"
+                [emptyHint]="asm.matePickStage() === 'b' ? 'Click a face, or a datum in the viewer or tree' : 'Not selected'"
+                (remove)="asm.clearFace('b')" (clear)="asm.clearFace('b')">
+            </cad-selection-list>
+            @if (asm.selectedMateType()) {
               <div class="panel-field active">
-                <div class="field-header"><mat-icon class="field-icon">link</mat-icon><span class="field-label">Mate type</span></div>
-                <div class="asm-chips">
-                  @for (t of asm.chooserTypes(); track t) {
-                    <button class="asm-chip" [class.on]="asm.selectedMateType() === t" (click)="asm.selectMateType(t)">{{ t }}</button>
-                  }
-                </div>
                 @if (asm.needsMateValue()) {
                   <div class="sub-row">
                     <span class="sub-label">Value (mm/°)</span>
@@ -1237,6 +1244,24 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 }
                 @if (asm.needsMateFlip()) {
                   <label class="asm-check"><input type="checkbox" [checked]="asm.mateFlip()" (change)="asm.mateFlip.set($any($event.target).checked)" /> Flip normal</label>
+                }
+                <!-- REQ 998 — origin pair: align the second component's axes. -->
+                @if (asm.showFrame()) {
+                  <label class="asm-check"><input type="checkbox" data-testid="asm-mate-align-axes" [checked]="asm.alignAxes()" (change)="asm.alignAxes.set($any($event.target).checked)" /> Align axes</label>
+                  @if (asm.alignAxes()) {
+                    <div class="sub-row">
+                      <span class="sub-label">Second X →</span>
+                      <select class="panel-input" data-testid="asm-mate-frame-x" [ngModel]="asm.frameX()" (ngModelChange)="asm.setFrameX($event)">
+                        @for (ax of FRAME_AXES; track ax) { <option [value]="ax">First {{ ax }}</option> }
+                      </select>
+                    </div>
+                    <div class="sub-row">
+                      <span class="sub-label">Second Y →</span>
+                      <select class="panel-input" data-testid="asm-mate-frame-y" [ngModel]="asm.frameY()" (ngModelChange)="asm.frameY.set($event)">
+                        @for (ax of asm.frameYChoices(); track ax) { <option [value]="ax">First {{ ax }}</option> }
+                      </select>
+                    </div>
+                  }
                 }
               </div>
             }
@@ -4043,10 +4068,16 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <!-- REQ 934 — empty-assembly call to action: prompt top-down modeling
                  when the assembly has no components yet. -->
             <div class="quick-start" data-testid="asm-empty-cta"
-                 *ngIf="assemblyMode() && mode() === 'idle' && activeSketchId() === null && asm.assembly() && asm.instances().length === 0">
+                 *ngIf="!quickStartDismissed() && assemblyMode() && mode() === 'idle' && activeSketchId() === null && asm.assembly() && asm.instances().length === 0">
+              <button class="quick-start-close" data-testid="asm-empty-cta-close" aria-label="Close" matTooltip="Close" (click)="quickStartDismissed.set(true)">
+                <mat-icon>close</mat-icon>
+              </button>
               <h3>Start top-down modeling</h3>
               <p class="muted">Add a part positioned against your skeleton sketches or datums. Reference skeleton geometry with <strong>Convert Entities</strong> while modeling to link it to the assembly.</p>
-              <button class="btn" data-testid="asm-empty-cta-add" (click)="onNewChildPartAction()">Add part</button>
+              <div class="quick-start-actions">
+                <button class="btn" data-testid="asm-empty-cta-add" (click)="onNewChildPartAction()">Add part</button>
+                <button class="btn" data-testid="asm-empty-cta-insert" (click)="asm.togglePicker()">Insert part</button>
+              </div>
             </div>
 
             <!-- Floating status overlay split into two translucent pill
@@ -4644,6 +4675,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .quick-start li { margin-bottom: 4px; }
     .quick-start .muted { margin: 10px 0 0; font-size: 11px; opacity: 0.6; }
     .quick-start button.btn { margin-top: 12px; }
+    .quick-start-actions { display: flex; gap: 8px; }
     .loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; }
     /* VCS lock / check-in / history (Phase 1) */
     .vcs-dirty { color: #ffb74d; font-size: 12px; }
@@ -4705,6 +4737,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .asm-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
     .asm-chip { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #ddd; border-radius: 4px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
     .asm-chip.on { background: rgba(66,165,245,0.22); border-color: #42a5f5; }
+    .asm-chip:disabled { opacity: 0.35; cursor: default; }
     .asm-grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; }
     .asm-grid3 label, .asm-field { display: flex; flex-direction: column; font-size: 10px; color: #aaa; gap: 2px; margin-top: 4px; }
     .asm-grid3 input, .asm-field input, .asm-field select { background: rgba(255,255,255,0.08); color: #ddd; border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; font-size: 11px; padding: 2px 4px; }
@@ -4722,7 +4755,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-412';
+  readonly buildMarker = 'text-418';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -6900,6 +6933,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         else if (kind === 'component-origin') this.asm.toggleComponentOriginExpand(parts[1]);
         break;
       case 'select':
+        // REQ 1001 — datum rows feed the mate picker.
+        if (this.asm.facePickActive() && datumRowMateRef(e.node.key)) { this.asm.onFacePicked(datumRowMateRef(e.node.key)!); break; }
         if (kind === 'component') this.asm.selectInstance(parts[1], !!e.ev?.shiftKey, !!(e.ev?.ctrlKey || e.ev?.metaKey));
         else if (kind === 'displaystate') { const s = this.asm.displayStates().find(x => x.id === parts[1]); if (s) this.asm.applyDisplayState(s); }
         break;
@@ -7448,6 +7483,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // REQ 989 — why ribbon actions are unavailable (null = available). Bound to
   // both [disabled] and the tooltip, so the two can't disagree.
   readonly DISABLED_REASON = DISABLED_REASON;
+  readonly FRAME_AXES = FRAME_AXES;
   editBlock = computed(() => disabledReason(
     [this.readonly(), this.readonlyHint()],
     [this.activeSketchId() !== null, DISABLED_REASON.inSketch],
@@ -9249,6 +9285,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const m = this.mode();
     if (id === null) return;
 
+    // REQ 999 — the assembly's own origin datums are mate references while picking.
+    if (this.assemblyMode() && this.asm.facePickActive() && id.startsWith('datum:')) {
+      const datumId = id.slice('datum:'.length);
+      if (ORIGIN_DATUM_DESCRIPTORS.some(d => d.id === datumId)) { this.asm.onFacePicked(`${ASSEMBLY_REF_ID}::${datumId}`); return; }
+    }
     // Datum Plane sidebar: a click on an existing datum (origin or
     // user) becomes a plane-ref pick for the active method's slot.
     if (this.datumPlaneSidebar() && id.startsWith('datum:')) {

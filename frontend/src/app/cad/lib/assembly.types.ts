@@ -32,6 +32,23 @@ export type MateType =
 
 export interface MateRef { instanceId: string; faceId: string; }
 
+/** REQ 999 — instance id for references to the assembly's own (grounded) origin. */
+export const ASSEMBLY_REF_ID = '__assembly__';
+
+/** REQ 998 — a signed axis of mate side A's frame. */
+export type FrameAxis = '+x' | '-x' | '+y' | '-y' | '+z' | '-z';
+export const FRAME_AXES: FrameAxis[] = ['+x', '-x', '+y', '-y', '+z', '-z'];
+/** Where side B's X and Y axes land on side A's frame (Z follows, right-handed). */
+export interface MateFrame { x: FrameAxis; y: FrameAxis; }
+/** Valid targets for B's Y once B's X is placed: any axis not parallel to X. */
+export function frameYOptions(x: FrameAxis): FrameAxis[] {
+  return FRAME_AXES.filter((a) => a[1] !== x[1]);
+}
+/** True for a scoped ref to a component origin or the assembly origin. */
+export function isOriginRef(scopedId: string | null): boolean {
+  return !!scopedId && scopedId.endsWith('::origin');
+}
+
 export interface Mate {
   mateId: string;
   id?: string;
@@ -40,6 +57,8 @@ export interface Mate {
   b: MateRef;
   value?: number;
   flip?: boolean;
+  /** REQ 998 — origin-pair coincident only: also align the axes. Absent = points only. */
+  frame?: MateFrame;
   suppressed?: boolean;
 }
 
@@ -160,6 +179,38 @@ export function validMateTypes(kindA: string | undefined, kindB: string | undefi
   if (points) types.push('coincident', 'distance'); // origin-point pairs
   types.push('lock'); // always available
   return types;
+}
+
+/** REQ 1000 — every user-creatable mate type, in sidebar order. */
+export const MATE_TYPES: MateType[] = ['coincident', 'distance', 'parallel', 'perpendicular', 'angle', 'concentric', 'tangent', 'lock'];
+const MATEABLE_KINDS = ['plane', 'cylinder', 'point'];
+
+/** Mate types still completable given the picked reference kinds (null = slot
+ * empty; any non-mateable surface kind only supports lock). */
+export function availableMateTypes(a: string | null, b: string | null): MateType[] {
+  if (a !== null && b !== null) {
+    const ok = validMateTypes(a, b);
+    return MATE_TYPES.filter((t) => ok.includes(t));
+  }
+  const k = a ?? b;
+  if (k === null) return MATE_TYPES;
+  return MATE_TYPES.filter((t) => MATEABLE_KINDS.some((o) => validMateTypes(k, o).includes(t)));
+}
+
+/** Whether a reference of `kind` may fill a slot for the chosen mate type,
+ * given the other slot's kind (null = empty). No type / lock accepts anything. */
+export function mateAllows(type: MateType | null, kind: string, otherKind: string | null): boolean {
+  if (!type || type === 'lock') return true;
+  if (otherKind !== null) return validMateTypes(kind, otherKind).includes(type);
+  return MATEABLE_KINDS.some((o) => validMateTypes(kind, o).includes(type));
+}
+
+/** REQ 1001 — assembly-tree datum row key → scoped mate ref (null if not a datum row). */
+export function datumRowMateRef(key: string): string | null {
+  const parts = key.split(':');
+  if (parts[0] === 'origin-datum') return `${ASSEMBLY_REF_ID}::${parts[1]}`;
+  if (parts[0] === 'component-datum') return `${parts[1]}::${parts[2]}`;
+  return null;
 }
 
 export interface MassProperties {
