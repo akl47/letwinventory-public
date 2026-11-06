@@ -422,6 +422,18 @@ function distanceRender(
  * toward the placement) out to the label anchor (slightly past the edge).
  * No witness lines — radius is conventionally drawn as a single leader.
  */
+/** REQ 817 — two distinct circles/arcs are concentric when they share a
+ * center point or their (separate) center points coincide, e.g. via a
+ * concentric constraint or a snap onto the other center. */
+export function curvesConcentric(
+  state: SketchState, a: CircleEntity | ArcEntity, b: CircleEntity | ArcEntity,
+): boolean {
+  if (a.id === b.id) return false;
+  if (a.centerId === b.centerId) return true;
+  const ca = findPoint(state, a.centerId), cb = findPoint(state, b.centerId);
+  return !!ca && !!cb && Math.hypot(ca.x - cb.x, ca.y - cb.y) < 1e-6;
+}
+
 /** Radial gap between two concentric circles/arcs: a leader from the inner
  * radius to the outer radius along the placement direction, with extension
  * arcs implied by the two edges. Targets are [inner, outer]. */

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dimensionRenders, previewDimension, previewEdgeDimension, resolveEdgeDim, formatDimensionText } from './dimensions';
+import { curvesConcentric, dimensionRenders, previewDimension, previewEdgeDimension, resolveEdgeDim, formatDimensionText } from './dimensions';
 import type {
   SketchState, PointEntity, LineEntity, CircleEntity, ArcEntity, SketchConstraint,
 } from './types';
@@ -114,6 +114,21 @@ describe('dimensionRenders', () => {
     expect(render.extensionLines).toEqual([]);
     expect(render.labelLeader![0]).toEqual({ x: 7, y: 0 });
     expect(render.labelLeader![1]).toEqual({ x: 12, y: 0 });
+  });
+
+  it('two curves are concentric when they share a center point or their centers coincide (REQ 817)', () => {
+    const c1: PointEntity = { kind: 'point', id: 'c1', x: 3, y: 2 };
+    const c2: PointEntity = { kind: 'point', id: 'c2', x: 3, y: 2 };  // separate point, same spot (concentric constraint)
+    const c3: PointEntity = { kind: 'point', id: 'c3', x: 4, y: 2 };
+    const a: CircleEntity = { kind: 'circle', id: 'a', centerId: 'c1', radius: 4 };
+    const b: CircleEntity = { kind: 'circle', id: 'b', centerId: 'c1', radius: 7 };
+    const d: ArcEntity = { kind: 'arc', id: 'd', centerId: 'c2', radius: 9, startId: 'c1', endId: 'c1', ccw: true };
+    const e: CircleEntity = { kind: 'circle', id: 'e', centerId: 'c3', radius: 2 };
+    const s = state(c1, c2, c3, a, b, d, e);
+    expect(curvesConcentric(s, a, b)).toBe(true);
+    expect(curvesConcentric(s, a, d)).toBe(true);
+    expect(curvesConcentric(s, a, e)).toBe(false);
+    expect(curvesConcentric(s, a, a)).toBe(false);
   });
 
   it('radius render carries the single-arrow leader flag', () => {

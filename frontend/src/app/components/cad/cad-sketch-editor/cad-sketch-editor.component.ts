@@ -30,7 +30,7 @@ import { extractClosedLoops } from '../../../cad/lib/profile';
 import { pickEntity, distanceToEntity, entityTouchesRect } from '../../../cad/lib/picking';
 import { inferLineEnd, inferAlignment, type InferenceResult, type PendingConstraint, type AlignmentRef } from '../../../cad/lib/inference';
 import { findEntity, isProjectedEntity } from '../../../cad/lib/types';
-import { previewDimension, previewEdgeDimension, resolveEdgeDim, chooseTwoPointDimType, twoPointDimValue, type DimensionRender } from '../../../cad/lib/dimensions';
+import { curvesConcentric, previewDimension, previewEdgeDimension, resolveEdgeDim, chooseTwoPointDimType, twoPointDimValue, type DimensionRender } from '../../../cad/lib/dimensions';
 import { analyzeDeterminacy } from '../../../cad/lib/determinacy';
 import { fullyDefineSketch } from '../../../cad/lib/fullyDefine';
 import {
@@ -3058,7 +3058,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     // If we already have a valid pick set, this click is the placement —
     // unless the click landed on an entity that EXTENDS the existing
     // selection (e.g. switching from "single line" to "line + line").
-    if (canPlaceDimension(sel) && !(picked && extendsSmartDim(picked, sel))) {
+    if (canPlaceDimension(sel) && !(picked && extendsSmartDim(this.state(), picked, sel))) {
       this.commitSmartDimAtPlacement(sel, { x, y });
       return;
     }
@@ -3074,7 +3074,7 @@ export class CadSketchEditorComponent implements OnDestroy {
       this.selected.set(new Set([picked.id]));
       return;
     }
-    if (extendsSmartDim(picked, sel)) {
+    if (extendsSmartDim(this.state(), picked, sel)) {
       const next = new Set(sel.map(e => e.id));
       next.add(picked.id);
       this.selected.set(next);
@@ -5319,7 +5319,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-433');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-434');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);
@@ -5554,7 +5554,7 @@ export class CadSketchEditorComponent implements OnDestroy {
 /** Whether `picked` can be added to the existing Smart Dim selection to
  * form a (still-valid) longer pick set. Used to decide between extending
  * the pick set vs treating the click as a placement. */
-function extendsSmartDim(picked: SketchEntity, sel: SketchEntity[]): boolean {
+function extendsSmartDim(state: SketchState, picked: SketchEntity, sel: SketchEntity[]): boolean {
   if (sel.length === 0) {
     return picked.kind === 'point' || picked.kind === 'line'
         || picked.kind === 'circle' || picked.kind === 'arc';
@@ -5568,8 +5568,8 @@ function extendsSmartDim(picked: SketchEntity, sel: SketchEntity[]): boolean {
     // A second CONCENTRIC circle/arc extends a curve pick into a
     // radial-distance dimension (the gap between the two radii).
     const isCurve = (x: SketchEntity) => x.kind === 'circle' || x.kind === 'arc';
-    if (isCurve(e) && isCurve(picked) && e.id !== picked.id
-        && (e as CircleEntity | ArcEntity).centerId === (picked as CircleEntity | ArcEntity).centerId) {
+    if (isCurve(e) && isCurve(picked)
+        && curvesConcentric(state, e as CircleEntity | ArcEntity, picked as CircleEntity | ArcEntity)) {
       return true;
     }
     return false;
@@ -5623,7 +5623,7 @@ function resolveSmartDim(
   // positive. Non-concentric pairs aren't a Smart Dim case → null.
   if (sel.length === 2 && sel.every(e => e.kind === 'circle' || e.kind === 'arc')) {
     const [a, b] = sel as Array<CircleEntity | ArcEntity>;
-    if (a.centerId !== b.centerId) return null;
+    if (!curvesConcentric(state, a, b)) return null;
     const inner = a.radius <= b.radius ? a : b;
     const outer = a.radius <= b.radius ? b : a;
     return { type: 'radial-distance', targets: [inner.id, outer.id], value: Math.abs(outer.radius - inner.radius) };
