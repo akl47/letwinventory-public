@@ -25,6 +25,7 @@ jobs:
           git fetch private master
 
           TAG=${GITHUB_REF#refs/tags/}
+          PUBLIC_ONLY_WORKFLOWS=".github/workflows/sync-to-private.yml .github/workflows/version-bump.yml .github/workflows/require-version-label.yml"
 
           # Checkout the private master and merge public master into it
           git checkout private/master
@@ -57,6 +58,15 @@ jobs:
               fi
             done
 
+            # Public-only workflows are deleted on private; a public edit to one
+            # is a modify/delete conflict — resolve it by keeping it deleted.
+            for f in $PUBLIC_ONLY_WORKFLOWS; do
+              if git diff --name-only --diff-filter=U | grep -q "^${f}$"; then
+                echo "Auto-resolving $f (public-only workflow, stays deleted)"
+                git rm -q "$f"
+              fi
+            done
+
             # Check if any conflicts remain
             if git diff --name-only --diff-filter=U | grep -q .; then
               echo "Unresolved conflicts remain — creating PR for manual resolution"
@@ -66,6 +76,10 @@ jobs:
               BRANCH="sync/public-$TAG"
               git checkout origin/master
               git checkout -b "$BRANCH"
+              # Strip public-only workflows so they never run on the private PR
+              # (require-version-label.yml would block it on a missing label).
+              git rm -q --ignore-unmatch $PUBLIC_ONLY_WORKFLOWS
+              git commit -q -m "chore: drop public-only workflows for private sync" || true
               git push private "$BRANCH"
 
               # Collect conflicted file list for the PR body
@@ -92,7 +106,7 @@ jobs:
           2. Merge \`master\` into it (or rebase) and resolve conflicts
           3. Push and merge the PR
 
-          > Public-only workflow files (\`sync-to-private.yml\`, \`version-bump.yml\`, \`require-version-label.yml\`) should be deleted if present.
+          > Public-only workflow files (\`sync-to-private.yml\`, \`version-bump.yml\`, \`require-version-label.yml\`) are already removed from this branch.
           EOF
           )"
 
