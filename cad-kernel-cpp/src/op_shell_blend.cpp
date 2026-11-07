@@ -18,6 +18,8 @@
 #include <vector>
 
 #include "geom_io.hpp"
+#include "blend_corner_refit.hpp"
+#include "shell_hole_fallback.hpp"
 
 #include <TopoDS.hxx>
 #include <TopoDS_Shape.hxx>
@@ -285,10 +287,17 @@ json op_buildShell(const json& params) {
     BRepOffsetAPI_MakeThickSolid mts;
     mts.MakeThickSolidByJoin(body, closing_faces, thickness, tolerance);
     mts.Build();
-    if (!mts.IsDone()) {
+    if (mts.IsDone()) shape = mts.Shape();
+    // Holes whose shell tubes run close to other walls make ByJoin fail or
+    // return an inside-out solid (rendered see-through). Rebuild from the
+    // hole-filled body instead; keep ByJoin's result if that can't help.
+    if (shape.IsNull() || !BRepCheck_Analyzer(shape).IsValid()) {
+      TopoDS_Shape alt = shell_with_hole_tubes(body, closing_faces, thickness, tolerance);
+      if (!alt.IsNull()) shape = alt;
+    }
+    if (shape.IsNull()) {
       throw std::runtime_error("MakeThickSolidByJoin did not complete");
     }
-    shape = mts.Shape();
   } catch (const Standard_Failure& f) {
     throw std::runtime_error(
         std::string("buildShell: failed to build the shell. The body's geometry "
@@ -540,6 +549,9 @@ json op_buildEdgeBlend(const json& params) {
               "features.");
         }
       }
+      // Corners where the radius exceeds the corner it wraps come back creased;
+      // make them tangent so later offsets (shell) don't split them open.
+      shape = refit_creased_blend_corners(shape);
     } else {
       const std::string mode = params.value("chamferMode", std::string("equal"));
       BRepFilletAPI_MakeChamfer mk(body);

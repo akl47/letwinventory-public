@@ -11,6 +11,11 @@
 //   4. buildShell:    hollow (3) 2mm removing the end cap — exercises the
 //                     pinched-torus clearance workaround (used to segfault)
 //   5. bodyVolume:    exact volume/centroid backs all of the above
+//   8. buildShell on a box with a counterbored through hole: ByJoin returns
+//                     an invalid solid; the hole-tube fallback must give the
+//                     analytic volume (REQ 1020)
+//   9. fillet corner refit: r5 round over r3 corners comes back creased; the
+//                     refit must make a 2mm shell of it tight (REQ 1021)
 
 #include <cmath>
 #include <cstdio>
@@ -25,6 +30,25 @@
 #include "../src/op_revolve_sweep.hpp"
 #include "../src/op_shell_blend.hpp"
 #include "../src/server_limits.hpp"
+#include "../src/blend_corner_refit.hpp"
+#include "../src/shell_hole_fallback.hpp"
+
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepGProp.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepTools.hxx>
+#include <BRep_Tool.hxx>
+#include <GProp_GProps.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
 
 #include <fstream>
 #include <sys/stat.h>
@@ -159,6 +183,80 @@ int main() {
     }
   }
 
+  // 8. REQ 1020 — hole-tube shell fallback. A 40x40x20 box with a through
+  //    counterbored hole, hollowed 2mm inward with the bottom removed: the
+  //    hole becomes a 2mm tube. ByJoin returns an invalid solid here (26222);
+  //    the fallback must be valid with the analytic volume:
+  //    body 31597.9 − (cavity 36·36·18 − grown hole inside it) where the
+  //    grown hole is r4 to z14 then r6 (square shoulder, as SolidWorks):
+  //    π·16·14 + π·36·4 = 1156.1  →  9426.0.
+  {
+    TopoDS_Shape hole = BRepAlgoAPI_Fuse(
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(20, 20, -1), gp_Dir(0, 0, 1)), 2.0, 22.0).Shape(),
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(20, 20, 16), gp_Dir(0, 0, 1)), 4.0, 5.0).Shape());
+    TopoDS_Shape body = BRepAlgoAPI_Cut(BRepPrimAPI_MakeBox(40, 40, 20).Shape(), hole);
+    TopTools_ListOfShape bottom;
+    for (TopExp_Explorer e(body, TopAbs_FACE); e.More(); e.Next()) {
+      BRepAdaptor_Surface a(TopoDS::Face(e.Current()));
+      if (a.GetType() == GeomAbs_Plane && std::fabs(a.Plane().Location().Z()) < 1e-9 &&
+          std::fabs(a.Plane().Axis().Direction().Z()) > 0.99) bottom.Append(e.Current());
+    }
+    CHECK(bottom.Extent() == 1, "hole box: want 1 bottom face, got %d", bottom.Extent());
+    auto vol = [](const TopoDS_Shape& s) { GProp_GProps g; BRepGProp::VolumeProperties(s, g); return g.Mass(); };
+    TopoDS_Shape alt = shell_with_hole_tubes(body, bottom, -2.0, 1e-3);
+    CHECK(!alt.IsNull(), "hole-tube shell fallback returned null");
+    if (!alt.IsNull()) {
+      CHECK(BRepCheck_Analyzer(alt).IsValid(), "hole-tube shell fallback result is invalid");
+      CHECK(std::fabs(vol(alt) - 9426.0) < 1.0, "hole-tube shell volume: want ~9426, got %.4f", vol(alt));
+    }
+  }
+
+  // 9. REQ 1021 — creased fillet corners. A 40x30x17 box with r3 vertical
+  //    corners, top edges rounded r5: OCCT's corner patches meet their
+  //    neighbours ~2.8° off tangent, so a 2mm ByJoin shell opens 0.10mm gaps
+  //    at them. After the refit the worst shell edge tolerance must be tight.
+  {
+    TopoDS_Shape box = BRepPrimAPI_MakeBox(40, 30, 17).Shape();
+    BRepFilletAPI_MakeFillet corners(box);
+    for (TopExp_Explorer e(box, TopAbs_EDGE); e.More(); e.Next()) {
+      BRepAdaptor_Curve c(TopoDS::Edge(e.Current()));
+      if (c.GetType() == GeomAbs_Line && std::fabs(c.Line().Direction().Z()) > 0.99) {
+        corners.Add(3.0, TopoDS::Edge(e.Current()));
+      }
+    }
+    const TopoDS_Shape rounded = corners.Shape();
+    auto plane_at = [](const TopoDS_Shape& s, double z) {
+      for (TopExp_Explorer e(s, TopAbs_FACE); e.More(); e.Next()) {
+        BRepAdaptor_Surface a(TopoDS::Face(e.Current()));
+        if (a.GetType() == GeomAbs_Plane && std::fabs(a.Plane().Location().Z() - z) < 1e-9 &&
+            std::fabs(a.Plane().Axis().Direction().Z()) > 0.99) return TopoDS::Face(e.Current());
+      }
+      return TopoDS_Face();
+    };
+    BRepFilletAPI_MakeFillet top_round(rounded);
+    for (TopExp_Explorer e(BRepTools::OuterWire(plane_at(rounded, 17)), TopAbs_EDGE); e.More(); e.Next()) {
+      top_round.Add(5.0, TopoDS::Edge(e.Current()));
+    }
+    const TopoDS_Shape filleted = top_round.Shape();
+    auto shell_tol = [&](const TopoDS_Shape& s) {
+      TopTools_ListOfShape open;
+      open.Append(plane_at(s, 0));
+      BRepOffsetAPI_MakeThickSolid mts;
+      mts.MakeThickSolidByJoin(s, open, -2.0, 1e-3);
+      double worst = 0;
+      for (TopExp_Explorer e(mts.Shape(), TopAbs_EDGE); e.More(); e.Next()) {
+        worst = std::max(worst, BRep_Tool::Tolerance(TopoDS::Edge(e.Current())));
+      }
+      return worst;
+    };
+    const TopoDS_Shape refit = refit_creased_blend_corners(filleted);
+    CHECK(!refit.IsSame(filleted), "fillet corner refit left the creased corners alone");
+    CHECK(BRepCheck_Analyzer(refit).IsValid(), "fillet corner refit result is invalid");
+    const double before = shell_tol(filleted), after = shell_tol(refit);
+    CHECK(before > 0.05, "creased-corner shell: expected OCCT's ~0.1mm gaps, got %.4g", before);
+    CHECK(after < 0.02, "refit-corner shell: worst edge tolerance %.4g mm (want < 0.02)", after);
+  }
+
   // 7. REQ 963 — limit defaults and env overrides.
   CHECK(kernel::max_request_bytes() == 512ull * 1024 * 1024, "default request cap should be 512 MiB");
   setenv("CAD_KERNEL_MAX_REQUEST_BYTES", "1024", 1);
@@ -173,6 +271,6 @@ int main() {
     std::fprintf(stderr, "kernel smoke tests: %d FAILURE(S)\n", g_failures);
     return 1;
   }
-  std::printf("kernel smoke tests OK (extrude, boolean, pinched sweep, pinched shell, limits)\n");
+  std::printf("kernel smoke tests OK (extrude, boolean, pinched sweep, pinched shell, hole-tube shell, fillet corner refit, limits)\n");
   return 0;
 }
