@@ -852,6 +852,15 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
           dbClient,
         });
         allCached = prism.cached && composed.cached;
+        // The kernel tags every composed body's faces `${feature.id}#body#…`,
+        // so a cut through several bodies hands them identical face ids.
+        // Keep the first body's names; scope the rest by body id.
+        if (targetBodies.indexOf(body) > 0) {
+          composed.faces = _scopeComposedFaceIds(composed.faces, feature.id, body.id);
+          composed.solids = (composed.solids || []).map(s => ({
+            ...s, faces: _scopeComposedFaceIds(s.faces, feature.id, body.id),
+          }));
+        }
         const allSolids = composed.solids || [];
         console.log(`[cadRegen] ${feature.id} compose result: ${allSolids.length} solid(s), cached=${composed.cached}`);
         for (let _i = 0; _i < allSolids.length; _i++) {
@@ -4188,6 +4197,18 @@ function _scopeFaceBoundaryEdges(faces, scope) {
   return faces.map(f => (
     Array.isArray(f.boundaryEdgeIds) && f.boundaryEdgeIds.length > 0
       ? { ...f, boundaryEdgeIds: f.boundaryEdgeIds.map(id => `${scope}/${id}`) }
+      : f
+  ));
+}
+
+/** Rewrite `${featureId}#body#…` face ids to `${featureId}#body@${bodyId}#…`. */
+function _scopeComposedFaceIds(faces, featureId, bodyId) {
+  if (!Array.isArray(faces)) return faces;
+  const from = `"feature_id":"${featureId}#body#`;
+  const to = `"feature_id":"${featureId}#body@${bodyId}#`;
+  return faces.map(f => (
+    typeof f.faceId === 'string' && f.faceId.includes(from)
+      ? { ...f, faceId: f.faceId.replace(from, to) }
       : f
   ));
 }

@@ -3862,7 +3862,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // rebuild below repopulates it at the solved positions).
     this.edgeGroup.visible = true;
     // Clear and rebuild face + edge meshes (face IDs reshuffle on every regen).
-    for (const mesh of this.faceMeshes.values()) {
+    // Walk the group, not the map: two bodies can share a face id, and the
+    // map only holds the last mesh per id.
+    for (const mesh of [...this.faceGroup.children] as THREE.Mesh[]) {
       this.faceGroup.remove(mesh);
       mesh.geometry.dispose();
       (mesh.material as THREE.Material).dispose();
