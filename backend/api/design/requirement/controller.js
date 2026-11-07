@@ -366,7 +366,7 @@ exports.getHistory = async (req, res) => {
         as: 'changedBy',
         attributes: ['id', 'displayName', 'email', 'photoURL']
       }],
-      order: [['createdAt', 'DESC']]
+      order: [['createdAt', 'DESC'], ['id', 'DESC']]
     });
 
     // Collect all user IDs referenced in changes
