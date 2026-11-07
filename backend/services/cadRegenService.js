@@ -2233,141 +2233,162 @@ async function _dispatchEdgeBlend(feature, bodies, model, client, dbClient, resu
       }
     }
   }
-  // SolidWorks-style "All bodies" Feature Scope: a blend applied to any
-  // body whose topology contains the picked edge gets that edge rounded.
-  // For now we target the most-recent body (single-body case), matching
-  // the additive flow. Multi-body scope is a later pass — the cache key
-  // includes body.id so adding per-body iteration here doesn't conflict.
-  const body = bodies[bodies.length - 1];
   const kind = feature.type;  // 'fillet' or 'chamfer'
-  const paramHash = _hashParams({
-    op: kind,
-    value,
-    edges: feature.edges,
-    bodyId: body.id,
-    upstream: body.paramHash,
-    // Chamfer mode + extras participate in the cache key so changing mode
-    // between equal / twoDistance / distanceAngle invalidates the cached
-    // result. distance2 / angle nullable for non-applicable modes.
-    chamferMode,
-    chamferDistance2,
-    chamferAngle,
-  });
-  const cacheKey = `${feature.id}#blend#${body.id}`;
-  console.log(`[cadRegen] dispatching feature ${feature.id} type=${kind} (${feature.edges.length} edge(s), value=${value})`);
-  const cached = await dbClient.DesignBRepCache.findOne({
-    where: {
-      cadModelID: model.id,
-      featureID: cacheKey,
-      paramHash,
-      upstreamHash: body.paramHash,
-      namingVersion: NAMING_VERSION,
-    },
-  });
-  let brep, faces, topology, solids, cachedFlag;
-  if (cached) {
-    cached.lastAccessedAt = new Date();
-    await cached.save();
-    brep = Buffer.isBuffer(cached.brepBytes)
-      ? cached.brepBytes.toString('base64')
-      : Buffer.from(cached.brepBytes || '').toString('base64');
-    faces = cached.tessellatedFaces.faces || [];
-    topology = cached.tessellatedFaces.topology || { vertices: [], edges: [] };
-    solids = cached.tessellatedFaces.solids || [];
-    cachedFlag = true;
-  } else {
-    const blend = edges => client.call('buildEdgeBlend', {
-      featureId: `${feature.id}#blend`,
-      aBrep: body.brep,
-      kind: kind === 'fillet' ? 'fillet' : 'chamfer',
-      value,
-      // Pass per-edge value override through to the kernel when present.
-      // Mixed radii / distances in a single MakeFillet / MakeChamfer call
-      // produce the correct interacting rolling balls at junction vertices.
-      edges: edges.map(e => {
-        const out = { start: e.start, end: e.end };
-        if (typeof e.value === 'number' && Number.isFinite(e.value) && e.value > 0) {
-          out.value = e.value;
-        }
-        return out;
-      }),
-      ...(kind === 'chamfer' ? {
-        chamferMode,
-        ...(chamferDistance2 !== null ? { distance2: chamferDistance2 } : {}),
-        ...(chamferAngle !== null ? { angle: chamferAngle } : {}),
-      } : {}),
-    });
-    let rpc;
+  // REQ 1024 — each picked edge is blended on the body it belongs to. Every
+  // body is blended before any is changed, so a failure leaves all untouched.
+  const groups = _groupEdgesByBody(bodies, feature.edges);
+  const blended = [];
+  for (const [body, bodyEdges] of groups) {
     try {
-      rpc = await blend(feature.edges);
+      blended.push({ body, ...await _blendBody(body, bodyEdges) });
     } catch (err) {
-      // REQ 1017 — rounds of different edges overran each other: blend the
-      // edges in groups on the original body and combine the results.
-      if (!isBlendOverrunError(err) || feature.edges.length < 2) throw err;
-      const grouped = await blendInGroups({
-        edges: feature.edges,
-        baseBrep: body.brep,
-        blend,
-        volume: async b => (await client.call('bodyVolume', { aBrep: b })).volume,
-        boolean: (op, a, b) => client.call('buildBoolean', { featureId: `${feature.id}#blend`, op, aBrep: a, bBrep: b }),
-        originalError: err,
-      });
-      console.log(`[cadRegen] ${feature.id} ${kind}: combined ${grouped.groups.length} edge groups (${grouped.groups.map(g => g.length).join('+')})`);
-      rpc = grouped.rpc;
+      if (groups.size < 2) throw err;
+      const name = body.name || `Body ${bodies.indexOf(body) + 1}`;
+      throw new Error(`${name}: ${err.message || String(err)}`);
     }
-    await dbClient.DesignBRepCache.upsert({
-      cadModelID: model.id,
-      featureID: cacheKey,
-      paramHash,
-      upstreamHash: body.paramHash,
-      brepBytes: Buffer.from(rpc.brepBytes || '', 'base64'),
-      tessellatedFaces: { faces: rpc.faces || [], topology: rpc.topology || { vertices: [], edges: [] }, solids: rpc.solids || [] },
-      namingVersion: NAMING_VERSION,
-      lastAccessedAt: new Date(),
-    });
-    brep = rpc.brepBytes;
-    faces = rpc.faces || [];
-    topology = rpc.topology || { vertices: [], edges: [] };
-    solids = rpc.solids || [];
-    cachedFlag = false;
   }
-  console.log(`[cadRegen] ${feature.id} ${kind} result: ${solids.length} solid(s), cached=${cachedFlag}`);
+  for (const { body, brep, faces, topology, solids, cachedFlag, paramHash } of blended) {
+    _applyBlend(body, { brep, faces, topology, solids, cachedFlag, paramHash });
+  }
 
-  // Replace the body's geometry with the blended result. The blend
-  // doesn't split or annihilate, so we keep the body id and just
-  // refresh brep / faces / topology / centroid. paramHash advances
-  // to the new compose-style hash so downstream features re-eval.
-  if (solids.length === 0) {
-    throw new Error(`${kind} produced no solid — the operation likely failed (radius/distance too large for an edge).`);
+  async function _blendBody(body, bodyEdges) {
+    const paramHash = _hashParams({
+      op: kind,
+      value,
+      edges: bodyEdges,
+      bodyId: body.id,
+      upstream: body.paramHash,
+      // Chamfer mode + extras participate in the cache key so changing mode
+      // between equal / twoDistance / distanceAngle invalidates the cached
+      // result. distance2 / angle nullable for non-applicable modes.
+      chamferMode,
+      chamferDistance2,
+      chamferAngle,
+    });
+    const cacheKey = `${feature.id}#blend#${body.id}`;
+    console.log(`[cadRegen] dispatching feature ${feature.id} type=${kind} (${bodyEdges.length} edge(s), value=${value})`);
+    const cached = await dbClient.DesignBRepCache.findOne({
+      where: {
+        cadModelID: model.id,
+        featureID: cacheKey,
+        paramHash,
+        upstreamHash: body.paramHash,
+        namingVersion: NAMING_VERSION,
+      },
+    });
+    let brep, faces, topology, solids, cachedFlag;
+    if (cached) {
+      cached.lastAccessedAt = new Date();
+      await cached.save();
+      brep = Buffer.isBuffer(cached.brepBytes)
+        ? cached.brepBytes.toString('base64')
+        : Buffer.from(cached.brepBytes || '').toString('base64');
+      faces = cached.tessellatedFaces.faces || [];
+      topology = cached.tessellatedFaces.topology || { vertices: [], edges: [] };
+      solids = cached.tessellatedFaces.solids || [];
+      cachedFlag = true;
+    } else {
+      const blend = edges => client.call('buildEdgeBlend', {
+        featureId: `${feature.id}#blend`,
+        aBrep: body.brep,
+        kind: kind === 'fillet' ? 'fillet' : 'chamfer',
+        value,
+        // Pass per-edge value override through to the kernel when present.
+        // Mixed radii / distances in a single MakeFillet / MakeChamfer call
+        // produce the correct interacting rolling balls at junction vertices.
+        edges: edges.map(e => {
+          const out = { start: e.start, end: e.end };
+          if (typeof e.value === 'number' && Number.isFinite(e.value) && e.value > 0) {
+            out.value = e.value;
+          }
+          return out;
+        }),
+        ...(kind === 'chamfer' ? {
+          chamferMode,
+          ...(chamferDistance2 !== null ? { distance2: chamferDistance2 } : {}),
+          ...(chamferAngle !== null ? { angle: chamferAngle } : {}),
+        } : {}),
+      });
+      let rpc;
+      try {
+        rpc = await blend(bodyEdges);
+      } catch (err) {
+        // REQ 1017 — rounds of different edges overran each other: blend the
+        // edges in groups on the original body and combine the results.
+        if (!isBlendOverrunError(err) || bodyEdges.length < 2) throw err;
+        const grouped = await blendInGroups({
+          edges: bodyEdges,
+          baseBrep: body.brep,
+          blend,
+          volume: async b => (await client.call('bodyVolume', { aBrep: b })).volume,
+          boolean: (op, a, b) => client.call('buildBoolean', { featureId: `${feature.id}#blend`, op, aBrep: a, bBrep: b }),
+          originalError: err,
+        });
+        console.log(`[cadRegen] ${feature.id} ${kind}: combined ${grouped.groups.length} edge groups (${grouped.groups.map(g => g.length).join('+')})`);
+        rpc = grouped.rpc;
+      }
+      await dbClient.DesignBRepCache.upsert({
+        cadModelID: model.id,
+        featureID: cacheKey,
+        paramHash,
+        upstreamHash: body.paramHash,
+        brepBytes: Buffer.from(rpc.brepBytes || '', 'base64'),
+        tessellatedFaces: { faces: rpc.faces || [], topology: rpc.topology || { vertices: [], edges: [] }, solids: rpc.solids || [] },
+        namingVersion: NAMING_VERSION,
+        lastAccessedAt: new Date(),
+      });
+      brep = rpc.brepBytes;
+      faces = rpc.faces || [];
+      topology = rpc.topology || { vertices: [], edges: [] };
+      solids = rpc.solids || [];
+      cachedFlag = false;
+    }
+    if (solids.length === 0) {
+      throw new Error(`${kind} produced no solid — the operation likely failed (radius/distance too large for an edge).`);
+    }
+    return { brep, faces, topology, solids, cachedFlag, paramHash };
   }
-  const primary = solids[0];
-  const prevFaces = body.faces || [], prevOwners = body.faceOwners || null;  // REQ 892
-  body.brep = primary.brepBytes || brep;
-  body.paramHash = paramHash;
-  body.faces = _scopeFaceBoundaryEdges(primary.faces || faces, body.id);
-  body.topology = _scopeTopology(primary.topology || topology, body.id);
-  body.centroid = primary.centroid
-    ? [primary.centroid[0], primary.centroid[1], primary.centroid[2]]
-    : _approxCentroidFromFaces(body.faces);
-  // REQ 892 — untouched faces keep their creators; the blend faces (and the
-  // trimmed flanks whose centroids moved) belong to this fillet/chamfer.
-  body.faceOwners = _carryFaceOwners(prevFaces, prevOwners, body.faces, feature.id);
-  for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
-  for (const f of body.faces || []) {
-    const plane = _faceRepresentativePlane(f);
-    if (plane) faceMap.set(f.faceId, plane);
+
+  function _applyBlend(body, { brep, faces, topology, solids, cachedFlag, paramHash }) {
+    console.log(`[cadRegen] ${feature.id} ${kind} result: ${solids.length} solid(s), cached=${cachedFlag}`);
+
+    // Replace the body's geometry with the blended result. The blend
+    // doesn't split or annihilate, so we keep the body id and just
+    // refresh brep / faces / topology / centroid. paramHash advances
+    // to the new compose-style hash so downstream features re-eval.
+    const primary = solids[0];
+    const prevFaces = body.faces || [], prevOwners = body.faceOwners || null;  // REQ 892
+    body.brep = primary.brepBytes || brep;
+    body.paramHash = paramHash;
+    // Blend faces are named after the feature on every body; keep each body's
+    // unique (the most recent body keeps the plain names it always had).
+    let blendFaces = primary.faces || faces;
+    if (body !== bodies[bodies.length - 1]) blendFaces = _scopeComposedFaceIds(blendFaces, feature.id, body.id, 'blend');
+    body.faces = _scopeFaceBoundaryEdges(blendFaces, body.id);
+    body.topology = _scopeTopology(primary.topology || topology, body.id);
+    body.centroid = primary.centroid
+      ? [primary.centroid[0], primary.centroid[1], primary.centroid[2]]
+      : _approxCentroidFromFaces(body.faces);
+    // REQ 892 — untouched faces keep their creators; the blend faces (and the
+    // trimmed flanks whose centroids moved) belong to this fillet/chamfer.
+    body.faceOwners = _carryFaceOwners(prevFaces, prevOwners, body.faces, feature.id);
+    for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
+    for (const f of body.faces || []) {
+      const plane = _faceRepresentativePlane(f);
+      if (plane) faceMap.set(f.faceId, plane);
+    }
+    const result = {
+      featureId: feature.id,
+      bodyId: body.id,
+      faces: body.faces,
+      topology: body.topology,
+      cached: cachedFlag,
+      bodyParamHash: body.paramHash,
+      faceOwners: body.faceOwners,
+    };
+    results.push(result);
+    emit(result);
   }
-  const result = {
-    featureId: feature.id,
-    bodyId: body.id,
-    faces: body.faces,
-    topology: body.topology,
-    cached: cachedFlag,
-    bodyParamHash: body.paramHash,
-    faceOwners: body.faceOwners,
-  };
-  results.push(result);
-  emit(result);
 }
 
 /** Build the kernel transform list for a pattern feature. Mirrors the
@@ -4202,10 +4223,10 @@ function _scopeFaceBoundaryEdges(faces, scope) {
 }
 
 /** Rewrite `${featureId}#body#…` face ids to `${featureId}#body@${bodyId}#…`. */
-function _scopeComposedFaceIds(faces, featureId, bodyId) {
+function _scopeComposedFaceIds(faces, featureId, bodyId, tag = 'body') {
   if (!Array.isArray(faces)) return faces;
-  const from = `"feature_id":"${featureId}#body#`;
-  const to = `"feature_id":"${featureId}#body@${bodyId}#`;
+  const from = `"feature_id":"${featureId}#${tag}#`;
+  const to = `"feature_id":"${featureId}#${tag}@${bodyId}#`;
   return faces.map(f => (
     typeof f.faceId === 'string' && f.faceId.includes(from)
       ? { ...f, faceId: f.faceId.replace(from, to) }
@@ -4218,6 +4239,32 @@ function _scopeComposedFaceIds(faces, featureId, bodyId) {
  * two bodies' topologies will collide on the frontend's edge-id keyed
  * Map (causing scene leakage where overwritten lines linger). Scoping
  * by body id makes them unique. */
+/** Picked edges grouped by the body owning them: each edge goes to the body
+ * with the nearest topology edge (by endpoints), later bodies winning ties.
+ * Returns a Map in body order. */
+function _groupEdgesByBody(bodies, edges) {
+  const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const owner = new Map();
+  for (const pick of edges) {
+    let best = bodies[bodies.length - 1], bestDist = Infinity;
+    for (let i = bodies.length - 1; i >= 0; i--) {
+      for (const e of (bodies[i].topology || {}).edges || []) {
+        if (!Array.isArray(e.endpoints) || e.endpoints.length !== 2 || !Array.isArray(pick.start) || !Array.isArray(pick.end)) continue;
+        const [a, b] = e.endpoints;
+        const dist = Math.min(d(pick.start, a) + d(pick.end, b), d(pick.start, b) + d(pick.end, a));
+        if (dist < bestDist) { best = bodies[i]; bestDist = dist; }
+      }
+    }
+    owner.set(pick, best);
+  }
+  const groups = new Map();
+  for (const body of bodies) {
+    const picks = edges.filter(e => owner.get(e) === body);
+    if (picks.length) groups.set(body, picks);
+  }
+  return groups;
+}
+
 function _scopeTopology(topo, scope) {
   if (!topo) return { vertices: [], edges: [] };
   return {
@@ -4274,5 +4321,6 @@ module.exports = {
   _danglingHostFaceWarnings, // exported for unit tests (host-face resolution / dangling detection)
   _carryFaceOwners, // exported for unit tests (REQ 892 — face ownership carry)
   _computePatternTransforms, // exported for unit tests (REQ 962 — copy limit)
+  _groupEdgesByBody, // exported for unit tests (REQ 1024 — multi-body blends)
   MAX_PATTERN_COPIES,
 };
