@@ -98,7 +98,7 @@ export interface TreeNode {
           <span *ngIf="!compact()">{{ headerTitle() }}</span>
         </header>
         <ul class="tree" #treeList *ngIf="!featuresCollapsed()">
-        <li *ngFor="let n of nodes()"
+        <li *ngFor="let n of nodes(); trackBy: trackNode"
             [attr.data-testid]="rowTestId(n)"
             [attr.data-feature-index]="n.featureIndex"
             [attr.data-node-key]="n.key"
@@ -485,6 +485,8 @@ export class CadFeatureTreePanelComponent {
   features = input<Feature[]>([]);
   doc = input<SketchDocument | null>(null);
   selectableSketches = input<boolean>(false);
+  /** Reuse rows across re-renders so the list keeps its scroll position. */
+  readonly trackNode = (_: number, n: TreeNode) => n.key;
   // ── External-nodes mode (e.g. assembly tree) ────────────────────────
   /** When non-null, the panel renders THESE nodes verbatim instead of building
    * them from `features`, and routes row interactions to `externalEvent`. */
@@ -745,15 +747,7 @@ export class CadFeatureTreePanelComponent {
     // feature render as the feature's CHILD instead of as their own
     // row. The feature's index in featureTree.features (NOT the display
     // position) is what the rollback bar gates against.
-    //
-    // Exception: in pick-extrude-target mode (selectableSketches=true),
-    // surface every sketch — consumed or orphan — at the top level so
-    // the user can click any sketch as the new extrude's source
-    // without having to expand the parent feature first. A sketch may
-    // be re-extruded into a second feature with different region picks
-    // (common pattern: extrude one region, then create a new extrude
-    // from the same sketch with a different region selection).
-    const pickMode = this.selectableSketches();
+    // Pick-sketch modes keep this layout; they only make sketch rows clickable.
     const consumedSketchIds = new Set<string>();
     for (const f of features) {
       if (f.type !== 'origin') {
@@ -775,7 +769,7 @@ export class CadFeatureTreePanelComponent {
     });
     if (doc) {
       for (const s of Object.values(doc.sketches)) {
-        if (!pickMode && consumedSketchIds.has(s.id)) continue;
+        if (consumedSketchIds.has(s.id)) continue;
         // Fall back to the numeric tail of the sketch id when createdAt
         // is missing (defensive — backfill should have populated it).
         const fallback = parseInt(s.id.replace(/^\D+/, ''), 10) || 0;
@@ -856,7 +850,7 @@ export class CadFeatureTreePanelComponent {
 
     // Compact: flat dependency order — each feature's sketches move up ahead
     // of it, and a sketch reused by a later feature isn't repeated.
-    if (this.compact() && !pickMode) {
+    if (this.compact()) {
       const flat: TreeNode[] = [];
       const shown = new Set<string>();
       for (let i = 0; i < out.length; i++) {
@@ -990,10 +984,7 @@ export class CadFeatureTreePanelComponent {
         });
         if (sketch) {
           sketchesUsed.add(sketch.id);
-          // Skip the nested child row in pick-extrude-target mode — the
-          // sketch is already rendered at the top level for one-click
-          // picking. Avoids the duplicate row.
-          if (isOpen && !this.selectableSketches()) {
+          if (isOpen) {
             const defaultSketchLabel = `${sketch.id} — ${this.hostLabel(sketch.hostId)}`;
             out.push({
               key: `child:${sketch.id}`,
@@ -1038,7 +1029,7 @@ export class CadFeatureTreePanelComponent {
           suppressed: sf.suppressed === true,
           feature: f,
         });
-        if (isOpen && !this.selectableSketches()) {
+        if (isOpen) {
           for (const [role, sk] of [['Profile', profile], ['Path', path]] as const) {
             if (!sk) continue;
             sketchesUsed.add(sk.id);
@@ -1052,7 +1043,7 @@ export class CadFeatureTreePanelComponent {
               depth: 1,
               expandable: false,
               expanded: false,
-              selectable: false,
+              selectable: this.selectableSketches(),
               visible: sk.visible !== false,
               visibilityToggleable: true,
               sketchId: sk.id,
@@ -1090,7 +1081,7 @@ export class CadFeatureTreePanelComponent {
         profiles.forEach((sk, i) => {
           if (!sk) return;
           sketchesUsed.add(sk.id);
-          if (!isOpen || this.selectableSketches()) return;
+          if (!isOpen) return;
           const role = `Profile ${i + 1}`;
           const defaultSketchLabel = `${role}: ${sk.id} — ${this.hostLabel(sk.hostId)}`;
           out.push({
@@ -1102,7 +1093,7 @@ export class CadFeatureTreePanelComponent {
             depth: 1,
             expandable: false,
             expanded: false,
-            selectable: false,
+            selectable: this.selectableSketches(),
             visible: sk.visible !== false,
             visibilityToggleable: true,
             sketchId: sk.id,

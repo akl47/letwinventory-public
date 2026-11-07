@@ -47,7 +47,7 @@ import { CadSelectionListComponent, SelectionRow } from '../cad-selection-list/c
 import { computeMeasure, fitCircle, MeasureItem } from '../../../cad/lib/measure';
 import { staleDirtyAgeMs, formatStaleAge } from '../../../cad/lib/staleness';
 import { cacheCoversRollback } from '../../../cad/lib/rollbackCoverage';
-import type { FeatureTree, Feature, OriginFeature, SketchDocument, SketchId, ModelGeometry, ModelTopology, SketchState, SketchConstraint, ExtrudeFeature, ExtrudeEndCondition, LineEntity, CircleEntity, PointEntity, ChamferFeature, DatumPlaneFeature, PlaneRef, VertexRef, EdgeRef3D, Plane3, ReferenceCandidate } from '../../../cad/lib/types';
+import type { FeatureTree, Feature, OriginFeature, SketchDocument, SketchId, ModelGeometry, ModelTopology, SketchState, SketchConstraint, ExtrudeFeature, ExtrudeEndCondition, LineEntity, CircleEntity, PointEntity, ChamferFeature, DatumPlaneFeature, PlaneRef, VertexRef, EdgeRef3D, Plane3, ReferenceCandidate, AxisRef, AxisSnapshot } from '../../../cad/lib/types';
 import {
   emptyFeatureTree, addFeature, defaultDatumVisibility,
   removeFeature, updateFeatureParam, removeFeaturesReferencingSketch,
@@ -93,6 +93,9 @@ type SnapKind = 'endpoint' | 'midpoint' | 'intersection' | 'quadrant' | 'on-edge
 /** Generic feature-tree selectable kinds — features, sketches, and origin datums
  *  all share one unified selection/anchor model. */
 type TreeSelKind = 'feature' | 'sketch' | 'datum';
+/** Pattern / Move-Copy axis: an origin axis, or a straight edge picked in the viewer. */
+type AxisChoice = 'x_axis' | 'y_axis' | 'z_axis' | 'edge';
+type AxisSlot = 'dir1' | 'dir2' | 'circ' | 'moveCopy';
 import { extractRegions, tessellateProfileLoop, topLevelRegionIndices } from '../../../cad/lib/profile';
 import { makeVarResolver, type TextResolver } from '../../../cad/lib/textGlyphs';
 import { buildBinaryStl } from '../../../cad/lib/stlExport';
@@ -906,7 +909,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           (contextMenu)="onContextRowMenu($event)"
           (contextVisibilityToggled)="toggleContextVisible($event)"
           [doc]="doc()"
-          [selectableSketches]="mode() === 'pick-extrude-target' || mode() === 'pick-revolve-target' || mode() === 'pick-cut-extrude-target' || mode() === 'pick-cut-revolve-target'"
+          [selectableSketches]="mode() === 'pick-extrude-target' || mode() === 'pick-revolve-target' || mode() === 'pick-cut-extrude-target' || mode() === 'pick-cut-revolve-target' || sketchPickSlot() !== null"
           [selectedFeatures]="selectedFeatures()"
           [featureErrors]="mergedFeatureErrors()"
           [selectedSketches]="selectedSketches()"
@@ -2267,11 +2270,15 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <div class="field-header">
                 <mat-icon class="field-icon">crop_din</mat-icon>
                 <span class="field-label">Profile sketch</span>
+                <button class="icon-btn" data-testid="sweep-profile-pick"
+                        [class.active]="sketchPickSlot() === 'sweepProfile'"
+                        [matTooltip]="sketchPickSlot() === 'sweepProfile' ? 'Click a sketch in the feature tree' : 'Pick from the feature tree'"
+                        (click)="toggleSketchPickSlot('sweepProfile')"><mat-icon>touch_app</mat-icon></button>
               </div>
               <select class="panel-input"
                       data-testid="sweep-profile"
                       [value]="sweepProfileSketchId() ?? ''"
-                      (change)="sweepProfileSketchId.set($any($event.target).value || null)">
+                      (change)="setSweepProfile($any($event.target).value || null)">
                 <option value="">— pick a sketch —</option>
                 <option *ngFor="let s of sweepSketchOptions(); trackBy: trackSketchId"
                         [value]="s.id"
@@ -2285,11 +2292,15 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <div class="field-header">
                 <mat-icon class="field-icon">timeline</mat-icon>
                 <span class="field-label">Path sketch</span>
+                <button class="icon-btn" data-testid="sweep-path-pick"
+                        [class.active]="sketchPickSlot() === 'sweepPath'"
+                        [matTooltip]="sketchPickSlot() === 'sweepPath' ? 'Click a sketch in the feature tree' : 'Pick from the feature tree'"
+                        (click)="toggleSketchPickSlot('sweepPath')"><mat-icon>touch_app</mat-icon></button>
               </div>
               <select class="panel-input"
                       data-testid="sweep-path"
                       [value]="sweepPathSketchId() ?? ''"
-                      (change)="sweepPathSketchId.set($any($event.target).value || null)">
+                      (change)="setSweepPath($any($event.target).value || null)">
                 <option value="">— pick a sketch —</option>
                 <option *ngFor="let s of sweepSketchOptions(); trackBy: trackSketchId"
                         [value]="s.id"
@@ -2345,6 +2356,10 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <div class="field-header">
                 <mat-icon class="field-icon">format_list_numbered</mat-icon>
                 <span class="field-label">Profile sections ({{ loftSketchIds().length }})</span>
+                <button class="icon-btn" data-testid="loft-section-pick"
+                        [class.active]="sketchPickSlot() === 'loft'"
+                        [matTooltip]="sketchPickSlot() === 'loft' ? 'Click sketches in the feature tree, in section order' : 'Pick from the feature tree'"
+                        (click)="toggleSketchPickSlot('loft')"><mat-icon>touch_app</mat-icon></button>
               </div>
               <div *ngFor="let sid of loftSketchIds(); let i = index; trackBy: trackLoftSection"
                    class="loop-toggle" style="justify-content: space-between;">
@@ -3445,11 +3460,16 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <select class="panel-input"
                         data-testid="move-copy-axis"
                         [value]="moveCopyAxisId()"
-                        (change)="moveCopyAxisId.set($any($event.target).value)">
+                        (change)="setAxisChoice('moveCopy', $any($event.target).value)">
                   <option value="x_axis">X axis</option>
                   <option value="y_axis">Y axis</option>
                   <option value="z_axis">Z axis</option>
+                  <option value="edge">Edge…</option>
                 </select>
+                <div class="axis-edge-row" *ngIf="moveCopyAxisId() === 'edge'" data-testid="axis-edge-moveCopy"
+                     [class.active]="axisEdgePickSlot() === 'moveCopy'" (click)="beginAxisEdgePick('moveCopy')">
+                  {{ axisEdgePickSlot() === 'moveCopy' ? 'Click a straight edge in the viewer' : (axisEdges()['moveCopy'] ? 'Edge picked — click to re-pick' : 'Click here, then a straight edge') }}
+                </div>
                 <div class="hole-override-row" style="margin-top: 6px;">
                   <span>Angle°</span>
                   <input type="number" step="1" class="panel-input"
@@ -3601,11 +3621,16 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                         data-testid="pattern-dir1-axis"
                         aria-label="Direction 1 axis"
                         [value]="patternDir1AxisId()"
-                        (change)="patternDir1AxisId.set($any($event.target).value)">
+                        (change)="setAxisChoice('dir1', $any($event.target).value)">
                   <option value="x_axis">X axis</option>
                   <option value="y_axis">Y axis</option>
                   <option value="z_axis">Z axis</option>
+                  <option value="edge">Edge…</option>
                 </select>
+                <div class="axis-edge-row" *ngIf="patternDir1AxisId() === 'edge'" data-testid="axis-edge-dir1"
+                     [class.active]="axisEdgePickSlot() === 'dir1'" (click)="beginAxisEdgePick('dir1')">
+                  {{ axisEdgePickSlot() === 'dir1' ? 'Click a straight edge in the viewer' : (axisEdges()['dir1'] ? 'Edge picked — click to re-pick' : 'Click here, then a straight edge') }}
+                </div>
               </div>
               <div class="panel-field active">
                 <div class="field-header">
@@ -3665,11 +3690,16 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                           data-testid="pattern-dir2-axis"
                           aria-label="Direction 2 axis"
                           [value]="patternDir2AxisId()"
-                          (change)="patternDir2AxisId.set($any($event.target).value)">
+                          (change)="setAxisChoice('dir2', $any($event.target).value)">
                     <option value="x_axis">X axis</option>
                     <option value="y_axis">Y axis</option>
                     <option value="z_axis">Z axis</option>
+                    <option value="edge">Edge…</option>
                   </select>
+                  <div class="axis-edge-row" *ngIf="patternDir2AxisId() === 'edge'" data-testid="axis-edge-dir2"
+                       [class.active]="axisEdgePickSlot() === 'dir2'" (click)="beginAxisEdgePick('dir2')">
+                    {{ axisEdgePickSlot() === 'dir2' ? 'Click a straight edge in the viewer' : (axisEdges()['dir2'] ? 'Edge picked — click to re-pick' : 'Click here, then a straight edge') }}
+                  </div>
                 </div>
                 <div class="panel-field active">
                   <div class="field-header">
@@ -3723,11 +3753,16 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                         data-testid="pattern-circ-axis"
                         aria-label="Rotation axis"
                         [value]="patternCircAxisId()"
-                        (change)="patternCircAxisId.set($any($event.target).value)">
+                        (change)="setAxisChoice('circ', $any($event.target).value)">
                   <option value="x_axis">X axis</option>
                   <option value="y_axis">Y axis</option>
                   <option value="z_axis">Z axis</option>
+                  <option value="edge">Edge…</option>
                 </select>
+                <div class="axis-edge-row" *ngIf="patternCircAxisId() === 'edge'" data-testid="axis-edge-circ"
+                     [class.active]="axisEdgePickSlot() === 'circ'" (click)="beginAxisEdgePick('circ')">
+                  {{ axisEdgePickSlot() === 'circ' ? 'Click a straight edge in the viewer' : (axisEdges()['circ'] ? 'Edge picked — click to re-pick' : 'Click here, then a straight edge') }}
+                </div>
               </div>
               <div class="panel-field active">
                 <div class="field-header">
@@ -4536,6 +4571,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     }
     .field-icon { font-size: 16px; width: 16px; height: 16px; opacity: 0.7; }
     .field-label { font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; flex: 1; }
+    .field-header .icon-btn.active { background: rgba(66, 165, 245, 0.35); color: #fff; border-radius: 4px; }
+    .axis-edge-row { margin-top: 4px; padding: 4px 6px; font-size: 12px; color: #aaa; border: 1px dashed #555; border-radius: 4px; cursor: pointer; }
+    .axis-edge-row.active { border-color: #42a5f5; color: #fff; background: rgba(66, 165, 245, 0.15); }
     .field-count {
       font-size: 11px;
       color: #ddd;
@@ -4759,7 +4797,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-439';
+  readonly buildMarker = 'text-446';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -5805,7 +5843,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   moveCopyTy = signal<number>(0);
   moveCopyTz = signal<number>(0);
   moveCopyRotateEnabled = signal<boolean>(false);
-  moveCopyAxisId = signal<'x_axis' | 'y_axis' | 'z_axis'>('z_axis');
+  moveCopyAxisId = signal<AxisChoice>('z_axis');
   moveCopyAngleDeg = signal<number>(0);
   moveCopyCopy = signal<boolean>(true);
 
@@ -6149,14 +6187,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   /** Linear: direction 1 axis + spacing + count + flipped. Count
    * supports expressions via the equations doc (REQ 658 update). */
-  patternDir1AxisId = signal<'x_axis' | 'y_axis' | 'z_axis'>('x_axis');
+  patternDir1AxisId = signal<AxisChoice>('x_axis');
   patternDir1Spacing = signal<number>(10);
   patternDir1SpacingExpression = signal<string | null>(null);
   patternDir1Count = signal<number>(3);
   patternDir1CountExpression = signal<string | null>(null);
   patternDir1Flipped = signal<boolean>(false);
   patternDir2Enabled = signal<boolean>(false);
-  patternDir2AxisId = signal<'x_axis' | 'y_axis' | 'z_axis'>('y_axis');
+  patternDir2AxisId = signal<AxisChoice>('y_axis');
   patternDir2Spacing = signal<number>(10);
   patternDir2SpacingExpression = signal<string | null>(null);
   patternDir2Count = signal<number>(2);
@@ -6164,7 +6202,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   patternDir2Flipped = signal<boolean>(false);
 
   /** Circular: rotation axis + count + mode + angle. */
-  patternCircAxisId = signal<'x_axis' | 'y_axis' | 'z_axis'>('z_axis');
+  patternCircAxisId = signal<AxisChoice>('z_axis');
   patternCircCount = signal<number>(4);
   patternCircCountExpression = signal<string | null>(null);
   patternCircMode = signal<'equalSpacing' | 'specifiedAngle'>('equalSpacing');
@@ -6305,20 +6343,20 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         return { kind: 'mirror', transforms: [{ kind: 'mirror', origin: snap.origin, normal: snap.normal }] };
       }
       if (ctx.kind === 'linearPattern') {
-        const d1AxisId = this.patternDir1AxisId();
+        const a1 = this.axisFor('dir1');
+        const a2 = this.axisFor('dir2');
+        if (!a1 || (this.patternDir2Enabled() && !a2)) return null;
         const tForm: import('../../../cad/lib/types').LinearPatternFeature = {
           id: '__preview__',
           type: 'linearPattern',
           direction1: {
-            axisRef: { kind: 'originAxis', axisId: d1AxisId },
-            axisSnapshot: this._originAxisSnapshot(d1AxisId),
+            ...a1,
             spacing: this.patternDir1Spacing(),
             count: this.patternDir1Count(),
             flipped: this.patternDir1Flipped(),
           },
           direction2: this.patternDir2Enabled() ? {
-            axisRef: { kind: 'originAxis', axisId: this.patternDir2AxisId() },
-            axisSnapshot: this._originAxisSnapshot(this.patternDir2AxisId()),
+            ...a2!,
             spacing: this.patternDir2Spacing(),
             count: this.patternDir2Count(),
             flipped: this.patternDir2Flipped(),
@@ -6327,12 +6365,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         return { kind: 'linearPattern', transforms: linearTransforms(tForm) };
       }
       if (ctx.kind === 'circularPattern') {
-        const axisId = this.patternCircAxisId();
+        const ac = this.axisFor('circ');
+        if (!ac) return null;
         const tForm: import('../../../cad/lib/types').CircularPatternFeature = {
           id: '__preview__',
           type: 'circularPattern',
-          axisRef: { kind: 'originAxis', axisId },
-          axisSnapshot: this._originAxisSnapshot(axisId),
+          ...ac,
           count: this.patternCircCount(),
           mode: this.patternCircMode(),
           angleDeg: this.patternCircAngleDeg(),
@@ -9550,6 +9588,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   onTreeSketchSelected(sketchId: string) {
+    if (this.sketchPickSlot()) { this.onSlotSketchPicked(sketchId); return; }
     const m = this.mode();
     if (m === 'pick-extrude-target') { this.openExtrudeDialog(sketchId); return; }
     if (m === 'pick-cut-extrude-target') { this.openExtrudeDialog(sketchId, 'cutExtrude'); return; }
@@ -10031,6 +10070,34 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.sweepPathSketchId.set(null);
     this.sweepMerge.set(true);
     this.sweepSidebar.set({ mode });
+    this.sketchPickSlot.set(profileId ? 'sweepPath' : 'sweepProfile');
+  }
+
+  /** Sweep/Loft field armed for a feature-tree sketch pick (null = none). */
+  sketchPickSlot = signal<'sweepProfile' | 'sweepPath' | 'loft' | null>(null);
+
+  toggleSketchPickSlot(slot: 'sweepProfile' | 'sweepPath' | 'loft'): void {
+    this.sketchPickSlot.set(this.sketchPickSlot() === slot ? null : slot);
+  }
+
+  setSweepProfile(id: string | null): void {
+    this.sweepProfileSketchId.set(id);
+    this.sketchPickSlot.set(id && !this.sweepPathSketchId() ? 'sweepPath' : null);
+  }
+
+  setSweepPath(id: string | null): void {
+    this.sweepPathSketchId.set(id);
+    this.sketchPickSlot.set(id && !this.sweepProfileSketchId() ? 'sweepProfile' : null);
+  }
+
+  /** A sketch clicked in the tree while a Sweep/Loft field is armed. Profile
+   * then path advance to whichever is still empty; Loft stays armed so
+   * sections can be clicked in order. */
+  private onSlotSketchPicked(sketchId: string): void {
+    const slot = this.sketchPickSlot();
+    if (slot === 'loft') { this.addLoftSection(sketchId); return; }
+    if (slot === 'sweepProfile' && sketchId !== this.sweepPathSketchId()) this.setSweepProfile(sketchId);
+    if (slot === 'sweepPath' && sketchId !== this.sweepProfileSketchId()) this.setSweepPath(sketchId);
   }
 
   /** Dropdown options for both Profile and Path fields. Lists every
@@ -10061,6 +10128,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const pathSketchId = this.sweepPathSketchId()!;
     const merge = this.sweepMerge();
     this.sweepSidebar.set(null);
+    this.sketchPickSlot.set(null);
     this.setMode('idle');
     if (ctx.editingFeatureId) {
       this.featureTree.set(updateFeatureParam<import('../../../cad/lib/types').SweepFeature>(
@@ -10086,6 +10154,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   cancelSweepSidebar() {
     this.sweepSidebar.set(null);
+    this.sketchPickSlot.set(null);
     this.sweepProfileSketchId.set(null);
     this.sweepPathSketchId.set(null);
     this.setMode('idle');
@@ -10107,6 +10176,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.loftSketchIds.set(pre);
     this.loftMerge.set(true);
     this.loftSidebar.set({});
+    this.sketchPickSlot.set('loft');
   }
 
   loftSketchLabel(sid: string): string {
@@ -10142,6 +10212,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const sketchIds = [...this.loftSketchIds()];
     const merge = this.loftMerge();
     this.loftSidebar.set(null);
+    this.sketchPickSlot.set(null);
     this.setMode('idle');
     if (ctx.editingFeatureId) {
       this.featureTree.set(updateFeatureParam<import('../../../cad/lib/types').LoftFeature>(
@@ -10158,6 +10229,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
   cancelLoftSidebar(): void {
     this.loftSidebar.set(null);
+    this.sketchPickSlot.set(null);
     this.loftSketchIds.set([]);
     this.setMode('idle');
   }
@@ -10983,7 +11055,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const ref: PlaneRef = { kind: 'datum', datumId } as PlaneRef;
       this.mirrorBodyPlaneRef.set(ref);
       this.mirrorBodyPlaneSnapshot.set(this._resolvePlaneRefSnapshot(ref));
+      this._advanceMirrorBodyToBodies();
     }
+  }
+  /** Plane set → next clicks pick bodies, unless some are already picked. */
+  private _advanceMirrorBodyToBodies(): void {
+    if (this.mirrorBodyBodyIds().length === 0) this.setMirrorBodyPickTarget('body');
   }
   /** Routed from onFacePicked. Returns true if consumed. */
   addMirrorBodyFacePick(faceId: string, fallbackPlane: Plane3): boolean {
@@ -10992,6 +11069,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const ref: PlaneRef = { kind: 'face', faceId, fallbackPlane } as PlaneRef;
       this.mirrorBodyPlaneRef.set(ref);
       this.mirrorBodyPlaneSnapshot.set(fallbackPlane);
+      this._advanceMirrorBodyToBodies();
       return true;
     }
     // Body pick: resolve owning body via perBodyGeometry membership.
@@ -11053,6 +11131,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.moveCopyTx.set(0); this.moveCopyTy.set(0); this.moveCopyTz.set(0);
     this.moveCopyRotateEnabled.set(false);
     this.moveCopyAxisId.set('z_axis');
+    this._clearAxisEdge('moveCopy');
     this.moveCopyAngleDeg.set(0);
     this.moveCopyCopy.set(true);
     this.facePickMode.set(true);
@@ -11061,6 +11140,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   cancelMoveCopyBodySidebar(): void {
     this.moveCopyBodySidebar.set(null);
     this.facePickMode.set(false);
+    this._clearAxisEdge('moveCopy');
   }
   /** Routed from onFacePicked. Returns true if consumed. */
   addMoveCopyBodyFromFace(faceId: string): boolean {
@@ -11081,6 +11161,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (this.moveCopyBodyIds().length === 0) return false;
     const hasTranslate = this.moveCopyTx() !== 0 || this.moveCopyTy() !== 0 || this.moveCopyTz() !== 0;
     const hasRotate = this.moveCopyRotateEnabled() && this.moveCopyAngleDeg() !== 0;
+    if (hasRotate && !this.axisFor('moveCopy')) return false;
     return hasTranslate || hasRotate;
   }
   commitMoveCopyBodySidebar(): void {
@@ -11092,20 +11173,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const tx = this.moveCopyTx(), ty = this.moveCopyTy(), tz = this.moveCopyTz();
     const hasTranslate = tx !== 0 || ty !== 0 || tz !== 0;
     const hasRotate = this.moveCopyRotateEnabled() && this.moveCopyAngleDeg() !== 0;
-    // Origin axes have known snapshots — direction along the axis, origin at (0,0,0).
-    const axisSnapshots: Record<string, { origin: [number, number, number]; direction: [number, number, number] }> = {
-      x_axis: { origin: [0, 0, 0], direction: [1, 0, 0] },
-      y_axis: { origin: [0, 0, 0], direction: [0, 1, 0] },
-      z_axis: { origin: [0, 0, 0], direction: [0, 0, 1] },
-    };
     const feature: import('../../../cad/lib/types').MoveCopyBodyFeature = {
       id, type: 'moveCopyBody',
       bodyIds: [...this.moveCopyBodyIds()],
       ...(hasTranslate ? { translate: [tx, ty, tz] as [number, number, number] } : {}),
       ...(hasRotate ? {
         rotate: {
-          axisRef: { kind: 'originAxis', axisId: this.moveCopyAxisId() } as any,
-          axisSnapshot: axisSnapshots[this.moveCopyAxisId()],
+          ...this.axisFor('moveCopy')!,
           angleDeg: this.moveCopyAngleDeg(),
         },
       } : {}),
@@ -11127,7 +11201,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (feature.rotate) {
       this.moveCopyRotateEnabled.set(true);
       const ar = feature.rotate.axisRef as any;
-      if (ar.kind === 'originAxis') this.moveCopyAxisId.set(ar.axisId);
+      this._loadAxis('moveCopy', ar);
       this.moveCopyAngleDeg.set(feature.rotate.angleDeg);
     } else {
       this.moveCopyRotateEnabled.set(false);
@@ -11511,6 +11585,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.patternDir2CountExpression.set(null);
     this.patternDir2Flipped.set(false);
     this.patternCircAxisId.set('z_axis');
+    for (const slot of ['dir1', 'dir2', 'circ'] as const) this._clearAxisEdge(slot);
     this.patternCircCount.set(4);
     this.patternCircCountExpression.set(null);
     this.patternCircMode.set('equalSpacing');
@@ -11562,6 +11637,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       return snap !== null;
     }
     if (ctx.kind === 'linearPattern') {
+      if (!this.axisFor('dir1') || (this.patternDir2Enabled() && !this.axisFor('dir2'))) return false;
       const c1 = this.patternDir1Count();
       if (!Number.isInteger(c1) || c1 < 1) return false;
       if (c1 >= 2 && (!Number.isFinite(this.patternDir1Spacing()) || this.patternDir1Spacing() === 0)) return false;
@@ -11573,6 +11649,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       return true;
     }
     if (ctx.kind === 'circularPattern') {
+      if (!this.axisFor('circ')) return false;
       const c = this.patternCircCount();
       if (!Number.isInteger(c) || c < 2) return false;
       if (!Number.isFinite(this.patternCircAngleDeg())) return false;
@@ -11596,6 +11673,81 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       : axisId === 'y_axis' ? [0, 1, 0]
       : [0, 0, 1];
     return { origin: [0, 0, 0], direction: dir };
+  }
+
+  /** Pattern / Move-Copy axis edges picked in the viewer, per slot. */
+  axisEdges = signal<Partial<Record<AxisSlot, EdgeRef3D>>>({});
+  /** Slot waiting for an edge click (its dropdown is on "Edge…"). */
+  axisEdgePickSlot = signal<AxisSlot | null>(null);
+
+  private _axisChoice(slot: AxisSlot) {
+    return slot === 'dir1' ? this.patternDir1AxisId
+      : slot === 'dir2' ? this.patternDir2AxisId
+      : slot === 'circ' ? this.patternCircAxisId
+      : this.moveCopyAxisId;
+  }
+
+  /** Dropdown change: "Edge…" arms edge picking for that slot. */
+  setAxisChoice(slot: AxisSlot, choice: AxisChoice): void {
+    this._axisChoice(slot).set(choice);
+    if (choice === 'edge') {
+      if (!this.axisEdges()[slot]) this.beginAxisEdgePick(slot);
+    } else if (this.axisEdgePickSlot() === slot) {
+      this.axisEdgePickSlot.set(null);
+      this.edgePickMode.set(false);
+    }
+  }
+
+  beginAxisEdgePick(slot: AxisSlot): void {
+    this.axisEdgePickSlot.set(slot);
+    this.edgePickMode.set(true);
+  }
+
+  /** Routed from onEdgePicked. Returns true when an axis slot took it. */
+  private addAxisEdgePick(rec: { isStraight: boolean; endpoints: [[number, number, number], [number, number, number]] }): boolean {
+    const slot = this.axisEdgePickSlot();
+    if (!slot) return false;
+    if (!rec.isStraight) {
+      this.errors.showError('Pick a straight edge for the axis.');
+      return true;
+    }
+    this.axisEdges.set({ ...this.axisEdges(), [slot]: { start: rec.endpoints[0], end: rec.endpoints[1] } });
+    this.axisEdgePickSlot.set(null);
+    this.edgePickMode.set(false);
+    return true;
+  }
+
+  private _clearAxisEdge(slot: AxisSlot): void {
+    const { [slot]: _, ...rest } = this.axisEdges();
+    this.axisEdges.set(rest);
+    if (this.axisEdgePickSlot() === slot) {
+      this.axisEdgePickSlot.set(null);
+      this.edgePickMode.set(false);
+    }
+  }
+
+  private _loadAxis(slot: AxisSlot, ref: AxisRef): void {
+    if (ref.kind === 'edge') {
+      this._axisChoice(slot).set('edge');
+      this.axisEdges.set({ ...this.axisEdges(), [slot]: ref.edgeRef });
+    } else {
+      this._axisChoice(slot).set(ref.axisId);
+    }
+  }
+
+  /** axisRef + snapshot for a slot, or null while "Edge…" has no edge yet. */
+  axisFor(slot: AxisSlot): { axisRef: AxisRef; axisSnapshot: AxisSnapshot } | null {
+    const choice = this._axisChoice(slot)();
+    if (choice !== 'edge') return { axisRef: { kind: 'originAxis', axisId: choice }, axisSnapshot: this._originAxisSnapshot(choice) };
+    const e = this.axisEdges()[slot];
+    if (!e) return null;
+    const d = [e.end[0] - e.start[0], e.end[1] - e.start[1], e.end[2] - e.start[2]];
+    const len = Math.hypot(d[0], d[1], d[2]);
+    if (len < 1e-9) return null;
+    return {
+      axisRef: { kind: 'edge', edgeRef: { start: e.start, end: e.end } },
+      axisSnapshot: { origin: e.start, direction: [d[0] / len, d[1] / len, d[2] / len] },
+    };
   }
 
   commitPatternSidebar(): void {
@@ -11630,20 +11782,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       };
       feature = mirror;
     } else if (ctx.kind === 'linearPattern') {
-      const d1AxisId = this.patternDir1AxisId();
       const direction1: import('../../../cad/lib/types').LinearPatternDirection = {
-        axisRef: { kind: 'originAxis', axisId: d1AxisId },
-        axisSnapshot: this._originAxisSnapshot(d1AxisId),
+        ...this.axisFor('dir1')!,
         spacing: this.patternDir1Spacing(),
         count: this.patternDir1Count(),
         flipped: this.patternDir1Flipped(),
       };
       let direction2: import('../../../cad/lib/types').LinearPatternDirection | undefined;
       if (this.patternDir2Enabled()) {
-        const d2AxisId = this.patternDir2AxisId();
         direction2 = {
-          axisRef: { kind: 'originAxis', axisId: d2AxisId },
-          axisSnapshot: this._originAxisSnapshot(d2AxisId),
+          ...this.axisFor('dir2')!,
           spacing: this.patternDir2Spacing(),
           count: this.patternDir2Count(),
           flipped: this.patternDir2Flipped(),
@@ -11659,12 +11807,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       };
       feature = lin;
     } else if (ctx.kind === 'circularPattern') {
-      const axisId = this.patternCircAxisId();
       const circ: import('../../../cad/lib/types').CircularPatternFeature = {
         id,
         type: 'circularPattern',
-        axisRef: { kind: 'originAxis', axisId },
-        axisSnapshot: this._originAxisSnapshot(axisId),
+        ...this.axisFor('circ')!,
         count: this.patternCircCount(),
         mode: this.patternCircMode(),
         angleDeg: this.patternCircAngleDeg(),
@@ -12368,6 +12514,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!facePickerKind) { this.extrudeUpToFaceId.set(null); this.extrudeUpToFaceFallback.set(null); }
     if (kind !== 'upToVertex') this.vertexPickMode.set(false);
     if (!facePickerKind) this.facePickMode.set(false);
+    // Arm the picker straight away when the new kind still needs a target.
+    if (kind === 'upToVertex' && !this.extrudeUpToVertexId()) this.beginVertexPick('end');
+    if (facePickerKind && !this.extrudeUpToFaceId()) this.beginFacePick('end');
   }
 
   /** Mirror of setExtrudeEndKind for the start side. Clears the face pick
@@ -12379,6 +12528,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!facePickerKind) { this.extrudeStartUpToFaceId.set(null); this.extrudeStartUpToFaceFallback.set(null); }
     if (kind !== 'upToVertex') this.vertexPickMode.set(false);
     if (!facePickerKind) this.facePickMode.set(false);
+    if (kind === 'upToVertex' && !this.extrudeStartUpToVertexId()) this.beginVertexPick('start');
+    if (facePickerKind && !this.extrudeStartUpToFaceId()) this.beginFacePick('start');
   }
 
   /** Magnitude setter for the end-side "Offset from face" distance — the
@@ -12907,6 +13058,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       if (kind !== 'upToVertex') this.vertexPickMode.set(false);
       if (!facePickerKind) this.facePickMode.set(false);
     }
+    if (kind === 'upToVertex' && !this.extrudeDir2UpToVertexId()) this.beginVertexPick('end2');
+    if (facePickerKind && !this.extrudeDir2UpToFaceId()) this.beginFacePick('end2');
   }
 
   /** Magnitude setter for Direction 2's "Offset from face" distance. */
@@ -13430,6 +13583,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const edgeRef: EdgeRef3D = { start: rec.endpoints[0], end: rec.endpoints[1] };
       if (this.addDatumPointEdgePick(edgeRef)) return;
     }
+    if (this.addAxisEdgePick(rec)) return;
     // 3D Fillet / Chamfer: add the picked edge to the current blend's
     // edge list. Stays in pick mode so the user can chain clicks across
     // multiple edges before committing.
@@ -14348,7 +14502,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         this.edgeBlendAngle.set(typeof f.angle === 'number' ? f.angle : 45);
         this.edgeBlendAngleExpression.set(null);
       }
-      this.edgePickMode.set(false);
+      // Edges usually just need a value tweak; arm picking only when there's
+      // nothing usable — no edges, or the feature failed (edges lost in regen).
+      this.edgePickMode.set(this.edgeBlendEdges().length === 0 || this.mergedFeatureErrors().has(featureId));
       this.edgeBlendSidebar.set({ kind: feature.type, editingFeatureId: featureId });
       return;
     }
@@ -14515,7 +14671,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.facePickMode.set(true);
     } else if (feature.type === 'linearPattern') {
       const d1 = feature.direction1;
-      if (d1.axisRef.kind === 'originAxis') this.patternDir1AxisId.set(d1.axisRef.axisId);
+      this._loadAxis('dir1', d1.axisRef);
       this.patternDir1Spacing.set(d1.spacing);
       this.patternDir1SpacingExpression.set(this.featureEquation(`feature.${feature.id}.direction1.spacing`));
       this.patternDir1Count.set(d1.count);
@@ -14524,7 +14680,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const d2 = feature.direction2;
       if (d2) {
         this.patternDir2Enabled.set(true);
-        if (d2.axisRef.kind === 'originAxis') this.patternDir2AxisId.set(d2.axisRef.axisId);
+        this._loadAxis('dir2', d2.axisRef);
         this.patternDir2Spacing.set(d2.spacing);
         this.patternDir2SpacingExpression.set(this.featureEquation(`feature.${feature.id}.direction2.spacing`));
         this.patternDir2Count.set(d2.count);
@@ -14532,7 +14688,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         this.patternDir2Flipped.set(d2.flipped === true);
       }
     } else if (feature.type === 'circularPattern') {
-      if (feature.axisRef.kind === 'originAxis') this.patternCircAxisId.set(feature.axisRef.axisId);
+      this._loadAxis('circ', feature.axisRef);
       this.patternCircCount.set(feature.count);
       this.patternCircCountExpression.set(this.featureEquation(`feature.${feature.id}.count`));
       this.patternCircMode.set(feature.mode);
