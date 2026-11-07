@@ -24,6 +24,7 @@ const crypto = require('crypto');
 // `jest.spyOn(cadKernelClient, 'getDefaultClient')` — a destructured binding
 // captures the original function and the spy would never take effect.
 const cadKernelClient = require('./cadKernelClient');
+const { blendInGroups, isBlendOverrunError } = require('./cadBlendGroups');
 const { extractRegions, extractMergedRegions } = require('./cadProfile');
 const { applyEquationsToModel, resolveEquations } = require('./cadEquations');
 const { applyProjectionToSketchDoc } = require('./cadProjection');
@@ -2262,7 +2263,7 @@ async function _dispatchEdgeBlend(feature, bodies, model, client, dbClient, resu
     solids = cached.tessellatedFaces.solids || [];
     cachedFlag = true;
   } else {
-    const rpc = await client.call('buildEdgeBlend', {
+    const blend = edges => client.call('buildEdgeBlend', {
       featureId: `${feature.id}#blend`,
       aBrep: body.brep,
       kind: kind === 'fillet' ? 'fillet' : 'chamfer',
@@ -2270,7 +2271,7 @@ async function _dispatchEdgeBlend(feature, bodies, model, client, dbClient, resu
       // Pass per-edge value override through to the kernel when present.
       // Mixed radii / distances in a single MakeFillet / MakeChamfer call
       // produce the correct interacting rolling balls at junction vertices.
-      edges: feature.edges.map(e => {
+      edges: edges.map(e => {
         const out = { start: e.start, end: e.end };
         if (typeof e.value === 'number' && Number.isFinite(e.value) && e.value > 0) {
           out.value = e.value;
@@ -2283,6 +2284,24 @@ async function _dispatchEdgeBlend(feature, bodies, model, client, dbClient, resu
         ...(chamferAngle !== null ? { angle: chamferAngle } : {}),
       } : {}),
     });
+    let rpc;
+    try {
+      rpc = await blend(feature.edges);
+    } catch (err) {
+      // REQ 1017 — rounds of different edges overran each other: blend the
+      // edges in groups on the original body and combine the results.
+      if (!isBlendOverrunError(err) || feature.edges.length < 2) throw err;
+      const grouped = await blendInGroups({
+        edges: feature.edges,
+        baseBrep: body.brep,
+        blend,
+        volume: async b => (await client.call('bodyVolume', { aBrep: b })).volume,
+        boolean: (op, a, b) => client.call('buildBoolean', { featureId: `${feature.id}#blend`, op, aBrep: a, bBrep: b }),
+        originalError: err,
+      });
+      console.log(`[cadRegen] ${feature.id} ${kind}: combined ${grouped.groups.length} edge groups (${grouped.groups.map(g => g.length).join('+')})`);
+      rpc = grouped.rpc;
+    }
     await dbClient.DesignBRepCache.upsert({
       cadModelID: model.id,
       featureID: cacheKey,
