@@ -1854,8 +1854,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                         (change)="setExtrudeStartKind($any($event.target).value)">
                   <option value="sketchPlane">Sketch plane</option>
                   <option value="offset">Offset from sketch plane</option>
-                  <option value="upToVertex">Up to vertex</option>
-                  <option value="upToSurface">Up to surface</option>
+                  <option value="upToVertex">From vertex</option>
+                  <option value="upToSurface">From surface</option>
                   <option value="offsetFromSurface">Offset from face</option>
                 </select>
               </div>
@@ -1879,33 +1879,23 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   </button>
                 </div>
               </div>
-              <div class="sub-row" *ngIf="extrudeStartKind() === 'upToVertex'">
-                <span class="sub-label">Target vertex</span>
-                <button class="btn panel-flip"
-                        data-testid="extrude-start-pick-vertex"
-                        (click)="beginVertexPick('start')">
-                  <mat-icon>{{ extrudeStartUpToVertexId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ extrudeStartUpToVertexId() ? 'Vertex picked — click to change' : 'Pick a vertex in the viewer' }}
-                </button>
-              </div>
-              <div class="sub-row" *ngIf="extrudeStartKind() === 'upToSurface'">
-                <span class="sub-label">Target face</span>
-                <button class="btn panel-flip"
-                        data-testid="extrude-start-pick-face"
-                        (click)="beginFacePick('start')">
-                  <mat-icon>{{ extrudeStartUpToFaceId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ extrudeStartUpToFaceId() ? 'Face picked — click to change' : 'Pick a face in the viewer' }}
-                </button>
-              </div>
-              <div class="sub-row" *ngIf="extrudeStartKind() === 'offsetFromSurface'">
-                <span class="sub-label">Reference face</span>
-                <button class="btn panel-flip"
-                        data-testid="extrude-start-pick-offset-face"
-                        (click)="beginFacePick('start')">
-                  <mat-icon>{{ extrudeStartUpToFaceId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ extrudeStartUpToFaceId() ? 'Face picked — click to change' : 'Pick a face in the viewer' }}
-                </button>
-              </div>
+              <cad-selection-list *ngIf="extrudeStartKind() === 'upToVertex'" style="cursor:pointer"
+                  (click)="beginVertexPick('start')"
+                  label="Start vertex" headerIcon="place" testid="extrude-start-pick-vertex"
+                  [rows]="extrudeStartRows()" [showCount]="false"
+                  [active]="vertexPickMode() && extrudePickTarget() === 'start'"
+                  [emptyHint]="vertexPickMode() && extrudePickTarget() === 'start' ? 'Click a vertex in the viewer' : 'Click here, then a vertex'"
+                  (remove)="clearExtrudeStartPick()" (clear)="clearExtrudeStartPick()">
+              </cad-selection-list>
+              <cad-selection-list *ngIf="extrudeStartKind() === 'upToSurface' || extrudeStartKind() === 'offsetFromSurface'" style="cursor:pointer"
+                  (click)="beginFacePick('start')"
+                  [label]="extrudeStartKind() === 'upToSurface' ? 'Start face' : 'Reference face'" headerIcon="crop_square"
+                  [testid]="extrudeStartKind() === 'upToSurface' ? 'extrude-start-pick-face' : 'extrude-start-pick-offset-face'"
+                  [rows]="extrudeStartRows()" [showCount]="false"
+                  [active]="facePickMode() && extrudePickTarget() === 'start'"
+                  [emptyHint]="facePickMode() && extrudePickTarget() === 'start' ? 'Click a face in the viewer' : 'Click here, then a face'"
+                  (remove)="clearExtrudeStartPick()" (clear)="clearExtrudeStartPick()">
+              </cad-selection-list>
               <div class="sub-row" *ngIf="extrudeStartKind() === 'offsetFromSurface'">
                 <span class="sub-label">Offset distance</span>
                 <div class="input-with-flip">
@@ -1975,42 +1965,23 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   (valueChange)="extrudeDistance.set($event)"
                   (expressionChange)="extrudeDistanceExpression.set($event)" />
               </div>
-              <div class="sub-row" *ngIf="extrudeEndKind() === 'upToVertex'">
-                <span class="sub-label">Target vertex</span>
-                <button class="btn panel-flip"
-                        data-testid="extrude-pick-vertex"
-                        (click)="beginVertexPick()">
-                  <mat-icon>{{ extrudeUpToVertexId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ extrudeUpToVertexId() ? 'Vertex picked — click to change' : 'Pick a vertex in the viewer' }}
-                </button>
-              </div>
-              <div class="sub-row" *ngIf="extrudeEndKind() === 'upToSurface'">
-                <span class="sub-label">Target face</span>
-                <button class="btn panel-flip"
-                        data-testid="extrude-pick-face"
-                        (click)="beginFacePick()">
-                  <mat-icon>{{ extrudeUpToFaceId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ extrudeUpToFaceId() ? 'Face picked — click to change' : 'Pick a face in the viewer' }}
-                </button>
-              </div>
-              <div class="sub-row" *ngIf="extrudeEndKind() === 'upToBody'">
-                <span class="sub-label">Target body</span>
-                <button class="btn panel-flip"
-                        data-testid="extrude-pick-body"
-                        (click)="beginFacePick()">
-                  <mat-icon>{{ extrudeUpToFaceId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ extrudeUpToFaceId() ? 'Body picked — click to change' : 'Click a face of the target body' }}
-                </button>
-              </div>
-              <div class="sub-row" *ngIf="extrudeEndKind() === 'offsetFromSurface'">
-                <span class="sub-label">Reference face</span>
-                <button class="btn panel-flip"
-                        data-testid="extrude-pick-offset-face"
-                        (click)="beginFacePick()">
-                  <mat-icon>{{ extrudeUpToFaceId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ extrudeUpToFaceId() ? 'Face picked — click to change' : 'Pick a face in the viewer' }}
-                </button>
-              </div>
+              <cad-selection-list *ngIf="extrudeEndKind() === 'upToVertex'" style="cursor:pointer"
+                  (click)="beginVertexPick()"
+                  label="Target vertex" headerIcon="place" testid="extrude-pick-vertex"
+                  [rows]="extrudeEndRows()" [showCount]="false"
+                  [active]="vertexPickMode() && extrudePickTarget() === 'end'"
+                  [emptyHint]="vertexPickMode() && extrudePickTarget() === 'end' ? 'Click a vertex in the viewer' : 'Click here, then a vertex'"
+                  (remove)="clearExtrudeEndPick('end')" (clear)="clearExtrudeEndPick('end')">
+              </cad-selection-list>
+              <cad-selection-list *ngIf="extrudeEndKind() === 'upToSurface' || extrudeEndKind() === 'upToBody' || extrudeEndKind() === 'offsetFromSurface'" style="cursor:pointer"
+                  (click)="beginFacePick()"
+                  [label]="pickFaceLabel(extrudeEndKind())" [headerIcon]="extrudeEndKind() === 'upToBody' ? 'view_in_ar' : 'crop_square'"
+                  [testid]="pickFaceTestid('extrude-pick', extrudeEndKind())"
+                  [rows]="extrudeEndRows()" [showCount]="false"
+                  [active]="facePickMode() && extrudePickTarget() === 'end'"
+                  [emptyHint]="facePickMode() && extrudePickTarget() === 'end' ? (extrudeEndKind() === 'upToBody' ? 'Click a face of the target body' : 'Click a face in the viewer') : 'Click here, then a face'"
+                  (remove)="clearExtrudeEndPick('end')" (clear)="clearExtrudeEndPick('end')">
+              </cad-selection-list>
               <div class="sub-row" *ngIf="extrudeEndKind() === 'offsetFromSurface'">
                 <span class="sub-label">Offset distance</span>
                 <div class="input-with-flip">
@@ -2077,46 +2048,25 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   (valueChange)="extrudeDir2Distance.set($event)"
                   (expressionChange)="extrudeDir2DistanceExpression.set($event)" />
               </div>
-              <div class="sub-row"
-                   *ngIf="extrudeDir2Enabled() && extrudeDir2EndKind() === 'upToVertex'">
-                <span class="sub-label">Target vertex</span>
-                <button class="btn panel-flip"
-                        data-testid="extrude-dir2-pick-vertex"
-                        (click)="beginVertexPick('end2')">
-                  <mat-icon>{{ extrudeDir2UpToVertexId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ extrudeDir2UpToVertexId() ? 'Vertex picked — click to change' : 'Pick a vertex in the viewer' }}
-                </button>
-              </div>
-              <div class="sub-row"
-                   *ngIf="extrudeDir2Enabled() && extrudeDir2EndKind() === 'upToSurface'">
-                <span class="sub-label">Target face</span>
-                <button class="btn panel-flip"
-                        data-testid="extrude-dir2-pick-face"
-                        (click)="beginFacePick('end2')">
-                  <mat-icon>{{ extrudeDir2UpToFaceId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ extrudeDir2UpToFaceId() ? 'Face picked — click to change' : 'Pick a face in the viewer' }}
-                </button>
-              </div>
-              <div class="sub-row"
-                   *ngIf="extrudeDir2Enabled() && extrudeDir2EndKind() === 'upToBody'">
-                <span class="sub-label">Target body</span>
-                <button class="btn panel-flip"
-                        data-testid="extrude-dir2-pick-body"
-                        (click)="beginFacePick('end2')">
-                  <mat-icon>{{ extrudeDir2UpToFaceId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ extrudeDir2UpToFaceId() ? 'Body picked — click to change' : 'Click a face of the target body' }}
-                </button>
-              </div>
-              <div class="sub-row"
-                   *ngIf="extrudeDir2Enabled() && extrudeDir2EndKind() === 'offsetFromSurface'">
-                <span class="sub-label">Reference face</span>
-                <button class="btn panel-flip"
-                        data-testid="extrude-dir2-pick-offset-face"
-                        (click)="beginFacePick('end2')">
-                  <mat-icon>{{ extrudeDir2UpToFaceId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ extrudeDir2UpToFaceId() ? 'Face picked — click to change' : 'Pick a face in the viewer' }}
-                </button>
-              </div>
+              <ng-container *ngIf="extrudeDir2Enabled()">
+                <cad-selection-list *ngIf="extrudeDir2EndKind() === 'upToVertex'" style="cursor:pointer"
+                    (click)="beginVertexPick('end2')"
+                    label="Target vertex" headerIcon="place" testid="extrude-dir2-pick-vertex"
+                    [rows]="extrudeDir2Rows()" [showCount]="false"
+                    [active]="vertexPickMode() && extrudePickTarget() === 'end2'"
+                    [emptyHint]="vertexPickMode() && extrudePickTarget() === 'end2' ? 'Click a vertex in the viewer' : 'Click here, then a vertex'"
+                    (remove)="clearExtrudeEndPick('end2')" (clear)="clearExtrudeEndPick('end2')">
+                </cad-selection-list>
+                <cad-selection-list *ngIf="extrudeDir2EndKind() === 'upToSurface' || extrudeDir2EndKind() === 'upToBody' || extrudeDir2EndKind() === 'offsetFromSurface'" style="cursor:pointer"
+                    (click)="beginFacePick('end2')"
+                    [label]="pickFaceLabel(extrudeDir2EndKind())" [headerIcon]="extrudeDir2EndKind() === 'upToBody' ? 'view_in_ar' : 'crop_square'"
+                    [testid]="pickFaceTestid('extrude-dir2-pick', extrudeDir2EndKind())"
+                    [rows]="extrudeDir2Rows()" [showCount]="false"
+                    [active]="facePickMode() && extrudePickTarget() === 'end2'"
+                    [emptyHint]="facePickMode() && extrudePickTarget() === 'end2' ? (extrudeDir2EndKind() === 'upToBody' ? 'Click a face of the target body' : 'Click a face in the viewer') : 'Click here, then a face'"
+                    (remove)="clearExtrudeEndPick('end2')" (clear)="clearExtrudeEndPick('end2')">
+                </cad-selection-list>
+              </ng-container>
               <div class="sub-row"
                    *ngIf="extrudeDir2Enabled() && extrudeDir2EndKind() === 'offsetFromSurface'">
                 <span class="sub-label">Offset distance</span>
@@ -2214,32 +2164,23 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               Pick a sketched line as the rotation axis and set the sweep angle.
             </p>
 
-            <div class="panel-field active" [class.active]="axisPickMode()">
+            <div class="panel-field active" *ngIf="axisCandidates3D().length === 0">
               <div class="field-header">
                 <mat-icon class="field-icon">timeline</mat-icon>
                 <span class="field-label">Axis</span>
               </div>
-              <div class="field-empty" *ngIf="axisCandidates3D().length === 0">
+              <div class="field-empty">
                 This sketch has no lines to use as an axis. Edit the sketch and add a line — a construction line is the natural choice.
               </div>
-              <div class="axis-pick-row" *ngIf="axisCandidates3D().length > 0">
-                <button class="btn panel-flip axis-pick-button"
-                        data-testid="revolve-pick-axis"
-                        (click)="beginAxisPick()">
-                  <mat-icon>{{ revolveAxisLineId() ? 'check_circle' : 'touch_app' }}</mat-icon>
-                  {{ revolveAxisLineId()
-                      ? (revolveAxisLabel() ?? 'Axis picked') + ' — click to change'
-                      : 'Pick an axis line in the viewer' }}
-                </button>
-                <button class="btn axis-clear-button"
-                        *ngIf="revolveAxisLineId()"
-                        data-testid="revolve-clear-axis"
-                        matTooltip="Clear axis selection"
-                        (click)="clearAxisPick()">
-                  <mat-icon>close</mat-icon>
-                </button>
-              </div>
             </div>
+            <cad-selection-list *ngIf="axisCandidates3D().length > 0" style="cursor:pointer"
+                (click)="beginAxisPick()"
+                label="Axis" headerIcon="timeline" testid="revolve-pick-axis"
+                [rows]="revolveAxisRows()" [showCount]="false"
+                [active]="axisPickMode()"
+                [emptyHint]="axisPickMode() ? 'Click an axis line in the viewer' : 'Click here, then a line'"
+                (remove)="clearAxisPick()" (clear)="clearAxisPick()">
+            </cad-selection-list>
 
             <div class="panel-field active">
               <div class="field-header">
@@ -4654,17 +4595,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
        spans the field's full width; the rest of the geometry comes
        from .btn (in styles.css). */
     .panel-flip { width: 100%; }
-    /* Axis pick row: the wide "Pick an axis line" button + a small square
-       X button next to it that clears the pick. X only renders when an
-       axis is selected; layout is the same shape as the inline-flip in
-       the offset row so they read consistently. */
-    .axis-pick-row { display: flex; gap: 4px; align-items: stretch; }
-    .axis-pick-button { flex: 1 1 auto; }
-    .axis-clear-button {
-      width: 30px; padding: 0;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .axis-clear-button mat-icon { font-size: 18px; width: 18px; height: 18px; }
     /* Group container holds related sub-rows under one header (e.g.
        "Direction 1" with its end-condition + distance + targets all
        stacked together). Each sub-row gets its own small label.
@@ -4829,7 +4759,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-436';
+  readonly buildMarker = 'text-439';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -5160,6 +5090,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // transient — a hidden body's faces are excluded from the rendered
   // geometry but the body itself stays in the roster.
   bodies = signal<Array<{ id: string; name: string | null; volume?: number }>>([]);
+  /** Every body the last regen produced, before the rollback filter. A
+   * cache-only rollback repaint filters `bodies` from this, so rolling
+   * forward again brings back bodies an earlier rollback dropped. */
+  private _regenBodyRoster: Array<{ id: string; name: string | null }> = [];
   /** REQ 857: body roster with user-assigned names overlaid from the
    * featureTree's bodyNames map (backend always emits name: null). */
   bodiesForTree = computed(() => {
@@ -6102,6 +6036,48 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const fid = this.datumPointFaceId();
     return fid ? [{ id: 'face', label: this._shortFaceLabel(fid), icon: 'crop_square' }] : [];
   });
+  /** Selection-list rows for the extrude start / end / direction-2 picks.
+   * Only the slot the condition kind uses is ever set. */
+  private _extrudePickRows(vertexId: string | null, faceId: string | null, kind: string): SelectionRow[] {
+    if (vertexId) return [{ id: 'vtx', label: 'Vertex', icon: 'place' }];
+    if (!faceId) return [];
+    if (kind === 'upToBody') {
+      const bid = this.bodyIdForFaceId(faceId);
+      const name = bid ? this.bodies().find(b => b.id === bid)?.name : null;
+      return [{ id: 'body', label: name || `Body ${bid ?? '?'}`, icon: 'view_in_ar' }];
+    }
+    return [{ id: 'face', label: this._shortFaceLabel(faceId), icon: 'crop_square' }];
+  }
+  extrudeStartRows = computed(() => this._extrudePickRows(
+    this.extrudeStartUpToVertexId(), this.extrudeStartUpToFaceId(), this.extrudeStartKind()));
+  extrudeEndRows = computed(() => this._extrudePickRows(
+    this.extrudeUpToVertexId(), this.extrudeUpToFaceId(), this.extrudeEndKind()));
+  extrudeDir2Rows = computed(() => this._extrudePickRows(
+    this.extrudeDir2UpToVertexId(), this.extrudeDir2UpToFaceId(), this.extrudeDir2EndKind()));
+  pickFaceLabel(kind: string): string {
+    return kind === 'upToBody' ? 'Target body' : kind === 'offsetFromSurface' ? 'Reference face' : 'Target face';
+  }
+  pickFaceTestid(prefix: string, kind: string): string {
+    return `${prefix}-${kind === 'upToBody' ? 'body' : kind === 'offsetFromSurface' ? 'offset-face' : 'face'}`;
+  }
+  clearExtrudeStartPick(): void {
+    this.extrudeStartUpToVertexId.set(null);
+    this.extrudeStartUpToFaceId.set(null);
+    this.extrudeStartUpToFaceFallback.set(null);
+  }
+  clearExtrudeEndPick(target: 'end' | 'end2'): void {
+    if (target === 'end') {
+      this.extrudeUpToVertexId.set(null);
+      this.extrudeUpToFaceId.set(null);
+      this.extrudeUpToFaceFallback.set(null);
+    } else {
+      this.extrudeDir2UpToVertexId.set(null);
+      this.extrudeDir2UpToFaceId.set(null);
+      this.extrudeDir2UpToFaceFallback.set(null);
+    }
+  }
+  revolveAxisRows = computed<SelectionRow[]>(() =>
+    this.revolveAxisLineId() ? [{ id: 'axis', label: this.revolveAxisLabel() ?? 'Axis line', icon: 'straighten' }] : []);
   datumPointEdgeRows = computed<SelectionRow[]>(() =>
     this.datumPointEdge() ? [{ id: 'edge', label: 'Edge', icon: 'timeline' }] : []);
   datumPointPlaneRows = computed<SelectionRow[]>(() => this.datumPointPlanes().map((r, i) => ({
@@ -14782,11 +14758,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       // the displayed geometry — otherwise the live preview / face
       // picks reference the already-modified body, which produces
       // "pattern of a pattern" (REQ 658) or makes it impossible to
-      // pick the un-shelled cap (REQ 659). Other feature kinds keep
-      // the legacy include-self behavior (rollback at idx+1) so the
-      // user still sees the saved feature's effect while tweaking.
+      // pick the un-shelled cap (REQ 659). Extrude/revolve/sweep are
+      // excluded too (REQ 1018): their live preview stands in for the
+      // saved body, which would otherwise hide faces/vertices the start
+      // and end conditions need to pick. Other kinds keep the legacy
+      // include-self behavior (rollback at idx+1).
       const feature = features[idx];
       const isBodyModifier = feature && (
+        feature.type === 'extrude' ||
+        feature.type === 'cutExtrude' ||
+        feature.type === 'revolve' ||
+        feature.type === 'cutRevolve' ||
+        feature.type === 'sweep' ||
+        feature.type === 'cutSweep' ||
         feature.type === 'mirror' ||
         feature.type === 'linearPattern' ||
         feature.type === 'circularPattern' ||
@@ -15395,8 +15379,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     this.perBodyGeometry.set(perBody);
     // Bodies that have no surviving feature drop out of the roster
-    // (their root feature was rolled back).
-    this.bodies.set(this.bodies().filter(b => perBody.has(b.id)));
+    // (their root feature was rolled back); rolled-forward ones return.
+    // Current entries win so renames since the regen are kept.
+    const current = new Map(this.bodies().map(b => [b.id, b]));
+    this._regenBodyRoster = [
+      ...this._regenBodyRoster.map(b => current.get(b.id) ?? b),
+      ...this.bodies().filter(b => !this._regenBodyRoster.some(r => r.id === b.id)),
+    ];
+    this.bodies.set(this._regenBodyRoster.filter(b => perBody.has(b.id)));
     this.rebuildGeometryFromBodies();
   }
 
@@ -15899,6 +15889,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         const rosterFromResp = resp.bodies ?? Array.from(perBody.keys()).map(id => ({ id, name: null }));
         const rosterIds = new Set(rosterFromResp.map(b => b.id));
         const keptPriorBodies = this.bodies().filter(b => !rosterIds.has(b.id) && perBody.has(b.id));
+        this._regenBodyRoster = [...rosterFromResp, ...this._regenBodyRoster.filter(b => !rosterIds.has(b.id))];
         this.bodies.set([...rosterFromResp.filter(b => perBody.has(b.id)), ...keptPriorBodies]);
         if (resp.kernelBuild) this.kernelBuild.set(resp.kernelBuild);
         // Sketches whose host face genuinely no longer exists (deleted, not

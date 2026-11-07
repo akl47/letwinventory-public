@@ -47,6 +47,23 @@ test('extrude boss creates a solid with faces and volume', async ({ page }) => {
   await expect.poll(() => footerVolume(page), { timeout: 10_000 }).toBeGreaterThan(0);
 });
 
+// REQ 1018 — editing a feature rolls the model back to just before it, so
+// faces the saved body covers stay pickable for start/end conditions.
+test('editing an extrude rolls back past it', async ({ page }) => {
+  await openEditor(page, PART_ID);
+  await expect.poll(async () => (await geometrySummary(page))?.faces ?? 0, { timeout: 20_000 })
+    .toBeGreaterThanOrEqual(6);
+  const bossRow = page.locator('[data-testid="feature-tree-row"]').nth(1);
+  await bossRow.click({ button: 'right' });
+  await page.locator('[data-testid="ctx-edit-feature"]').click();
+  await expect(page.locator('[data-testid="extrude-sidebar"]')).toBeVisible();
+  // The boss is the only body — rolled back, nothing is left.
+  await expect.poll(async () => (await geometrySummary(page))?.faces ?? 0, { timeout: 10_000 }).toBe(0);
+  await page.locator('[data-testid="extrude-cancel"]').click();
+  await expect.poll(async () => (await geometrySummary(page))?.faces ?? 0, { timeout: 10_000 })
+    .toBeGreaterThanOrEqual(6);
+});
+
 test('cut-extrude removes material (volume decreases)', async ({ page }) => {
   await openEditor(page, PART_ID);
   const volBefore = await footerVolume(page);
