@@ -1,6 +1,7 @@
-# Copy / paste of sketches and features — plan
+# Copy / paste of sketches, features and parts — plan
 
-Status: plan (2026-11-03). No requirements or code yet.
+Status: plan (2026-11-03, extended 2026-11-06 for parts + prod↔dev). No
+requirements or code yet.
 
 ## Goal
 
@@ -14,6 +15,17 @@ Decisions (user, 2026-11-03):
 - Cross-part paste is in v1.
 - Independent copies only; no linked paste.
 
+Decisions (user, 2026-11-06):
+- Copies must move **between environments** (prod ↔ dev, different hosts).
+  Transport = **OS clipboard** (JSON text) + **.lwcad file** download/upload
+  as a fallback. No server-to-server sync.
+- **Whole-part copy** in v1; pasting a part **creates a new Part** (no
+  replace-existing-model paste).
+- **Parts only** — assemblies are out of v1 (children are referenced by
+  database id, which differs per environment).
+- **Current state only** — sketches, features, equations; no VCS history,
+  branches or release tags. The new part starts its own history.
+
 ## User flow
 
 1. **Copy** — select one or more tree rows (sketch or feature) → right-click
@@ -26,14 +38,32 @@ Decisions (user, 2026-11-03):
    one (`Cut-Extrude 2 — end condition "up to face"`) with *Delete* / *Leave
    dangling* (per item + "apply to all"). Dangling refs then surface as the
    existing feature errors, exactly like any broken reference today.
+4. **Copy part** — File tab → *Copy part* puts a whole-model bundle on the
+   clipboard; *Export .lwcad* downloads the same bundle as a file. (Built
+   2026-11-06; the naming version comes from `GET /cad-model/kernel/status`.
+   A part bundle stores the model docs whole under `model`, not split into
+   `sketches`/`features`/`variables`.)
+5. **Paste as new part** — on the CAD landing page, Ctrl+V or *Import part*
+   (file picker). Opens the existing New Part dialog prefilled with the
+   source name/description (editable — `(name, revision)` is unique, so a name
+   already taken in this environment needs changing), creates the Part + CAD
+   model, checks it out, then saves the copied sketches/features/equations as
+   the first content edit and regenerates. Feature/sketch bundles pasted on
+   the landing page are refused with a toast (`Open a part to paste
+   features`); a part bundle pasted inside the editor offers to create a new
+   part instead.
 
 ## The clipboard bundle (`cad/lib/clipboard.ts`, pure + unit-tested)
 
 ```ts
 interface ClipboardBundle {
+  kind: 'letwinventory-cad';      // marker so arbitrary pasted text is ignored
   schema: 1;
+  scope: 'items' | 'part';        // sketches/features vs a whole part
   namingVersion: number;          // NAMING_VERSION at copy time
-  sourceModelId: number;          // same-part detection
+  source: { origin: string; modelId: number;   // origin = location.origin;
+            partName: string; partRev: string; // same-part = origin AND id match
+            description: string | null };
   sketches: Sketch[];             // deep copies
   features: Feature[];            // deep copies, tree order
   variables: EquationEntry[];     // globals referenced by copied dims/params
@@ -41,9 +71,28 @@ interface ClipboardBundle {
 }
 ```
 
-Stored in `localStorage` (`cad-clipboard`) so it pastes in another tab/part,
-with an in-memory copy for the current tab. Rejected on paste if `schema`
-or `namingVersion` doesn't match.
+Written to the **OS clipboard** as JSON text through the DOM `copy` event
+(`event.clipboardData.setData`) and read back through the `paste` event —
+both work on plain-http origins, unlike `navigator.clipboard`, so it works
+between the internal prod host and dev. Ctrl+C/V go through those events
+directly; the context-menu *Copy* uses `document.execCommand('copy')` to fire
+one, and context-menu *Paste* (no user paste event available on http) tells
+the user to press Ctrl+V. There is no `localStorage` copy: the OS clipboard
+is the single source of truth, so whatever was copied last pastes.
+
+**Same part = same `origin` and `modelId`.** Model ids collide across
+environments, so id alone would wrongly "keep" prod topology refs in an
+unrelated dev part.
+
+Paste rejects a bundle whose `schema` is unknown. A `namingVersion`
+mismatch does NOT block (prod usually lags dev): the paste proceeds and
+warns that face/edge references may need re-picking; references that fail
+to resolve then surface as normal feature errors.
+
+For `scope: 'part'`, `sketches`/`features`/`variables` hold the whole
+model (Origin feature included) and every reference is internal, so
+nothing is unresolved — the ids are kept as-is (it is a new model, no
+clashes) and no transform is applied.
 
 ### Closure (what a copy includes)
 - Copying a feature pulls in the sketch(es) it consumes (`sketchId`,
@@ -96,22 +145,37 @@ distance, sketch constraint removed); *Leave dangling* keeps the id as is.
    handling, cross-part, tree context menu + Ctrl+C/V, confirmation dialog.
 2. **Feature copy/paste** — extrude/cut/revolve/hole with their sketches; end
    conditions, body targets, variables.
-3. **Multi-select + remaining feature types** — fillet/chamfer edge sets,
+3. **Whole part** — *Copy part* / *Export part (.lwcad)*, landing-page
+   paste / *Import part* → prefilled New Part dialog → create, checkout,
+   save, regenerate. Can ship before phase 1–2 since it needs no reference
+   remapping; recommended first for the prod→dev use case.
+4. **Multi-select + remaining feature types** — fillet/chamfer edge sets,
    patterns/mirrors (`seedFeatureIds`), sweeps/lofts (multiple sketches),
    shell/combine/move-copy body.
 
 Within-sketch entity copy/paste (Ctrl+C/V on sketch geometry) is out of
 scope; the existing sketch Copy tool covers it.
 
+## Out of scope (v1)
+
+- Assemblies (copy/paste or file). Would need child mapping by part
+  name + revision and creating missing children.
+- VCS history, branches, tags, workflow state.
+- Server-to-server sync between environments.
+- Replacing an existing part's model from a part bundle.
+
 ## Testing
 
 - Unit (`clipboard.spec.ts`): closure, id remap, plane transform, every
   feature type registered in `refsOf`, same-part keep vs cross-part
-  unresolved, variable merge/clash, delete-vs-dangle rewrites.
+  unresolved, variable merge/clash, delete-vs-dangle rewrites, bundle
+  parse (marker/schema rejection, foreign text ignored), same-part needs
+  origin + id, part bundle round-trip.
 - E2E (`e2e/cad/copy-paste.spec.ts`): copy a sketch onto another datum; copy
   a cut-extrude onto a different face and assert the body changes; paste into
   a second fixture part and assert the confirmation dialog lists the
-  unresolved refs.
+  unresolved refs; copy a part, paste on the landing page, assert the new
+  part regenerates the same body count/volume; export/import a .lwcad.
 
 ## Open risks
 

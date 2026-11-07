@@ -18,6 +18,8 @@ import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import { CadModelService } from '../../../services/cad-model.service';
 import { InventoryService } from '../../../services/inventory.service';
 import { CadTabsService } from '../../../services/cad-tabs.service';
+import { CadClipboardService } from '../../../services/cad-clipboard.service';
+import { buildPartBundle, partFileName, serializeBundle, type ClipboardBundle } from '../../../cad/lib/clipboard';
 import { CadPartTabsComponent } from '../cad-part-tabs/cad-part-tabs.component';
 import { Part } from '../../../models/part.model';
 import { CadModel, CadCommit, CadBranch, CadCommitDiff, CadWorkflow, CadDefaultView, CadCommitGeometry, PartWithCadSummary } from '../../../models/cad-model.model';
@@ -226,6 +228,24 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <div class="ribbon-group-label">History</div>
             </div>
             <div class="ribbon-divider"></div>
+            <!-- REQ 1012 — copy the whole part (works read-only); paste it as a
+                 new part on the CAD landing page, in any environment. -->
+            <div class="ribbon-group" *ngIf="!assemblyMode()">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="action-copy-part" [disabled]="!model()"
+                        [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || 'Copy this part — paste it with Ctrl+V on the CAD landing page (any environment) to create a new part'"
+                        (click)="onCopyPart()">
+                  <mat-icon>content_copy</mat-icon><span class="ribbon-label">Copy part</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-export-part" [disabled]="!model()"
+                        [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || 'Download this part as a .lwcad file — import it on the CAD landing page'"
+                        (click)="onExportPart()">
+                  <mat-icon>download</mat-icon><span class="ribbon-label">Export .lwcad</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Copy</div>
+            </div>
+            <div class="ribbon-divider" *ngIf="!assemblyMode()"></div>
             <div class="ribbon-group">
               <div class="ribbon-group-row">
                 <!-- Production review workflow (submit / approve) — only on main,
@@ -4809,7 +4829,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-434';
+  readonly buildMarker = 'text-435';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -4886,6 +4906,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private cadTabs = inject(CadTabsService);
   private auth = inject(AuthService);
   private errors = inject(ErrorNotificationService);
+  private cadClipboard = inject(CadClipboardService);
   private dialog = inject(MatDialog);
   /** REQ Batch 6 — owning Part (number / revision / etc.) fetched
    * when partID is set. Used to expose `partNumber`, `partRevision`,
@@ -5304,6 +5325,39 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         error: (err) => { this.stepExporting.set(false); this.errors.showError(err?.error?.error || 'STEP export failed.'); },
       });
     }
+  }
+
+  /** REQ 1012 — whole-part bundle of the current working state. */
+  private _partBundle(): ClipboardBundle | null {
+    const m = this.model();
+    if (!m) return null;
+    return buildPartBundle(
+      { ...m, featureTree: this.featureTree(), sketchDoc: this.doc(), equations: this.equations() },
+      { origin: location.origin, namingVersion: this.cadClipboard.namingVersion, rev: m.displayRevision ?? m.part?.revision ?? '' },
+    );
+  }
+
+  onCopyPart(): void {
+    const b = this._partBundle();
+    if (!b) return;
+    if (this.cadClipboard.copy(b)) this.errors.showSuccess(`Copied ${partFileName(b).replace(/\.lwcad$/, '')} — press Ctrl+V on the CAD landing page to paste it as a new part`);
+    else this.errors.showError('The browser blocked clipboard access — use Export .lwcad instead');
+  }
+
+  onExportPart(): void {
+    const b = this._partBundle();
+    if (b) this._downloadBlob(new Blob([serializeBundle(b)], { type: 'application/json' }), partFileName(b));
+  }
+
+  /** REQ 1013 — a copied PART pasted in the editor offers a new part. */
+  @HostListener('document:paste', ['$event'])
+  onDocumentPaste(e: ClipboardEvent): void {
+    if (this.cadClipboard.isFieldPaste(e) || this.dialog.openDialogs.length) return;
+    const r = this.cadClipboard.parse(e.clipboardData?.getData('text/plain') ?? '');
+    if (!r) return;
+    e.preventDefault();
+    const name = partFileName(r.bundle).replace(/\.lwcad$/, '');
+    if (confirm(`The clipboard holds a copied part (${name}). Create a new part from it?`)) void this.cadClipboard.openPasteDialog(r.bundle);
   }
 
   private _downloadBlob(blob: Blob, filename: string): void {

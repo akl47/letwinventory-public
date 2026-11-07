@@ -18,9 +18,13 @@ import {
   Quat, IDENTITY_QUAT, rotateAboutAssemblyAxis, alignZToNormal, axisMappingLabel, originMateFrame,
 } from '../../../cad/lib/insertOrientation';
 import { ASSEMBLY_REF_ID } from '../../../cad/lib/assembly.types';
+import type { ClipboardBundle } from '../../../cad/lib/clipboard';
 
 export interface CadNewPartDialogData {
   mode: 'part' | 'assembly';
+  /** REQ 1013 — paste a copied part: prefill its description and save
+   * its sketches/features/equations as the new model's first content. */
+  seed?: ClipboardBundle;
   /** REQ 920 — create the part AS A CHILD of this assembly: after the CAD
    * model is minted, insert an instance placed at `origin` (assembly world
    * frame) and open the part IN CONTEXT instead of standalone. */
@@ -61,7 +65,7 @@ export interface CadNewPartDialogData {
     MatSelectModule, MatCheckboxModule, MatButtonModule, MatIconModule, MatProgressSpinnerModule,
   ],
   template: `
-    <h2 mat-dialog-title>{{ data.mode === 'assembly' ? 'New assembly' : 'New CAD part' }}</h2>
+    <h2 mat-dialog-title>{{ data.seed ? 'Paste part' : data.mode === 'assembly' ? 'New assembly' : 'New CAD part' }}</h2>
     <mat-dialog-content class="npd">
       <mat-form-field appearance="outline" class="full">
         <mat-label>Part number</mat-label>
@@ -145,13 +149,17 @@ export class CadNewPartDialogComponent {
   /** Only the two relevant categories are offered; child-of-assembly mode
    * (REQ 920) creates plain parts only. */
   pickableCategories = computed(() =>
-    this.categories().filter((c) => this.data.insertInto
+    this.categories().filter((c) => this.data.insertInto || this.data.seed
       ? c.name === 'Part'
       : (c.name === 'Part' || c.name === 'Assembly')));
   private isAssembly = computed(() =>
     this.categories().find((c) => c.id === this.categoryId())?.name === 'Assembly');
 
   constructor() {
+    // A pasted part gets this environment's next part number (below), not the
+    // source's — only the description carries over.
+    const seed = this.data.seed?.source;
+    if (seed) this.description.set(seed.description ?? '');
     this.inv.getPartCategories().subscribe((cs) => {
       this.categories.set(cs);
       const want = this.data.mode === 'assembly' ? 'Assembly' : 'Part';
@@ -193,14 +201,37 @@ export class CadNewPartDialogComponent {
             // Checkout is the unified cad-model endpoint (works for assemblies);
             // a failure shouldn't block opening — navigate regardless.
             this.cadApi.checkout(m.id).subscribe({
-              next: () => this.finish(assembly, part.id, m.id),
-              error: () => this.finish(assembly, part.id, m.id),
+              next: (co) => this.seed(m.id, co.lastContentSavedAt ?? null, () => this.finish(assembly, part.id, m.id)),
+              error: (e) => {
+                // A pasted design can only be written to a checked-out model.
+                if (!this.data.seed) { this.finish(assembly, part.id, m.id); return; }
+                this.busy.set(false);
+                this.error.set(`Part ${nm} was created, but checking it out failed, so the copied design was not added: ${this.msg(e, 'checkout error')}`);
+              },
             });
           },
-          error: (e) => { this.busy.set(false); this.error.set(e?.error?.error || 'Failed to attach a design to the new part'); },
+          error: (e) => { this.busy.set(false); this.error.set(this.msg(e, 'Failed to attach a design to the new part')); },
         });
       },
-      error: (e) => { this.busy.set(false); this.error.set(e?.error?.error || 'Failed to create part'); },
+      error: (e) => { this.busy.set(false); this.error.set(this.msg(e, 'Failed to create part')); },
+    });
+  }
+
+  /** REQ 1013 — write the pasted model into the fresh (checked-out) model;
+   * the editor regenerates it on open. */
+  private seed(modelId: number, token: string | null, done: () => void) {
+    const m = this.data.seed?.model;
+    if (!m) { done(); return; }
+    this.cadApi.update(modelId, {
+      featureTree: m.featureTree, sketchDoc: m.sketchDoc,
+      ...(m.equations ? { equations: m.equations } : {}),
+      clientSavedAt: token,
+    }).subscribe({
+      next: done,
+      error: (e) => {
+        this.busy.set(false);
+        this.error.set(`Part ${this.name().trim()} was created, but copying the design into it failed: ${this.msg(e, 'save error')}`);
+      },
     });
   }
 
@@ -240,7 +271,7 @@ export class CadNewPartDialogComponent {
             : { type: 'lock', a: { instanceId: child, faceId: '' }, b: { instanceId: anchor, faceId: '' } },
           ).subscribe({ next: go, error: go });
         },
-        error: (e) => { this.busy.set(false); this.error.set(e?.error?.error || 'Part created, but inserting it into the assembly failed'); },
+        error: (e) => { this.busy.set(false); this.error.set(this.msg(e, 'Part created, but inserting it into the assembly failed')); },
       });
       return;
     }
@@ -254,5 +285,10 @@ export class CadNewPartDialogComponent {
   }
 
   cancel() { this.ref.close(false); }
+
+  /** The global error handler answers `{ errorMessage }`; CAD controllers `{ error }`. */
+  private msg(e: any, fallback: string): string {
+    return e?.error?.errorMessage || e?.error?.error || fallback;
+  }
 }
 

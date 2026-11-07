@@ -1,4 +1,4 @@
-import { Component, inject, signal, computed, OnInit } from '@angular/core';
+import { Component, HostListener, inject, signal, computed, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
@@ -12,6 +12,7 @@ import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { CadNewPartDialogComponent } from '../cad-new-part-dialog/cad-new-part-dialog.component';
 import { CadPartTabsComponent } from '../cad-part-tabs/cad-part-tabs.component';
 import { CadTabsService } from '../../../services/cad-tabs.service';
+import { CadClipboardService } from '../../../services/cad-clipboard.service';
 import { CadModelService } from '../../../services/cad-model.service';
 import { AssemblyService } from '../../../services/assembly.service';
 import { PartWithCadSummary } from '../../../models/cad-model.model';
@@ -73,6 +74,13 @@ import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-tabl
         data-testid="cad-landing-table">
 
         <div dataTableToolbar>
+          <input #lwcadFile type="file" accept=".lwcad,application/json" hidden data-testid="cad-import-file"
+                 (change)="importPartFile(lwcadFile)" />
+          <button mat-stroked-button (click)="lwcadFile.click()" data-testid="cad-import-part"
+                  matTooltip="Create a new part from a .lwcad file. You can also press Ctrl+V here to paste a copied part.">
+            <mat-icon>upload_file</mat-icon>
+            Import part
+          </button>
           <button mat-stroked-button (click)="newPart('assembly')"
                   matTooltip="Create a new assembly part and open it.">
             <mat-icon>account_tree</mat-icon>
@@ -183,6 +191,30 @@ export class CadLandingComponent implements OnInit {
   private router = inject(Router);
   private dialog = inject(MatDialog);
   readonly cadTabs = inject(CadTabsService);
+  private clipboard = inject(CadClipboardService);
+
+  /** REQ 1013 — Ctrl+V anywhere on the page pastes a copied part, even with
+   * the search box focused (a CAD bundle is never meant as a search term). */
+  @HostListener('document:paste', ['$event'])
+  onPaste(e: ClipboardEvent) {
+    if (this.dialog.openDialogs.length) return;
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    if (this.clipboard.pasteAsNewPart(text)) { e.preventDefault(); return; }
+    if (!this.clipboard.isFieldPaste(e)) {
+      this.errors.showInfo('The clipboard does not hold a copied CAD part — use Copy part in the part editor first');
+    }
+  }
+
+  /** REQ 1013 — Import part (.lwcad). */
+  importPartFile(input: HTMLInputElement) {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    file.text().then(
+      text => { if (!this.clipboard.pasteAsNewPart(text)) this.errors.showError(`${file.name} is not a CAD part file`); },
+      () => this.errors.showError(`Could not read ${file.name}`),
+    );
+  }
 
   /** Open the reduced new-part dialog (CAD part or assembly), then refresh on
    * close in case the user cancels navigation. */

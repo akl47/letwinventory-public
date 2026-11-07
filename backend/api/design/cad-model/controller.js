@@ -226,7 +226,7 @@ async function fetchActiveModel(id) {
     where: activeWhere({ id }),
     // Part identity feeds `#{partNumber}` / `#{partRevision}` etc. in sketch
     // text — cadRegenService builds the text-variable resolver from it.
-    include: [{ model: db.Part, as: 'part', attributes: ['id', 'name', 'sku', 'manufacturerPN', 'revision'] }],
+    include: [{ model: db.Part, as: 'part', attributes: ['id', 'name', 'sku', 'manufacturerPN', 'revision', 'description'] }],
   });
 }
 
@@ -377,7 +377,7 @@ module.exports = {
       // different revision than the one being viewed (see lineagePartIds).
       const model = await db.DesignCADModel.findOne({
         where: activeWhere({ partID: await lineagePartIds(partID) }),
-        include: [{ model: db.Part, as: 'part', attributes: ['id', 'name', 'sku', 'manufacturerPN', 'revision'] }],
+        include: [{ model: db.Part, as: 'part', attributes: ['id', 'name', 'sku', 'manufacturerPN', 'revision', 'description'] }],
         // Deterministic pick if a lineage ever holds more than one active row.
         order: [['updatedAt', 'DESC']],
       });
