@@ -47,7 +47,7 @@ using json = nlohmann::json;
 //     (CAD_KERNEL_MAX_REQUEST_BYTES), each forked op child gets an address-space
 //     rlimit (CAD_KERNEL_CHILD_MEM_MB), and stale cad-export-* temp files are
 //     swept at startup. Behavior-only — NAMING stays 48.
-static constexpr const char* KERNEL_BUILD = "cpp-16";
+static constexpr const char* KERNEL_BUILD = "cpp-17";
 // 30: native C++/OCCT 8.0 kernel; binary BinTools BReps invalidate the old
 // text-BRep cache (must match NAMING_VERSION in backend cadRegenService.js).
 // 31: tessellation normal off-by-one fix (zero-normal last node → dark

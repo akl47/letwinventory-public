@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -34,6 +35,8 @@
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <Geom_RectangularTrimmedSurface.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Dir.hxx>
@@ -600,6 +603,27 @@ json op_buildEdgeBlend(const json& params) {
             "chamfer fewer edges at once, or split into separate features.");
       }
       shape = mk.Shape();
+      // OCCT "completes" a chamfer whose distance reaches past the center of
+      // a picked arc (e.g. a rounded corner of radius 3 chamfered by 5) but
+      // returns an invalid solid that later fails to mesh. Name the cause.
+      if (!BRepCheck_Analyzer(shape).IsValid()) {
+        double min_r = std::numeric_limits<double>::infinity();
+        double max_d = 0.0;
+        for (size_t i = 0; i < matched.size(); ++i) {
+          BRepAdaptor_Curve c(body_edges[matched[i]]);
+          if (c.GetType() == GeomAbs_Circle) min_r = std::min(min_r, c.Circle().Radius());
+          max_d = std::max(max_d, per_edge_value[i]);
+        }
+        if (min_r <= max_d) {
+          char buf[320];
+          std::snprintf(buf, sizeof buf,
+              "chamfer distance %.4g mm reaches past the center of a curved edge "
+              "in the selection (radius %.4g mm) — a bevel can't be wider than "
+              "the curve it follows. Use a distance smaller than %.4g mm, or "
+              "leave the curved edges out.", max_d, min_r, min_r);
+          throw std::runtime_error(buf);
+        }
+      }
     }
   } catch (const Standard_Failure& f) {
     throw std::runtime_error(
