@@ -158,7 +158,11 @@ const { applyProjectionToSketchDoc } = require('./cadProjection');
 //    seam off the pinch (degenerate seam caused strip meshes + offset
 //    segfaults), and buildShell gives near-exact pinched tori 0.1 µm of
 //    clearance so hollowing succeeds. Invalidates v47 sweep rows.
-const NAMING_VERSION = 48;  // matches NAMING_SCHEMA_VERSION in cad-kernel-cpp/src/main.cpp — bump together with kernel
+// 49: shells of bodies with holes that ByJoin turned inside out are rebuilt
+//    from the hole-filled body (kernel). Invalidates v48 broken-shell rows.
+// 50: creased fillet corner patches are refit tangent (kernel), changing
+//    fillet geometry and the shells built on it. Invalidates v49 rows.
+const NAMING_VERSION = 50;  // matches NAMING_SCHEMA_VERSION in cad-kernel-cpp/src/main.cpp — bump together with kernel
 
 // Sentinel distance for Through All. Picked to comfortably exceed any
 // reasonable model dimension without overflowing OCCT's tolerance

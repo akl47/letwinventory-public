@@ -47,7 +47,9 @@ using json = nlohmann::json;
 //     (CAD_KERNEL_MAX_REQUEST_BYTES), each forked op child gets an address-space
 //     rlimit (CAD_KERNEL_CHILD_MEM_MB), and stale cad-export-* temp files are
 //     swept at startup. Behavior-only — NAMING stays 48.
-static constexpr const char* KERNEL_BUILD = "cpp-16";
+// cpp-21: fillet corner patches left creased by OCCT (radius larger than the
+//     corner it wraps) are refit tangent to their neighbours.
+static constexpr const char* KERNEL_BUILD = "cpp-21";
 // 30: native C++/OCCT 8.0 kernel; binary BinTools BReps invalidate the old
 // text-BRep cache (must match NAMING_VERSION in backend cadRegenService.js).
 // 31: tessellation normal off-by-one fix (zero-normal last node → dark
@@ -125,7 +127,13 @@ static constexpr const char* KERNEL_BUILD = "cpp-16";
 //     0.1 µm of clearance (pcurve-preserving swap) so ByJoin can hollow them —
 //     both OCCT engines refuse the exact horn outright. Bump invalidates v47
 //     rows (seam relocation changes sweep tessellation/topology).
-static constexpr int NAMING_SCHEMA_VERSION = 48;
+// 49: inward shells of bodies with holes whose tubes defeat ByJoin are rebuilt
+//     from the hole-filled body (shell_hole_fallback) instead of returning an
+//     inside-out solid. Bump invalidates v48 rows holding the broken shells.
+// 50: fillet corner patches that OCCT leaves creased against their neighbours
+//     are refit tangent (blend_corner_refit), so a later shell offsets them
+//     without gaps and gets SolidWorks' square hole-tube shoulders.
+static constexpr int NAMING_SCHEMA_VERSION = 50;
 
 // ── Operation watchdog ─────────────────────────────────────────────────────────
 // Since cpp-13, geometry ops run in a forked child (see run_op_isolated), so
