@@ -47,7 +47,7 @@ export interface CadModel {
   /** True when a draft branch is behind main (main advanced) — rebase to release. */
   behindMain?: boolean;
   // Part identity, included by getById / getActiveByPart.
-  part?: { id: number; name: string; sku?: string | null; manufacturerPN?: string | null; revision: string } | null;
+  part?: { id: number; name: string; sku?: string | null; manufacturerPN?: string | null; revision: string; description?: string | null } | null;
   /** True when this model is an assembly (assemblyDoc carries the content). */
   isAssembly?: boolean;
   /** Assembly document (typed as AssemblyDoc in cad/lib/assembly.types — kept
