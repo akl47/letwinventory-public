@@ -4829,7 +4829,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-435';
+  readonly buildMarker = 'text-436';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -15496,12 +15496,17 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private save(opts?: { skipRegen?: boolean }) {
     const m = this.model();
     if (!m) return;
+    // A geometry edit made outside a sketch owes a regen even if a later
+    // save (e.g. entering a new sketch within the debounce) coalesces it.
+    if (!opts?.skipRegen && this.activeSketchId() === null) this.regenOwed = true;
     this.pendingSaveOpts = opts ?? null;
     if (this.debouncedSave) clearTimeout(this.debouncedSave);
     this.debouncedSave = window.setTimeout(() => this._commitSave(), 500);
   }
 
   private pendingSaveOpts: { skipRegen?: boolean } | null = null;
+  /** A non-sketch edit is waiting to be regenerated once its save lands. */
+  private regenOwed = false;
   /** True while a save PATCH is on the wire (REQ 905 unsaved-work tracking). */
   private saveInFlight = false;
   /** A debounced save fired while another was in flight; sent once it settles. */
@@ -15605,6 +15610,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (this.saveInFlight) { this.saveQueued = true; return; }
     const opts = this.pendingSaveOpts ?? undefined;
     const skipRegen = opts?.skipRegen === true;
+    const regenOwed = this.regenOwed;
+    this.regenOwed = false;
     const sent = { featureTree: this.featureTree(), sketchDoc: this.doc(), equations: this.equations() };
     // REQ 942 — instance/mate/pattern edits also stamp lastContentSavedAt;
     // their responses refresh asm.assembly (not model), so read it there.
@@ -15623,9 +15630,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           this._saveSettled();
           // Skeleton sketches need no kernel work; refresh the composed view
           // only after leaving the sketch (Phase 2 dependents resolve then).
-          if (!skipRegen && this.activeSketchId() === null) this.asm.regenerate();
+          if (regenOwed || (!skipRegen && this.activeSketchId() === null)) this.asm.regenerate();
         },
         error: err => {
+          if (regenOwed) this.regenOwed = true;
           // REQ 991 — no response: the server may have applied it. Resolve
           // that before anything else; the save stays "in flight" meanwhile.
           if (err?.status === 0) { this._recoverLostSave(m.id, sent, sentToken, skipRegen); return; }
@@ -15667,10 +15675,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           // hasn't been re-evaluated yet). onExitSketch() calls save()
           // again with activeSketchId === null, which is when the
           // accumulated sketch changes propagate to the kernel.
-          if (skipRegen) return;
-          if (this.activeSketchId() === null) this.regenerate('save');
+          if (regenOwed || (!skipRegen && this.activeSketchId() === null)) this.regenerate('save');
         },
         error: err => {
+          if (regenOwed) this.regenOwed = true;
           // REQ 991 — no response: the server may have applied it. Resolve
           // that before anything else; the save stays "in flight" meanwhile.
           if (err?.status === 0) { this._recoverLostSave(m.id, sent, sentToken, skipRegen); return; }
