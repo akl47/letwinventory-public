@@ -513,6 +513,12 @@ module.exports = {
       if (req.body.grounded !== undefined) inst.grounded = !!req.body.grounded;
       if (req.body.suppressed !== undefined) inst.suppressed = !!req.body.suppressed;
       if (req.body.visible !== undefined) inst.visible = !!req.body.visible;
+      // Tree reorder: the instance's position among components and skeleton rows.
+      if (req.body.createdAt !== undefined) {
+        const t = Number(req.body.createdAt);
+        if (!Number.isFinite(t)) return res.status(400).json({ error: 'createdAt must be a number' });
+        inst.createdAt = t;
+      }
       // REQ 788 — change (or clear) the tracked branch.
       if (req.body.branch !== undefined) {
         inst.ref = { kind: 'cad', ...(inst.ref || {}) };
@@ -957,6 +963,8 @@ module.exports = {
         // REQ 915 — skeleton sketch geometry (assembly world frame) for the
         // in-context overlay.
         skeleton: composed.skeleton,
+        // Tree rows each component references in-context (drag-reorder limit).
+        instanceRefs: composed.instanceRefs,
       });
     } catch (err) {
       if (err instanceof KernelDisconnected || err instanceof KernelRpcError) {

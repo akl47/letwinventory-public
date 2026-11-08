@@ -1325,6 +1325,9 @@ export interface FeatureTree {
   /** REQ 858 — persisted rollback-bar position (features at index >= this are
    * skipped in regen). null/absent = fully rolled forward. */
   rollbackIndex?: number | null;
+  /** Assemblies only: rollback-bar cutoff. Components and skeleton rows
+   * created at or after this time are rolled back. null/absent = none. */
+  rollbackAt?: number | null;
 }
 
 // ──────────────────────────────────────────────────────────────────────────

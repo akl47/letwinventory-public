@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assemblyOriginDatums, computeSkeletonDatums, placedOriginDatums } from './assemblyDatums';
+import { assemblyOriginDatums, computeSkeletonDatums, meshCylinderAxis, meshIsFlat, placedOriginDatums } from './assemblyDatums';
 import type { AssemblyRegenResponse, Placement } from './assembly.types';
 import type { FeatureTree } from './types';
 
@@ -177,5 +177,38 @@ describe('skeleton point coordinate systems (REQ 1006)', () => {
     const ds = computeSkeletonDatums(pt({ instanceId: '__assembly__', local: [1, 2, 3] }), regen);
     expect((ds[0] as { position: number[] }).position).toEqual([1, 2, 3]);
     expect(axis(ds, 'x')).toEqual([1, 0, 0]);
+  });
+});
+
+describe('pattern plane/axis from a picked face (REQ 1027)', () => {
+  // Cylinder of radius 3 about the line through (5, 2, *) along +Z.
+  function cylinder() {
+    const positions: number[] = [], normals: number[] = [];
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * 2 * Math.PI;
+      for (const z of [0, 4]) {
+        positions.push(5 + 3 * Math.cos(a), 2 + 3 * Math.sin(a), z);
+        normals.push(Math.cos(a), Math.sin(a), 0);
+      }
+    }
+    return { positions, normals };
+  }
+
+  it('recovers a cylindrical face axis', () => {
+    const { positions, normals } = cylinder();
+    const ax = meshCylinderAxis(positions, normals)!;
+    expect(Math.abs(ax.direction[2])).toBeCloseTo(1, 6);
+    expect(ax.origin[0]).toBeCloseTo(5, 6);
+    expect(ax.origin[1]).toBeCloseTo(2, 6);
+    expect(ax.origin[2]).toBeCloseTo(2, 6);  // pinned at the face centroid
+  });
+
+  it('rejects a flat face as a cylinder', () => {
+    expect(meshCylinderAxis([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 0, 1, 0, 0, 1, 0, 0, 1])).toBeNull();
+  });
+
+  it('tells flat faces from curved ones', () => {
+    expect(meshIsFlat([0, 0, 1, 0, 0, 1], [0, 0, 1])).toBe(true);
+    expect(meshIsFlat(cylinder().normals, [1, 0, 0])).toBe(false);
   });
 });

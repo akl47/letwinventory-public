@@ -79,7 +79,7 @@ export class AssemblyService {
     return this.http.post<{ instance: AssemblyInstance; assembly: Assembly }>(`${this.apiUrl}/${id}/instances`, body).pipe(this.renewOnExpiry(id));
   }
 
-  updateInstance(id: number, instanceId: string, patch: Partial<Pick<AssemblyInstance, 'placement' | 'grounded' | 'suppressed' | 'visible'>> & { branch?: string | null; configurationId?: string | null }):
+  updateInstance(id: number, instanceId: string, patch: Partial<Pick<AssemblyInstance, 'placement' | 'grounded' | 'suppressed' | 'visible' | 'createdAt'>> & { branch?: string | null; configurationId?: string | null }):
     Observable<{ instance: AssemblyInstance; assembly: Assembly }> {
     return this.http.put<{ instance: AssemblyInstance; assembly: Assembly }>(`${this.apiUrl}/${id}/instances/${instanceId}`, patch).pipe(this.renewOnExpiry(id));
   }

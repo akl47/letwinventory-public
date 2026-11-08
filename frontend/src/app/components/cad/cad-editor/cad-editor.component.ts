@@ -80,8 +80,8 @@ import { CadConfigurationsPanelComponent } from '../cad-configurations-panel/cad
 import { CadFeatureDeleteDialogComponent, type FeatureDeleteResult } from '../cad-feature-delete-dialog/cad-feature-delete-dialog.component';
 import { AssemblyEditController } from '../assembly-editor/assembly-edit.controller';
 import { AssemblyService } from '../../../services/assembly.service';
-import { creationOrderTree } from '../../../cad/lib/assemblyTreeOrder';
-import { computeSkeletonDatums, meshFacePlane, placedOriginDatums, ORIGIN_DATUM_DESCRIPTORS, type PlacedDatum } from '../../../cad/lib/assemblyDatums';
+import { assemblyTreeRefs, creationOrderTree, reorderBlocker, withRollbackBar } from '../../../cad/lib/assemblyTreeOrder';
+import { assemblyOriginDatums, computeSkeletonDatums, meshCylinderAxis, meshFacePlane, meshIsFlat, placedOriginDatums, ORIGIN_DATUM_DESCRIPTORS, type PlacedDatum } from '../../../cad/lib/assemblyDatums';
 import type { Assembly, AssemblyInstance, Mate, AssemblyPattern, DisplayState } from '../../../cad/lib/assembly.types';
 import { ASSEMBLY_REF_ID, FRAME_AXES, datumRowMateRef, csysRefId } from '../../../cad/lib/assembly.types';
 import { buildInContextOverlay, SKELETON_INSTANCE_ID, type InContextOverlay, type OverlayEdge, type OverlayFace, type OverlayVertex } from '../../../cad/lib/inContextOverlay';
@@ -782,33 +782,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <!-- Insert picker + mate chooser now live in the secondary sidebar
                  (alongside the part-mode feature property panels). -->
 
-            <!-- Pattern form -->
-            @if (asm.patternSeedId()) {
-              <div class="asm-section">
-                <div class="asm-head">Pattern<button class="asm-x" (click)="asm.cancelPattern()">×</button></div>
-                <div class="asm-chips">
-                  <button class="asm-chip" [class.on]="asm.patternKind()==='linear'" (click)="asm.patternKind.set('linear')">Linear</button>
-                  <button class="asm-chip" [class.on]="asm.patternKind()==='circular'" (click)="asm.patternKind.set('circular')">Circular</button>
-                  <button class="asm-chip" [class.on]="asm.patternKind()==='mirror'" (click)="asm.patternKind.set('mirror')">Mirror</button>
-                </div>
-                @if (asm.patternKind()==='linear') {
-                  <div class="asm-grid3">
-                    <label>n<input type="number" [ngModel]="asm.pCount()" (ngModelChange)="asm.pCount.set(+$event)" /></label>
-                    <label>dx<input type="number" [ngModel]="asm.pSpacing()[0]" (ngModelChange)="asm.pSpacing.set([+$event, asm.pSpacing()[1], asm.pSpacing()[2]])" /></label>
-                    <label>dy<input type="number" [ngModel]="asm.pSpacing()[1]" (ngModelChange)="asm.pSpacing.set([asm.pSpacing()[0], +$event, asm.pSpacing()[2]])" /></label>
-                    <label>dz<input type="number" [ngModel]="asm.pSpacing()[2]" (ngModelChange)="asm.pSpacing.set([asm.pSpacing()[0], asm.pSpacing()[1], +$event])" /></label>
-                  </div>
-                } @else if (asm.patternKind()==='circular') {
-                  <div class="asm-grid3">
-                    <label>n<input type="number" [ngModel]="asm.pCount()" (ngModelChange)="asm.pCount.set(+$event)" /></label>
-                    <label>°<input type="number" [ngModel]="asm.pAngle()" (ngModelChange)="asm.pAngle.set(+$event)" /></label>
-                  </div>
-                } @else {
-                  <label class="asm-field">Plane<select [ngModel]="asm.pPlane()" (ngModelChange)="asm.pPlane.set($event)"><option value="YZ">YZ</option><option value="XZ">XZ</option><option value="XY">XY</option></select></label>
-                }
-                <button class="asm-apply" (click)="asm.createPattern()">Create pattern</button>
-              </div>
-            }
 
             <!-- Assembly tree: origin + skeleton group + components + mates. -->
             <app-cad-feature-tree-panel
@@ -832,6 +805,12 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <div class="ctx-anchor" #asmCtxAnchor [style.left.px]="asmCtxMenuX()" [style.top.px]="asmCtxMenuY()" [matMenuTriggerFor]="asmCtxMenu"></div>
             <mat-menu #asmCtxMenu="matMenu">
               @if (asmCtxItem(); as item) {
+                @if (asmCtxCreatedAt(item) !== null) {
+                  <button mat-menu-item data-testid="asm-ctx-rollback-here" [disabled]="readonly()" (click)="asmRollbackTo(asmCtxCreatedAt(item))"><mat-icon>arrow_drop_down</mat-icon> Roll back to here</button>
+                  @if (featureTree().rollbackAt != null) {
+                    <button mat-menu-item data-testid="asm-ctx-rollback-forward" [disabled]="readonly()" (click)="asmRollbackTo(null)"><mat-icon>arrow_drop_up</mat-icon> Roll forward to end</button>
+                  }
+                }
                 @if (item.kind === 'component') {
                   <button mat-menu-item (click)="openPartInTab(item.inst)"><mat-icon>tab</mat-icon> Open in new tab</button>
                   <button mat-menu-item (click)="openPartInNewTab(item.inst)"><mat-icon>open_in_new</mat-icon> Open part</button>
@@ -1236,6 +1215,60 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <button class="btn btn-primary" [disabled]="!asm.pendingInsertPart()" (click)="asm.confirmInsert()"><mat-icon>check</mat-icon> Insert</button>
               }
               <button class="btn" (click)="asm.togglePicker()"><mat-icon>close</mat-icon> Cancel</button>
+            </div>
+          </div>
+        </ng-container>
+
+        <!-- Assembly: component pattern (secondary sidebar, feature-panel UX) -->
+        <ng-container *ngIf="assemblyMode() && asm.patternSeedId()">
+          <div class="tool-panel" data-testid="asm-pattern-sidebar">
+            <h3 class="panel-title"><mat-icon>apps</mat-icon> Component pattern</h3>
+            <p class="panel-hint">Copies {{ asm.instName(asm.patternSeedId()!) }} in a row, around an axis, or across a mirror plane.</p>
+            <div class="panel-field active">
+              <div class="field-header"><mat-icon class="field-icon">category</mat-icon><span class="field-label">Pattern type</span></div>
+              <div class="asm-chips" data-testid="asm-pattern-types">
+                <button class="asm-chip" [class.on]="asm.patternKind()==='linear'" (click)="asm.setPatternKind('linear')">Linear</button>
+                <button class="asm-chip" [class.on]="asm.patternKind()==='circular'" (click)="asm.setPatternKind('circular')">Circular</button>
+                <button class="asm-chip" [class.on]="asm.patternKind()==='mirror'" (click)="asm.setPatternKind('mirror')">Mirror</button>
+              </div>
+            </div>
+            @if (asm.patternKind() === 'linear') {
+              <div class="panel-field active">
+                <div class="field-header"><mat-icon class="field-icon">tag</mat-icon><span class="field-label">Instances</span></div>
+                <input class="panel-input" type="number" min="2" step="1" data-testid="asm-pattern-count" [ngModel]="asm.pCount()" (ngModelChange)="asm.pCount.set(+$event)" />
+              </div>
+              <div class="panel-field active">
+                <div class="field-header"><mat-icon class="field-icon">straighten</mat-icon><span class="field-label">Spacing (mm)</span></div>
+                <div class="sub-row"><span class="sub-label">X</span><input class="panel-input" type="number" data-testid="asm-pattern-dx" [ngModel]="asm.pSpacing()[0]" (ngModelChange)="asm.pSpacing.set([+$event, asm.pSpacing()[1], asm.pSpacing()[2]])" /></div>
+                <div class="sub-row"><span class="sub-label">Y</span><input class="panel-input" type="number" data-testid="asm-pattern-dy" [ngModel]="asm.pSpacing()[1]" (ngModelChange)="asm.pSpacing.set([asm.pSpacing()[0], +$event, asm.pSpacing()[2]])" /></div>
+                <div class="sub-row"><span class="sub-label">Z</span><input class="panel-input" type="number" data-testid="asm-pattern-dz" [ngModel]="asm.pSpacing()[2]" (ngModelChange)="asm.pSpacing.set([asm.pSpacing()[0], asm.pSpacing()[1], +$event])" /></div>
+              </div>
+            } @else if (asm.patternKind() === 'circular') {
+              <cad-selection-list style="cursor:pointer" (click)="asm.patternPick.set('axis')"
+                  label="Rotation axis" headerIcon="rotate_right" testid="asm-pattern-axis"
+                  [rows]="asmPatternAxisRows()" [showCount]="false" [active]="asm.patternPick() === 'axis'"
+                  [emptyHint]="asm.patternPick() === 'axis' ? 'Click a datum axis or a cylindrical face, in the viewer or tree' : 'Not selected'"
+                  (remove)="asm.pAxisRef.set(null); asm.patternPick.set('axis')" (clear)="asm.pAxisRef.set(null); asm.patternPick.set('axis')">
+              </cad-selection-list>
+              <div class="panel-field active">
+                <div class="field-header"><mat-icon class="field-icon">tag</mat-icon><span class="field-label">Instances</span></div>
+                <input class="panel-input" type="number" min="2" step="1" data-testid="asm-pattern-count" [ngModel]="asm.pCount()" (ngModelChange)="asm.pCount.set(+$event)" />
+              </div>
+              <div class="panel-field active">
+                <div class="field-header"><mat-icon class="field-icon">rotate_right</mat-icon><span class="field-label">Angle between (°)</span></div>
+                <input class="panel-input" type="number" data-testid="asm-pattern-angle" [ngModel]="asm.pAngle()" (ngModelChange)="asm.pAngle.set(+$event)" />
+              </div>
+            } @else {
+              <cad-selection-list style="cursor:pointer" (click)="asm.patternPick.set('plane')"
+                  label="Mirror plane" headerIcon="filter_none" testid="asm-pattern-plane"
+                  [rows]="asmPatternPlaneRows()" [showCount]="false" [active]="asm.patternPick() === 'plane'"
+                  [emptyHint]="asm.patternPick() === 'plane' ? 'Click a datum plane or a flat face, in the viewer or tree' : 'Not selected'"
+                  (remove)="asm.pPlaneRef.set(null); asm.patternPick.set('plane')" (clear)="asm.pPlaneRef.set(null); asm.patternPick.set('plane')">
+              </cad-selection-list>
+            }
+            <div class="panel-actions">
+              <button class="btn btn-primary" data-testid="asm-pattern-ok" [disabled]="!asm.canCreatePattern()" (click)="asm.createPattern()"><mat-icon>check</mat-icon> OK</button>
+              <button class="btn" (click)="asm.cancelPattern()"><mat-icon>close</mat-icon> Cancel</button>
             </div>
           </div>
         </ng-container>
@@ -3329,20 +3362,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                       [class.active]="mirrorBodyPickTarget() === 'plane' && facePickMode()"
                       (click)="setMirrorBodyPickTarget('plane')">
                 <mat-icon>{{ mirrorBodyPickTarget() === 'plane' && facePickMode() ? 'touch_app' : 'add' }}</mat-icon>
-                Pick face or datum
+                {{ mirrorBodyPickTarget() === 'plane' && facePickMode() ? 'Click a face or datum plane' : 'Pick face or datum plane' }}
               </button>
-              <div class="panel-field active" style="padding: 4px 0;">
-                <select class="panel-input"
-                        data-testid="mirror-body-plane-datum-select"
-                        aria-label="Use an origin plane"
-                        [value]="mirrorBodyPlaneDatumOption()"
-                        (change)="setMirrorBodyPlaneFromDatum($any($event.target).value)">
-                  <option value="">— or pick an origin plane —</option>
-                  <option value="xy_plane">Top (XY)</option>
-                  <option value="xz_plane">Front (XZ)</option>
-                  <option value="yz_plane">Right (YZ)</option>
-                </select>
-              </div>
             </cad-selection-list>
 
             <cad-selection-list
@@ -3453,23 +3474,22 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <span>Rotate</span>
               </label>
               <ng-container *ngIf="moveCopyRotateEnabled()">
-                <div class="field-header" style="margin-top: 6px;">
-                  <mat-icon class="field-icon">rotate_right</mat-icon>
-                  <span class="field-label">Axis</span>
-                </div>
-                <select class="panel-input"
-                        data-testid="move-copy-axis"
-                        [value]="moveCopyAxisId()"
-                        (change)="setAxisChoice('moveCopy', $any($event.target).value)">
-                  <option value="x_axis">X axis</option>
-                  <option value="y_axis">Y axis</option>
-                  <option value="z_axis">Z axis</option>
-                  <option value="edge">Edge…</option>
-                </select>
-                <div class="axis-edge-row" *ngIf="moveCopyAxisId() === 'edge'" data-testid="axis-edge-moveCopy"
-                     [class.active]="axisEdgePickSlot() === 'moveCopy'" (click)="beginAxisEdgePick('moveCopy')">
-                  {{ axisEdgePickSlot() === 'moveCopy' ? 'Click a straight edge in the viewer' : (axisEdges()['moveCopy'] ? 'Edge picked — click to re-pick' : 'Click here, then a straight edge') }}
-                </div>
+                <cad-selection-list
+                    label="Rotation axis"
+                    headerIcon="rotate_right"
+                    testid="move-copy-axis"
+                    emptyHint="Pick a straight edge or a datum axis"
+                    [rows]="axisRows().moveCopy"
+                    [active]="axisEdgePickSlot() === 'moveCopy'"
+                    (remove)="clearAxis('moveCopy')">
+                  <button class="btn panel-flip"
+                          data-testid="move-copy-axis-pick"
+                          [class.active]="axisEdgePickSlot() === 'moveCopy'"
+                          (click)="toggleAxisPick('moveCopy')">
+                    <mat-icon>{{ axisEdgePickSlot() === 'moveCopy' ? 'touch_app' : 'add' }}</mat-icon>
+                    {{ axisEdgePickSlot() === 'moveCopy' ? 'Click an edge or axis (click here to stop)' : 'Pick edge or axis' }}
+                  </button>
+                </cad-selection-list>
                 <div class="hole-override-row" style="margin-top: 6px;">
                   <span>Angle°</span>
                   <input type="number" step="1" class="panel-input"
@@ -3595,43 +3615,27 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <mat-icon>{{ facePickMode() ? 'touch_app' : 'add' }}</mat-icon>
                   {{ facePickMode() ? 'Click a face or datum (click here to stop)' : 'Pick from viewer' }}
                 </button>
-                <div class="panel-field active" style="padding: 4px 0;">
-                  <select class="panel-input"
-                          data-testid="pattern-plane-datum-select"
-                          aria-label="Use an origin plane"
-                          [value]="patternPlaneDatumOption()"
-                          (change)="setPatternPlaneFromDatum($any($event.target).value)">
-                    <option value="">— or pick an origin plane —</option>
-                    <option value="xy_plane">Top (XY)</option>
-                    <option value="xz_plane">Front (XZ)</option>
-                    <option value="yz_plane">Right (YZ)</option>
-                  </select>
-                </div>
               </cad-selection-list>
             </ng-container>
 
             <!-- Linear: direction 1, optional direction 2 -->
             <ng-container *ngIf="pCtx.kind === 'linearPattern'">
-              <div class="panel-field active">
-                <div class="field-header">
-                  <mat-icon class="field-icon">north_east</mat-icon>
-                  <span class="field-label">Direction 1 axis</span>
-                </div>
-                <select class="panel-input"
-                        data-testid="pattern-dir1-axis"
-                        aria-label="Direction 1 axis"
-                        [value]="patternDir1AxisId()"
-                        (change)="setAxisChoice('dir1', $any($event.target).value)">
-                  <option value="x_axis">X axis</option>
-                  <option value="y_axis">Y axis</option>
-                  <option value="z_axis">Z axis</option>
-                  <option value="edge">Edge…</option>
-                </select>
-                <div class="axis-edge-row" *ngIf="patternDir1AxisId() === 'edge'" data-testid="axis-edge-dir1"
-                     [class.active]="axisEdgePickSlot() === 'dir1'" (click)="beginAxisEdgePick('dir1')">
-                  {{ axisEdgePickSlot() === 'dir1' ? 'Click a straight edge in the viewer' : (axisEdges()['dir1'] ? 'Edge picked — click to re-pick' : 'Click here, then a straight edge') }}
-                </div>
-              </div>
+              <cad-selection-list
+                  label="Direction 1 axis"
+                  headerIcon="north_east"
+                  testid="pattern-dir1-axis"
+                  emptyHint="Pick a straight edge or a datum axis"
+                  [rows]="axisRows().dir1"
+                  [active]="axisEdgePickSlot() === 'dir1'"
+                  (remove)="clearAxis('dir1')">
+                <button class="btn panel-flip"
+                        data-testid="pattern-dir1-axis-pick"
+                        [class.active]="axisEdgePickSlot() === 'dir1'"
+                        (click)="toggleAxisPick('dir1')">
+                  <mat-icon>{{ axisEdgePickSlot() === 'dir1' ? 'touch_app' : 'add' }}</mat-icon>
+                  {{ axisEdgePickSlot() === 'dir1' ? 'Click an edge or axis (click here to stop)' : 'Pick edge or axis' }}
+                </button>
+              </cad-selection-list>
               <div class="panel-field active">
                 <div class="field-header">
                   <mat-icon class="field-icon">straighten</mat-icon>
@@ -3681,26 +3685,22 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 </button>
               </div>
               <ng-container *ngIf="patternDir2Enabled()">
-                <div class="panel-field active">
-                  <div class="field-header">
-                    <mat-icon class="field-icon">east</mat-icon>
-                    <span class="field-label">Direction 2 axis</span>
-                  </div>
-                  <select class="panel-input"
-                          data-testid="pattern-dir2-axis"
-                          aria-label="Direction 2 axis"
-                          [value]="patternDir2AxisId()"
-                          (change)="setAxisChoice('dir2', $any($event.target).value)">
-                    <option value="x_axis">X axis</option>
-                    <option value="y_axis">Y axis</option>
-                    <option value="z_axis">Z axis</option>
-                    <option value="edge">Edge…</option>
-                  </select>
-                  <div class="axis-edge-row" *ngIf="patternDir2AxisId() === 'edge'" data-testid="axis-edge-dir2"
-                       [class.active]="axisEdgePickSlot() === 'dir2'" (click)="beginAxisEdgePick('dir2')">
-                    {{ axisEdgePickSlot() === 'dir2' ? 'Click a straight edge in the viewer' : (axisEdges()['dir2'] ? 'Edge picked — click to re-pick' : 'Click here, then a straight edge') }}
-                  </div>
-                </div>
+                <cad-selection-list
+                    label="Direction 2 axis"
+                    headerIcon="east"
+                    testid="pattern-dir2-axis"
+                    emptyHint="Pick a straight edge or a datum axis"
+                    [rows]="axisRows().dir2"
+                    [active]="axisEdgePickSlot() === 'dir2'"
+                    (remove)="clearAxis('dir2')">
+                  <button class="btn panel-flip"
+                          data-testid="pattern-dir2-axis-pick"
+                          [class.active]="axisEdgePickSlot() === 'dir2'"
+                          (click)="toggleAxisPick('dir2')">
+                    <mat-icon>{{ axisEdgePickSlot() === 'dir2' ? 'touch_app' : 'add' }}</mat-icon>
+                    {{ axisEdgePickSlot() === 'dir2' ? 'Click an edge or axis (click here to stop)' : 'Pick edge or axis' }}
+                  </button>
+                </cad-selection-list>
                 <div class="panel-field active">
                   <div class="field-header">
                     <mat-icon class="field-icon">straighten</mat-icon>
@@ -3744,26 +3744,22 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
 
             <!-- Circular: axis + count + mode + angle -->
             <ng-container *ngIf="pCtx.kind === 'circularPattern'">
-              <div class="panel-field active">
-                <div class="field-header">
-                  <mat-icon class="field-icon">rotate_right</mat-icon>
-                  <span class="field-label">Rotation axis</span>
-                </div>
-                <select class="panel-input"
-                        data-testid="pattern-circ-axis"
-                        aria-label="Rotation axis"
-                        [value]="patternCircAxisId()"
-                        (change)="setAxisChoice('circ', $any($event.target).value)">
-                  <option value="x_axis">X axis</option>
-                  <option value="y_axis">Y axis</option>
-                  <option value="z_axis">Z axis</option>
-                  <option value="edge">Edge…</option>
-                </select>
-                <div class="axis-edge-row" *ngIf="patternCircAxisId() === 'edge'" data-testid="axis-edge-circ"
-                     [class.active]="axisEdgePickSlot() === 'circ'" (click)="beginAxisEdgePick('circ')">
-                  {{ axisEdgePickSlot() === 'circ' ? 'Click a straight edge in the viewer' : (axisEdges()['circ'] ? 'Edge picked — click to re-pick' : 'Click here, then a straight edge') }}
-                </div>
-              </div>
+              <cad-selection-list
+                  label="Rotation axis"
+                  headerIcon="rotate_right"
+                  testid="pattern-circ-axis"
+                  emptyHint="Pick a straight edge or a datum axis"
+                  [rows]="axisRows().circ"
+                  [active]="axisEdgePickSlot() === 'circ'"
+                  (remove)="clearAxis('circ')">
+                <button class="btn panel-flip"
+                        data-testid="pattern-circ-axis-pick"
+                        [class.active]="axisEdgePickSlot() === 'circ'"
+                        (click)="toggleAxisPick('circ')">
+                  <mat-icon>{{ axisEdgePickSlot() === 'circ' ? 'touch_app' : 'add' }}</mat-icon>
+                  {{ axisEdgePickSlot() === 'circ' ? 'Click an edge or axis (click here to stop)' : 'Pick edge or axis' }}
+                </button>
+              </cad-selection-list>
               <div class="panel-field active">
                 <div class="field-header">
                   <mat-icon class="field-icon">tune</mat-icon>
@@ -3976,7 +3972,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [profileFillsHovered]="extrudeHoveredRegion()"
               [vertexPickMode]="vertexPickMode() || mode() === 'pick-child-origin'"
               [extraPickableVertices]="sketchPickableVertices()"
-              [facePickMode]="assemblyMode() ? (asm.facePickActive() || mode() === 'pick-child-origin' || datumPlaneSidebar() !== null || datumPointSidebar() !== null) : facePickActive()"
+              [facePickMode]="assemblyMode() ? (asm.facePickActive() || asm.patternPick() !== null || mode() === 'pick-child-origin' || datumPlaneSidebar() !== null || datumPointSidebar() !== null) : facePickActive()"
               [planePickMode]="sketchPlanePickActive()"
               [facePickExcludeFeatureId]="extrudeSidebar()?.editingFeatureId ?? null"
               [axisPickMode]="axisPickMode()"
@@ -4572,8 +4568,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .field-icon { font-size: 16px; width: 16px; height: 16px; opacity: 0.7; }
     .field-label { font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; flex: 1; }
     .field-header .icon-btn.active { background: rgba(66, 165, 245, 0.35); color: #fff; border-radius: 4px; }
-    .axis-edge-row { margin-top: 4px; padding: 4px 6px; font-size: 12px; color: #aaa; border: 1px dashed #555; border-radius: 4px; cursor: pointer; }
-    .axis-edge-row.active { border-color: #42a5f5; color: #fff; background: rgba(66, 165, 245, 0.15); }
     .field-count {
       font-size: 11px;
       color: #ddd;
@@ -4797,7 +4791,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-446';
+  readonly buildMarker = 'text-448';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -5831,10 +5825,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   });
   mirrorBodyRows = computed<SelectionRow[]>(() =>
     this.mirrorBodyBodyIds().map((id, i) => ({ id: `b:${i}`, label: `Body ${id}`, icon: 'view_in_ar' })));
-  mirrorBodyPlaneDatumOption = computed<string>(() => {
-    const r = this.mirrorBodyPlaneRef();
-    return r?.kind === 'datum' ? String(r.datumId) : '';
-  });
 
   // ── Move/Copy Body sidebar — REQ 667 ───────────────────────────────
   moveCopyBodySidebar = signal<{ editingFeatureId?: string } | null>(null);
@@ -6183,7 +6173,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   /** Mirror: selected origin datum option in the dropdown (or '' for
    * face-pick mode). Two-way bound with patternPlaneRef when the user
    * picks an origin plane via the dropdown. */
-  patternPlaneDatumOption = signal<string>('');
 
   /** Linear: direction 1 axis + spacing + count + flipped. Count
    * supports expressions via the equations doc (REQ 658 update). */
@@ -7088,6 +7077,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   /** Dispatch a generic row event from the shared feature-tree panel (assembly
    * mode). Node keys are `<kind>[:<id>[:<id>]]`. */
   onAsmTreeEvent(e: ExternalTreeEvent) {
+    if (e.type === 'reorder' || e.type === 'rollback' || (e.type === 'context' && e.node.kind === 'rollback-bar')) {
+      this._onAsmTreeOrderEvent(e);
+      return;
+    }
     const parts = e.node.key.split(':');
     const kind = parts[0];
     // Skeleton rows fold into the assembly tree — reuse their handler.
@@ -7108,6 +7101,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         else if (kind === 'component-origin') this.asm.toggleComponentOriginExpand(parts[1]);
         break;
       case 'select':
+        if (this._datumIdOfRow(e.node.key) && this._asmPatternDatumPick(this._datumIdOfRow(e.node.key)!)) break;
         // REQ 1001 — datum rows feed the mate picker.
         if (this.asm.facePickActive() && datumRowMateRef(e.node.key)) { this.asm.onFacePicked(datumRowMateRef(e.node.key)!); break; }
         // Picking a skeleton sketch plane: assembly origin planes host it.
@@ -7134,6 +7128,60 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         break;
     }
   }
+  /** Move the assembly rollback bar to before the row created at `at`
+   * (null = roll forward to the end). */
+  asmRollbackTo(at: number | null): void {
+    if (this.readonly()) { this.errors.showError('Check out the assembly to change the tree.'); return; }
+    this.featureTree.set({ ...this.featureTree(), rollbackAt: at });
+    this.save();
+  }
+  /** Creation time of the right-clicked assembly tree row (rollback target). */
+  asmCtxCreatedAt(item: { kind: string; inst?: AssemblyInstance; sketchId?: string; featureId?: string }): number | null {
+    if (item.kind === 'component') return item.inst?.createdAt ?? 0;
+    if (item.kind === 'skeleton-sketch') return this.doc().sketches[item.sketchId!]?.createdAt ?? null;
+    if (item.kind === 'skeleton-plane') return this.featureTree().features.find(f => f.id === item.featureId)?.createdAt ?? null;
+    return null;
+  }
+
+  /** Assembly tree drag-reorder and rollback bar. Rows are ordered by
+   * createdAt, so a reorder restamps the dragged row and the bar is a
+   * createdAt cutoff stored on the assembly's feature tree. */
+  private _onAsmTreeOrderEvent(e: ExternalTreeEvent): void {
+    if (this.readonly()) { this.errors.showError('Check out the assembly to change the tree.'); return; }
+    if (e.type !== 'reorder') {
+      // Dropping the bar at the end, or right-clicking it, rolls forward.
+      this.asmRollbackTo(e.type === 'rollback' ? e.createdAt ?? null : null);
+      return;
+    }
+    const createdAt = e.createdAt;
+    if (typeof createdAt !== 'number') return;
+    const rows = this.asmTreeNodes();
+    const refs = assemblyTreeRefs({
+      instanceIds: this.asm.instances().map(i => i.instanceId),
+      skeletonFeatures: this.featureTree().features.filter(f => f.type === 'datumPlane' || f.type === 'datumPoint'),
+      skeletonSketches: Object.values(this.doc().sketches),
+      instanceRefs: this.asm.regen()?.instanceRefs,
+    });
+    const createdAtOf = new Map(rows.filter(r => r.depth === 0 && r.createdAt !== undefined).map(r => [r.key, r.createdAt!]));
+    const blocker = reorderBlocker(e.node.key, createdAt, refs, createdAtOf, k => rows.find(r => r.key === k)?.label ?? k);
+    if (blocker) { this.errors.showError(blocker); return; }
+    const [kind, ...rest] = e.node.key.split(':');
+    const id = rest.join(':');
+    if (kind === 'component') { this.asm.reorderInstance(id, createdAt); return; }
+    if (kind === 'skelsketch') {
+      const doc = this.doc();
+      const sk = doc.sketches[id];
+      if (!sk) return;
+      this.doc.set({ ...doc, sketches: { ...doc.sketches, [id]: { ...sk, createdAt } } });
+    } else if (kind === 'skelplane') {
+      const ft = this.featureTree();
+      this.featureTree.set({ ...ft, features: ft.features.map(f => f.id === id ? { ...f, createdAt } as Feature : f) });
+    } else {
+      return;
+    }
+    this.save();
+  }
+
   // ── Skeleton tree (REQ 911/912/919) ───────────────────────────────────
   /** Assembly skeleton rows: datum plane features from the assembly
    * featureTree + master sketches from its sketchDoc. */
@@ -7172,7 +7220,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const base = this.sidebarMode() === 'mini' ? this.asm.treeNodesExpanded() : this.asm.treeNodes();
     // REQ 1007 — components and skeleton rows interleave in creation order.
     const created = Object.fromEntries(this.asm.instances().map(i => [i.instanceId, i.createdAt]));
-    return creationOrderTree(base, this.skeletonNodes(), created);
+    const bar: TreeNode = {
+      key: '__rollback_bar__', kind: 'rollback-bar', label: 'Rolled back to here',
+      iconName: 'arrow_drop_down', iconClass: 'rollback', depth: 0,
+      expandable: false, expanded: false, selectable: false,
+    };
+    return withRollbackBar(creationOrderTree(base, this.skeletonNodes(), created), this.featureTree().rollbackAt ?? null, bar);
   });
 
   onSkeletonTreeEvent(e: ExternalTreeEvent) {
@@ -7180,6 +7233,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (e.type === 'select') {
       if (n.datumId) {
         // REQ 1006 — skeleton planes/points as references for the active pick.
+        if (this._asmPatternDatumPick(n.datumId)) return;
         if (this.datumPointSidebar()) { this.addDatumPointDatumPick(n.datumId); return; }
         if (this.datumPlaneSidebar()) { this.addDatumPlaneDatumPick(n.datumId); return; }
         if (this.mode() === 'pick-plane') { this._pickSketchPlaneFromTree(n.datumId); return; }
@@ -7829,7 +7883,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     effect(() => {
       if (!this.assemblyMode()) return;
       // REQ 1004 — the composed regen lets skeleton planes follow component faces/datums.
-      this.asm.skeletonDatums.set(computeSkeletonDatums(this.featureTree(), this.asm.regen()));
+      // Skeleton planes/points below the rollback bar drop out.
+      const ft = this.featureTree();
+      const at = ft.rollbackAt ?? null;
+      const active = at === null ? ft : { ...ft, features: ft.features.filter(f => (f.createdAt ?? 0) < at) };
+      this.asm.skeletonDatums.set(computeSkeletonDatums(active, this.asm.regen()));
     });
     // Datum tree rows are pick targets while choosing a new part's origin or
     // building a reference point / plane.
@@ -9527,6 +9585,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const m = this.mode();
     if (id === null) return;
 
+    if (this.assemblyMode() && id.startsWith('datum:') && this._asmPatternDatumPick(id.slice('datum:'.length))) return;
     // REQ 999 — the assembly's own origin datums are mate references while picking.
     if (this.assemblyMode() && this.asm.facePickActive() && id.startsWith('datum:')) {
       const datumId = id.slice('datum:'.length);
@@ -9537,6 +9596,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (this.assemblyMode() && this.datumPointSidebar() && id.startsWith('datum:')) {
       if (this.addDatumPointDatumPick(id.slice('datum:'.length))) return;
     }
+    if (id.startsWith('datum:') && this._routeDatumToPickBox(id.slice('datum:'.length))) return;
     // Datum Plane sidebar: a click on an existing datum (origin or
     // user) becomes a plane-ref pick for the active method's slot.
     if (this.datumPlaneSidebar() && id.startsWith('datum:')) {
@@ -9617,6 +9677,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (this.activeSketchId() && this.sketchEditorRef()?.tool() === 'smart-dim') {
       if (this.addDatumDimensionReference(ev.datumId, true)) return;
     }
+    if (this._routeDatumToPickBox(ev.datumId)) return;
     if (this.selected() !== null) this.selected.set(null);
     this.applyTreeSelection('datum', ev.datumId, ev.shiftKey, ev.ctrlKey);
   }
@@ -10763,6 +10824,57 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     return (d?.axis?.direction ?? d?.direction ?? null) as [number, number, number] | null;
   }
 
+  /** Assembly pattern mirror plane / rotation axis from a datum (viewer or
+   * tree). Returns true when the waiting selection box took it. */
+  private _asmPatternDatumPick(datumId: string): boolean {
+    const pick = this.asm.patternPick();
+    if (!pick) return false;
+    // Origin datums count even while hidden (picked from the tree).
+    const d: PlacedDatum | undefined = this._asmPickDatums().find(x => x.id === datumId)
+      ?? assemblyOriginDatums({}).find(x => x.id === datumId);
+    if (!d) return false;
+    const label = d.name ?? ORIGIN_DATUM_DESCRIPTORS.find(x => x.id === d.id)?.label ?? d.id;
+    if (pick === 'plane' && d.kind === 'plane') {
+      const normal = d.plane?.normal ?? d.direction;
+      if (!normal) return false;
+      this.asm.setPatternPlane({ label, origin: d.plane?.origin ?? [0, 0, 0], normal });
+      return true;
+    }
+    if (pick === 'axis' && d.kind === 'axis') {
+      const direction = d.axis?.direction ?? d.direction;
+      if (!direction) return false;
+      this.asm.setPatternAxis({ label, origin: d.axis?.origin ?? [0, 0, 0], direction });
+      return true;
+    }
+    this.errors.showError(pick === 'plane' ? 'Pick a datum plane or a flat face for the mirror plane.' : 'Pick a datum axis or a cylindrical face for the rotation axis.');
+    return true;
+  }
+
+  /** Assembly pattern plane (flat face) or axis (cylindrical face) from a
+   * component face, read from the un-exploded composed mesh. */
+  private _asmPatternFacePick(faceId: string): void {
+    const f = this.asm.regen()?.bodies.flatMap(b => b.faces).find(x => x.faceId === faceId);
+    if (!f) return;
+    if (this.asm.patternPick() === 'plane') {
+      const pl = meshFacePlane(f.positions, f.normals);
+      if (pl && meshIsFlat(f.normals, pl.normal)) { this.asm.setPatternPlane({ label: 'Face', ...pl }); return; }
+      this.errors.showError('Pick a flat face or a datum plane for the mirror plane.');
+      return;
+    }
+    const ax = meshCylinderAxis(f.positions, f.normals);
+    if (ax) { this.asm.setPatternAxis({ label: 'Cylinder axis', ...ax }); return; }
+    this.errors.showError('Pick a cylindrical face or a datum axis for the rotation axis.');
+  }
+
+  asmPatternPlaneRows = computed<SelectionRow[]>(() => {
+    const r = this.asm.pPlaneRef();
+    return r ? [{ id: 'plane', label: r.label, icon: 'filter_none' }] : [];
+  });
+  asmPatternAxisRows = computed<SelectionRow[]>(() => {
+    const r = this.asm.pAxisRef();
+    return r ? [{ id: 'axis', label: r.label, icon: 'north_east' }] : [];
+  });
+
   /** REQ 1005/1006 — attach a skeleton point to its owner: the component it
    * was picked on (all picks on one component), else the assembly. Stores
    * the point and its coordinate-system orientation in the owner's frame. */
@@ -11048,15 +11160,40 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.facePickMode.set(true);
   }
   setMirrorBodyPlaneFromDatum(datumId: string): void {
-    if (datumId === '') {
-      this.mirrorBodyPlaneRef.set(null);
-      this.mirrorBodyPlaneSnapshot.set(null);
-    } else {
-      const ref: PlaneRef = { kind: 'datum', datumId } as PlaneRef;
-      this.mirrorBodyPlaneRef.set(ref);
-      this.mirrorBodyPlaneSnapshot.set(this._resolvePlaneRefSnapshot(ref));
-      this._advanceMirrorBodyToBodies();
+    const ref: PlaneRef = { kind: 'datum', datumId } as PlaneRef;
+    this.mirrorBodyPlaneRef.set(ref);
+    this.mirrorBodyPlaneSnapshot.set(this._resolvePlaneRefSnapshot(ref));
+    this._advanceMirrorBodyToBodies();
+  }
+
+  /** A datum clicked in the viewer or feature tree while a plane or axis
+   * selection box is waiting for a pick. Returns true when consumed. */
+  private _routeDatumToPickBox(datumId: string): boolean {
+    const isPlane = !!this._resolveDatumPlane(`datum:${datumId}`);
+    if (isPlane && this.mirrorBodySidebar() && this.mirrorBodyPickTarget() === 'plane') {
+      this.setMirrorBodyPlaneFromDatum(datumId);
+      return true;
     }
+    if (isPlane && this.patternSidebar()?.kind === 'mirror') {
+      this.setPatternPlaneFromDatum(datumId);
+      return true;
+    }
+    const slot = this.axisEdgePickSlot();
+    const axis = slot ? this._resolveDatumAxis(datumId) : null;
+    if (slot && axis) {
+      if (datumId === 'x_axis' || datumId === 'y_axis' || datumId === 'z_axis') {
+        this._axisChoice(slot).set(datumId);
+      } else {
+        // User datum axes are stored as the edge they span.
+        const o = axis.origin, d = axis.direction;
+        this._axisChoice(slot).set('edge');
+        this.axisEdges.set({ ...this.axisEdges(), [slot]: { start: o, end: [o[0] + d[0], o[1] + d[1], o[2] + d[2]] } });
+      }
+      this.axisEdgePickSlot.set(null);
+      this.edgePickMode.set(false);
+      return true;
+    }
+    return false;
   }
   /** Plane set → next clicks pick bodies, unless some are already picked. */
   private _advanceMirrorBodyToBodies(): void {
@@ -11570,7 +11707,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   private _resetPatternInputs(): void {
     this.patternPlaneRef.set(null);
-    this.patternPlaneDatumOption.set('');
     this.patternDir1AxisId.set('x_axis');
     this.patternDir1Spacing.set(10);
     this.patternDir1SpacingExpression.set(null);
@@ -11603,15 +11739,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this._resetPatternInputs();
   }
 
-  /** Set the mirror plane from the origin-plane dropdown. Empty string
-   * means "use face pick instead" — clears any datum pick. */
+  /** Set the mirror plane from a datum plane clicked in the viewer or tree. */
   setPatternPlaneFromDatum(datumId: string): void {
-    this.patternPlaneDatumOption.set(datumId);
-    if (datumId === '') {
-      this.patternPlaneRef.set(null);
-    } else {
-      this.patternPlaneRef.set({ kind: 'datum', datumId });
-    }
+    this.patternPlaneRef.set({ kind: 'datum', datumId });
   }
 
   /** Route a face pick to the active pattern sidebar's plane slot.
@@ -11621,7 +11751,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const ctx = this.patternSidebar();
     if (!ctx || ctx.kind !== 'mirror') return false;
     this.patternPlaneRef.set({ kind: 'face', faceId, fallbackPlane });
-    this.patternPlaneDatumOption.set('');  // clear the datum dropdown to avoid stale display
     return true;
   }
 
@@ -11677,7 +11806,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   /** Pattern / Move-Copy axis edges picked in the viewer, per slot. */
   axisEdges = signal<Partial<Record<AxisSlot, EdgeRef3D>>>({});
-  /** Slot waiting for an edge click (its dropdown is on "Edge…"). */
+  /** Slot whose selection box is waiting for an edge or datum-axis click. */
   axisEdgePickSlot = signal<AxisSlot | null>(null);
 
   private _axisChoice(slot: AxisSlot) {
@@ -11687,15 +11816,34 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       : this.moveCopyAxisId;
   }
 
-  /** Dropdown change: "Edge…" arms edge picking for that slot. */
-  setAxisChoice(slot: AxisSlot, choice: AxisChoice): void {
-    this._axisChoice(slot).set(choice);
-    if (choice === 'edge') {
-      if (!this.axisEdges()[slot]) this.beginAxisEdgePick(slot);
-    } else if (this.axisEdgePickSlot() === slot) {
+  /** One selection-box row per axis slot: the picked datum axis or edge. */
+  axisRows = computed<Record<AxisSlot, SelectionRow[]>>(() => {
+    const edges = this.axisEdges();
+    const row = (slot: AxisSlot): SelectionRow[] => {
+      const choice = this._axisChoice(slot)();
+      if (choice !== 'edge') return [{ id: slot, label: `${choice[0].toUpperCase()} axis`, icon: 'north_east' }];
+      const e = edges[slot];
+      if (!e) return [];
+      const len = Math.hypot(e.end[0] - e.start[0], e.end[1] - e.start[1], e.end[2] - e.start[2]);
+      return [{ id: slot, label: 'Edge', detail: `${len.toFixed(2)} mm`, icon: 'horizontal_rule' }];
+    };
+    return { dir1: row('dir1'), dir2: row('dir2'), circ: row('circ'), moveCopy: row('moveCopy') };
+  });
+
+  toggleAxisPick(slot: AxisSlot): void {
+    if (this.axisEdgePickSlot() === slot) {
       this.axisEdgePickSlot.set(null);
       this.edgePickMode.set(false);
+    } else {
+      this.beginAxisEdgePick(slot);
     }
+  }
+
+  /** Remove the slot's axis and wait for a new one. */
+  clearAxis(slot: AxisSlot): void {
+    this._axisChoice(slot).set('edge');
+    this._clearAxisEdge(slot);
+    this.beginAxisEdgePick(slot);
   }
 
   beginAxisEdgePick(slot: AxisSlot): void {
@@ -11711,6 +11859,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.errors.showError('Pick a straight edge for the axis.');
       return true;
     }
+    this._axisChoice(slot).set('edge');
     this.axisEdges.set({ ...this.axisEdges(), [slot]: { start: rec.endpoints[0], end: rec.endpoints[1] } });
     this.axisEdgePickSlot.set(null);
     this.edgePickMode.set(false);
@@ -11735,7 +11884,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
   }
 
-  /** axisRef + snapshot for a slot, or null while "Edge…" has no edge yet. */
+  /** axisRef + snapshot for a slot, or null while it has no axis. */
   axisFor(slot: AxisSlot): { axisRef: AxisRef; axisSnapshot: AxisSnapshot } | null {
     const choice = this._axisChoice(slot)();
     if (choice !== 'edge') return { axisRef: { kind: 'originAxis', axisId: choice }, axisSnapshot: this._originAxisSnapshot(choice) };
@@ -12891,6 +13040,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         this.addMeasureItem(face ? this._measureItemFromFace(faceId, face) : { kind: 'face', id: faceId, isFlat: false });
         return;
       }
+      if (this.asm.patternPick()) { this._asmPatternFacePick(faceId); return; }
       // REQ 1004 — component faces feed skeleton datum planes. Snapshot from
       // the un-exploded composed mesh; the plane re-resolves live on regen.
       if (this.datumPlaneSidebar()) {
@@ -14665,9 +14815,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this._resetPatternInputs();
     if (feature.type === 'mirror') {
       this.patternPlaneRef.set(feature.planeRef);
-      if (feature.planeRef.kind === 'datum') {
-        this.patternPlaneDatumOption.set(feature.planeRef.datumId);
-      }
       this.facePickMode.set(true);
     } else if (feature.type === 'linearPattern') {
       const d1 = feature.direction1;
