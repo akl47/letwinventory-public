@@ -96,6 +96,19 @@ extract_failures() {
   } >> "$FAIL_FILE"
 }
 
+# ── E2E dev server (warm-up) ───────────────────────────────────
+# Playwright's own `ng serve` compile takes ~100 s. Start it now so it compiles
+# while the unit suites run; Playwright reuses it (reuseExistingServer).
+E2E_PORT=4201
+E2E_SERVER_PID=""
+if $run_e2e && ! curl -so /dev/null "http://localhost:$E2E_PORT/" 2>/dev/null; then
+  E2E_SERVER_LOG=$(mktemp)
+  # Own process group, so stopping it also stops ng serve under npx.
+  setsid bash -c "cd '$FRONTEND_DIR' && exec npx ng serve --configuration=e2e --port $E2E_PORT" > "$E2E_SERVER_LOG" 2>&1 &
+  E2E_SERVER_PID=$!
+  trap '[[ -n "$E2E_SERVER_PID" ]] && kill -- -"$E2E_SERVER_PID" 2>/dev/null; rm -f "${E2E_SERVER_LOG:-}"' EXIT
+fi
+
 # ── Backend Tests ──────────────────────────────────────────────
 if $run_backend; then
   print_header "Backend Tests (Jest)"
@@ -144,6 +157,14 @@ if $run_e2e; then
     echo "WARNING: Backend not reachable at localhost:3000" >> "$LOG_FILE"
     record_result "E2E (Playwright)" 1
   else
+    if [[ -n "$E2E_SERVER_PID" ]]; then
+      echo "Waiting for the e2e dev server on port $E2E_PORT..."
+      for _ in $(seq 1 150); do
+        curl -so /dev/null "http://localhost:$E2E_PORT/" 2>/dev/null && break
+        kill -0 "$E2E_SERVER_PID" 2>/dev/null || { echo "e2e dev server exited:"; tail -20 "$E2E_SERVER_LOG"; break; }
+        sleep 2
+      done
+    fi
     e2e_out=$(mktemp)
     pushd "$FRONTEND_DIR" > /dev/null
     set +e

@@ -81,3 +81,45 @@ describe('extractMergedRegions — standalone holes inside merged faces', () => 
     expect(merged[0].holes[0][0].kind).toBe('circle');
   });
 });
+
+// Part 1490 — a rectangle drawn INSIDE an outline (not touching it) is its own
+// face. Selecting the outline AND the inner rectangle must extrude solid
+// there, not leave the rectangle as a hole.
+describe('extractMergedRegions — selected islands inside a merged outline', () => {
+  const rect = (id, x0, y0, x1, y1) => {
+    const p = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    return [
+      ...p.map(([x, y], i) => ({ kind: 'point', id: `${id}p${i}`, x, y })),
+      ...p.map((_, i) => ({ kind: 'line', id: `${id}l${i}`, startId: `${id}p${i}`, endId: `${id}p${(i + 1) % 4}` })),
+    ];
+  };
+  const state = {
+    entities: [
+      ...rect('o', 0, 0, 100, 50),
+      ...rect('n', 20, 30, 40, 50),   // notch on the top edge (adjacent face)
+      ...rect('i', 60, 10, 80, 20),   // island, clear of the outline
+      { kind: 'point', id: 'c', x: 10, y: 10 },
+      { kind: 'circle', id: 'hole', centerId: 'c', radius: 3 },
+    ],
+    constraints: [],
+  };
+
+  it('fills a selected island instead of cutting it as a hole', () => {
+    const { regions } = extractRegions(state);
+    const faceIdx = regions.map((r, i) => i).filter(i => regions[i].outer[0].kind !== 'circle');
+    expect(faceIdx.length).toBe(3);
+    const { regions: merged } = extractMergedRegions(state, faceIdx);
+    expect(merged.length).toBe(1);
+    expect(merged[0].holes.length).toBe(1);
+    expect(merged[0].holes[0][0].kind).toBe('circle');
+  });
+
+  it('keeps an unselected island as a hole', () => {
+    const { regions } = extractRegions(state);
+    const island = regions.findIndex(r => r.outer.some(e => e.kind === 'line' && e.start.x === 60));
+    const faceIdx = regions.map((r, i) => i).filter(i => regions[i].outer[0].kind !== 'circle' && i !== island);
+    const { regions: merged } = extractMergedRegions(state, faceIdx);
+    expect(merged.length).toBe(1);
+    expect(merged[0].holes.length).toBe(2);
+  });
+});

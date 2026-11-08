@@ -7,7 +7,7 @@
 //   window.__cadSetSelected(id) — programmatic selection (datum picks etc.)
 //   window.__cadAsm        — assembly mode: { instances, mates, equations }
 //   window.__cadEquations  — equations doc
-import { expect, request as pwRequest, Page, APIRequestContext } from '@playwright/test';
+import { test as base, expect, request as pwRequest, Page, APIRequestContext } from '@playwright/test';
 
 export interface CadFixture {
   api: APIRequestContext;
@@ -59,6 +59,45 @@ export async function openEditor(page: Page, partId: number) {
   else await open.click();
   await page.waitForURL(/\/parts\/\d+\/cad\/editor/, { timeout: 10_000 });
   await page.locator('[data-testid="cad-hud-ready"]').waitFor({ timeout: 30_000 });
+}
+
+/** `test` whose `page` is ONE editor shared by every test in the worker,
+ * reset to an empty, checked-in model after each test — skips the per-test
+ * fixture part + editor load. A failed test restarts the worker, so a
+ * broken editor never leaks into the next test. */
+export const sharedEditorTest = base.extend<{}, { editorPage: Page }>({
+  editorPage: [async ({ browser }, use, workerInfo) => {
+    const { baseURL, storageState } = workerInfo.project.use;
+    const context = await browser.newContext({ baseURL, storageState });
+    const page = await context.newPage();
+    const fx = await createFixturePart('shared');
+    await fx.api.dispose();
+    await openEditor(page, fx.partId);
+    await use(page);
+    await context.close();
+  }, { scope: 'worker' }],
+  page: async ({ editorPage }, use) => {
+    await use(editorPage);
+    await resetEditor(editorPage);
+  },
+});
+
+/** Leave sketch mode, discard the test's edits (undo checkout), and put the
+ * camera back to its load-time target + zoom. */
+async function resetEditor(page: Page) {
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  const exit = page.locator('[data-testid="exit-sketch"]');
+  if (await exit.isVisible()) await exitSketch(page);
+  await openFileTab(page);
+  const checkin = page.locator('[data-testid="action-checkin"]');
+  if (await checkin.isEnabled()) {
+    page.once('dialog', (d) => d.accept());
+    await page.locator('[data-testid="action-undo-checkout"]').click();
+    await expect(checkin).toBeDisabled({ timeout: 10_000 });
+  }
+  await expect(featureRows(page)).toHaveCount(1, { timeout: 10_000 });
+  await page.evaluate(() => (window as any).__cadCamera.resetView());
 }
 
 export async function openFileTab(page: Page) {

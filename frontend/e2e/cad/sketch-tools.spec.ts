@@ -1,28 +1,18 @@
 // REQ 925 — sketch primitive tools e2e. Each test draws with real canvas
 // clicks and asserts the resulting entity model (kinds + counts) through
 // the __cadSketch debug hook. A fresh sketch per test keeps counts exact.
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import {
-  createFixturePart, openEditor, enterSketchOnXY, pickTool, clickSequence,
+  sharedEditorTest as test, enterSketchOnXY, pickTool, clickSequence,
   canvasCenter, sketchEntityCount, sketchEntities, drawClosedRectangle, sketchToScreen,
 } from './helpers';
 
-// A fresh fixture part per test: reopening a part frames its existing
-// sketches, which moves the origin under the canvas-centred click points
-// (axis/origin snaps hijack them). Serial to keep load predictable.
+// One shared editor, reset to an empty model after each test (see
+// sharedEditorTest). Serial: the tests take turns on that editor.
 test.describe.configure({ mode: 'serial' });
-
-let PART_ID = 0;
-
-test.beforeEach(async () => {
-  const fx = await createFixturePart('tools');
-  PART_ID = fx.partId;
-  await fx.api.dispose();
-});
 
 test.describe('Primitive tools', () => {
   test('point', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'primitives', 'point');
     const { cx, cy } = await canvasCenter(page);
@@ -32,14 +22,12 @@ test.describe('Primitive tools', () => {
   });
 
   test('line chain closes into a rectangle (4 lines)', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await drawClosedRectangle(page);
     await expect.poll(() => sketchEntityCount(page, 'line'), { timeout: 5_000 }).toBe(4);
   });
 
   test('centerline draws a construction line', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'primitives', 'centerline');
     const { cx, cy } = await canvasCenter(page);
@@ -51,7 +39,6 @@ test.describe('Primitive tools', () => {
   });
 
   test('spline commits on Enter with the clicked control points', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'primitives', 'spline');
     const { cx, cy } = await canvasCenter(page);
@@ -63,7 +50,6 @@ test.describe('Primitive tools', () => {
 
 test.describe('Circle tools', () => {
   test('circle (center + radius)', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'circles', 'circle');
     const { cx, cy } = await canvasCenter(page);
@@ -74,7 +60,6 @@ test.describe('Circle tools', () => {
   });
 
   test('perimeter circle (two diameter clicks)', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'circles', 'circle-perimeter');
     const { cx, cy } = await canvasCenter(page);
@@ -83,7 +68,6 @@ test.describe('Circle tools', () => {
   });
 
   test('center arc (center, start, end)', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'circles', 'arc');
     const { cx, cy } = await canvasCenter(page);
@@ -92,7 +76,6 @@ test.describe('Circle tools', () => {
   });
 
   test('3-point arc', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'circles', 'arc-3pt');
     const { cx, cy } = await canvasCenter(page);
@@ -101,7 +84,6 @@ test.describe('Circle tools', () => {
   });
 
   test('ellipse (center + major + minor)', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'circles', 'ellipse');
     const { cx, cy } = await canvasCenter(page);
@@ -112,7 +94,6 @@ test.describe('Circle tools', () => {
 
 test.describe('Shape tools', () => {
   test('corner rectangle mints 4 lines + its constraint scheme', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'shapes', 'rect-corner');
     const { cx, cy } = await canvasCenter(page);
@@ -128,7 +109,6 @@ test.describe('Shape tools', () => {
 
   // REQ 992 — a corner clicked ON an existing sketch line is coincident with it.
   test('corner rectangle clicked on an existing line is coincident with it', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     const { cx, cy } = await canvasCenter(page);
     await pickTool(page, 'primitives', 'line');
@@ -160,7 +140,6 @@ test.describe('Shape tools', () => {
   });
 
   test('center rectangle draws 4 solid sides (+ construction diagonal)', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'shapes', 'rect-center');
     const { cx, cy } = await canvasCenter(page);
@@ -173,7 +152,6 @@ test.describe('Shape tools', () => {
   });
 
   test('polygon honors the sides input', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'shapes', 'polygon');
     const sides = page.locator('[data-testid="param-polygon-sides"]');
@@ -185,7 +163,6 @@ test.describe('Shape tools', () => {
   });
 
   test('straight slot (endpoint, endpoint, width) = 2 lines + 2 arcs', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await pickTool(page, 'shapes', 'slot');
     const { cx, cy } = await canvasCenter(page);
@@ -197,7 +174,6 @@ test.describe('Shape tools', () => {
 
 test.describe('Draw-as-construction toggle', () => {
   test('entities drawn with the toggle on are construction', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await page.locator('[data-testid="toggle-draw-construction"]').click();
     await pickTool(page, 'circles', 'circle');

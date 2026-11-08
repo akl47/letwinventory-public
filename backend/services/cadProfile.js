@@ -325,19 +325,33 @@ function extractMergedRegions(state, regionIndices, resolve = (s) => s) {
         for (const j of insideOf[i]) { const d = insideOf[j].size; if (d > bestDepth) { best = j; bestDepth = d; } }
         return best;
       });
-      // REQ 994 — UNSELECTED standalone loops (a mounting-hole circle) inside
-      // a merged outline are holes too; without them the fused profile fills
-      // them in. Only direct children: skip one nested in another candidate
-      // or inside one of the merged loop's own holes.
+      // REQ 994 — UNSELECTED loops inside a merged outline are holes too: a
+      // standalone mounting-hole circle, or an island face (a rectangle drawn
+      // clear of the outline). Without them the fused profile fills them in.
+      // Only direct children: skip one nested in another candidate or inside
+      // one of the merged loop's own holes.
       const selSet = new Set(sel);
-      const cand = loops.map((l, c) => c)
-        .filter(c => !selSet.has(c) && !(sources[c] && sources[c].kind === 'face'));
+      const cand = loops.map((l, c) => c).filter(c => !selSet.has(c));
       const candPolys = new Map(cand.map(c => [c, tessellateProfileLoopJS(loops[c])]));
+      // Faces are CCW, so a merged boundary that winds CW is the inner edge
+      // of a hole. A CCW loop nested directly in another CCW loop is a
+      // SELECTED island filling that outline's hole (part 1490) — it adds no
+      // boundary, so it's dropped and its own holes pass to the enclosing
+      // outline. Islands inside an unselected loop stay regions of their own.
+      const signedArea = (pl) => {
+        let a = 0;
+        for (let k = 0, j = pl.length - 1; k < pl.length; j = k++) a += pl[j].x * pl[k].y - pl[k].x * pl[j].y;
+        return a / 2;
+      };
+      const isHole = polys.map(pl => signedArea(pl) < 0);
+      const filledIsland = (i) => !isHole[i] && parent[i] !== null && !isHole[parent[i]]
+        && !cand.some(c => loopContains(polys[i], candPolys.get(c)) && loopContains(candPolys.get(c), polys[parent[i]]));
+      const owner = (h) => { let s = parent[h]; while (s !== null && filledIsland(s)) s = parent[s]; return s; };
       for (let i = 0; i < mergedLoops.length; i++) {
-        if (insideOf[i].size > 0) continue;  // a hole of some other merged loop
+        if (isHole[i] || filledIsland(i)) continue;
         const holes = [];
         const holeIdx = [];
-        for (let c = 0; c < mergedLoops.length; c++) if (parent[c] === i) { holes.push(mergedLoops[c]); holeIdx.push(c); }
+        for (let c = 0; c < mergedLoops.length; c++) if (isHole[c] && owner(c) === i) { holes.push(mergedLoops[c]); holeIdx.push(c); }
         const inside = cand.filter(c => loopContains(candPolys.get(c), polys[i])
           && !holeIdx.some(h => loopContains(candPolys.get(c), polys[h])));
         for (const c of inside) {
