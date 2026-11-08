@@ -99,7 +99,7 @@ type AxisSlot = 'dir1' | 'dir2' | 'circ' | 'moveCopy';
 import { extractRegions, tessellateProfileLoop, topLevelRegionIndices } from '../../../cad/lib/profile';
 import { makeVarResolver, type TextResolver } from '../../../cad/lib/textGlyphs';
 import { buildBinaryStl } from '../../../cad/lib/stlExport';
-import { CadExportDialogComponent, resolveExportName, type ExportDialogResult } from '../cad-export-dialog/cad-export-dialog.component';
+import { CadExportDialogComponent, DEFAULT_EXPORT_NAME_TEMPLATE, resolveExportName, type ExportDialogResult } from '../cad-export-dialog/cad-export-dialog.component';
 import { CadNewPartDialogComponent, type CadNewPartDialogData } from '../cad-new-part-dialog/cad-new-part-dialog.component';
 import JSZip from 'jszip';
 import { environment } from '../../../../environments/environment';
@@ -290,13 +290,16 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                         (click)="onCreateBranch()">
                   <mat-icon svgIcon="cad-branch"></mat-icon><span class="ribbon-label">New branch</span>
                 </button>
-                <!-- Download the released revision's frozen files. -->
-                <button class="ribbon-button" data-testid="action-dl-step" *ngIf="model()?.released"
-                        matTooltip="Download released STEP" (click)="downloadReleaseStep()">
-                  <mat-icon>category</mat-icon><span class="ribbon-label">STEP</span>
+                <!-- Export: multi-body parts choose bodies (and one file vs one
+                     per body) in the export dialog; a single body downloads
+                     directly (the frozen files for a released revision). -->
+                <button class="ribbon-button" data-testid="action-dl-step" *ngIf="bodies().length > 0"
+                        [disabled]="stepExporting()"
+                        matTooltip="Export STEP" (click)="exportStep()">
+                  <mat-icon>{{ stepExporting() ? 'hourglass_empty' : 'category' }}</mat-icon><span class="ribbon-label">STEP</span>
                 </button>
-                <button class="ribbon-button" data-testid="action-dl-stl" *ngIf="model()?.released"
-                        matTooltip="Download released STL" (click)="downloadReleaseStl()">
+                <button class="ribbon-button" data-testid="action-dl-stl" *ngIf="bodies().length > 0"
+                        matTooltip="Export STL" (click)="exportStl()">
                   <mat-icon>view_in_ar</mat-icon><span class="ribbon-label">STL</span>
                 </button>
               </div>
@@ -460,15 +463,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <span class="ribbon-label">Combine</span>
                 </button>
                 <button class="ribbon-button"
-                        data-testid="action-mirror-body"
-                        [disabled]="!!bodyBlock()"
-                        [class.active]="mirrorBodySidebar() !== null"
-                        [matTooltip]="bodyBlock() || 'Mirror Body — reflect bodies across a plane'"
-                        (click)="onMirrorBodyAction()">
-                  <mat-icon svgIcon="cad-mirror"></mat-icon>
-                  <span class="ribbon-label">Mirror Body</span>
-                </button>
-                <button class="ribbon-button"
                         data-testid="action-move-copy-body"
                         [disabled]="!!bodyBlock()"
                         [class.active]="moveCopyBodySidebar() !== null"
@@ -526,7 +520,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                         data-testid="action-mirror"
                         [disabled]="!!bodyBlock()"
                         [class.active]="patternSidebar()?.kind === 'mirror'"
-                        [matTooltip]="bodyBlock() || 'Mirror — reflect the body across a plane'"
+                        [matTooltip]="bodyBlock() || 'Mirror — reflect features or bodies across a plane'"
                         (click)="onMirrorAction()">
                   <mat-icon svgIcon="cad-mirror"></mat-icon>
                   <span class="ribbon-label">Mirror</span>
@@ -3388,76 +3382,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           </div>
         </ng-container>
 
-        <!-- Mirror Body sidebar — REQ 666. Reflects selected bodies
-             across a plane. Plane picker mirrors the Pattern Mirror
-             plane picker; body picker mirrors the Combine pattern. -->
-        <ng-container *ngIf="mirrorBodySidebar() as mCtx">
-          <div class="tool-panel" data-testid="mirror-body-sidebar">
-            <h3 class="panel-title">
-              <mat-icon>flip</mat-icon>
-              {{ mCtx.editingFeatureId ? 'Edit Mirror Body' : 'Mirror Body' }}
-            </h3>
-            <p class="panel-hint">Reflects every selected body across the mirror plane.</p>
-
-            <cad-selection-list
-                label="Mirror plane"
-                headerIcon="filter_none"
-                testid="mirror-body-plane"
-                [rows]="mirrorBodyPlaneRows()"
-                [active]="true"
-                (remove)="mirrorBodyPlaneRef.set(null)">
-              <button class="btn panel-flip"
-                      data-testid="mirror-body-plane-pick"
-                      [class.active]="mirrorBodyPickTarget() === 'plane' && facePickMode()"
-                      (click)="setMirrorBodyPickTarget('plane')">
-                <mat-icon>{{ mirrorBodyPickTarget() === 'plane' && facePickMode() ? 'touch_app' : 'add' }}</mat-icon>
-                {{ mirrorBodyPickTarget() === 'plane' && facePickMode() ? 'Click a face or datum plane' : 'Pick face or datum plane' }}
-              </button>
-            </cad-selection-list>
-
-            <cad-selection-list
-                label="Bodies to mirror"
-                headerIcon="view_in_ar"
-                testid="mirror-body-bodies"
-                [rows]="mirrorBodyRows()"
-                [active]="true"
-                (remove)="removeMirrorBodyRow($event)"
-                (clear)="mirrorBodyBodyIds.set([])">
-              <button class="btn panel-flip"
-                      data-testid="mirror-body-pick-body"
-                      [class.active]="mirrorBodyPickTarget() === 'body' && facePickMode()"
-                      (click)="setMirrorBodyPickTarget('body')">
-                <mat-icon>{{ mirrorBodyPickTarget() === 'body' && facePickMode() ? 'touch_app' : 'add' }}</mat-icon>
-                Pick body via face
-              </button>
-            </cad-selection-list>
-
-            <div class="panel-field">
-              <label class="panel-checkbox">
-                <input type="checkbox"
-                       data-testid="mirror-body-keep-originals"
-                       [checked]="mirrorBodyKeepOriginals()"
-                       (change)="mirrorBodyKeepOriginals.set($any($event.target).checked)" />
-                <span>Keep originals (uncheck to mirror in place)</span>
-              </label>
-            </div>
-
-            <div class="panel-actions">
-              <button class="btn btn-primary"
-                      [disabled]="!canCommitMirrorBody()"
-                      (click)="commitMirrorBodySidebar()"
-                      data-testid="mirror-body-apply">
-                <mat-icon>check</mat-icon> OK
-              </button>
-              <button class="btn"
-                      (click)="cancelMirrorBodySidebar()"
-                      data-testid="mirror-body-cancel">
-                <mat-icon>close</mat-icon> Cancel
-              </button>
-            </div>
-          </div>
-        </ng-container>
-
         <!-- Move/Copy Body sidebar — REQ 667. Translate (XYZ) and/or
              rotate (axis + angle) the selected bodies; toggle Copy
              to keep originals + add transformed copies. -->
@@ -3595,44 +3519,55 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <p class="panel-hint">
               {{
                 pCtx.kind === 'mirror'
-                  ? 'Reflect the current body across a reference plane.'
+                  ? 'Reflect features or bodies across a plane.'
                   : pCtx.kind === 'linearPattern'
                   ? 'Translate copies of the current body along one or two directions.'
                   : 'Rotate copies of the current body around an axis.'
               }}
             </p>
 
-            <!-- REQ 822: repeat whole bodies, or selected upstream features -->
+            <!-- Mirror: plane first, then what to reflect (SolidWorks order). -->
+            <ng-container *ngIf="pCtx.kind === 'mirror'">
+              <cad-selection-list
+                  style="cursor:pointer" (click)="setPatternPickTarget('plane')"
+                  label="Mirror plane"
+                  headerIcon="filter_none"
+                  testid="pattern-plane"
+                  [rows]="patternPlaneRows()"
+                  [showCount]="false"
+                  [active]="patternPickTarget() === 'plane'"
+                  [emptyHint]="patternPickTarget() === 'plane' ? 'Click a face or datum plane, in the viewer or tree' : 'Not selected'"
+                  (remove)="patternPlaneRef.set(null); setPatternPickTarget('plane')">
+              </cad-selection-list>
+            </ng-container>
+
+            <!-- REQ 822 / 1031: repeat selected upstream features, or bodies -->
             <div class="panel-field active">
               <div class="sub-row">
                 <span class="sub-label">{{ pCtx.kind === 'mirror' ? 'Mirror' : 'Pattern' }}</span>
                 <div style="display: flex; gap: 4px;">
-                  <button class="asm-chip" [class.on]="patternSeedKind() === 'bodies'"
-                          data-testid="pattern-seed-bodies"
-                          (click)="patternSeedKind.set('bodies')">Bodies</button>
                   <button class="asm-chip" [class.on]="patternSeedKind() === 'features'"
                           data-testid="pattern-seed-features"
-                          (click)="patternSeedKind.set('features')">Features</button>
+                          (click)="setPatternSeedKind('features')">Features</button>
+                  <button class="asm-chip" [class.on]="patternSeedKind() === 'bodies'"
+                          data-testid="pattern-seed-bodies"
+                          (click)="setPatternSeedKind('bodies')">Bodies</button>
                 </div>
               </div>
-              <div class="sub-row" *ngIf="patternSeedKind() === 'features'"
-                   style="flex-direction: column; align-items: stretch; gap: 4px;">
-                <span class="sub-label">Features to {{ pCtx.kind === 'mirror' ? 'mirror' : 'pattern' }}</span>
-                <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                  <button class="asm-chip" *ngFor="let s of patternableSeedFeatures()"
-                          [class.on]="patternSeedFeatureIds().includes(s.id)"
-                          data-testid="pattern-seed-chip"
-                          (click)="togglePatternSeed(s.id)">
-                    <mat-icon style="font-size: 14px; width: 14px; height: 14px;">{{ s.icon }}</mat-icon>
-                    {{ s.label }}
-                  </button>
-                  <span class="panel-hint" *ngIf="patternableSeedFeatures().length === 0">
-                    No patternable features yet — add an extrude, cut, hole, fillet, etc. first.
-                  </span>
-                </div>
-              </div>
-              <div class="sub-row" *ngIf="patternSeedKind() === 'features'"
-                   style="flex-direction: column; align-items: stretch; gap: 2px;">
+            </div>
+            <ng-container *ngIf="patternSeedKind() === 'features'">
+              <cad-selection-list
+                  style="cursor:pointer" (click)="setPatternPickTarget('seeds')"
+                  [label]="pCtx.kind === 'mirror' ? 'Features to mirror' : 'Features to pattern'"
+                  headerIcon="account_tree"
+                  testid="pattern-seeds"
+                  [rows]="patternSeedRows()"
+                  [active]="patternPickTarget() === 'seeds'"
+                  [emptyHint]="patternPickTarget() === 'seeds' ? 'Click features in the tree, or a face in the viewer' : 'Click here, then a feature'"
+                  (remove)="togglePatternSeed($event)"
+                  (clear)="patternSeedFeatureIds.set([])">
+              </cad-selection-list>
+              <div class="panel-field">
                 <button class="btn panel-flip"
                         data-testid="pattern-geometry"
                         [class.active]="patternGeometryPattern()"
@@ -3646,27 +3581,39 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   (avoids duplicate faces); instances won't re-adapt to local geometry.
                 </span>
               </div>
-            </div>
-
-            <!-- Mirror: plane pick -->
-            <ng-container *ngIf="pCtx.kind === 'mirror'">
-              <cad-selection-list
-                  label="Mirror plane"
-                  headerIcon="filter_none"
-                  testid="pattern-plane"
-                  [rows]="patternPlaneRows()"
-                  [active]="true"
-                  (remove)="patternPlaneRef.set(null)">
-                <button class="btn panel-flip"
-                        data-testid="pattern-plane-pick"
-                        [class.active]="facePickMode()"
-                        (click)="facePickMode.set(!facePickMode())">
-                  <mat-icon>{{ facePickMode() ? 'touch_app' : 'add' }}</mat-icon>
-                  {{ facePickMode() ? 'Click a face or datum (click here to stop)' : 'Pick from viewer' }}
-                </button>
-              </cad-selection-list>
             </ng-container>
-
+            <ng-container *ngIf="patternSeedKind() === 'bodies'">
+              <ng-container *ngIf="pCtx.kind === 'mirror'; else patternBodyHint">
+                <cad-selection-list
+                    style="cursor:pointer" (click)="setPatternPickTarget('seeds')"
+                    label="Bodies to mirror"
+                    headerIcon="deployed_code"
+                    testid="mirror-bodies"
+                    [rows]="mirrorBodyRows()"
+                    [active]="patternPickTarget() === 'seeds'"
+                    [emptyHint]="patternPickTarget() === 'seeds' ? 'Click a face of a body, or a body in the tree' : 'Click here, then a body'"
+                    (remove)="toggleMirrorBody($event)"
+                    (clear)="mirrorBodyBodyIds.set([])">
+                </cad-selection-list>
+                <div class="panel-field">
+                  <label class="panel-checkbox">
+                    <input type="checkbox" data-testid="mirror-body-keep-originals"
+                           [checked]="mirrorBodyKeepOriginals()"
+                           (change)="mirrorBodyKeepOriginals.set($any($event.target).checked)" />
+                    <span>Keep originals (uncheck to mirror in place)</span>
+                  </label>
+                  <label class="panel-checkbox" *ngIf="mirrorBodyKeepOriginals()">
+                    <input type="checkbox" data-testid="mirror-body-merge"
+                           [checked]="mirrorBodyMerge()"
+                           (change)="mirrorBodyMerge.set($any($event.target).checked)" />
+                    <span>Merge each mirror with its original</span>
+                  </label>
+                </div>
+              </ng-container>
+              <ng-template #patternBodyHint>
+                <p class="panel-hint">Patterns the most recent body.</p>
+              </ng-template>
+            </ng-container>
             <!-- Linear: direction 1, optional direction 2 -->
             <ng-container *ngIf="pCtx.kind === 'linearPattern'">
               <cad-selection-list
@@ -4840,7 +4787,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-449';
+  readonly buildMarker = 'text-451';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -5204,13 +5151,27 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   /** Visible bodies as { id, label } for the export dialog. Unnamed bodies
    * fall back to "Body N" (1-indexed in body order). */
   private _exportBodies(): Array<{ id: string; label: string }> {
+    return this.bodies().map((b, i) => ({ id: b.id, label: (b.name && b.name.trim()) ? b.name.trim() : `Body ${i + 1}` }));
+  }
+
+  /** Export dialog for multi-body parts (visible bodies pre-ticked); a single
+   * body skips it. Returns the choice through `run`. */
+  private _chooseExportBodies(format: 'STL' | 'STEP', run: (res: ExportDialogResult, bodies: Array<{ id: string; label: string }>) => void): void {
+    const bodies = this._exportBodies();
+    if (bodies.length === 0) {
+      this.errors.showError('Nothing to export — the model has no bodies.');
+      return;
+    }
+    if (bodies.length === 1) {
+      run({ bodyIds: [bodies[0].id], separate: false, zip: false, nameTemplate: DEFAULT_EXPORT_NAME_TEMPLATE }, bodies);
+      return;
+    }
     const hidden = this.hiddenBodies();
-    const out: Array<{ id: string; label: string }> = [];
-    this.bodies().forEach((b, i) => {
-      if (hidden.has(b.id)) return;
-      out.push({ id: b.id, label: (b.name && b.name.trim()) ? b.name.trim() : `Body ${i + 1}` });
-    });
-    return out;
+    const selected = bodies.filter(b => !hidden.has(b.id)).map(b => b.id);
+    this.dialog.open(CadExportDialogComponent, {
+      data: { format, bodies, vars: this._exportVars(), selected: selected.length ? selected : undefined },
+      width: '380px',
+    }).afterClosed().subscribe((res: ExportDialogResult | null) => { if (res) run(res, bodies); });
   }
 
   /** Filename variables for export name templates (#{partNumber} etc.).
@@ -5236,16 +5197,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   /** STL export — opens the body-selection dialog, then serializes on the
    * client (no kernel round-trip). */
   exportStl(): void {
-    const bodies = this._exportBodies();
-    if (bodies.length === 0) {
-      this.errors.showError('Nothing to export — the model has no visible bodies.');
-      return;
-    }
-    this.dialog.open(CadExportDialogComponent, { data: { format: 'STL', bodies, vars: this._exportVars() }, width: '380px' })
-      .afterClosed().subscribe((res: ExportDialogResult | null) => {
-        if (!res) return;
-        this._runStlExport(res, bodies);
-      });
+    if (this.model()?.released && this._exportBodies().length === 1) { this.downloadReleaseStl(); return; }
+    this._chooseExportBodies('STL', (res, bodies) => this._runStlExport(res, bodies));
   }
 
   private _runStlExport(res: ExportDialogResult, bodies: Array<{ id: string; label: string }>): void {
@@ -5285,16 +5238,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * the backend (the kernel serializes the real BRep). */
   exportStep(): void {
     if (this.stepExporting()) return;
-    const bodies = this._exportBodies();
-    if (bodies.length === 0) {
-      this.errors.showError('Nothing to export — the model has no visible bodies.');
-      return;
-    }
-    this.dialog.open(CadExportDialogComponent, { data: { format: 'STEP', bodies, vars: this._exportVars() }, width: '380px' })
-      .afterClosed().subscribe((res: ExportDialogResult | null) => {
-        if (!res) return;
-        this._runStepExport(res, bodies);
-      });
+    if (this.model()?.released && this._exportBodies().length === 1) { this.downloadReleaseStep(); return; }
+    this._chooseExportBodies('STEP', (res, bodies) => this._runStepExport(res, bodies));
   }
 
   private _runStepExport(res: ExportDialogResult, bodies: Array<{ id: string; label: string }>): void {
@@ -5855,6 +5800,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   /** Tree body row click: feeds the open feature's body scope. */
   onTreeBodyClicked(bodyId: string): void {
+    if (this.patternSidebar()?.kind === 'mirror' && this.patternSeedKind() === 'bodies') { this.toggleMirrorBody(bodyId); return; }
     if (!this.showScope()) return;
     if (this.scopeKind() === 'cut' && this.scopeAllBodies()) this.scopeAllBodies.set(false);
     else if (this.scopeKind() === 'additive' && !this.scopeMergeOn()) return;
@@ -5969,25 +5915,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   combineToolRows = computed<SelectionRow[]>(() =>
     this.combineToolBodyIds().map((id, i) => ({ id: `tool:${i}`, label: `Body ${id}`, icon: 'view_in_ar' })));
 
-  // ── Mirror Body sidebar — REQ 666 ──────────────────────────────────
-  mirrorBodySidebar = signal<{ editingFeatureId?: string } | null>(null);
-  mirrorBodyPlaneRef = signal<PlaneRef | null>(null);
-  /** Snapshot captured at pick time so the dispatcher doesn't have
-   * to re-resolve datums. Updated whenever planeRef changes. */
-  mirrorBodyPlaneSnapshot = signal<Plane3 | null>(null);
+  // ── Mirror, Bodies mode (REQ 666 / 1031) ───────────────────────────
+  // The Mirror sidebar's Bodies mode saves a Mirror Body feature.
   mirrorBodyBodyIds = signal<string[]>([]);
   mirrorBodyKeepOriginals = signal<boolean>(true);
-  /** Which slot the next face-click sets: the mirror plane or a body. */
-  mirrorBodyPickTarget = signal<'plane' | 'body'>('plane');
-
-  mirrorBodyPlaneRows = computed<SelectionRow[]>(() => {
-    const r = this.mirrorBodyPlaneRef();
-    if (!r) return [];
-    const label = r.kind === 'datum' ? String(r.datumId).replace(/_/g, ' ') : `face ${r.faceId}`;
-    return [{ id: 'plane', label, icon: 'filter_none' }];
+  /** With Keep originals: fuse each mirror into its original (one body). */
+  mirrorBodyMerge = signal<boolean>(false);
+  mirrorBodyRows = computed<SelectionRow[]>(() => {
+    const labels = new Map(this.bodiesForTree().map((b, i) => [b.id, b.name?.trim() ? b.name : `Body ${i + 1}`]));
+    return this.mirrorBodyBodyIds().map(id => ({ id, label: labels.get(id) ?? id, icon: 'deployed_code' }));
   });
-  mirrorBodyRows = computed<SelectionRow[]>(() =>
-    this.mirrorBodyBodyIds().map((id, i) => ({ id: `b:${i}`, label: `Body ${id}`, icon: 'view_in_ar' })));
 
   // ── Move/Copy Body sidebar — REQ 667 ───────────────────────────────
   moveCopyBodySidebar = signal<{ editingFeatureId?: string } | null>(null);
@@ -8693,6 +8630,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // REQ 626 — feature-tree row click. Shared multi-select policy with the
   // viewer click path.
   onFeatureTreeSelect(ev: FeatureSelectEvent) {
+    // REQ 1031 — Mirror / pattern Features mode: tree clicks pick seeds.
+    if (this.patternSidebar() && this.patternSeedKind() === 'features') { this.pickPatternSeed(ev.featureId); return; }
     // Picking a sketch plane: a user datum plane row hosts the sketch.
     if (this.mode() === 'pick-plane' && this._pickSketchPlaneFromTree(ev.featureId)) return;
     // Selecting in the tree supersedes a transient 3D face pick — clear it so a
@@ -11309,43 +11248,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.combineSidebar.set({ editingFeatureId: feature.id });
   }
 
-  // ── Mirror Body handlers — REQ 666 ─────────────────────────────────
-
-  onMirrorBodyAction(): void {
-    if (this.readonly()) return;
-    if (this.mirrorBodySidebar()) { this.cancelMirrorBodySidebar(); return; }
-    this.mirrorBodyPlaneRef.set(null);
-    this.mirrorBodyPlaneSnapshot.set(null);
-    this.mirrorBodyBodyIds.set([]);
-    this.mirrorBodyKeepOriginals.set(true);
-    this.mirrorBodyPickTarget.set('plane');
-    this.facePickMode.set(true);
-    this.mirrorBodySidebar.set({});
-  }
-  cancelMirrorBodySidebar(): void {
-    this.mirrorBodySidebar.set(null);
-    this.facePickMode.set(false);
-  }
-  setMirrorBodyPickTarget(t: 'plane' | 'body'): void {
-    this.mirrorBodyPickTarget.set(t);
-    this.facePickMode.set(true);
-  }
-  setMirrorBodyPlaneFromDatum(datumId: string): void {
-    const ref: PlaneRef = { kind: 'datum', datumId } as PlaneRef;
-    this.mirrorBodyPlaneRef.set(ref);
-    this.mirrorBodyPlaneSnapshot.set(this._resolvePlaneRefSnapshot(ref));
-    this._advanceMirrorBodyToBodies();
-  }
-
   /** A datum clicked in the viewer or feature tree while a plane or axis
    * selection box is waiting for a pick. Returns true when consumed. */
   private _routeDatumToPickBox(datumId: string): boolean {
     const isPlane = !!this._resolveDatumPlane(`datum:${datumId}`);
-    if (isPlane && this.mirrorBodySidebar() && this.mirrorBodyPickTarget() === 'plane') {
-      this.setMirrorBodyPlaneFromDatum(datumId);
-      return true;
-    }
-    if (isPlane && this.patternSidebar()?.kind === 'mirror') {
+    if (isPlane && this.patternSidebar()?.kind === 'mirror' && this.patternPickTarget() === 'plane') {
       this.setPatternPlaneFromDatum(datumId);
       return true;
     }
@@ -11366,68 +11273,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     return false;
   }
-  /** Plane set → next clicks pick bodies, unless some are already picked. */
-  private _advanceMirrorBodyToBodies(): void {
-    if (this.mirrorBodyBodyIds().length === 0) this.setMirrorBodyPickTarget('body');
-  }
-  /** Routed from onFacePicked. Returns true if consumed. */
-  addMirrorBodyFacePick(faceId: string, fallbackPlane: Plane3): boolean {
-    if (!this.mirrorBodySidebar()) return false;
-    if (this.mirrorBodyPickTarget() === 'plane') {
-      const ref: PlaneRef = { kind: 'face', faceId, fallbackPlane } as PlaneRef;
-      this.mirrorBodyPlaneRef.set(ref);
-      this.mirrorBodyPlaneSnapshot.set(fallbackPlane);
-      this._advanceMirrorBodyToBodies();
-      return true;
-    }
-    // Body pick: resolve owning body via perBodyGeometry membership.
-    const bodyId = this.bodyIdForFaceId(faceId);
-    if (!bodyId) return true;  // consumed but no-op
+
+  /** Mirror Bodies mode: add or remove a body picked in the viewer or tree. */
+  toggleMirrorBody(bodyId: string): void {
     const cur = this.mirrorBodyBodyIds();
-    if (!cur.includes(bodyId)) this.mirrorBodyBodyIds.set([...cur, bodyId]);
-    return true;
-  }
-  removeMirrorBodyRow(rowId: string): void {
-    const idx = Number(rowId.split(':')[1]);
-    if (!Number.isInteger(idx)) return;
-    this.mirrorBodyBodyIds.set(this.mirrorBodyBodyIds().filter((_, i) => i !== idx));
-  }
-  canCommitMirrorBody(): boolean {
-    if (!this.mirrorBodySidebar()) return false;
-    if (!this.mirrorBodyPlaneRef() || !this.mirrorBodyPlaneSnapshot()) return false;
-    if (this.mirrorBodyBodyIds().length === 0) return false;
-    return true;
-  }
-  commitMirrorBodySidebar(): void {
-    const ctx = this.mirrorBodySidebar();
-    if (!ctx || !this.canCommitMirrorBody()) return;
-    const tree = this.featureTree();
-    const seq = tree.nextFeatureSeq;
-    const id = ctx.editingFeatureId || newFeatureId();
-    const feature: import('../../../cad/lib/types').MirrorBodyFeature = {
-      id, type: 'mirrorBody',
-      bodyIds: [...this.mirrorBodyBodyIds()],
-      planeRef: this.mirrorBodyPlaneRef()!,
-      planeSnapshot: this.mirrorBodyPlaneSnapshot()!,
-      keepOriginals: this.mirrorBodyKeepOriginals(),
-      createdAt: Date.now(),
-    };
-    if (ctx.editingFeatureId) {
-      this.featureTree.set(updateFeatureParam<any>(this.featureTree(), id, feature as any));
-    } else {
-      this.featureTree.set(this._commitNewFeature(tree, feature, seq));
-    }
-    this.cancelMirrorBodySidebar();
-    this.save();
-  }
-  private _editMirrorBody(feature: import('../../../cad/lib/types').MirrorBodyFeature) {
-    this.mirrorBodyPlaneRef.set(feature.planeRef);
-    this.mirrorBodyPlaneSnapshot.set(feature.planeSnapshot);
-    this.mirrorBodyBodyIds.set([...feature.bodyIds]);
-    this.mirrorBodyKeepOriginals.set(feature.keepOriginals !== false);
-    this.mirrorBodyPickTarget.set('body');
-    this.facePickMode.set(true);
-    this.mirrorBodySidebar.set({ editingFeatureId: feature.id });
+    this.mirrorBodyBodyIds.set(cur.includes(bodyId) ? cur.filter(b => b !== bodyId) : [...cur, bodyId]);
   }
 
   // ── Move/Copy Body handlers — REQ 667 ──────────────────────────────
@@ -11870,12 +11720,35 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       return;
     }
     this._resetPatternInputs();
-    if (kind === 'mirror') {
-      // Mirror needs a plane pick — enable face picking. Datum picks
-      // route through the dropdown.
-      this.facePickMode.set(true);
-    }
+    // Features already selected in the tree become the seeds (SolidWorks).
+    const patternable = new Set(this.patternableSeedFeatures().map(f => f.id));
+    this.patternSeedFeatureIds.set([...this.selectedFeatures()].filter(id => patternable.has(id)));
     this.patternSidebar.set({ kind, editingFeatureId });
+    this.setPatternPickTarget(kind === 'mirror' ? 'plane' : 'seeds');
+  }
+
+  /** Which pattern/mirror box the next viewer face click fills. */
+  patternPickTarget = signal<'plane' | 'seeds'>('plane');
+  setPatternPickTarget(t: 'plane' | 'seeds'): void {
+    this.patternPickTarget.set(t);
+    this.facePickMode.set(true);
+  }
+  setPatternSeedKind(kind: 'features' | 'bodies'): void {
+    this.patternSeedKind.set(kind);
+    if (this.patternSidebar()?.kind !== 'mirror' || this.patternPlaneRef()) this.setPatternPickTarget('seeds');
+  }
+  /** One row per seed feature, labelled like the seed list. */
+  patternSeedRows = computed<SelectionRow[]>(() => {
+    const info = new Map(this.patternableSeedFeatures().map(f => [f.id, f]));
+    return this.patternSeedFeatureIds().map(id => ({ id, label: info.get(id)?.label ?? id, icon: info.get(id)?.icon ?? 'widgets' }));
+  });
+  /** A feature clicked in the tree or (through its face) in the viewer. */
+  pickPatternSeed(featureId: string): void {
+    if (!this.patternableSeedFeatures().some(f => f.id === featureId)) {
+      this.errors.showError('That feature can\'t be mirrored or patterned here — pick an earlier feature that adds or removes material.');
+      return;
+    }
+    this.togglePatternSeed(featureId);
   }
 
   private _resetPatternInputs(): void {
@@ -11901,9 +11774,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.patternCircAngleDeg.set(360);
     this.patternCircAngleExpression.set(null);
     this.patternCircFlipped.set(false);
-    this.patternSeedKind.set('bodies');
+    this.patternSeedKind.set('features');
     this.patternSeedFeatureIds.set([]);
     this.patternGeometryPattern.set(true);
+    this.mirrorBodyBodyIds.set([]);
+    this.mirrorBodyKeepOriginals.set(true);
+    this.mirrorBodyMerge.set(false);
   }
 
   cancelPatternSidebar(): void {
@@ -11915,6 +11791,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   /** Set the mirror plane from a datum plane clicked in the viewer or tree. */
   setPatternPlaneFromDatum(datumId: string): void {
     this.patternPlaneRef.set({ kind: 'datum', datumId });
+    this._advancePatternToSeeds();
+  }
+  /** Plane set → next clicks pick what to mirror, unless already picked. */
+  private _advancePatternToSeeds(): void {
+    const none = this.patternSeedKind() === 'features' ? this.patternSeedFeatureIds().length === 0 : this.mirrorBodyBodyIds().length === 0;
+    if (none) this.setPatternPickTarget('seeds');
   }
 
   /** Route a face pick to the active pattern sidebar's plane slot.
@@ -11924,14 +11806,17 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const ctx = this.patternSidebar();
     if (!ctx || ctx.kind !== 'mirror') return false;
     this.patternPlaneRef.set({ kind: 'face', faceId, fallbackPlane });
+    this._advancePatternToSeeds();
     return true;
   }
 
   canCommitPattern(): boolean {
     const ctx = this.patternSidebar();
     if (!ctx) return false;
-    // Feature mode needs at least one seed feature selected.
+    // Feature mode needs at least one seed feature selected; Mirror's
+    // Bodies mode needs at least one body.
     if (this.patternSeedKind() === 'features' && this.patternSeedFeatureIds().length === 0) return false;
+    if (this.patternSeedKind() === 'bodies' && ctx.kind === 'mirror' && this.mirrorBodyBodyIds().length === 0) return false;
     if (ctx.kind === 'mirror') {
       const ref = this.patternPlaneRef();
       if (!ref) return false;
@@ -12091,7 +11976,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         }
       : {};
 
-    if (ctx.kind === 'mirror') {
+    if (ctx.kind === 'mirror' && this.patternSeedKind() === 'bodies') {
+      // REQ 1031 — Bodies mode is a Mirror Body feature.
+      const ref = this.patternPlaneRef()!;
+      const keep = this.mirrorBodyKeepOriginals();
+      const mb: import('../../../cad/lib/types').MirrorBodyFeature = {
+        id, type: 'mirrorBody',
+        bodyIds: [...this.mirrorBodyBodyIds()],
+        planeRef: ref,
+        planeSnapshot: this._resolvePlaneRefSnapshot(ref)!,
+        keepOriginals: keep,
+        ...(keep && this.mirrorBodyMerge() ? { merge: true } : {}),
+        createdAt: Date.now(),
+      };
+      feature = mb;
+    } else if (ctx.kind === 'mirror') {
       const ref = this.patternPlaneRef()!;
       const snap = this._resolvePlaneRefSnapshot(ref)!;
       const mirror: import('../../../cad/lib/types').MirrorFeatureFeature = {
@@ -12145,7 +12044,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!feature) return;
 
     if (ctx.editingFeatureId) {
-      this.featureTree.set(updateFeatureParam<any>(this.featureTree(), id, feature as any));
+      const prev = tree.features.find(f => f.id === id);
+      if (prev && prev.type !== feature.type) {
+        // Switching Mirror between Features and Bodies changes the feature
+        // type: replace it in place, keeping its name and tree state.
+        const keep = prev as { name?: string; visible?: boolean; suppressed?: boolean };
+        const replaced = { ...feature, name: keep.name, visible: keep.visible, suppressed: keep.suppressed } as import('../../../cad/lib/types').Feature;
+        this.featureTree.set({ ...tree, features: tree.features.map(f => f.id === id ? replaced : f) });
+      } else {
+        this.featureTree.set(updateFeatureParam<any>(this.featureTree(), id, feature as any));
+      }
     } else {
       this.featureTree.set(this._commitNewFeature(tree, feature, seq));
     }
@@ -13295,7 +13203,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // Pattern sidebar (Mirror only): route face picks to the mirror
     // plane slot. Snapshot captured for the same renumber-survival
     // reason as the datum-plane case above.
-    if (this.patternSidebar()?.kind === 'mirror') {
+    if (this.patternSidebar()?.kind === 'mirror' && this.patternPickTarget() === 'plane') {
       const fb = this.faceFallbackPlane(faceId);
       if (fb) {
         const plane: Plane3 = {
@@ -13307,18 +13215,22 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         if (this.addPatternFacePick(faceId, plane)) return;
       }
     }
+    // REQ 1031 — features/bodies box: a face picks the feature that made it
+    // (Features mode) or its body (Mirror, Bodies mode).
+    if (this.patternSidebar() && this.patternPickTarget() === 'seeds') {
+      if (this.patternSeedKind() === 'features') {
+        const owner = this.geometry()?.faces.find(f => f.faceId === faceId)?.featureId;
+        if (owner) this.pickPatternSeed(owner);
+      } else if (this.patternSidebar()!.kind === 'mirror') {
+        const bodyId = this.bodyIdForFaceId(faceId);
+        if (bodyId) this.toggleMirrorBody(bodyId);
+      }
+      return;
+    }
     // REQ 662 — Combine: route the face pick to the active body slot
     // (target or tool). Owning body id is on the face record.
     if (this.combineSidebar()) {
       if (this.addCombineFacePick(faceId)) return;
-    }
-    // REQ 666 — Mirror Body: route to mirror plane OR body slot.
-    if (this.mirrorBodySidebar()) {
-      const fb = this.faceFallbackPlane(faceId);
-      const plane: Plane3 = fb
-        ? { origin: fb.origin, normal: fb.normal, xAxis: [1, 0, 0], yAxis: [0, 1, 0] }
-        : { origin: [0, 0, 0], normal: [0, 0, 1], xAxis: [1, 0, 0], yAxis: [0, 1, 0] };
-      if (this.addMirrorBodyFacePick(faceId, plane)) return;
     }
     // REQ 667 — Move/Copy Body: face-click picks owning body.
     if (this.moveCopyBodySidebar()) {
@@ -14808,7 +14720,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       return;
     }
     if (feature.type === 'mirrorBody') {
-      this._editMirrorBody(feature);
+      this._editPattern(feature);
       return;
     }
     if (feature.type === 'moveCopyBody') {
@@ -14996,12 +14908,35 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private _editPattern(
     feature: import('../../../cad/lib/types').MirrorFeatureFeature
           | import('../../../cad/lib/types').LinearPatternFeature
-          | import('../../../cad/lib/types').CircularPatternFeature,
+          | import('../../../cad/lib/types').CircularPatternFeature
+          | import('../../../cad/lib/types').MirrorBodyFeature,
   ) {
     this._resetPatternInputs();
+    // Legacy feature-less patterns repeat the body (Bodies mode).
+    this.patternSeedKind.set('bodies');
+    if (feature.type === 'mirrorBody') {
+      this.patternPlaneRef.set(feature.planeRef);
+      this.mirrorBodyBodyIds.set([...feature.bodyIds]);
+      this.mirrorBodyKeepOriginals.set(feature.keepOriginals !== false);
+      this.mirrorBodyMerge.set(feature.merge === true);
+      this.patternSidebar.set({ kind: 'mirror', editingFeatureId: feature.id });
+      this.setPatternPickTarget('seeds');
+      return;
+    }
     if (feature.type === 'mirror') {
       this.patternPlaneRef.set(feature.planeRef);
-      this.facePickMode.set(true);
+      if (feature.seedKind !== 'features') {
+        // A body-mode Mirror fused the most recent body with its mirror —
+        // the same as Mirror Body with Keep originals + Merge.
+        const idx = this.featureTree().features.findIndex(f => f.id === feature.id);
+        const before = this.bodiesForTree().filter(b => {
+          const i = this.featureTree().features.findIndex(f => f.id === b.id.split('#')[0]);
+          return i >= 0 && i < idx;
+        });
+        const last = before.at(-1);
+        this.mirrorBodyBodyIds.set(last ? [last.id] : []);
+        this.mirrorBodyMerge.set(true);
+      }
     } else if (feature.type === 'linearPattern') {
       const d1 = feature.direction1;
       this._loadAxis('dir1', d1.axisRef);
@@ -15037,6 +14972,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.patternGeometryPattern.set(feature.geometryPattern !== false);
     }
     this.patternSidebar.set({ kind: feature.type, editingFeatureId: feature.id });
+    this.setPatternPickTarget('seeds');
   }
 
   // REQ 626 — if the right-clicked feature is part of the current selection
@@ -15238,7 +15174,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.combineSidebar()?.editingFeatureId ??
       this.holeSidebar()?.editingFeatureId ??
       this.loftSidebar()?.editingFeatureId ??
-      this.mirrorBodySidebar()?.editingFeatureId ??
       this.moveCopyBodySidebar()?.editingFeatureId ?? null;
     if (editingId) {
       const idx = features.findIndex(f => f.id === editingId);
