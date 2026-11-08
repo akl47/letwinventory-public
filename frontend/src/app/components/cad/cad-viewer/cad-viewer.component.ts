@@ -1583,6 +1583,13 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
           y: rect.top + (1 - v.y) / 2 * rect.height,
         };
       },
+      // Shared-editor e2e specs reset between tests: default target + zoom.
+      resetView: () => {
+        if (this.cubeAnimHandle) { cancelAnimationFrame(this.cubeAnimHandle); this.cubeAnimHandle = 0; }
+        this.orbitTarget.set(0, 0, 0);
+        this.orbitDistance = 180;
+        this.updateCamera();
+      },
     };
   }
 

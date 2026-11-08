@@ -2,23 +2,15 @@
 // inch-input regression (REQ 922): type a unit-suffixed dimension value in
 // the inline editor and assert the GEOMETRY moves to the converted mm value
 // — the class of bug where the label updates while the points stay put.
-import { test, expect, Page } from '@playwright/test';
+import { expect, Page } from '@playwright/test';
 import {
-  createFixturePart, openEditor, enterSketchOnXY, pickTool, clickSequence,
+  sharedEditorTest as test, enterSketchOnXY, pickTool, clickSequence,
   canvasCenter, drawClosedRectangle, sketchConstraints, pointDistance, sketchToScreen,
 } from './helpers';
 
-// Tests share one fixture part — run serially even when the suite is
-// configured fullyParallel (CI already uses workers: 1).
+// One shared editor, reset to an empty model after each test (see
+// sharedEditorTest). Serial: the tests take turns on that editor.
 test.describe.configure({ mode: 'serial' });
-
-let PART_ID = 0;
-
-test.beforeAll(async () => {
-  const fx = await createFixturePart('dims');
-  PART_ID = fx.partId;
-  await fx.api.dispose();
-});
 
 /** A placement point above the rectangle's top edge, offset 45px sideways
  * AWAY from the sketch's Y datum axis — a click near a datum axis picks the
@@ -58,7 +50,6 @@ async function smartDimFirstLine(page: Page, place: [number, number]): Promise<a
 
 test.describe('Smart dimension + inline value edit', () => {
   test('unit-suffixed input ("2 in") moves the geometry to 50.8 mm — REQ 922 regression', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     const corners = await drawClosedRectangle(page);
 
@@ -88,7 +79,6 @@ test.describe('Smart dimension + inline value edit', () => {
   });
 
   test('bare numeric input is interpreted in the model default unit (mm)', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);  // each entry creates a FRESH sketch
     const corners = await drawClosedRectangle(page);
     const dim = await smartDimFirstLine(page, await dimPlacement(page, corners));
@@ -108,7 +98,6 @@ test.describe('Smart dimension + inline value edit', () => {
 
 test.describe('Dimension context menu', () => {
   test('right-click → driven toggles the driven flag; delete removes the dim', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);  // fresh sketch — mint our own dim
     const corners = await drawClosedRectangle(page);
     const dim = await smartDimFirstLine(page, await dimPlacement(page, corners));
@@ -130,7 +119,6 @@ test.describe('Dimension context menu', () => {
 
 test.describe('Geometric constraints', () => {
   test('parallel makes two skew lines parallel; perpendicular follows', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     const { cx, cy } = await canvasCenter(page);
 
@@ -180,7 +168,6 @@ test.describe('Geometric constraints', () => {
   });
 
   test('horizontal on a single skew line levels it', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     const { cx, cy } = await canvasCenter(page);
     await pickTool(page, 'primitives', 'line');
@@ -208,7 +195,6 @@ test.describe('Geometric constraints', () => {
 
   // REQ 990 — SolidWorks-style: one Horizontal click levels every selected line.
   test('horizontal on several selected lines levels them all', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     const { cx, cy } = await canvasCenter(page);
     await pickTool(page, 'primitives', 'line');

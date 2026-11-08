@@ -1,28 +1,18 @@
 // REQ 927 — sketch edit operations e2e: trim, extend, mirror, offset,
 // convert entities (with the REQ 921 sidebar), sketch fillet.
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import {
-  createFixturePart, openEditor, enterSketchOnXY, exitSketch, pickTool,
+  sharedEditorTest as test, enterSketchOnXY, exitSketch, pickTool,
   clickSequence, canvasCenter, sketchEntityCount, sketchEntities,
   sketchConstraints, drawClosedRectangle, extrudeSketch, sketchToScreen,
 } from './helpers';
 
-// A fresh fixture part per test: reopening a part frames its existing
-// sketches, which moves the origin under the canvas-centred click points
-// (axis/origin snaps hijack them). Serial to keep load predictable.
+// One shared editor, reset to an empty model after each test (see
+// sharedEditorTest). Serial: the tests take turns on that editor.
 test.describe.configure({ mode: 'serial' });
-
-let PART_ID = 0;
-
-test.beforeEach(async () => {
-  const fx = await createFixturePart('editops');
-  PART_ID = fx.partId;
-  await fx.api.dispose();
-});
 
 test.describe('Trim / Extend', () => {
   test('trim removes the clicked segment of a crossed line', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     const { cx, cy } = await canvasCenter(page);
     // A plus-sign OFFSET from the datum axes — segments riding the X/Y
@@ -75,7 +65,6 @@ test.describe('Trim / Extend', () => {
   });
 
   test('extend stretches a line to the next boundary', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     const { cx, cy } = await canvasCenter(page);
     // Vertical boundary + a short horizontal line stopping left of it —
@@ -107,7 +96,6 @@ test.describe('Trim / Extend', () => {
 
 test.describe('Mirror (axis-first, REQ from 2026-07 batch)', () => {
   test('mirroring a circle across a centerline doubles it', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     const { cx, cy } = await canvasCenter(page);
     await pickTool(page, 'primitives', 'centerline');
@@ -153,7 +141,6 @@ test.describe('Mirror (axis-first, REQ from 2026-07 batch)', () => {
 
 test.describe('Offset', () => {
   test('offsetting a circle outward creates a larger concentric circle', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     // Grid snap relocates the drawn circle away from the click coords —
     // turn it off for this test.
@@ -198,7 +185,6 @@ test.describe('Offset', () => {
 test.describe('Convert Entities (REQ 921 sidebar)', () => {
   test('converting a body edge projects it with an on-edge link; chain converts the loop; list removes', async ({ page }) => {
     test.setTimeout(120_000);
-    await openEditor(page, PART_ID);
     // Build a body first: rectangle → extrude.
     await enterSketchOnXY(page);
     await drawClosedRectangle(page, 60);
@@ -260,7 +246,6 @@ test.describe('Convert Entities (REQ 921 sidebar)', () => {
 
 test.describe('Sketch fillet', () => {
   test('filleting a rectangle corner replaces it with an arc', async ({ page }) => {
-    await openEditor(page, PART_ID);
     await enterSketchOnXY(page);
     await drawClosedRectangle(page);
     // Pre-select a corner POINT — the fillet panel seeds its corner list
