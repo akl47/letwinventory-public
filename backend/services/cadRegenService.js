@@ -403,7 +403,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
   // _dispatchFeaturePattern). Captured one iteration late — at the TOP of the
   // next feature's turn `bodies` already reflects the previous feature's result
   // — plus once after the loop for the last feature.
-  /** @type {Map<string, { bodyId: string|null, before: string, after: string }>} */
+  /** @type {Map<string, { bodyId: string|null, before: string, after: string, perBody?: Array<{ bodyId: string, before: string, after: string }> }>} */
   const featureSnapshots = new Map();
   // Per-feature TOOL solid (the un-composed prism), for true feature patterns.
   /** @type {Map<string, { brep: string, type: string }>} */
@@ -2681,10 +2681,14 @@ function _captureFeatureSnapshot(featureId, bodies, bodiesBefore, snapshots) {
     snapshots.set(featureId, { bodyId: null, before: '', after: '' });
     return;
   }
+  // REQ 1031 — every body the feature changed (a cut through two bodies),
+  // primary first; feature mirrors/patterns copy the change on each.
+  const others = bodies.filter(b => b !== target && bodiesBefore.get(b.id) !== undefined && bodiesBefore.get(b.id) !== b.brep);
   snapshots.set(featureId, {
     bodyId: target.id,
     before: bodiesBefore.get(target.id) || '',
     after: target.brep || '',
+    perBody: [target, ...others].map(b => ({ bodyId: b.id, before: bodiesBefore.get(b.id) || '', after: b.brep || '' })),
   });
 }
 
@@ -2704,7 +2708,7 @@ const TOOL_PATTERN_TYPES = new Set(['extrude', 'cutExtrude', 'revolve', 'cutRevo
  * the seed GROUP's net delta (before-first-seed → after-last-seed), replacing
  * the per-seed feature-pattern loop. Caches + replaces the body in place +
  * emits, mirroring the per-seed path's bookkeeping. */
-async function _applyGeometryPattern({ feature, transforms, before, after, targetBody, model, client, dbClient, results, emit, indexBody }) {
+async function _applyGeometryPattern({ feature, transforms, before, after, targetBody, model, client, dbClient, results, emit, indexBody, scopeFaces = false }) {
   const paramHash = _hashParams({
     op: feature.type, mode: 'geometry', transforms,
     before: before ? _hashParams({ b: before }) : '',
@@ -2742,6 +2746,8 @@ async function _applyGeometryPattern({ feature, transforms, before, after, targe
   if (!brep) {
     throw new Error(`${feature.type}: geometry pattern produced no geometry — the instances may overlap destructively.`);
   }
+  // Every body gets the pattern's face names; keep each body's unique.
+  if (scopeFaces) faces = _scopeFeatureFaceIds(faces, feature.id, targetBody.id);
   const prevFacesG = targetBody.faces || [], prevOwnersG = targetBody.faceOwners || null;  // REQ 892
   targetBody.brep = brep;
   targetBody.faces = _scopeFaceBoundaryEdges(faces, targetBody.id);
@@ -2787,19 +2793,26 @@ async function _dispatchFeaturePattern(feature, bodies, model, client, dbClient,
     // Seeds that actually changed a body (a failed/no-op seed — e.g. a fillet
     // that didn't build — leaves an empty snapshot and is skipped; it's a no-op,
     // so the surrounding before/after still bracket the real geometry change).
-    const valid = seedIds.map(id => featureSnapshots.get(id)).filter(s => s && s.bodyId && s.after);
+    const valid = seedIds.map(id => featureSnapshots.get(id))
+      .flatMap(s => (s && s.perBody) || (s ? [s] : []))
+      .filter(s => s && s.bodyId && s.after);
     const bodyIds = new Set(valid.map(s => s.bodyId));
-    const ok = valid.length >= 1 && bodyIds.size === 1;
-    const targetBody = ok ? bodies.find(b => b.id === valid[valid.length - 1].bodyId) : null;
-    if (ok && targetBody && targetBody.brep) {
-      await _applyGeometryPattern({
-        feature, transforms,
-        before: valid[0].before, after: valid[valid.length - 1].after,
-        targetBody, model, client, dbClient, results, emit, indexBody,
-      });
+    // REQ 1031 — seeds on several bodies: copy each body's seed group
+    // (first seed's before → last seed's after on that body) separately.
+    const targets = [...bodyIds].map(id => bodies.find(b => b.id === id));
+    if (valid.length >= 1 && targets.every(b => b && b.brep)) {
+      for (let ti = 0; ti < targets.length; ti++) {
+        const group = valid.filter(v => v.bodyId === targets[ti].id);
+        await _applyGeometryPattern({
+          feature, transforms,
+          before: group[0].before, after: group[group.length - 1].after,
+          targetBody: targets[ti], model, client, dbClient, results, emit, indexBody,
+          scopeFaces: ti > 0,
+        });
+      }
       return;
     }
-    console.warn(`[cadRegen] ${feature.id}: geometry-pattern preconditions not met (seeds must change a single shared body) — falling back to feature pattern`);
+    console.warn(`[cadRegen] ${feature.id}: geometry-pattern preconditions not met (a seed's body is gone) — falling back to feature pattern`);
   }
 
   let appliedAny = false;
@@ -3048,13 +3061,15 @@ async function _dispatchMirrorBody(feature, bodies, model, client, dbClient, res
   }
   if (!feature.planeSnapshot) throw new Error('Mirror Body has no mirror plane. Pick one.');
   const keep = feature.keepOriginals !== false;
+  // REQ 1031 — keep + merge fuses each mirror into its source body.
+  const merge = keep && feature.merge === true;
   const plane = feature.planeSnapshot;
   const mirrorTransform = { kind: 'mirror', origin: plane.origin, normal: plane.normal };
   for (const bodyId of feature.bodyIds) {
     const source = bodies.find(b => b.id === bodyId);
     if (!source) throw new Error(`Mirror Body: source body '${bodyId}' not found. Re-pick.`);
     const cacheKey = `${feature.id}#mirror#${bodyId}`;
-    const paramHash = _hashParams({ op: 'mirrorBody', plane: mirrorTransform, sourceUpstream: source.paramHash });
+    const paramHash = _hashParams({ op: 'mirrorBody', plane: mirrorTransform, sourceUpstream: source.paramHash, ...(merge ? { merge } : {}) });
     const cached = await dbClient.DesignBRepCache.findOne({
       where: { cadModelID: model.id, featureID: cacheKey, paramHash, upstreamHash: source.paramHash, namingVersion: NAMING_VERSION },
     });
@@ -3074,7 +3089,7 @@ async function _dispatchMirrorBody(feature, bodies, model, client, dbClient, res
         featureId: cacheKey,
         aBrep: source.brep,
         transforms: [mirrorTransform],
-        mergeWithSource: false,
+        mergeWithSource: merge,
       });
       await dbClient.DesignBRepCache.upsert({
         cadModelID: model.id, featureID: cacheKey, paramHash, upstreamHash: source.paramHash,
@@ -3093,10 +3108,14 @@ async function _dispatchMirrorBody(feature, bodies, model, client, dbClient, res
       target.centroid = s.centroid ? [s.centroid[0], s.centroid[1], s.centroid[2]] : _approxCentroidFromFaces(target.faces);
       target.paramHash = paramHash;
       // REQ 892 — a mirrored body is entirely this feature's product (every
-      // centroid reflected, so nothing carries — matches SW attribution).
-      target.faceOwners = _carryFaceOwners([], null, target.faces, feature.id);
+      // centroid reflected, so nothing carries — matches SW attribution). A
+      // merged mirror keeps the original half's owners.
+      target.faceOwners = merge
+        ? _carryFaceOwners(prevFaces, prevOwners, target.faces, feature.id)
+        : _carryFaceOwners([], null, target.faces, feature.id);
     };
-    if (keep) {
+    const prevFaces = source.faces || [], prevOwners = source.faceOwners || null;
+    if (keep && !merge) {
       // Add the mirror as a new body next to the original.
       const newBodyId = `${feature.id}#mirror#${bodyId}`;
       const newBody = { id: newBodyId, brep: '', paramHash: '', faces: [], topology: { vertices: [], edges: [] } };
@@ -4374,5 +4393,6 @@ module.exports = {
   _groupEdgesByBody, // exported for unit tests (REQ 1024 — multi-body blends)
   _scopedBodies, // exported for unit tests (REQ 1029 — feature scope)
   _scopeFeatureFaceIds, // exported for unit tests (REQ 1029 — per-body hole face ids)
+  _captureFeatureSnapshot, // exported for unit tests (REQ 1031 — per-body seed snapshots)
   MAX_PATTERN_COPIES,
 };

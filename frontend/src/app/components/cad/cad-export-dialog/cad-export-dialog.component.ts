@@ -12,6 +12,8 @@ export interface ExportDialogData {
   /** Part-level filename variables (#{partNumber}, #{rev}, …). `bodyName` is
    * supplied per body at export time. */
   vars: Record<string, string>;
+  /** Bodies ticked when the dialog opens (default: all). */
+  selected?: string[];
 }
 
 export interface ExportDialogResult {
@@ -45,7 +47,7 @@ export function resolveExportName(template: string, vars: Record<string, string>
   template: `
     <h2 mat-dialog-title>Export {{ data.format }}</h2>
     <mat-dialog-content>
-      <p class="hint">Choose which bodies to include. Defaults to all.</p>
+      <p class="hint">Choose which bodies to include. Visible bodies are ticked to start.</p>
       <div class="body-list">
         <mat-checkbox class="all" [checked]="allSelected()" [indeterminate]="someSelected()"
                       (change)="toggleAll($any($event).checked)">
@@ -105,7 +107,7 @@ export function resolveExportName(template: string, vars: Record<string, string>
 export class CadExportDialogComponent {
   private ref = inject(MatDialogRef<CadExportDialogComponent>);
   data = inject(MAT_DIALOG_DATA) as ExportDialogData;
-  selected = signal<Set<string>>(new Set(this.data.bodies.map(b => b.id)));
+  selected = signal<Set<string>>(new Set(this.data.selected ?? this.data.bodies.map(b => b.id)));
   separate = signal<boolean>(false);
   zip = signal<boolean>(false);
   nameTemplate = signal<string>(DEFAULT_EXPORT_NAME_TEMPLATE);

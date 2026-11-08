@@ -1238,6 +1238,9 @@ export interface MirrorBodyFeature {
    * is added; when false, each source body's BREP is replaced in
    * place by its mirror. */
   keepOriginals?: boolean;
+  /** REQ 1031 — with keepOriginals, fuse each mirror into its source body
+   * (one body, keeps the source id) instead of adding a separate body. */
+  merge?: boolean;
   visible?: boolean;
   suppressed?: boolean;
   name?: string;
