@@ -756,15 +756,23 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
       // features still target a single body (the most recent for merge,
       // or a freshly-seeded one for !merge / first-feature).
       let targetBodies = [];
+      // Bodies an additive merge also joins (feature scope with 2+ bodies).
+      let mergeExtra = [];
       if (isCut) {
         if (bodies.length === 0) {
           throw new Error('Cut feature needs an existing body to cut from. Add an additive Extrude, Revolve, or Sweep first.');
         }
-        targetBodies = [...bodies];  // snapshot — split-off bodies created during the loop won't get re-cut
-        console.log(`[cadRegen] ${feature.id} CUT all bodies (${targetBodies.length})`);
+        // REQ 1029 — feature scope: only the selected bodies (default all).
+        targetBodies = _scopedBodies(feature, bodies, [...bodies]);  // snapshot — split-off bodies created during the loop won't get re-cut
+        console.log(`[cadRegen] ${feature.id} CUT ${targetBodies.length} bodies`);
       } else if (isAdditive) {
         let targetBodyIndex;
-        if (bodies.length === 0 || !wantsMerge) {
+        const scope = bodies.length > 0 && wantsMerge ? _scopedBodies(feature, bodies, null) : null;
+        if (scope) {
+          console.log(`[cadRegen] ${feature.id} MERGE into scoped bodies ${scope.map(b => b.id).join(',')}`);
+          targetBodyIndex = bodies.indexOf(scope[0]);
+          mergeExtra = scope.slice(1);
+        } else if (bodies.length === 0 || !wantsMerge) {
           console.log(`[cadRegen] ${feature.id} SEED new body (bodies.length=${bodies.length}, merge=${feature.merge}, wantsMerge=${wantsMerge})`);
           targetBodyIndex = bodies.length;
           bodies.push({ id: feature.id, brep: '', paramHash: '', faces: [], topology: { vertices: [], edges: [] } });
@@ -1030,6 +1038,14 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
 
       for (const tb of targetBodies) {
         await processBody(tb);
+      }
+      // REQ 1029 — merging with several bodies joins them into the first
+      // through the new material (same fuse as a Combine Add).
+      if (mergeExtra.length) {
+        await _dispatchCombine({
+          id: feature.id, type: 'combine', operation: 'add',
+          targetBodyId: targetBodies[0].id, toolBodyIds: mergeExtra.map(b => b.id),
+        }, bodies, model, client, dbClient, results, emit, vertexMap, faceMap);
       }
 
       // If the cut/merge produced no body changes at all (e.g. cut
@@ -3221,9 +3237,18 @@ async function _dispatchHole(feature, bodies, model, client, dbClient, results, 
   if (!Array.isArray(feature.placements) || feature.placements.length === 0) {
     throw new Error('Hole feature has no placements. Click faces in the viewer to drop hole centers.');
   }
+  // REQ 1029 — feature scope: drill every selected body (default the most
+  // recent). Bodies after the first get their own cache rows and face ids.
+  const targets = _scopedBodies(feature, bodies, [bodies[bodies.length - 1]]);
+  for (let ti = 0; ti < targets.length; ti++) {
+    await _drillHole(feature, targets[ti], ti > 0, model, dbClient, client, results, emit, vertexMap, faceMap);
+  }
+}
+
+async function _drillHole(feature, target, scopeToBody, model, dbClient, client, results, emit, vertexMap, faceMap) {
+  const cacheFeatureId = scopeToBody ? `${feature.id}#${target.id}` : feature.id;
   const { holeSpec } = require('./holeSpecs');
   const spec = holeSpec(feature.standard, feature.size);
-  const target = bodies[bodies.length - 1];
   const flipped = feature.flipped === true;
 
   // Resolve dimensions: per-feature override wins over the spec table.
@@ -3260,7 +3285,7 @@ async function _dispatchHole(feature, bodies, model, client, dbClient, results, 
   });
   console.log(`[cadRegen] dispatching feature ${feature.id} type=hole kind=${feature.holeType} ${feature.standard}/${feature.size} placements=${feature.placements.length} target=${target.id}`);
   const cached = await dbClient.DesignBRepCache.findOne({
-    where: { cadModelID: model.id, featureID: feature.id, paramHash, upstreamHash: target.paramHash, namingVersion: NAMING_VERSION },
+    where: { cadModelID: model.id, featureID: cacheFeatureId, paramHash, upstreamHash: target.paramHash, namingVersion: NAMING_VERSION },
   });
 
   let brep, faces, topology, solids, cachedFlag;
@@ -3382,11 +3407,16 @@ async function _dispatchHole(feature, bodies, model, client, dbClient, results, 
     solids = lastRpc.solids || [];
     cachedFlag = false;
     await dbClient.DesignBRepCache.upsert({
-      cadModelID: model.id, featureID: feature.id, paramHash, upstreamHash: target.paramHash,
+      cadModelID: model.id, featureID: cacheFeatureId, paramHash, upstreamHash: target.paramHash,
       brepBytes: Buffer.from(brep || '', 'base64'),
       tessellatedFaces: { faces, topology, solids },
       namingVersion: NAMING_VERSION, lastAccessedAt: new Date(),
     });
+  }
+  // Every drilled body gets the hole's face names; keep each body's unique.
+  if (scopeToBody) {
+    faces = _scopeFeatureFaceIds(faces, feature.id, target.id);
+    solids = solids.map(sol => ({ ...sol, faces: _scopeFeatureFaceIds(sol.faces, feature.id, target.id) }));
   }
 
   if (solids.length === 0) {
@@ -4223,6 +4253,26 @@ function _scopeFaceBoundaryEdges(faces, scope) {
 }
 
 /** Rewrite `${featureId}#body#…` face ids to `${featureId}#body@${bodyId}#…`. */
+/** Bodies named in a feature's scope (`bodyIds`), or `fallback` when the
+ * feature has no scope. A scoped body that no longer exists is an error. */
+function _scopedBodies(feature, bodies, fallback) {
+  if (!Array.isArray(feature.bodyIds) || feature.bodyIds.length === 0) return fallback;
+  return feature.bodyIds.map(id => {
+    const b = bodies.find(x => x.id === id);
+    if (!b) throw new Error(`A body in this feature's scope (${id}) no longer exists. Re-pick the bodies.`);
+    return b;
+  });
+}
+
+/** Scope every face the feature named (`<featureId>#…`) to one body, for
+ * features that apply the same kernel names to several bodies. */
+function _scopeFeatureFaceIds(faces, featureId, bodyId) {
+  if (!Array.isArray(faces)) return faces;
+  const from = `"feature_id":"${featureId}#`;
+  const to = `"feature_id":"${featureId}#@${bodyId}#`;
+  return faces.map(f => (typeof f.faceId === 'string' && f.faceId.includes(from) ? { ...f, faceId: f.faceId.replace(from, to) } : f));
+}
+
 function _scopeComposedFaceIds(faces, featureId, bodyId, tag = 'body') {
   if (!Array.isArray(faces)) return faces;
   const from = `"feature_id":"${featureId}#${tag}#`;
@@ -4322,5 +4372,7 @@ module.exports = {
   _carryFaceOwners, // exported for unit tests (REQ 892 — face ownership carry)
   _computePatternTransforms, // exported for unit tests (REQ 962 — copy limit)
   _groupEdgesByBody, // exported for unit tests (REQ 1024 — multi-body blends)
+  _scopedBodies, // exported for unit tests (REQ 1029 — feature scope)
+  _scopeFeatureFaceIds, // exported for unit tests (REQ 1029 — per-body hole face ids)
   MAX_PATTERN_COPIES,
 };
