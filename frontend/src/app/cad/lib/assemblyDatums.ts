@@ -104,6 +104,61 @@ export function meshFacePlane(positions: ArrayLike<number>, normals: ArrayLike<n
   return { origin: [cx / n, cy / n, cz / n], normal: [nx / len, ny / len, nz / len] };
 }
 
+/** True when every vertex normal of the mesh matches `normal` (a flat face). */
+export function meshIsFlat(normals: ArrayLike<number>, normal: [number, number, number]): boolean {
+  for (let i = 0; i < normals.length; i += 3) {
+    if (normals[i] * normal[0] + normals[i + 1] * normal[1] + normals[i + 2] * normal[2] < 0.999) return false;
+  }
+  return true;
+}
+
+/** Axis of a cylindrical face mesh — the line every vertex normal points
+ * through — or null when the face isn't a cylinder (or cone/sphere). */
+export function meshCylinderAxis(positions: ArrayLike<number>, normals: ArrayLike<number>): { origin: [number, number, number]; direction: [number, number, number] } | null {
+  const n = Math.min(positions.length, normals.length) / 3;
+  if (n < 3) return null;
+  const N = (i: number): [number, number, number] => [normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]];
+  const P = (i: number): [number, number, number] => [positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]];
+  const cross = (a: number[], b: number[]): [number, number, number] => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  // Direction: perpendicular to the two least-parallel normals.
+  const n0 = N(0);
+  let best: [number, number, number] = [0, 0, 0], bestMag = 0;
+  for (let i = 1; i < n; i++) {
+    const c = cross(n0, N(i)), m = Math.hypot(c[0], c[1], c[2]);
+    if (m > bestMag) { best = c; bestMag = m; }
+  }
+  if (bestMag < 0.1) return null;
+  const d: [number, number, number] = [best[0] / bestMag, best[1] / bestMag, best[2] / bestMag];
+  for (let i = 0; i < n; i++) {
+    const ni = N(i);
+    if (Math.abs(ni[0] * d[0] + ni[1] * d[1] + ni[2] * d[2]) > 0.02) return null;
+  }
+  // Origin: least-squares meeting point of the normal lines, pinned along
+  // the axis at the face centroid. Solve A c = b with A = Σ(I − nnᵀ) + ddᵀ.
+  const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b = [0, 0, 0], mean = [0, 0, 0];
+  for (let i = 0; i < n; i++) {
+    const ni = N(i), pi = P(i);
+    for (let r = 0; r < 3; r++) {
+      mean[r] += pi[r] / n;
+      for (let c = 0; c < 3; c++) {
+        const m = (r === c ? 1 : 0) - ni[r] * ni[c];
+        A[r][c] += m;
+        b[r] += m * pi[c];
+      }
+    }
+  }
+  const dm = d[0] * mean[0] + d[1] * mean[1] + d[2] * mean[2];
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) A[r][c] += d[r] * d[c];
+    b[r] += d[r] * dm;
+  }
+  const det = (m: number[][]) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+  const D = det(A);
+  if (Math.abs(D) < 1e-12) return null;
+  const col = (k: number) => A.map((row, r) => row.map((v, c) => (c === k ? b[r] : v)));
+  return { origin: [det(col(0)) / D, det(col(1)) / D, det(col(2)) / D], direction: d };
+}
+
 /** REQ 912 — assembly-level datum plane FEATURES (skeleton planes), computed
  * in feature order against the assembly's own datums (origin planes + earlier
  * skeleton planes). REQ 1004 — with the composed regen, they may also

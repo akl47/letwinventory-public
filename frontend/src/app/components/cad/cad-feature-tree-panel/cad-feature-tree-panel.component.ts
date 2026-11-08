@@ -27,9 +27,13 @@ export type FeatureTreeAction =
  * (e.g. the assembly tree). The host owns selection/visibility/expand/context
  * semantics — the panel just reports which node + how it was interacted with. */
 export interface ExternalTreeEvent {
-  type: 'select' | 'expand' | 'visibility' | 'context';
+  type: 'select' | 'expand' | 'visibility' | 'context' | 'reorder' | 'rollback';
   node: TreeNode;
   ev?: MouseEvent;
+  /** reorder: the createdAt to stamp on the dragged row (midpoint of its new
+   * neighbours). rollback: the createdAt of the row the bar now sits before,
+   * or null when the bar was dropped at the end. */
+  createdAt?: number | null;
 }
 
 // REQ 626 — feature selection event from a left-click on a feature row.
@@ -102,6 +106,7 @@ export interface TreeNode {
             [attr.data-testid]="rowTestId(n)"
             [attr.data-feature-index]="n.featureIndex"
             [attr.data-node-key]="n.key"
+            [attr.data-created-at]="n.createdAt"
             class="row"
             [class.dragging-sketch]="dragSketchId() !== null && n.sketchId === dragSketchId()"
             [class.depth-0]="n.depth === 0"
@@ -114,7 +119,7 @@ export interface TreeNode {
             [class.suppressed]="n.suppressed"
             [class.rollback-bar]="n.kind === 'rollback-bar'"
             [class.drag-target-above]="(dragTargetIndex() !== null && n.featureIndex === dragTargetIndex()) || (dropBeforeKey() !== null && n.key === dropBeforeKey())"
-            [class.dragging-feature]="dragFeatureIndex() !== null && n.featureIndex === dragFeatureIndex()"
+            [class.dragging-feature]="(dragFeatureIndex() !== null && n.featureIndex === dragFeatureIndex()) || (dragExternalKey() !== null && n.key === dragExternalKey())"
             [class.selected]="isRowSelected(n)"
             [matTooltip]="compact() ? n.label : ''" matTooltipPosition="right"
             [attr.aria-label]="compact() ? n.label : null"
@@ -1683,9 +1688,61 @@ export class CadFeatureTreePanelComponent {
   private _suppressNextRowClick = false;
 
   onRowMouseDown(ev: MouseEvent, n: TreeNode): void {
+    if (this.externalNodes() !== null) { this.onExternalDragStart(ev, n); return; }
     if (n.kind === 'rollback-bar') { this.onRollbackDragStart(ev); return; }
     if (n.kind === 'feature') this.onFeatureDragStart(ev, n);
     else if (n.kind === 'sketch' && n.sketchId && n.depth === 0) this.onSketchDragStart(ev, n);
+  }
+
+  // External-nodes (assembly) tree: top-level rows carrying a createdAt drag
+  // to a new slot, and the rollback bar drags between them. The host stamps
+  // the reported createdAt / moves its rollback cutoff.
+  dragExternalKey = signal<string | null>(null);
+
+  private onExternalDragStart(ev: MouseEvent, n: TreeNode): void {
+    if (ev.button !== 0) return;
+    const isBar = n.kind === 'rollback-bar';
+    if (!isBar && (n.depth !== 0 || n.createdAt === undefined)) return;
+    if (isBar) ev.preventDefault();
+    const startY = ev.clientY;
+    let engaged = false;
+    const move = (mv: MouseEvent) => {
+      if (!engaged) {
+        if (Math.abs(mv.clientY - startY) < 4) return;  // threshold → plain clicks still select
+        engaged = true;
+        this.dragExternalKey.set(n.key);
+      }
+      this.dropBeforeKey.set(this._hitTestExternalDrop(mv.clientY, n.key).beforeKey);
+    };
+    const up = (upEv: MouseEvent) => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      this.dragExternalKey.set(null);
+      this.dropBeforeKey.set(null);
+      if (!engaged) return;
+      this._suppressNextRowClick = true;
+      const drop = this._hitTestExternalDrop(upEv.clientY, n.key);
+      if (isBar) this.externalEvent.emit({ type: 'rollback', node: n, createdAt: drop.beforeCreatedAt });
+      else this.externalEvent.emit({ type: 'reorder', node: n, createdAt: drop.createdAt });
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  }
+
+  /** Cursor Y → the orderable top-level row to land before (null = end), its
+   * createdAt, and the midpoint createdAt for a row dropped there. */
+  private _hitTestExternalDrop(cursorY: number, dragKey: string): { beforeKey: string | null; beforeCreatedAt: number | null; createdAt: number } {
+    const list = this.treeList?.nativeElement;
+    let prevCa = 0;
+    for (const el of Array.from(list?.querySelectorAll<HTMLLIElement>('li.row.depth-0') ?? [])) {
+      const raw = el.dataset['createdAt'];
+      if (raw === undefined || raw === '' || el.dataset['nodeKey'] === dragKey) continue;
+      const ca = Number(raw);
+      const r = el.getBoundingClientRect();
+      if (cursorY < r.top + r.height / 2) return { beforeKey: el.dataset['nodeKey'] ?? null, beforeCreatedAt: ca, createdAt: (prevCa + ca) / 2 };
+      prevCa = ca;
+    }
+    return { beforeKey: null, beforeCreatedAt: null, createdAt: prevCa + 1 };
   }
 
   // Drag-reorder a top-level sketch row. Sketches are ordered by createdAt, so

@@ -183,5 +183,20 @@ describe('NavComponent', () => {
       expect(component.isGroupActive('build' as any)).toBe(true);
       expect(component.isGroupActive('tools' as any)).toBe(false);
     });
+
+    // REQ 1025 — part CAD pages live under /parts but belong to Design
+    it('should detect part CAD and assembly editor pages as design active', () => {
+      for (const url of ['/parts/12/cad', '/parts/12/cad/editor?branch=x', '/parts/12/assembly/editor']) {
+        vi.spyOn(router, 'url', 'get').mockReturnValue(url);
+        expect(component.isGroupActive('design' as any)).toBe(true);
+        expect(component.isGroupActive('inventory' as any)).toBe(false);
+      }
+    });
+
+    it('should keep plain part pages under inventory', () => {
+      vi.spyOn(router, 'url', 'get').mockReturnValue('/parts/12/edit');
+      expect(component.isGroupActive('inventory' as any)).toBe(true);
+      expect(component.isGroupActive('design' as any)).toBe(false);
+    });
   });
 });

@@ -483,7 +483,12 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
   await assertAcyclic(assembly, db);
   const resolver = resolveChild || defaultResolveChild({ db, kernelClient });
   const doc = assembly.assemblyDoc || {};
-  const instances = (doc.instances || []).filter((i) => !i.suppressed);
+  // Rollback bar: components and skeleton sketches created at or after the
+  // cutoff are left out, like suppressed ones.
+  const rollbackAt = assembly.featureTree && typeof assembly.featureTree.rollbackAt === 'number'
+    ? assembly.featureTree.rollbackAt : null;
+  const rolledBack = (item) => rollbackAt !== null && (item.createdAt ?? 0) >= rollbackAt;
+  const instances = (doc.instances || []).filter((i) => !i.suppressed && !rolledBack(i));
   // Origin mates carry no face-pair geometry — they fix a component to the
   // assembly origin via its grounded flag + identity placement, so they're
   // excluded from the solver's residual set.
@@ -547,10 +552,30 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
   // REQ 915/916 — evaluate the assembly's own skeleton sketches once; used by
   // the resolver for skeleton refs and returned to the client for the
   // in-context overlay.
-  const skeletonGeo = assemblySkeleton.skeletonGeoMap(assembly.sketchDoc);
+  // Tree rows each component references in-context (other components and
+  // skeleton sketches), as assembly-tree keys — drag-reorder keeps them above.
+  composed.instanceRefs = {};
+  for (const [iid, refs] of refsByInstance) {
+    const keys = new Set();
+    for (const r of refs) {
+      if (r.sourceInstanceId === SKELETON_INSTANCE_ID) {
+        const g = (r.externalRef && r.externalRef.sourceGeomRef) || {};
+        const m = /^asketchv?:([^/]+)\//.exec(g.edgeId || g.vertexId || '');
+        if (m) keys.add(`skelsketch:${m[1]}`);
+      } else if (r.sourceInstanceId && r.sourceInstanceId !== iid) {
+        keys.add(`component:${r.sourceInstanceId}`);
+      }
+    }
+    if (keys.size) composed.instanceRefs[iid] = [...keys];
+  }
+  const sketchDoc = rollbackAt === null || !assembly.sketchDoc ? assembly.sketchDoc : {
+    ...assembly.sketchDoc,
+    sketches: Object.fromEntries(Object.entries(assembly.sketchDoc.sketches || {}).filter(([, sk]) => !rolledBack(sk))),
+  };
+  const skeletonGeo = assemblySkeleton.skeletonGeoMap(sketchDoc);
   composed.skeleton = {
     partID: assembly.partID,
-    edges: assemblySkeleton.skeletonEdges(assembly.sketchDoc),
+    edges: assemblySkeleton.skeletonEdges(sketchDoc),
   };
   if (refsByInstance.size) {
     const { nodes, edges } = buildCrossPartDepGraph(instances, refsByInstance);
@@ -621,7 +646,8 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
       childGeo, pose, xform: rigidTransform(pose.quaternion, pose.translate), derivedFrom: null,
     });
   }
-  expandPatterns((doc.patterns || []).filter((p) => !p.suppressed), renderUnits, composed.errors);
+  const rolledBackIds = new Set((doc.instances || []).filter(rolledBack).map((i) => i.instanceId));
+  expandPatterns((doc.patterns || []).filter((p) => !p.suppressed && !rolledBackIds.has(p.seedInstanceId)), renderUnits, composed.errors);
 
   // Phase C — transform each render unit, scope ids by instance, compose.
   for (const unit of renderUnits) {

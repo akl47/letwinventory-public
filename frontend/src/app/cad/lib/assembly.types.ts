@@ -163,6 +163,9 @@ export interface AssemblyRegenResponse {
   instances: ComposedInstance[];
   errors: string[];
   constraintState: ConstraintState | null;
+  /** Assembly-tree keys (`component:<id>`, `skelsketch:<id>`) each component
+   * references in-context; reordering keeps them above the component. */
+  instanceRefs?: Record<string, string[]>;
   /** REQ 915 — assembly skeleton sketch geometry (assembly WORLD frame), for
    * the in-context overlay + skeleton reference picking. */
   skeleton?: {

@@ -26,6 +26,10 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
  * state. The CAD editor's template renders the Assembly ribbon + component panel
  * bound to this controller, and feeds its `geometry()` to the shared viewer.
  */
+type Vec3 = [number, number, number];
+export interface PatternPlaneRef { label: string; origin: Vec3; normal: Vec3 }
+export interface PatternAxisRef { label: string; origin: Vec3; direction: Vec3 }
+
 @Injectable()
 export class AssemblyEditController {
   private assemblyApi = inject(AssemblyService);
@@ -208,7 +212,11 @@ export class AssemblyEditController {
   pCount = signal(3);
   pSpacing = signal<[number, number, number]>([10, 0, 0]);
   pAngle = signal(90);
-  pPlane = signal<'YZ' | 'XZ' | 'XY'>('YZ');
+  /** Mirror plane / circular axis picked in the viewer or tree (world space). */
+  pPlaneRef = signal<PatternPlaneRef | null>(null);
+  pAxisRef = signal<PatternAxisRef | null>(null);
+  /** Which pattern selection box is waiting for a pick. */
+  patternPick = signal<'plane' | 'axis' | null>(null);
 
   matePickStage = signal<null | 'a' | 'b'>(null);
   faceA = signal<string | null>(null);
@@ -539,17 +547,33 @@ export class AssemblyEditController {
     });
   }
 
-  openPatternForm(inst: AssemblyInstance) { this.patternSeedId.set(inst.instanceId); this.patternKind.set('linear'); }
-  cancelPattern() { this.patternSeedId.set(null); }
+  openPatternForm(inst: AssemblyInstance) {
+    this.patternSeedId.set(inst.instanceId);
+    this.pPlaneRef.set(null);
+    this.pAxisRef.set(null);
+    this.setPatternKind('linear');
+  }
+  cancelPattern() { this.patternSeedId.set(null); this.patternPick.set(null); }
+  /** Switching to mirror/circular starts picking its plane/axis right away. */
+  setPatternKind(kind: PatternKind) {
+    this.patternKind.set(kind);
+    this.patternPick.set(kind === 'mirror' && !this.pPlaneRef() ? 'plane' : kind === 'circular' && !this.pAxisRef() ? 'axis' : null);
+  }
+  setPatternPlane(ref: PatternPlaneRef) { this.pPlaneRef.set(ref); this.patternPick.set(null); }
+  setPatternAxis(ref: PatternAxisRef) { this.pAxisRef.set(ref); this.patternPick.set(null); }
+  canCreatePattern = computed(() => {
+    const kind = this.patternKind();
+    return kind === 'mirror' ? !!this.pPlaneRef() : kind === 'circular' ? !!this.pAxisRef() : true;
+  });
   createPattern() {
     const a = this.assembly();
     const seed = this.patternSeedId();
-    if (!a || !seed) return;
+    if (!a || !seed || !this.canCreatePattern()) return;
     const kind = this.patternKind();
     const body: { kind: PatternKind; seedInstanceId: string } & Partial<AssemblyPattern> = { kind, seedInstanceId: seed };
     if (kind === 'linear') { body.count = this.pCount(); body.spacing = this.pSpacing(); }
-    else if (kind === 'circular') { body.count = this.pCount(); body.axisOrigin = [0, 0, 0]; body.axisDir = [0, 0, 1]; body.angleStep = (this.pAngle() * Math.PI) / 180; }
-    else { body.planeOrigin = [0, 0, 0]; body.planeNormal = this.pPlane() === 'YZ' ? [1, 0, 0] : this.pPlane() === 'XZ' ? [0, 1, 0] : [0, 0, 1]; }
+    else if (kind === 'circular') { const ax = this.pAxisRef()!; body.count = this.pCount(); body.axisOrigin = ax.origin; body.axisDir = ax.direction; body.angleStep = (this.pAngle() * Math.PI) / 180; }
+    else { const pl = this.pPlaneRef()!; body.planeOrigin = pl.origin; body.planeNormal = pl.normal; }
     this.assemblyApi.addPattern(a.id, body).subscribe({
       next: (res) => { this.assembly.set(res.assembly); this.cancelPattern(); this.regenerate(); },
       error: (e) => this.errors.showError(e?.error?.error || 'Failed to create pattern'),
@@ -575,6 +599,16 @@ export class AssemblyEditController {
         this.regenerate();
       },
       error: (e) => this.errors.showError(e?.error?.error || 'Failed to remove component'),
+    });
+  }
+
+  /** Tree drag-reorder: move a component to a new creation-order slot. */
+  reorderInstance(instanceId: string, createdAt: number) {
+    const a = this.assembly();
+    if (!a) return;
+    this.assemblyApi.updateInstance(a.id, instanceId, { createdAt }).subscribe({
+      next: (res) => { this.assembly.set(res.assembly); this.regenerate(); },
+      error: (e) => this.errors.showError(e?.error?.error || 'Failed to reorder component'),
     });
   }
 

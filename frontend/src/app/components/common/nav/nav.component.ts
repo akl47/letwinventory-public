@@ -130,6 +130,9 @@ export class NavComponent implements OnInit, OnDestroy {
     isGroupActive(group: NavGroup): boolean {
         const url = this.router.url;
         const prefixMap: Record<NavGroup, string[]> = { inventory: this.inventoryPrefixes, design: this.designPrefixes, tools: this.toolsPrefixes, build: this.buildPrefixes, admin: this.adminPrefixes };
+        // Part CAD pages live under /parts but belong to Design.
+        const isCad = /^\/parts\/[^/]+\/(cad|assembly)(\/|\?|$)/.test(url);
+        if (isCad) return group === 'design';
         return prefixMap[group].some(p => url.startsWith(p));
     }
 

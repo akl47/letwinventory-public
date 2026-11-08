@@ -3785,11 +3785,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (!cloud) return null;
     const prev = this.raycaster.params.Points?.threshold ?? 1;
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    this.raycaster.params.Points = { threshold: 4 };
+    // Radius in screen pixels, not world units: a fixed 4 mm swallowed clicks
+    // on edges of small or dense parts, converting a nearby corner instead.
+    this.raycaster.params.Points = { threshold: this.pixelsToSketchUnits(this.POINT_PICK_PX) };
     const hits = this.raycaster.intersectObject(cloud, false);
     this.raycaster.params.Points = { threshold: prev };
-    if (!hits.length || hits[0].index == null) return null;
-    return (cloud.userData as { overlayVertices: OverlayVertex[] }).overlayVertices[hits[0].index] ?? null;
+    const hit = hits.reduce<THREE.Intersection | null>((best, h) =>
+      h.index != null && (!best || (h.distanceToRay ?? 0) < (best.distanceToRay ?? 0)) ? h : best, null);
+    if (!hit) return null;
+    return (cloud.userData as { overlayVertices: OverlayVertex[] }).overlayVertices[hit.index!] ?? null;
   }
 
   private syncReference(ref: InContextOverlay | null) {
