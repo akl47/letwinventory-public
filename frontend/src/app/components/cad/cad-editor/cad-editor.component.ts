@@ -895,6 +895,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           [selectedDatums]="selectedDatums()"
           [danglingSketchIds]="missingHostSketchIds()"
           [bodyList]="bodiesForTree()"
+          (bodyClicked)="onTreeBodyClicked($event)"
           [hiddenBodyIds]="hiddenBodies()"
           [rollbackBeforeIndex]="rollbackBeforeIndex()"
           [rollbackBeforeCreatedAt]="rollbackBeforeCreatedAt()"
@@ -1844,6 +1845,36 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
              is clicked with a sketch selected (or after the "pick-extrude-
              target" mode lands on a sketch). Inputs mirror the previous
              MatDialog: distance, direction flip, loop selection. -->
+        <!-- REQ 1029 — feature scope for multi-body parts: which bodies an
+             additive feature merges with, or which bodies a cut/hole removes
+             material from. Shared by Extrude, Revolve, Sweep, Loft and Hole. -->
+        <ng-template #bodyScopeTpl>
+          <ng-container *ngIf="showScope()">
+            <ng-container *ngIf="scopeKind() === 'cut'">
+              <div class="panel-field active">
+                <div class="field-header">
+                  <mat-icon class="field-icon">deployed_code</mat-icon>
+                  <span class="field-label">Feature scope</span>
+                </div>
+                <label class="loop-toggle">
+                  <input type="checkbox" data-testid="scope-all-bodies"
+                         [checked]="scopeAllBodies()"
+                         (change)="setScopeAllBodies($any($event.target).checked)" />
+                  <span>{{ scopeAllBodies() ? 'All bodies' : 'Selected bodies only' }}</span>
+                </label>
+              </div>
+            </ng-container>
+            <cad-selection-list *ngIf="scopeKind() === 'cut' ? !scopeAllBodies() : scopeMergeOn()"
+                style="cursor:pointer" (click)="beginScopePick()"
+                [label]="scopeKind() === 'cut' ? 'Bodies affected' : 'Merge with bodies'"
+                headerIcon="deployed_code" testid="scope-bodies"
+                [rows]="scopeRows()" [active]="scopePicking()"
+                [emptyHint]="scopePicking() ? 'Click a face of a body, or a body in the tree' : 'Click here, then a body'"
+                (remove)="removeScopeBody($event)" (clear)="scopeBodyIds.set([])">
+            </cad-selection-list>
+          </ng-container>
+        </ng-template>
+
         <ng-container *ngIf="extrudeSidebar() as ctx">
           <div class="tool-panel" data-testid="extrude-sidebar"
                (keyup.enter)="onExtrudeSidebarEnter()">
@@ -2168,6 +2199,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               </ul>
             </div>
 
+            <ng-container *ngTemplateOutlet="bodyScopeTpl"></ng-container>
             <div class="panel-actions">
               <button class="btn btn-primary"
                       [disabled]="!canCommitExtrude()"
@@ -2266,6 +2298,20 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               </ul>
             </div>
 
+            <div class="panel-field active" *ngIf="ctx.mode !== 'cutRevolve'">
+              <div class="field-header">
+                <mat-icon class="field-icon">merge_type</mat-icon>
+                <span class="field-label">Merge result</span>
+              </div>
+              <label class="loop-toggle">
+                <input type="checkbox"
+                       data-testid="revolve-merge"
+                       [checked]="revolveMerge()"
+                       (change)="revolveMerge.set($any($event.target).checked)" />
+                <span>{{ revolveMerge() ? 'Fuse into existing body' : 'Create a new body' }}</span>
+              </label>
+            </div>
+            <ng-container *ngTemplateOutlet="bodyScopeTpl"></ng-container>
             <div class="panel-actions">
               <button class="btn btn-primary"
                       [disabled]="!canCommitRevolve()"
@@ -2357,6 +2403,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               </label>
             </div>
 
+            <ng-container *ngTemplateOutlet="bodyScopeTpl"></ng-container>
             <div class="panel-actions">
               <button class="btn btn-primary"
                       [disabled]="!canCommitSweep()"
@@ -2430,6 +2477,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               </label>
             </div>
 
+            <ng-container *ngTemplateOutlet="bodyScopeTpl"></ng-container>
             <div class="panel-actions">
               <button class="btn btn-primary" data-testid="loft-apply"
                       [disabled]="!canCommitLoft()"
@@ -3323,6 +3371,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               </label>
             </div>
 
+            <ng-container *ngTemplateOutlet="bodyScopeTpl"></ng-container>
             <div class="panel-actions">
               <button class="btn btn-primary"
                       [disabled]="!canCommitHole()"
@@ -4791,7 +4840,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-448';
+  readonly buildMarker = 'text-449';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -5725,6 +5774,120 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   } | null>(null);
   revolveAngle = signal<number>(360);
   revolveFlipped = signal<boolean>(false);
+  /** "Merge result" for additive revolve (cut revolve ignores it). */
+  revolveMerge = signal<boolean>(true);
+
+  // ── Feature scope (REQ 1029) ───────────────────────────────────────
+  /** Bodies the open feature merges with (additive) or cuts (cut / hole). */
+  scopeBodyIds = signal<string[]>([]);
+  /** Cuts and holes: true = every body (the default), false = scopeBodyIds. */
+  scopeAllBodies = signal<boolean>(true);
+  /** Face clicks pick bodies into the scope while true. */
+  scopePicking = signal<boolean>(false);
+  private _scopeKey: string | null = null;
+  /** The open sidebar that takes a body scope, if any. */
+  private _scopeContext = computed<{ key: string; kind: 'additive' | 'cut'; editingFeatureId?: string } | null>(() => {
+    const e = this.extrudeSidebar();
+    if (e) return { key: `extrude:${e.editingFeatureId ?? e.sketchId}`, kind: e.mode === 'cutExtrude' ? 'cut' : 'additive', editingFeatureId: e.editingFeatureId };
+    const r = this.revolveSidebar();
+    if (r) return { key: `revolve:${r.editingFeatureId ?? r.sketchId}`, kind: r.mode === 'cutRevolve' ? 'cut' : 'additive', editingFeatureId: r.editingFeatureId };
+    const sw = this.sweepSidebar();
+    if (sw) return { key: `sweep:${sw.editingFeatureId ?? sw.mode}`, kind: sw.mode === 'cutSweep' ? 'cut' : 'additive', editingFeatureId: sw.editingFeatureId };
+    const l = this.loftSidebar();
+    if (l) return { key: `loft:${l.editingFeatureId ?? ''}`, kind: 'additive', editingFeatureId: l.editingFeatureId };
+    const h = this.holeSidebar();
+    if (h) return { key: `hole:${h.editingFeatureId ?? ''}`, kind: 'cut', editingFeatureId: h.editingFeatureId };
+    return null;
+  });
+  scopeKind = computed(() => this._scopeContext()?.kind ?? null);
+  /** Bodies that exist before the feature (its own and later bodies can't be targets). */
+  scopeCandidates = computed(() => {
+    const ctx = this._scopeContext();
+    if (!ctx) return [];
+    const feats = this.featureTree().features;
+    const index = new Map(feats.map((f, i) => [f.id, i]));
+    const limit = ctx.editingFeatureId ? (index.get(ctx.editingFeatureId) ?? feats.length) : feats.length;
+    return this.bodiesForTree()
+      .map((b, i) => ({ id: b.id, label: b.name?.trim() ? b.name : `Body ${i + 1}` }))
+      .filter(b => (index.get(b.id.split('#')[0]) ?? -1) < limit);
+  });
+  /** The scope only matters once there's more than one body to choose from. */
+  showScope = computed(() => this.scopeCandidates().length > 1);
+  scopeMergeOn = computed(() => {
+    if (this.extrudeSidebar()) return this.extrudeMerge();
+    if (this.revolveSidebar()) return this.revolveMerge();
+    if (this.sweepSidebar()) return this.sweepMerge();
+    if (this.loftSidebar()) return this.loftMerge();
+    return false;
+  });
+  scopeRows = computed<SelectionRow[]>(() => {
+    const labels = new Map(this.bodiesForTree().map((b, i) => [b.id, b.name?.trim() ? b.name : `Body ${i + 1}`]));
+    return this.scopeBodyIds().map(id => ({ id, label: labels.get(id) ?? id, icon: 'deployed_code' }));
+  });
+  /** False when the scope is shown but names no body to work on. */
+  scopeValid = computed(() => {
+    if (!this.showScope() || this.scopeBodyIds().length > 0) return true;
+    return this.scopeKind() === 'cut' ? this.scopeAllBodies() : !this.scopeMergeOn();
+  });
+  /** Load the scope when a sidebar opens (or switches feature). */
+  private _scopeInit = effect(() => {
+    const ctx = this._scopeContext();
+    untracked(() => {
+      const key = ctx ? `${ctx.kind}:${ctx.key}` : null;
+      if (key === this._scopeKey) return;
+      this._scopeKey = key;
+      if (this.scopePicking()) { this.scopePicking.set(false); this.facePickMode.set(false); }
+      if (!ctx) return;
+      const feature = ctx.editingFeatureId
+        ? this.featureTree().features.find(f => f.id === ctx.editingFeatureId) as { bodyIds?: string[] } | undefined
+        : undefined;
+      const ids = feature?.bodyIds ?? [];
+      if (ctx.kind === 'cut') {
+        this.scopeAllBodies.set(ids.length === 0);
+        this.scopeBodyIds.set(ids);
+      } else {
+        // Default merge target = the most recent body, as before scopes existed.
+        const last = this.scopeCandidates().at(-1);
+        this.scopeBodyIds.set(ids.length ? ids : last ? [last.id] : []);
+      }
+    });
+  });
+
+  /** Tree body row click: feeds the open feature's body scope. */
+  onTreeBodyClicked(bodyId: string): void {
+    if (!this.showScope()) return;
+    if (this.scopeKind() === 'cut' && this.scopeAllBodies()) this.scopeAllBodies.set(false);
+    else if (this.scopeKind() === 'additive' && !this.scopeMergeOn()) return;
+    this.toggleScopeBody(bodyId);
+  }
+
+  setScopeAllBodies(all: boolean): void {
+    this.scopeAllBodies.set(all);
+    if (all) this.scopePicking.set(false);
+    else if (this.scopeBodyIds().length === 0) this.beginScopePick();
+  }
+  beginScopePick(): void {
+    this.scopePicking.set(true);
+    this.facePickMode.set(true);
+  }
+  removeScopeBody(id: string): void {
+    this.scopeBodyIds.set(this.scopeBodyIds().filter(b => b !== id));
+  }
+  /** Add (or remove, if already there) a body picked in the viewer or tree. */
+  toggleScopeBody(bodyId: string): void {
+    if (!this.scopeCandidates().some(b => b.id === bodyId)) {
+      this.errors.showError('That body is created by this feature or a later one, so it can\'t be in its scope.');
+      return;
+    }
+    const cur = this.scopeBodyIds();
+    this.scopeBodyIds.set(cur.includes(bodyId) ? cur.filter(b => b !== bodyId) : [...cur, bodyId]);
+  }
+  /** The scope to store on the committed feature (undefined = default). */
+  private _scopeBodyIds(): string[] | undefined {
+    if (!this.showScope()) return undefined;
+    if (this.scopeKind() === 'cut') return this.scopeAllBodies() ? undefined : [...this.scopeBodyIds()];
+    return this.scopeMergeOn() ? [...this.scopeBodyIds()] : undefined;
+  }
   /** Sketched line id picked as the rotation axis. */
   revolveAxisLineId = signal<string | null>(null);
 
@@ -9986,6 +10149,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.revolveAngle.set(360);
     this.revolveAngleExpression.set(null);
     this.revolveFlipped.set(false);
+    this.revolveMerge.set(true);
     this.extrudeSelectedRegions.set(new Set([0]));
     this.extrudeHoveredRegion.set(null);
     this.revolveSidebar.set({ sketchId: sid, regionCount: regions.length, mode });
@@ -10050,6 +10214,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   canCommitRevolve(): boolean {
     if (!this.revolveSidebar()) return false;
+    if (!this.scopeValid()) return false;
     if (this.revolveAxisLineId() === null) return false;
     if (this.extrudeSelectedRegions().size === 0) return false;
     const a = this.revolveAngle();
@@ -10063,6 +10228,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const angle = this.revolveAngle();
     const flipped = this.revolveFlipped();
     const regionIndices = [...this.extrudeSelectedRegions()].sort((a, b) => a - b);
+    const merge = ctx.mode === 'revolve' ? this.revolveMerge() : undefined;
+    const bodyIds = this._scopeBodyIds();
     this.revolveSidebar.set(null);
     this.extrudeHoveredRegion.set(null);
     this.axisPickMode.set(false);
@@ -10070,14 +10237,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (ctx.editingFeatureId) {
       this.featureTree.set(updateFeatureParam<import('../../../cad/lib/types').RevolveFeature>(
         this.featureTree(), ctx.editingFeatureId,
-        { axisLineId, angle, flipped, regionIndices },
+        { axisLineId, angle, flipped, regionIndices, bodyIds, ...(merge === undefined ? {} : { merge }) },
       ));
       this._writeRevolveEquations(ctx.editingFeatureId);
       this.save();
     } else {
       const base = ctx.mode === 'cutRevolve'
-        ? { type: 'cutRevolve' as const, sketchId: ctx.sketchId, axisLineId, angle, flipped, regionIndices }
-        : { type: 'revolve' as const, sketchId: ctx.sketchId, axisLineId, angle, flipped, regionIndices };
+        ? { type: 'cutRevolve' as const, sketchId: ctx.sketchId, axisLineId, angle, flipped, regionIndices, ...(bodyIds ? { bodyIds } : {}) }
+        : { type: 'revolve' as const, sketchId: ctx.sketchId, axisLineId, angle, flipped, regionIndices, ...(merge === false ? { merge } : {}), ...(bodyIds ? { bodyIds } : {}) };
       const nextTree = addFeature(this.featureTree(), base);
       this.featureTree.set(nextTree);
       const newFeatureId = nextTree.features[nextTree.features.length - 1]?.id;
@@ -10175,6 +10342,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   canCommitSweep(): boolean {
     if (!this.sweepSidebar()) return false;
+    if (!this.scopeValid()) return false;
     const p = this.sweepProfileSketchId();
     const q = this.sweepPathSketchId();
     if (!p || !q || p === q) return false;
@@ -10188,6 +10356,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const profileSketchId = this.sweepProfileSketchId()!;
     const pathSketchId = this.sweepPathSketchId()!;
     const merge = this.sweepMerge();
+    const bodyIds = this._scopeBodyIds();
     this.sweepSidebar.set(null);
     this.sketchPickSlot.set(null);
     this.setMode('idle');
@@ -10195,14 +10364,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       this.featureTree.set(updateFeatureParam<import('../../../cad/lib/types').SweepFeature>(
         this.featureTree(), ctx.editingFeatureId,
         ctx.mode === 'sweep'
-          ? { profileSketchId, pathSketchId, merge }
-          : { profileSketchId, pathSketchId } as Partial<import('../../../cad/lib/types').SweepFeature>,
+          ? { profileSketchId, pathSketchId, merge, bodyIds }
+          : { profileSketchId, pathSketchId, bodyIds } as Partial<import('../../../cad/lib/types').SweepFeature>,
       ));
       this.save();
     } else {
       const base = ctx.mode === 'sweep'
-        ? { type: 'sweep' as const, profileSketchId, pathSketchId, merge }
-        : { type: 'cutSweep' as const, profileSketchId, pathSketchId };
+        ? { type: 'sweep' as const, profileSketchId, pathSketchId, merge, ...(bodyIds ? { bodyIds } : {}) }
+        : { type: 'cutSweep' as const, profileSketchId, pathSketchId, ...(bodyIds ? { bodyIds } : {}) };
       this.featureTree.set(addFeature(this.featureTree(), base));
       // Auto-hide both source sketches, same as Extrude / Revolve.
       let doc = this.doc();
@@ -10264,6 +10433,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.loftSketchIds.set(next);
   }
   canCommitLoft(): boolean {
+    if (!this.scopeValid()) return false;
     const ids = this.loftSketchIds();
     return ids.length >= 2 && ids.every(id => !!this.doc().sketches[id]);
   }
@@ -10272,15 +10442,16 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!ctx || !this.canCommitLoft()) return;
     const sketchIds = [...this.loftSketchIds()];
     const merge = this.loftMerge();
+    const bodyIds = this._scopeBodyIds();
     this.loftSidebar.set(null);
     this.sketchPickSlot.set(null);
     this.setMode('idle');
     if (ctx.editingFeatureId) {
       this.featureTree.set(updateFeatureParam<import('../../../cad/lib/types').LoftFeature>(
-        this.featureTree(), ctx.editingFeatureId, { sketchIds, merge }));
+        this.featureTree(), ctx.editingFeatureId, { sketchIds, merge, bodyIds }));
       this.save();
     } else {
-      this.featureTree.set(addFeature(this.featureTree(), { type: 'loft' as const, sketchIds, merge }));
+      this.featureTree.set(addFeature(this.featureTree(), { type: 'loft' as const, sketchIds, merge, ...(bodyIds ? { bodyIds } : {}) }));
       // Auto-hide the section sketches, same as Extrude / Sweep.
       let doc = this.doc();
       for (const sid of sketchIds) doc = setSketchVisibility(doc, sid, false);
@@ -11464,6 +11635,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
   canCommitHole(): boolean {
     if (!this.holeSidebar()) return false;
+    if (!this.scopeValid()) return false;
     if (this.holePlacements().length === 0) return false;
     if (this.holeEndKind() === 'blind' && !(this.holeDepth() > 0)) return false;
     try { holeSpec(this.holeStandard(), this.holeSize()); } catch { return false; }
@@ -11490,6 +11662,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       ...(this.holeCboreDepthOverride() !== null ? { counterboreDepthOverride: this.holeCboreDepthOverride()! } : {}),
       ...(this.holeCskDiaOverride() !== null ? { countersinkDiameterOverride: this.holeCskDiaOverride()! } : {}),
       ...(this.holeCskAngleOverride() !== null ? { countersinkAngleOverride: this.holeCskAngleOverride()! } : {}),
+      bodyIds: this._scopeBodyIds(),
       createdAt: Date.now(),
     };
     if (ctx.editingFeatureId) {
@@ -12911,6 +13084,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * needs neither. */
   canCommitExtrude(): boolean {
     if (this.extrudeSelectedRegions().size === 0) return false;
+    if (!this.scopeValid()) return false;
     const kind = this.extrudeEndKind();
     let endOk: boolean;
     if (kind === 'blind' || kind === 'midPlane') {
@@ -12969,6 +13143,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * `target` says which signal the click result feeds — direction 1's
    * end condition (default) or the start condition. */
   beginVertexPick(target: 'start' | 'end' | 'end2' = 'end'): void {
+    this.scopePicking.set(false);
     this.facePickMode.set(false);  // mutually exclusive with face pick
     this.extrudePickTarget.set(target);
     this.vertexPickMode.set(true);
@@ -13023,6 +13198,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   /** Enter face-pick mode — same exclusive pattern as vertex picking. */
   beginFacePick(target: 'start' | 'end' | 'end2' = 'end'): void {
+    this.scopePicking.set(false);
     this.vertexPickMode.set(false);
     this.extrudePickTarget.set(target);
     this.facePickMode.set(true);
@@ -13061,6 +13237,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         return;
       }
       this.asm.onFacePicked(faceId);
+      return;
+    }
+    // REQ 1029 — feature scope box armed: the clicked face picks its body.
+    if (this.scopePicking() && this.scopeKind()) {
+      const bodyId = this.bodyIdForFaceId(faceId);
+      if (bodyId) this.toggleScopeBody(bodyId);
       return;
     }
     // Convert Entities: project every boundary edge of the picked face
@@ -14345,6 +14527,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const distance = this.extrudeDistance();
     const flipped = this.extrudeFlipped();
     const merge = this.extrudeMerge();
+    const bodyIds = this._scopeBodyIds();
     const regionIndices = [...this.extrudeSelectedRegions()].sort((a, b) => a - b);
     const startCondition = this.resolveStartCondition();
     if (!startCondition) return;  // canCommitExtrude already gates this
@@ -14362,7 +14545,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       // it for cutExtrude (the field doesn't exist there).
       const patch: Partial<ExtrudeFeature> = {
         distance, flipped, regionIndices, endCondition,
-        startCondition, direction2,
+        startCondition, direction2, bodyIds,
       };
       if (ctx.mode !== 'cutExtrude') patch.merge = merge;
       this.featureTree.set(updateFeatureParam<ExtrudeFeature>(
@@ -14373,7 +14556,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     } else {
       this._applyExtrude(ctx.sketchId, {
         distance, flipped, regionIndices, endCondition, mode: ctx.mode, merge,
-        startCondition, direction2,
+        startCondition, direction2, bodyIds,
       });
     }
   }
@@ -14459,6 +14642,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       merge?: boolean;
       startCondition?: import('../../../cad/lib/types').ExtrudeStartCondition;
       direction2?: import('../../../cad/lib/types').ExtrudeDirection;
+      bodyIds?: string[];
     },
   ) {
     const type = result.mode === 'cutExtrude' ? 'cutExtrude' : 'extrude';
@@ -14470,6 +14654,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       endCondition: result.endCondition ?? { kind: 'blind' },
     };
     if (type === 'extrude' && result.merge === false) featurePayload.merge = false;
+    if (result.bodyIds) featurePayload.bodyIds = result.bodyIds;
     // Persist startCondition only when it differs from the default —
     // keeps the JSON tidy for the common case.
     if (result.startCondition && result.startCondition.kind !== 'sketchPlane') {
@@ -14750,6 +14935,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.revolveAngle.set(feature.angle);
     this.revolveAngleExpression.set(this.featureEquation(`feature.${feature.id}.angle`));
     this.revolveFlipped.set(feature.flipped === true);
+    this.revolveMerge.set(feature.type === 'revolve' ? feature.merge !== false : true);
     this.extrudeSelectedRegions.set(new Set(feature.regionIndices ?? [0]));
     this.revolveSidebar.set({
       sketchId: feature.sketchId,

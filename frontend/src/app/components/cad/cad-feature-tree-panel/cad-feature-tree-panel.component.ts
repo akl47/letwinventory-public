@@ -193,6 +193,7 @@ export interface TreeNode {
               [attr.data-testid]="'body-' + b.id"
               [matTooltip]="compact() ? b.label : ''" matTooltipPosition="right"
               [attr.aria-label]="compact() ? b.label : null"
+              (click)="bodyClicked.emit(b.id)"
               (contextmenu)="onBodyContextMenu($event, b)">
             <span class="chevron-spacer" *ngIf="!compact()"></span>
             <mat-icon class="kind-icon extrude">deployed_code</mat-icon>
@@ -553,6 +554,8 @@ export class CadFeatureTreePanelComponent {
   debugVisible = input<boolean>(false);
   /** Generic row interaction, emitted only in external-nodes mode. */
   externalEvent = output<ExternalTreeEvent>();
+  /** A body row was clicked (e.g. to add it to a feature's body scope). */
+  bodyClicked = output<string>();
   // Map of featureId → friendly error message. Features in this map render
   // with a red error icon + tooltip so the user can identify which feature
   // failed during the last regenerate. Empty map = no errors.

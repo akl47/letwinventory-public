@@ -674,6 +674,10 @@ export interface ExtrudeFeature {
    * existing body — that's how you build multi-body parts. The new body's
    * id is this feature's id. */
   merge?: boolean;
+  /** REQ 1029 — feature scope: bodies this feature merges with (additive,
+   * merge on) or cuts (cut variants). Absent = the default (most recent
+   * body for a merge, every body for a cut). */
+  bodyIds?: string[];
   /** REQ 624 — user-supplied label shown in the feature tree. */
   name?: string;
   /** Creation timestamp — see Sketch.createdAt. */
@@ -688,6 +692,8 @@ export interface ExtrudeFeature {
 export interface CutExtrudeFeature {
   id: FeatureId;
   type: 'cutExtrude';
+  /** REQ 1029 — feature scope: bodies this feature cuts. Absent = every body. */
+  bodyIds?: string[];
   sketchId: SketchId;
   distance: number;
   visible?: boolean;
@@ -727,6 +733,10 @@ export interface RevolveFeature {
   /** SolidWorks-style "Merge result" toggle. Missing == true. See
    * `ExtrudeFeature.merge` for semantics. */
   merge?: boolean;
+  /** REQ 1029 — feature scope: bodies this feature merges with (additive,
+   * merge on) or cuts (cut variants). Absent = the default (most recent
+   * body for a merge, every body for a cut). */
+  bodyIds?: string[];
   visible?: boolean;
   /** SolidWorks-style suppression — see ExtrudeFeature.suppressed. */
   suppressed?: boolean;
@@ -744,6 +754,8 @@ export interface RevolveFeature {
 export interface CutRevolveFeature {
   id: FeatureId;
   type: 'cutRevolve';
+  /** REQ 1029 — feature scope: bodies this feature cuts. Absent = every body. */
+  bodyIds?: string[];
   sketchId: SketchId;
   axisLineId: string;
   angle: number;
@@ -776,6 +788,10 @@ export interface SweepFeature {
    * semantics as ExtrudeFeature.merge — false produces a free-floating
    * body that does not fuse with the cumulative shape. */
   merge?: boolean;
+  /** REQ 1029 — feature scope: bodies this feature merges with (additive,
+   * merge on) or cuts (cut variants). Absent = the default (most recent
+   * body for a merge, every body for a cut). */
+  bodyIds?: string[];
   visible?: boolean;
   /** SolidWorks-style suppression — see ExtrudeFeature.suppressed. */
   suppressed?: boolean;
@@ -790,6 +806,8 @@ export interface SweepFeature {
 export interface CutSweepFeature {
   id: FeatureId;
   type: 'cutSweep';
+  /** REQ 1029 — feature scope: bodies this feature cuts. Absent = every body. */
+  bodyIds?: string[];
   profileSketchId: SketchId;
   pathSketchId: SketchId;
   regionIndices?: number[];
@@ -1170,6 +1188,8 @@ export interface HolePlacement {
 export interface HoleFeature {
   id: FeatureId;
   type: 'hole';
+  /** REQ 1029 — feature scope: bodies to drill. Absent = the most recent body. */
+  bodyIds?: string[];
   /** One entry per hole — drives the per-point loop in the backend. */
   placements: HolePlacement[];
   /** Which hole kind to synthesize. */
@@ -1256,6 +1276,10 @@ export interface LoftFeature {
   sketchIds: SketchId[];
   /** SolidWorks-style "Merge result" toggle. Missing == true. */
   merge?: boolean;
+  /** REQ 1029 — feature scope: bodies this feature merges with (additive,
+   * merge on) or cuts (cut variants). Absent = the default (most recent
+   * body for a merge, every body for a cut). */
+  bodyIds?: string[];
   visible?: boolean;
   suppressed?: boolean;
   name?: string;
