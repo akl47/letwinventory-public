@@ -2280,6 +2280,8 @@ async function _dispatchEdgeBlend(feature, bodies, model, client, dbClient, resu
       chamferMode,
       chamferDistance2,
       chamferAngle,
+      // Kernel cpp-23 changed fillet corner refits — rebuild cached fillets.
+      ...(kind === 'fillet' ? { refit: 2 } : {}),
     });
     const cacheKey = `${feature.id}#blend#${body.id}`;
     console.log(`[cadRegen] dispatching feature ${feature.id} type=${kind} (${bodyEdges.length} edge(s), value=${value})`);
@@ -3507,6 +3509,8 @@ async function _dispatchShell(feature, bodies, model, client, dbClient, results,
   });
   const paramHash = _hashParams({
     op: 'shell',
+    // v2: kernel cpp-22 rejects invalid shells — drops cached corrupt results.
+    v: 2,
     faces: kernelFaces,
     thickness: signedThickness,
     tolerance,

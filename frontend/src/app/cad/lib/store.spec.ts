@@ -3,7 +3,7 @@ import {
   emptySketchState, addPoint, addLine, addCircle, addArc, movePoint, deletePrimitive,
   addConstraint, setDistanceValue, setConstraintDriven,
   addRectangleCorners, addRectangleCenter, addRectangle3PtCorner, addRectangle3PtCenter, addParallelogram,
-  addPolygon, addSlotStraight, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
+  addPolygon, addSlotStraight, addSlotTab, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
   addCircle3Points, addArc3Points, addEllipse, addEllipticalArc, addSpline,
   addParabolaByPoints, addTextBoxByCorners, rotateTextBox,
   setConstructionFlag, mergePoints,
@@ -457,7 +457,7 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       const { state, ids } = addSlotStraight(emptySketchState(), 0, 0, 20, 0, 5);
       expect(ids.length).toBe(4);
       const arcs = state.entities.filter((e): e is ArcEntity => e.kind === 'arc');
-      const lines = state.entities.filter((e): e is LineEntity => e.kind === 'line');
+      const lines = state.entities.filter((e): e is LineEntity => e.kind === 'line' && !e.construction);
       expect(arcs.length).toBe(2);
       expect(lines.length).toBe(2);
     });
@@ -482,15 +482,56 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       expect(arc2.radius).toBeCloseTo(5);
     });
 
-    it('REQ 894: emits parallel rails + equal-radius caps', () => {
-      const { state, ids } = addSlotStraight(emptySketchState(), 0, 0, 20, 0, 5);
-      const [lTopId, arc1Id, lBotId, arc2Id] = ids;
-      const parallels = state.constraints.filter(c => c.type === 'parallel');
-      expect(parallels.length).toBe(1);
-      expect(parallels[0].targets.map(t => t.entityId).sort()).toEqual([lTopId, lBotId].sort());
-      const equals = state.constraints.filter(c => c.type === 'equal');
-      expect(equals.length).toBe(1);
-      expect(equals[0].targets.map(t => t.entityId).sort()).toEqual([arc1Id, arc2Id].sort());
+    it('REQ 1034: rails tangent to both caps and parallel to the centerline', () => {
+      const r = addSlotStraight(emptySketchState(), 0, 0, 20, 0, 5);
+      const [lTopId, arc1Id, lBotId, arc2Id] = r.ids;
+      const pairs = (type: string) => r.state.constraints.filter(c => c.type === type)
+        .map(c => c.targets.map(t => t.entityId).sort().join('|')).sort();
+      const key = (...ids: string[]) => ids.sort().join('|');
+      expect(pairs('tangent')).toEqual([key(lTopId, arc1Id), key(lTopId, arc2Id), key(lBotId, arc1Id), key(lBotId, arc2Id)].sort());
+      expect(pairs('parallel')).toEqual([key(r.centerlineId!, lTopId), key(r.centerlineId!, lBotId)].sort());
+      expect(pairs('equal')).toEqual([]);
+    });
+
+    it('REQ 1034: a construction centerline joins the two cap centers', () => {
+      const r = addSlotStraight(emptySketchState(), 0, 0, 20, 0, 5);
+      const cl = findEntity(r.state, r.centerlineId!) as LineEntity;
+      expect(cl.construction).toBe(true);
+      const [arc1, arc2] = [r.ids[1], r.ids[3]].map(id => findEntity(r.state, id) as ArcEntity);
+      expect([cl.startId, cl.endId].sort()).toEqual([arc2.centerId, arc1.centerId].sort());
+    });
+  });
+
+  describe('addSlotTab (REQ 1034)', () => {
+    it('builds a round cap + two rails + a square end, with a centerline', () => {
+      const r = addSlotTab(emptySketchState(), 0, 0, 20, 0, 5);
+      const [lTopId, lEndId, lBotId, capId] = r.ids;
+      const cap = findEntity(r.state, capId) as ArcEntity;
+      expect(cap.radius).toBeCloseTo(5);
+      const end = findEntity(r.state, lEndId) as LineEntity;
+      const ends = [findPoint(r.state, end.startId)!, findPoint(r.state, end.endId)!];
+      expect(ends.map(p => p.x)).toEqual([20, 20]);
+      expect(ends.map(p => Math.abs(p.y))).toEqual([5, 5]);
+      const cl = findEntity(r.state, r.centerlineId!) as LineEntity;
+      expect(cl.construction).toBe(true);
+      expect(cl.startId).toBe(cap.centerId);
+      const types = r.state.constraints.map(c => c.type).sort();
+      expect(types).toEqual(['coincident', 'parallel', 'parallel', 'perpendicular', 'tangent', 'tangent']);
+      for (const c of r.state.constraints.filter(c => c.type === 'parallel')) {
+        expect(c.targets[0].entityId).toBe(r.centerlineId);
+      }
+      expect(r.state.constraints.find(c => c.type === 'coincident')!.targets.map(t => t.entityId))
+        .toEqual([cl.endId, lEndId]);
+      void lTopId; void lBotId;
+    });
+
+    it('bulges the cap away from the square end', () => {
+      const r = addSlotTab(emptySketchState(), 0, 0, 20, 0, 5);
+      const cap = findEntity(r.state, r.ids[3]) as ArcEntity;
+      const a = findPoint(r.state, cap.startId)!, b = findPoint(r.state, cap.endId)!;
+      // CW sweep from (0,-5) to (0,5) about the origin passes through (-5, 0).
+      expect(cap.ccw).toBe(false);
+      expect([a.y, b.y]).toEqual([-5, 5]);
     });
   });
 

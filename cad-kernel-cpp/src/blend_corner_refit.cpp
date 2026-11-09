@@ -2,6 +2,7 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepLib.hxx>
@@ -10,6 +11,7 @@
 #include <BRepTools_ReShape.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <Bnd_Box.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <ShapeFix_Edge.hxx>
 #include <Standard_Failure.hxx>
@@ -33,6 +35,12 @@ namespace {
 constexpr double MIN_CREASE = 0.05 * M_PI / 180.0;
 constexpr double MAX_CREASE = 10.0 * M_PI / 180.0;
 constexpr int SAMPLES = 8;
+// A refit may only smooth the crease, not reshape the corner: reject one that
+// strays more than this fraction of the patch's size from the original. Good
+// refits stay near 1% (0.06-0.12 mm on a 12 mm patch); a corner OCCT built
+// irregularly refit 0.44 mm off and left a body the shell could not offset
+// (model 935).
+constexpr double MAX_DEVIATION_FRACTION = 0.02;
 
 std::optional<gp_Dir> outward_normal(const TopoDS_Face& f, const gp_Pnt& p) {
   TopLoc_Location loc;
@@ -144,6 +152,32 @@ TopoDS_Face refit(const TopTools_IndexedDataMapOfShapeListOfShape& edge_faces,
   return TopoDS::Face(nf.Oriented(f.Orientation()));
 }
 
+// Largest distance from interior samples of the original patch to the refit
+// surface, as a fraction of the original patch's diagonal.
+double relative_deviation(const TopoDS_Face& f, const TopoDS_Face& nf) {
+  Bnd_Box box;
+  BRepBndLib::AddOptimal(f, box, false, false);
+  const double diag = std::sqrt(box.SquareExtent());
+  if (diag < 1e-9) return 0.0;
+  TopLoc_Location loc;
+  const Handle(Geom_Surface) s = BRep_Tool::Surface(nf, loc);
+  if (s.IsNull()) return 1.0;
+  BRepAdaptor_Surface orig(f);
+  double u0, u1, v0, v1;
+  BRepTools::UVBounds(f, u0, u1, v0, v1);
+  double worst = 0.0;
+  for (int i = 1; i < SAMPLES; ++i) {
+    for (int j = 1; j < SAMPLES; ++j) {
+      gp_Pnt p = orig.Value(u0 + (u1 - u0) * i / SAMPLES, v0 + (v1 - v0) * j / SAMPLES);
+      p.Transform(loc.Transformation().Inverted());
+      GeomAPI_ProjectPointOnSurf proj(p, s);
+      if (!proj.NbPoints()) return 1.0;
+      worst = std::max(worst, proj.LowerDistance());
+    }
+  }
+  return worst / diag;
+}
+
 }  // namespace
 
 TopoDS_Shape refit_creased_blend_corners(const TopoDS_Shape& input) {
@@ -168,6 +202,7 @@ TopoDS_Shape refit_creased_blend_corners(const TopoDS_Shape& input) {
       if (nf.IsNull()) continue;
       // The new face shares the old face's edges, so its neighbours are unchanged.
       if (worst_crease(edge_faces, f, nf) >= before) continue;
+      if (relative_deviation(f, nf) > MAX_DEVIATION_FRACTION) continue;
       reshape.Replace(f, nf);
       ++replaced;
     }

@@ -168,7 +168,8 @@ if $run_e2e; then
     e2e_out=$(mktemp)
     pushd "$FRONTEND_DIR" > /dev/null
     set +e
-    npx playwright test 2>&1 | tee "$e2e_out" >(sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> "$LOG_FILE")
+    # PW_ARGS (optional) narrows the run, e.g. PW_ARGS="-g slot" while iterating.
+    npx playwright test ${PW_ARGS:-} 2>&1 | tee "$e2e_out" >(sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' >> "$LOG_FILE")
     e2e_rc=${PIPESTATUS[0]}
     set -e
     popd > /dev/null

@@ -13,7 +13,7 @@ import {
 import { findEntity, findPoint } from './types';
 import type {
   LineEntity, ArcEntity, CircleEntity, PointEntity,
-  EllipseEntity, EllipticalArcEntity, SplineEntity,
+  EllipseEntity, EllipticalArcEntity, SplineEntity, SketchState,
 } from './types';
 
 /**
@@ -1657,6 +1657,58 @@ describe('stretchEntities', () => {
 });
 
 describe('offsetChain', () => {
+  // Sketch s356r491t3 — a rounded rectangle offset by its corner radius.
+  // Inward the corner arcs collapse (sharp corners); flipping outward
+  // turns their side points into the arc centers, which must still give
+  // radius-2 corner arcs instead of dropping them.
+  function roundedRect(): SketchState {
+    const pts: Array<[string, number, number]> = [
+      ['b0', 1, 0], ['b1', 19, 0], ['r0', 20, 1], ['r1', 20, 9],
+      ['t0', 19, 10], ['t1', 1, 10], ['l0', 0, 9], ['l1', 0, 1],
+      ['cBR', 19, 1], ['cTR', 19, 9], ['cTL', 1, 9], ['cBL', 1, 1],
+    ];
+    return {
+      entities: [
+        ...pts.map(([id, x, y]) => ({ id, kind: 'point', x, y }) as PointEntity),
+        { id: 'bottom', kind: 'line', startId: 'b0', endId: 'b1' } as LineEntity,
+        { id: 'aBR', kind: 'arc', centerId: 'cBR', startId: 'b1', endId: 'r0', radius: 1, ccw: true } as ArcEntity,
+        { id: 'right', kind: 'line', startId: 'r0', endId: 'r1' } as LineEntity,
+        { id: 'aTR', kind: 'arc', centerId: 'cTR', startId: 'r1', endId: 't0', radius: 1, ccw: true } as ArcEntity,
+        { id: 'top', kind: 'line', startId: 't0', endId: 't1' } as LineEntity,
+        { id: 'aTL', kind: 'arc', centerId: 'cTL', startId: 't1', endId: 'l0', radius: 1, ccw: true } as ArcEntity,
+        { id: 'left', kind: 'line', startId: 'l0', endId: 'l1' } as LineEntity,
+        { id: 'aBL', kind: 'arc', centerId: 'cBL', startId: 'l1', endId: 'b0', radius: 1, ccw: true } as ArcEntity,
+      ],
+      constraints: [],
+    } as SketchState;
+  }
+  const kindsOf = (r: { state: SketchState; affectedIds?: string[] }) =>
+    (r.affectedIds ?? []).map(id => findEntity(r.state, id)?.kind);
+  it('inward offset by the corner radius collapses the corner arcs to sharp corners', () => {
+    const inside = { x: 10, y: 5 };
+    const items = ['left', 'bottom', 'aBR', 'right', 'aTR', 'top', 'aTL', 'aBL']
+      .map(entityId => ({ entityId, sidePoint: inside }));
+    const r = offsetChain(roundedRect(), items, 1);
+    expect(kindsOf(r).filter(k => k === 'arc')).toHaveLength(0);
+    expect(kindsOf(r).filter(k => k === 'line')).toHaveLength(4);
+  });
+  it('flipped outward (arc side points at their centers) keeps the corner arcs', () => {
+    const s = roundedRect();
+    const items = [
+      { entityId: 'left', sidePoint: { x: -5, y: 5 } },
+      { entityId: 'bottom', sidePoint: { x: 10, y: -5 } },
+      { entityId: 'right', sidePoint: { x: 25, y: 5 } },
+      { entityId: 'top', sidePoint: { x: 10, y: 15 } },
+      ...['aBR', 'aTR', 'aTL', 'aBL'].map(id => {
+        const c = findPoint(s, (findEntity(s, id) as ArcEntity).centerId)!;
+        return { entityId: id, sidePoint: { x: c.x, y: c.y } };
+      }),
+    ];
+    const r = offsetChain(s, items, 1);
+    const arcs = (r.affectedIds ?? []).map(id => findEntity(r.state, id)).filter(e => e?.kind === 'arc') as ArcEntity[];
+    expect(arcs).toHaveLength(4);
+    for (const a of arcs) expect(a.radius).toBeCloseTo(2, 6);
+  });
   it('reconciles a 90° convex corner with an arc filler when fillCorners is on', () => {
     // L-shape: line from (0,0)→(10,0), then (10,0)→(10,10). The
     // convex corner is at (10, 0) — offsetting outward (sidePoint

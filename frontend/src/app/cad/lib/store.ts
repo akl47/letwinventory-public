@@ -684,7 +684,7 @@ export function addParallelogram(
  */
 export function addSlotStraight(
   state: SketchState, p1x: number, p1y: number, p2x: number, p2y: number, halfWidth: number,
-): { state: SketchState; ids: string[] } {
+): { state: SketchState; ids: string[]; centerlineId?: string } {
   const dx = p2x - p1x, dy = p2y - p1y;
   const len = Math.hypot(dx, dy);
   if (len < 1e-6 || halfWidth < 1e-6) return { state, ids: [] };
@@ -719,12 +719,56 @@ export function addSlotStraight(
   // construction, satisfying addArcByPoints's radius invariant.
   const arc1 = addArcByPoints(s, pc2.id, pb1.id, pb2.id, false); s = arc1.state;
   const arc2 = addArcByPoints(s, pc1.id, pa2.id, pa1.id, false); s = arc2.state;
-  // REQ 894 — slot relations, so the slot survives edits AS a slot (SW
-  // parity: slots stay slots and need only length/width/position dims):
-  // rails stay parallel, caps stay equal-radius.
-  s = addConstraint(s, 'parallel', [lTop.id, lBot.id]).state;
-  s = addConstraint(s, 'equal', [arc1.id, arc2.id]).state;
-  return { state: s, ids: [lTop.id, arc1.id, lBot.id, arc2.id] };
+  // REQ 894 / 1034 — slot relations, so the slot survives edits AS a slot
+  // (SW parity: slots stay slots and need only length/width/position dims).
+  // A construction centerline joins the cap centers; both rails are parallel
+  // to it and every rail is tangent to both caps (which also keeps the caps
+  // equal).
+  const center = addLine(s, pc1.id, pc2.id, { construction: true }); s = center.state;
+  for (const rail of [lTop.id, lBot.id]) {
+    for (const cap of [arc2.id, arc1.id]) s = addConstraint(s, 'tangent', [rail, cap]).state;
+  }
+  s = addConstraint(s, 'parallel', [center.id, lTop.id]).state;
+  s = addConstraint(s, 'parallel', [center.id, lBot.id]).state;
+  return { state: s, ids: [lTop.id, arc1.id, lBot.id, arc2.id], centerlineId: center.id };
+}
+
+/**
+ * REQ 1034 — Tab (half slot): a semicircular cap centered on (cx, cy) and a
+ * square end whose midpoint is (ex, ey). A construction centerline joins the
+ * two; the rails are parallel to it and tangent to the cap, and the end line
+ * is perpendicular to them.
+ */
+export function addSlotTab(
+  state: SketchState, cx: number, cy: number, ex: number, ey: number, halfWidth: number,
+): { state: SketchState; ids: string[]; centerlineId?: string } {
+  const dx = ex - cx, dy = ey - cy;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6 || halfWidth < 1e-6) return { state, ids: [] };
+  const ox = (-dy / len) * halfWidth, oy = (dx / len) * halfWidth;
+  let s = state;
+  const pa1 = addPoint(s, cx + ox, cy + oy); s = pa1.state;
+  const pa2 = addPoint(s, cx - ox, cy - oy); s = pa2.state;
+  const pb1 = addPoint(s, ex + ox, ey + oy); s = pb1.state;
+  const pb2 = addPoint(s, ex - ox, ey - oy); s = pb2.state;
+  const pc = addPoint(s, cx, cy); s = pc.state;
+  const pe = addPoint(s, ex, ey); s = pe.state;
+  const lTop = addLine(s, pa1.id, pb1.id); s = lTop.state;
+  const lEnd = addLine(s, pb1.id, pb2.id); s = lEnd.state;
+  const lBot = addLine(s, pb2.id, pa2.id); s = lBot.state;
+  // Same outward sweep as the slot's near cap (see addSlotStraight).
+  const cap = addArcByPoints(s, pc.id, pa2.id, pa1.id, false); s = cap.state;
+  // Rails parallel to the centerline and tangent to the cap, end square to
+  // them, and the end point on the end line. That places (ex, ey) at the end
+  // line's midpoint; a midpoint constraint on top would be redundant.
+  const center = addLine(s, pc.id, pe.id, { construction: true }); s = center.state;
+  s = addConstraint(s, 'parallel', [center.id, lTop.id]).state;
+  s = addConstraint(s, 'parallel', [center.id, lBot.id]).state;
+  s = addConstraint(s, 'tangent', [lTop.id, cap.id]).state;
+  s = addConstraint(s, 'tangent', [lBot.id, cap.id]).state;
+  s = addConstraint(s, 'perpendicular', [lEnd.id, lTop.id]).state;
+  s = addConstraint(s, 'coincident', [pe.id, lEnd.id]).state;
+  return { state: s, ids: [lTop.id, lEnd.id, lBot.id, cap.id], centerlineId: center.id };
 }
 
 /**
