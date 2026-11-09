@@ -137,6 +137,7 @@ const ICONS: Record<string, string> = {
   'cad-polygon': `<path d="M12 3 L 20.66 8 L 20.66 16 L 12 21 L 3.34 16 L 3.34 8 Z"/>`,
   // Slot = pill: two horizontal lines + semicircular caps.
   'cad-slot': `<path d="M7 9 L 17 9 A 3 3 0 0 1 17 15 L 7 15 A 3 3 0 0 1 7 9 Z"/>`,
+  'cad-slot-tab': `<path d="M7 9 L 17 9 L 17 15 L 7 15 A 3 3 0 0 1 7 9 Z"/>`,
   'cad-slot-centerpoint': `<path d="M7 9 L 17 9 A 3 3 0 0 1 17 15 L 7 15 A 3 3 0 0 1 7 9 Z"/>${dot(12, 12, 1.6)}`,
   // Arc slot = curved pill (two concentric arcs + cap arcs at each end).
   'cad-slot-arc-3pt': `<path d="M5 19 A 11 11 0 0 1 19 19"/><path d="M9 19 A 7 7 0 0 1 15 19"/><path d="M5 19 A 2 2 0 0 1 9 19"/><path d="M15 19 A 2 2 0 0 1 19 19"/>`,

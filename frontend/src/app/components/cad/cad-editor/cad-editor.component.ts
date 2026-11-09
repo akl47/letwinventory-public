@@ -29,7 +29,7 @@ import { CadStreamService, type CadStreamEvent } from '../../../services/cad-str
 import { CadUiStateService } from '../../../services/cad-ui-state.service';
 import { CadViewerComponent, type DisplayMode, type SketchPreview, type ProfileFill, type HolePreview, type CosmeticThread } from '../cad-viewer/cad-viewer.component';
 import { CadFeatureTreePanelComponent, type FeatureTreeAction, type FeatureSelectEvent, type SketchSelectEvent, type ExternalTreeEvent, type TreeNode } from '../cad-feature-tree-panel/cad-feature-tree-panel.component';
-import { CadSketchEditorComponent } from '../cad-sketch-editor/cad-sketch-editor.component';
+import { CadSketchEditorComponent, type CircleMode } from '../cad-sketch-editor/cad-sketch-editor.component';
 import { CadConstraintListComponent } from '../cad-constraint-list/cad-constraint-list.component';
 import { CadDimensionPropertiesComponent } from '../cad-dimension-properties/cad-dimension-properties.component';
 import { CategoryBadge } from '../../common/category-badge/category-badge';
@@ -1009,6 +1009,17 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               </header>
               <div class="rail-tool-body" [hidden]="toolOptsCollapsed()">
                 @switch (rt.tool) {
+                  @case ('circle') {
+                    @for (m of circleModes; track m.mode) {
+                      <label class="panel-toggle" [attr.data-testid]="'circle-mode-' + m.mode">
+                        <input type="radio" name="circle-mode"
+                               [checked]="sketchEditor.circleMode() === m.mode"
+                               (change)="sketchEditor.setCircleMode(m.mode)" />
+                        <span>{{ m.label }}</span>
+                      </label>
+                    }
+                    <p class="rail-tool-hint">{{ circleModeHint() }}</p>
+                  }
                   @case ('trim') {
                     <label class="panel-toggle" data-testid="trim-keep-construction">
                       <input type="checkbox"
@@ -4787,7 +4798,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-452';
+  readonly buildMarker = 'text-461';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -6874,12 +6885,36 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * null when the current tool has no rail panel. */
   railTool = computed<{ tool: string; label: string; icon?: string; svgIcon?: string } | null>(() => {
     switch (this.sketchEditorRef()?.tool()) {
+      case 'circle': return { tool: 'circle', label: 'Circle', svgIcon: 'cad-circle' };
       case 'trim': return { tool: 'trim', label: 'Trim', svgIcon: 'cad-trim' };
       case 'mirror': return { tool: 'mirror', label: 'Mirror Entities', icon: 'flip' };
       case 'convert-entities': return { tool: 'convert-entities', label: 'Convert Entities', svgIcon: 'cad-convert' };
       default: return null;
     }
   });
+
+  /** REQ 1032 — Circle tool placement modes (rail options). */
+  readonly circleModes: Array<{ mode: CircleMode; label: string }> = [
+    { mode: 'single', label: 'Single circle' },
+    { mode: 'repeat', label: 'Repeat — same diameter, one click each' },
+    { mode: 'boss', label: 'Repeat boss — concentric pair, one click each' },
+  ];
+  circleModeHint(): string {
+    const ed = this.sketchEditorRef();
+    if (!ed) return '';
+    const started = !!ed.circleRepeat();
+    switch (ed.circleMode()) {
+      case 'repeat': return started
+        ? 'Click a center to place another circle of the same diameter.'
+        : 'Click a center, then a radius, for the first circle.';
+      case 'boss': return started
+        ? 'Click a center to place another boss of the same size.'
+        : ed.draftBossInnerRadius() !== null
+          ? 'Click the second radius.'
+          : 'Click a center, then the two radii, for the first boss.';
+      default: return 'Click a center, then a point on the circle.';
+    }
+  }
 
   /** Convert Entities options (REQ 921) — persisted like the Trim options. */
   readonly convertToConstruction = signal<boolean>(localStorage.getItem('cadConvertConstruction') === '1');
@@ -8948,16 +8983,17 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * guide back to the reference) into the sketch overlay preview, mirroring
    * what `_snapClickToPoint` will commit on click (REQ 827). No-op when
    * nothing aligns to an armed reference (the origin, or a hovered point). */
-  private pushAlignmentPreview(items: SketchPreview[], state: SketchState, cursor: { x: number; y: number }): void {
+  private pushAlignmentPreview(items: SketchPreview[], state: SketchState, cursor: { x: number; y: number }): { x: number; y: number } | null {
     const editor = this.sketchEditorRef();
-    if (!editor) return;
+    if (!editor) return null;
     const align = inferAlignment(state, cursor, editor.armedRefs(), { tol: this.sketchPointTolerance() });
-    if (!align.refs.length) return;
+    if (!align.refs.length) return null;
     items.push({ kind: 'snap-indicator', x: align.snapped.x, y: align.snapped.y });
     for (let i = 0; i < align.hints.length; i++) {
       items.push({ kind: 'inference-badge', x: align.snapped.x, y: align.snapped.y, label: align.hints[i], stackIndex: i });
     }
     for (const g of align.guides) items.push({ kind: 'alignment-guide', start: g.from, end: g.to });
+    return align.snapped;
   }
 
   /** Push dashed-ghost preview items for the given entity ids of a
@@ -9150,17 +9186,32 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       }
       return items;
     }
-    if (tool === 'slot') {
+    if (tool === 'slot' || tool === 'slot-tab') {
       const path = editor.draftSlotPath();
       if (path.p1) items.push({ kind: 'point-marker', x: path.p1.x, y: path.p1.y, style: 'pending' });
       if (path.p2) items.push({ kind: 'point-marker', x: path.p2.x, y: path.p2.y, style: 'pending' });
-      if (path.p1 && !path.p2) {
-        // First-click → cursor preview: centerline only.
-        items.push({ kind: 'line', start: path.p1, end: cursor });
-      }
-      if (path.p1 && path.p2) {
-        // Both endpoints set; preview the full slot shape using the cursor as
-        // the width control point.
+      // REQ 1034 — both centerline clicks show the same snap hints a point
+      // or line endpoint does.
+      const badges = (at: { x: number; y: number }, hints: string[]) => {
+        if (hints.length === 0) return;
+        items.push({ kind: 'snap-indicator', x: at.x, y: at.y });
+        hints.forEach((label, i) => items.push({ kind: 'inference-badge', x: at.x, y: at.y, label, stackIndex: i }));
+      };
+      if (!path.p1) {
+        const hover = inferHoverOnCurve(sketch.state, cursor);
+        if (hover) badges(hover.snapped, hover.hints);
+        else this.pushAlignmentPreview(items, sketch.state, cursor);
+      } else if (!path.p2) {
+        const snapPt = this.snapTargetPoint();
+        const inf = snapPt ? null : inferLineEnd(sketch.state, path.p1, cursor, { curveTol: this.sketchCurveTolerance() });
+        const end = snapPt ? { x: snapPt.x, y: snapPt.y } : inf!.snapped;
+        items.push({ kind: 'line', start: path.p1, end });
+        if (snapPt) items.push({ kind: 'snap-indicator', x: end.x, y: end.y });
+        else badges(end, inf!.hints ?? (inf!.hint ? [inf!.hint] : []));
+      } else {
+        // Both centerline points set; preview the shape with the cursor as
+        // the width control point. Caps sweep CW so they bulge outward —
+        // the same direction addSlotStraight / addSlotTab commit.
         const dx = path.p2.x - path.p1.x, dy = path.p2.y - path.p1.y;
         const len = Math.hypot(dx, dy);
         if (len > 1e-6) {
@@ -9173,8 +9224,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           const b2 = { x: path.p2.x - ox, y: path.p2.y - oy };
           items.push({ kind: 'line', start: a1, end: b1 });
           items.push({ kind: 'line', start: b2, end: a2 });
-          items.push({ kind: 'arc', center: path.p2, start: b1, end: b2, radius: hw, ccw: true });
-          items.push({ kind: 'arc', center: path.p1, start: a2, end: a1, radius: hw, ccw: true });
+          items.push({ kind: 'line', start: path.p1, end: path.p2 });
+          if (tool === 'slot-tab') items.push({ kind: 'line', start: b1, end: b2 });
+          else items.push({ kind: 'arc', center: path.p2, start: b1, end: b2, radius: hw, ccw: false });
+          items.push({ kind: 'arc', center: path.p1, start: a2, end: a1, radius: hw, ccw: false });
         }
       }
       return items;
@@ -9310,8 +9363,28 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       }
     } else if (tool === 'circle') {
       const center = editor.draftCircleCenter();
-      if (center) {
+      // REQ 1032 — a repeat run ghosts its copy (or boss pair) at the cursor.
+      const repeatRadii = editor.circleMode() !== 'single'
+        ? (editor.circleRepeat() ?? []).map(id => sketch.state.entities.find(e => e.id === id))
+            .flatMap(e => (e?.kind === 'circle' ? [e.radius] : []))
+        : [];
+      if (!center && repeatRadii.length > 0) {
+        // Same snaps as a first click — the ghost sits where the center will.
+        const hover = inferHoverOnCurve(sketch.state, cursor);
+        let at = cursor;
+        if (hover) {
+          at = hover.snapped;
+          items.push({ kind: 'snap-indicator', x: at.x, y: at.y });
+          hover.hints.forEach((label, i) => items.push({ kind: 'inference-badge', x: at.x, y: at.y, label, stackIndex: i }));
+        } else {
+          at = this.pushAlignmentPreview(items, sketch.state, cursor) ?? cursor;
+        }
+        items.push({ kind: 'point-marker', x: at.x, y: at.y, style: 'pending' });
+        for (const radius of repeatRadii) items.push({ kind: 'circle', center: at, radius });
+      } else if (center) {
         items.push({ kind: 'point-marker', x: center.x, y: center.y, style: 'pending' });
+        const inner = editor.draftBossInnerRadius();
+        if (inner !== null) items.push({ kind: 'circle', center, radius: inner });
         const radius = Math.hypot(cursor.x - center.x, cursor.y - center.y);
         if (radius > 0.1) items.push({ kind: 'circle', center, radius });
       } else {

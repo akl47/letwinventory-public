@@ -290,13 +290,23 @@ json op_buildShell(const json& params) {
     if (mts.IsDone()) shape = mts.Shape();
     // Holes whose shell tubes run close to other walls make ByJoin fail or
     // return an inside-out solid (rendered see-through). Rebuild from the
-    // hole-filled body instead; keep ByJoin's result if that can't help.
+    // hole-filled body instead.
     if (shape.IsNull() || !BRepCheck_Analyzer(shape).IsValid()) {
       TopoDS_Shape alt = shell_with_hole_tubes(body, closing_faces, thickness, tolerance);
       if (!alt.IsNull()) shape = alt;
     }
     if (shape.IsNull()) {
       throw std::runtime_error("MakeThickSolidByJoin did not complete");
+    }
+    // An invalid result is a corrupt solid (walls missing or self-crossing),
+    // not a shell — report it instead of handing it downstream as success.
+    if (!BRepCheck_Analyzer(shape).IsValid()) {
+      throw std::runtime_error(
+          "buildShell: OCCT could not hollow this body at " +
+          std::to_string(std::fabs(thickness)) +
+          " mm — the result is not a valid solid. Blended corners are the usual "
+          "cause (a fillet larger than the corner beneath it): shell before "
+          "filleting, reduce the fillet radius, or try a different thickness.");
     }
   } catch (const Standard_Failure& f) {
     throw std::runtime_error(

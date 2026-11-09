@@ -2458,9 +2458,12 @@ function detectOffsetsOnWrongPolygonSide(
     }
   }
   if (seedIdx < 0) seedIdx = 0;
-  const sides: (boolean | null)[] = workItems.map((_, i) => {
+  const sides: (boolean | null)[] = workItems.map((it, i) => {
     const oid = offsetIds[i];
-    if (!oid) return null;
+    // A failed offset (an arc that collapsed toward its center) has no
+    // result to test — judge the side it was ASKED to go instead, so a
+    // corner arc whose side point disagrees with the seed still flips.
+    if (!oid) return requestedSideInside(preState, it, polygon);
     const off = findEntity(state, oid);
     if (!off) return null;
     const mid = offsetMidpoint(state, off);
@@ -2476,6 +2479,40 @@ function detectOffsetsOnWrongPolygonSide(
     if (s !== seedSide) out[i] = true;
   }
   return out;
+}
+
+/** Whether an item's requested offset side lies inside the chain
+ * polygon: the source curve's midpoint nudged toward its side point
+ * (arcs: toward the center when the side point is inside the circle,
+ * matching `offsetCurve`). Null for anything else. */
+function requestedSideInside(state: SketchState, item: OffsetChainItem, polygon: Pt[]): boolean | null {
+  const e = findEntity(state, item.entityId);
+  const sp = item.sidePoint;
+  if (e?.kind === 'arc') {
+    const c = findPoint(state, e.centerId);
+    const a = findPoint(state, e.startId);
+    const b = findPoint(state, e.endId);
+    if (!c || !a || !b) return null;
+    const a0 = Math.atan2(a.y - c.y, a.x - c.x);
+    let sweep = Math.atan2(b.y - c.y, b.x - c.x) - a0;
+    if (e.ccw) { while (sweep <= 0) sweep += Math.PI * 2; } else { while (sweep >= 0) sweep -= Math.PI * 2; }
+    const m = a0 + sweep / 2;
+    const inward = Math.hypot(sp.x - c.x, sp.y - c.y) < e.radius;
+    const r = e.radius * (inward ? 0.95 : 1.05);
+    return _polygonContains(polygon, { x: c.x + r * Math.cos(m), y: c.y + r * Math.sin(m) });
+  }
+  if (e?.kind === 'line') {
+    const a = findPoint(state, e.startId);
+    const b = findPoint(state, e.endId);
+    if (!a || !b) return null;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < EPS) return null;
+    const side = Math.sign(dx * (sp.y - a.y) - dy * (sp.x - a.x)) || 1;
+    const k = 1e-3 * side;
+    return _polygonContains(polygon, { x: (a.x + b.x) / 2 - dy * k, y: (a.y + b.y) / 2 + dx * k });
+  }
+  return null;
 }
 
 /** Walk an ordered chain of line/arc entities and emit a tessellated

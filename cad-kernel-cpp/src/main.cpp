@@ -49,7 +49,11 @@ using json = nlohmann::json;
 //     swept at startup. Behavior-only — NAMING stays 48.
 // cpp-21: fillet corner patches left creased by OCCT (radius larger than the
 //     corner it wraps) are refit tangent to their neighbours.
-static constexpr const char* KERNEL_BUILD = "cpp-21";
+// cpp-22: buildShell rejects an invalid result with an error instead of
+//     returning the corrupt solid as success. NAMING unchanged.
+// cpp-23: a fillet-corner refit that strays >2% of the patch size from the
+//     original is rejected (it reshaped an irregular corner and broke shells).
+static constexpr const char* KERNEL_BUILD = "cpp-23";
 // 30: native C++/OCCT 8.0 kernel; binary BinTools BReps invalidate the old
 // text-BRep cache (must match NAMING_VERSION in backend cadRegenService.js).
 // 31: tessellation normal off-by-one fix (zero-normal last node → dark

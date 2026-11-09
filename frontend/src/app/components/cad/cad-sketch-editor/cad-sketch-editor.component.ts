@@ -19,7 +19,7 @@ import { angleQuadrant } from '../../../cad/lib/geometry';
 import {
   addPoint, addLine, addCircle, addCircleByPoint, addArc, addArcByPoints, addConstraint, movePoint, deletePrimitive, emptySketchState,
   addRectangleCorners, addRectangleCenter, addRectangle3PtCorner, addRectangle3PtCenter, addParallelogram,
-  addPolygon, addSlotStraight, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
+  addPolygon, addSlotStraight, addSlotTab, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
   addCircle3Points, addArc3Points, addEllipse, addEllipticalArc, addSpline,
   addParabolaByPoints, addEquationCurve, addText, addTextBoxByCorners, addPicture,
   setConstructionFlag, setConstraintDriven, mergePoints, ORIGIN_POINT_ID,
@@ -43,12 +43,15 @@ import {
   type ChamferMode,
 } from '../../../cad/lib/sketchEditOps';
 
+/** REQ 1032 — Circle tool placement modes. */
+export type CircleMode = 'single' | 'repeat' | 'boss';
+
 type Tool =
   | 'select' | 'point' | 'line' | 'centerline' | 'midpoint-line' | 'circle' | 'arc'
   | 'rect-corner' | 'rect-center' | 'rect-3pt-corner' | 'rect-3pt-center'
   | 'rect-rounded-corner' | 'rect-rounded-center'
   | 'parallelogram' | 'polygon'
-  | 'slot' | 'slot-centerpoint' | 'slot-arc-3pt' | 'slot-arc-centerpoint'
+  | 'slot' | 'slot-tab' | 'slot-centerpoint' | 'slot-arc-3pt' | 'slot-arc-centerpoint'
   | 'circle-3pt' | 'arc-3pt' | 'ellipse' | 'partial-ellipse' | 'spline' | 'style-spline'
   | 'parabola' | 'equation-curve' | 'text' | 'picture'
   | 'circle-perimeter' | 'tangent-arc'
@@ -263,6 +266,7 @@ const SHAPE_TOOLS: readonly ToolSpec[] = [
   { tool: 'parallelogram',         icon: 'cad-parallelogram',         label: 'Parallelogram',    tooltip: 'Parallelogram (3 corners — 4th derived from closure)' },
   { tool: 'polygon',               icon: 'cad-polygon',               label: 'Polygon',          tooltip: 'Regular polygon (prompts for N)' },
   { tool: 'slot',                  icon: 'cad-slot',                  label: 'Slot',             tooltip: 'Straight slot (endpoint, endpoint, width)' },
+  { tool: 'slot-tab',              icon: 'cad-slot-tab',              label: 'Tab',              tooltip: 'Tab (half slot): round-end center, square-end midpoint, width' },
   { tool: 'slot-centerpoint',      icon: 'cad-slot-centerpoint',      label: 'C-pt Slot',        tooltip: 'Straight slot from center + one cap + width' },
   { tool: 'slot-arc-3pt',          icon: 'cad-slot-arc-3pt',          label: '3-pt Arc Slot',    tooltip: 'Arc slot through 3 centerline points + width' },
   { tool: 'slot-arc-centerpoint',  icon: 'cad-slot-arc-centerpoint',  label: 'C-pt Arc Slot',    tooltip: 'Arc slot: arc center, start, end + width' },
@@ -905,6 +909,20 @@ export class CadSketchEditorComponent implements OnDestroy {
   armedRefs = signal<Set<string>>(new Set());
   draftLineStart = signal<string | null>(null);
   draftCircleCenter = signal<PendingPoint | null>(null);
+  /** REQ 1032 — Circle placement mode, persisted like the Trim options. */
+  circleMode = signal<CircleMode>((localStorage.getItem('cadCircleMode') as CircleMode) || 'single');
+  /** The first circle of a Repeat run ([inner, outer] for Repeat boss).
+   * Later clicks copy their sizes and equal-constrain to them. */
+  circleRepeat = signal<string[] | null>(null);
+  /** Repeat boss: inner radius picked, waiting for the outer-radius click. */
+  draftBossInnerRadius = signal<number | null>(null);
+  setCircleMode(mode: CircleMode): void {
+    this.circleMode.set(mode);
+    localStorage.setItem('cadCircleMode', mode);
+    this.draftCircleCenter.set(null);
+    this.draftBossInnerRadius.set(null);
+    this.circleRepeat.set(null);
+  }
   draftArcCenter = signal<PendingPoint | null>(null);
   draftArcStart = signal<PendingPoint | null>(null);
   // Composite-shape drafts. Each holds the points clicked so far for the
@@ -935,7 +953,7 @@ export class CadSketchEditorComponent implements OnDestroy {
   eqTMax = signal<number>(Math.PI * 2);
   eqSamples = signal<number>(100);
   setEqSamples(n: number) { this.eqSamples.set(Math.max(8, Math.min(2000, Math.round(n) || 100))); }
-  draftSlotPath = signal<{ p1?: PendingPoint; p2?: PendingPoint }>({});  // slot: 2 centerline endpoints + 1 width click
+  draftSlotPath = signal<{ p1?: PendingPoint; p2?: PendingPoint & { axis?: 'horizontal' | 'vertical' } }>({});  // slot: 2 centerline endpoints + 1 width click
   // 3-point rectangle (corner variant): 2 clicks define the first edge,
   // 3rd click picks the opposite-side offset.
   draftRect3Corner = signal<PendingPoint[]>([]);
@@ -1132,6 +1150,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     ['parallelogram',   () => { this.clearAllDraftsExcept(['parallelogram']); }],
     ['polygon', () => { this.clearAllDraftsExcept(['polygon']); }],
     ['slot', () => { this.clearAllDraftsExcept(['slot']); }],
+    ['slot-tab', () => { this.clearAllDraftsExcept(['slot-tab']); }],
     ['slot-centerpoint',     () => { this.clearAllDraftsExcept(['slot-centerpoint']); }],
     ['slot-arc-3pt',         () => { this.clearAllDraftsExcept(['slot-arc-3pt']); }],
     ['slot-arc-centerpoint', () => { this.clearAllDraftsExcept(['slot-arc-centerpoint']); }],
@@ -1292,7 +1311,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     // so the user can switch between them mid-chain without dropping
     // their pending start point.
     if (!k.has('line') && !k.has('centerline') && !k.has('midpoint-line')) this.draftLineStart.set(null);
-    if (!k.has('circle')) this.draftCircleCenter.set(null);
+    if (!k.has('circle')) { this.draftCircleCenter.set(null); this.draftBossInnerRadius.set(null); this.circleRepeat.set(null); }
     if (!k.has('arc')) { this.draftArcCenter.set(null); this.draftArcStart.set(null); }
     if (!k.has('rect-corner')) this.draftRectCorner.set(null);
     if (!k.has('rect-center')) this.draftRectCenter.set(null);
@@ -1302,7 +1321,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (!k.has('rect-3pt-center')) this.draftRect3Center.set([]);
     if (!k.has('parallelogram')) this.draftParallelogram.set([]);
     if (!k.has('polygon')) this.draftPolygonCenter.set(null);
-    if (!k.has('slot')) this.draftSlotPath.set({});
+    if (!k.has('slot') && !k.has('slot-tab')) this.draftSlotPath.set({});
     if (!k.has('slot-centerpoint')) this.draftSlotCenterpoint.set({});
     if (!k.has('slot-arc-3pt')) this.draftSlotArc3.set([]);
     if (!k.has('slot-arc-centerpoint')) this.draftSlotArcCenterpoint.set([]);
@@ -1632,6 +1651,8 @@ export class CadSketchEditorComponent implements OnDestroy {
   private clearAllDrafts() {
     this.draftLineStart.set(null);
     this.draftCircleCenter.set(null);
+    this.draftBossInnerRadius.set(null);
+    this.circleRepeat.set(null);
     this.draftArcCenter.set(null);
     this.draftArcStart.set(null);
     this.draftRectCorner.set(null);
@@ -2002,6 +2023,7 @@ export class CadSketchEditorComponent implements OnDestroy {
       case 'parallelogram':       this.handleParallelogramClick(x, y); break;
       case 'polygon':             this.handlePolygonClick(x, y); break;
       case 'slot':                this.handleSlotClick(x, y); break;
+      case 'slot-tab':            this.handleSlotClick(x, y, 'tab'); break;
       case 'slot-centerpoint':    this.handleSlotCenterpointClick(x, y); break;
       case 'slot-arc-3pt':        this.handleSlotArc3Click(x, y); break;
       case 'slot-arc-centerpoint': this.handleSlotArcCenterpointClick(x, y); break;
@@ -2277,7 +2299,7 @@ export class CadSketchEditorComponent implements OnDestroy {
           next = movePoint(next, id, q.x, q.y);
         }
       }
-      this.commit(next);
+      this.commit(next, new Set(drag.points.map(pt => pt.id)));
       return;
     }
     const rb = this.rubberBand();
@@ -2315,18 +2337,7 @@ export class CadSketchEditorComponent implements OnDestroy {
       // movable so the solver can't slide them around to satisfy a
       // coincident-with-projected constraint while the user is
       // dragging a free entity tied to them.
-      const projectedAnchors = this._projectedAnchorPoints(state);
-      const movable = new Set<string>();
-      for (const e of state.entities) {
-        if (e.kind !== 'point') continue;
-        if (dragged.has(e.id)) continue;
-        if (projectedAnchors.has(e.id)) continue;
-        movable.add(e.id);
-      }
-      // Pin curve radii so circles / arcs can't grow or shrink to satisfy
-      // constraints during the drag. The user is just translating the
-      // anchor; resizing should require an explicit dimension edit.
-      result = await solveSketch(state, { movablePoints: movable, pinAllRadii: true, externalEdges: this._externalEdgeLines() });
+      result = await this._dragSolve(state, dragged);
     } else {
       result = await solveSketch(state, { externalEdges: this._externalEdgeLines() });
     }
@@ -2339,6 +2350,37 @@ export class CadSketchEditorComponent implements OnDestroy {
     // this gate the dragged points would slide with the cursor regardless
     // of constraint violations.
     if (result.status === 'ok' && !this._solveCollapsed(state, result.state)) this.sketchChanged.emit(result.state);
+  }
+
+  /** Solve a drag with the dragged points pinned and curve radii pinned (the
+   * user is translating the anchor; resizing needs an explicit dimension).
+   * First try also holding the OTHER arc/circle centers and construction-line
+   * endpoints — the defining points of slots, tabs, rounded shapes — so
+   * dragging one slot center leaves the other where it is (SW behavior),
+   * except the center of an arc the dragged point ends.
+   * Only when that can't be satisfied are those points freed too.
+   * Projected-entity anchors are never movable: their coords come from the
+   * body's source edge each regen. */
+  private async _dragSolve(state: SketchState, dragged: Set<string>) {
+    const projectedAnchors = this._projectedAnchorPoints(state);
+    const held = new Set<string>();
+    for (const e of state.entities) {
+      if (e.kind === 'arc' || e.kind === 'circle') held.add(e.centerId);
+      else if (e.kind === 'line' && e.construction) { held.add(e.startId); held.add(e.endId); }
+    }
+    // An arc's endpoint can only move with its center (the radius is pinned),
+    // so dragging a slot's rail end carries that cap along.
+    for (const e of state.entities) {
+      if (e.kind === 'arc' && (dragged.has(e.startId) || dragged.has(e.endId))) held.delete(e.centerId);
+    }
+    const movable = new Set<string>();
+    for (const e of state.entities) {
+      if (e.kind === 'point' && !dragged.has(e.id) && !projectedAnchors.has(e.id)) movable.add(e.id);
+    }
+    const opts = { pinAllRadii: true, externalEdges: this._externalEdgeLines() };
+    const first = await solveSketch(state, { ...opts, movablePoints: new Set([...movable].filter(id => !held.has(id))) });
+    if (first.status === 'ok') return first;
+    return solveSketch(state, { ...opts, movablePoints: movable });
   }
 
   /** Apply a rubber-band rectangle as a selection (REQ 863, SW convention):
@@ -2563,6 +2605,27 @@ export class CadSketchEditorComponent implements OnDestroy {
   }
 
   private handleCircleClick(x: number, y: number) {
+    const mode = this.circleMode();
+    // REQ 1032 — after the first circle (or boss pair) of a repeat run,
+    // one click places a copy at that center, equal-constrained to the
+    // first. Sizes are read live, so an edited first diameter carries over.
+    const rep = this.circleRepeat();
+    if (mode !== 'single' && rep) {
+      const firsts = rep.map(id => findEntity(this.state(), id));
+      if (firsts.every(e => e?.kind === 'circle')) {
+        const radii = firsts.map(e => (e as CircleEntity).radius);
+        let s = this.state();
+        const placed = this._placeCircle(s, this._snapClickToPoint(x, y), radii[0]); s = placed.state;
+        const ids = [placed.circleId];
+        for (const r of radii.slice(1)) {
+          const c = addCircleByPoint(s, placed.centerId, r); s = c.state; ids.push(c.id);
+        }
+        ids.forEach((id, i) => { s = addConstraint(s, 'equal', [rep[i], id]).state; });
+        this.commit(s);
+        return;
+      }
+      this.circleRepeat.set(null);  // a first circle was deleted — start over
+    }
     const center = this.draftCircleCenter();
     if (!center) {
       this.draftCircleCenter.set(this._snapClickToPoint(x, y));
@@ -2574,36 +2637,14 @@ export class CadSketchEditorComponent implements OnDestroy {
     const onCircum = this._snapClickToPoint(x, y);
     const radius = Math.hypot(onCircum.x - center.x, onCircum.y - center.y);
     if (radius < 0.5) return;  // ignore second click on top of first
+    // Repeat boss: the first radius click sets the inner circle; the
+    // next one sets the outer and places the concentric pair.
+    const inner = this.draftBossInnerRadius();
+    if (mode === 'boss' && inner === null) { this.draftBossInnerRadius.set(radius); return; }
+    if (mode === 'boss' && Math.abs(radius - inner!) < 0.5) return;
     let s = this.state();
-    let circleId: string;
-    if (center.pointId) {
-      // Reuse the existing point as the center — no synthetic
-      // coincident-with-original-point pair.
-      const r = addCircleByPoint(s, center.pointId, radius);
-      s = r.state; circleId = r.id;
-    } else {
-      const r = addCircle(s, center.x, center.y, radius);
-      s = r.state; circleId = r.id;
-      // SW-style: clicking ON a curve drops the center as a point and
-      // pins it with coincident-on-curve, or — when snapped to a model
-      // edge·vertex — an on-edge external reference, or — in open space —
-      // a horizontal/vertical alignment to an armed reference. We need the
-      // center point's id, which addCircle synthesised; find it via the new
-      // circle entity's centerId.
-      const newCircle = s.entities.find(e => e.id === circleId);
-      if (newCircle && newCircle.kind === 'circle') {
-        s = this._anchorPointToCurve(s, newCircle.centerId, center);
-        if (center.externalRef) {
-          // Snap onto a projected arc/circle center → concentric (REQ 831);
-          // any other model ref → the existing on-edge link.
-          s = isCenterExternalRef(center.externalRef)
-            ? this._addCenterRelation(s, newCircle.centerId, center.externalRef, 'concentric')
-            : this._addOnEdge(s, newCircle.centerId, center.externalRef);
-        }
-        s = this._applyAlignTo(s, newCircle.centerId, center.alignTo);
-        s = this._applyQuadrant(s, newCircle.centerId, center);
-      }
-    }
+    const placed = this._placeCircle(s, center, radius); s = placed.state;
+    const circleId = placed.circleId;
     if (onCircum.pointId) {
       // Lock the radius: with the center pinned and a point on the
       // circumference, |P - C| = R locks R via the existing
@@ -2619,8 +2660,47 @@ export class CadSketchEditorComponent implements OnDestroy {
       s = addConstraint(s, 'coincident', [pp.id, onCircum.onCurveId]).state;
       s = this._applyQuadrant(s, pp.id, onCircum);
     }
+    let run = [circleId];
+    if (mode === 'boss') {
+      const other = addCircleByPoint(s, placed.centerId, inner!); s = other.state;
+      run = inner! < radius ? [other.id, circleId] : [circleId, other.id];
+    }
     this.commit(s);
     this.draftCircleCenter.set(null);
+    this.draftBossInnerRadius.set(null);
+    if (mode !== 'single') this.circleRepeat.set(run);
+  }
+
+  /** Add a circle at a snapped center: reuse a picked point, or create the
+   * center and anchor it to whatever the click snapped to. */
+  private _placeCircle(s: SketchState, center: PendingPoint, radius: number): { state: SketchState; circleId: string; centerId: string } {
+    if (center.pointId) {
+      // Reuse the existing point as the center — no synthetic
+      // coincident-with-original-point pair.
+      const r = addCircleByPoint(s, center.pointId, radius);
+      return { state: r.state, circleId: r.id, centerId: center.pointId };
+    }
+    const r = addCircle(s, center.x, center.y, radius);
+    s = r.state;
+    // SW-style: clicking ON a curve drops the center as a point and
+    // pins it with coincident-on-curve, or — when snapped to a model
+    // edge·vertex — an on-edge external reference, or — in open space —
+    // a horizontal/vertical alignment to an armed reference. We need the
+    // center point's id, which addCircle synthesised; find it via the new
+    // circle entity's centerId.
+    const newCircle = s.entities.find(e => e.id === r.id) as CircleEntity;
+    const centerId = newCircle.centerId;
+    s = this._anchorPointToCurve(s, centerId, center);
+    if (center.externalRef) {
+      // Snap onto a projected arc/circle center → concentric (REQ 831);
+      // any other model ref → the existing on-edge link.
+      s = isCenterExternalRef(center.externalRef)
+        ? this._addCenterRelation(s, centerId, center.externalRef, 'concentric')
+        : this._addOnEdge(s, centerId, center.externalRef);
+    }
+    s = this._applyAlignTo(s, centerId, center.alignTo);
+    s = this._applyQuadrant(s, centerId, center);
+    return { state: s, circleId: r.id, centerId };
   }
 
   private handleArcClick(x: number, y: number) {
@@ -5015,23 +5095,60 @@ export class CadSketchEditorComponent implements OnDestroy {
     this.draftPolygonCenter.set(null);
   }
 
-  private handleSlotClick(x: number, y: number) {
+  /** Straight slot / Tab (REQ 1034): click 1 = first center, click 2 =
+   * second center (Slot) or square-end midpoint (Tab), click 3 = width.
+   * Both centerline clicks snap like any point; the second also picks up a
+   * horizontal/vertical inference from the first, applied to the
+   * construction centerline. */
+  private handleSlotClick(x: number, y: number, kind: 'slot' | 'tab' = 'slot') {
     const path = this.draftSlotPath();
-    if (!path.p1) { this.draftSlotPath.set({ p1: { x, y } }); return; }
+    if (!path.p1) { this.draftSlotPath.set({ p1: this._snapClickToPoint(x, y) }); return; }
     if (!path.p2) {
-      if (Math.hypot(x - path.p1.x, y - path.p1.y) < 1) return;
-      this.draftSlotPath.set({ p1: path.p1, p2: { x, y } }); return;
+      const p2 = this._slotSecondPoint(path.p1, x, y);
+      if (Math.hypot(p2.x - path.p1.x, p2.y - path.p1.y) < 1) return;
+      this.draftSlotPath.set({ p1: path.p1, p2 }); return;
     }
     // Third click defines the half-width (perpendicular distance from the
     // centerline to the click point).
-    const dx = path.p2.x - path.p1.x, dy = path.p2.y - path.p1.y;
+    const { p1, p2 } = path;
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
     const len = Math.hypot(dx, dy);
     if (len < 1e-6) { this.draftSlotPath.set({}); return; }
     const px = -dy / len, py = dx / len;
-    const halfWidth = Math.abs(px * (x - path.p1.x) + py * (y - path.p1.y));
+    const halfWidth = Math.abs(px * (x - p1.x) + py * (y - p1.y));
     if (halfWidth < 0.5) return;  // ignore click on the centerline
-    this.commit(addSlotStraight(this.state(), path.p1.x, path.p1.y, path.p2.x, path.p2.y, halfWidth).state);
+    const before = this.state();
+    const r = kind === 'tab'
+      ? addSlotTab(before, p1.x, p1.y, p2.x, p2.y, halfWidth)
+      : addSlotStraight(before, p1.x, p1.y, p2.x, p2.y, halfWidth);
+    let s = this._relateNewCornerToSnap(before, r.state, p1);
+    s = this._relateNewCornerToSnap(before, s, p2);
+    for (const p of [p1, p2]) {
+      const pt = s.entities.find((e): e is PointEntity => e.kind === 'point'
+        && !before.entities.some(b => b.id === e.id) && Math.abs(e.x - p.x) < 1e-6 && Math.abs(e.y - p.y) < 1e-6);
+      if (pt) s = this._applyAlignTo(s, pt.id, p.alignTo);
+    }
+    if (r.centerlineId && p2.axis) s = addConstraint(s, p2.axis, [r.centerlineId]).state;
+    this.commit(s);
     this.draftSlotPath.set({});
+  }
+
+  /** Second slot click: a hard snap (point / curve / edge) wins; in open
+   * space, a horizontal/vertical inference from the first click flattens
+   * the centerline — the same rule the line tool applies. */
+  private _slotSecondPoint(p1: PendingPoint, x: number, y: number): PendingPoint & { axis?: 'horizontal' | 'vertical' } {
+    const snap = this._snapClickToPoint(x, y);
+    if (snap.pointId || snap.onCurveId || snap.externalRef) return snap;
+    const raw = this._lastRawClick ?? { x, y };
+    const inf = inferLineEnd(this.state(), p1, raw, { curveTol: this.lastPickTolerance });
+    const pend = inf.constraints ?? (inf.constraint ? [inf.constraint] : []);
+    const axis = pend.find(c => c.type === 'horizontal' || c.type === 'vertical')?.type as 'horizontal' | 'vertical' | undefined;
+    if (!axis) return snap;
+    return {
+      x: axis === 'vertical' ? p1.x : this._snap(raw.x),
+      y: axis === 'horizontal' ? p1.y : this._snap(raw.y),
+      axis,
+    };
   }
 
   /** 3-point corner rectangle: click 1 sets corner A, click 2 sets corner
@@ -5319,7 +5436,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-452');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-461');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);
@@ -5492,7 +5609,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     void this.commit(next);
   }
 
-  private async commit(next: SketchState) {
+  private async commit(next: SketchState, dragged?: Set<string>) {
     // Compute the entity-id diff once — both draw-as-construction and
     // dynamic-mirror read it. Skip when the commit doesn't add any
     // entities (drag-only / state-replace commits).
@@ -5528,6 +5645,22 @@ export class CadSketchEditorComponent implements OnDestroy {
     // solveWithRecovery (REQ 922): detects a degenerate "success" (an
     // undimensioned line collapsed to zero) and retries by continuation —
     // see cad/lib/solveRecovery.ts.
+    // A finished drag re-solves like the live drag did (dragged points and
+    // other centers held), so releasing — which snaps the dragged point to
+    // the grid — doesn't shift unrelated geometry. If that can't be solved,
+    // keep the last frame the live drag accepted: an unconstrained full solve
+    // here is what teleported centers, flipped tangents and resized caps.
+    if (dragged?.size) {
+      const r = await this._dragSolve(next, dragged);
+      if (id !== this.latestCommitId) return;
+      if (r.status === 'ok' && !this._solveCollapsed(next, r.state)) {
+        this._recordSolve(r);
+        this.sketchChanged.emit(r.state);
+      } else {
+        this.sketchChanged.emit(prev);
+      }
+      return;
+    }
     const { result, collapsed } = await solveWithRecovery(next, { externalEdges: this._externalEdgeLines() });
     if (id !== this.latestCommitId) return;
     this._recordSolve(result);

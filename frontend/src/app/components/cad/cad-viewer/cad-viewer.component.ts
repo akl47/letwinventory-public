@@ -61,6 +61,7 @@ import { singleLineStrokesForText } from '../../../cad/lib/singleLineFont';
 import { exceedsDragThreshold, screenDeltaToWorld } from '../../../cad/lib/assemblyDrag';
 import { WORLD_UP as WORLD_UP_AXIS, orbitDir, dirToOrbit } from '../../../cad/lib/viewAxis';
 import { fitFrame, type FitViewport } from '../../../cad/lib/fitFrame';
+import { clampZoom, clipDepth } from '../../../cad/lib/zoomLimits';
 import { originPlaneLabel } from '../../../cad/lib/datum';
 
 /** World up-axis for the 3D VIEW convention (Z-up, right-handed), as a Three
@@ -1609,6 +1610,24 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   /** Recompute the orthographic frustum from the canvas aspect ratio +
    * current `orbitDistance` (= half-height of the visible region in
    * world units). Called by onResize and updateCamera. */
+  /** Model bounding sphere (solid, sketches, assembly context), or null when
+   * empty. Cached briefly — every camera update reads it. */
+  private _modelSphere(): THREE.Sphere | null {
+    const now = performance.now();
+    if (this._sphereCache && now - this._sphereCache.at < 250) return this._sphereCache.sphere;
+    const box = new THREE.Box3();
+    for (const g of [this.faceGroup, this.sketchGroup, this.referenceGroup]) if (g) box.expandByObject(g);
+    const sphere = box.isEmpty() ? null : box.getBoundingSphere(new THREE.Sphere());
+    this._sphereCache = { at: now, sphere };
+    return sphere;
+  }
+  private _sphereCache: { at: number; sphere: THREE.Sphere | null } | null = null;
+
+  /** REQ 1033 — zoom range scaled to the model (see zoomLimits). */
+  private _clampZoom(halfHeight: number): number {
+    return clampZoom(halfHeight, this._modelSphere()?.radius ?? null);
+  }
+
   private updateOrthoFrustum(width?: number, height?: number) {
     const w = width ?? this.renderer?.domElement.clientWidth ?? 800;
     const h = height ?? this.renderer?.domElement.clientHeight ?? 600;
@@ -1619,6 +1638,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.camera.right = halfW;
     this.camera.top = halfH;
     this.camera.bottom = -halfH;
+    // REQ 1033 — clip depth follows the model so nothing is sliced off
+    // when zoomed far out on a large assembly.
+    const sphere = this._modelSphere();
+    const depth = clipDepth(sphere ? this.camera.position.distanceTo(sphere.center) : 0, sphere?.radius ?? null);
+    this.camera.near = -depth;
+    this.camera.far = depth;
     this.camera.updateProjectionMatrix();
   }
 
@@ -2504,7 +2529,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       // Ctrl+MMB drag: dragging DOWN moves the camera CLOSER (zoom in),
       // dragging UP moves it AWAY (zoom out). Same convention as SW.
       const factor = Math.exp(-dy * 0.01);
-      this.orbitDistance = Math.max(5, Math.min(2000, this.orbitDistance * factor));
+      this.orbitDistance = this._clampZoom(this.orbitDistance * factor);
       this.updateCamera();
     } else if (this.activeSketchId() !== null) {
       // In a sketch we still drive the 3D pick hover so the user sees the
@@ -2695,7 +2720,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const mx = (a.clientX + b.clientX) / 2, my = (a.clientY + b.clientY) / 2;
       // Pinch → zoom (fingers apart = zoom in).
       if (this.lastPinchDist > 0 && dist > 0) {
-        this.orbitDistance = Math.max(5, Math.min(2000, this.orbitDistance * (this.lastPinchDist / dist)));
+        this.orbitDistance = this._clampZoom(this.orbitDistance * (this.lastPinchDist / dist));
       }
       // Two-finger drag (midpoint movement) → pan. 1:1 with the fingers: the
       // ortho frustum half-height is orbitDistance (see updateOrthoFrustum), so
@@ -2736,7 +2761,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // REQ 873: per-user wheel-direction preference flips the sign.
     const dy = this.invertZoom() ? -ev.deltaY : ev.deltaY;
     const factor = dy > 0 ? 1.1 : 1 / 1.1;
-    const next = Math.max(5, Math.min(2000, this.orbitDistance * factor));
+    const next = this._clampZoom(this.orbitDistance * factor);
     const applied = next / this.orbitDistance;  // actual scale after clamping
     // Cursor-anchored zoom (SolidWorks-style): shift orbitTarget within the view
     // plane so the world point under the cursor stays put on screen. For an
