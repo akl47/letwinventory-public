@@ -28,7 +28,7 @@ import { ErrorNotificationService } from '../../../services/error-notification.s
 import { CadStreamService, type CadStreamEvent } from '../../../services/cad-stream.service';
 import { CadUiStateService } from '../../../services/cad-ui-state.service';
 import { CadViewerComponent, type DisplayMode, type SketchPreview, type ProfileFill, type HolePreview, type CosmeticThread } from '../cad-viewer/cad-viewer.component';
-import { CadFeatureTreePanelComponent, type FeatureTreeAction, type FeatureSelectEvent, type SketchSelectEvent, type ExternalTreeEvent, type TreeNode } from '../cad-feature-tree-panel/cad-feature-tree-panel.component';
+import { CadFeatureTreePanelComponent, type FeatureTreeAction, type FeatureSelectEvent, type SketchSelectEvent, type ExternalTreeEvent, type TreeNode, type BodyGroupAction, folderNode } from '../cad-feature-tree-panel/cad-feature-tree-panel.component';
 import { CadSketchEditorComponent, type CircleMode } from '../cad-sketch-editor/cad-sketch-editor.component';
 import { CadConstraintListComponent } from '../cad-constraint-list/cad-constraint-list.component';
 import { CadDimensionPropertiesComponent } from '../cad-dimension-properties/cad-dimension-properties.component';
@@ -52,7 +52,8 @@ import type { FeatureTree, Feature, OriginFeature, SketchDocument, SketchId, Mod
 import {
   emptyFeatureTree, addFeature, defaultDatumVisibility,
   removeFeature, updateFeatureParam, removeFeaturesReferencingSketch,
-  featureReferencesSketch, setBodyVisibility, setBodyName, setRollbackIndex,
+  featureReferencesSketch, setBodyVisibility, setBodyName, setBodyColor, setRollbackIndex,
+  addBodyGroup, renameBodyGroup, ungroupBodies, removeBodyFromGroup, addBodiesToGroup,
 } from '../../../cad/lib/featureTree';
 import { newFeatureId } from '../../../cad/lib/ids';
 import { emptyDocument, createSketch, updateSketchState, deleteSketch, setSketchVisibility, setSketchName, projectTopologyToCandidates } from '../../../cad/lib/document';
@@ -100,6 +101,8 @@ type AxisSlot = 'dir1' | 'dir2' | 'circ' | 'moveCopy';
 import { extractRegions, tessellateProfileLoop, topLevelRegionIndices } from '../../../cad/lib/profile';
 import { makeVarResolver, type TextResolver } from '../../../cad/lib/textGlyphs';
 import { buildBinaryStl } from '../../../cad/lib/stlExport';
+import { build3mf, groupObjects, type ThreeMfBody } from '../../../cad/lib/threeMf';
+import { applyFolders, canFolder, foldersAdd, foldersAddTo, foldersDelete, foldersRemove, foldersRename } from '../../../cad/lib/treeFolders';
 import { CadExportDialogComponent, DEFAULT_EXPORT_NAME_TEMPLATE, resolveExportName, type ExportDialogResult } from '../cad-export-dialog/cad-export-dialog.component';
 import { CadNewPartDialogComponent, type CadNewPartDialogData } from '../cad-new-part-dialog/cad-new-part-dialog.component';
 import JSZip from 'jszip';
@@ -138,6 +141,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
   ],
   // Assembly mode state is scoped per editor instance.
   providers: [AssemblyEditController],
+  // REQ 1040 — read-only parts still open feature panels for inspection; the
+  // class makes every panel control inert (styles below).
+  host: { '[class.cad-view-only]': 'readonly()' },
   template: `
     <div class="cad-editor" [class.fullscreen]="fullscreen()" [attr.data-testid]="'cad-editor'">
       <!-- Mobile: the CAD editor needs landscape. We best-effort lock the
@@ -302,6 +308,11 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <button class="ribbon-button" data-testid="action-dl-stl" *ngIf="bodies().length > 0"
                         matTooltip="Export STL" (click)="exportStl()">
                   <mat-icon>view_in_ar</mat-icon><span class="ribbon-label">STL</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-dl-3mf" *ngIf="bodies().length > 0"
+                        [disabled]="threeMfExporting()"
+                        matTooltip="Export 3MF for slicers — touching bodies stay together, body colors become filaments" (click)="export3mf()">
+                  <mat-icon>{{ threeMfExporting() ? 'hourglass_empty' : 'print' }}</mat-icon><span class="ribbon-label">3MF</span>
                 </button>
               </div>
               <div class="ribbon-group-label">Review &amp; release</div>
@@ -798,12 +809,29 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
 
             <!-- Assembly tree right-click menu (components + mates) -->
             <div class="ctx-anchor" #asmCtxAnchor [style.left.px]="asmCtxMenuX()" [style.top.px]="asmCtxMenuY()" [matMenuTriggerFor]="asmCtxMenu"></div>
+            <mat-menu #asmFolderPickMenu="matMenu">
+              @for (f of asmFoldersAccepting(asmCtxFolderKeys()); track f.id) {
+                <button mat-menu-item [attr.data-testid]="'asm-ctx-folder-pick-' + f.id" (click)="onFolderAction({ action: 'add', folderId: f.id, keys: asmCtxFolderKeys() })"><mat-icon>folder</mat-icon> {{ f.name }}</button>
+              }
+            </mat-menu>
             <mat-menu #asmCtxMenu="matMenu">
               @if (asmCtxItem(); as item) {
                 @if (asmCtxCreatedAt(item) !== null) {
                   <button mat-menu-item data-testid="asm-ctx-rollback-here" [disabled]="readonly()" (click)="asmRollbackTo(asmCtxCreatedAt(item))"><mat-icon>arrow_drop_down</mat-icon> Roll back to here</button>
                   @if (featureTree().rollbackAt != null) {
                     <button mat-menu-item data-testid="asm-ctx-rollback-forward" [disabled]="readonly()" (click)="asmRollbackTo(null)"><mat-icon>arrow_drop_up</mat-icon> Roll forward to end</button>
+                  }
+                }
+                <!-- REQ 1046 — folders for top-level component / skeleton rows. -->
+                @if (!readonly() && (item.kind === 'component' || item.kind === 'skeleton-sketch' || item.kind === 'skeleton-plane')) {
+                  @if (asmCanFolder(asmCtxFolderKeys())) {
+                    <button mat-menu-item data-testid="asm-ctx-folder-new" (click)="onFolderAction({ action: 'create', keys: asmCtxFolderKeys() })"><mat-icon>create_new_folder</mat-icon> Add to new folder…</button>
+                  }
+                  @if (asmFoldersAccepting(asmCtxFolderKeys()).length > 0) {
+                    <button mat-menu-item data-testid="asm-ctx-folder-add" [matMenuTriggerFor]="asmFolderPickMenu"><mat-icon>drive_file_move</mat-icon> Add to folder</button>
+                  }
+                  @if (asmInFolder(asmCtxFolderKeys())) {
+                    <button mat-menu-item data-testid="asm-ctx-folder-remove" (click)="onFolderAction({ action: 'remove', keys: asmCtxFolderKeys() })"><mat-icon>drive_file_move_rtl</mat-icon> Remove from folder</button>
                   }
                 }
                 @if (item.kind === 'component') {
@@ -832,6 +860,9 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 } @else if (item.kind === 'skeleton-plane') {
                   <button mat-menu-item [disabled]="readonly()" (click)="editSkeletonFeature(item.featureId)"><mat-icon>edit</mat-icon> Edit</button>
                   <button mat-menu-item [disabled]="readonly()" (click)="deleteSkeletonPlane(item.featureId)"><mat-icon>delete</mat-icon> Delete</button>
+                } @else if (item.kind === 'folder') {
+                  <button mat-menu-item data-testid="asm-ctx-folder-rename" [disabled]="readonly()" (click)="onFolderAction({ action: 'rename', folderId: item.folderId })"><mat-icon>drive_file_rename_outline</mat-icon> Rename folder</button>
+                  <button mat-menu-item data-testid="asm-ctx-folder-delete" [disabled]="readonly()" (click)="onFolderAction({ action: 'delete', folderId: item.folderId })"><mat-icon>folder_off</mat-icon> Delete folder</button>
                 } @else {
                   <button mat-menu-item (click)="asm.applyDisplayState(item.state)"><mat-icon>visibility</mat-icon> Apply</button>
                   <button mat-menu-item (click)="asm.deleteDisplayState(item.state)"><mat-icon>delete</mat-icon> Delete display state</button>
@@ -897,6 +928,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           [cosmeticThreadsCount]="cosmeticThreadsTotalCount()"
           [cosmeticThreadsVisible]="cosmeticThreadsVisible()"
           [debugVisible]="debugVisible()"
+          [readonly]="readonly()"
           (rollbackChanged)="setRollbackBeforeIndex($event)"
           (rollbackToSketch)="rollBackBeforeSketch($event)"
           (reorderFeature)="onReorderFeature($event)"
@@ -908,8 +940,14 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           (featureSelect)="onFeatureTreeSelect($event)"
           (datumSelect)="onTreeDatumSelect($event)"
           (bodyVisibilityToggled)="toggleBodyVisibility($event)"
-          (bodyIsolated)="onIsolateBody($event)"
+          (bodyIsolated)="onIsolateBodies($event)"
+          (bodiesVisibilitySet)="setBodiesVisibility($event.bodyIds, $event.visible)"
+          (bodyGroupAction)="onBodyGroupAction($event)"
           (bodyRenamed)="onRenameBody($event)"
+          (bodyColorChanged)="onBodyColor($event.bodyIds, $event.color)"
+          [bodyGroups]="featureTree().bodyGroups ?? []"
+          [folders]="featureTree().treeFolders ?? []"
+          (folderAction)="onFolderAction($event)"
           (bodyDeleted)="onDeleteBody($event)"
           class="feature-tree"
           [compact]="sidebarMode() === 'mini'"
@@ -1456,6 +1494,29 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <p class="panel-hint" *ngIf="props.font === 'singleLine'" style="margin: 4px 0 0;">
                   Single-stroke engraving font — open strokes for V-carve / engraving. Not a closed region, so it won't extrude into a solid.
                 </p>
+              </div>
+              <!-- REQ 1048 — Roboto Bold / Italic faces (outline font only). -->
+              <div class="panel-field" *ngIf="props.font !== 'singleLine'">
+                <div class="field-header">
+                  <mat-icon class="field-icon">text_format</mat-icon>
+                  <span class="field-label">Style</span>
+                </div>
+                <div style="display: flex; gap: 4px;">
+                  <button class="btn"
+                          data-testid="text-prop-bold"
+                          [class.active]="!!props.bold"
+                          matTooltip="Bold"
+                          (click)="onSketchTextEdit(props.id, 'bold', props.bold ? 0 : 1)">
+                    <mat-icon>format_bold</mat-icon>
+                  </button>
+                  <button class="btn"
+                          data-testid="text-prop-italic"
+                          [class.active]="!!props.italic"
+                          matTooltip="Italic"
+                          (click)="onSketchTextEdit(props.id, 'italic', props.italic ? 0 : 1)">
+                    <mat-icon>format_italic</mat-icon>
+                  </button>
+                </div>
               </div>
               <div class="panel-field">
                 <div class="field-header">
@@ -3934,6 +3995,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <app-cad-viewer
               #viewer
               [geometry]="displayedGeometry()"
+              [faceColors]="faceColors()"
               [referenceGeometry]="contextVisible() ? referenceOverlay() : null"
               [selected]="selected()"
               [normalToPlane]="normalToPlane()"
@@ -4521,6 +4583,20 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     /* Tool panel — same column dimensions as .constraint-list so swapping
        between them doesn't reflow the viewer. Used by the Mirror tool
        today; same shell will accept Pattern, Linear/Circular pattern, etc. */
+    /* REQ 1040 — a feature panel opened on a read-only part is for viewing:
+       its controls ignore the pointer and OK is gone (Enter can't reach a
+       hidden button). Measure stays usable. */
+    :host(.cad-view-only) .tool-panel:not([data-testid="measure-sidebar"]) > :not(.panel-title):not(.panel-actions) {
+      pointer-events: none;
+    }
+    :host(.cad-view-only) .tool-panel .panel-actions .btn-primary { display: none; }
+    :host(.cad-view-only) .tool-panel:not([data-testid="measure-sidebar"]) .panel-actions::before {
+      content: 'View only';
+      align-self: center;
+      margin-right: auto;
+      color: #9a9ab0;
+      font-size: 12px;
+    }
     .tool-panel {
       width: 220px;
       border-right: 1px solid #444;
@@ -4799,7 +4875,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-462';
+  readonly buildMarker = 'text-472';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -5138,7 +5214,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * featureTree's bodyNames map (backend always emits name: null). */
   bodiesForTree = computed(() => {
     const names = this.featureTree().bodyNames ?? {};
-    return this.bodies().map(b => names[b.id] ? { ...b, name: names[b.id] } : b);
+    const colors = this.featureTree().bodyColors ?? {};
+    return this.bodies().map(b => ({ ...b, name: names[b.id] ?? b.name, color: colors[b.id] }));
   });
   hiddenBodies = signal<Set<string>>(new Set());
   /** Per-body { faces, topology } populated as regen events arrive.
@@ -5163,12 +5240,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   /** Visible bodies as { id, label } for the export dialog. Unnamed bodies
    * fall back to "Body N" (1-indexed in body order). */
   private _exportBodies(): Array<{ id: string; label: string }> {
-    return this.bodies().map((b, i) => ({ id: b.id, label: (b.name && b.name.trim()) ? b.name.trim() : `Body ${i + 1}` }));
+    return this.bodiesForTree().map((b, i) => ({ id: b.id, label: (b.name && b.name.trim()) ? b.name.trim() : `Body ${i + 1}` }));
   }
 
   /** Export dialog for multi-body parts (visible bodies pre-ticked); a single
    * body skips it. Returns the choice through `run`. */
-  private _chooseExportBodies(format: 'STL' | 'STEP', run: (res: ExportDialogResult, bodies: Array<{ id: string; label: string }>) => void): void {
+  private _chooseExportBodies(format: 'STL' | 'STEP' | '3MF', run: (res: ExportDialogResult, bodies: Array<{ id: string; label: string }>) => void): void {
     const bodies = this._exportBodies();
     if (bodies.length === 0) {
       this.errors.showError('Nothing to export — the model has no bodies.');
@@ -5244,6 +5321,114 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const buf = buildBinaryStl(meshes);
       this._downloadBlob(new Blob([buf], { type: 'model/stl' }), `${nameFor('')}.stl`);
     }
+  }
+
+  threeMfExporting = signal<boolean>(false);
+
+  /** REQ 1042 — 3MF export, written here from the viewer meshes: one object
+   * per body group, one per ungrouped body. */
+  export3mf(): void {
+    if (this.threeMfExporting()) return;
+    this._chooseExportBodies('3MF', (res, bodies) => {
+      const perBody = this.perBodyGeometry();
+      const colors = this.featureTree().bodyColors ?? {};
+      const toBody = (id: string): ThreeMfBody => ({
+        id,
+        name: bodies.find(b => b.id === id)?.label ?? id,
+        color: colors[id] ?? null,
+        meshes: (perBody.get(id)?.faces ?? [])
+          .filter(f => f.positions && f.indices && f.indices.length >= 3)
+          .map(f => ({ positions: f.positions, indices: f.indices })),
+      });
+      // REQ 1042/1045 — one object per body group, one per ungrouped body.
+      const { objects, names } = groupObjects(res.bodyIds, this.featureTree().bodyGroups ?? []);
+      const kept = objects.map((g, i) => ({ bodies: g.map(toBody).filter(b => b.meshes.length > 0), name: names[i] }))
+        .filter(o => o.bodies.length > 0);
+      if (kept.length === 0) { this.errors.showError('Nothing to export.'); return; }
+      this.threeMfExporting.set(true);
+      void build3mf(kept.map(o => o.bodies), kept.map(o => o.name)).then(blob => {
+        this.threeMfExporting.set(false);
+        this._downloadBlob(blob, `${resolveExportName(res.nameTemplate, { ...this._exportVars(), bodyName: '' })}.3mf`);
+      });
+    });
+  }
+
+  /** REQ 1041 — face id → body color for the viewer (colored bodies only). */
+  faceColors = computed(() => {
+    const colors = this.featureTree().bodyColors ?? {};
+    const out = new Map<string, string>();
+    for (const [bodyId, slot] of this.perBodyGeometry()) {
+      const c = colors[bodyId];
+      if (c) for (const f of slot.faces) out.set(f.faceId, c);
+    }
+    return out;
+  });
+
+  onBodyColor(bodyIds: string[], color: string | null): void {
+    if (this.readonly()) return;
+    let tree = this.featureTree();
+    for (const id of bodyIds) tree = setBodyColor(tree, id, color);
+    this.featureTree.set(tree);
+    this.save({ skipRegen: true });
+  }
+
+  /** REQ 1046 — folder edits from the part or assembly tree (display only:
+   * saved without regen). */
+  onFolderAction(a:
+    | { action: 'create'; keys: string[] }
+    | { action: 'add'; folderId: string; keys: string[] }
+    | { action: 'remove'; keys: string[] }
+    | { action: 'rename' | 'delete'; folderId: string }): void {
+    if (this.readonly()) return;
+    const tree = this.featureTree();
+    const folders = tree.treeFolders ?? [];
+    let next = folders;
+    if (a.action === 'create') {
+      const name = window.prompt('Folder name:', `Folder ${folders.length + 1}`);
+      if (name === null || !name.trim()) return;
+      next = foldersAdd(folders, { id: `fd${Date.now().toString(36)}`, name: name.trim(), memberKeys: a.keys });
+    } else if (a.action === 'add') {
+      next = foldersAddTo(folders, a.folderId, a.keys);
+    } else if (a.action === 'remove') {
+      next = foldersRemove(folders, a.keys);
+    } else if (a.action === 'rename') {
+      const name = window.prompt('Rename folder:', folders.find(f => f.id === a.folderId)?.name ?? '');
+      if (name === null) return;
+      next = foldersRename(folders, a.folderId, name);
+    } else {
+      next = foldersDelete(folders, a.folderId);
+    }
+    if (next === folders) return;
+    const t: FeatureTree = { ...tree, treeFolders: next };
+    if (next.length === 0) delete t.treeFolders;
+    this.featureTree.set(t);
+    this.save({ skipRegen: true });
+  }
+
+  /** REQ 1045 — body group edits from the bodies section (metadata only). */
+  onBodyGroupAction(a: BodyGroupAction): void {
+    if (this.readonly()) return;
+    const tree = this.featureTree();
+    let next = tree;
+    if (a.action === 'group') {
+      const name = window.prompt('Group name:', `Group ${(tree.bodyGroups?.length ?? 0) + 1}`);
+      if (name === null || !name.trim()) return;
+      next = addBodyGroup(tree, { id: `g${Date.now().toString(36)}`, name: name.trim(), bodyIds: a.bodyIds });
+    } else if (a.action === 'rename') {
+      const current = tree.bodyGroups?.find(g => g.id === a.groupId)?.name ?? '';
+      const name = window.prompt('Rename group:', current);
+      if (name === null) return;
+      next = renameBodyGroup(tree, a.groupId, name);
+    } else if (a.action === 'add') {
+      next = addBodiesToGroup(tree, a.groupId, a.bodyIds);
+    } else if (a.action === 'remove') {
+      for (const id of a.bodyIds) next = removeBodyFromGroup(next, id);
+    } else {
+      next = ungroupBodies(tree, a.groupId);
+    }
+    if (next === tree) return;
+    this.featureTree.set(next);
+    this.save({ skipRegen: true });
   }
 
   /** STEP export — opens the body-selection dialog, then round-trips through
@@ -6698,6 +6883,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * planar zone (outer loop + 0..N inner holes); selecting the donut
    * region of two concentric circles produces an annular extrude. */
   extrudeSelectedRegions = signal<Set<number>>(new Set([0]));
+  /** Selected region indices that still exist in the sketch, sorted. A saved
+   * selection can name regions the sketch no longer has (its text resolved to
+   * fewer glyphs); those can't be clicked off in the viewer, so drop them on
+   * commit instead of saving an index regen will skip. */
+  private _liveRegionIndices(sketchId: string): number[] {
+    const sketch = this.doc().sketches[sketchId];
+    const count = sketch ? extractRegions(sketch.state, this.textResolver()).regions.length : 0;
+    return [...this.extrudeSelectedRegions()].filter(i => i < count).sort((a, b) => a - b);
+  }
   /** Region index the pointer is hovering in the viewer; null when not on
    * a fill. Updated by the viewer's profileFillHover output. */
   extrudeHoveredRegion = signal<number | null>(null);
@@ -7184,6 +7378,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     | { kind: 'displayState'; state: DisplayState }
     | { kind: 'skeleton-sketch'; sketchId: string }
     | { kind: 'skeleton-plane'; featureId: string }
+    | { kind: 'folder'; folderId: string }
     | null
   >(null);
   @ViewChild('asmCtxAnchor', { read: MatMenuTrigger }) private asmCtxTrigger?: MatMenuTrigger;
@@ -7194,7 +7389,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     queueMicrotask(() => this.asmCtxTrigger?.openMenu());
   }
   onAsmComponentContextMenu(ev: MouseEvent, inst: AssemblyInstance) {
-    this.asm.select(inst.instanceId);
+    // Keep a multi-selection the clicked component is part of (folder actions).
+    if (!this.asm.selectedIds().has(inst.instanceId)) this.asm.select(inst.instanceId);
     this.asmCtxItem.set({ kind: 'component', inst });
     this.openAsmCtxMenu(ev);
   }
@@ -7219,6 +7415,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     const parts = e.node.key.split(':');
     const kind = parts[0];
+    if (e.type === 'context') this.asmCtxKey.set(e.node.key);
+    // REQ 1046 — folder rows: click / chevron toggles, right-click = folder menu.
+    if (kind === 'folder') {
+      if (e.type === 'expand' || e.type === 'select') {
+        const next = new Set(this.asmCollapsedFolders());
+        if (next.has(parts[1])) next.delete(parts[1]); else next.add(parts[1]);
+        this.asmCollapsedFolders.set(next);
+      } else if (e.type === 'context' && e.ev) {
+        this.asmCtxItem.set({ kind: 'folder', folderId: parts[1] });
+        this.openAsmCtxMenu(e.ev);
+      }
+      return;
+    }
     // Skeleton rows fold into the assembly tree — reuse their handler.
     if (kind === 'skelsketch' || kind === 'skelplane') { this.onSkeletonTreeEvent(e); return; }
     // Component body eye: key = component-body:<instanceId>:<scopedBodyId>
@@ -7291,7 +7500,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     const createdAt = e.createdAt;
     if (typeof createdAt !== 'number') return;
-    const rows = this.asmTreeNodes();
+    const rows = this.asmTreeBase();
     const refs = assemblyTreeRefs({
       instanceIds: this.asm.instances().map(i => i.instanceId),
       skeletonFeatures: this.featureTree().features.filter(f => f.type === 'datumPlane' || f.type === 'datumPoint'),
@@ -7352,7 +7561,42 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   /** REQ 919 — skeleton sketches + planes fold INTO the assembly tree as
    * top-level rows right after the Origin block (like a part's own tree). */
+  /** REQ 1046 — the assembly tree with its folders applied. */
   asmTreeNodes = computed<TreeNode[]>(() => {
+    const rows = this.asmTreeBase();
+    const folders = this.featureTree().treeFolders ?? [];
+    if (this.sidebarMode() === 'mini' || folders.length === 0) return rows;
+    return applyFolders(rows, folders, this.asmCollapsedFolders(), folderNode);
+  });
+  asmCollapsedFolders = signal<Set<string>>(new Set());
+  /** Key of the right-clicked assembly tree row (folder actions). */
+  asmCtxKey = signal<string | null>(null);
+
+  /** REQ 1046 — top-level row keys the assembly menu's folder actions act on:
+   * the selected components when the clicked one is among them. */
+  asmCtxFolderKeys(): string[] {
+    const key = this.asmCtxKey();
+    if (!key || key.startsWith('folder:')) return [];
+    const sel = this.asm.selectedIds();
+    if (key.startsWith('component:') && sel.size > 1 && sel.has(key.slice('component:'.length))) {
+      return this.asmTreeBase().filter(r => r.depth === 0 && r.key.startsWith('component:') && sel.has(r.key.slice('component:'.length))).map(r => r.key);
+    }
+    return [key];
+  }
+  asmCanFolder(keys: string[]): boolean {
+    return canFolder(this.asmTreeBase(), keys);
+  }
+  asmFoldersAccepting(keys: string[]) {
+    const base = this.asmTreeBase();
+    const top = new Set(base.filter(r => r.depth === 0).map(r => r.key));
+    return (this.featureTree().treeFolders ?? []).filter(f => !keys.every(k => f.memberKeys.includes(k))
+      && canFolder(base, [...new Set([...f.memberKeys.filter(k => top.has(k)), ...keys])]));
+  }
+  asmInFolder(keys: string[]): boolean {
+    return (this.featureTree().treeFolders ?? []).some(f => keys.some(k => f.memberKeys.includes(k)));
+  }
+
+  private asmTreeBase = computed<TreeNode[]>(() => {
     const base = this.sidebarMode() === 'mini' ? this.asm.treeNodesExpanded() : this.asm.treeNodes();
     // REQ 1007 — components and skeleton rows interleave in creation order.
     const created = Object.fromEntries(this.asm.instances().map(i => [i.instanceId, i.createdAt]));
@@ -9112,6 +9356,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       }
       return items;
     }
+    // REQ 1049 — Part Number preset: ghost of the 45 x 5 box under the cursor.
+    if (tool === 'text-part-number') {
+      const corners = [
+        { x: cursor.x - 22.5, y: cursor.y - 2.5 }, { x: cursor.x + 22.5, y: cursor.y - 2.5 },
+        { x: cursor.x + 22.5, y: cursor.y + 2.5 }, { x: cursor.x - 22.5, y: cursor.y + 2.5 },
+      ];
+      for (let i = 0; i < 4; i++) items.push({ kind: 'line', start: corners[i], end: corners[(i + 1) % 4] });
+      return items;
+    }
     if (tool === 'rect-center') {
       const c = editor.draftRectCenter();
       if (c) {
@@ -10046,7 +10299,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onSketchChanged(state: SketchState) {
     const sid = this.activeSketchId();
-    if (!sid) return;
+    if (!sid || this.readonly()) return;
     this.doc.set(updateSketchState(this.doc(), sid, state));
     this.save();
   }
@@ -10240,7 +10493,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const axisLineId = this.revolveAxisLineId()!;
     const angle = this.revolveAngle();
     const flipped = this.revolveFlipped();
-    const regionIndices = [...this.extrudeSelectedRegions()].sort((a, b) => a - b);
+    const regionIndices = this._liveRegionIndices(ctx.sketchId);
     const merge = ctx.mode === 'revolve' ? this.revolveMerge() : undefined;
     const bodyIds = this._scopeBodyIds();
     this.revolveSidebar.set(null);
@@ -14514,7 +14767,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const flipped = this.extrudeFlipped();
     const merge = this.extrudeMerge();
     const bodyIds = this._scopeBodyIds();
-    const regionIndices = [...this.extrudeSelectedRegions()].sort((a, b) => a - b);
+    const regionIndices = this._liveRegionIndices(ctx.sketchId);
     const startCondition = this.resolveStartCondition();
     if (!startCondition) return;  // canCommitExtrude already gates this
     const d2End = this.resolveDir2EndCondition();
@@ -14676,7 +14929,20 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       case 'toggle-sketch-visibility': return this.toggleSketchVisibility(action.sketchId);
       case 'toggle-cosmetic-threads-visibility': return this.cosmeticThreadsVisible.set(!this.cosmeticThreadsVisible());
     }
-    if (this.readonly()) return;
+    // REQ 1040 — a read-only part can still open a sketch or feature to view
+    // it: the sketch editor disables its tools, feature panels go inert
+    // (cad-view-only host class), and save() refuses to persist.
+    if (this.readonly()) {
+      if (action.action === 'edit-sketch') this.editSketch(action.sketchId);
+      if (action.action === 'edit-feature') {
+        this.editFeature(action.featureId);
+        this.vertexPickMode.set(false);
+        this.facePickMode.set(false);
+        this.axisPickMode.set(false);
+        this.edgePickMode.set(false);
+      }
+      return;
+    }
     switch (action.action) {
       case 'edit-feature': return this.editFeature(action.featureId);
       case 'delete-feature': return this.deleteFeature(action.featureId);
@@ -15891,6 +16157,15 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   /** Toggle the visibility of a body in the Bodies panel. REQ 745:
    * persisted with the working copy when checked out; transient view
    * toggle when the part is locked. */
+  /** REQ 1044 — show or hide several bodies at once. */
+  setBodiesVisibility(bodyIds: string[], visible: boolean): void {
+    const next = new Set(this.hiddenBodies());
+    for (const id of bodyIds) { if (visible) next.delete(id); else next.add(id); }
+    this.hiddenBodies.set(next);
+    this.rebuildGeometryFromBodies();
+    this.persistBodyVisibility();
+  }
+
   toggleBodyVisibility(bodyId: string): void {
     const next = new Set(this.hiddenBodies());
     if (next.has(bodyId)) next.delete(bodyId); else next.add(bodyId);
@@ -15901,10 +16176,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   /** Hide every body except this one. Re-isolating shows all. Persisted
    * like the single toggle (REQ 745). */
-  onIsolateBody(bodyId: string): void {
+  onIsolateBodies(bodyIds: string[]): void {
     const allIds = this.bodies().map(b => b.id);
     const current = this.hiddenBodies();
-    const isolated = new Set(allIds.filter(id => id !== bodyId));
+    const keep = new Set(bodyIds);
+    const isolated = new Set(allIds.filter(id => !keep.has(id)));
     // If we're already isolated to this body, restore all visible.
     const restoringAll = current.size === isolated.size &&
       [...current].every(id => isolated.has(id));
@@ -15996,7 +16272,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   private save(opts?: { skipRegen?: boolean }) {
     const m = this.model();
-    if (!m) return;
+    if (!m || this.readonly()) return;
     // A geometry edit made outside a sketch owes a regen even if a later
     // save (e.g. entering a new sketch within the debounce) coalesces it.
     if (!opts?.skipRegen && this.activeSketchId() === null) this.regenOwed = true;
@@ -16846,7 +17122,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * and saves the document the same way constraint edits do. */
   onSketchTextEdit(
     entityId: string,
-    field: 'text' | 'size' | 'justify' | 'font' | 'mirror' | 'rotation',
+    field: 'text' | 'size' | 'justify' | 'font' | 'mirror' | 'rotation' | 'bold' | 'italic',
     value: string | number,
   ): void {
     if (this.readonly()) return;
@@ -16873,6 +17149,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         break;
       case 'mirror':
         patch = { mirror: !!+value };
+        break;
+      case 'bold':
+      case 'italic':
+        patch = { [field]: !!+value };
         break;
       default:
         patch = { text: String(value) };

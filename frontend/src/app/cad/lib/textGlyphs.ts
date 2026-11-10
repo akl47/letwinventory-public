@@ -1,6 +1,7 @@
 // REQ Batch 6 — glyph outline tessellation for sketch text.
 //
-// Loads Roboto Regular once (lazily, on first use), parses glyph outlines via
+// Loads Roboto (Regular, or Bold / Italic / Bold Italic per REQ 1048) once per
+// face, lazily on first use, parses glyph outlines via
 // opentype.js, tessellates Bezier curves into polylines, and yields closed
 // loops suitable for the extrude profile pipeline. Each character contributes
 // one or more closed loops; letters like 'O' contribute two (outer + inner).
@@ -16,31 +17,50 @@ import * as opentype from 'opentype.js';
 import type { Font, Path, PathCommand } from 'opentype.js';
 import type { TextEntity } from './types';
 
-const FONT_URL = 'assets/fonts/Roboto-Regular.ttf';
+/** REQ 1048 — Roboto face per text style. Regular loads at import; the
+ * others load on first use. KEEP IN SYNC with cadTextGlyphs.js FONT_FILES. */
+export type TextStyle = 'regular' | 'bold' | 'italic' | 'boldItalic';
+const FONT_URLS: Record<TextStyle, string> = {
+  regular: 'assets/fonts/Roboto-Regular.ttf',
+  bold: 'assets/fonts/Roboto-Bold.ttf',
+  italic: 'assets/fonts/Roboto-Italic.ttf',
+  boldItalic: 'assets/fonts/Roboto-BoldItalic.ttf',
+};
 
-let fontPromise: Promise<Font> | null = null;
+/** The face a text entity's Bold / Italic flags select. */
+export function textStyleOf(e: { bold?: boolean; italic?: boolean }): TextStyle {
+  return e.bold ? (e.italic ? 'boldItalic' : 'bold') : (e.italic ? 'italic' : 'regular');
+}
 
-/** Lazy-load the bundled Roboto font. Cached after the first call. */
-async function loadFont(): Promise<Font> {
-  if (!fontPromise) {
-    fontPromise = (async () => {
-      const resp = await fetch(FONT_URL);
+const fontPromises: Partial<Record<TextStyle, Promise<Font>>> = {};
+
+/** Lazy-load a bundled Roboto face. Cached after the first call. */
+async function loadFont(style: TextStyle = 'regular'): Promise<Font> {
+  if (!fontPromises[style]) {
+    fontPromises[style] = (async () => {
+      const resp = await fetch(FONT_URLS[style]);
       if (!resp.ok) throw new Error(`Roboto font fetch failed (${resp.status})`);
       const buf = await resp.arrayBuffer();
       const f = opentype.parse(buf);
       // Set the sync handle here (not in a one-shot at import) so a retry
       // after a failed first load still unblocks the try* accessors.
-      font = f;
-      const cbs = fontReadyCbs.splice(0);
+      fonts[style] = f;
+      const cbs = (fontReadyCbs[style] ?? []).splice(0);
       for (const cb of cbs) { try { cb(); } catch { /* consumer error — ignore */ } }
       return f;
     })().catch((err) => {
       // Don't cache a failed load — let the next call retry.
-      fontPromise = null;
+      delete fontPromises[style];
       throw err;
     });
   }
-  return fontPromise;
+  return fontPromises[style]!;
+}
+
+/** The parsed face, or null (starting its load) while it isn't ready. */
+function readyFont(style: TextStyle): Font | null {
+  if (!fontPromises[style]) { void loadFont(style).catch(() => { /* retried on next use */ }); return null; }
+  return fonts[style] ?? null;
 }
 
 /** Resolved closed loop in sketch coords: a polyline whose first and last
@@ -52,28 +72,27 @@ export type GlyphLoop = Array<{ x: number; y: number }>;
  * loaded yet. Triggers a load if needed so subsequent calls succeed. */
 export function tryGlyphLoopsForText(
   text: string, anchor: { x: number; y: number }, capHeightMm: number,
-  alignment: 'left' | 'center' | 'right', boxWidthMm: number,
+  alignment: 'left' | 'center' | 'right', boxWidthMm: number, style: TextStyle = 'regular',
 ): GlyphLoop[] | null {
-  if (!fontPromise) { void loadFont(); return null; }
-  if (!font) return null;
-  return _tessellate(font, text, anchor, capHeightMm, alignment, boxWidthMm);
+  const f = readyFont(style);
+  return f ? _tessellate(f, text, anchor, capHeightMm, alignment, boxWidthMm) : null;
 }
 
-/** Cached synchronous handle once the font is parsed — opentype.js's getPaths
- * is synchronous. */
-let font: Font | null = null;
-/** One-shot callbacks fired when the font finishes parsing. Consumers (e.g.
- * the viewer's sketch overlay) register here so they can re-render once Roboto
- * is available — `tryGlyphLoopsForText` returns null until then. */
-const fontReadyCbs: Array<() => void> = [];
+/** Cached synchronous handles once each face is parsed — opentype.js's
+ * getPaths is synchronous. */
+const fonts: Partial<Record<TextStyle, Font>> = {};
+/** One-shot callbacks fired when a face finishes parsing. Consumers (e.g.
+ * the viewer's sketch overlay) register here so they can re-render once the
+ * face is available — `tryGlyphLoopsForText` returns null until then. */
+const fontReadyCbs: Partial<Record<TextStyle, Array<() => void>>> = {};
 loadFont().catch(() => { /* network failure — leave null */ });
 
-/** Register a callback fired once Roboto has parsed. Fires synchronously if the
- * font is already loaded; otherwise queued and invoked one time when the load
+/** Register a callback fired once a face has parsed. Fires synchronously if
+ * it is already loaded; otherwise queued and invoked one time when the load
  * resolves. Used by the sketch overlay to re-render text on first font load. */
-export function onFontReady(cb: () => void): void {
-  if (font) { cb(); return; }
-  fontReadyCbs.push(cb);
+export function onFontReady(cb: () => void, style: TextStyle = 'regular'): void {
+  if (fonts[style]) { cb(); return; }
+  (fontReadyCbs[style] ??= []).push(cb);
 }
 
 /** Cap height in font units. The box height maps to THIS (the uppercase-letter
@@ -135,9 +154,9 @@ function applyTextBezierTransform(
  * that can await. */
 export async function glyphLoopsForText(
   text: string, anchor: { x: number; y: number }, capHeightMm: number,
-  alignment: 'left' | 'center' | 'right', boxWidthMm: number,
+  alignment: 'left' | 'center' | 'right', boxWidthMm: number, style: TextStyle = 'regular',
 ): Promise<GlyphLoop[]> {
-  const f = await loadFont();
+  const f = await loadFont(style);
   return _tessellate(f, text, anchor, capHeightMm, alignment, boxWidthMm);
 }
 
@@ -176,7 +195,7 @@ export function loopsFromTextEntity(
   const boxH = Math.hypot(tl.x - bl.x, tl.y - bl.y);
   if (boxW < 1e-6 || boxH < 1e-6) return [];
   const text = resolve(e.text || '');
-  const loops = tryGlyphLoopsForText(text, { x: bl.x, y: bl.y }, boxH, e.justify ?? 'left', boxW) ?? [];
+  const loops = tryGlyphLoopsForText(text, { x: bl.x, y: bl.y }, boxH, e.justify ?? 'left', boxW, textStyleOf(e)) ?? [];
   return applyTextTransform(loops, bl, br, tl, boxW, boxH, !!e.mirror);
 }
 
@@ -197,7 +216,7 @@ export async function loopsFromTextEntityAsync(
   const boxH = Math.hypot(tl.x - bl.x, tl.y - bl.y);
   if (boxW < 1e-6 || boxH < 1e-6) return [];
   const text = resolve(e.text || '');
-  return glyphLoopsForText(text, { x: bl.x, y: bl.y }, boxH, e.justify ?? 'left', boxW);
+  return glyphLoopsForText(text, { x: bl.x, y: bl.y }, boxH, e.justify ?? 'left', boxW, textStyleOf(e));
 }
 
 // ── Bézier-segment output (for analytic profile edges) ──
@@ -212,11 +231,10 @@ export type GlyphBezierLoop = GlyphBezierSeg[];
 /** Sync accessor — null until the font is parsed (triggers a load). */
 export function tryGlyphBezierLoops(
   text: string, anchor: { x: number; y: number }, capHeightMm: number,
-  alignment: 'left' | 'center' | 'right', boxWidthMm: number,
+  alignment: 'left' | 'center' | 'right', boxWidthMm: number, style: TextStyle = 'regular',
 ): GlyphBezierLoop[] | null {
-  if (!fontPromise) { void loadFont(); return null; }
-  if (!font) return null;
-  return _tessellateBezier(font, text, anchor, capHeightMm, alignment, boxWidthMm);
+  const f = readyFont(style);
+  return f ? _tessellateBezier(f, text, anchor, capHeightMm, alignment, boxWidthMm) : null;
 }
 
 /** TextEntity → analytic Bézier contours in sketch coords. Mirrors
@@ -237,7 +255,7 @@ export function bezierLoopsFromTextEntity(
   const boxH = Math.hypot(tl.x - bl.x, tl.y - bl.y);
   if (boxW < 1e-6 || boxH < 1e-6) return [];
   const text = resolve(e.text || '');
-  const contours = tryGlyphBezierLoops(text, { x: bl.x, y: bl.y }, boxH, e.justify ?? 'left', boxW) ?? [];
+  const contours = tryGlyphBezierLoops(text, { x: bl.x, y: bl.y }, boxH, e.justify ?? 'left', boxW, textStyleOf(e)) ?? [];
   return applyTextBezierTransform(contours, bl, br, tl, boxW, boxH, !!e.mirror);
 }
 

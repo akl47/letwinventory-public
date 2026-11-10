@@ -53,7 +53,7 @@ using json = nlohmann::json;
 //     returning the corrupt solid as success. NAMING unchanged.
 // cpp-23: a fillet-corner refit that strays >2% of the patch size from the
 //     original is rejected (it reshaped an irregular corner and broke shells).
-static constexpr const char* KERNEL_BUILD = "cpp-25";
+static constexpr const char* KERNEL_BUILD = "cpp-26";
 // 30: native C++/OCCT 8.0 kernel; binary BinTools BReps invalidate the old
 // text-BRep cache (must match NAMING_VERSION in backend cadRegenService.js).
 // 31: tessellation normal off-by-one fix (zero-normal last node → dark
@@ -217,6 +217,7 @@ static json handle_method(const std::string& method, const json& params) {
   if (method == "buildFeaturePattern") return kernel::op_buildFeaturePattern(params);
   if (method == "buildToolPattern")    return kernel::op_buildToolPattern(params);
   if (method == "bodyVolume")          return kernel::op_bodyVolume(params);
+  if (method == "bodyContacts")        return kernel::op_bodyContacts(params);
   if (method == "exportStl")           return kernel::op_exportStl(params);
   if (method == "exportStep")          return kernel::op_exportStep(params);
   throw std::runtime_error("method not implemented: " + method);

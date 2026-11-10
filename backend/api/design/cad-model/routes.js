@@ -77,5 +77,6 @@ router.post('/:id/default-view', checkToken, checkPermission('cad', 'write'), co
 // Returns tessellated face meshes for the viewer to render.
 router.post('/:id/regenerate', checkToken, checkPermission('cad', 'read'), regenLimit, controller.regenerate);
 router.get('/:id/export/step', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.exportStep);
+router.post('/:id/body-contacts', checkToken, checkPermission('cad', 'read'), kernelLimit, controller.bodyContacts);
 
 module.exports = router;

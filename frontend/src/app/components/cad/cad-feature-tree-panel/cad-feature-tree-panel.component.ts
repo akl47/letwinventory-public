@@ -3,7 +3,8 @@ import { CommonModule } from '@angular/common';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
-import type { Feature, Sketch, SketchDocument, OriginFeature, ExtrudeFeature, SketchState } from '../../../cad/lib/types';
+import { applyFolders, canFolder, type TreeFolder } from '../../../cad/lib/treeFolders';
+import type { BodyGroup, Feature, Sketch, SketchDocument, OriginFeature, ExtrudeFeature, SketchState } from '../../../cad/lib/types';
 import { analyzeDeterminacy } from '../../../cad/lib/determinacy';
 import { ORIGIN_POINT_ID } from '../../../cad/lib/store';
 import { defaultDatumVisibility } from '../../../cad/lib/featureTree';
@@ -26,6 +27,27 @@ export type FeatureTreeAction =
 /** Generic row event emitted when the panel renders externally-supplied nodes
  * (e.g. the assembly tree). The host owns selection/visibility/expand/context
  * semantics — the panel just reports which node + how it was interacted with. */
+/** REQ 1045/1047 — body group edits the bodies section asks the host for. */
+export type BodyGroupAction =
+  | { action: 'group'; bodyIds: string[] }
+  | { action: 'add'; groupId: string; bodyIds: string[] }
+  | { action: 'rename' | 'ungroup'; groupId: string }
+  | { action: 'remove'; bodyIds: string[] };
+
+/** REQ 1045 — one row of the bodies section: a body, or a group's parent row. */
+export interface BodyRow {
+  kind: 'body' | 'group';
+  id: string;
+  label: string;
+  depth: number;
+  visible: boolean;
+  color?: string;
+  /** Body rows under a group. */
+  groupId?: string;
+  /** Group rows: member body ids present in the part (body order). */
+  memberIds?: string[];
+}
+
 export interface ExternalTreeEvent {
   type: 'select' | 'expand' | 'visibility' | 'context' | 'reorder' | 'rollback';
   node: TreeNode;
@@ -56,7 +78,7 @@ export interface SketchSelectEvent {
 export interface TreeNode {
   /** Unique within the tree; used for expansion tracking. */
   key: string;
-  kind: 'feature' | 'sketch' | 'datum' | 'rollback-bar' | 'cosmetic-threads-group';
+  kind: 'feature' | 'sketch' | 'datum' | 'rollback-bar' | 'cosmetic-threads-group' | 'folder';
   label: string;
   iconName: string;
   iconClass: string;
@@ -79,12 +101,23 @@ export interface TreeNode {
   /** Stable id payload passed back through events. */
   datumId?: string;
   sketchId?: string;
+  /** REQ 1046 — folder rows: the folder's id. */
+  folderId?: string;
   feature?: Feature;
   /** Top-level createdAt (sketch rows) — used for drag-reorder hit-testing. */
   createdAt?: number;
   /** Sketch rows only: true = fully constrained (DOF 0), false = under-constrained,
    * undefined = not applicable / unknown (e.g. legacy doc). */
   fullyConstrained?: boolean;
+}
+
+/** REQ 1046 — the parent row of a tree folder (part and assembly trees). */
+export function folderNode(f: TreeFolder, memberCount: number, expanded: boolean): TreeNode {
+  return {
+    key: `folder:${f.id}`, kind: 'folder', label: `${f.name} (${memberCount})`,
+    iconName: expanded ? 'folder_open' : 'folder', iconClass: 'folder', depth: 0,
+    expandable: true, expanded, selectable: false, folderId: f.id,
+  };
 }
 
 @Component({
@@ -123,7 +156,7 @@ export interface TreeNode {
             [class.selected]="isRowSelected(n)"
             [matTooltip]="compact() ? n.label : ''" matTooltipPosition="right"
             [attr.aria-label]="compact() ? n.label : null"
-            [style.padding-left.px]="compact() ? 8 + n.depth * 6 : null"
+            [style.padding-left.px]="compact() ? 8 + n.depth * 6 : (n.depth >= 2 ? 12 + n.depth * 16 : null)"
             (mousedown)="onRowMouseDown($event, n)"
             (click)="onRowClick(n, $event)"
             (contextmenu)="onRowContextMenu($event, n)">
@@ -175,6 +208,10 @@ export interface TreeNode {
            additive chains). Each row has a visibility toggle. -->
       <div class="section bodies-section" *ngIf="showBodies()" [class.collapsed]="bodiesCollapsed()">
         <header class="panel-header collapsible" (click)="toggleBodiesCollapsed()"
+                [class.drop-target]="bodyDropGroupId() === ''"
+                (dragover)="onBodyDragOver($event, '')"
+                (dragleave)="bodyDropGroupId.set(null)"
+                (drop)="onBodyDrop($event, '')"
                 [matTooltip]="compact() ? 'Bodies' : ''" matTooltipPosition="right">
           <mat-icon class="section-chevron" *ngIf="!compact()">{{ bodiesCollapsed() ? 'chevron_right' : 'expand_more' }}</mat-icon>
           <mat-icon>category</mat-icon>
@@ -187,24 +224,56 @@ export interface TreeNode {
           <li *ngIf="bodiesView().length === 0 && !compact()" class="row empty-row">
             <span class="label muted">No body yet — add an Extrude or Revolve.</span>
           </li>
-          <li *ngFor="let b of bodiesView(); let i = index"
-              class="row depth-0"
-              [class.hidden-feature]="!b.visible"
-              [attr.data-testid]="'body-' + b.id"
-              [matTooltip]="compact() ? b.label : ''" matTooltipPosition="right"
-              [attr.aria-label]="compact() ? b.label : null"
-              (click)="bodyClicked.emit(b.id)"
-              (contextmenu)="onBodyContextMenu($event, b)">
-            <span class="chevron-spacer" *ngIf="!compact()"></span>
-            <mat-icon class="kind-icon extrude">deployed_code</mat-icon>
-            <span class="label" *ngIf="!compact()">{{ b.label }}</span>
-            <button class="visibility-toggle" *ngIf="!compact()"
-                    [attr.data-testid]="'body-visibility-' + b.id"
-                    [matTooltip]="b.visible ? 'Hide' : 'Show'"
-                    (click)="onBodyVisibilityClick(b, $event)">
-              <mat-icon>{{ b.visible ? 'visibility' : 'visibility_off' }}</mat-icon>
-            </button>
-          </li>
+          <!-- REQ 1045 — a body group is a parent row; its members sit under it. -->
+          <ng-container *ngFor="let r of bodyRows(); trackBy: trackBodyRow">
+            <li *ngIf="r.kind === 'group'"
+                class="row depth-0 body-group"
+                [class.hidden-feature]="!r.visible"
+                [class.selected]="groupSelected(r)"
+                [attr.data-testid]="'body-group-' + r.id"
+                [class.drop-target]="bodyDropGroupId() === r.id"
+                [matTooltip]="compact() ? r.label : ''" matTooltipPosition="right"
+                (dragover)="onBodyDragOver($event, r.id)"
+                (dragleave)="bodyDropGroupId.set(null)"
+                (drop)="onBodyDrop($event, r.id)"
+                (click)="onGroupRowClick(r)"
+                (contextmenu)="onGroupContextMenu($event, r)">
+              <mat-icon class="chevron" *ngIf="!compact()" (click)="toggleGroupCollapsed(r.id, $event)">
+                {{ collapsedGroups().has(r.id) ? 'chevron_right' : 'expand_more' }}
+              </mat-icon>
+              <mat-icon class="kind-icon">folder</mat-icon>
+              <span class="label" *ngIf="!compact()">{{ r.label }} <span class="muted">({{ r.memberIds!.length }})</span></span>
+              <button class="visibility-toggle" *ngIf="!compact()"
+                      [attr.data-testid]="'body-group-visibility-' + r.id"
+                      [matTooltip]="r.visible ? 'Hide all' : 'Show all'"
+                      (click)="$event.stopPropagation(); bodiesVisibilitySet.emit({ bodyIds: r.memberIds!, visible: !r.visible })">
+                <mat-icon>{{ r.visible ? 'visibility' : 'visibility_off' }}</mat-icon>
+              </button>
+            </li>
+            <li *ngIf="r.kind === 'body'"
+                class="row"
+                [class.depth-0]="r.depth === 0" [class.depth-1]="r.depth === 1"
+                [class.hidden-feature]="!r.visible"
+                [class.selected]="selectedBodyIds().has(r.id)"
+                [attr.data-testid]="'body-' + r.id"
+                [matTooltip]="compact() ? r.label : ''" matTooltipPosition="right"
+                [attr.aria-label]="compact() ? r.label : null"
+                [attr.draggable]="!readonly()"
+                (dragstart)="onBodyDragStart($event, r)"
+                (dragend)="onBodyDragEnd()"
+                (click)="onBodyRowClick($event, r)"
+                (contextmenu)="onBodyContextMenu($event, r)">
+              <span class="chevron-spacer" *ngIf="!compact()"></span>
+              <mat-icon class="kind-icon extrude" [style.color]="r.color ? '#' + r.color : null">deployed_code</mat-icon>
+              <span class="label" *ngIf="!compact()">{{ r.label }}</span>
+              <button class="visibility-toggle" *ngIf="!compact()"
+                      [attr.data-testid]="'body-visibility-' + r.id"
+                      [matTooltip]="r.visible ? 'Hide' : 'Show'"
+                      (click)="onBodyVisibilityClick(r, $event)">
+                <mat-icon>{{ r.visible ? 'visibility' : 'visibility_off' }}</mat-icon>
+              </button>
+            </li>
+          </ng-container>
         </ul>
       </div>
 
@@ -222,26 +291,81 @@ export interface TreeNode {
            [style.left.px]="bodyMenuX()"
            [style.top.px]="bodyMenuY()"
            [matMenuTriggerFor]="bodyCtxMenu"></div>
+      <!-- REQ 1044 — every action applies to contextBodyIds() (the selection,
+           or a group's members); Rename / Delete need a single body. -->
       <mat-menu #bodyCtxMenu="matMenu">
-        <ng-container *ngIf="contextBody() as b">
+        <ng-container *ngIf="contextBodyIds().length > 0">
+          <ng-container *ngIf="contextGroup() as g">
+            <button mat-menu-item data-testid="ctx-group-rename" [disabled]="readonly()"
+                    (click)="bodyGroupAction.emit({ action: 'rename', groupId: g.id })">
+              <mat-icon>drive_file_rename_outline</mat-icon> Rename group
+            </button>
+            <button mat-menu-item data-testid="ctx-group-ungroup" [disabled]="readonly()"
+                    (click)="bodyGroupAction.emit({ action: 'ungroup', groupId: g.id })">
+              <mat-icon>folder_off</mat-icon> Ungroup
+            </button>
+          </ng-container>
           <button mat-menu-item data-testid="ctx-body-toggle-visibility"
-                  (click)="bodyVisibilityToggled.emit(b.id)">
-            <mat-icon>{{ b.visible ? 'visibility_off' : 'visibility' }}</mat-icon>
-            {{ b.visible ? 'Hide body' : 'Show body' }}
+                  (click)="bodiesVisibilitySet.emit({ bodyIds: contextBodyIds(), visible: !contextAnyVisible() })">
+            <mat-icon>{{ contextAnyVisible() ? 'visibility_off' : 'visibility' }}</mat-icon>
+            {{ contextAnyVisible() ? 'Hide' : 'Show' }} {{ contextNoun() }}
           </button>
           <button mat-menu-item data-testid="ctx-body-isolate"
-                  (click)="bodyIsolated.emit(b.id)">
-            <mat-icon>filter_center_focus</mat-icon> Isolate body
+                  (click)="bodyIsolated.emit(contextBodyIds())">
+            <mat-icon>filter_center_focus</mat-icon> Isolate {{ contextNoun() }}
           </button>
-          <button mat-menu-item data-testid="ctx-body-rename"
-                  (click)="bodyRenamed.emit(b.id)">
-            <mat-icon>drive_file_rename_outline</mat-icon> Rename body
+          <button mat-menu-item data-testid="ctx-body-color" [matMenuTriggerFor]="bodyColorMenu" [disabled]="readonly()">
+            <mat-icon>palette</mat-icon> Color
           </button>
-          <button mat-menu-item data-testid="ctx-body-delete"
-                  (click)="bodyDeleted.emit(b.id)">
-            <mat-icon>delete</mat-icon> Delete body
+          <button *ngIf="!contextGroup()" mat-menu-item data-testid="ctx-body-group" [disabled]="readonly()"
+                  (click)="groupSelectedBodies()">
+            <mat-icon>create_new_folder</mat-icon> Group {{ contextNoun() }}…
           </button>
+          <button *ngIf="!contextGroup() && groupsToJoin().length > 0" mat-menu-item data-testid="ctx-body-add-to-group"
+                  [disabled]="readonly()" [matMenuTriggerFor]="bodyGroupPickMenu">
+            <mat-icon>drive_file_move</mat-icon> Add to group
+          </button>
+          <button *ngIf="!contextGroup() && contextBodyIds().length > 1 && contextInAnyGroup()" mat-menu-item
+                  data-testid="ctx-bodies-ungroup" [disabled]="readonly()"
+                  (click)="bodyGroupAction.emit({ action: 'remove', bodyIds: contextBodyIds() })">
+            <mat-icon>drive_file_move_rtl</mat-icon> Remove from group
+          </button>
+          <ng-container *ngIf="!contextGroup() && contextBodyIds().length === 1 && contextBody() as b">
+            <button *ngIf="groupOf(b.id)" mat-menu-item data-testid="ctx-body-ungroup" [disabled]="readonly()"
+                    (click)="bodyGroupAction.emit({ action: 'remove', bodyIds: [b.id] })">
+              <mat-icon>drive_file_move_rtl</mat-icon> Remove from group
+            </button>
+            <button mat-menu-item data-testid="ctx-body-rename"
+                    (click)="bodyRenamed.emit(b.id)">
+              <mat-icon>drive_file_rename_outline</mat-icon> Rename body
+            </button>
+            <button mat-menu-item data-testid="ctx-body-delete"
+                    (click)="bodyDeleted.emit(b.id)">
+              <mat-icon>delete</mat-icon> Delete body
+            </button>
+          </ng-container>
         </ng-container>
+      </mat-menu>
+      <!-- REQ 1047 — existing groups the context bodies can join. -->
+      <mat-menu #bodyGroupPickMenu="matMenu">
+        <button *ngFor="let g of groupsToJoin()" mat-menu-item [attr.data-testid]="'ctx-body-group-pick-' + g.id"
+                (click)="bodyGroupAction.emit({ action: 'add', groupId: g.id, bodyIds: contextBodyIds() })">
+          <mat-icon>folder</mat-icon> {{ g.name }}
+        </button>
+      </mat-menu>
+      <!-- REQ 1041 — body color: swatches, a custom picker, or the default. -->
+      <mat-menu #bodyColorMenu="matMenu">
+        <div class="swatches">
+          <button *ngFor="let c of BODY_SWATCHES" class="swatch" [attr.data-testid]="'body-swatch-' + c"
+                  [style.background]="'#' + c" [class.current]="contextColor() === c" [attr.aria-label]="'#' + c"
+                  (click)="setBodyColor(c)"></button>
+        </div>
+        <button mat-menu-item data-testid="ctx-body-color-custom" (click)="pickCustomBodyColor()">
+          <mat-icon>colorize</mat-icon> Custom…
+        </button>
+        <button mat-menu-item data-testid="ctx-body-color-reset" (click)="setBodyColor(null)">
+          <mat-icon>format_color_reset</mat-icon> Default color
+        </button>
       </mat-menu>
 
       <mat-menu #ctxMenu="matMenu">
@@ -252,12 +376,12 @@ export interface TreeNode {
               <button *ngIf="scope.count === 1"
                       mat-menu-item data-testid="ctx-edit-feature"
                       (click)="emitAction({ action: 'edit-feature', featureId: n.feature.id })">
-                <mat-icon>edit</mat-icon> Edit…
+                <mat-icon>{{ readonly() ? 'visibility' : 'edit' }}</mat-icon> {{ readonly() ? 'View…' : 'Edit…' }}
               </button>
               <button *ngIf="scope.count === 1 && featureSketchId(n.feature) as fSketchId"
                       mat-menu-item data-testid="ctx-edit-feature-sketch"
                       (click)="emitAction({ action: 'edit-sketch', sketchId: fSketchId })">
-                <mat-icon>draw</mat-icon> Edit sketch
+                <mat-icon>draw</mat-icon> {{ readonly() ? 'View sketch' : 'Edit sketch' }}
               </button>
               <button *ngIf="scope.count === 1"
                       mat-menu-item data-testid="ctx-rename-feature"
@@ -315,7 +439,7 @@ export interface TreeNode {
               <button *ngIf="scope.count === 1"
                       mat-menu-item data-testid="ctx-edit-sketch"
                       (click)="emitAction({ action: 'edit-sketch', sketchId: n.sketchId })">
-                <mat-icon>edit</mat-icon> Edit sketch
+                <mat-icon>{{ readonly() ? 'visibility' : 'edit' }}</mat-icon> {{ readonly() ? 'View sketch' : 'Edit sketch' }}
               </button>
               <button *ngIf="scope.count === 1"
                       mat-menu-item data-testid="ctx-rename-sketch"
@@ -354,8 +478,39 @@ export interface TreeNode {
                 <mat-icon>content_copy</mat-icon> Copy sketch name
               </button>
             </ng-container>
+            <!-- REQ 1046 — folders for top-level feature / sketch rows. -->
+            <ng-container *ngIf="!readonly() && ctxKeys().length > 0">
+              <button *ngIf="canFolderKeys(ctxKeys())" mat-menu-item data-testid="ctx-folder-new"
+                      (click)="folderAction.emit({ action: 'create', keys: ctxKeys() })">
+                <mat-icon>create_new_folder</mat-icon> Add to new folder…
+              </button>
+              <button *ngIf="foldersAccepting(ctxKeys()).length > 0" mat-menu-item data-testid="ctx-folder-add"
+                      [matMenuTriggerFor]="folderPickMenu">
+                <mat-icon>drive_file_move</mat-icon> Add to folder
+              </button>
+              <button *ngIf="inAnyFolder(ctxKeys())" mat-menu-item data-testid="ctx-folder-remove"
+                      (click)="folderAction.emit({ action: 'remove', keys: ctxKeys() })">
+                <mat-icon>drive_file_move_rtl</mat-icon> Remove from folder
+              </button>
+            </ng-container>
+            <ng-container *ngIf="n.kind === 'folder' && n.folderId">
+              <button mat-menu-item data-testid="ctx-folder-rename" [disabled]="readonly()"
+                      (click)="folderAction.emit({ action: 'rename', folderId: n.folderId })">
+                <mat-icon>drive_file_rename_outline</mat-icon> Rename folder
+              </button>
+              <button mat-menu-item data-testid="ctx-folder-delete" [disabled]="readonly()"
+                      (click)="folderAction.emit({ action: 'delete', folderId: n.folderId })">
+                <mat-icon>folder_off</mat-icon> Delete folder
+              </button>
+            </ng-container>
           </ng-container>
         </ng-container>
+      </mat-menu>
+      <mat-menu #folderPickMenu="matMenu">
+        <button *ngFor="let f of foldersAccepting(ctxKeys())" mat-menu-item [attr.data-testid]="'ctx-folder-pick-' + f.id"
+                (click)="folderAction.emit({ action: 'add', folderId: f.id, keys: ctxKeys() })">
+          <mat-icon>folder</mat-icon> {{ f.name }}
+        </button>
       </mat-menu>
     </div>
   `,
@@ -414,6 +569,9 @@ export interface TreeNode {
     .error-indicator { font-size: 16px; width: 16px; height: 16px; color: #ef5350; flex-shrink: 0; }
     .dangling-indicator { font-size: 16px; width: 16px; height: 16px; color: #ffa726; flex-shrink: 0; cursor: help; }
     .menu-anchor { position: fixed; width: 0; height: 0; }
+    .swatches { display: grid; grid-template-columns: repeat(7, 22px); gap: 6px; padding: 8px 12px; }
+    .swatch { width: 22px; height: 22px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.25); padding: 0; cursor: pointer; }
+    .swatch.current { outline: 2px solid #40c4ff; outline-offset: 1px; }
     .chevron { display: inline-flex; align-items: center; width: 18px; flex: 0 0 18px; cursor: pointer; opacity: 0.7; }
     .chevron mat-icon { font-size: 18px; width: 18px; height: 18px; }
     .chevron:hover { opacity: 1; }
@@ -424,6 +582,8 @@ export interface TreeNode {
     .kind-icon.mate { color: #42a5f5; }
     .kind-icon.extrude { color: #4caf50; }
     .kind-icon.sketch { color: #42a5f5; }
+    .kind-icon.folder { color: #ffca28; }
+    .drop-target { outline: 1px dashed #40c4ff; outline-offset: -1px; background: rgba(64, 196, 255, 0.12); }
     .kind-icon.datum-point { color: #fff; }
     .kind-icon.datum-axis-x { color: #e53935; }
     .kind-icon.datum-axis-y { color: #43a047; }
@@ -491,6 +651,8 @@ export class CadFeatureTreePanelComponent {
   features = input<Feature[]>([]);
   doc = input<SketchDocument | null>(null);
   selectableSketches = input<boolean>(false);
+  /** REQ 1040 — read-only part: Edit entries open for viewing. */
+  readonly = input<boolean>(false);
   /** Reuse rows across re-renders so the list keeps its scroll position. */
   readonly trackNode = (_: number, n: TreeNode) => n.key;
   // ── External-nodes mode (e.g. assembly tree) ────────────────────────
@@ -589,19 +751,61 @@ export class CadFeatureTreePanelComponent {
   // ── Bodies panel inputs / outputs ───────────────────────────────────
   /** Body roster surfaced in the bottom half of the panel. Editor
    * populates from the regen response. */
-  bodyList = input<Array<{ id: string; name: string | null }>>([]);
+  bodyList = input<Array<{ id: string; name: string | null; color?: string }>>([]);
+  /** REQ 1045 — body groups (featureTree.bodyGroups). */
+  bodyGroups = input<BodyGroup[]>([]);
+  /** REQ 1046 — feature-tree folders (featureTree.treeFolders). */
+  folders = input<TreeFolder[]>([]);
+  /** REQ 1046 — create / extend / leave / rename / delete a folder. `keys`
+   * are top-level row keys (feature or sketch ids). */
+  folderAction = output<
+    | { action: 'create'; keys: string[] }
+    | { action: 'add'; folderId: string; keys: string[] }
+    | { action: 'remove'; keys: string[] }
+    | { action: 'rename' | 'delete'; folderId: string }
+  >();
   /** Body ids currently hidden — drawn faded with a closed-eye icon
    * and excluded from rendered geometry. */
   hiddenBodyIds = input<Set<string>>(new Set());
   /** Body visibility toggled — emit the body id. Editor flips its
    * hiddenBodies signal in response. */
   bodyVisibilityToggled = output<string>();
-  /** Isolate body — hide everything but this one. */
-  bodyIsolated = output<string>();
+  /** REQ 1044 — show or hide several bodies at once. */
+  bodiesVisibilitySet = output<{ bodyIds: string[]; visible: boolean }>();
+  /** Isolate bodies — hide everything else. */
+  bodyIsolated = output<string[]>();
   /** REQ 857 — user picked "Rename body" from the body context menu. */
   bodyRenamed = output<string>();
   /** Delete body — drops every feature whose target was this body. */
   bodyDeleted = output<string>();
+  /** REQ 1041 — a color was picked ('rrggbb') for bodies, or null for the default. */
+  bodyColorChanged = output<{ bodyIds: string[]; color: string | null }>();
+  /** REQ 1045 — group the given bodies, or rename / dissolve a group, or take
+   * a body out of its group. */
+  bodyGroupAction = output<BodyGroupAction>();
+  readonly BODY_SWATCHES = [
+    'ffffff', '9e9e9e', '212121', 'e53935', 'fb8c00', 'fdd835',
+    '43a047', '00897b', '1e88e5', '3949ab', '8e24aa', 'd81b60', '6d4c41', 'c0a062',
+  ];
+
+  /** Native color picker on a throwaway input (the menu is gone by the time
+   * the picker returns, so the input can't live in it). */
+  pickCustomBodyColor(): void {
+    const ids = this.contextBodyIds();
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = `#${this.contextColor() ?? '8aa0c4'}`;
+    input.addEventListener('change', () => this.bodyColorChanged.emit({ bodyIds: ids, color: input.value }));
+    input.click();
+  }
+
+  setBodyColor(color: string | null): void {
+    this.bodyColorChanged.emit({ bodyIds: this.contextBodyIds(), color });
+  }
+
+  groupSelectedBodies(): void {
+    this.bodyGroupAction.emit({ action: 'group', bodyIds: this.contextBodyIds() });
+  }
 
   // ── Rollback bar inputs / outputs ───────────────────────────────────
   /** Index of the feature the rollback bar sits BEFORE. null = no
@@ -643,7 +847,15 @@ export class CadFeatureTreePanelComponent {
   // feature/sketch one.
   bodyMenuX = signal(0);
   bodyMenuY = signal(0);
-  contextBody = signal<{ id: string; label: string; visible: boolean } | null>(null);
+  contextBody = signal<{ id: string; label: string; visible: boolean; color?: string } | null>(null);
+  /** REQ 1044 — bodies the open body menu acts on (display order). */
+  contextBodyIds = signal<string[]>([]);
+  /** REQ 1045 — the group whose row was right-clicked, if any. */
+  contextGroup = signal<BodyGroup | null>(null);
+  /** REQ 1044 — bodies selected in the bodies section (UI state only). */
+  selectedBodyIds = signal<Set<string>>(new Set());
+  private _bodyAnchor: string | null = null;
+  collapsedGroups = signal<Set<string>>(new Set());
   @ViewChild('menuTriggerEl', { read: MatMenuTrigger }) private menuTrigger?: MatMenuTrigger;
   @ViewChild('bodyMenuTriggerEl', { read: MatMenuTrigger }) private bodyMenuTrigger?: MatMenuTrigger;
   @ViewChild('treeList') private treeList?: ElementRef<HTMLUListElement>;
@@ -661,25 +873,167 @@ export class CadFeatureTreePanelComponent {
 
   /** Body roster computed into the shape the template renders — adds
    * a default "Body N" label + the visibility flag. */
-  bodiesView = computed<Array<{ id: string; label: string; visible: boolean }>>(() => {
+  bodiesView = computed<Array<{ id: string; label: string; visible: boolean; color?: string }>>(() => {
     const hidden = this.hiddenBodyIds();
     return this.bodyList().map((b, i) => ({
       id: b.id,
       label: b.name && b.name.trim() ? b.name : `Body ${i + 1}`,
       visible: !hidden.has(b.id),
+      color: b.color,
     }));
   });
+
+  /** REQ 1045 — display rows: each group at its first member's place, its
+   * members (body order) indented under it; then ungrouped bodies in place. */
+  bodyRows = computed<BodyRow[]>(() => {
+    const bodies = this.bodiesView();
+    const present = new Set(bodies.map(b => b.id));
+    const groupOfBody = new Map<string, BodyGroup>();
+    for (const g of this.bodyGroups()) for (const id of g.bodyIds) if (present.has(id)) groupOfBody.set(id, g);
+    const collapsed = this.collapsedGroups();
+    const rows: BodyRow[] = [];
+    const placed = new Set<string>();
+    for (const b of bodies) {
+      const g = groupOfBody.get(b.id);
+      if (!g) { rows.push({ kind: 'body', ...b, depth: 0 }); continue; }
+      if (placed.has(g.id)) continue;
+      placed.add(g.id);
+      const members = bodies.filter(m => groupOfBody.get(m.id) === g);
+      rows.push({ kind: 'group', id: g.id, label: g.name, depth: 0, visible: members.some(m => m.visible), memberIds: members.map(m => m.id) });
+      if (!collapsed.has(g.id)) for (const m of members) rows.push({ kind: 'body', ...m, depth: 1, groupId: g.id });
+    }
+    return rows;
+  });
+  readonly trackBodyRow = (_: number, r: BodyRow) => `${r.kind}:${r.id}`;
+
+  /** REQ 1047 — groups the context bodies could join (not one already
+   * holding all of them). */
+  groupsToJoin(): BodyGroup[] {
+    const ids = this.contextBodyIds();
+    return this.bodyGroups().filter(g => !ids.every(id => g.bodyIds.includes(id)));
+  }
+  contextInAnyGroup(): boolean {
+    return this.contextBodyIds().some(id => !!this.groupOf(id));
+  }
+
+  /** REQ 1047 — drag a body (or the selection holding it) onto a group row to
+   * add it there, or onto the Bodies header ('' target) to ungroup it. */
+  bodyDropGroupId = signal<string | null>(null);
+  private _dragBodyIds: string[] = [];
+  onBodyDragStart(ev: DragEvent, r: { id: string }): void {
+    if (this.readonly()) { ev.preventDefault(); return; }
+    const sel = this.selectedBodyIds();
+    this._dragBodyIds = sel.has(r.id) ? this.bodiesView().filter(b => sel.has(b.id)).map(b => b.id) : [r.id];
+    ev.dataTransfer?.setData('text/plain', this._dragBodyIds.join(','));
+    if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
+  }
+  onBodyDragOver(ev: DragEvent, groupId: string): void {
+    if (this._dragBodyIds.length === 0) return;
+    ev.preventDefault();  // allow the drop
+    this.bodyDropGroupId.set(groupId);
+  }
+  onBodyDrop(ev: DragEvent, groupId: string): void {
+    ev.preventDefault();
+    const ids = this._dragBodyIds;
+    this.onBodyDragEnd();
+    if (ids.length === 0) return;
+    if (groupId) this.bodyGroupAction.emit({ action: 'add', groupId, bodyIds: ids });
+    else if (ids.some(id => this.groupOf(id))) this.bodyGroupAction.emit({ action: 'remove', bodyIds: ids });
+  }
+  onBodyDragEnd(): void {
+    this._dragBodyIds = [];
+    this.bodyDropGroupId.set(null);
+  }
+
+  groupOf(bodyId: string): BodyGroup | undefined {
+    return this.bodyGroups().find(g => g.bodyIds.includes(bodyId));
+  }
+
+  groupSelected(r: BodyRow): boolean {
+    const sel = this.selectedBodyIds();
+    return !!r.memberIds?.length && r.memberIds.every(id => sel.has(id));
+  }
+
+  /** Context-menu helpers over contextBodyIds(). */
+  contextAnyVisible(): boolean {
+    const ids = new Set(this.contextBodyIds());
+    return this.bodiesView().some(b => ids.has(b.id) && b.visible);
+  }
+  contextNoun(): string {
+    return this.contextGroup() ? 'group' : this.contextBodyIds().length > 1 ? `${this.contextBodyIds().length} bodies` : 'body';
+  }
+  /** The shared color of the context bodies, or undefined when mixed/default. */
+  contextColor(): string | undefined {
+    const ids = new Set(this.contextBodyIds());
+    const colors = new Set(this.bodiesView().filter(b => ids.has(b.id)).map(b => b.color));
+    return colors.size === 1 ? [...colors][0] : undefined;
+  }
+
+  /** REQ 1044 — click selects one, Ctrl/Cmd toggles, Shift selects the range
+   * (display order) from the last clicked body. Still reports the click for
+   * feature body-scope picks. */
+  onBodyRowClick(ev: MouseEvent, b: { id: string }): void {
+    const order = this.bodyRows().filter(r => r.kind === 'body').map(r => r.id);
+    let next: Set<string>;
+    if (ev.shiftKey && this._bodyAnchor && order.includes(this._bodyAnchor)) {
+      const [i, j] = [order.indexOf(this._bodyAnchor), order.indexOf(b.id)].sort((x, y) => x - y);
+      next = new Set(order.slice(i, j + 1));
+    } else if (ev.ctrlKey || ev.metaKey) {
+      next = new Set(this.selectedBodyIds());
+      if (next.has(b.id)) next.delete(b.id); else next.add(b.id);
+      this._bodyAnchor = b.id;
+    } else {
+      next = new Set([b.id]);
+      this._bodyAnchor = b.id;
+    }
+    this.selectedBodyIds.set(next);
+    this.bodyClicked.emit(b.id);
+  }
+
+  onGroupRowClick(r: BodyRow): void {
+    this.selectedBodyIds.set(new Set(r.memberIds));
+    this._bodyAnchor = null;
+  }
+
+  onGroupContextMenu(ev: MouseEvent, r: BodyRow): void {
+    ev.preventDefault();
+    this.selectedBodyIds.set(new Set(r.memberIds));
+    this.contextGroup.set(this.bodyGroups().find(g => g.id === r.id) ?? null);
+    this.contextBodyIds.set([...r.memberIds!]);
+    this.contextBody.set(null);
+    this._openBodyMenu(ev);
+  }
+
+  toggleGroupCollapsed(groupId: string, ev: MouseEvent): void {
+    ev.stopPropagation();
+    const next = new Set(this.collapsedGroups());
+    if (next.has(groupId)) next.delete(groupId); else next.add(groupId);
+    this.collapsedGroups.set(next);
+  }
 
   onBodyVisibilityClick(b: { id: string }, ev: MouseEvent): void {
     ev.stopPropagation();
     this.bodyVisibilityToggled.emit(b.id);
   }
 
-  onBodyContextMenu(ev: MouseEvent, b: { id: string; label: string; visible: boolean }): void {
+  /** REQ 1044 — the menu acts on the selection when the body is in it;
+   * otherwise the body becomes the selection. */
+  onBodyContextMenu(ev: MouseEvent, b: { id: string }): void {
     ev.preventDefault();
+    if (!this.selectedBodyIds().has(b.id)) {
+      this.selectedBodyIds.set(new Set([b.id]));
+      this._bodyAnchor = b.id;
+    }
+    const sel = this.selectedBodyIds();
+    this.contextBodyIds.set(this.bodiesView().filter(x => sel.has(x.id)).map(x => x.id));
+    this.contextGroup.set(null);
+    this.contextBody.set(this.bodiesView().find(x => x.id === b.id) ?? null);
+    this._openBodyMenu(ev);
+  }
+
+  private _openBodyMenu(ev: MouseEvent): void {
     this.bodyMenuX.set(ev.clientX);
     this.bodyMenuY.set(ev.clientY);
-    this.contextBody.set(b);
     queueMicrotask(() => this.bodyMenuTrigger?.openMenu());
   }
 
@@ -698,6 +1052,38 @@ export class CadFeatureTreePanelComponent {
     return this.sketchHostMissing(sketchId)
       ? 'Reference face missing — this sketch\'s host face was deleted.'
       : null;
+  }
+
+  /** REQ 1046 — top-level row keys the context menu's folder actions act on
+   * (same selection rule as ctxScope). */
+  ctxKeys = computed<string[]>(() => {
+    const n = this.contextNode();
+    if (!n || n.kind === 'folder') return [];
+    if (n.kind === 'feature' && n.feature && n.feature.type !== 'origin') {
+      const sel = this.selectedFeatures();
+      return sel.has(n.feature.id) && sel.size > 1 ? Array.from(sel) : [n.feature.id];
+    }
+    if (n.kind === 'sketch' && n.sketchId) {
+      const sel = this.selectedSketches();
+      return sel.has(n.sketchId) && sel.size > 1 ? Array.from(sel) : [n.sketchId];
+    }
+    return [];
+  });
+
+  canFolderKeys(keys: string[]): boolean {
+    return canFolder(this.baseNodes(), keys);
+  }
+
+  /** Folders that `keys` can join and still be one consecutive run. */
+  foldersAccepting(keys: string[]): TreeFolder[] {
+    const base = this.baseNodes();
+    const top = new Set(base.filter(r => r.depth === 0).map(r => r.key));
+    return this.folders().filter(f => !keys.every(k => f.memberKeys.includes(k))
+      && canFolder(base, [...new Set([...f.memberKeys.filter(k => top.has(k)), ...keys])]));
+  }
+
+  inAnyFolder(keys: string[]): boolean {
+    return this.folders().some(f => keys.some(k => f.memberKeys.includes(k)));
   }
 
   // What the context menu will act on, given the right-clicked node and the
@@ -736,7 +1122,17 @@ export class CadFeatureTreePanelComponent {
     return { kind: null, count: 0, anyVisible: false, anySuppressed: false };
   });
 
+  /** REQ 1046 — the tree with folders applied (part mode; the assembly host
+   * folds its own external nodes). */
   nodes = computed<TreeNode[]>(() => {
+    const base = this.baseNodes();
+    if (this.externalNodes() || this.compact() || this.folders().length === 0) return base;
+    const collapsed = new Set(this.folders().map(f => f.id).filter(id => this.expanded().has(`folder:${id}`)));
+    return applyFolders(base, this.folders(), collapsed, folderNode);
+  });
+
+  /** Rows before folders are applied. */
+  private baseNodes = computed<TreeNode[]>(() => {
     const ext = this.externalNodes();
     if (ext) return ext;
     const out: TreeNode[] = [...this.contextNodes()];
@@ -1485,6 +1881,7 @@ export class CadFeatureTreePanelComponent {
     if (n.kind === 'feature') return 'feature-tree-row';
     if (n.kind === 'sketch') return 'sketch-tree-row';
     if (n.kind === 'datum') return `datum-tree-row-${n.datumId}`;
+    if (n.kind === 'folder') return `folder-row-${n.folderId}`;
     return 'tree-row';
   }
 
@@ -1505,6 +1902,7 @@ export class CadFeatureTreePanelComponent {
     if (this._suppressNextRowClick) { this._suppressNextRowClick = false; return; }
     // Context rows (ctxasm:<id>) — actions live on the right-click menu.
     if (n.key.startsWith('ctxasm:')) return;
+    if (n.kind === 'folder') { this.toggleExpand(n, ev); return; }
     // External-nodes mode: selectable rows select; expandable rows toggle.
     if (this.externalNodes()) {
       if (n.selectable) this.externalEvent.emit({ type: 'select', node: n, ev });

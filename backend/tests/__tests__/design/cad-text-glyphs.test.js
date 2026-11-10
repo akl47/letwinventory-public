@@ -32,6 +32,31 @@ describe('cadTextGlyphs (drift guard vs frontend textGlyphs.ts)', () => {
     expect(_fontLoaded()).toBe(true);
   });
 
+  // REQ 1048 — Bold / Italic / Bold Italic faces; same pins as the frontend.
+  it.each([
+    ['bold', [9, 4, 61, 24, 22], 2.2390, 0.0549, 17.7953],
+    ['italic', [9, 4, 58, 24, 26], 0.8242, -0.5563, 16.9490],
+    ['boldItalic', [9, 4, 59, 22, 22], 1.5041, -0.7074, 17.6025],
+  ])('tessellates "AB" in %s to the pinned loops', (style, lengths, firstX, minX, maxX) => {
+    expect(_fontLoaded(style)).toBe(true);
+    const loops = _tessellate('AB', { x: 0, y: 0 }, 10, 'left', 1000, style);
+    expect(loops.map(l => l.length)).toEqual(lengths);
+    expect(loops[0][0].x).toBeCloseTo(firstX, 3);
+    const xs = loops.flat().map(p => p.x), ys = loops.flat().map(p => p.y);
+    expect(Math.min(...xs)).toBeCloseTo(minX, 3);
+    expect(Math.max(...xs)).toBeCloseTo(maxX, 3);
+    expect(Math.max(...ys)).toBeCloseTo(10, 3);
+  });
+
+  it('a bold text entity extrudes the bold face', () => {
+    const st = textBoxState('AB');
+    const regular = loopsFromTextEntity(st, st.entities.find(e => e.kind === 'text'));
+    st.entities.find(e => e.kind === 'text').bold = true;
+    const bold = loopsFromTextEntity(st, st.entities.find(e => e.kind === 'text'));
+    expect(bold.map(l => l.length)).toEqual([9, 4, 61, 24, 22]);
+    expect(bold.map(l => l.length)).not.toEqual(regular.map(l => l.length));
+  });
+
   it('tessellates "AB" to the pinned loops', () => {
     const loops = _tessellate('AB', { x: 0, y: 0 }, 10, 'left', 1000);
     // A: outer outline + 1 counter; B: outer outline + 2 counters = 5 loops.

@@ -11,6 +11,7 @@ import { solveWithRecovery, collapsedLines, measuredDimValue } from './solveReco
 import { solveSketch } from './solver';
 import type { SketchState, SketchEntity, SketchConstraint } from './types';
 import { findPoint } from './types';
+import { addLine, addPoint, addTextBoxByCorners, emptySketchState } from './store';
 
 function pt(id: string, x: number, y: number): SketchEntity {
   return { kind: 'point', id, x, y };
@@ -84,6 +85,32 @@ describe('collapsedLines (REQ 922)', () => {
     };
     expect(collapsedLines(before, after)).toEqual(['l5']);
     expect(collapsedLines(before, before)).toEqual([]);
+  });
+});
+
+describe('collapsedLines — text boxes', () => {
+  it('guards a text box side although it is construction geometry', () => {
+    const box = addTextBoxByCorners(emptySketchState(), 0, 0, 40, 10, 'x');
+    const [, , tr, tl] = box.cornerIds;
+    const bl = box.state.entities.find(e => e.id === box.cornerIds[0]) as any;
+    const br = box.state.entities.find(e => e.id === box.cornerIds[1]) as any;
+    // Top corners dropped onto the bottom ones: the box is flat.
+    const flat: SketchState = {
+      ...box.state,
+      entities: box.state.entities.map(e => e.id === tl ? { ...e, x: bl.x, y: bl.y }
+        : e.id === tr ? { ...e, x: br.x, y: br.y } : e),
+    };
+    const [, lRgt, , lLft] = box.lineIds;
+    expect(collapsedLines(box.state, flat).sort()).toEqual([lLft, lRgt].sort());
+  });
+
+  it('still ignores other construction lines', () => {
+    let s = emptySketchState();
+    const a = addPoint(s, 0, 0); s = a.state;
+    const b = addPoint(s, 10, 0); s = b.state;
+    const l = addLine(s, a.id, b.id, { construction: true }); s = l.state;
+    const flat = { ...s, entities: s.entities.map(e => e.id === b.id ? { ...e, x: 0 } : e) };
+    expect(collapsedLines(s, flat)).toEqual([]);
   });
 });
 

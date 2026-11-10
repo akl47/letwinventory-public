@@ -17,6 +17,9 @@
 #include <unistd.h>
 
 #include <BRep_Builder.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <Bnd_Box.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
@@ -334,6 +337,37 @@ json op_bodyVolume(const json& params) {
       {"volume", volume},
       {"centroid", {centroid.X(), centroid.Y(), centroid.Z()}},
   };
+}
+
+// bodyContacts (REQ 1043) — index pairs of bodies that overlap or touch:
+// minimum distance <= tolerance. BRepExtrema reports 0 for intersecting
+// solids and for a solid wholly inside another (inner solution). Bounding
+// boxes skip pairs that are clearly apart.
+json op_bodyContacts(const json& params) {
+  if (!params.contains("breps") || !params["breps"].is_array()) {
+    throw std::runtime_error("bodyContacts: breps must be an array");
+  }
+  double tol = params.value("tolerance", 1e-4);
+  if (tol < 0.0) tol = 0.0;
+  std::vector<TopoDS_Shape> shapes;
+  std::vector<Bnd_Box> boxes;
+  for (const auto& b : params["breps"]) {
+    if (!b.is_string()) throw std::runtime_error("bodyContacts: BRep is not a string");
+    shapes.push_back(brep_from_base64(b.get<std::string>()));
+    Bnd_Box box;
+    BRepBndLib::Add(shapes.back(), box);
+    box.Enlarge(tol);
+    boxes.push_back(box);
+  }
+  json pairs = json::array();
+  for (size_t i = 0; i < shapes.size(); ++i) {
+    for (size_t j = i + 1; j < shapes.size(); ++j) {
+      if (boxes[i].IsOut(boxes[j])) continue;
+      BRepExtrema_DistShapeShape dist(shapes[i], shapes[j]);
+      if (dist.IsDone() && dist.Value() <= tol) pairs.push_back({i, j});
+    }
+  }
+  return json{{"pairs", pairs}};
 }
 
 // exportStl — combine bodies, mesh at chord tolerance, write binary STL, base64.

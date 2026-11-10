@@ -1,4 +1,5 @@
 import type {
+  BodyGroup,
   Feature, FeatureTree, OriginFeature, ExtrudeFeature, CutExtrudeFeature,
   RevolveFeature, CutRevolveFeature, SweepFeature, CutSweepFeature,
 } from './types';
@@ -172,6 +173,63 @@ export function setBodyName(tree: FeatureTree, bodyId: string, name: string): Fe
   if (Object.keys(map).length) next.bodyNames = map;
   else delete next.bodyNames;
   return next;
+}
+
+/** REQ 1041: per-body color ('rrggbb', stored lowercase without '#'). null
+ * clears it back to the default; a malformed color leaves the tree as is. */
+export function setBodyColor(tree: FeatureTree, bodyId: string, color: string | null): FeatureTree {
+  const map = { ...(tree.bodyColors ?? {}) };
+  if (color === null) delete map[bodyId];
+  else {
+    const hex = color.replace(/^#/, '').toLowerCase();
+    if (!/^[0-9a-f]{6}$/.test(hex)) return tree;
+    map[bodyId] = hex;
+  }
+  const next = { ...tree };
+  if (Object.keys(map).length) next.bodyColors = map;
+  else delete next.bodyColors;
+  return next;
+}
+
+/** REQ 1045 — store `groups` (empty ones dropped; none left = field removed). */
+function withBodyGroups(tree: FeatureTree, groups: BodyGroup[]): FeatureTree {
+  const kept = groups.filter(g => g.bodyIds.length > 0);
+  const next = { ...tree };
+  if (kept.length) next.bodyGroups = kept;
+  else delete next.bodyGroups;
+  return next;
+}
+
+/** REQ 1045: add a group; its bodies leave whatever group they were in. */
+export function addBodyGroup(tree: FeatureTree, group: BodyGroup): FeatureTree {
+  const taken = new Set(group.bodyIds);
+  const others = (tree.bodyGroups ?? []).map(g => ({ ...g, bodyIds: g.bodyIds.filter(id => !taken.has(id)) }));
+  return withBodyGroups(tree, [...others, { ...group, bodyIds: [...group.bodyIds] }]);
+}
+
+/** REQ 1047: add bodies to an existing group (they leave any other group). */
+export function addBodiesToGroup(tree: FeatureTree, groupId: string, bodyIds: string[]): FeatureTree {
+  const taken = new Set(bodyIds);
+  return withBodyGroups(tree, (tree.bodyGroups ?? []).map(g => g.id === groupId
+    ? { ...g, bodyIds: [...g.bodyIds.filter(id => !taken.has(id)), ...bodyIds] }
+    : { ...g, bodyIds: g.bodyIds.filter(id => !taken.has(id)) }));
+}
+
+/** REQ 1045: rename a group; a blank name leaves the tree as is. */
+export function renameBodyGroup(tree: FeatureTree, groupId: string, name: string): FeatureTree {
+  const trimmed = name.trim();
+  if (!trimmed) return tree;
+  return withBodyGroups(tree, (tree.bodyGroups ?? []).map(g => (g.id === groupId ? { ...g, name: trimmed } : g)));
+}
+
+/** REQ 1045: dissolve a group (its bodies stay, ungrouped). */
+export function ungroupBodies(tree: FeatureTree, groupId: string): FeatureTree {
+  return withBodyGroups(tree, (tree.bodyGroups ?? []).filter(g => g.id !== groupId));
+}
+
+/** REQ 1045: take one body out of its group. */
+export function removeBodyFromGroup(tree: FeatureTree, bodyId: string): FeatureTree {
+  return withBodyGroups(tree, (tree.bodyGroups ?? []).map(g => ({ ...g, bodyIds: g.bodyIds.filter(id => id !== bodyId) })));
 }
 
 /** REQ 858: persisted rollback-bar position. null clears (fully rolled forward). */

@@ -101,30 +101,25 @@ export function migrateSketchState(state: LegacySketchState | SketchState): Sket
       return rest as SketchEntity;
     });
     if (synthesised.length > 0) constraints = [...constraints, ...synthesised];
-    // REQ Batch 6 — retrofit a `fixed` constraint on existing text
-    // boxes' BL corner so dimensioning them doesn't drift the
-    // whole box. Idempotent: skipped when the BL is already fixed.
-    const hasFixedOn = (pointId: string) =>
-      constraints.some(c => c.type === 'fixed' && c.targets[0]?.entityId === pointId);
-    for (const e of cleanedEntities) {
-      if (e.kind !== 'text') continue;
+    // A text box is NOT pinned in place (store.addTextBoxByCorners): it is
+    // dragged or dimensioned into position like any geometry. (Loading used
+    // to add a `fixed` on every box's bottom-left corner, which made a fully
+    // dimensioned box — the Part Number preset — undraggable.)
+    //
+    // Drop text whose box points are gone (its box was deleted, the text
+    // survived): it can't render or be picked, so it could never be removed.
+    const pointIds = new Set(cleanedEntities.filter(p => p.kind === 'point').map(p => p.id));
+    const liveEntities = cleanedEntities.filter(e => {
+      if (e.kind !== 'text') return true;
       const te = e as import('./types').TextEntity;
-      if (!te.cornerIds || te.cornerIds.length < 1) continue;
-      const blId = te.cornerIds[0];
-      if (!hasFixedOn(blId)) {
-        constraints = [...constraints, {
-          id: `c-textfix-${te.id}`,
-          type: 'fixed',
-          targets: [{ entityId: blId }],
-        }];
-      }
-    }
+      return !te.cornerIds || te.cornerIds.length !== 4 || te.cornerIds.every(id => pointIds.has(id));
+    });
     // REQ Batch 6 — repair text entities that lost their text /
     // cornerIds fields (e.g. via a stale signal write). Heuristic:
     // if a text entity has no cornerIds AND no anchorId, find a
     // 4-construction-point axis-aligned rectangle in the same
     // sketch state and bind it.
-    const repairedEntities = cleanedEntities.map(e => {
+    const repairedEntities = liveEntities.map(e => {
       if (e.kind !== 'text') return e;
       const te = e as import('./types').TextEntity;
       if (te.cornerIds && te.cornerIds.length === 4) return e;

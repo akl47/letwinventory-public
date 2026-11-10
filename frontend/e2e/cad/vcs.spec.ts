@@ -108,6 +108,25 @@ test('release to main mints the revision, locks the model, and protects main', a
   // surfaced by the read-only banner asserted above.
 });
 
+// REQ 1040 — a released part's sketches open for viewing only.
+test('released part: a sketch opens view-only and nothing is saved', async ({ page }) => {
+  await openEditor(page, PART_ID);
+  await expect(page.locator('[data-testid="readonly-banner"]')).toBeVisible({ timeout: 15_000 });
+  const before = (await apiModel()).lastContentSavedAt;
+
+  await page.locator('[data-testid="sketch-tree-row"]').first().click({ button: 'right' });
+  const view = page.locator('[data-testid="ctx-edit-sketch"]');
+  await expect(view).toContainText('View sketch');
+  await view.click();
+  await expect(page.locator('[data-testid="sketch-toolbar"]')).toBeVisible({ timeout: 10_000 });
+  expect(await sketchEntityCount(page, 'line')).toBeGreaterThan(0);
+  await expect(page.locator('[data-testid="group-primitives"] button').first()).toBeDisabled();
+
+  await exitSketch(page);
+  await page.waitForTimeout(1_000);  // past the 500 ms save debounce
+  expect((await apiModel()).lastContentSavedAt).toBe(before);
+});
+
 test('new branch from main creates and switches; branches panel lists both', async ({ page }) => {
   await openEditor(page, PART_ID);
   await openFileTab(page);

@@ -1,7 +1,8 @@
 // REQ 932 — export, measure, and section-view e2e. Builds one cube, then
-// exercises STL/STEP downloads (non-empty payloads), the measure sidebar,
+// exercises body color, STL/STEP/3MF downloads (non-empty payloads), the measure sidebar,
 // and the part section toggle.
 import { test, expect } from '@playwright/test';
+import JSZip from 'jszip';
 import {
   createFixturePart, openEditor, enterSketchOnXY, drawClosedRectangle,
   extrudeSketch, openFileTab,
@@ -23,6 +24,14 @@ test('build the cube fixture and release it (downloads serve the frozen release)
   await enterSketchOnXY(page);
   await drawClosedRectangle(page, 60);
   await extrudeSketch(page, 12);
+
+  // REQ 1041 — color the body (persisted on the working copy, tints its row).
+  const bodyRow = page.locator('li[data-testid^="body-"]').first();
+  await bodyRow.click({ button: 'right' });
+  await page.locator('[data-testid="ctx-body-color"]').click();
+  await page.locator('[data-testid="body-swatch-e53935"]').click();
+  await expect(bodyRow.locator('mat-icon.kind-icon')).toHaveCSS('color', 'rgb(229, 57, 53)');
+  await page.waitForTimeout(1_000);  // past the 500 ms save debounce
 
   // Check in + release: the STL/STEP buttons only exist on a released model.
   await openFileTab(page);
@@ -65,6 +74,23 @@ test('STEP export downloads a non-empty file', async ({ page }) => {
   let text = '';
   for await (const chunk of stream) text += chunk.toString('utf8');
   expect(text).toContain('ISO-10303');
+});
+
+// REQ 1042 — 3MF carries the body as one object with its color as a filament.
+test('3MF export downloads a package with the body color', async ({ page }) => {
+  await openEditor(page, PART_ID);
+  await openFileTab(page);
+  const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+  await page.locator('[data-testid="action-dl-3mf"]').click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/\.3mf$/i);
+  const chunks: Buffer[] = [];
+  for await (const chunk of await download.createReadStream()) chunks.push(chunk as Buffer);
+  const zip = await JSZip.loadAsync(Buffer.concat(chunks));
+  const model = await zip.file('3D/3dmodel.model')!.async('string');
+  expect(model.match(/<item objectid=/g)).toHaveLength(1);
+  const settings = JSON.parse(await zip.file('Metadata/project_settings.config')!.async('string'));
+  expect(settings.filament_colour).toEqual(['#E53935']);
 });
 
 test('measure sidebar reports an edge length', async ({ page }) => {

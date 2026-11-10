@@ -5,7 +5,7 @@ import {
   addRectangleCorners, addRectangleCenter, addRectangle3PtCorner, addRectangle3PtCenter, addParallelogram,
   addPolygon, addSlotStraight, addSlotTab, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
   addCircle3Points, addArc3Points, addEllipse, addEllipticalArc, addSpline,
-  addParabolaByPoints, addTextBoxByCorners, rotateTextBox,
+  addParabolaByPoints, addTextBoxByCorners, rotateTextBox, addPartNumberText, PART_NUMBER_TEXT, textBoxParts,
   setConstructionFlag, mergePoints,
   ORIGIN_POINT_ID,
 } from './store';
@@ -866,6 +866,57 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
       expect(e.ccw).toBe(true);
       // Materialized center + major-end points.
       expect(userPoints(r.state).length).toBe(2);
+    });
+  });
+
+  // REQ 1049 — Part Number preset: centered, bold, 45 x 5 mm, dimensioned.
+  describe('addPartNumberText', () => {
+    it('places a centered bold part-number box on the click point', () => {
+      const r = addPartNumberText(emptySketchState(), 10, 20);
+      const t = r.state.entities.find(e => e.id === r.id) as any;
+      expect(t).toMatchObject({ kind: 'text', text: '#{partName}-#{partRevision}', justify: 'center', bold: true });
+      expect(PART_NUMBER_TEXT).toBe('#{partName}-#{partRevision}');
+      const pt = (id: string) => r.state.entities.find(e => e.id === id) as any;
+      const [bl, br, tr] = r.cornerIds.map(pt);
+      expect([bl.x, bl.y, tr.x, tr.y]).toEqual([-12.5, 17.5, 32.5, 22.5]);
+      expect(br.x - bl.x).toBeCloseTo(45);
+      expect(tr.y - br.y).toBeCloseTo(5);
+    });
+
+    it('dimensions the box 45 mm wide and 5 mm tall', () => {
+      const r = addPartNumberText(emptySketchState(), 0, 0);
+      const [bl, br, tr] = r.cornerIds;
+      const dims = r.state.constraints.filter(c => c.type === 'distance');
+      const dimOn = (a: string, b: string) => dims.find(c => c.targets.map(t => t.entityId).sort().join() === [a, b].sort().join());
+      expect(dimOn(bl, br)?.value).toBe(45);
+      expect(dimOn(br, tr)?.value).toBe(5);
+    });
+  });
+
+  describe('text box as one unit', () => {
+    const box = () => addTextBoxByCorners(emptySketchState(), 0, 0, 40, 10, 'x');
+
+    it('textBoxParts lists the corners, centerline ends, sides and centerline', () => {
+      const t = box();
+      const parts = textBoxParts(t.state, t.id);
+      expect(parts.points).toHaveLength(6);
+      expect(parts.points.slice(0, 4)).toEqual(t.cornerIds);
+      expect(parts.lines).toHaveLength(5);
+      expect(parts.lines.slice(0, 4).sort()).toEqual([...t.lineIds].sort());
+    });
+
+    it('deleting the text deletes its whole box', () => {
+      const t = box();
+      const after = deletePrimitive(t.state, t.id);
+      expect(after.entities.map(e => e.id)).toEqual([ORIGIN_POINT_ID]);
+      expect(after.constraints).toEqual([]);
+    });
+
+    it('deleting a corner deletes the text instead of orphaning it', () => {
+      const t = box();
+      const after = deletePrimitive(t.state, t.cornerIds[2]);
+      expect(after.entities.some(e => e.kind === 'text')).toBe(false);
+      expect(after.entities.map(e => e.id)).toEqual([ORIGIN_POINT_ID]);
     });
   });
 

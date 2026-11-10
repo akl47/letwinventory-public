@@ -212,6 +212,44 @@ export function addTextBoxByCorners(
   };
 }
 
+/** A text entity's box: its 4 corners, the 4 sides, and the vertical
+ * centerline (whose ends are midpoint-pinned to the bottom and top sides).
+ * One rigid unit — deleting the text deletes it, and a drag moves all of it. */
+export function textBoxParts(state: SketchState, textId: string): { points: string[]; lines: string[] } {
+  const te = state.entities.find(e => e.id === textId && e.kind === 'text') as import('./types').TextEntity | undefined;
+  if (!te?.cornerIds) return { points: [], lines: [] };
+  const corners = new Set(te.cornerIds);
+  const sides = state.entities.filter(e => e.kind === 'line' && corners.has(e.startId) && corners.has(e.endId)).map(e => e.id);
+  const sideSet = new Set(sides);
+  const mids = new Set(state.constraints
+    .filter(c => c.type === 'midpoint' && c.targets.length === 2 && sideSet.has(c.targets[1].entityId))
+    .map(c => c.targets[0].entityId));
+  const center = state.entities.filter(e => e.kind === 'line' && mids.has(e.startId) && mids.has(e.endId)).map(e => e.id);
+  return { points: [...corners, ...mids], lines: [...sides, ...center] };
+}
+
+/** REQ 1049 — the Part Number preset's text: the part name and revision. */
+export const PART_NUMBER_TEXT = '#{partName}-#{partRevision}';
+const PART_NUMBER_W = 45, PART_NUMBER_H = 5;
+
+/** REQ 1049 — Part Number preset: a 45 x 5 mm text box centered on (cx, cy),
+ * center-justified, bold, reading the part name and revision, with driving
+ * width / height dimensions (placed just below and right of the box). */
+export function addPartNumberText(
+  state: SketchState, cx: number, cy: number,
+): ReturnType<typeof addTextBoxByCorners> {
+  const hw = PART_NUMBER_W / 2, hh = PART_NUMBER_H / 2;
+  const r = addTextBoxByCorners(state, cx - hw, cy - hh, cx + hw, cy + hh, PART_NUMBER_TEXT);
+  const [bl, br, tr] = r.cornerIds;
+  let s: SketchState = {
+    ...r.state,
+    entities: r.state.entities.map(e => (e.id === r.id ? { ...e, justify: 'center' as const, bold: true } : e)),
+  };
+  s = addConstraint(s, 'distance', [bl, br], PART_NUMBER_W, { x: cx, y: cy - hh - 3 }).state;
+  s = addConstraint(s, 'distance', [br, tr], PART_NUMBER_H, { x: cx + hw + 3, y: cy }).state;
+  return { ...r, state: s };
+}
+
 /** Rotate a text box to an absolute angle (degrees, CCW) by moving its real
  * corner points about the fixed bottom-left anchor — so the construction lines,
  * dimensions and centerline all rotate as normal geometry. The solver then
@@ -305,7 +343,7 @@ export function addSplineOnSurface(
  * and the constraint list pass through unchanged. */
 export function updateTextEntity(
   state: SketchState, id: string,
-  patch: Partial<Pick<import('./types').TextEntity, 'text' | 'size' | 'justify' | 'font' | 'mirror' | 'rotation'>>,
+  patch: Partial<Pick<import('./types').TextEntity, 'text' | 'size' | 'justify' | 'font' | 'mirror' | 'rotation' | 'bold' | 'italic'>>,
 ): SketchState {
   return {
     ...state,
@@ -1074,6 +1112,15 @@ export function deletePrimitive(
       }
     }
 
+    // A doomed text takes its whole box (sides + centerline); the backward
+    // pass below then drops the box points.
+    for (const e of state.entities) {
+      if (e.kind !== 'text' || !toDelete.has(e.id)) continue;
+      for (const l of textBoxParts(state, e.id).lines) {
+        if (!toDelete.has(l)) { toDelete.add(l); changed = true; }
+      }
+    }
+
     for (const e of state.entities) {
       if (!toDelete.has(e.id)) continue;
       for (const ptId of supportPointIdsOf(e)) {
@@ -1105,6 +1152,7 @@ function supportPointIdsOf(e: SketchEntity): string[] {
     case 'ellipse':       return [e.centerId, e.majorAxisEndId];
     case 'ellipticalArc': return [e.centerId, e.majorAxisEndId];
     case 'spline':        return [...e.controlPointIds];
+    case 'text':          return e.cornerIds ? [...e.cornerIds] : [];
     default:              return [];
   }
 }

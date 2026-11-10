@@ -21,11 +21,11 @@ import {
   addRectangleCorners, addRectangleCenter, addRectangle3PtCorner, addRectangle3PtCenter, addParallelogram,
   addPolygon, addSlotStraight, addSlotTab, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
   addCircle3Points, addArc3Points, addEllipse, addEllipticalArc, addSpline,
-  addParabolaByPoints, addEquationCurve, addText, addTextBoxByCorners, addPicture,
+  addParabolaByPoints, addEquationCurve, addText, addTextBoxByCorners, addPartNumberText, textBoxParts, addPicture,
   setConstructionFlag, setConstraintDriven, mergePoints, ORIGIN_POINT_ID,
 } from '../../../cad/lib/store';
 import { solveSketch } from '../../../cad/lib/solver';
-import { solveWithRecovery } from '../../../cad/lib/solveRecovery';
+import { solveWithRecovery, collapsedLines } from '../../../cad/lib/solveRecovery';
 import { extractClosedLoops } from '../../../cad/lib/profile';
 import { pickEntity, distanceToEntity, entityTouchesRect } from '../../../cad/lib/picking';
 import { inferLineEnd, inferAlignment, type InferenceResult, type PendingConstraint, type AlignmentRef } from '../../../cad/lib/inference';
@@ -53,7 +53,7 @@ type Tool =
   | 'parallelogram' | 'polygon'
   | 'slot' | 'slot-tab' | 'slot-centerpoint' | 'slot-arc-3pt' | 'slot-arc-centerpoint'
   | 'circle-3pt' | 'arc-3pt' | 'ellipse' | 'partial-ellipse' | 'spline' | 'style-spline'
-  | 'parabola' | 'equation-curve' | 'text' | 'picture'
+  | 'parabola' | 'equation-curve' | 'text' | 'text-part-number' | 'picture'
   | 'circle-perimeter' | 'tangent-arc'
   | 'smart-dim'
   | 'trim' | 'extend' | 'split' | 'offset' | 'mirror' | 'dynamic-mirror' | 'fillet' | 'chamfer' | 'jog'
@@ -271,6 +271,7 @@ const SHAPE_TOOLS: readonly ToolSpec[] = [
   { tool: 'slot-arc-3pt',          icon: 'cad-slot-arc-3pt',          label: '3-pt Arc Slot',    tooltip: 'Arc slot through 3 centerline points + width' },
   { tool: 'slot-arc-centerpoint',  icon: 'cad-slot-arc-centerpoint',  label: 'C-pt Arc Slot',    tooltip: 'Arc slot: arc center, start, end + width' },
   { tool: 'text',                  icon: 'cad-point',                 label: 'Text',             tooltip: 'Sketch Text — click to anchor, then enter the string + height (mm)' },
+  { tool: 'text-part-number',      icon: 'cad-point',                 label: 'Part Number',      tooltip: 'Part Number — click to place a centered, bold #{partName}-#{partRevision} text box, 45 x 5 mm' },
   { tool: 'picture',               icon: 'cad-point',                 label: 'Picture',          tooltip: 'Sketch Picture — pick an image file, then click to anchor (lower-left). Use Properties to resize / rotate.' },
 ];
 
@@ -2036,6 +2037,7 @@ export class CadSketchEditorComponent implements OnDestroy {
       case 'parabola':        this.handleParabolaClick(x, y); break;
       case 'equation-curve':  this.handleEquationCurveClick(x, y); break;
       case 'text':            this.handleTextClick(x, y); break;
+      case 'text-part-number': this.handlePartNumberClick(x, y); break;
       case 'picture':         this.handlePictureClick(x, y); break;
       case 'circle-perimeter': this.handleCirclePerimeterClick(x, y); break;
       case 'tangent-arc': this.handleTangentArcClick(x, y); break;
@@ -2372,6 +2374,12 @@ export class CadSketchEditorComponent implements OnDestroy {
     // so dragging a slot's rail end carries that cap along.
     for (const e of state.entities) {
       if (e.kind === 'arc' && (dragged.has(e.startId) || dragged.has(e.endId))) held.delete(e.centerId);
+    }
+    // A text box is one rigid unit: its corners and centerline must follow the
+    // dragged point. Holding them left nothing free, so PlaneGCS dropped the
+    // box constraints and reported success with the box broken.
+    for (const e of state.entities) {
+      if (e.kind === 'text') for (const id of textBoxParts(state, e.id).points) held.delete(id);
     }
     const movable = new Set<string>();
     for (const e of state.entities) {
@@ -4459,19 +4467,7 @@ export class CadSketchEditorComponent implements OnDestroy {
    * degenerate collapse (e.g. a rectangle flattened onto a line). Used to
    * reject such solves so a dimension can never destroy the sketch. */
   private _solveCollapsed(before: SketchState, after: SketchState): boolean {
-    const TOL = 1e-3;
-    const len = (st: SketchState, l: { startId: string; endId: string }) => {
-      const a = findPoint(st, l.startId), b = findPoint(st, l.endId);
-      return a && b ? Math.hypot(b.x - a.x, b.y - a.y) : 0;
-    };
-    const afterById = new Map(after.entities.map(e => [e.id, e]));
-    for (const e of before.entities) {
-      if (e.kind !== 'line' || e.construction) continue;
-      const ae = afterById.get(e.id);
-      if (ae?.kind !== 'line') continue;
-      if (len(before, e) > TOL && len(after, ae) <= TOL) return true;
-    }
-    return false;
+    return collapsedLines(before, after).length > 0;
   }
 
   private findSpec(type: ConstraintType): ConstraintSpec | null {
@@ -5436,10 +5432,18 @@ export class CadSketchEditorComponent implements OnDestroy {
     const first = this.draftTextRect();
     if (!first) { this.draftTextRect.set({ x, y }); return; }
     if (Math.hypot(x - first.x, y - first.y) < 1e-3) return;
-    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-462');
+    const r = addTextBoxByCorners(this.state(), first.x, first.y, x, y, 'text-472');
     this.commit(r.state);
     this.selected.set(new Set([r.id]));
     this.draftTextRect.set(null);
+    this.tool.set('select');
+  }
+
+  /** REQ 1049 — Part Number preset: one click places the dimensioned box. */
+  private handlePartNumberClick(x: number, y: number) {
+    const r = addPartNumberText(this.state(), x, y);
+    this.commit(r.state);
+    this.selected.set(new Set([r.id]));
     this.tool.set('select');
   }
 

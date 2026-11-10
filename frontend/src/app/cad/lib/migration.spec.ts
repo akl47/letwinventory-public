@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { migrateSketchState, migrateSketchDocument, isLegacySketchState } from './migration';
 import type { LegacySketchState } from './migration';
+import type { SketchState } from './types';
 
 // Phase A REQ 565: schema migration.
 //
@@ -217,5 +218,27 @@ describe('migration: externalRef scope backfill (REQ 770/771)', () => {
     };
     const migrated = migrateSketchState(modernWith(crossPart) as Parameters<typeof migrateSketchState>[0]);
     expect(oeRef(migrated)).toMatchObject({ scope: 'cross-part', definingAssemblyId: 7, sourceInstanceId: 'i2' });
+  });
+});
+
+describe('migration: text boxes', () => {
+  const box = (textCorners: string[]): SketchState => ({
+    entities: [
+      { kind: 'point', id: 'origin', x: 0, y: 0, construction: true },
+      { kind: 'point', id: 'a', x: 0, y: 0 }, { kind: 'point', id: 'b', x: 10, y: 0 },
+      { kind: 'point', id: 'c', x: 10, y: 5 }, { kind: 'point', id: 'd', x: 0, y: 5 },
+      { kind: 'text', id: 't1', text: 'x', cornerIds: textCorners as [string, string, string, string] },
+    ],
+    constraints: [],
+  } as SketchState);
+
+  it('does not pin a text box in place on load', () => {
+    const out = migrateSketchState(box(['a', 'b', 'c', 'd']));
+    expect(out.constraints.filter(c => c.type === 'fixed')).toEqual([]);
+  });
+
+  it('drops a text whose box points were deleted', () => {
+    const out = migrateSketchState(box(['gone1', 'gone2', 'gone3', 'gone4']));
+    expect(out.entities.some(e => e.kind === 'text')).toBe(false);
   });
 });

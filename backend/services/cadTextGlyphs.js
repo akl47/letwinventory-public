@@ -8,7 +8,7 @@
 // ── KEEP IN SYNC WITH frontend/src/app/cad/lib/textGlyphs.ts ──
 // The two tessellators MUST produce byte-for-byte identical loops or the
 // in-browser preview and the committed solid will diverge. Same font (the
-// SAME Roboto-Regular.ttf, copied into backend/assets/fonts), same opentype.js
+// SAME Roboto TTFs, copied into backend/assets/fonts), same opentype.js
 // version, same scale (capHeight/ascender), same kerning, same Bézier segment
 // counts (Q=12, C=16), same y-flip. The `cad-text-glyphs.test.js` drift guard
 // pins a sample string against the frontend's `textGlyphs.spec.ts`.
@@ -17,20 +17,37 @@ const fs = require('fs');
 const path = require('path');
 const opentype = require('opentype.js');
 
-const FONT_PATH = path.join(__dirname, '..', 'assets', 'fonts', 'Roboto-Regular.ttf');
+/** REQ 1048 — Roboto face per text style. KEEP IN SYNC with textGlyphs.ts
+ * FONT_URLS (same files, copied into backend/assets/fonts). */
+const FONT_FILES = {
+  regular: 'Roboto-Regular.ttf',
+  bold: 'Roboto-Bold.ttf',
+  italic: 'Roboto-Italic.ttf',
+  boldItalic: 'Roboto-BoldItalic.ttf',
+};
 
-/** Parsed Roboto, loaded once at module init. Synchronous — this is a server
- * process, the font is on local disk. Null only if the file is missing. */
-let font = null;
-try {
-  const buf = fs.readFileSync(FONT_PATH);
-  // opentype.parse wants an ArrayBuffer; slice to the Buffer's exact view.
-  font = opentype.parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-} catch (err) {
-  // Leave font null; loopsFromTextEntity returns [] so a missing font
-  // degrades to "text contributes no geometry" rather than crashing regen.
-  // eslint-disable-next-line no-console
-  console.error(`[cadTextGlyphs] failed to load Roboto from ${FONT_PATH}:`, err.message);
+/** Parsed Roboto faces, loaded once at module init. Synchronous — this is a
+ * server process, the fonts are on local disk. A face is missing only if its
+ * file is. */
+const fonts = {};
+for (const [style, file] of Object.entries(FONT_FILES)) {
+  const fontPath = path.join(__dirname, '..', 'assets', 'fonts', file);
+  try {
+    const buf = fs.readFileSync(fontPath);
+    // opentype.parse wants an ArrayBuffer; slice to the Buffer's exact view.
+    fonts[style] = opentype.parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+  } catch (err) {
+    // Leave the face missing; its text contributes no geometry rather than
+    // crashing regen.
+    // eslint-disable-next-line no-console
+    console.error(`[cadTextGlyphs] failed to load Roboto from ${fontPath}:`, err.message);
+  }
+}
+
+/** The face a text entity's Bold / Italic flags select. KEEP IN SYNC with
+ * textGlyphs.ts `textStyleOf`. */
+function textStyleOf(e) {
+  return e.bold ? (e.italic ? 'boldItalic' : 'bold') : (e.italic ? 'italic' : 'regular');
 }
 
 const IDENTITY_RESOLVER = (s) => s;
@@ -77,7 +94,6 @@ function applyTextBezierTransform(contours, bl, br, tl, boxW, boxH, mirror) {
  * @returns {Array<Array<{x:number,y:number}>>}
  */
 function loopsFromTextEntity(state, e, resolve = IDENTITY_RESOLVER) {
-  if (!font) return [];
   if (!e.cornerIds || e.cornerIds.length !== 4) return [];
   const [blId, brId, , tlId] = e.cornerIds;
   const ents = state.entities;
@@ -89,7 +105,7 @@ function loopsFromTextEntity(state, e, resolve = IDENTITY_RESOLVER) {
   const boxH = Math.hypot(tl.x - bl.x, tl.y - bl.y);
   if (boxW < 1e-6 || boxH < 1e-6) return [];
   const text = resolve(e.text || '');
-  return tessellate(text, { x: bl.x, y: bl.y }, boxH, e.justify || 'left', boxW);
+  return tessellate(text, { x: bl.x, y: bl.y }, boxH, e.justify || 'left', boxW, textStyleOf(e));
 }
 
 /**
@@ -102,7 +118,6 @@ function loopsFromTextEntity(state, e, resolve = IDENTITY_RESOLVER) {
  * @returns {Array<Array<{points: Array<{x:number,y:number}>}>>}
  */
 function bezierLoopsFromTextEntity(state, e, resolve = IDENTITY_RESOLVER) {
-  if (!font) return [];
   if (!e.cornerIds || e.cornerIds.length !== 4) return [];
   const [blId, brId, , tlId] = e.cornerIds;
   const ents = state.entities;
@@ -114,13 +129,14 @@ function bezierLoopsFromTextEntity(state, e, resolve = IDENTITY_RESOLVER) {
   const boxH = Math.hypot(tl.x - bl.x, tl.y - bl.y);
   if (boxW < 1e-6 || boxH < 1e-6) return [];
   const text = resolve(e.text || '');
-  const contours = tessellateBezier(text, { x: bl.x, y: bl.y }, boxH, e.justify || 'left', boxW);
+  const contours = tessellateBezier(text, { x: bl.x, y: bl.y }, boxH, e.justify || 'left', boxW, textStyleOf(e));
   return applyTextBezierTransform(contours, bl, br, tl, boxW, boxH, !!e.mirror);
 }
 
 /** Bézier-segment layout — same math as `tessellate` but emits control-point
  * segments per contour. KEEP IN SYNC with textGlyphs.ts `_tessellateBezier`. */
-function tessellateBezier(text, anchor, capHeightMm, alignment, boxWidthMm) {
+function tessellateBezier(text, anchor, capHeightMm, alignment, boxWidthMm, style = 'regular') {
+  const font = fonts[style];
   if (!font || !text) return [];
   const scale = capHeightMm / capHeightOf(font);
   const pxAdvance = font.getAdvanceWidth(text, font.unitsPerEm, { kerning: true });
@@ -178,7 +194,8 @@ function subpathToBezierSegs(commands, scale) {
 }
 
 /** Core tessellation — identical math to textGlyphs.ts `_tessellate`. */
-function tessellate(text, anchor, capHeightMm, alignment, boxWidthMm) {
+function tessellate(text, anchor, capHeightMm, alignment, boxWidthMm, style = 'regular') {
+  const font = fonts[style];
   if (!font || !text) return [];
   const scale = capHeightMm / capHeightOf(font);
   const pxAdvance = font.getAdvanceWidth(text, font.unitsPerEm, { kerning: true });
@@ -287,5 +304,5 @@ module.exports = {
   // exported for the drift-guard test
   _tessellate: tessellate,
   _tessellateBezier: tessellateBezier,
-  _fontLoaded: () => font !== null,
+  _fontLoaded: (style = 'regular') => !!fonts[style],
 };

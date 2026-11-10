@@ -24,13 +24,27 @@ function lineLen(st: SketchState, l: { startId: string; endId: string }): number
   return a && b ? Math.hypot(b.x - a.x, b.y - a.y) : 0;
 }
 
-/** Ids of non-construction lines that had real length in `before` and are
- * zero-length in `after` — the degenerate-collapse signature. */
+/** Sides of text boxes: construction lines, but a text box that flattens is
+ * broken just like a real rectangle (its zero-length sides still read as
+ * parallel / perpendicular), so they are guarded too. */
+function textBoxSides(state: SketchState): Set<string> {
+  const corners = new Set<string>();
+  for (const e of state.entities) if (e.kind === 'text' && e.cornerIds) for (const id of e.cornerIds) corners.add(id);
+  const out = new Set<string>();
+  for (const e of state.entities) {
+    if (e.kind === 'line' && corners.has(e.startId) && corners.has(e.endId)) out.add(e.id);
+  }
+  return out;
+}
+
+/** Ids of lines (non-construction, or text-box sides) that had real length in
+ * `before` and are zero-length in `after` — the degenerate-collapse signature. */
 export function collapsedLines(before: SketchState, after: SketchState): string[] {
   const afterById = new Map(after.entities.map(e => [e.id, e]));
+  const boxSides = textBoxSides(before);
   const out: string[] = [];
   for (const e of before.entities) {
-    if (e.kind !== 'line' || e.construction) continue;
+    if (e.kind !== 'line' || (e.construction && !boxSides.has(e.id))) continue;
     const ae = afterById.get(e.id);
     if (ae?.kind !== 'line') continue;
     if (lineLen(before, e) > COLLAPSE_TOL && lineLen(after, ae) <= COLLAPSE_TOL) out.push(e.id);

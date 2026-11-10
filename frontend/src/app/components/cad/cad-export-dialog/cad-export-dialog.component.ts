@@ -7,7 +7,7 @@ import { MatCheckboxModule } from '@angular/material/checkbox';
 export interface ExportDialogBody { id: string; label: string; }
 
 export interface ExportDialogData {
-  format: 'STL' | 'STEP';
+  format: 'STL' | 'STEP' | '3MF';
   bodies: ExportDialogBody[];
   /** Part-level filename variables (#{partNumber}, #{rev}, …). `bodyName` is
    * supplied per body at export time. */
@@ -59,7 +59,8 @@ export function resolveExportName(template: string, vars: Record<string, string>
           {{ b.label }}
         </mat-checkbox>
       </div>
-      <mat-checkbox class="sep" [checked]="separate()" (change)="separate.set($any($event).checked)"
+      <!-- 3MF is always one file: touching bodies become one object (REQ 1042). -->
+      <mat-checkbox class="sep" *ngIf="data.format !== '3MF'" [checked]="separate()" (change)="separate.set($any($event).checked)"
                     [disabled]="selectedCount() < 2">
         Export each body as a separate file
       </mat-checkbox>
@@ -114,7 +115,7 @@ export class CadExportDialogComponent {
   /** Variable chips shown under the input. */
   varKeys = [...Object.keys(this.data.vars), 'bodyName'];
 
-  fileExt(): string { return this.data.format === 'STL' ? '.stl' : '.step'; }
+  fileExt(): string { return { STL: '.stl', STEP: '.step', '3MF': '.3mf' }[this.data.format]; }
 
   /** Live preview of the first file's name. Combined exports resolve
    * #{bodyName} to empty; separate exports use the first selected body. */

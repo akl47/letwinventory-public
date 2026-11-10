@@ -1,3 +1,5 @@
+import type { TreeFolder } from './treeFolders';
+
 // Pure-data types for the CAD module. No framework dependencies.
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -101,6 +103,10 @@ export interface TextEntity extends SketchEntityBase {
    * 'singleLine' = single-stroke engraving font (open strokes, for V-carve /
    * engraving — not a closed region, so it doesn't extrude into a solid). */
   font?: 'outline' | 'singleLine';
+  /** REQ 1048 — Roboto Bold / Italic faces (outline font only; together =
+   * Bold Italic). Absent = Regular. */
+  bold?: boolean;
+  italic?: boolean;
   /** Mirror the glyphs horizontally within the box (reversed text — e.g. for
    * back-side engraving / stamps). The box constraints are unaffected. */
   mirror?: boolean;
@@ -1349,6 +1355,16 @@ export interface FeatureTree {
   /** REQ 857 — user-assigned body names, keyed by body id. Missing key =
    * default "Body N" label. */
   bodyNames?: Record<string, string>;
+  /** REQ 1041 — user-assigned body colors ('rrggbb', no '#'), keyed by body
+   * id. Missing key = the default viewer color. Never affects regen. */
+  bodyColors?: Record<string, string>;
+  /** REQ 1045 — named parent rows grouping bodies in the tree; a body is in at
+   * most one group. 3MF export writes a group as one object. Never affects
+   * regen; ids of bodies that no longer exist are ignored. */
+  bodyGroups?: BodyGroup[];
+  /** REQ 1046 — folders in the feature tree (part) / assembly tree. Display
+   * only: never affects regen. */
+  treeFolders?: TreeFolder[];
   /** REQ 858 — persisted rollback-bar position (features at index >= this are
    * skipped in regen). null/absent = fully rolled forward. */
   rollbackIndex?: number | null;
@@ -1413,6 +1429,13 @@ export interface ModelTopology {
     endpoints: [[number, number, number], [number, number, number]];
     polyline?: Array<[number, number, number]>;
   }>;
+}
+
+/** REQ 1045 — a named group of bodies (see FeatureTree.bodyGroups). */
+export interface BodyGroup {
+  id: string;
+  name: string;
+  bodyIds: string[];
 }
 
 export interface ModelGeometry {
