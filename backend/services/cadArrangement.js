@@ -150,6 +150,9 @@ function splitAtIntersections(state) {
 
   for (const c of curves) {
     const h = hits.get(c.id);
+    // Pieces remember the sketch entity they came from (`srcId`, in order
+    // along it as `srcSeg`) so extrude walls are named after it (REQ 1037).
+    let seg = 0;
     if (h.length === 0) {
       const orig = origById.get(c.id);
       if (orig) out.push(orig);
@@ -161,11 +164,11 @@ function splitAtIntersections(state) {
       let prev = c.startId;
       for (const hit of h) {
         if (hit.pointId === prev) continue;
-        out.push({ kind: 'line', id: `arr_ln_${entSeq++}`, startId: prev, endId: hit.pointId });
+        out.push({ kind: 'line', id: `arr_ln_${entSeq++}`, srcId: c.id, srcSeg: seg++, startId: prev, endId: hit.pointId });
         prev = hit.pointId;
       }
       if (prev !== c.endId) {
-        out.push({ kind: 'line', id: `arr_ln_${entSeq++}`, startId: prev, endId: c.endId });
+        out.push({ kind: 'line', id: `arr_ln_${entSeq++}`, srcId: c.id, srcSeg: seg++, startId: prev, endId: c.endId });
       }
     } else if (c.kind === 'circle') {
       const uniqueByPoint = new Map();
@@ -182,6 +185,8 @@ function splitAtIntersections(state) {
         out.push({
           kind: 'arc',
           id: `arr_ar_${entSeq++}`,
+          srcId: c.id,
+          srcSeg: seg++,
           centerId: c.centerId,
           startId: aHit.pointId,
           endId: bHit.pointId,
@@ -208,6 +213,8 @@ function splitAtIntersections(state) {
         out.push({
           kind: 'arc',
           id: `arr_ar_${entSeq++}`,
+          srcId: c.id,
+          srcSeg: seg++,
           centerId: c.centerId,
           startId: prev,
           endId: hit.pointId,
@@ -220,6 +227,8 @@ function splitAtIntersections(state) {
         out.push({
           kind: 'arc',
           id: `arr_ar_${entSeq++}`,
+          srcId: c.id,
+          srcSeg: seg++,
           centerId: c.centerId,
           startId: prev,
           endId: c.endId,
@@ -432,11 +441,13 @@ function buildHalfEdges(state) {
       if (!a || !b) continue;
       const fwd = {
         id: `he_${id++}`, fromId: e.startId, toId: e.endId,
+        srcId: e.srcId || e.id, srcSeg: e.srcSeg || 0,
         twinId: '', kind: 'line', from: a, to: b,
         exitAngle: Math.atan2(b.y - a.y, b.x - a.x),
       };
       const bwd = {
         id: `he_${id++}`, fromId: e.endId, toId: e.startId,
+        srcId: e.srcId || e.id, srcSeg: e.srcSeg || 0,
         twinId: '', kind: 'line', from: b, to: a,
         exitAngle: Math.atan2(a.y - b.y, a.x - b.x),
       };
@@ -458,6 +469,7 @@ function buildHalfEdges(state) {
         : Math.atan2(Math.cos(endAngle), -Math.sin(endAngle));
       const fwd = {
         id: `he_${id++}`, fromId: e.startId, toId: e.endId,
+        srcId: e.srcId || e.id, srcSeg: e.srcSeg || 0,
         twinId: '', kind: 'arc',
         arcCenter: c, arcRadius: e.radius, arcCcw: e.ccw,
         arcStartAngle: startAngle, arcEndAngle: endAngle,
@@ -465,6 +477,7 @@ function buildHalfEdges(state) {
       };
       const bwd = {
         id: `he_${id++}`, fromId: e.endId, toId: e.startId,
+        srcId: e.srcId || e.id, srcSeg: e.srcSeg || 0,
         twinId: '', kind: 'arc',
         arcCenter: c, arcRadius: e.radius, arcCcw: !e.ccw,
         arcStartAngle: endAngle, arcEndAngle: startAngle,

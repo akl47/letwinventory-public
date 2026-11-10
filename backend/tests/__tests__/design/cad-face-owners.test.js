@@ -1,15 +1,16 @@
-// REQ 892 — SolidWorks-style face OWNERSHIP. The kernel re-tags every face of
-// a boolean result under the composing feature, so the regen service carries
-// per-face ownership geometrically: result faces matching a previous body
-// face's centroid+normal inherit that face's owner; everything else belongs
-// to the composing feature. Selecting a feature then highlights only ITS
-// faces, not the whole body.
+// REQ 892 — SolidWorks-style face OWNERSHIP: selecting a feature highlights
+// only the faces it created. Since REQ 1035 the kernel keeps a face's name
+// through every later op, so the creator is the root of the name (the pattern
+// feature for an instance copy); faces without a structured name fall back to
+// the composing feature.
 
 const { authenticatedRequest, createTestPart } = require('../../helpers');
 const cadRegenService = require('../../../services/cadRegenService');
 const cadKernelClient = require('../../../services/cadKernelClient');
 
 const { _carryFaceOwners } = cadRegenService;
+
+const name = (featureId, role, extra = {}) => JSON.stringify({ feature_id: featureId, role, sub_index: 0, ...extra, upstream_refs: [] });
 
 /** A fake tessellated face: one triangle centered near `center`, facing `normal`. */
 function face(id, center, normal = [0, 0, 1], size = 1) {
@@ -29,40 +30,22 @@ function face(id, center, normal = [0, 0, 1], size = 1) {
 }
 
 describe('_carryFaceOwners (unit)', () => {
-  it('a result face matching a previous face inherits its owner', () => {
-    const prev = [face('a', [0, 0, 0]), face('b', [5, 0, 0])];
-    const prevOwners = { a: 'f2', b: 'f2' };
-    const next = [face('a2', [0, 0, 0]), face('new', [9, 9, 9])];
-    const owners = _carryFaceOwners(prev, prevOwners, next, 'f3');
-    expect(owners).toEqual({ a2: 'f2', new: 'f3' });
+  it('a face is owned by the root feature of its name', () => {
+    const owners = _carryFaceOwners([], null, [
+      face(name('f2#m0', 'cap-top'), [0, 0, 0]),
+      face(name('f3#body', 'new'), [5, 0, 0]),
+      face(name('f4', 'offset'), [9, 0, 0]),
+    ], 'f9');
+    expect(Object.values(owners)).toEqual(['f2', 'f3', 'f4']);
   });
 
-  it('ownership chains across multiple carries', () => {
-    const gen1 = _carryFaceOwners([], null, [face('a', [0, 0, 0])], 'f2');
-    const gen2 = _carryFaceOwners([face('a', [0, 0, 0])], gen1, [face('a2', [0, 0, 0]), face('n', [7, 0, 0])], 'f3');
-    const gen3 = _carryFaceOwners(
-      [face('a2', [0, 0, 0]), face('n', [7, 0, 0])], gen2,
-      [face('a3', [0, 0, 0]), face('n2', [7, 0, 0]), face('blend', [3, 3, 3])], 'f4');
-    expect(gen3).toEqual({ a3: 'f2', n2: 'f3', blend: 'f4' });
+  it('an instance copy belongs to the pattern feature that made it', () => {
+    const id = name('f2#0', 'side', { instance: 'f7#2/f5#1' });
+    expect(_carryFaceOwners([], null, [face(id, [0, 0, 0])], 'f9')[id]).toBe('f7');
   });
 
-  it('an opposite-facing face at the same centroid does NOT match (normal gate)', () => {
-    const prev = [face('top', [0, 0, 5], [0, 0, 1])];
-    const owners = _carryFaceOwners(prev, { top: 'f2' }, [face('bottom', [0, 0, 5], [0, 0, -1])], 'f3');
-    expect(owners.bottom).toBe('f3');
-  });
-
-  it('a symmetrically-trimmed face (same centroid, smaller mesh) keeps its creator', () => {
-    // The classic case: a concentric hole turns a disk into a ring — the
-    // centroid and normal survive, so the ring stays with the base feature.
-    const prev = [face('disk', [0, 0, 10], [0, 0, 1], 5)];
-    const owners = _carryFaceOwners(prev, { disk: 'f2' }, [face('ring', [0, 0, 10], [0, 0, 1], 2)], 'f3');
-    expect(owners.ring).toBe('f2');
-  });
-
-  it('with no previous faces, everything belongs to the composing feature', () => {
-    const owners = _carryFaceOwners([], null, [face('a', [0, 0, 0]), face('b', [5, 0, 0])], 'f2');
-    expect(owners).toEqual({ a: 'f2', b: 'f2' });
+  it('unstructured ids fall back to the composing feature', () => {
+    expect(_carryFaceOwners([], null, [face('raw', [0, 0, 0])], 'f3')).toEqual({ raw: 'f3' });
   });
 });
 
@@ -88,13 +71,13 @@ function fakeCircleSketch(sketchId, radius = 10) {
 
 describe('regenerate carries face ownership across a cut (REQ 892)', () => {
   // The base extrude's prism faces (become the seeded body):
-  const BASE_FACES = [face('base-cap', [0, 0, 20]), face('base-side', [10, 0, 10], [1, 0, 0])];
-  // Boolean (cut) result: the cap + side SURVIVE at the same centroids; the
-  // bore wall is NEW.
+  const BASE_FACES = [face(name('f2#0', 'cap-top'), [0, 0, 20]), face(name('f2#0', 'side'), [10, 0, 10], [1, 0, 0])];
+  // Boolean (cut) result: the cap + side keep their names; the bore wall is
+  // the cut tool's side face.
   const BOOL_FACES = [
-    face('cut-cap', [0, 0, 20]),
-    face('cut-side', [10, 0, 10], [1, 0, 0]),
-    face('cut-bore', [0, 0, 10], [0, 1, 0]),
+    BASE_FACES[0],
+    BASE_FACES[1],
+    face(name('f3#0', 'side', { body: 'f2' }), [0, 0, 10], [0, 1, 0]),
   ];
 
   let kernelStub;

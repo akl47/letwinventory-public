@@ -53,7 +53,7 @@ using json = nlohmann::json;
 //     returning the corrupt solid as success. NAMING unchanged.
 // cpp-23: a fillet-corner refit that strays >2% of the patch size from the
 //     original is rejected (it reshaped an irregular corner and broke shells).
-static constexpr const char* KERNEL_BUILD = "cpp-23";
+static constexpr const char* KERNEL_BUILD = "cpp-25";
 // 30: native C++/OCCT 8.0 kernel; binary BinTools BReps invalidate the old
 // text-BRep cache (must match NAMING_VERSION in backend cadRegenService.js).
 // 31: tessellation normal off-by-one fix (zero-normal last node → dark
@@ -137,7 +137,11 @@ static constexpr const char* KERNEL_BUILD = "cpp-23";
 // 50: fillet corner patches that OCCT leaves creased against their neighbours
 //     are refit tangent (blend_corner_refit), so a later shell offsets them
 //     without gaps and gets SolidWorks' square hole-tube shoulders.
-static constexpr int NAMING_SCHEMA_VERSION = 50;
+// 51: topological naming (REQs 1035–1039) — faces keep their names through
+//     every later op (names ride in a BRep trailer), new faces are named from
+//     what made them, edge/vertex ids derive from face names; the positional
+//     ids survive as legacyId for migration.
+static constexpr int NAMING_SCHEMA_VERSION = 51;
 
 // ── Operation watchdog ─────────────────────────────────────────────────────────
 // Since cpp-13, geometry ops run in a forked child (see run_op_isolated), so

@@ -126,8 +126,9 @@ json op_buildShell(const json& params) {
   }
 
   TopoDS_Shape body;
+  std::vector<std::string> body_names;
   try {
-    body = brep_from_base64(params.at("aBrep").get<std::string>());
+    body = brep_from_base64(params.at("aBrep").get<std::string>(), &body_names);
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("buildShell: decoding input BREP: ") + e.what());
   }
@@ -322,7 +323,12 @@ json op_buildShell(const json& params) {
         "thickness " + std::to_string(thickness) + " mm.");
   }
 
-  std::string brep_b64 = brep_to_base64(shape);
+  // Kept walls inherit their names; each new inner/outer wall is named after
+  // the face it was offset from.
+  NamingOptions naming_opts;
+  naming_opts.offset = std::fabs(thickness);
+  const FaceNaming naming = name_result(shape, {NameSource{body, body_names, "", ""}}, feature_id, naming_opts);
+  std::string brep_b64 = brep_to_base64(shape, naming);
   if (brep_b64.empty()) {
     throw std::runtime_error(
         "buildShell: result BRep serialization returned empty bytes — OCCT could "
@@ -332,8 +338,8 @@ json op_buildShell(const json& params) {
         "self-intersecting offset surfaces.");
   }
 
-  Tessellated tess = tessellate_generic(shape, feature_id);
-  json solids = decompose_into_solids(shape, feature_id);
+  Tessellated tess = tessellate_generic(shape, feature_id, &naming);
+  json solids = decompose_into_solids(shape, feature_id, &naming);
 
   return json{
       {"brepBytes", brep_b64},
@@ -490,8 +496,9 @@ json op_buildEdgeBlend(const json& params) {
   }
 
   TopoDS_Shape body;
+  std::vector<std::string> body_names;
   try {
-    body = brep_from_base64(params.at("aBrep").get<std::string>());
+    body = brep_from_base64(params.at("aBrep").get<std::string>(), &body_names);
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("buildEdgeBlend: decoding input BREP: ") +
                              e.what());
@@ -664,7 +671,9 @@ json op_buildEdgeBlend(const json& params) {
         "or the edges are adjacent in a way OCCT can't blend).");
   }
 
-  std::string brep_b64 = brep_to_base64(shape);
+  // Trimmed faces keep their names; blend faces are named by their neighbors.
+  const FaceNaming naming = name_result(shape, {NameSource{body, body_names, "", ""}}, feature_id);
+  std::string brep_b64 = brep_to_base64(shape, naming);
   if (brep_b64.empty()) {
     throw std::runtime_error(
         std::string("buildEdgeBlend: result BRep is empty — the ") +
@@ -673,8 +682,8 @@ json op_buildEdgeBlend(const json& params) {
         "or the edges are adjacent in a way OCCT can't blend).");
   }
 
-  Tessellated tess = tessellate_generic(shape, feature_id);
-  json solids = decompose_into_solids(shape, feature_id);
+  Tessellated tess = tessellate_generic(shape, feature_id, &naming);
+  json solids = decompose_into_solids(shape, feature_id, &naming);
 
   return json{
       {"brepBytes", brep_b64},

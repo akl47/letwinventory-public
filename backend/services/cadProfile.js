@@ -132,7 +132,7 @@ function extractClosedLoops(state, resolve = (s) => s) {
     if (e.kind !== 'circle' || e.construction) continue;
     const center = findPoint(split, e.centerId);
     if (!center) { errors.push(`circle ${e.id}: center point not found`); continue; }
-    loops.push([{ kind: 'circle', center: { x: center.x, y: center.y }, radius: e.radius }]);
+    loops.push([{ kind: 'circle', center: { x: center.x, y: center.y }, radius: e.radius, sid: e.srcId || e.id, sseg: e.srcSeg || 0 }]);
     sources.push({ kind: 'circle' });
   }
 
@@ -166,8 +166,10 @@ function faceToProfileLoop(face, state) {
   /** @type {ProfileEdge[]} */
   const out = [];
   for (const e of face.edges) {
+    // `sid` / `sseg`: the sketch entity (and piece along it) each segment came
+    // from — the kernel names the swept wall after it (REQ 1037).
     if (e.kind === 'line' && e.from && e.to) {
-      out.push({ kind: 'line', start: { x: e.from.x, y: e.from.y }, end: { x: e.to.x, y: e.to.y } });
+      out.push({ kind: 'line', start: { x: e.from.x, y: e.from.y }, end: { x: e.to.x, y: e.to.y }, sid: e.srcId, sseg: e.srcSeg });
     } else if (e.kind === 'arc' && e.arcCenter && e.arcRadius !== undefined
                && e.arcStartAngle !== undefined && e.arcEndAngle !== undefined
                && e.arcCcw !== undefined) {
@@ -183,6 +185,8 @@ function faceToProfileLoop(face, state) {
         ccw: e.arcCcw,
         start: { x: from.x, y: from.y },
         end: { x: to.x, y: to.y },
+        sid: e.srcId,
+        sseg: e.srcSeg,
       });
     }
   }
@@ -234,17 +238,20 @@ function simplifyMergedLoop(loop) {
     && Math.abs(a.radius - b.radius) < 1e-6
     && Math.hypot(a.end.x - b.start.x, a.end.y - b.start.y) < 1e-6
   );
+  // A merged segment keeps the first piece's source entity (REQ 1037).
+  const src = (a) => (a.sid !== undefined ? { sid: a.sid, sseg: a.sseg } : {});
   const mergeArcs = (a, b) => ({
     kind: 'arc', center: a.center, radius: a.radius, ccw: a.ccw,
     start: a.start, end: b.end,
     startAngle: Math.atan2(a.start.y - a.center.y, a.start.x - a.center.x),
     endAngle: Math.atan2(b.end.y - a.center.y, b.end.x - a.center.x),
+    ...src(a),
   });
   const out = [];
   for (const e of loop) {
     const prev = out[out.length - 1];
     if (prev && collinearLines(prev, e)) {
-      out[out.length - 1] = { kind: 'line', start: prev.start, end: e.end };
+      out[out.length - 1] = { kind: 'line', start: prev.start, end: e.end, ...src(prev) };
     } else if (prev && coCircularArcs(prev, e)) {
       out[out.length - 1] = mergeArcs(prev, e);
     } else {
@@ -256,7 +263,7 @@ function simplifyMergedLoop(loop) {
     const last = out[out.length - 1], first = out[0];
     if (collinearLines(last, first)) {
       out.pop();
-      out[0] = { kind: 'line', start: last.start, end: first.end };
+      out[0] = { kind: 'line', start: last.start, end: first.end, ...src(last) };
     } else if (coCircularArcs(last, first)) {
       out.pop();
       out[0] = mergeArcs(last, first);
@@ -266,7 +273,7 @@ function simplifyMergedLoop(loop) {
   // (cylindrical face, no seam) rather than a 360° arc.
   if (out.length === 1 && out[0].kind === 'arc'
       && Math.hypot(out[0].start.x - out[0].end.x, out[0].start.y - out[0].end.y) < 1e-6) {
-    return [{ kind: 'circle', center: out[0].center, radius: out[0].radius }];
+    return [{ kind: 'circle', center: out[0].center, radius: out[0].radius, ...src(out[0]) }];
   }
   return out;
 }

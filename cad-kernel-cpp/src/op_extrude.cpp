@@ -136,17 +136,19 @@ void proj_extent(const TopoDS_Shape& shape, const gp_Pnt& origin, const gp_Dir& 
 }
 
 // Assemble the {brepBytes, faces, topology} result shared by extrude + loft.
+// `plane` + `profile` (+ `holes`) name each side wall after its profile segment.
 json make_result(const TopoDS_Shape& shape, const gp_Pnt& plane_origin,
                  const gp_Dir& plane_normal, double signed_distance,
-                 const std::string& feature_id) {
-  std::string brep = brep_to_base64(shape);
+                 const std::string& feature_id, const Plane3* plane = nullptr,
+                 const json* profile = nullptr, const json* holes = nullptr) {
+  Tessellated tess = tessellate_named(shape, plane_origin, plane_normal, signed_distance,
+                                      feature_id, plane, profile, holes);
+  std::string brep = brep_to_base64(shape, tess.naming);
   if (brep.empty()) {
     throw std::runtime_error(
         "extrude: result BRep serialization returned empty bytes — the solid is "
         "degenerate (the profile may not enclose a valid region).");
   }
-  Tessellated tess =
-      tessellate_named(shape, plane_origin, plane_normal, signed_distance, feature_id);
   return json{{"brepBytes", brep}, {"faces", tess.faces}, {"topology", tess.topology}};
 }
 
@@ -282,7 +284,8 @@ nlohmann::json op_buildExtrude(const nlohmann::json& params) {
     double min_proj, max_proj;
     proj_extent(result, start_origin, dir, min_proj, max_proj);
     const double signed_distance = dir_sign * max_proj;
-    return make_result(result, sketch_origin, plane_normal, signed_distance, feature_id);
+    return make_result(result, sketch_origin, plane_normal, signed_distance, feature_id, &plane,
+                       &profile, &holes);
   }
 
   // ── blind / direction-2 (folded single prism) ─────────────────────────────
@@ -322,7 +325,8 @@ nlohmann::json op_buildExtrude(const nlohmann::json& params) {
 
   // Naming references the original sketch-plane origin + direction-1's signed
   // distance, so persistent ids stay stable across saves.
-  return make_result(shape, sketch_origin, plane_normal, d1_signed, feature_id);
+  return make_result(shape, sketch_origin, plane_normal, d1_signed, feature_id, &plane, &profile,
+                     &holes);
 }
 
 // ── buildLoft ───────────────────────────────────────────────────────────────

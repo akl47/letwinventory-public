@@ -8,6 +8,8 @@
 
 #include "geom_io.hpp"
 
+#include <limits>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -804,9 +806,11 @@ TopoDS_Face build_bezier_profile_face(const Plane3& plane, const json& profile) 
 // ════════════════════════════════════════════════════════════════════════════
 
 // ── BRep <-> base64 (BinTools binary) ───────────────────────────────────────
-TopoDS_Shape brep_from_base64(const std::string& b64) {
+TopoDS_Shape brep_from_base64(const std::string& b64, std::vector<std::string>* names) {
   std::vector<unsigned char> bytes = base64_decode(b64);
   if (bytes.empty()) throw std::runtime_error("decode base64 BREP payload: empty");
+  std::vector<std::string> trailer = strip_name_trailer(bytes);
+  if (names) *names = std::move(trailer);
   std::stringstream ss(std::ios::in | std::ios::out | std::ios::binary);
   ss.write(reinterpret_cast<const char*>(bytes.data()),
            static_cast<std::streamsize>(bytes.size()));
@@ -828,6 +832,19 @@ std::string brep_to_base64(const TopoDS_Shape& shape) {
     return std::string();  // mirror serialize_brep returning empty on failure
   }
   std::string s = ss.str();
+  std::vector<unsigned char> bytes(s.begin(), s.end());
+  return base64_encode(bytes);
+}
+
+std::string brep_to_base64(const TopoDS_Shape& shape, const FaceNaming& naming) {
+  std::stringstream ss(std::ios::in | std::ios::out | std::ios::binary);
+  try {
+    BinTools::Write(shape, ss);
+  } catch (const Standard_Failure&) {
+    return std::string();
+  }
+  std::string s = ss.str();
+  append_name_trailer(s, naming.aligned(shape));
   std::vector<unsigned char> bytes(s.begin(), s.end());
   return base64_encode(bytes);
 }
@@ -1020,11 +1037,57 @@ TopoDS_Face build_profile_face(const Plane3& plane, const json& outer, const jso
 }
 
 // ── extract_topology ────────────────────────────────────────────────────────
-json extract_topology(const TopoDS_Shape& shape) {
+// Names of the faces around a topology element, sorted + joined: the identity
+// an edge/vertex id is derived from (REQ 1038).
+static std::string adjacent_face_key(const TopTools_IndexedDataMapOfShapeListOfShape& ancestors,
+                                     const TopoDS_Shape& s, const FaceNaming& naming) {
+  std::set<std::string> names;
+  if (ancestors.Contains(s)) {
+    for (const TopoDS_Shape& f : ancestors.FindFromKey(s)) {
+      const std::string* n = naming.find(f);
+      names.insert(n ? *n : std::string("?"));
+    }
+  }
+  std::string key;
+  for (const std::string& n : names) key += n + "|";
+  return key;
+}
+
+// Replace each element's positional id with prefix + hash(key) (+ ":k" when
+// several elements share a key, k by position), keeping the old id as legacyId.
+static void assign_derived_ids(json& elems, const std::vector<std::string>& keys,
+                               const std::vector<gp_Pnt>& where, const char* prefix) {
+  std::map<std::string, std::vector<size_t>> groups;
+  for (size_t i = 0; i < keys.size(); ++i) groups[keys[i]].push_back(i);
+  auto q = [](double v) { return std::llround(v * 1.0e6); };
+  for (auto& [key, idx] : groups) {
+    std::sort(idx.begin(), idx.end(), [&](size_t a, size_t b) {
+      const gp_Pnt &pa = where[a], &pb = where[b];
+      if (q(pa.X()) != q(pb.X())) return q(pa.X()) < q(pb.X());
+      if (q(pa.Y()) != q(pb.Y())) return q(pa.Y()) < q(pb.Y());
+      return q(pa.Z()) < q(pb.Z());
+    });
+    const std::string base = std::string(prefix) + short_hash(key);
+    for (size_t k = 0; k < idx.size(); ++k) {
+      json& e = elems[idx[k]];
+      e["legacyId"] = e["id"];
+      e["id"] = idx.size() > 1 ? base + ":" + std::to_string(k) : base;
+    }
+  }
+}
+
+json extract_topology(const TopoDS_Shape& shape, const FaceNaming* naming) {
   json vertices = json::array();
   json edges_out = json::array();
   std::set<QPos> seen_v;
   size_t v_id = 0;
+  TopTools_IndexedDataMapOfShapeListOfShape edge_faces, vertex_faces;
+  std::vector<std::string> edge_keys, vertex_keys;
+  std::vector<gp_Pnt> edge_mids, vertex_pts;
+  if (naming) {
+    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces);
+    TopExp::MapShapesAndAncestors(shape, TopAbs_VERTEX, TopAbs_FACE, vertex_faces);
+  }
 
   std::vector<TopoDS_Face> faces = collect_faces(shape);
   std::map<Key, TangentKind> classified = detect_tangent_edges(faces);
@@ -1051,12 +1114,19 @@ json extract_topology(const TopoDS_Shape& shape) {
     bool is_seam = (it != classified.end() && it->second == TangentKind::Seam);
     if (is_seam) continue;  // drop parametric/coplanar seams entirely
 
-    for (const gp_Pnt& p : {start, end}) {
+    TopoDS_Vertex v_first, v_last;
+    if (naming) TopExp::Vertices(edge, v_first, v_last, /*CumOri=*/Standard_True);
+    for (int end_i = 0; end_i < 2; ++end_i) {
+      const gp_Pnt& p = end_i == 0 ? start : end;
       QPos vk = quantize(p);
       if (seen_v.insert(vk).second) {
         vertices.push_back(json{{"id", "v" + std::to_string(v_id)},
                                 {"position", {p.X(), p.Y(), p.Z()}}});
         ++v_id;
+        if (naming) {
+          vertex_keys.push_back(adjacent_face_key(vertex_faces, end_i == 0 ? v_first : v_last, *naming));
+          vertex_pts.push_back(p);
+        }
       }
     }
 
@@ -1075,6 +1145,15 @@ json extract_topology(const TopoDS_Shape& shape) {
       e["polyline"] = pl;
     }
     edges_out.push_back(std::move(e));
+    if (naming) {
+      edge_keys.push_back(adjacent_face_key(edge_faces, edge, *naming));
+      edge_mids.push_back(polyline.size() >= 3 ? polyline[polyline.size() / 2]
+                                               : gp_Pnt((start.XYZ() + end.XYZ()) * 0.5));
+    }
+  }
+  if (naming) {
+    assign_derived_ids(edges_out, edge_keys, edge_mids, "e:");
+    assign_derived_ids(vertices, vertex_keys, vertex_pts, "v:");
   }
   return json{{"vertices", vertices}, {"edges", edges_out}};
 }
@@ -1236,13 +1315,111 @@ std::vector<int> group_coaxial_cylinders(const TopoDS_Shape& shape,
 }
 }  // namespace
 
-// ── tessellate_named (extrude/revolve/sweep/loft cap/side classification) ────
+// ── tessellate_named (extrude/loft cap/side classification) ──────────────────
+// Profile segment (outer + holes) a swept side face came from, by the 2D
+// distance from the face's interior point to each segment. Returns false when
+// no segment carries a `sid` within tolerance (text glyphs, far caps).
+static bool profile_segment_for(const Plane3& plane, const json& profile, const json* holes,
+                                const gp_Pnt& p3, std::string& sid, uint32_t& sseg) {
+  gp_Vec rel(plane.origin, p3);
+  const double qx = rel.Dot(gp_Vec(plane.x_axis)), qy = rel.Dot(gp_Vec(plane.y_axis));
+  auto xy = [](const json& j, double& x, double& y) {
+    x = j.at("x").get<double>();
+    y = j.at("y").get<double>();
+  };
+  auto seg_dist = [](double px, double py, double ax, double ay, double bx, double by) {
+    const double dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    double t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0.0;
+    t = std::max(0.0, std::min(1.0, t));
+    return std::hypot(px - (ax + t * dx), py - (ay + t * dy));
+  };
+  double best = std::numeric_limits<double>::infinity(), best_tol = 0.0;
+  const json* best_seg = nullptr;
+  auto consider = [&](const json& seg) {
+    const std::string kind = seg.value("kind", std::string());
+    double d = std::numeric_limits<double>::infinity(), tol = 1.0e-4;
+    if (kind == "line") {
+      double ax, ay, bx, by;
+      xy(seg.at("start"), ax, ay);
+      xy(seg.at("end"), bx, by);
+      d = seg_dist(qx, qy, ax, ay, bx, by);
+    } else if (kind == "circle") {
+      double cx, cy;
+      xy(seg.at("center"), cx, cy);
+      d = std::fabs(std::hypot(qx - cx, qy - cy) - seg.at("radius").get<double>());
+    } else if (kind == "arc") {
+      double cx, cy, ax, ay, bx, by;
+      xy(seg.at("center"), cx, cy);
+      xy(seg.at("start"), ax, ay);
+      xy(seg.at("end"), bx, by);
+      const double r = seg.at("radius").get<double>();
+      const bool ccw = seg.value("ccw", true);
+      auto norm = [](double a) { const double t = std::fmod(a, 2 * M_PI); return t < 0 ? t + 2 * M_PI : t; };
+      const double a = std::atan2(qy - cy, qx - cx), a0 = std::atan2(ay - cy, ax - cx), a1 = std::atan2(by - cy, bx - cx);
+      double span = ccw ? norm(a1 - a0) : norm(a0 - a1);
+      if (span < 1e-12) span = 2 * M_PI;
+      const double t = ccw ? norm(a - a0) : norm(a0 - a);
+      d = t <= span + 1e-6 ? std::fabs(std::hypot(qx - cx, qy - cy) - r)
+                           : std::min(std::hypot(qx - ax, qy - ay), std::hypot(qx - bx, qy - by));
+    } else if (kind == "bezier" && seg.contains("points") && seg.at("points").size() >= 2) {
+      std::vector<std::array<double, 2>> cp;
+      for (const auto& pt : seg.at("points")) cp.push_back({pt.at("x").get<double>(), pt.at("y").get<double>()});
+      const int N = 32;
+      double px = cp.front()[0], py = cp.front()[1], ext = 0.0;
+      for (int i = 1; i <= N; ++i) {
+        std::vector<std::array<double, 2>> w = cp;
+        const double t = double(i) / N;
+        for (size_t lvl = w.size() - 1; lvl > 0; --lvl)
+          for (size_t k = 0; k < lvl; ++k)
+            w[k] = {w[k][0] + (w[k + 1][0] - w[k][0]) * t, w[k][1] + (w[k + 1][1] - w[k][1]) * t};
+        d = std::min(d, seg_dist(qx, qy, px, py, w[0][0], w[0][1]));
+        ext += std::hypot(w[0][0] - px, w[0][1] - py);
+        px = w[0][0];
+        py = w[0][1];
+      }
+      tol = std::max(1.0e-3, ext * 0.01);
+    }
+    if (d < best) {
+      best = d;
+      best_tol = tol;
+      best_seg = &seg;
+    }
+  };
+  for (const auto& seg : profile) consider(seg);
+  if (holes && holes->is_array()) {
+    for (const auto& hole : *holes) {
+      if (hole.is_array()) {
+        for (const auto& seg : hole) consider(seg);
+      }
+    }
+  }
+  if (!best_seg || best > best_tol || !best_seg->contains("sid") || !best_seg->at("sid").is_string()) return false;
+  sid = best_seg->at("sid").get<std::string>();
+  sseg = best_seg->contains("sseg") && best_seg->at("sseg").is_number_unsigned() ? best_seg->at("sseg").get<uint32_t>() : 0;
+  return true;
+}
+
+// Attach `legacyId` and merge `aliases` to a FaceMesh built for `members`.
+static void annotate_face_mesh(json& fm, const std::vector<TopoDS_Face>& members, const std::string& id,
+                               const std::string& legacy_id, const FaceNaming& naming) {
+  fm["legacyId"] = legacy_id;
+  std::vector<std::string> aliases;
+  auto add = [&](const std::string& a) {
+    if (a != id && std::find(aliases.begin(), aliases.end(), a) == aliases.end()) aliases.push_back(a);
+  };
+  for (const TopoDS_Face& f : members) {
+    if (const std::string* n = naming.find(f)) add(*n);
+    if (const std::vector<std::string>* al = naming.aliases(f)) {
+      for (const std::string& a : *al) add(a);
+    }
+  }
+  if (!aliases.empty()) fm["aliases"] = aliases;
+}
+
 Tessellated tessellate_named(const TopoDS_Shape& shape, const gp_Pnt& plane_origin,
                              const gp_Dir& plane_normal, double signed_distance,
-                             const std::string& feature_id) {
-  json topology = extract_topology(shape);
-  auto id_by_key = build_edge_id_lookup(topology);
-
+                             const std::string& feature_id, const Plane3* plane,
+                             const json* profile, const json* holes) {
   std::vector<TopoDS_Face> faces = collect_faces(shape);
   double tol = std::max(std::fabs(signed_distance) * 1e-3, 1e-6);
 
@@ -1275,44 +1452,57 @@ Tessellated tessellate_named(const TopoDS_Shape& shape, const gp_Pnt& plane_orig
     return a.angle < b.angle;
   });
 
-  json faces_out = json::array();
+  // Legacy (angle-rank) ids, then stable names: a side wall is named after the
+  // profile segment it was swept from when the segment carries a `sid`.
+  std::vector<std::string> legacy(classified.size());
+  FaceNaming naming;
   uint32_t side_index = 0;
-  for (const Entry& e : classified) {
-    std::string id;
-    bool force_flat;
-    if (e.kind == Kind::CapBottom) {
-      id = persistent_name(feature_id, "cap-bottom", 0);
-      force_flat = true;
-    } else if (e.kind == Kind::CapTop) {
-      id = persistent_name(feature_id, "cap-top", 0);
-      force_flat = true;
-    } else {
-      id = persistent_name(feature_id, "side", side_index++);
-      force_flat = false;
+  for (size_t i = 0; i < classified.size(); ++i) {
+    const Entry& e = classified[i];
+    if (e.kind == Kind::CapBottom) legacy[i] = persistent_name(feature_id, "cap-bottom", 0);
+    else if (e.kind == Kind::CapTop) legacy[i] = persistent_name(feature_id, "cap-top", 0);
+    else legacy[i] = persistent_name(feature_id, "side", side_index++);
+    std::string name = legacy[i];
+    std::string sid;
+    uint32_t sseg = 0;
+    if (e.kind == Kind::Side && plane && profile &&
+        profile_segment_for(*plane, *profile, holes, face_interior_point(e.face), sid, sseg)) {
+      NameParts p;
+      p.feature_id = feature_id;
+      p.role = "side";
+      p.sub_index = sseg;
+      p.refs = {sid};
+      name = encode_name(p);
     }
-    faces_out.push_back(make_face_mesh(e.face, id, force_flat, id_by_key));
+    naming.set(e.face, name);
   }
-  return Tessellated{faces_out, topology};
+  resolve_duplicate_names(shape, naming);
+
+  json topology = extract_topology(shape, &naming);
+  auto id_by_key = build_edge_id_lookup(topology);
+  json faces_out = json::array();
+  for (size_t i = 0; i < classified.size(); ++i) {
+    const Entry& e = classified[i];
+    const std::string id = *naming.find(e.face);
+    json fm = make_face_mesh(e.face, id, e.kind != Kind::Side, id_by_key);
+    annotate_face_mesh(fm, {e.face}, id, legacy[i], naming);
+    faces_out.push_back(std::move(fm));
+  }
+  return Tessellated{faces_out, topology, naming};
 }
 
-// ── tessellate_generic (boolean/pattern/shell/blend) ─────────────────────────
-Tessellated tessellate_generic(const TopoDS_Shape& shape, const std::string& scope) {
-  // Mesh the whole shape once, in parallel, up front — every make_face_mesh /
-  // combine_face_meshes below then just READS the shared triangulation instead
-  // of each spinning up its own single-face mesher.
-  ensure_meshed(shape);
+// ── Legacy positional grouping (also the base naming of revolve/sweep) ───────
+// Coaxial + same-radius + adjacent cylinder faces form one group (OCCT leaves
+// such walls split when their axes are opposite and the UI shows them as ONE
+// face); groups are ranked by their representative centroid and named
+// `side i` under `scope`. These are every face's `legacyId` (REQ 1039).
+struct LegacyGroups {
+  std::vector<std::vector<TopoDS_Face>> groups;
+  std::vector<std::string> ids;
+};
 
-  json topology = extract_topology(shape);
-  auto id_by_key = build_edge_id_lookup(topology);
-
+static LegacyGroups legacy_groups(const TopoDS_Shape& shape, const std::string& scope) {
   std::vector<TopoDS_Face> faces = collect_faces(shape);
-
-  // Group coaxial + same-radius + adjacent cylinder faces: OCCT leaves such walls
-  // split into two faces when their surface axes are opposite (a bore extended by
-  // a coaxial same-Ø cut) and cannot geometrically merge them, so we present the
-  // group as ONE face. A face with no qualifying neighbour is its own singleton
-  // group (the common case), so non-split geometry — and its side indices — is
-  // unchanged.
   std::vector<int> root = group_coaxial_cylinders(shape, faces);
   struct Group { std::vector<TopoDS_Face> faces; gp_Pnt rep; };
   std::unordered_map<int, size_t> root_to_group;
@@ -1332,38 +1522,78 @@ Tessellated tessellate_generic(const TopoDS_Shape& shape, const std::string& sco
            (c.Y() == g.rep.Y() && c.Z() < g.rep.Z())))) g.rep = c;
     }
   }
-
-  // Deterministic order by representative centroid (matches the old per-face
-  // ordering for singletons).
   std::stable_sort(groups.begin(), groups.end(), [](const Group& a, const Group& b) {
     if (a.rep.X() != b.rep.X()) return a.rep.X() < b.rep.X();
     if (a.rep.Y() != b.rep.Y()) return a.rep.Y() < b.rep.Y();
     return a.rep.Z() < b.rep.Z();
   });
-
-  json faces_out = json::array();
+  LegacyGroups out;
   for (size_t i = 0; i < groups.size(); ++i) {
-    std::string id = persistent_name(scope, "side", static_cast<uint32_t>(i));
-    if (groups[i].faces.size() == 1)
-      faces_out.push_back(make_face_mesh(groups[i].faces[0], id, /*force_flat=*/false, id_by_key));
-    else
-      faces_out.push_back(combine_face_meshes(groups[i].faces, id, id_by_key));
+    out.groups.push_back(std::move(groups[i].faces));
+    out.ids.push_back(persistent_name(scope, "side", static_cast<uint32_t>(i)));
   }
-  return Tessellated{faces_out, topology};
+  return out;
+}
+
+FaceNaming legacy_naming(const TopoDS_Shape& shape, const std::string& scope) {
+  LegacyGroups lg = legacy_groups(shape, scope);
+  FaceNaming naming;
+  for (size_t i = 0; i < lg.groups.size(); ++i) {
+    for (const TopoDS_Face& f : lg.groups[i]) naming.set(f, lg.ids[i]);
+  }
+  resolve_duplicate_names(shape, naming);  // grouped members become split pieces
+  return naming;
+}
+
+// ── tessellate_generic (boolean/pattern/shell/blend) ─────────────────────────
+Tessellated tessellate_generic(const TopoDS_Shape& shape, const std::string& scope,
+                               const FaceNaming* naming) {
+  // Mesh the whole shape once, in parallel, up front — every make_face_mesh /
+  // combine_face_meshes below then just READS the shared triangulation instead
+  // of each spinning up its own single-face mesher.
+  ensure_meshed(shape);
+
+  FaceNaming local;
+  if (!naming) {
+    local = legacy_naming(shape, scope);
+    naming = &local;
+  }
+  json topology = extract_topology(shape, naming);
+  auto id_by_key = build_edge_id_lookup(topology);
+
+  LegacyGroups lg = legacy_groups(shape, scope);
+  json faces_out = json::array();
+  for (size_t i = 0; i < lg.groups.size(); ++i) {
+    const std::vector<TopoDS_Face>& members = lg.groups[i];
+    // A grouped (split-cylinder) face shows under its shortest member name —
+    // the plain name over its split pieces.
+    std::string id;
+    for (const TopoDS_Face& f : members) {
+      const std::string* n = naming->find(f);
+      const std::string cand = n ? *n : lg.ids[i];
+      if (id.empty() || cand.size() < id.size() || (cand.size() == id.size() && cand < id)) id = cand;
+    }
+    json fm = members.size() == 1 ? make_face_mesh(members[0], id, /*force_flat=*/false, id_by_key)
+                                  : combine_face_meshes(members, id, id_by_key);
+    annotate_face_mesh(fm, members, id, lg.ids[i], *naming);
+    faces_out.push_back(std::move(fm));
+  }
+  return Tessellated{faces_out, topology, *naming};
 }
 
 // ── decompose_into_solids ────────────────────────────────────────────────────
-json decompose_into_solids(const TopoDS_Shape& shape, const std::string& scope) {
+json decompose_into_solids(const TopoDS_Shape& shape, const std::string& scope,
+                           const FaceNaming* naming) {
   json parts = json::array();
   size_t i = 0;
   for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next(), ++i) {
     TopoDS_Solid solid = TopoDS::Solid(ex.Current());
     std::string solid_scope = scope + "#body" + std::to_string(i);
-    Tessellated t = tessellate_generic(solid, solid_scope);
+    Tessellated t = tessellate_generic(solid, solid_scope, naming);
     double volume;
     gp_Pnt centroid;
     volume_centroid(solid, volume, centroid);
-    parts.push_back(json{{"brepBytes", brep_to_base64(solid)},
+    parts.push_back(json{{"brepBytes", brep_to_base64(solid, t.naming)},
                          {"centroid", {centroid.X(), centroid.Y(), centroid.Z()}},
                          {"volume", volume},
                          {"faces", t.faces},

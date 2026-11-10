@@ -18,11 +18,12 @@ describe('feature body scope (REQ 1029)', () => {
     expect(() => _scopedBodies({ bodyIds: ['f9'] }, bodies, null)).toThrow(/f9.*no longer exists/);
   });
 
-  it('scopes a feature\'s face ids to one body without touching other faces', () => {
-    const mine = { faceId: '{"feature_id":"h1#p0#drillcut#body0","role":"side"}' };
-    const other = { faceId: '{"feature_id":"f1#0","role":"cap"}' };
+  it('scopes a feature\'s legacy face ids to one body without touching other faces (REQ 1039)', () => {
+    const mine = { faceId: 'stable', legacyId: '{"feature_id":"h1#p0#drillcut#body0","role":"side"}' };
+    const other = { faceId: 'stable2', legacyId: '{"feature_id":"f1#0","role":"cap"}' };
     const [a, b] = _scopeFeatureFaceIds([mine, other], 'h1', 'f2');
-    expect(a.faceId).toBe('{"feature_id":"h1#@f2#p0#drillcut#body0","role":"side"}');
+    expect(a.legacyId).toBe('{"feature_id":"h1#@f2#p0#drillcut#body0","role":"side"}');
+    expect(a.faceId).toBe('stable');  // stable ids are already unique per body
     expect(b).toBe(other);
   });
 });

@@ -47,6 +47,9 @@ function applyProjectionToSketchDoc(sketchDoc, bodies, opts = {}) {
     for (const v of verts) {
       vertexIndex.set(v.id, v);
     }
+    // REQ 1039 — refs saved before stable naming still hold positional ids.
+    for (const e of edges) if (e.legacyId && !edgeIndex.has(e.legacyId)) edgeIndex.set(e.legacyId, e);
+    for (const v of verts) if (v.legacyId && !vertexIndex.has(v.legacyId)) vertexIndex.set(v.legacyId, v);
   }
   // Cross-part in-context references (REQ 770/775): each cross-part on-edge
   // constraint's SOURCE edge — already transformed into THIS part's frame by the

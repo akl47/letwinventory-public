@@ -6351,6 +6351,14 @@ function _bodyIndexFromFaceId(raw: string | undefined): string | null {
  * without a body suffix are treated as belonging to the same source
  * and pass through. REQ 658. */
 function filterToFirstBody(children: THREE.Object3D[]): THREE.Object3D[] {
+  // Stable names (REQ 1035) mark pattern copies with an `instance` field —
+  // the source is every face without one.
+  const isCopy = (c: THREE.Object3D) => {
+    try { return !!(JSON.parse((c.userData as { faceId?: string }).faceId ?? '') as { instance?: string }).instance; }
+    catch { return false; }
+  };
+  const copies = children.filter(isCopy);
+  if (copies.length > 0 && copies.length < children.length) return children.filter(c => !isCopy(c));
   let smallest: string | null = null;
   let anyHadSuffix = false;
   for (const c of children) {

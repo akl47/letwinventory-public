@@ -17,6 +17,8 @@ import {
   MATE_TYPES, availableMateTypes, mateAllows, datumRowMateRef, csysDatumOf,
 } from '../../../cad/lib/assembly.types';
 import { canDragInstance, translatedPlacement } from '../../../cad/lib/assemblyDrag';
+import { migrateMateRefs } from '../../../cad/lib/idMigration';
+import { concatMap, from } from 'rxjs';
 
 const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { vertices: [], edges: [] } };
 
@@ -425,6 +427,7 @@ export class AssemblyEditController {
       next: (r) => {
         this.regen.set(r);
         if (r.errors?.length) this.regenError.set(r.errors.join('; '));
+        this.migrateLegacyMates(r);
       },
       error: (e) => {
         this.regen.set(null);
@@ -432,6 +435,21 @@ export class AssemblyEditController {
           ? 'CAD kernel is offline — components cannot be rendered.'
           : (e?.error?.error || 'Failed to regenerate assembly'));
       },
+    });
+  }
+
+  /** REQ 1039 — point mates saved with a child's positional face ids at the
+   * child's stable ids (only while this user holds the checkout). */
+  private migrateLegacyMates(r: AssemblyRegenResponse) {
+    const a = this.assembly();
+    if (!a || !this.isLockedByMe()) return;
+    const byInstance: Record<string, Record<string, string> | undefined> = {};
+    for (const inst of r.instances || []) byInstance[inst.instanceId] = inst.idMigration;
+    const updates = migrateMateRefs(this.mates(), byInstance);
+    if (!updates.length) return;
+    from(updates).pipe(concatMap((u) => this.assemblyApi.updateMate(a.id, u.mateId, { a: u.a, b: u.b }))).subscribe({
+      next: (asm) => this.assembly.set(asm),
+      error: (e) => this.errors.showError(e?.error?.error || 'Failed to update mate references'),
     });
   }
 

@@ -13,6 +13,7 @@ find_package(nlohmann_json REQUIRED)
 
 set(KERNEL_OP_SOURCES
   src/geom_io.cpp
+  src/naming.cpp
   src/op_extrude.cpp
   src/op_boolean.cpp
   src/op_revolve_sweep.cpp

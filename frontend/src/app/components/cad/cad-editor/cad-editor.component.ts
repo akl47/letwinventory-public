@@ -38,6 +38,7 @@ import { SketchDeleteWarningDialogComponent, type SketchDeleteAction } from '../
 import { projectTo3D, projectFrom3D } from '../../../cad/lib/plane';
 import { disabledReason, DISABLED_REASON } from '../../../cad/lib/disabledReason';
 import { sameSavedContent, type SavedContent } from '../../../cad/lib/savedContent';
+import { hasMigrations, migrateReferences, migrateSketchDoc, type IdMigration } from '../../../cad/lib/idMigration';
 import type { Observable } from 'rxjs';
 import { closestPointOnSegment, crossPartEdgeRef, crossPartVertexRef } from '../../../cad/lib/externalSnap';
 import { findProjectedBySource, listProjectedCurves } from '../../../cad/lib/projectedGeometry';
@@ -4798,7 +4799,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-461';
+  readonly buildMarker = 'text-462';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -15980,6 +15981,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * Multiple in-flight save calls coalesce into the last one's
    * regen behaviour via the debounce clear+reset.
    */
+  /** REQ 1039 — move references saved with positional face ids
+   * onto the stable ids the regen reported, and save once. Geometry is
+   * unchanged (the backend resolves both), so no regen. */
+  private migrateLegacyRefs(m: IdMigration | undefined, resolvedHosts: Record<string, string>) {
+    if (!m || !hasMigrations(m) || this.readonly()) return;
+    const doc = migrateSketchDoc(this.doc(), m, resolvedHosts);
+    const tree = migrateReferences(this.featureTree(), m);
+    if (doc === this.doc() && tree === this.featureTree()) return;
+    this.doc.set(doc);
+    this.featureTree.set(tree);
+    this.save({ skipRegen: true });
+  }
+
   private save(opts?: { skipRegen?: boolean }) {
     const m = this.model();
     if (!m) return;
@@ -16394,6 +16408,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         // coincidence test. Surface as a per-row indicator in the tree.
         this.danglingSketchIds.set(new Set((resp as any).danglingSketchIds || []));
         this.sketchHostFaces.set((resp as any).sketchHostFaces || {});
+        this.migrateLegacyRefs((resp as any).idMigration, (resp as any).sketchHostFaces || {});
         this.rebuildGeometryFromBodies();
         // Per-feature errors are nested in the merged response. Surface them
         // as warning toasts so the user sees what failed and why — silent
