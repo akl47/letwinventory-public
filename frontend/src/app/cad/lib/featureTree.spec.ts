@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   emptyFeatureTree, addFeature, removeFeature, updateFeatureParam,
   removeFeaturesReferencingSketch, featureReferencesSketch,
-  upgradeFeatureTree, setBodyVisibility, setBodyName, setRollbackIndex,
+  upgradeFeatureTree, setBodyVisibility, setBodyName, setBodyColor, setRollbackIndex,
+  addBodyGroup, renameBodyGroup, ungroupBodies, removeBodyFromGroup, addBodiesToGroup,
   isOriginFeature, isExtrudeFeature,
 } from './featureTree';
 
@@ -242,6 +243,91 @@ describe('Feature tree (CAD-034, CAD-035, CAD-037)', () => {
       expect(t1.bodyNames).toEqual({ b1: 'Housing' });
       const t2 = setBodyName(t1, 'b1', '   ');
       expect(t2.bodyNames ?? {}).toEqual({});
+    });
+  });
+
+  describe('setBodyColor (REQ 1041)', () => {
+    it('stores a normalized hex color and clears it with null', () => {
+      const t0 = emptyFeatureTree();
+      const t1 = setBodyColor(t0, 'b1', '#FF8800');
+      expect(t1.bodyColors).toEqual({ b1: 'ff8800' });
+      const t2 = setBodyColor(t1, 'b2', '00aa11');
+      expect(t2.bodyColors).toEqual({ b1: 'ff8800', b2: '00aa11' });
+      const t3 = setBodyColor(setBodyColor(t2, 'b1', null), 'b2', null);
+      expect(t3.bodyColors).toBeUndefined();
+    });
+
+    it('ignores a malformed color', () => {
+      const t0 = setBodyColor(emptyFeatureTree(), 'b1', 'ff8800');
+      expect(setBodyColor(t0, 'b1', 'orange')).toBe(t0);
+    });
+  });
+
+  describe('body groups (REQ 1045)', () => {
+    it('groups bodies, moving them out of any other group and dropping groups left empty', () => {
+      const t1 = addBodyGroup(emptyFeatureTree(), { id: 'g1', name: 'Set A', bodyIds: ['b1', 'b2'] });
+      expect(t1.bodyGroups).toEqual([{ id: 'g1', name: 'Set A', bodyIds: ['b1', 'b2'] }]);
+      const t2 = addBodyGroup(t1, { id: 'g2', name: 'Set B', bodyIds: ['b2', 'b3'] });
+      expect(t2.bodyGroups).toEqual([
+        { id: 'g1', name: 'Set A', bodyIds: ['b1'] },
+        { id: 'g2', name: 'Set B', bodyIds: ['b2', 'b3'] },
+      ]);
+      const t3 = addBodyGroup(t2, { id: 'g3', name: 'All', bodyIds: ['b1'] });
+      expect(t3.bodyGroups!.map(g => g.id)).toEqual(['g2', 'g3']);
+    });
+
+    it('adds bodies to an existing group, taking them from their old group (REQ 1047)', () => {
+      let t = addBodyGroup(emptyFeatureTree(), { id: 'g1', name: 'A', bodyIds: ['b1'] });
+      t = addBodyGroup(t, { id: 'g2', name: 'B', bodyIds: ['b2', 'b3'] });
+      t = addBodiesToGroup(t, 'g1', ['b3', 'b4']);
+      expect(t.bodyGroups).toEqual([
+        { id: 'g1', name: 'A', bodyIds: ['b1', 'b3', 'b4'] },
+        { id: 'g2', name: 'B', bodyIds: ['b2'] },
+      ]);
+    });
+
+    it('renames, removes a member, and ungroups', () => {
+      const t1 = addBodyGroup(emptyFeatureTree(), { id: 'g1', name: 'Set A', bodyIds: ['b1', 'b2'] });
+      expect(renameBodyGroup(t1, 'g1', '  Kit ').bodyGroups![0].name).toBe('Kit');
+      expect(renameBodyGroup(t1, 'g1', '   ')).toBe(t1);  // blank name keeps the old one
+      const t2 = removeBodyFromGroup(t1, 'b1');
+      expect(t2.bodyGroups).toEqual([{ id: 'g1', name: 'Set A', bodyIds: ['b2'] }]);
+      expect(removeBodyFromGroup(t2, 'b2').bodyGroups).toBeUndefined();
+      expect(ungroupBodies(t1, 'g1').bodyGroups).toBeUndefined();
+    });
+  });
+
+  // Tree edits must never drop part-level settings, and editing a feature
+  // must not move it (its createdAt orders it in the tree).
+  describe('tree edits keep part-level settings', () => {
+    const decorated = () => ({
+      ...emptyFeatureTree(),
+      bodyNames: { b1: 'Base' }, bodyColors: { b1: 'ff0000' }, bodyVisibility: { b2: false },
+      bodyGroups: [{ id: 'g1', name: 'Kit', bodyIds: ['b1'] }],
+      treeFolders: [{ id: 'fd1', name: 'Planes', memberKeys: ['x'] }],
+      rollbackIndex: 1, defaultUnit: 'in' as const,
+    });
+    const extras = (t: object) => {
+      const { features: _f, nextFeatureSeq: _n, ...rest } = t as Record<string, unknown>;
+      return rest;
+    };
+
+    it('addFeature, updateFeatureParam, removeFeature, removeFeaturesReferencingSketch', () => {
+      const t0 = decorated();
+      const t1 = addFeature(t0, { type: 'extrude', sketchId: 's1', distance: 5 } as never);
+      expect(extras(t1)).toEqual(extras(t0));
+      const id = t1.features[1].id;
+      expect(extras(updateFeatureParam(t1, id, { distance: 9 } as never))).toEqual(extras(t0));
+      expect(extras(removeFeature(t1, id))).toEqual(extras(t0));
+      expect(extras(removeFeaturesReferencingSketch(t1, 's1'))).toEqual(extras(t0));
+    });
+
+    it('editing a feature keeps its createdAt', () => {
+      const t1 = addFeature(emptyFeatureTree(), { type: 'extrude', sketchId: 's1', distance: 5 } as never);
+      const f = t1.features[1];
+      const t2 = updateFeatureParam(t1, f.id, { ...f, distance: 9, createdAt: f.createdAt! + 1e6 } as never);
+      expect(t2.features[1].createdAt).toBe(f.createdAt);
+      expect((t2.features[1] as { distance: number }).distance).toBe(9);
     });
   });
 

@@ -56,7 +56,7 @@ import { dimensionRenders, type DimensionRender } from '../../../cad/lib/dimensi
 import { externalEdgeLinesFromCandidates } from '../../../cad/lib/externalSnap';
 import { formatNumber, fromMm, unitSymbol, type Unit } from '../../../cad/lib/units';
 import { constraintIconsForEntity, type ConstraintIcon, type ConstraintIconGroup } from '../../../cad/lib/constraintIcons';
-import { tryGlyphLoopsForText, onFontReady, applyTextTransform } from '../../../cad/lib/textGlyphs';
+import { tryGlyphLoopsForText, onFontReady, applyTextTransform, textStyleOf } from '../../../cad/lib/textGlyphs';
 import { singleLineStrokesForText } from '../../../cad/lib/singleLineFont';
 import { exceedsDragThreshold, screenDeltaToWorld } from '../../../cad/lib/assemblyDrag';
 import { WORLD_UP as WORLD_UP_AXIS, orbitDir, dirToOrbit } from '../../../cad/lib/viewAxis';
@@ -379,6 +379,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   private hoveredCubeSlot: number | null = null;
 
   geometry = input<ModelGeometry | null>(null);
+  /** REQ 1041 — face id → body color ('rrggbb'); other faces use the default. */
+  faceColors = input<Map<string, string>>(new Map());
   /** CAD-790 in-context editing: ghost geometry of the OTHER assembly components
    * (read-only reference), drawn in the edited part's local frame. */
   referenceGeometry = input<InContextOverlay | null>(null);
@@ -995,6 +997,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const hov = this.hovered();
       const features = this.selectedFeatures();
       const picked = this.pickedFaceIds();
+      this.faceColors();  // body colors also repaint (read by recolor)
       if (this.scene) this.recolor(sel, hov, features, picked);
     });
     effect(() => {
@@ -6197,7 +6200,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       group.userData = { entityId: e.id };
       return group;
     }
-    const loops = tryGlyphLoopsForText(displayText, { x: bl.x, y: bl.y }, boxH, justify, boxW);
+    const style = textStyleOf(e);
+    const loops = tryGlyphLoopsForText(displayText, { x: bl.x, y: bl.y }, boxH, justify, boxW, style);
     if (loops === null) {
       // Font still parsing — re-render the overlay once Roboto lands.
       if (!this._textFontRebuildArmed) {
@@ -6208,7 +6212,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
             this.syncSketches(this.sketchDoc(), this.activeSketchId(),
               this.selectedSketchEntities(), this.mirrorAxisId());
           }
-        });
+        }, style);
       }
       return null;
     }
@@ -6319,7 +6323,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       else if (id === selected) mat.color.setHex(0x0066cc);
       else if (pickedFaces.has(id)) mat.color.setHex(0x1976d2);
       else if (ownFeatureSelected) mat.color.setHex(0xffb74d);
-      else mat.color.setHex(0x8aa0c4);
+      else mat.color.setHex(parseInt(this.faceColors().get(id) ?? '8aa0c4', 16));
     }
     // Datum coloring (selection + hover) is owned by recolorDatums(), driven by
     // its own effect on selectedDatums/hovered/selected.

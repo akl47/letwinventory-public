@@ -32,6 +32,7 @@ namespace kernel {
 nlohmann::json op_buildBoolean(const nlohmann::json& params);
 nlohmann::json op_buildFuseMany(const nlohmann::json& params);
 nlohmann::json op_bodyVolume(const nlohmann::json& params);
+nlohmann::json op_bodyContacts(const nlohmann::json& params);
 nlohmann::json op_exportStl(const nlohmann::json& params);
 nlohmann::json op_exportStep(const nlohmann::json& params);
 

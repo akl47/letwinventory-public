@@ -1232,6 +1232,37 @@ async function exportModelStl(model, { kernelClient, db, bodyIds } = {}) {
   return { ...out, errors: regen.errors };
 }
 
+/** REQ 1043 — which bodies overlap or touch (kernel `bodyContacts`), for
+ * grouping bodies into 3MF objects. Returns body ids in regen order, the
+ * touching pairs by id, and the connected groups (each in body order). */
+async function bodyContacts(model, { kernelClient, db, bodyIds } = {}) {
+  const client = kernelClient || cadKernelClient.getDefaultClient();
+  const regen = await regenerateModel(model, { kernelClient: client, db, includeBodyBreps: true });
+  let bodies = (regen.bodies || []).filter(b => b.brep);
+  if (Array.isArray(bodyIds) && bodyIds.length > 0) {
+    const want = new Set(bodyIds);
+    bodies = bodies.filter(b => want.has(b.id));
+  }
+  const ids = bodies.map(b => b.id);
+  const rpc = bodies.length > 1
+    ? await client.call('bodyContacts', { breps: bodies.map(b => b.brep) })
+    : { pairs: [] };
+  const pairs = (rpc.pairs || []).map(([i, j]) => [ids[i], ids[j]]);
+  const root = new Map(ids.map(id => [id, id]));
+  const find = (x) => { while (root.get(x) !== x) x = root.get(x); return x; };
+  for (const [a, b] of pairs) {
+    const [ra, rb] = [find(a), find(b)].sort((x, y) => ids.indexOf(x) - ids.indexOf(y));
+    if (ra !== rb) root.set(rb, ra);
+  }
+  const groups = new Map();
+  for (const id of ids) {
+    const r = find(id);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(id);
+  }
+  return { bodyIds: ids, pairs, groups: [...groups.values()], errors: regen.errors };
+}
+
 function _safeCallback(fn) {
   if (typeof fn !== 'function') return () => {};
   return (arg) => {
@@ -3462,7 +3493,12 @@ async function _dispatchShell(feature, bodies, model, client, dbClient, results,
   const tolerance = Number.isFinite(feature.tolerance) && feature.tolerance > 0
     ? Number(feature.tolerance) : 1.0e-3;
 
-  const body = bodies[bodies.length - 1];
+  // The body that owns a picked face (stable id, legacy id or merge alias);
+  // the newest body only when no pick matches (e.g. pre-naming picks).
+  const picked = new Set(feature.faces.map(f => f.faceId).filter(Boolean));
+  const owns = (b) => (b.faces || []).some(f => picked.has(f.faceId) || picked.has(f.legacyId)
+    || (f.aliases || []).some(a => picked.has(a)));
+  const body = bodies.find(owns) || bodies[bodies.length - 1];
   // Send the kernel just centroid + normal (and the per-face thickness
   // override, reserved for later) so face matching is geometry-keyed.
   const kernelFaces = feature.faces.map(f => {
@@ -4385,6 +4421,7 @@ module.exports = {
   exportBodyBreps,
   exportModelStep,
   exportModelStl,
+  bodyContacts,
   NAMING_VERSION,
   _buildExternalEdges, // exported for unit tests (REQ 770/773)
   _danglingHostFaceWarnings, // exported for unit tests (host-face resolution / dangling detection)

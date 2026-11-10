@@ -200,3 +200,155 @@ describe('CadFeatureTreePanelComponent — context visibility (REQ 997)', () => 
     expect(btn.textContent).toContain('visibility_off');
   });
 });
+
+// REQs 1044/1045 — body multi-select (click / Ctrl / Shift) with bulk actions,
+// and body groups shown as a parent row.
+describe('CadFeatureTreePanelComponent — body selection and groups (REQ 1044, 1045)', () => {
+  let fixture: ComponentFixture<CadFeatureTreePanelComponent>;
+  let component: CadFeatureTreePanelComponent;
+  const bodies = [
+    { id: 'b1', name: 'Base', color: undefined },
+    { id: 'b2', name: null },
+    { id: 'b3', name: null },
+    { id: 'b4', name: null },
+  ];
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({ imports: [CadFeatureTreePanelComponent], providers: [provideNoopAnimations()] });
+    fixture = TestBed.createComponent(CadFeatureTreePanelComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('bodyList', bodies);
+    fixture.detectChanges();
+  });
+
+  const click = (id: string, mods: MouseEventInit = {}) =>
+    component.onBodyRowClick(new MouseEvent('click', mods), { id });
+
+  it('click selects one, Ctrl toggles, Shift selects a range', () => {
+    click('b1');
+    expect([...component.selectedBodyIds()]).toEqual(['b1']);
+    click('b3', { ctrlKey: true });
+    expect([...component.selectedBodyIds()].sort()).toEqual(['b1', 'b3']);
+    click('b1', { ctrlKey: true });
+    expect([...component.selectedBodyIds()]).toEqual(['b3']);
+    click('b2');
+    click('b4', { shiftKey: true });
+    expect([...component.selectedBodyIds()].sort()).toEqual(['b2', 'b3', 'b4']);
+  });
+
+  it('a context-menu action applies to the whole selection', () => {
+    const colors: Array<{ bodyIds: string[]; color: string | null }> = [];
+    component.bodyColorChanged.subscribe(e => colors.push(e));
+    click('b1');
+    click('b2', { ctrlKey: true });
+    component.onBodyContextMenu(new MouseEvent('contextmenu'), { id: 'b2' });
+    component.setBodyColor('e53935');
+    expect(colors).toEqual([{ bodyIds: ['b1', 'b2'], color: 'e53935' }]);
+  });
+
+  it('right-clicking outside the selection selects just that body', () => {
+    click('b1');
+    click('b2', { ctrlKey: true });
+    component.onBodyContextMenu(new MouseEvent('contextmenu'), { id: 'b4' });
+    expect([...component.selectedBodyIds()]).toEqual(['b4']);
+    expect(component.contextBodyIds()).toEqual(['b4']);
+  });
+
+  it('shows a group as a parent row with its members under it', () => {
+    fixture.componentRef.setInput('bodyGroups', [{ id: 'g1', name: 'Kit', bodyIds: ['b3', 'b1', 'gone'] }]);
+    fixture.detectChanges();
+    expect(component.bodyRows().map(r => `${r.kind}:${r.id}:${r.depth}`)).toEqual([
+      'group:g1:0', 'body:b1:1', 'body:b3:1', 'body:b2:0', 'body:b4:0',
+    ]);
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('[data-testid="body-group-g1"]')?.textContent).toContain('Kit');
+  });
+
+  // REQ 1047 — drag bodies onto a group row / the Bodies header.
+  const dragEvent = () => ({ preventDefault: () => {}, dataTransfer: null }) as unknown as DragEvent;
+
+  it('dragging the selection onto a group adds every selected body to it', () => {
+    fixture.componentRef.setInput('bodyGroups', [{ id: 'g1', name: 'Kit', bodyIds: ['b1'] }]);
+    fixture.detectChanges();
+    const acts: unknown[] = [];
+    component.bodyGroupAction.subscribe(a => acts.push(a));
+    click('b3');
+    click('b4', { ctrlKey: true });
+    component.onBodyDragStart(dragEvent(), { id: 'b4' });
+    component.onBodyDragOver(dragEvent(), 'g1');
+    expect(component.bodyDropGroupId()).toBe('g1');
+    component.onBodyDrop(dragEvent(), 'g1');
+    expect(acts).toEqual([{ action: 'add', groupId: 'g1', bodyIds: ['b3', 'b4'] }]);
+    expect(component.bodyDropGroupId()).toBeNull();
+  });
+
+  it('dropping a grouped body on the Bodies header ungroups it; an unselected drag moves just that body', () => {
+    fixture.componentRef.setInput('bodyGroups', [{ id: 'g1', name: 'Kit', bodyIds: ['b1', 'b2'] }]);
+    fixture.detectChanges();
+    const acts: unknown[] = [];
+    component.bodyGroupAction.subscribe(a => acts.push(a));
+    click('b3');
+    component.onBodyDragStart(dragEvent(), { id: 'b2' });
+    component.onBodyDrop(dragEvent(), '');
+    expect(acts).toEqual([{ action: 'remove', bodyIds: ['b2'] }]);
+  });
+
+  it('lists the groups the context bodies can join', () => {
+    fixture.componentRef.setInput('bodyGroups', [
+      { id: 'g1', name: 'A', bodyIds: ['b1'] }, { id: 'g2', name: 'B', bodyIds: ['b2'] },
+    ]);
+    fixture.detectChanges();
+    component.onBodyContextMenu(new MouseEvent('contextmenu'), { id: 'b1' });
+    expect(component.groupsToJoin().map(g => g.id)).toEqual(['g2']);
+  });
+
+  it('group asks for the selected bodies', () => {
+    const acts: unknown[] = [];
+    component.bodyGroupAction.subscribe(a => acts.push(a));
+    click('b2');
+    click('b4', { ctrlKey: true });
+    component.onBodyContextMenu(new MouseEvent('contextmenu'), { id: 'b4' });
+    component.groupSelectedBodies();
+    expect(acts).toEqual([{ action: 'group', bodyIds: ['b2', 'b4'] }]);
+  });
+});
+
+// REQ 1046 — folders in the part feature tree.
+describe('CadFeatureTreePanelComponent — feature folders (REQ 1046)', () => {
+  let fixture: ComponentFixture<CadFeatureTreePanelComponent>;
+  let component: CadFeatureTreePanelComponent;
+  const features = [
+    { id: 'f0', type: 'origin', createdAt: 0 },
+    { id: 'f1', type: 'datumPlane', name: 'P1', createdAt: 1 },
+    { id: 'f2', type: 'datumPlane', name: 'P2', createdAt: 2 },
+    { id: 'f3', type: 'datumPlane', name: 'P3', createdAt: 3 },
+  ];
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({ imports: [CadFeatureTreePanelComponent], providers: [provideNoopAnimations()] });
+    fixture = TestBed.createComponent(CadFeatureTreePanelComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('features', features);
+    fixture.componentRef.setInput('folders', [{ id: 'a', name: 'Planes', memberKeys: ['f1', 'f2'] }]);
+    fixture.detectChanges();
+  });
+
+  const top = () => component.nodes().filter(n => n.depth === 0).map(n => n.key);
+
+  it('shows a folder row over its consecutive members and collapses it on click', () => {
+    expect(top()).toEqual(['f0', 'folder:a', 'f3']);
+    expect(component.nodes().find(n => n.key === 'f1')?.depth).toBe(1);
+    component.onRowClick(component.nodes().find(n => n.key === 'folder:a')!, new MouseEvent('click'));
+    expect(component.nodes().some(n => n.key === 'f1')).toBe(false);
+    expect(fixture.nativeElement.querySelector('[data-testid="folder-row-a"]')).toBeTruthy();
+  });
+
+  it('offers only folder actions that keep the run consecutive', () => {
+    const f3 = component.nodes().find(n => n.key === 'f3')!;
+    component.onRowContextMenu(new MouseEvent('contextmenu'), f3);
+    expect(component.ctxKeys()).toEqual(['f3']);
+    expect(component.foldersAccepting(['f3']).map(f => f.id)).toEqual(['a']);
+    expect(component.canFolderKeys(['f1', 'f3'])).toBe(false);
+    expect(component.inAnyFolder(['f3'])).toBe(false);
+  });
+});

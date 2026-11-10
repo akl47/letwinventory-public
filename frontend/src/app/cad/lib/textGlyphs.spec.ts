@@ -12,14 +12,15 @@ import { dirname, join } from 'node:path';
 // change it there and re-pin BOTH tests.
 
 const here = dirname(fileURLToPath(import.meta.url));
-const TTF = join(here, '../../../../public/assets/fonts/Roboto-Regular.ttf');
+const PUBLIC = join(here, '../../../../public/');
 
 beforeAll(() => {
-  const buf = readFileSync(TTF);
-  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-  // textGlyphs loads the font via fetch(); feed it the real TTF off disk so
-  // the tessellator runs under vitest (jsdom has no asset server).
-  (globalThis as { fetch: unknown }).fetch = async () => ({ ok: true, arrayBuffer: async () => ab });
+  // textGlyphs loads each face via fetch('assets/fonts/…'); feed it the real
+  // TTF off disk so the tessellator runs under vitest (jsdom has no asset server).
+  (globalThis as { fetch: unknown }).fetch = async (url: string) => {
+    const buf = readFileSync(join(PUBLIC, url));
+    return { ok: true, arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) };
+  };
 });
 
 describe('textGlyphs tessellation (drift guard vs backend cadTextGlyphs.js)', () => {
@@ -45,6 +46,30 @@ describe('textGlyphs tessellation (drift guard vs backend cadTextGlyphs.js)', ()
     expect(miny).toBeCloseTo(0, 6);
     expect(maxx).toBeCloseTo(17.1429, 3);
     expect(maxy).toBeCloseTo(10.0000, 3);
+  });
+
+  // REQ 1048 — Bold / Italic / Bold Italic faces; same pins as the backend.
+  it.each([
+    ['bold', [9, 4, 61, 24, 22], 2.2390, 0.0549, 17.7953],
+    ['italic', [9, 4, 58, 24, 26], 0.8242, -0.5563, 16.9490],
+    ['boldItalic', [9, 4, 59, 22, 22], 1.5041, -0.7074, 17.6025],
+  ] as const)('tessellates "AB" in %s to the pinned loops', async (style, lengths, firstX, minX, maxX) => {
+    const { glyphLoopsForText } = await import('./textGlyphs');
+    const loops = await glyphLoopsForText('AB', { x: 0, y: 0 }, 10, 'left', 1000, style);
+    expect(loops.map(l => l.length)).toEqual(lengths);
+    expect(loops[0][0].x).toBeCloseTo(firstX, 3);
+    const xs = loops.flat().map(p => p.x), ys = loops.flat().map(p => p.y);
+    expect(Math.min(...xs)).toBeCloseTo(minX, 3);
+    expect(Math.max(...xs)).toBeCloseTo(maxX, 3);
+    expect(Math.max(...ys)).toBeCloseTo(10, 3);  // caps still fill the box
+  });
+
+  it('picks the face from the entity flags', async () => {
+    const { textStyleOf } = await import('./textGlyphs');
+    expect(textStyleOf({})).toBe('regular');
+    expect(textStyleOf({ bold: true })).toBe('bold');
+    expect(textStyleOf({ italic: true })).toBe('italic');
+    expect(textStyleOf({ bold: true, italic: true })).toBe('boldItalic');
   });
 
   it('does NOT double-advance glyphs (kerned, not stretched)', async () => {

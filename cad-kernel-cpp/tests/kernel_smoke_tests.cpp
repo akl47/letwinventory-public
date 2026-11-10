@@ -16,6 +16,7 @@
 //                     analytic volume (REQ 1020)
 //   9. fillet corner refit: r5 round over r3 corners comes back creased; the
 //                     refit must make a 2mm shell of it tight (REQ 1021)
+//  11. bodyContacts: touching, nested and clear bodies (REQ 1043)
 
 #include <cmath>
 #include <cstdio>
@@ -418,6 +419,23 @@ int main() {
           ids_with(shelled, "\"role\":\"offset\"").size());
   }
 
+  // 11. REQ 1043 — body contacts. A (10-cube at 0) and B (face-touching at
+  //     x=10) touch; C sits inside A; D is 0.5 mm clear of B.
+  {
+    auto cube = [](const char* id, double cx, double cy, double half, double z0, double h) {
+      return kernel::op_buildExtrude(json{
+          {"featureId", id}, {"profile", square(cx, cy, half)},
+          {"plane", json{{"origin", {0, 0, z0}}, {"xAxis", {1, 0, 0}}, {"yAxis", {0, 1, 0}}, {"normal", {0, 0, 1}}}},
+          {"distance", h}}).at("brepBytes").get<std::string>();
+    };
+    json contacts = kernel::op_bodyContacts(json{{"breps", json::array({
+        cube("ca", 5, 5, 5, 0, 10), cube("cb", 15, 5, 5, 0, 10),
+        cube("cc", 5, 5, 1, 4, 2), cube("cd", 25.5, 5, 5, 0, 10)})}});
+    json want = json::array({json::array({0, 1}), json::array({0, 2})});
+    CHECK(contacts.at("pairs") == want, "bodyContacts: want [[0,1],[0,2]], got %s",
+          contacts.at("pairs").dump().c_str());
+  }
+
   // 7. REQ 963 — limit defaults and env overrides.
   CHECK(kernel::max_request_bytes() == 512ull * 1024 * 1024, "default request cap should be 512 MiB");
   setenv("CAD_KERNEL_MAX_REQUEST_BYTES", "1024", 1);
@@ -432,6 +450,6 @@ int main() {
     std::fprintf(stderr, "kernel smoke tests: %d FAILURE(S)\n", g_failures);
     return 1;
   }
-  std::printf("kernel smoke tests OK (extrude, boolean, pinched sweep, pinched shell, hole-tube shell, fillet corner refit, naming, limits)\n");
+  std::printf("kernel smoke tests OK (extrude, boolean, pinched sweep, pinched shell, hole-tube shell, fillet corner refit, naming, body contacts, limits)\n");
   return 0;
 }

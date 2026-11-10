@@ -291,4 +291,10 @@ export class CadModelService {
     const q = bodyIds && bodyIds.length ? `?bodyIds=${encodeURIComponent(bodyIds.join(','))}` : '';
     return this.http.get(`${this.apiUrl}/${id}/export/step${q}`, { responseType: 'text' });
   }
+
+  /** REQ 1043 — bodies that overlap or touch, grouped (3MF export). */
+  bodyContacts(id: number, bodyIds?: string[]): Observable<{ bodyIds: string[]; pairs: Array<[string, string]>; groups: string[][] }> {
+    return this.http.post<{ bodyIds: string[]; pairs: Array<[string, string]>; groups: string[][] }>(
+      `${this.apiUrl}/${id}/body-contacts`, { bodyIds });
+  }
 }

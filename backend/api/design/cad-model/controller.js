@@ -1212,6 +1212,24 @@ module.exports = {
     }
   },
 
+  /** REQ 1043 — touching/overlapping body pairs and their groups (3MF
+   * export). `bodyIds` in the request body limits the check. */
+  async bodyContacts(req, res) {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'invalid model id' });
+    const model = await fetchActiveModel(id);
+    if (!model) return res.status(404).json({ error: 'CAD model not found' });
+    if (rejectAssembly(model, res, 'Body contacts')) return undefined;
+    const bodyIds = Array.isArray(req.body?.bodyIds) ? req.body.bodyIds.map(String) : undefined;
+    try {
+      const { bodyIds: ids, pairs, groups } = await cadRegenService.bodyContacts(model, { bodyIds });
+      return res.json({ bodyIds: ids, pairs, groups });
+    } catch (err) {
+      if (err instanceof KernelDisconnected || err instanceof KernelRpcError) return sendCadError(res, err);
+      return sendCadError(res, err, 'Body contact check failed');
+    }
+  },
+
   // exported for unit testing in isolation
   _internals: { INITIAL_FEATURE_TREE, INITIAL_SKETCH_DOC },
 };
