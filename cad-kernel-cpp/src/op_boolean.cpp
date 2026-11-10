@@ -27,6 +27,7 @@
 #include <StlAPI_Writer.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopTools_ListOfShape.hxx>
 #include <gp_Pnt.hxx>
 
 #include "geom_io.hpp"
@@ -146,8 +147,9 @@ json op_buildBoolean(const json& params) {
   const std::string want_faces = params.value("wantFaces", std::string("all"));
   const size_t bytes_in = a_brep.size() + b_brep.size();
 
-  TopoDS_Shape a = brep_from_base64(a_brep);
-  TopoDS_Shape b = brep_from_base64(b_brep);
+  std::vector<std::string> a_names, b_names;
+  TopoDS_Shape a = brep_from_base64(a_brep, &a_names);
+  TopoDS_Shape b = brep_from_base64(b_brep, &b_names);
   const long t_deser = timer.lap();
 
   // Union / Cut / Common. BuildBooleanOp serializes lowercase in protocol.rs.
@@ -183,6 +185,11 @@ json op_buildBoolean(const json& params) {
   // fragments with opposite axis directions — clean_unify canonicalizes those
   // surfaces first so UnifySameDomain recognizes them as one).
   TopoDS_Shape shape = clean_unify(raw);
+  // A compose (`bodyId` given) qualifies the tool's face names with the body,
+  // so one feature cutting several bodies never repeats a name across them.
+  const FaceNaming naming = name_result(
+      shape, {NameSource{a, a_names, "", ""}, NameSource{b, b_names, params.value("bodyId", std::string()), ""}},
+      feature_id);
   const long t_unify = timer.lap();
 
   // Topology + generic (centroid-sorted) face tessellation. Skipped when the
@@ -191,14 +198,15 @@ json op_buildBoolean(const json& params) {
   json topology = json{{"vertices", json::array()}, {"edges", json::array()}};
   json faces = json::array();
   if (want_faces != "solids") {
-    topology = extract_topology(shape);
-    faces = tessellate_generic(shape, feature_id).faces;
+    Tessellated t = tessellate_generic(shape, feature_id, &naming);
+    topology = std::move(t.topology);
+    faces = std::move(t.faces);
   }
   const long t_tess = timer.lap();
 
   // Whole-shape BRep that feeds the NEXT compose op. brep_to_base64 throws on
   // an empty/unserializable shape, matching the Rust empty-bytes guard.
-  std::string brep_bytes = brep_to_base64(shape);
+  std::string brep_bytes = brep_to_base64(shape, naming);
   if (brep_bytes.empty()) {
     throw std::runtime_error(
         "buildBoolean: result BRep serialization returned empty bytes — "
@@ -208,7 +216,7 @@ json op_buildBoolean(const json& params) {
   const long t_ser = timer.lap();
 
   // SolidWorks-style body tracking: split the result into disjoint solids.
-  json solids = decompose_into_solids(shape, feature_id);
+  json solids = decompose_into_solids(shape, feature_id, &naming);
   const long t_decomp = timer.lap();
 
   std::fprintf(stderr,
@@ -242,6 +250,7 @@ json op_buildFuseMany(const json& params) {
   const auto& breps = params["breps"];
   size_t bytes_in = 0;
   std::vector<TopoDS_Shape> shapes;
+  std::vector<NameSource> sources;
   shapes.reserve(breps.size());
   for (size_t i = 0; i < breps.size(); ++i) {
     if (!breps[i].is_string()) {
@@ -249,37 +258,52 @@ json op_buildFuseMany(const json& params) {
     }
     const std::string s = breps[i].get<std::string>();
     bytes_in += s.size();
-    shapes.push_back(brep_from_base64(s));
+    std::vector<std::string> names;
+    shapes.push_back(brep_from_base64(s, &names));
+    sources.push_back(NameSource{shapes.back(), std::move(names), "", ""});
   }
   const long t_deser = timer.lap();
 
-  TopoDS_Compound tool;
+  // Tools go in as a LIST, not one compound: OCCT never intersects members of
+  // the same compound with each other, so two tools that touch (a glyph ring
+  // and its counter) stayed separate solids and broke the downstream cut.
+  // The compound only sizes the fuzzy tolerance over every tool.
+  TopTools_ListOfShape args, tools;
+  args.Append(shapes[0]);
+  TopoDS_Compound all_tools;
   BRep_Builder builder;
-  builder.MakeCompound(tool);
-  for (size_t i = 1; i < shapes.size(); ++i) builder.Add(tool, shapes[i]);
+  builder.MakeCompound(all_tools);
+  for (size_t i = 1; i < shapes.size(); ++i) {
+    tools.Append(shapes[i]);
+    builder.Add(all_tools, shapes[i]);
+  }
 
-  BRepAlgoAPI_Fuse fuse(shapes[0], tool);
-  fuse.SetFuzzyValue(boolean_fuzzy(shapes[0], tool));
+  BRepAlgoAPI_Fuse fuse;
+  fuse.SetArguments(args);
+  fuse.SetTools(tools);
+  fuse.SetFuzzyValue(boolean_fuzzy(shapes[0], all_tools));
   fuse.Build();
   if (!fuse.IsDone()) throw std::runtime_error("buildFuseMany: Fuse failed");
   TopoDS_Shape shape = clean_unify(fuse.Shape());
+  const FaceNaming naming = name_result(shape, sources, feature_id);
   const long t_bool = timer.lap();
 
   json topology = json{{"vertices", json::array()}, {"edges", json::array()}};
   json faces = json::array();
   if (want_faces != "solids") {
-    topology = extract_topology(shape);
-    faces = tessellate_generic(shape, feature_id).faces;
+    Tessellated t = tessellate_generic(shape, feature_id, &naming);
+    topology = std::move(t.topology);
+    faces = std::move(t.faces);
   }
   const long t_tess = timer.lap();
 
-  std::string brep_bytes = brep_to_base64(shape);
+  std::string brep_bytes = brep_to_base64(shape, naming);
   if (brep_bytes.empty()) {
     throw std::runtime_error("buildFuseMany: result BRep serialization returned empty bytes");
   }
   const long t_ser = timer.lap();
 
-  json solids = decompose_into_solids(shape, feature_id);
+  json solids = decompose_into_solids(shape, feature_id, &naming);
   const long t_decomp = timer.lap();
 
   std::fprintf(stderr,

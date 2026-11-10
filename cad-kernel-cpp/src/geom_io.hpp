@@ -25,12 +25,17 @@
 #include <gp_Pnt.hxx>
 #include <gp_Dir.hxx>
 
+#include "naming.hpp"
+
 namespace kernel {
 using nlohmann::json;
 
 // ── BRep <-> base64 (binary BinTools, matching the Rust serialize_brep) ────────
-TopoDS_Shape brep_from_base64(const std::string& b64);
+// `names` (optional) receives the face names carried in the payload's trailer
+// (empty when the payload has none). The FaceNaming overload writes them.
+TopoDS_Shape brep_from_base64(const std::string& b64, std::vector<std::string>* names = nullptr);
 std::string brep_to_base64(const TopoDS_Shape& shape);
+std::string brep_to_base64(const TopoDS_Shape& shape, const FaceNaming& naming);
 
 // ── Sketch plane + profile geometry ────────────────────────────────────────────
 struct Plane3 {
@@ -66,31 +71,48 @@ void replace_torus_surface(const TopoDS_Face& face, const TopLoc_Location& loc,
 struct Tessellated {
   json faces;
   json topology;
+  FaceNaming naming;  // names the faces/topology above were emitted with
 };
 
 // Analytic-feature tessellation (extrude/revolve/sweep/loft): classifies each face
 // as cap-top / cap-bottom / side by projecting its centroid onto `plane_normal`
 // from `plane_origin` (≈0 → cap-bottom, ≈signed_distance → cap-top, else side with
 // sub_index = a stable per-face index). Persistent names are PersistentName JSON.
+//
+// With `plane` + `profile`, a side face is named after the profile segment it
+// was swept from (`sid` / `sseg` on the segment JSON) instead of its angle rank.
 Tessellated tessellate_named(const TopoDS_Shape& shape,
                              const gp_Pnt& plane_origin,
                              const gp_Dir& plane_normal,
                              double signed_distance,
-                             const std::string& feature_id);
+                             const std::string& feature_id,
+                             const Plane3* plane = nullptr,
+                             const json* profile = nullptr,
+                             const json* holes = nullptr);
 
 // Generic tessellation (boolean/pattern/shell/blend results): face ids are
 // PersistentName JSON with feature_id=`scope`, role=side, sub_index=face index.
 // This mirrors the Rust tessellate_faces_generic_with_topology.
-Tessellated tessellate_generic(const TopoDS_Shape& shape, const std::string& scope);
+// With `naming`, faces use those names; without, the positional names below
+// (which are also every face's `legacyId`, REQ 1039).
+Tessellated tessellate_generic(const TopoDS_Shape& shape, const std::string& scope,
+                               const FaceNaming* naming = nullptr);
+
+// Positional naming of a fresh base solid (revolve/sweep): the legacy scheme.
+FaceNaming legacy_naming(const TopoDS_Shape& shape, const std::string& scope);
 
 // {vertices:[{id,position}], edges:[{id,isStraight,isTangent,endpoints,polyline?}]}
 // Drops parametric seams + coplanar/co-domain redundant edges (the e86/e97 case).
-json extract_topology(const TopoDS_Shape& shape);
+// With `naming`, edge/vertex ids derive from their adjacent faces' names and the
+// positional ids are kept as `legacyId`.
+json extract_topology(const TopoDS_Shape& shape, const FaceNaming* naming = nullptr);
 
 // ── Solid decomposition + mass properties ──────────────────────────────────────
 // Returns a json ARRAY of SolidPart {brepBytes, centroid, volume, faces, topology},
 // one per disjoint solid. `scope` namespaces each solid's face ids (`scope#bodyN`).
-json decompose_into_solids(const TopoDS_Shape& shape, const std::string& scope);
+// Each solid's brepBytes carries its face names when `naming` is given.
+json decompose_into_solids(const TopoDS_Shape& shape, const std::string& scope,
+                           const FaceNaming* naming = nullptr);
 
 // Mesh-based volume/centroid (fast; used for body-tracking identity matching).
 void volume_centroid(const TopoDS_Shape& shape, double& volume, gp_Pnt& centroid);

@@ -143,6 +143,8 @@ function flattenChildGeometry(regen) {
       persistentName: face.persistentName, faceId: face.faceId || face.persistentName,
       positions: face.positions, normals: face.normals, indices: face.indices,
       surface: face.surface,
+      ...(face.legacyId ? { legacyId: face.legacyId } : {}),
+      ...(face.aliases ? { aliases: face.aliases } : {}),
     }));
     const bVerts = []; const bEdges = [];
     const topo = f.topology || {};
@@ -678,10 +680,16 @@ async function regenerateAssembly(assembly, { db, resolveChild, kernelClient, ch
       composed.edges.push(...b.edges);
       composed.bodies.push(b);
     }
+    // REQ 1039 — child-local legacy face id → stable id, for mate migration.
+    const idMigration = {};
+    for (const b of childGeo.bodies || []) {
+      for (const f of b.faces || []) if (f.legacyId && f.legacyId !== f.faceId) idMigration[f.legacyId] = f.faceId;
+    }
     composed.instances.push({
       instanceId, partID: unit.partID, placement: pose ? { translate: pose.translate, quaternion: pose.quaternion } : null,
       grounded: !!unit.grounded, derivedFrom: unit.derivedFrom,
       bodyIds: placedBodies.map((b) => b.id),
+      idMigration,
     });
   }
 
@@ -762,9 +770,20 @@ function qMul3(a, b) {
 // Build a faceId → analytic surface lookup (child LOCAL frame) for one instance.
 function faceSurfaceMap(childGeo) {
   const map = new Map();
-  for (const body of (childGeo && childGeo.bodies) || []) {
+  const bodies = (childGeo && childGeo.bodies) || [];
+  for (const body of bodies) {
     for (const f of body.faces || []) {
       if (f.surface) map.set(f.faceId || f.persistentName, f.surface);
+    }
+  }
+  // REQ 1039 — mates saved before stable naming hold positional child ids;
+  // merged faces also answer to their aliases (REQ 1036).
+  for (const body of bodies) {
+    for (const f of body.faces || []) {
+      if (!f.surface) continue;
+      for (const alt of [f.legacyId, ...(f.aliases || [])]) {
+        if (alt && !map.has(alt)) map.set(alt, f.surface);
+      }
     }
   }
   return map;
@@ -812,7 +831,8 @@ function csysGeom(faceId, ownerId, featureTree, childGeo) {
   if (pt.method && pt.method.kind === 'centerOfFace') {
     const localId = String(pt.method.faceId).split('::').pop();
     for (const body of (childGeo && childGeo.bodies) || []) {
-      const f = (body.faces || []).find((x) => (x.faceId || x.persistentName) === localId);
+      const f = ((body.faces || []).find((x) => (x.faceId || x.persistentName) === localId)
+        || (body.faces || []).find((x) => x.legacyId === localId || (x.aliases || []).includes(localId)));
       const n = f && f.positions ? f.positions.length / 3 : 0;
       if (!n) continue;
       origin = [0, 1, 2].map((k) => { let s = 0; for (let i = 0; i < n; i++) s += f.positions[i * 3 + k]; return s / n; });

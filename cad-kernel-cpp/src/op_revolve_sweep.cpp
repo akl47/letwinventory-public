@@ -325,7 +325,7 @@ json op_buildRevolve(const json& params) {
   }
 
   Tessellated tess = tessellate_generic(shape, feature_id);
-  std::string brep = brep_to_base64(shape);
+  std::string brep = brep_to_base64(shape, tess.naming);
   if (brep.empty()) {
     throw std::runtime_error(
         "buildRevolve: result BRep serialization returned empty bytes. Likely "
@@ -399,7 +399,7 @@ json op_buildSweep(const json& params) {
   }
 
   Tessellated tess = tessellate_generic(shape, feature_id);
-  std::string brep = brep_to_base64(shape);
+  std::string brep = brep_to_base64(shape, tess.naming);
   if (brep.empty()) {
     throw std::runtime_error(
         "buildSweep: result BRep serialization returned empty bytes. Likely "

@@ -162,7 +162,11 @@ const { applyProjectionToSketchDoc } = require('./cadProjection');
 //    from the hole-filled body (kernel). Invalidates v48 broken-shell rows.
 // 50: creased fillet corner patches are refit tangent (kernel), changing
 //    fillet geometry and the shells built on it. Invalidates v49 rows.
-const NAMING_VERSION = 50;  // matches NAMING_SCHEMA_VERSION in cad-kernel-cpp/src/main.cpp — bump together with kernel
+// 51: topological naming (kernel, REQs 1035–1039) — face names persist through
+//    later ops, edge/vertex ids derive from them, positional ids become
+//    legacyId. Also retires multi-region fused tools from before cpp-24 merged
+//    touching regions (a glyph ring + its counter). Invalidates v50 rows.
+const NAMING_VERSION = 51;  // matches NAMING_SCHEMA_VERSION in cad-kernel-cpp/src/main.cpp — bump together with kernel
 
 // Sentinel distance for Through All. Picked to comfortably exceed any
 // reasonable model dimension without overflowing OCCT's tolerance
@@ -730,11 +734,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
           // REQ 892 — a freshly-seeded body's faces are all this feature's.
           body.faceOwners = _carryFaceOwners([], null, body.faces, feature.id);
           bodies.push(body);
-          for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
-          for (const f of body.faces || []) {
-            const plane = _faceRepresentativePlane(f);
-            if (plane) faceMap.set(f.faceId, plane);
-          }
+          _indexBody(body, vertexMap, faceMap);
           const seedResult = {
             featureId: feature.id,
             bodyId: body.id,
@@ -818,11 +818,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
         body.faceOwners = _carryFaceOwners([], null, body.faces, feature.id);
         allCached = prism.cached;
         // Index + emit single-body result.
-        for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
-        for (const f of body.faces || []) {
-          const plane = _faceRepresentativePlane(f);
-          if (plane) faceMap.set(f.faceId, plane);
-        }
+        _indexBody(body, vertexMap, faceMap);
         result = {
           featureId: feature.id,
           bodyId: body.id,
@@ -860,9 +856,9 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
           dbClient,
         });
         allCached = prism.cached && composed.cached;
-        // The kernel tags every composed body's faces `${feature.id}#body#…`,
-        // so a cut through several bodies hands them identical face ids.
-        // Keep the first body's names; scope the rest by body id.
+        // Pre-REQ-1035 regens tagged every composed body's faces
+        // `${feature.id}#body#…` and scoped all but the first body by id;
+        // reproduce that on the legacy ids so stored references still match.
         if (targetBodies.indexOf(body) > 0) {
           composed.faces = _scopeComposedFaceIds(composed.faces, feature.id, body.id);
           composed.solids = (composed.solids || []).map(s => ({
@@ -890,11 +886,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
             body.topology = _scopeTopology(composed.topology || { vertices: [], edges: [] }, body.id);
             body.centroid = _approxCentroidFromFaces(body.faces);
             body.faceOwners = _carryFaceOwners(prevFaces, prevOwners, body.faces, feature.id);
-            for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
-            for (const f of body.faces || []) {
-              const plane = _faceRepresentativePlane(f);
-              if (plane) faceMap.set(f.faceId, plane);
-            }
+            _indexBody(body, vertexMap, faceMap);
             result = {
               featureId: feature.id,
               bodyId: body.id,
@@ -961,11 +953,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
           ? [primary.centroid[0], primary.centroid[1], primary.centroid[2]]
           : _approxCentroidFromFaces(body.faces);
         body.faceOwners = _carryFaceOwners(prevFaces, prevOwners, body.faces, feature.id);
-        for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
-        for (const f of body.faces || []) {
-          const plane = _faceRepresentativePlane(f);
-          if (plane) faceMap.set(f.faceId, plane);
-        }
+        _indexBody(body, vertexMap, faceMap);
         result = {
           featureId: feature.id,
           bodyId: body.id,
@@ -1007,11 +995,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
           // their original features); genuinely new faces → this feature.
           newBody.faceOwners = _carryFaceOwners(prevFaces, prevOwners, newBody.faces, feature.id);
           bodies.push(newBody);
-          for (const v of newBody.topology.vertices || []) vertexMap.set(v.id, v.position);
-          for (const f of newBody.faces || []) {
-            const plane = _faceRepresentativePlane(f);
-            if (plane) faceMap.set(f.faceId, plane);
-          }
+          _indexBody(newBody, vertexMap, faceMap);
           const pieceResult = {
             featureId: feature.id,
             bodyId: newBody.id,
@@ -1187,7 +1171,22 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
     delete model.__regenStats;
   }
 
-  return { features: results, errors, bodies: bodyList, kernelBuild, danglingSketchIds, sketchHostFaces };
+  return { features: results, errors, bodies: bodyList, kernelBuild, danglingSketchIds, sketchHostFaces, idMigration: _idMigration(results) };
+}
+
+/** REQ 1039 — legacy positional face id → stable id for every face this
+ * regen produced, so the editor can rewrite stored face references. A legacy
+ * face id names the feature that produced it, so it maps to one face. Legacy
+ * edge/vertex ids (`<body>/eN`) mean a different element after every feature
+ * and are NOT migrated — they keep resolving through the legacy aliases. */
+function _idMigration(results) {
+  const out = { faces: {} };
+  for (const r of results) {
+    for (const f of r.faces || []) {
+      if (f.legacyId && f.legacyId !== f.faceId) out.faces[f.legacyId] = f.faceId;
+    }
+  }
+  return out;
 }
 
 /** Regenerate the model and export its bodies as a single STEP file (text).
@@ -2390,11 +2389,7 @@ async function _dispatchEdgeBlend(feature, bodies, model, client, dbClient, resu
     // REQ 892 — untouched faces keep their creators; the blend faces (and the
     // trimmed flanks whose centroids moved) belong to this fillet/chamfer.
     body.faceOwners = _carryFaceOwners(prevFaces, prevOwners, body.faces, feature.id);
-    for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
-    for (const f of body.faces || []) {
-      const plane = _faceRepresentativePlane(f);
-      if (plane) faceMap.set(f.faceId, plane);
-    }
+    _indexBody(body, vertexMap, faceMap);
     const result = {
       featureId: feature.id,
       bodyId: body.id,
@@ -2622,11 +2617,7 @@ async function _dispatchPattern(feature, bodies, model, client, dbClient, result
   const firstSolid = solids[0];
   adoptSolid(body, firstSolid, body.id);
   body.paramHash = paramHash;
-  for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
-  for (const f of body.faces || []) {
-    const plane = _faceRepresentativePlane(f);
-    if (plane) faceMap.set(f.faceId, plane);
-  }
+  _indexBody(body, vertexMap, faceMap);
   const result = {
     featureId: feature.id,
     bodyId: body.id,
@@ -2645,11 +2636,7 @@ async function _dispatchPattern(feature, bodies, model, client, dbClient, result
     const newBody = { id: newBodyId, brep: '', paramHash: `${paramHash}#${i}`, faces: [], topology: { vertices: [], edges: [] } };
     adoptSolid(newBody, s, newBodyId);
     bodies.push(newBody);
-    for (const v of newBody.topology.vertices || []) vertexMap.set(v.id, v.position);
-    for (const f of newBody.faces || []) {
-      const plane = _faceRepresentativePlane(f);
-      if (plane) faceMap.set(f.faceId, plane);
-    }
+    _indexBody(newBody, vertexMap, faceMap);
     const extraResult = {
       featureId: feature.id,
       bodyId: newBody.id,
@@ -2736,6 +2723,7 @@ async function _applyGeometryPattern({ feature, transforms, before, after, targe
       afterBrep: after,
       bodyBrep: targetBody.brep,
       transforms,
+      ...(scopeFaces ? { bodyId: targetBody.id } : {}),
     });
     await dbClient.DesignBRepCache.upsert({
       cadModelID: model.id, featureID: cacheKey, paramHash, upstreamHash,
@@ -2775,8 +2763,7 @@ async function _dispatchFeaturePattern(feature, bodies, model, client, dbClient,
   if (transforms.length === 0) { emitNoop(); return; }  // count 1 — no copies
 
   const indexBody = (b) => {
-    for (const v of b.topology.vertices || []) vertexMap.set(v.id, v.position);
-    for (const f of b.faces || []) { const p = _faceRepresentativePlane(f); if (p) faceMap.set(f.faceId, p); }
+    _indexBody(b, vertexMap, faceMap);
   };
 
   // GEOMETRY PATTERN (REQ 841 / SolidWorks-OnShape parity): instead of re-running
@@ -2865,6 +2852,7 @@ async function _dispatchFeaturePattern(feature, bodies, model, client, dbClient,
             toolBrep: seedTool.brep,
             transforms,
             fuse,
+            bodyId: targetBody.id,
           })
         : await client.call('buildFeaturePattern', {
             featureId: `${feature.id}#seed${seedId}`,
@@ -2872,6 +2860,7 @@ async function _dispatchFeaturePattern(feature, bodies, model, client, dbClient,
             afterBrep: snap.after,
             bodyBrep: targetBody.brep,
             transforms,
+            bodyId: targetBody.id,
           });
       await dbClient.DesignBRepCache.upsert({
         cadModelID: model.id, featureID: cacheKey, paramHash, upstreamHash,
@@ -3021,11 +3010,7 @@ async function _dispatchCombine(feature, bodies, model, client, dbClient, result
   };
   adoptSolid(target, solids[0], target.id);
   target.paramHash = paramHash;
-  for (const v of target.topology.vertices || []) vertexMap.set(v.id, v.position);
-  for (const f of target.faces || []) {
-    const plane = _faceRepresentativePlane(f);
-    if (plane) faceMap.set(f.faceId, plane);
-  }
+  _indexBody(target, vertexMap, faceMap);
   const result = {
     featureId: feature.id, bodyId: target.id, faces: target.faces, topology: target.topology,
     cached: cachedFlag, bodyParamHash: target.paramHash, faceOwners: target.faceOwners,
@@ -3038,11 +3023,7 @@ async function _dispatchCombine(feature, bodies, model, client, dbClient, result
     const newBody = { id: newBodyId, brep: '', paramHash: `${paramHash}#${i}`, faces: [], topology: { vertices: [], edges: [] } };
     adoptSolid(newBody, s, newBodyId);
     bodies.push(newBody);
-    for (const v of newBody.topology.vertices || []) vertexMap.set(v.id, v.position);
-    for (const f of newBody.faces || []) {
-      const plane = _faceRepresentativePlane(f);
-      if (plane) faceMap.set(f.faceId, plane);
-    }
+    _indexBody(newBody, vertexMap, faceMap);
     const extraResult = {
       featureId: feature.id, bodyId: newBody.id, faces: newBody.faces, topology: newBody.topology,
       cached: cachedFlag, bodyParamHash: newBody.paramHash, faceOwners: newBody.faceOwners,
@@ -3123,20 +3104,12 @@ async function _dispatchMirrorBody(feature, bodies, model, client, dbClient, res
       const newBody = { id: newBodyId, brep: '', paramHash: '', faces: [], topology: { vertices: [], edges: [] } };
       adoptInto(newBody, solids[0], newBodyId);
       bodies.push(newBody);
-      for (const v of newBody.topology.vertices || []) vertexMap.set(v.id, v.position);
-      for (const f of newBody.faces || []) {
-        const plane = _faceRepresentativePlane(f);
-        if (plane) faceMap.set(f.faceId, plane);
-      }
+      _indexBody(newBody, vertexMap, faceMap);
       const r = { featureId: feature.id, bodyId: newBody.id, faces: newBody.faces, topology: newBody.topology, cached: cachedFlag, bodyParamHash: newBody.paramHash, faceOwners: newBody.faceOwners };
       results.push(r); emit(r);
     } else {
       adoptInto(source, solids[0], source.id);
-      for (const v of source.topology.vertices || []) vertexMap.set(v.id, v.position);
-      for (const f of source.faces || []) {
-        const plane = _faceRepresentativePlane(f);
-        if (plane) faceMap.set(f.faceId, plane);
-      }
+      _indexBody(source, vertexMap, faceMap);
       const r = { featureId: feature.id, bodyId: source.id, faces: source.faces, topology: source.topology, cached: cachedFlag, bodyParamHash: source.paramHash, faceOwners: source.faceOwners };
       results.push(r); emit(r);
     }
@@ -3186,6 +3159,7 @@ async function _dispatchMoveCopyBody(feature, bodies, model, client, dbClient, r
           aBrep: chained,
           transforms: [{ kind: 'translate', dx: t[0], dy: t[1], dz: t[2] }],
           mergeWithSource: false,
+          keepNames: !copy,
         });
         chained = lastRpc.brepBytes;
       }
@@ -3196,6 +3170,7 @@ async function _dispatchMoveCopyBody(feature, bodies, model, client, dbClient, r
           aBrep: chained,
           transforms: [{ kind: 'rotate', origin: r.axisSnapshot.origin, direction: r.axisSnapshot.direction, angleRad: rad }],
           mergeWithSource: false,
+          keepNames: !copy,
         });
       }
       await dbClient.DesignBRepCache.upsert({
@@ -3222,20 +3197,12 @@ async function _dispatchMoveCopyBody(feature, bodies, model, client, dbClient, r
       const newBody = { id: newBodyId, brep: '', paramHash: '', faces: [], topology: { vertices: [], edges: [] } };
       adoptInto(newBody, solids[0], newBodyId);
       bodies.push(newBody);
-      for (const v of newBody.topology.vertices || []) vertexMap.set(v.id, v.position);
-      for (const f of newBody.faces || []) {
-        const plane = _faceRepresentativePlane(f);
-        if (plane) faceMap.set(f.faceId, plane);
-      }
+      _indexBody(newBody, vertexMap, faceMap);
       const out = { featureId: feature.id, bodyId: newBody.id, faces: newBody.faces, topology: newBody.topology, cached: cachedFlag, bodyParamHash: newBody.paramHash, faceOwners: newBody.faceOwners };
       results.push(out); emit(out);
     } else {
       adoptInto(source, solids[0], source.id);
-      for (const v of source.topology.vertices || []) vertexMap.set(v.id, v.position);
-      for (const f of source.faces || []) {
-        const plane = _faceRepresentativePlane(f);
-        if (plane) faceMap.set(f.faceId, plane);
-      }
+      _indexBody(source, vertexMap, faceMap);
       const out = { featureId: feature.id, bodyId: source.id, faces: source.faces, topology: source.topology, cached: cachedFlag, bodyParamHash: source.paramHash, faceOwners: source.faceOwners };
       results.push(out); emit(out);
     }
@@ -3362,6 +3329,7 @@ async function _drillHole(feature, target, scopeToBody, model, dbClient, client,
         featureId: `${feature.id}#p${pi}#drillcut`,
         op: 'cut',
         aBrep: chained,
+        bodyId: target.id,
         bBrep: drillRpc.brepBytes,
       });
       chained = lastRpc.brepBytes;
@@ -3381,6 +3349,7 @@ async function _drillHole(feature, target, scopeToBody, model, dbClient, client,
           featureId: `${feature.id}#p${pi}#cborecut`,
           op: 'cut',
           aBrep: chained,
+          bodyId: target.id,
           bBrep: cboreRpc.brepBytes,
         });
         chained = lastRpc.brepBytes;
@@ -3416,6 +3385,7 @@ async function _drillHole(feature, target, scopeToBody, model, dbClient, client,
           featureId: `${feature.id}#p${pi}#cskcut`,
           op: 'cut',
           aBrep: chained,
+          bodyId: target.id,
           bBrep: cskRpc.brepBytes,
         });
         chained = lastRpc.brepBytes;
@@ -3458,11 +3428,7 @@ async function _drillHole(feature, target, scopeToBody, model, dbClient, client,
   // REQ 892 — the bore/counterbore walls belong to the hole feature; the
   // surrounding body faces keep their creators.
   target.faceOwners = _carryFaceOwners(prevFacesH, prevOwnersH, target.faces, feature.id);
-  for (const v of target.topology.vertices || []) vertexMap.set(v.id, v.position);
-  for (const f of target.faces || []) {
-    const plane = _faceRepresentativePlane(f);
-    if (plane) faceMap.set(f.faceId, plane);
-  }
+  _indexBody(target, vertexMap, faceMap);
   const result = {
     featureId: feature.id, bodyId: target.id, faces: target.faces, topology: target.topology,
     cached: cachedFlag, bodyParamHash: target.paramHash, faceOwners: target.faceOwners,
@@ -3584,11 +3550,7 @@ async function _dispatchShell(feature, bodies, model, client, dbClient, results,
   // REQ 892 — surviving outer faces keep their creators; the inner offset
   // walls (their centroids sit one wall-thickness away) belong to the shell.
   body.faceOwners = _carryFaceOwners(prevFacesS, prevOwnersS, body.faces, feature.id);
-  for (const v of body.topology.vertices || []) vertexMap.set(v.id, v.position);
-  for (const f of body.faces || []) {
-    const plane = _faceRepresentativePlane(f);
-    if (plane) faceMap.set(f.faceId, plane);
-  }
+  _indexBody(body, vertexMap, faceMap);
   const result = {
     featureId: feature.id,
     bodyId: body.id,
@@ -3661,6 +3623,8 @@ async function _composeIntoBody({ feature, prism, body, model, client, dbClient 
     op,
     aBrep: body.brep,
     bBrep: prism.prismBrep,
+    // Tool faces carry this body in their names (unique across bodies).
+    bodyId: body.id,
     // REQ 878 — only solids[].faces are consumed below; skipping the
     // top-level whole-body tessellation halves kernel meshing work.
     // Pre-cpp-11 kernels ignore the flag (they just return full faces).
@@ -3728,6 +3692,32 @@ function _approxCentroidFromFaces(faces) {
   return [sx / n, sy / n, sz / n];
 }
 
+/**
+ * Register a body's vertices and faces for reference resolution: each under
+ * its stable id, then its positional `legacyId` and merge `aliases`
+ * (REQs 1036/1039) where those don't shadow another face of the same body.
+ */
+function _indexBody(body, vertexMap, faceMap) {
+  const vertices = (body.topology && body.topology.vertices) || [];
+  for (const v of vertices) vertexMap.set(v.id, v.position);
+  const own = new Set();
+  const planes = [];
+  for (const f of body.faces || []) {
+    const rep = _faceRepresentativePlane(f);
+    if (!rep) continue;
+    const plane = { ...rep, faceId: f.faceId };  // aliases resolve to the stable id
+    faceMap.set(f.faceId, plane);
+    own.add(f.faceId);
+    planes.push([f, plane]);
+  }
+  for (const v of vertices) if (v.legacyId) vertexMap.set(v.legacyId, v.position);
+  for (const [f, plane] of planes) {
+    for (const alt of [f.legacyId, ...(f.aliases || [])]) {
+      if (alt && !own.has(alt)) faceMap.set(alt, plane);
+    }
+  }
+}
+
 function _faceRepresentativePlane(face) {
   const pos = face.positions;
   const nor = face.normals;
@@ -3747,61 +3737,51 @@ function _faceRepresentativePlane(face) {
 
 /**
  * REQ 892 — SolidWorks-style face OWNERSHIP: which feature CREATED each face.
- * The kernel re-tags every face of a boolean result under the composing
- * feature (positional naming), so ownership is carried geometrically at each
- * body-mutating step: a result face whose centroid + first-vertex normal match
- * a face of the PREVIOUS body state inherits that face's owner; everything
- * else (new walls, blend faces) is owned by the composing feature. Faces that
- * merely got trimmed symmetrically (e.g. a top face turned into a ring by a
- * concentric hole) keep their centroid/normal and stay with their creator —
- * asymmetric trims shift the centroid past tolerance and fall to the composer,
- * a documented approximation (the exact fix is kernel-side boolean history).
- *
- * Pure and per-regen: owners are keyed by the CURRENT walk's scoped faceIds
- * and never cached — cache hits return the same faces, so recomputation is
- * deterministic and dirt cheap (no kernel calls).
+ * Since REQ 1035 a face keeps its name through every later op, so its
+ * creator is the root of the name: the pattern/copy feature for an instance
+ * copy, else the name's feature id (`f5#m0`, `f5#body` → `f5`). Faces
+ * without a structured name fall back to the composing feature. The
+ * `prevFaces` / `prevOwners` arguments are no longer needed (kept so the
+ * call sites read as before).
  */
 function _carryFaceOwners(prevFaces, prevOwners, nextFaces, featureId) {
   const owners = {};
-  const prev = [];
-  for (const f of prevFaces || []) {
-    const g = _faceRepresentativePlane(f);
-    if (g) prev.push({ id: f.faceId, c: g.centroid, n: g.normal, size: _faceBboxDiag(f) });
-  }
-  for (const f of nextFaces || []) {
-    let owner = featureId;
-    const g = _faceRepresentativePlane(f);
-    if (g && prev.length) {
-      let best = null, bestD = Infinity;
-      for (const p of prev) {
-        // Same-orientation gate. Curved faces average toward a stable
-        // first-vertex normal too (both sides tessellate the same surface),
-        // so a plain dot test holds for planes and cylinders alike.
-        const dot = p.n[0] * g.normal[0] + p.n[1] * g.normal[1] + p.n[2] * g.normal[2];
-        if (dot < 0.999) continue;
-        const d = Math.hypot(p.c[0] - g.centroid[0], p.c[1] - g.centroid[1], p.c[2] - g.centroid[2]);
-        if (d < bestD) { bestD = d; best = p; }
-      }
-      const tol = Math.max(1e-4, (best?.size || 0) * 0.01);
-      if (best && bestD <= tol) owner = (prevOwners && prevOwners[best.id]) || featureId;
-    }
-    owners[f.faceId] = owner;
-  }
+  for (const f of nextFaces || []) owners[f.faceId] = _faceCreator(f.faceId) || featureId;
   return owners;
 }
 
-function _faceBboxDiag(face) {
-  const pos = face.positions;
-  if (!pos || pos.length < 3) return 0;
-  let minx = Infinity, miny = Infinity, minz = Infinity, maxx = -Infinity, maxy = -Infinity, maxz = -Infinity;
-  const vCount = (pos.length / 3) | 0;
-  for (let i = 0; i < vCount; i++) {
-    const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
-    if (x < minx) minx = x; if (x > maxx) maxx = x;
-    if (y < miny) miny = y; if (y > maxy) maxy = y;
-    if (z < minz) minz = z; if (z > maxz) maxz = z;
+function _faceCreator(faceId) {
+  let name;
+  try { name = JSON.parse(faceId); } catch { return null; }
+  if (!name || typeof name !== 'object') return null;
+  const root = (name.instance ? String(name.instance).split('/')[0] : String(name.feature_id || '')).split('#')[0];
+  return root || null;
+}
+
+/** Name with its split-piece path removed (null for a non-structured id). */
+function _faceBaseName(faceId) {
+  let name;
+  try { name = JSON.parse(faceId); } catch { return null; }
+  if (!name || typeof name !== 'object') return null;
+  delete name.split;
+  return JSON.stringify(name);
+}
+
+/** A face id in `faceMap` that is a split piece of `faceId` (or the unsplit
+ * face of a piece id), parallel to `normal`. Null when there is none. */
+function _splitPieceOf(faceMap, faceId, normal) {
+  const base = _faceBaseName(faceId);
+  if (!base) return null;
+  for (const [id, rep] of faceMap.entries()) {
+    if (id !== faceId && _faceBaseName(id) === base && (!normal || _isParallelFace(rep, normal))) return id;
   }
-  return Math.hypot(maxx - minx, maxy - miny, maxz - minz);
+  return null;
+}
+
+function _isParallelFace(face, normal) {
+  if (!face || !face.normal) return false;
+  const dot = face.normal[0] * normal[0] + face.normal[1] * normal[1] + face.normal[2] * normal[2];
+  return Math.abs(dot) >= 0.999;
 }
 
 /**
@@ -3816,15 +3796,23 @@ function _faceBboxDiag(face) {
  * and only re-project the baked origin onto the current face plane. That snaps
  * the sketch onto the moved face while preserving the 2D layout drawn on it.
  *
- * Resolution: exact persistent-faceId lookup first; if the id was re-tagged by
- * an upstream topology change, fall back to the parallel face nearest the baked
- * origin (the host was on/at the baked origin at creation time).
+ * Resolution: exact face-id lookup first (stable ids, legacy ids and merge
+ * aliases are all registered), then a piece of the host if a later op split it
+ * (REQ 1036), then the parallel face nearest the baked origin (the host was
+ * on/at the baked origin at creation time).
  */
 function _resolveHostFacePlane(sketch, faceMap) {
   const plane = sketch && sketch.plane;
   if (!plane || !sketch.hostId || !sketch.hostId.startsWith('face:')) return plane;
   const faceId = sketch.hostId.slice('face:'.length);
+  // A legacy positional id can still land on an unrelated (even perpendicular)
+  // face — trust a hit only while it is parallel to the sketch.
   let rep = faceMap.get(faceId);
+  if (rep && !_isParallelFace(rep, plane.normal)) rep = null;
+  if (!rep) {
+    const piece = _splitPieceOf(faceMap, faceId, plane.normal);
+    if (piece) rep = faceMap.get(piece);
+  }
   if (!rep) {
     // Geometric fallback — parallel face whose plane is nearest the baked origin.
     let best = null, bestDist = Infinity;
@@ -3873,8 +3861,13 @@ function _danglingHostFaceWarnings(sketchDoc, faceMap, usedSketchIds) {
   for (const [sid, sk] of Object.entries(sketchDoc.sketches)) {
     if (!sk || !sk.hostId || !sk.hostId.startsWith('face:')) continue;
     const faceId = sk.hostId.slice('face:'.length);
-    if (faceMap.has(faceId)) { resolved[sid] = faceId; continue; }  // exact reference face still present
     const plane = sk.plane;
+    // Exact reference face still present (and still parallel — see _resolveHostFacePlane).
+    if (faceMap.has(faceId) && (!plane || !plane.normal || _isParallelFace(faceMap.get(faceId), plane.normal))) {
+      resolved[sid] = faceMap.get(faceId).faceId || faceId; continue;
+    }
+    const piece = _splitPieceOf(faceMap, faceId, plane && plane.normal);
+    if (piece) { resolved[sid] = faceMap.get(piece).faceId || piece; continue; }
     if (!plane || !plane.normal || !plane.origin) continue;
     // The host's structured name rarely matches a faceMap key verbatim, so
     // resolve to the nearest coincident parallel face (same heuristic
@@ -3897,7 +3890,7 @@ function _danglingHostFaceWarnings(sketchDoc, faceMap, usedSketchIds) {
         warnings.push(`Sketch "${sk.name || sid}" lost its reference face (its host feature was deleted or changed). It's now on a fallback plane — re-pick the sketch's reference face (right-click the sketch → Change reference face).`);
       }
     } else if (bestId) {
-      resolved[sid] = bestId;
+      resolved[sid] = faceMap.get(bestId).faceId || bestId;
     }
   }
   return { warnings, sketchIds, resolved };
@@ -4247,7 +4240,7 @@ function _resolveEndConditionDispatch(endCondition, plane, feature, vertexMap, f
 function _mergeTopology(acc, topo, scope) {
   if (!topo) return;
   for (const v of topo.vertices || []) {
-    acc.vertices.push({ id: `${scope}/${v.id}`, position: v.position });
+    acc.vertices.push({ id: `${scope}/${v.id}`, position: v.position, ...(v.legacyId ? { legacyId: `${scope}/${v.legacyId}` } : {}) });
   }
   for (const e of topo.edges || []) {
     const out = {
@@ -4255,6 +4248,7 @@ function _mergeTopology(acc, topo, scope) {
       isStraight: !!e.isStraight,
       endpoints: e.endpoints,
     };
+    if (e.legacyId) out.legacyId = `${scope}/${e.legacyId}`;
     if (e.isTangent) out.isTangent = true;
     if (e.polyline) out.polyline = e.polyline;
     acc.edges.push(out);
@@ -4287,13 +4281,14 @@ function _scopedBodies(feature, bodies, fallback) {
   });
 }
 
-/** Scope every face the feature named (`<featureId>#…`) to one body, for
- * features that apply the same kernel names to several bodies. */
+/** Scope the positional `legacyId` of every face the feature named
+ * (`<featureId>#…`) to one body, reproducing the ids pre-REQ-1035 regens
+ * stored (REQ 1039). Stable face ids are already unique per body. */
 function _scopeFeatureFaceIds(faces, featureId, bodyId) {
   if (!Array.isArray(faces)) return faces;
   const from = `"feature_id":"${featureId}#`;
   const to = `"feature_id":"${featureId}#@${bodyId}#`;
-  return faces.map(f => (typeof f.faceId === 'string' && f.faceId.includes(from) ? { ...f, faceId: f.faceId.replace(from, to) } : f));
+  return faces.map(f => (typeof f.legacyId === 'string' && f.legacyId.includes(from) ? { ...f, legacyId: f.legacyId.replace(from, to) } : f));
 }
 
 function _scopeComposedFaceIds(faces, featureId, bodyId, tag = 'body') {
@@ -4301,8 +4296,8 @@ function _scopeComposedFaceIds(faces, featureId, bodyId, tag = 'body') {
   const from = `"feature_id":"${featureId}#${tag}#`;
   const to = `"feature_id":"${featureId}#${tag}@${bodyId}#`;
   return faces.map(f => (
-    typeof f.faceId === 'string' && f.faceId.includes(from)
-      ? { ...f, faceId: f.faceId.replace(from, to) }
+    typeof f.legacyId === 'string' && f.legacyId.includes(from)
+      ? { ...f, legacyId: f.legacyId.replace(from, to) }
       : f
   ));
 }
@@ -4341,13 +4336,14 @@ function _groupEdgesByBody(bodies, edges) {
 function _scopeTopology(topo, scope) {
   if (!topo) return { vertices: [], edges: [] };
   return {
-    vertices: (topo.vertices || []).map(v => ({ id: `${scope}/${v.id}`, position: v.position })),
+    vertices: (topo.vertices || []).map(v => ({ id: `${scope}/${v.id}`, position: v.position, ...(v.legacyId ? { legacyId: `${scope}/${v.legacyId}` } : {}) })),
     edges: (topo.edges || []).map(e => {
       const out = {
         id: `${scope}/${e.id}`,
         isStraight: !!e.isStraight,
         endpoints: e.endpoints,
       };
+      if (e.legacyId) out.legacyId = `${scope}/${e.legacyId}`;
       if (e.isTangent) out.isTangent = true;
       if (e.polyline) out.polyline = e.polyline;
       return out;

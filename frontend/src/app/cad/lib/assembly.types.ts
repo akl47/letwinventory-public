@@ -153,6 +153,8 @@ export interface ComposedInstance {
   partID: number;
   placement: Placement;
   bodyIds: string[];
+  /** REQ 1039 — child-local legacy positional face id → stable id. */
+  idMigration?: Record<string, string>;
 }
 
 export interface AssemblyRegenResponse {

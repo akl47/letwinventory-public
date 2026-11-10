@@ -50,6 +50,7 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 
+#include <algorithm>
 #include <fstream>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -93,6 +94,76 @@ static json square(double cx, double cy, double half) {
 static double volume_of(const std::string& brep_b64) {
   json v = kernel::op_bodyVolume(json{{"aBrep", brep_b64}});
   return v.at("volume").get<double>();
+}
+
+
+// ── Naming helpers (case 10) ────────────────────────────────────────────────
+static json line_sid(double x1, double y1, double x2, double y2, const char* sid) {
+  json l = line(x1, y1, x2, y2);
+  l["sid"] = sid;
+  return l;
+}
+
+// Ids of planar faces with outward normal n at offset d (n·origin == d).
+static std::vector<std::string> plane_face_ids(const json& res, double nx, double ny, double nz, double d) {
+  std::vector<std::string> out;
+  for (const auto& f : res.at("faces")) {
+    if (!f.contains("surface") || f["surface"].value("kind", "") != "plane") continue;
+    const auto& n = f["surface"]["normal"];
+    const auto& o = f["surface"]["origin"];
+    const double dot = n[0].get<double>() * nx + n[1].get<double>() * ny + n[2].get<double>() * nz;
+    const double off = o[0].get<double>() * nx + o[1].get<double>() * ny + o[2].get<double>() * nz;
+    if (dot > 0.999 && std::fabs(off - d) < 1e-6) out.push_back(f.at("faceId").get<std::string>());
+  }
+  return out;
+}
+
+static const json* face_by_id(const json& res, const std::string& id) {
+  for (const auto& f : res.at("faces")) {
+    if (f.at("faceId").get<std::string>() == id) return &f;
+  }
+  return nullptr;
+}
+
+// Topology edge running from (x, y0, z) to (x, y1, z), either direction.
+static std::string edge_id_at(const json& res, double x, double y0, double y1, double z) {
+  for (const auto& e : res.at("topology").at("edges")) {
+    const auto& a = e["endpoints"][0];
+    const auto& b = e["endpoints"][1];
+    auto at = [&](const json& p, double y) {
+      return std::fabs(p[0].get<double>() - x) < 1e-6 && std::fabs(p[1].get<double>() - y) < 1e-6 &&
+             std::fabs(p[2].get<double>() - z) < 1e-6;
+    };
+    if ((at(a, y0) && at(b, y1)) || (at(a, y1) && at(b, y0))) return e.at("id").get<std::string>();
+  }
+  return "";
+}
+
+static std::vector<std::string> ids_with(const json& res, const char* needle) {
+  std::vector<std::string> out;
+  for (const auto& f : res.at("faces")) {
+    const std::string id = f.at("faceId").get<std::string>();
+    if (id.find(needle) != std::string::npos) out.push_back(id);
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+static json pocket(const char* id, double cx, double cy, double hx, double hy, double z0, double depth) {
+  json pl = plane_xy();
+  pl["origin"] = {0, 0, z0};
+  return kernel::op_buildExtrude(json{
+      {"featureId", id},
+      {"profile", json::array({line(cx - hx, cy - hy, cx + hx, cy - hy), line(cx + hx, cy - hy, cx + hx, cy + hy),
+                               line(cx + hx, cy + hy, cx - hx, cy + hy), line(cx - hx, cy + hy, cx - hx, cy - hy)})},
+      {"plane", pl},
+      {"distance", depth},
+  });
+}
+
+static json cut_into(const char* id, const json& body, const json& tool) {
+  return kernel::op_buildBoolean(json{{"featureId", id}, {"op", "cut"}, {"bodyId", "B"},
+                                      {"aBrep", body.at("brepBytes")}, {"bBrep", tool.at("brepBytes")}});
 }
 
 int main() {
@@ -257,6 +328,96 @@ int main() {
     CHECK(after < 0.02, "refit-corner shell: worst edge tolerance %.4g mm (want < 0.02)", after);
   }
 
+  // 10. Topological naming (REQs 1035–1039). A 20x10x5 box whose walls carry
+  //     sketch segment ids, cut by a pocket A (x=+5) and then a pocket C at a
+  //     SMALLER x (-7) — the positional scheme renumbered every face after C.
+  {
+    json box = kernel::op_buildExtrude(json{
+        {"featureId", "nb"},
+        {"profile", json::array({line_sid(-10, -5, 10, -5, "S"), line_sid(10, -5, 10, 5, "R"),
+                                 line_sid(10, 5, -10, 5, "N"), line_sid(-10, 5, -10, -5, "W")})},
+        {"plane", plane_xy()},
+        {"distance", 5.0},
+    });
+    const json a = cut_into("ta", box, pocket("pa", 5, 0, 1, 1, 3, 3));
+    const json ac = cut_into("tc", a, pocket("pc", -7, 0, 1, 1, 3, 3));
+
+    std::vector<std::string> names;
+    kernel::brep_from_base64(ac.at("brepBytes").get<std::string>(), &names);
+    size_t brep_faces = 0;
+    for (TopExp_Explorer ex(kernel::brep_from_base64(ac.at("brepBytes").get<std::string>()), TopAbs_FACE); ex.More(); ex.Next()) ++brep_faces;
+    CHECK(names.size() == brep_faces && brep_faces > 0, "naming trailer: %zu names for %zu faces", names.size(), brep_faces);
+
+    const auto top_box = plane_face_ids(box, 0, 0, 1, 5), top_a = plane_face_ids(a, 0, 0, 1, 5),
+               top_ac = plane_face_ids(ac, 0, 0, 1, 5);
+    CHECK(top_box.size() == 1 && top_a.size() == 1 && top_ac.size() == 1, "naming: one top face per stage");
+    if (top_box.size() == 1 && top_a.size() == 1 && top_ac.size() == 1) {
+      CHECK(top_box[0] == top_a[0] && top_a[0] == top_ac[0], "naming: top face renamed by a cut: %s -> %s -> %s",
+            top_box[0].c_str(), top_a[0].c_str(), top_ac[0].c_str());
+      CHECK(top_box[0].find("cap-top") != std::string::npos, "naming: top face is the extrude cap-top (%s)", top_box[0].c_str());
+    }
+    const auto right = plane_face_ids(ac, 1, 0, 0, 10);
+    CHECK(right.size() == 1 && right[0].find("\"upstream_refs\":[\"R\"]") != std::string::npos,
+          "naming: right wall named after sketch segment R (%s)", right.empty() ? "-" : right[0].c_str());
+
+    const std::string e_a = edge_id_at(a, 10, -5, 5, 5), e_ac = edge_id_at(ac, 10, -5, 5, 5);
+    CHECK(!e_a.empty() && e_a == e_ac && e_a.rfind("e:", 0) == 0, "naming: edge id moved by an unrelated cut: %s -> %s",
+          e_a.c_str(), e_ac.c_str());
+
+    CHECK(!ids_with(a, "\"body\":\"B\"").empty(), "naming: compose tool walls carry the body qualifier");
+
+    bool legacy_ok = true;
+    for (const auto& f : a.at("faces")) {
+      legacy_ok = legacy_ok && f.value("legacyId", std::string()).rfind("{\"feature_id\":\"ta\",\"role\":\"side\"", 0) == 0;
+    }
+    CHECK(legacy_ok, "naming: every face carries its positional legacyId");
+
+    // Split: a slot through the whole width splits the top in two.
+    const json slot = cut_into("ts", box, pocket("ps", 0, 0, 1, 7, 3, 3));
+    const auto top_s = plane_face_ids(slot, 0, 0, 1, 5);
+    CHECK(top_s.size() == 2, "naming split: want 2 top pieces, got %zu", top_s.size());
+    if (top_s.size() == 2) {
+      const bool plain0 = top_s[0] == top_box[0], plain1 = top_s[1] == top_box[0];
+      const std::string& other = plain0 ? top_s[1] : top_s[0];
+      CHECK(plain0 != plain1 && other.find("\"split\":\"1\"") != std::string::npos,
+            "naming split: pieces %s / %s", top_s[0].c_str(), top_s[1].c_str());
+    }
+
+    // Merge: a coplanar neighbor box fused on keeps one top answering to both.
+    json box2 = kernel::op_buildExtrude(json{
+        {"featureId", "nb2"}, {"profile", square(15, 0, 5)}, {"plane", plane_xy()}, {"distance", 5.0}});
+    const json fused = kernel::op_buildBoolean(json{{"featureId", "tf"}, {"op", "fuse"},
+                                                    {"aBrep", box.at("brepBytes")}, {"bBrep", box2.at("brepBytes")}});
+    const auto top_f = plane_face_ids(fused, 0, 0, 1, 5);
+    const auto top_b2 = plane_face_ids(box2, 0, 0, 1, 5);
+    CHECK(top_f.size() == 1 && !top_box.empty() && top_f[0] == top_box[0], "naming merge: merged top keeps box's name");
+    if (top_f.size() == 1 && top_b2.size() == 1) {
+      const json* mf = face_by_id(fused, top_f[0]);
+      bool aliased = false;
+      if (mf && mf->contains("aliases")) {
+        for (const auto& al : (*mf)["aliases"]) aliased = aliased || al.get<std::string>() == top_b2[0];
+      }
+      CHECK(aliased, "naming merge: merged top lists the fused box's top as an alias");
+    }
+
+    // Fillet: the blend face's name doesn't move when an unrelated cut lands elsewhere.
+    auto fillet = [](const json& body) {
+      return kernel::op_buildEdgeBlend(json{{"featureId", "tr"}, {"kind", "fillet"}, {"value", 1.0},
+                                            {"aBrep", body.at("brepBytes")},
+                                            {"edges", json::array({json{{"start", {10, -5, 5}}, {"end", {10, 5, 5}}}})}});
+    };
+    const auto blend_a = ids_with(fillet(a), "\"role\":\"new\""), blend_ac = ids_with(fillet(ac), "\"role\":\"new\"");
+    CHECK(blend_a.size() == 1 && blend_a == blend_ac, "naming: fillet face renamed by an unrelated cut (%zu vs %zu)",
+          blend_a.size(), blend_ac.size());
+
+    // Shell: inner walls are named after the face they were offset from.
+    const json shelled = kernel::op_buildShell(json{{"featureId", "th"}, {"aBrep", box.at("brepBytes")},
+                                                    {"faces", json::array({json{{"centroid", {0, 0, 5}}, {"normal", {0, 0, 1}}}})},
+                                                    {"thickness", -1.0}});
+    CHECK(ids_with(shelled, "\"role\":\"offset\"").size() == 5, "naming shell: want 5 offset walls, got %zu",
+          ids_with(shelled, "\"role\":\"offset\"").size());
+  }
+
   // 7. REQ 963 — limit defaults and env overrides.
   CHECK(kernel::max_request_bytes() == 512ull * 1024 * 1024, "default request cap should be 512 MiB");
   setenv("CAD_KERNEL_MAX_REQUEST_BYTES", "1024", 1);
@@ -271,6 +432,6 @@ int main() {
     std::fprintf(stderr, "kernel smoke tests: %d FAILURE(S)\n", g_failures);
     return 1;
   }
-  std::printf("kernel smoke tests OK (extrude, boolean, pinched sweep, pinched shell, hole-tube shell, fillet corner refit, limits)\n");
+  std::printf("kernel smoke tests OK (extrude, boolean, pinched sweep, pinched shell, hole-tube shell, fillet corner refit, naming, limits)\n");
   return 0;
 }

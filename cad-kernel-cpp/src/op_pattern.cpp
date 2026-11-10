@@ -112,12 +112,24 @@ TopoDS_Shape cut(const TopoDS_Shape& a, const TopoDS_Shape& b) {
 }
 
 // Group transformed copies of `seed` into one compound (compound_of equivalent).
-TopoDS_Compound compound_of_transformed(const TopoDS_Shape& seed, const json& transforms) {
+// Copy k (1-based) of a named seed: a transformed copy keeps the seed's face
+// order, so it donates the seed's names qualified with `<feature>#k`.
+std::string instance_tag(const std::string& feature_id, size_t k) {
+  return feature_id + "#" + std::to_string(k);
+}
+
+TopoDS_Compound compound_of_transformed(const TopoDS_Shape& seed, const json& transforms,
+                                        const std::vector<std::string>& seed_names,
+                                        const std::string& feature_id, const std::string& body_id,
+                                        std::vector<NameSource>& sources) {
   TopoDS_Compound compound;
   BRep_Builder builder;
   builder.MakeCompound(compound);
+  size_t k = 0;
   for (const auto& t : transforms) {
-    builder.Add(compound, apply_transform(seed, t));
+    TopoDS_Shape copy = apply_transform(seed, t);
+    builder.Add(compound, copy);
+    sources.push_back(NameSource{copy, seed_names, body_id, instance_tag(feature_id, ++k)});
   }
   return compound;
 }
@@ -126,8 +138,10 @@ TopoDS_Compound compound_of_transformed(const TopoDS_Shape& seed, const json& tr
 // {brepBytes, faces, topology, solids} — matches protocol.rs BuildPatternResult.
 json assemble_result(const TopoDS_Shape& result_shape,
                      const std::string& feature_id,
-                     const char* op_name) {
-  std::string brep = brep_to_base64(result_shape);
+                     const char* op_name,
+                     const std::vector<NameSource>& sources) {
+  const FaceNaming naming = name_result(result_shape, sources, feature_id);
+  std::string brep = brep_to_base64(result_shape, naming);
   if (brep.empty()) {
     throw std::runtime_error(std::string(op_name) +
                              ": result BRep serialization returned empty bytes — one or more "
@@ -135,8 +149,8 @@ json assemble_result(const TopoDS_Shape& result_shape,
                              "passing through the source, or a 0°/coincident rotate), or the "
                              "pattern removed the entire body.");
   }
-  Tessellated tess = tessellate_generic(result_shape, feature_id);
-  json solids = decompose_into_solids(result_shape, feature_id);
+  Tessellated tess = tessellate_generic(result_shape, feature_id, &naming);
+  json solids = decompose_into_solids(result_shape, feature_id, &naming);
   return json{
       {"brepBytes", std::move(brep)},
       {"faces", std::move(tess.faces)},
@@ -160,11 +174,21 @@ json op_buildPattern(const json& params) {
         "buildPattern: no transforms supplied — a pattern with zero copies has nothing to do");
   }
 
-  TopoDS_Shape source = brep_from_base64(params.at("aBrep").get<std::string>());
+  std::vector<std::string> source_names;
+  TopoDS_Shape source = brep_from_base64(params.at("aBrep").get<std::string>(), &source_names);
+  // A plain move (one transform, source not kept) is the same body relocated:
+  // its faces keep their names instead of becoming instance copies.
+  const bool keep_names = params.value("keepNames", false) && !merge_with_source && transforms.size() == 1;
 
   std::vector<TopoDS_Shape> copies;
+  std::vector<NameSource> sources;
   copies.reserve(transforms.size());
-  for (const auto& t : transforms) copies.push_back(apply_transform(source, t));
+  if (merge_with_source) sources.push_back(NameSource{source, source_names, "", ""});
+  for (const auto& t : transforms) {
+    copies.push_back(apply_transform(source, t));
+    sources.push_back(NameSource{copies.back(), source_names, "",
+                                 keep_names ? std::string() : instance_tag(feature_id, copies.size())});
+  }
 
   TopoDS_Shape acc;
   if (merge_with_source) {
@@ -178,7 +202,7 @@ json op_buildPattern(const json& params) {
   }
 
   TopoDS_Shape result_shape = clean_unify(acc);
-  return assemble_result(result_shape, feature_id, "buildPattern");
+  return assemble_result(result_shape, feature_id, "buildPattern", sources);
 }
 
 // ── buildFeaturePattern ───────────────────────────────────────────────────────
@@ -196,8 +220,11 @@ json op_buildFeaturePattern(const json& params) {
         "to do");
   }
 
-  TopoDS_Shape after = brep_from_base64(params.at("afterBrep").get<std::string>());
-  TopoDS_Shape body = brep_from_base64(params.at("bodyBrep").get<std::string>());
+  // One pattern applied to several bodies qualifies its copies per body.
+  const std::string body_id = params.value("bodyId", std::string());
+  std::vector<std::string> after_names, body_names, before_names;
+  TopoDS_Shape after = brep_from_base64(params.at("afterBrep").get<std::string>(), &after_names);
+  TopoDS_Shape body = brep_from_base64(params.at("bodyBrep").get<std::string>(), &body_names);
 
   // `before` is absent/empty for a body-seeding feature (nothing was removed;
   // the whole `after` is the added material).
@@ -206,7 +233,7 @@ json op_buildFeaturePattern(const json& params) {
   if (params.contains("beforeBrep") && !params["beforeBrep"].is_null()) {
     const std::string b = params["beforeBrep"].get<std::string>();
     if (!b.empty()) {
-      before = brep_from_base64(b);
+      before = brep_from_base64(b, &before_names);
       has_before = true;
     }
   }
@@ -235,17 +262,24 @@ json op_buildFeaturePattern(const json& params) {
   // Re-apply each delta with a SINGLE boolean over the compound of all copies
   // (one BOP resolves all coincident seams in one pass — folding instances
   // one-at-a-time re-tolerances the body per instance and shaves slivers).
+  // The delta pieces lie on the seed's named faces: name them first so every
+  // copy carries the seed feature's face names (qualified per instance).
+  std::vector<NameSource> seed_sources = {NameSource{after, after_names, "", ""}};
+  if (has_before) seed_sources.push_back(NameSource{before, before_names, "", ""});
+  std::vector<NameSource> sources = {NameSource{body, body_names, "", ""}};
   if (has_removed) {
-    TopoDS_Compound tool = compound_of_transformed(removed, transforms);
+    const std::vector<std::string> names = name_result(removed, seed_sources, feature_id).aligned(removed);
+    TopoDS_Compound tool = compound_of_transformed(removed, transforms, names, feature_id, body_id, sources);
     body = cut(body, tool);
   }
   if (added_nonempty) {
-    TopoDS_Compound tool = compound_of_transformed(added, transforms);
+    const std::vector<std::string> names = name_result(added, seed_sources, feature_id).aligned(added);
+    TopoDS_Compound tool = compound_of_transformed(added, transforms, names, feature_id, body_id, sources);
     body = fuse_glued(body, tool);
   }
 
   TopoDS_Shape result_shape = clean_unify(body);
-  return assemble_result(result_shape, feature_id, "buildFeaturePattern");
+  return assemble_result(result_shape, feature_id, "buildFeaturePattern", sources);
 }
 
 // ── buildToolPattern ──────────────────────────────────────────────────────────
@@ -261,19 +295,23 @@ json op_buildToolPattern(const json& params) {
     throw std::runtime_error("buildToolPattern: no transforms supplied");
   }
 
-  TopoDS_Shape body = brep_from_base64(params.at("bodyBrep").get<std::string>());
-  TopoDS_Shape tool = brep_from_base64(params.at("toolBrep").get<std::string>());
+  std::vector<std::string> body_names, tool_names;
+  TopoDS_Shape body = brep_from_base64(params.at("bodyBrep").get<std::string>(), &body_names);
+  TopoDS_Shape tool = brep_from_base64(params.at("toolBrep").get<std::string>(), &tool_names);
   if (is_empty(tool)) {
     throw std::runtime_error("buildToolPattern: seed tool is empty — nothing to repeat");
   }
 
+  std::vector<NameSource> sources = {NameSource{body, body_names, "", ""}};
   for (const auto& t : transforms) {
     TopoDS_Shape tool_i = apply_transform(tool, t);
+    sources.push_back(NameSource{tool_i, tool_names, params.value("bodyId", std::string()),
+                                 instance_tag(feature_id, sources.size())});
     body = do_fuse ? fuse(body, tool_i) : cut(body, tool_i);
   }
 
   TopoDS_Shape result_shape = clean_unify(body);
-  return assemble_result(result_shape, feature_id, "buildToolPattern");
+  return assemble_result(result_shape, feature_id, "buildToolPattern", sources);
 }
 
 }  // namespace kernel

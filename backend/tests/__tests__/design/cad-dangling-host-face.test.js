@@ -38,6 +38,39 @@ describe('_danglingHostFaceWarnings', () => {
     expect(out.warnings).toEqual([]);
   });
 
+  test('ignores an exact host-id hit that is no longer parallel (positional id reshuffle)', () => {
+    const sk = faceHostedSketch('Sketch A', 5);
+    const hostKey = sk.hostId.slice('face:'.length);
+    const sketchDoc = { sketches: { sA: sk } };
+    const faceMap = new Map([
+      [hostKey, { normal: [0, -1, 0], centroid: [0, 0, 3] }],  // same id, now a side wall
+      ['face-top-id', faceEntry(5)],
+    ]);
+    const out = _danglingHostFaceWarnings(sketchDoc, faceMap, new Set(['sA']));
+    expect(out.resolved).toEqual({ sA: 'face-top-id' });
+    expect(out.warnings).toEqual([]);
+  });
+
+  test('a host face split by a later op resolves to one of its pieces (REQ 1036)', () => {
+    const sk = faceHostedSketch('Sketch A', 5);
+    const piece = sk.hostId.slice('face:'.length).replace('"sub_index":0', '"sub_index":0,"split":"1"');
+    const faceMap = new Map([
+      ['unrelated-coplanar', faceEntry(5)],  // the geometric fallback would take this one
+      [piece, { ...faceEntry(5), faceId: piece }],
+    ]);
+    const out = _danglingHostFaceWarnings({ sketches: { sA: sk } }, faceMap, new Set(['sA']));
+    expect(out.resolved).toEqual({ sA: piece });
+  });
+
+  test('a legacy positional host id resolves to the stable id it maps to (REQ 1039)', () => {
+    const sk = faceHostedSketch('Sketch A', 5);
+    const legacy = sk.hostId.slice('face:'.length);
+    const entry = { ...faceEntry(5), faceId: 'stable-top' };
+    const faceMap = new Map([['stable-top', entry], [legacy, entry]]);
+    const out = _danglingHostFaceWarnings({ sketches: { sA: sk } }, faceMap, new Set(['sA']));
+    expect(out.resolved).toEqual({ sA: 'stable-top' });
+  });
+
   test('flags a sketch whose host face has no coincident match (dangling)', () => {
     const sketchDoc = { sketches: { sA: faceHostedSketch('Sketch A', 20) } };
     const faceMap = new Map([
