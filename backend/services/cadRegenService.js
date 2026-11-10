@@ -3493,7 +3493,12 @@ async function _dispatchShell(feature, bodies, model, client, dbClient, results,
   const tolerance = Number.isFinite(feature.tolerance) && feature.tolerance > 0
     ? Number(feature.tolerance) : 1.0e-3;
 
-  const body = bodies[bodies.length - 1];
+  // The body that owns a picked face (stable id, legacy id or merge alias);
+  // the newest body only when no pick matches (e.g. pre-naming picks).
+  const picked = new Set(feature.faces.map(f => f.faceId).filter(Boolean));
+  const owns = (b) => (b.faces || []).some(f => picked.has(f.faceId) || picked.has(f.legacyId)
+    || (f.aliases || []).some(a => picked.has(a)));
+  const body = bodies.find(owns) || bodies[bodies.length - 1];
   // Send the kernel just centroid + normal (and the per-face thickness
   // override, reserved for later) so face matching is geometry-keyed.
   const kernelFaces = feature.faces.map(f => {

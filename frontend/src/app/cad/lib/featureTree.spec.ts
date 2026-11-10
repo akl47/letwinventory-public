@@ -297,6 +297,40 @@ describe('Feature tree (CAD-034, CAD-035, CAD-037)', () => {
     });
   });
 
+  // Tree edits must never drop part-level settings, and editing a feature
+  // must not move it (its createdAt orders it in the tree).
+  describe('tree edits keep part-level settings', () => {
+    const decorated = () => ({
+      ...emptyFeatureTree(),
+      bodyNames: { b1: 'Base' }, bodyColors: { b1: 'ff0000' }, bodyVisibility: { b2: false },
+      bodyGroups: [{ id: 'g1', name: 'Kit', bodyIds: ['b1'] }],
+      treeFolders: [{ id: 'fd1', name: 'Planes', memberKeys: ['x'] }],
+      rollbackIndex: 1, defaultUnit: 'in' as const,
+    });
+    const extras = (t: object) => {
+      const { features: _f, nextFeatureSeq: _n, ...rest } = t as Record<string, unknown>;
+      return rest;
+    };
+
+    it('addFeature, updateFeatureParam, removeFeature, removeFeaturesReferencingSketch', () => {
+      const t0 = decorated();
+      const t1 = addFeature(t0, { type: 'extrude', sketchId: 's1', distance: 5 } as never);
+      expect(extras(t1)).toEqual(extras(t0));
+      const id = t1.features[1].id;
+      expect(extras(updateFeatureParam(t1, id, { distance: 9 } as never))).toEqual(extras(t0));
+      expect(extras(removeFeature(t1, id))).toEqual(extras(t0));
+      expect(extras(removeFeaturesReferencingSketch(t1, 's1'))).toEqual(extras(t0));
+    });
+
+    it('editing a feature keeps its createdAt', () => {
+      const t1 = addFeature(emptyFeatureTree(), { type: 'extrude', sketchId: 's1', distance: 5 } as never);
+      const f = t1.features[1];
+      const t2 = updateFeatureParam(t1, f.id, { ...f, distance: 9, createdAt: f.createdAt! + 1e6 } as never);
+      expect(t2.features[1].createdAt).toBe(f.createdAt);
+      expect((t2.features[1] as { distance: number }).distance).toBe(9);
+    });
+  });
+
   describe('setRollbackIndex (REQ 858)', () => {
     it('stores an index and clears it with null', () => {
       const t0 = emptyFeatureTree();

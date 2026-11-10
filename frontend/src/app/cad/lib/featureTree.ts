@@ -43,6 +43,7 @@ export function addFeature(tree: FeatureTree, feature: FeatureInput): FeatureTre
     ? partial
     : { ...partial, name: defaultFeatureName(tree, partial) } as Feature;
   return {
+    ...tree,
     features: [...tree.features, next],
     nextFeatureSeq: tree.nextFeatureSeq + 1,
   };
@@ -88,18 +89,17 @@ function featureKindLabel(kind: Feature['type']): string | null {
 
 export function removeFeature(tree: FeatureTree, id: string): FeatureTree {
   if (!tree.features.some(f => f.id === id)) return tree;
-  return {
-    features: tree.features.filter(f => f.id !== id),
-    nextFeatureSeq: tree.nextFeatureSeq,
-  };
+  return { ...tree, features: tree.features.filter(f => f.id !== id) };
 }
 
 export function updateFeatureParam<T extends Feature>(
   tree: FeatureTree, id: string, patch: Partial<T>,
 ): FeatureTree {
+  // An edit never moves the feature: createdAt orders the tree and only a
+  // reorder changes it (edit panels hand back a whole feature with a fresh one).
   return {
-    features: tree.features.map(f => f.id === id ? ({ ...f, ...patch } as Feature) : f),
-    nextFeatureSeq: tree.nextFeatureSeq,
+    ...tree,
+    features: tree.features.map(f => f.id === id ? ({ ...f, ...patch, createdAt: f.createdAt } as Feature) : f),
   };
 }
 
@@ -123,10 +123,7 @@ export function featureReferencesSketch(f: Feature, sketchId: string): boolean {
 // sketch (extrude/revolve variants, sweep profile OR path, loft profiles).
 // Origin features and any future features without a sketch ref are unaffected.
 export function removeFeaturesReferencingSketch(tree: FeatureTree, sketchId: string): FeatureTree {
-  return {
-    features: tree.features.filter(f => !featureReferencesSketch(f, sketchId)),
-    nextFeatureSeq: tree.nextFeatureSeq,
-  };
+  return { ...tree, features: tree.features.filter(f => !featureReferencesSketch(f, sketchId)) };
 }
 
 /** Datum feature kinds — their `visible` flag is render-only (they produce no
