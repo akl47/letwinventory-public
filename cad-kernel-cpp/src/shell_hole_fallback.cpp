@@ -277,7 +277,27 @@ TopoDS_Shape shell_with_hole_tubes(const TopoDS_Shape& body,
     if (!valid_solid(filled)) return {};
     TopTools_ListOfShape closing_filled;
     for (const auto& f : closing_faces) {
-      if (defeat.IsDeleted(f)) return {};
+      if (defeat.IsDeleted(f)) {
+        // Filling the holes can rebuild a face they pierced (REQ 1050): take
+        // the filled body's faces on the same plane, facing the same way.
+        BRepAdaptor_Surface os(TopoDS::Face(f));
+        if (os.GetType() != GeomAbs_Plane) return {};
+        const gp_Pln op = os.Plane();
+        gp_Dir on = op.Axis().Direction();
+        if (f.Orientation() == TopAbs_REVERSED) on.Reverse();
+        const int before = closing_filled.Extent();
+        for (TopExp_Explorer fx(filled, TopAbs_FACE); fx.More(); fx.Next()) {
+          const TopoDS_Face g = TopoDS::Face(fx.Current());
+          BRepAdaptor_Surface gs(g);
+          if (gs.GetType() != GeomAbs_Plane) continue;
+          gp_Dir gn = gs.Plane().Axis().Direction();
+          if (g.Orientation() == TopAbs_REVERSED) gn.Reverse();
+          if (gn.Dot(on) < 1.0 - 1e-9 || op.Distance(gs.Plane().Location()) > tol) continue;
+          closing_filled.Append(g);
+        }
+        if (closing_filled.Extent() == before) return {};
+        continue;
+      }
       const TopTools_ListOfShape& mod = defeat.Modified(f);
       if (mod.IsEmpty()) closing_filled.Append(f);
       else for (const auto& m : mod) closing_filled.Append(m);

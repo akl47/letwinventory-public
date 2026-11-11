@@ -849,6 +849,10 @@ export interface EdgeRef3D {
    * for the whole chain). Single-edge picks without expansion leave
    * this undefined. Doesn't affect kernel behaviour. */
   edgeGroupId?: string;
+  /** REQ 1051 — persistent ids of the faces that meet at this edge, saved
+   * at pick time. Regeneration finds the edge as the one these faces share
+   * (the coordinates above break ties and are the fallback). */
+  faces?: string[];
 }
 
 /** SolidWorks-style 3D fillet — round one or more edges of the host body
