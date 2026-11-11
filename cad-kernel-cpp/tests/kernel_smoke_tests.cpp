@@ -436,6 +436,43 @@ int main() {
           contacts.at("pairs").dump().c_str());
   }
 
+  // 12. REQ 1050 — hole-tube shell fallback when filling the holes rebuilds
+  //     the removed face. A 40x40x8 box with r5 top edges and four Ø6.5x3.2
+  //     counterbored Ø3.4 through-holes 7.45 mm from the walls (model 1013):
+  //     filling the holes leaves the bottom face with no direct image. At 12
+  //     tall it never did. Volume pinned from the valid result (5419.67).
+  {
+    const double H = 8.0;
+    TopoDS_Shape box = BRepPrimAPI_MakeBox(40, 40, H).Shape();
+    BRepFilletAPI_MakeFillet top(box);
+    for (TopExp_Explorer e(box, TopAbs_EDGE); e.More(); e.Next()) {
+      BRepAdaptor_Curve c(TopoDS::Edge(e.Current()));
+      if (std::fabs(c.Value(c.FirstParameter()).Z() - H) < 1e-9 &&
+          std::fabs(c.Value(c.LastParameter()).Z() - H) < 1e-9) top.Add(5.0, TopoDS::Edge(e.Current()));
+    }
+    TopoDS_Shape body = top.Shape();
+    for (double x : {7.45, 32.55}) for (double y : {7.45, 32.55}) {
+      body = BRepAlgoAPI_Cut(body, BRepAlgoAPI_Fuse(
+          BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(x, y, -1), gp_Dir(0, 0, 1)), 1.7, H + 2).Shape(),
+          BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(x, y, H - 3.2), gp_Dir(0, 0, 1)), 3.25, 5.0).Shape()).Shape());
+    }
+    TopTools_ListOfShape bottom;
+    for (TopExp_Explorer e(body, TopAbs_FACE); e.More(); e.Next()) {
+      BRepAdaptor_Surface a(TopoDS::Face(e.Current()));
+      if (a.GetType() == GeomAbs_Plane && std::fabs(a.Plane().Location().Z()) < 1e-9 &&
+          std::fabs(a.Plane().Axis().Direction().Z()) > 0.99) bottom.Append(e.Current());
+    }
+    CHECK(bottom.Extent() == 1, "filleted hole box: want 1 bottom face, got %d", bottom.Extent());
+    TopoDS_Shape alt = shell_with_hole_tubes(body, bottom, -2.0, 1e-3);
+    CHECK(!alt.IsNull(), "filleted hole box: shell fallback returned null");
+    if (!alt.IsNull()) {
+      GProp_GProps g;
+      BRepGProp::VolumeProperties(alt, g);
+      CHECK(BRepCheck_Analyzer(alt).IsValid(), "filleted hole box: shell result is invalid");
+      CHECK(std::fabs(g.Mass() - 5419.67) < 1.0, "filleted hole box: want ~5419.67, got %.4f", g.Mass());
+    }
+  }
+
   // 7. REQ 963 — limit defaults and env overrides.
   CHECK(kernel::max_request_bytes() == 512ull * 1024 * 1024, "default request cap should be 512 MiB");
   setenv("CAD_KERNEL_MAX_REQUEST_BYTES", "1024", 1);

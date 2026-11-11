@@ -307,10 +307,9 @@ const DIM_SHOULDER_FRAC = 5 / 180;         // radius-leader horizontal landing l
     .webgl-error .we-retry mat-icon { font-size: 18px; width: 18px; height: 18px; }
     .nav-cube { position: absolute; top: 12px; right: 62px; width: 103px; height: 103px; cursor: pointer; user-select: none; }
     .nav-cube canvas { display: block; }
-    /* Centre the controls row on the nav cube's centre (cube: right 62px, width
-       103px → centre at right 113.5px). translateX(50%) keeps it centred
-       regardless of how many buttons the row holds. */
-    .view-controls { position: absolute; top: 118px; right: calc(62px + 103px / 2); transform: translateX(50%);
+    /* Controls row under the nav cube, right edge held in from the viewer
+       edge (centring it on the cube ran the last button off-screen). */
+    .view-controls { position: absolute; top: 118px; right: 12px;
                      display: flex; align-items: center; gap: 4px; }
     .vc-btn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; padding: 0;
               background: rgba(42,42,58,0.92); border: 1px solid #3a3a4a; border-radius: 4px; color: #cfd2e0; cursor: pointer; }

@@ -333,6 +333,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
   const errors = [];
   let danglingSketchIds = [];
   let sketchHostFaces = {};
+  let sketchPlanes = {};
   // Seed errors with any equation resolution failures so the user sees
   // cycles / parse errors in the regen response toast as well as in
   // the equations panel.
@@ -468,6 +469,9 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
       // into `geometry.datums`.
       continue;
     }
+    // REQ 1052 — points of a face-hosted sketch sit on the host face as it
+    // is now, for every feature that reads them (holes, Up to Vertex).
+    if (faceMap.size > 0) _seedSketchVertices(vertexMap, _applyHostFacePlanes(sketchDoc, faceMap));
 
     // Edge-blend features (fillet / chamfer) take an existing body and
     // modify it in place — no separate prism + compose stage. Handle
@@ -1092,6 +1096,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
     for (const w of dangling.warnings) errors.push(w);
     danglingSketchIds = dangling.sketchIds;
     sketchHostFaces = dangling.resolved;
+    sketchPlanes = _movedHostPlanes(sketchDoc, faceMap);
   }
 
   // Exact OCCT volume per body. The editor footer shows this instead of
@@ -1171,7 +1176,7 @@ async function regenerateModel(model, { kernelClient, db, onFeatureResult, rollb
     delete model.__regenStats;
   }
 
-  return { features: results, errors, bodies: bodyList, kernelBuild, danglingSketchIds, sketchHostFaces, idMigration: _idMigration(results) };
+  return { features: results, errors, bodies: bodyList, kernelBuild, danglingSketchIds, sketchHostFaces, sketchPlanes, idMigration: _idMigration(results) };
 }
 
 /** REQ 1039 — legacy positional face id → stable id for every face this
@@ -3240,6 +3245,16 @@ async function _dispatchMoveCopyBody(feature, bodies, model, client, dbClient, r
   }
 }
 
+/** vertexMap key (`sketch:<sid>/<pid>`) of a hole placement made on a sketch
+ * point — a vertex pick (`vertex:sketch:<sid>/<pid>`) or a point ingested
+ * from the wizard's sketch (`sketchpoint:<sid>:<pid>`) — else null. */
+function _sketchPointKey(faceId) {
+  if (typeof faceId !== 'string') return null;
+  if (faceId.startsWith('vertex:sketch:')) return faceId.slice('vertex:'.length);
+  const m = /^sketchpoint:([^:]+):(.+)$/.exec(faceId);
+  return m ? `sketch:${m[1]}/${m[2]}` : null;
+}
+
 /** REQ 663 — Hole Wizard. Reads the placement sketch's points, builds
  * a drill cylinder (and optionally a counterbore cylinder or
  * countersink cone) at each point, and subtracts them from the
@@ -3290,6 +3305,14 @@ async function _drillHole(feature, target, scopeToBody, model, dbClient, client,
     ? THROUGH_ALL_DISTANCE
     : feature.endCondition.depth;
 
+  // REQ 1052 — a placement on a sketch point drills where that point is now
+  // (a face-hosted sketch follows its face), not where it was when placed.
+  const placements = feature.placements.map(p => {
+    const key = _sketchPointKey(p.faceId);
+    const at = key && vertexMap.get(key);
+    return at ? { ...p, position: at } : p;
+  });
+
   // Cache key — every placement, all dims (resolved), end condition.
   const paramHash = _hashParams({
     op: 'hole',
@@ -3298,7 +3321,7 @@ async function _drillHole(feature, target, scopeToBody, model, dbClient, client,
     size: feature.size,
     end: feature.endCondition,
     flipped,
-    placements: feature.placements.map(p => ({ pos: p.position, n: p.faceNormal })),
+    placements: placements.map(p => ({ pos: p.position, n: p.faceNormal })),
     drillDia, cboreDia, cboreDepth, cskDia, cskAngleDeg,
     targetUpstream: target.paramHash,
   });
@@ -3335,8 +3358,8 @@ async function _drillHole(feature, target, scopeToBody, model, dbClient, client,
     };
     let chained = target.brep;
     let lastRpc;
-    for (let pi = 0; pi < feature.placements.length; pi++) {
-      const pl = feature.placements[pi];
+    for (let pi = 0; pi < placements.length; pi++) {
+      const pl = placements[pi];
       const faceNormal = norm3(pl.faceNormal);
       const xAxis = perpToNormal(faceNormal);
       const yAxis = norm3(cross3(faceNormal, xAxis));
@@ -3932,6 +3955,24 @@ function _danglingHostFaceWarnings(sketchDoc, faceMap, usedSketchIds) {
   return { warnings, sketchIds, resolved };
 }
 
+/** REQ 1052 — sketchId → current plane for each face-hosted sketch whose host
+ * face (found by its persistent id, or a piece of it) has moved. Sketches
+ * placed only by the nearest-parallel-face guess are left out, so a guess is
+ * never written back into the saved doc. */
+function _movedHostPlanes(sketchDoc, faceMap) {
+  const out = {};
+  for (const [sid, sk] of Object.entries((sketchDoc && sketchDoc.sketches) || {})) {
+    if (!sk || !sk.plane || !sk.hostId || !sk.hostId.startsWith('face:')) continue;
+    const faceId = sk.hostId.slice('face:'.length);
+    const byId = (faceMap.has(faceId) && _isParallelFace(faceMap.get(faceId), sk.plane.normal))
+      || _splitPieceOf(faceMap, faceId, sk.plane.normal);
+    if (!byId) continue;
+    const plane = _resolveHostFacePlane(sk, faceMap);
+    if (plane !== sk.plane) out[sid] = plane;
+  }
+  return out;
+}
+
 /**
  * Apply {@link _resolveHostFacePlane} to every sketch in a doc. Clones only the
  * sketches whose plane actually moved (and the doc) so the stored model is
@@ -4349,7 +4390,15 @@ function _scopeComposedFaceIds(faces, featureId, bodyId, tag = 'body') {
 function _groupEdgesByBody(bodies, edges) {
   const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
   const owner = new Map();
+  edges = edges.map(pick => {
+    const hit = _resolveEdgeByFaces(bodies, pick);
+    if (!hit) return pick;
+    const resolved = { ...pick, start: hit.start, end: hit.end };
+    owner.set(resolved, hit.body);
+    return resolved;
+  });
   for (const pick of edges) {
+    if (owner.has(pick)) continue;
     let best = bodies[bodies.length - 1], bestDist = Infinity;
     for (let i = bodies.length - 1; i >= 0; i--) {
       for (const e of (bodies[i].topology || {}).edges || []) {
@@ -4367,6 +4416,60 @@ function _groupEdgesByBody(bodies, edges) {
     if (picks.length) groups.set(body, picks);
   }
   return groups;
+}
+
+/** REQ 1051 — find a picked edge by the faces it lies on: the boundary edge
+ * its named faces (`faces`, else the older single `faceId`) share on the most
+ * recent body that has them, nearest the saved endpoints. With one planar
+ * face the endpoints are measured in its current plane, so a face that moved
+ * along its normal keeps its edges. Null when no body has a named face. */
+function _resolveEdgeByFaces(bodies, pick) {
+  const names = [...new Set([...(Array.isArray(pick.faces) ? pick.faces : []), pick.faceId].filter(n => typeof n === 'string'))];
+  if (names.length === 0 || !Array.isArray(pick.start) || !Array.isArray(pick.end)) return null;
+  const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  for (let i = bodies.length - 1; i >= 0; i--) {
+    const body = bodies[i];
+    const named = names
+      .map(n => (body.faces || []).find(f => f.faceId === n || f.legacyId === n || (f.aliases || []).includes(n)))
+      .filter(Boolean);
+    if (named.length === 0) continue;
+    let ids = named[0].boundaryEdgeIds || [];
+    for (const f of named.slice(1)) {
+      const own = new Set(f.boundaryEdgeIds || []);
+      ids = ids.filter(id => own.has(id));
+    }
+    const wanted = new Set(ids);
+    const candidates = ((body.topology || {}).edges || [])
+      .filter(e => wanted.has(e.id) && Array.isArray(e.endpoints) && e.endpoints.length === 2);
+    if (candidates.length === 0) continue;
+    const plane = named.length === 1 ? _planarFacePlane(named[0]) : null;
+    const onPlane = p => {
+      if (!plane) return p;
+      const { centroid: c, normal: n } = plane;
+      const h = (p[0] - c[0]) * n[0] + (p[1] - c[1]) * n[1] + (p[2] - c[2]) * n[2];
+      return [p[0] - h * n[0], p[1] - h * n[1], p[2] - h * n[2]];
+    };
+    const s = onPlane(pick.start), t = onPlane(pick.end);
+    let best = null, bestDist = Infinity;
+    for (const e of candidates) {
+      const [a, b] = e.endpoints;
+      const dist = Math.min(d(s, a) + d(t, b), d(s, b) + d(t, a));
+      if (dist < bestDist) { best = e; bestDist = dist; }
+    }
+    return { body, start: best.endpoints[0], end: best.endpoints[1] };
+  }
+  return null;
+}
+
+/** A face's plane when every tessellation normal agrees, else null. */
+function _planarFacePlane(face) {
+  const rep = _faceRepresentativePlane(face);
+  if (!rep) return null;
+  const n = face.normals, [x, y, z] = rep.normal;
+  for (let i = 0; i + 2 < n.length; i += 3) {
+    if (Math.abs(n[i] * x + n[i + 1] * y + n[i + 2] * z) < 1 - 1e-6) return null;
+  }
+  return rep;
 }
 
 function _scopeTopology(topo, scope) {
@@ -4428,6 +4531,7 @@ module.exports = {
   _carryFaceOwners, // exported for unit tests (REQ 892 — face ownership carry)
   _computePatternTransforms, // exported for unit tests (REQ 962 — copy limit)
   _groupEdgesByBody, // exported for unit tests (REQ 1024 — multi-body blends)
+  _movedHostPlanes, // exported for unit tests (REQ 1052 — hosted sketches follow their face)
   _scopedBodies, // exported for unit tests (REQ 1029 — feature scope)
   _scopeFeatureFaceIds, // exported for unit tests (REQ 1029 — per-body hole face ids)
   _captureFeatureSnapshot, // exported for unit tests (REQ 1031 — per-body seed snapshots)

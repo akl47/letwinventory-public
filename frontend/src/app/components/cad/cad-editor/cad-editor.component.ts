@@ -55,6 +55,7 @@ import {
   featureReferencesSketch, setBodyVisibility, setBodyName, setBodyColor, setRollbackIndex,
   addBodyGroup, renameBodyGroup, ungroupBodies, removeBodyFromGroup, addBodiesToGroup,
 } from '../../../cad/lib/featureTree';
+import { adoptHostPlanes } from '../../../cad/lib/hostPlanes';
 import { newFeatureId } from '../../../cad/lib/ids';
 import { emptyDocument, createSketch, updateSketchState, deleteSketch, setSketchVisibility, setSketchName, projectTopologyToCandidates } from '../../../cad/lib/document';
 import { sizeOptions as holeSizeOptionsFor, defaultSizeFor as holeDefaultSizeFor, holeSpec, type HoleStandard, type HoleSizeKey } from '../../../cad/lib/holeSpecs';
@@ -4875,7 +4876,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-473';
+  readonly buildMarker = 'text-475';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -6050,7 +6051,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // a single "Face N" row so the user sees the face as one item rather
   // than N separate edges. Items without `faceId` are individually-
   // picked edges and render one per row.
-  edgeBlendEdges = signal<Array<{ edgeId: string; start: [number, number, number]; end: [number, number, number]; value?: number; faceId?: string; edgeGroupId?: string }>>([]);
+  edgeBlendEdges = signal<Array<{ edgeId: string; start: [number, number, number]; end: [number, number, number]; value?: number; faceId?: string; edgeGroupId?: string; faces?: string[] }>>([]);
   // SolidWorks-style tangent propagation toggle. When ON (default),
   // picking one edge auto-picks every tangent-continuous neighbor — so
   // one click on a hole rim selects all four arcs of the circumference.
@@ -12899,12 +12900,19 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // in the data model for backwards-compat with stored payloads but
     // isn't exposed in the UI. `faceId` is persisted so re-opening for
     // edit restores the "Face N" row grouping in the sidebar.
-    const edges = this.edgeBlendEdges().map(e => ({
-      start: e.start,
-      end: e.end,
-      ...(e.faceId ? { faceId: e.faceId } : {}),
-      ...(e.edgeGroupId ? { edgeGroupId: e.edgeGroupId } : {}),
-    }));
+    // REQ 1051 — each edge also saves the faces that meet at it, so regen
+    // finds it by those faces after upstream edits move it.
+    const geomFaces = this.displayedGeometry()?.faces ?? [];
+    const edges = this.edgeBlendEdges().map(e => {
+      const faces = e.faces ?? geomFaces.filter(f => f.boundaryEdgeIds?.includes(e.edgeId)).map(f => f.faceId);
+      return {
+        start: e.start,
+        end: e.end,
+        ...(e.faceId ? { faceId: e.faceId } : {}),
+        ...(e.edgeGroupId ? { edgeGroupId: e.edgeGroupId } : {}),
+        ...(faces.length ? { faces } : {}),
+      };
+    });
     const value = this.edgeBlendValue();
     // Chamfer-only extras: pack mode + secondary fields. Skipped on
     // fillet (single radius is the whole story).
@@ -15078,6 +15086,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         ...(typeof e.value === 'number' ? { value: e.value } : {}),
         ...(typeof e.faceId === 'string' ? { faceId: e.faceId } : {}),
         ...(typeof e.edgeGroupId === 'string' ? { edgeGroupId: e.edgeGroupId } : {}),
+        ...(Array.isArray(e.faces) ? { faces: e.faces } : {}),
       })));
       // Restore chamfer-specific mode + extras. Legacy chamfer records
       // without `mode` set count as 'equal' so they keep rendering the
@@ -16270,6 +16279,17 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.save({ skipRegen: true });
   }
 
+  /** REQ 1052 — face-hosted sketches whose host face moved take the plane the
+   * regen reports (their hole placements follow); saved without a regen. */
+  private followHostPlanes(planes: Record<string, Plane3> | undefined) {
+    if (!planes || this.readonly()) return;
+    const { doc, tree } = adoptHostPlanes(this.doc(), this.featureTree(), planes, this.activeSketchId());
+    if (doc === this.doc()) return;
+    this.doc.set(doc);
+    this.featureTree.set(tree);
+    this.save({ skipRegen: true });
+  }
+
   private save(opts?: { skipRegen?: boolean }) {
     const m = this.model();
     if (!m || this.readonly()) return;
@@ -16685,6 +16705,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         this.danglingSketchIds.set(new Set((resp as any).danglingSketchIds || []));
         this.sketchHostFaces.set((resp as any).sketchHostFaces || {});
         this.migrateLegacyRefs((resp as any).idMigration, (resp as any).sketchHostFaces || {});
+        this.followHostPlanes((resp as any).sketchPlanes);
         this.rebuildGeometryFromBodies();
         // Per-feature errors are nested in the merged response. Surface them
         // as warning toasts so the user sees what failed and why — silent
