@@ -4876,7 +4876,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * every frontend change ready for browser testing (the sketch-editor's
    * addTextBoxByCorners 'text-NN' string is a separate legacy marker; keep
    * the two in sync). */
-  readonly buildMarker = 'text-475';
+  readonly buildMarker = 'text-477';
 
   // ── Feature-tree sidebar resize / collapse ──────────────────────────────────
   /** Sidebar width in px (drag the divider to change); persisted. */
@@ -5268,10 +5268,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * `bodyName` is added per body at export time. */
   private _exportVars(): Record<string, string> {
     const p = this.part();
+    // The rev being exported: the draft's displayed rev, not the part row's.
+    const rev = String(this.model()?.displayRevision ?? p?.revision ?? '');
     return {
       partNumber: String(p?.sku || p?.name || ''),
-      rev: String(p?.revision || ''),
-      partRevision: String(p?.revision || ''),
+      rev,
+      partRevision: rev,
       partName: String(p?.name || ''),
       manufacturerPN: String(p?.manufacturerPN || ''),
     };
@@ -5637,6 +5639,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // Phase 1: server-side regen is in flight. The viewer's loading overlay
   // reads this. Old kernelLoading + kernelLoadStatus signals were tied to
   // the deleted client-side OCCT loader.
+  /** Cached features past the rollback bar built before an upstream change
+   * — they need a rebuild, so the cache no longer covers them. */
+  private _staleFeatureIds = new Set<string>();
   regenLoading = signal<boolean>(false);
   regenError = signal<string | null>(null);
   // Per-feature failures from the last regenerate pass. Cleared on regen
@@ -8329,7 +8334,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         // Repaint from cache — no kernel call. The bar moved, but
         // the cached per-feature geometry is still valid; we just
         // filter which features get included by the new cutoff.
-        queueMicrotask(() => this._rederivePerBodyFromCache());
+        queueMicrotask(() => {
+          this._rederivePerBodyFromCache();
+          // Features the bar now uncovers that need a rebuild.
+          if (!this.regenLoading() && !this._cacheCoversRollback(this.rollbackBeforeIndex())) this.regenerate('rollback');
+        });
       }
     });
 
@@ -9965,6 +9974,17 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     return { ...tree, features, nextFeatureSeq: seq + 1 };
   }
 
+  /** addFeature, placed at the rollback bar when rolled back (extrude,
+   * revolve, sweep, loft build through addFeature). */
+  private _addFeatureAtRollback(
+    tree: import('../../../cad/lib/types').FeatureTree,
+    base: Parameters<typeof addFeature>[1],
+  ): { tree: import('../../../cad/lib/types').FeatureTree; id: string } {
+    const added = addFeature(tree, base);
+    const feature = added.features[added.features.length - 1];
+    return { tree: this._commitNewFeature(tree, feature, tree.nextFeatureSeq), id: feature.id };
+  }
+
   /** After createSketch, if the rollback bar is active, re-stamp the new
    * sketch's createdAt so it appears AT the bar in the tree (display = createdAt
    * order). A sketch isn't in the features array, so the bar position is
@@ -10512,10 +10532,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const base = ctx.mode === 'cutRevolve'
         ? { type: 'cutRevolve' as const, sketchId: ctx.sketchId, axisLineId, angle, flipped, regionIndices, ...(bodyIds ? { bodyIds } : {}) }
         : { type: 'revolve' as const, sketchId: ctx.sketchId, axisLineId, angle, flipped, regionIndices, ...(merge === false ? { merge } : {}), ...(bodyIds ? { bodyIds } : {}) };
-      const nextTree = addFeature(this.featureTree(), base);
+      const { tree: nextTree, id: newFeatureId } = this._addFeatureAtRollback(this.featureTree(), base);
       this.featureTree.set(nextTree);
-      const newFeatureId = nextTree.features[nextTree.features.length - 1]?.id;
-      if (newFeatureId) this._writeRevolveEquations(newFeatureId);
+      this._writeRevolveEquations(newFeatureId);
       // Auto-hide the source sketch after the revolve commits, same as
       // Extrude / Cut. Users can re-show via the tree visibility toggle.
       this.doc.set(setSketchVisibility(this.doc(), ctx.sketchId, false));
@@ -10639,7 +10658,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       const base = ctx.mode === 'sweep'
         ? { type: 'sweep' as const, profileSketchId, pathSketchId, merge, ...(bodyIds ? { bodyIds } : {}) }
         : { type: 'cutSweep' as const, profileSketchId, pathSketchId, ...(bodyIds ? { bodyIds } : {}) };
-      this.featureTree.set(addFeature(this.featureTree(), base));
+      this.featureTree.set(this._addFeatureAtRollback(this.featureTree(), base).tree);
       // Auto-hide both source sketches, same as Extrude / Revolve.
       let doc = this.doc();
       doc = setSketchVisibility(doc, profileSketchId, false);
@@ -10718,7 +10737,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         this.featureTree(), ctx.editingFeatureId, { sketchIds, merge, bodyIds }));
       this.save();
     } else {
-      this.featureTree.set(addFeature(this.featureTree(), { type: 'loft' as const, sketchIds, merge, ...(bodyIds ? { bodyIds } : {}) }));
+      this.featureTree.set(this._addFeatureAtRollback(this.featureTree(), { type: 'loft' as const, sketchIds, merge, ...(bodyIds ? { bodyIds } : {}) }).tree);
       // Auto-hide the section sketches, same as Extrude / Sweep.
       let doc = this.doc();
       for (const sid of sketchIds) doc = setSketchVisibility(doc, sid, false);
@@ -14908,11 +14927,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       featurePayload.startCondition = result.startCondition;
     }
     if (result.direction2) featurePayload.direction2 = result.direction2;
-    const nextTree = addFeature(this.featureTree(), featurePayload);
+    const { tree: nextTree, id: newFeatureId } = this._addFeatureAtRollback(this.featureTree(), featurePayload);
     this.featureTree.set(nextTree);
-    // addFeature appends — the new feature is the last entry. Persist
-    // any pending equation bindings under that feature's id.
-    const newFeatureId = nextTree.features[nextTree.features.length - 1]?.id;
+    // Persist any pending equation bindings under the new feature's id.
     if (newFeatureId) {
       this._writeExtrudeEquations(
         newFeatureId,
@@ -16036,7 +16053,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * visible solid feature below `cutoff` — so a rollback to `cutoff` can be
    * painted entirely from cache with no kernel regeneration (REQ 878). */
   private _cacheCoversRollback(cutoff: number | null): boolean {
-    const have = new Set(this.latestRegenFeatures().filter(f => !f.error).map(f => f.featureId));
+    const have = new Set(this.latestRegenFeatures()
+      .filter(f => !f.error && !this._staleFeatureIds.has(f.featureId)).map(f => f.featureId));
     return cacheCoversRollback(this.featureTree().features, have, cutoff);
   }
 
@@ -16677,8 +16695,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
             return ti !== undefined && ti >= dispatchCutoff;
           });
           mergedFeatures = [...cachedFeatures, ...keptPrior] as typeof cachedFeatures;
+          // A change (or any fresh kernel work) upstream of the bar leaves the
+          // kept features built on old geometry: mark them for rebuild.
+          const stale = new Set([...this._staleFeatureIds].filter(id => !respIds.has(id)));
+          if (reason !== 'rollback' || kernelN > 0) for (const f of keptPrior) stale.add(f.featureId);
+          this._staleFeatureIds = stale;
+        } else {
+          this._staleFeatureIds = new Set();
         }
         this.latestRegenFeatures.set(mergedFeatures);
+        // The bar moved past stale features while this regen ran (e.g. an
+        // edit closed and restored it): rebuild them now.
+        const liveCutoff = this.rollbackBeforeIndex();
+        if (liveCutoff !== dispatchCutoff && !this._cacheCoversRollback(liveCutoff)) {
+          queueMicrotask(() => this.regenerate('stale'));
+        }
         // For each body, take the LAST surviving feature's emission as
         // the body's current state. Honour the LIVE rollback bar — the
         // cache above is complete, so a bar parked mid-flight filters the

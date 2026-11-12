@@ -154,6 +154,11 @@ export interface PartWithCadSummary {
    * on a draft branch). Use this for the part-number label so it matches the
    * editor badge instead of the raw Parts.revision. */
   displayRevision?: string | null;
+  /** The working copy's branch, and the revs of `main` / any draft branch —
+   * an assembly instance tracking a branch labels itself with that branch's rev. */
+  branchName?: string;
+  mainRevision?: string | null;
+  draftRevision?: string | null;
   revisionCount: number;
   latestRevisionID: number | null;
   latestRevision: string | null;
