@@ -221,6 +221,14 @@ async function exportRelease(req, res, format) {
   }
 }
 
+// `#{partRevision}` text = the rev being worked on: a draft branch's derived
+// display rev (highest released + 1), or the released revision on main —
+// matching the editor's badge + preview so the engraved rev is consistent.
+async function workingRevision(model) {
+  if ((model.branchName || 'main') === 'main') return (model.part && model.part.revision) || '';
+  return cadVcsService.derivedDraftRev(model);
+}
+
 async function fetchActiveModel(id) {
   return db.DesignCADModel.findOne({
     where: activeWhere({ id }),
@@ -337,6 +345,10 @@ module.exports = {
           partID: m.partID,
           part: m.part ? { id: m.part.id, name: m.part.name, revision: m.part.revision, description: m.part.description, imageFileID: m.part.imageFileID } : null,
           displayRevision,
+          // Revs an assembly instance tracking a specific branch shows.
+          branchName: m.branchName || 'main',
+          mainRevision: highestReleased > 0 ? cadVcsService.padNumeric(highestReleased) : partRev,
+          draftRevision: cadVcsService.padNumeric(highestReleased + 1),
           // Unified landing: assemblies are design rows too (Type column + the
           // assembly editor as the open target).
           isAssembly: !!m.isAssembly,
@@ -1109,13 +1121,7 @@ module.exports = {
     const model = await fetchActiveModel(id);
     if (!model) return res.status(404).json({ error: 'CAD model not found' });
     if (rejectAssembly(model, res, 'Feature-tree regeneration')) return undefined;
-    // `#{partRevision}` text = the rev being worked on: a draft branch's derived
-    // display rev (highest released + 1), or the released revision on main —
-    // matching the editor's badge + preview so the engraved rev is consistent.
-    const onMainBranch = (model.branchName || 'main') === 'main';
-    model.__partRevision = onMainBranch
-      ? (model.part && model.part.revision) || ''
-      : await cadVcsService.derivedDraftRev(model);
+    model.__partRevision = await workingRevision(model);
     // SolidWorks-style rollback bar: optional POST body field. Frontend
     // sends the index of the first feature to skip (matches the
     // rollbackBeforeIndex signal); backend skips features at/past that
@@ -1193,9 +1199,10 @@ module.exports = {
       ? req.query.bodyIds.split(',').map(s => s.trim()).filter(Boolean)
       : undefined;
     try {
+      model.__partRevision = await workingRevision(model);
       const { step } = await cadRegenService.exportModelStep(model, { bodyIds });
       const pn = String(model.part?.sku || model.part?.name || `part-${model.partID}`);
-      const rev = String(model.part?.revision || '');
+      const rev = String(model.__partRevision || '');
       const base = (rev ? `${pn}-${rev}` : pn)
         .replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'part';
       res.setHeader('Content-Type', 'application/step');

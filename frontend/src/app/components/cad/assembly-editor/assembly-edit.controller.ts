@@ -164,7 +164,7 @@ export class AssemblyEditController {
     if (visible.size) {
       for (const inst of this.regen()?.instances ?? []) {
         const prefix = `inst:${inst.instanceId}:`;
-        for (const d of placedOriginDatums(inst.placement, prefix, this.partName(inst.partID))) {
+        for (const d of placedOriginDatums(inst.placement, prefix, this.instName(inst.instanceId))) {
           const sub = d.id.slice(prefix.length);
           if (visible.has(`${inst.instanceId}:${sub}`)) out.push(d);
         }
@@ -399,12 +399,16 @@ export class AssemblyEditController {
     });
   }
 
-  partName(partID: number): string {
+  partName(partID: number, tracked?: string): string {
     const p = this.partsWithCad().find((x) => x.partID === partID);
     if (!p?.part) return `Part ${partID}`;
     // Use the VCS display revision (matches the editor badge), falling back to
-    // the raw Parts.revision. Canonical part number = name-revision.
-    const rev = p.displayRevision ?? p.part.revision;
+    // the raw Parts.revision. Canonical part number = name-revision. An
+    // instance tracking another branch than the child's working copy shows
+    // that branch's rev.
+    const branchRev = !tracked || tracked === p.branchName ? null
+      : tracked === 'main' ? p.mainRevision : p.draftRevision;
+    const rev = branchRev ?? p.displayRevision ?? p.part.revision;
     return formatPartNumber(p.part.name, rev, (p.revisionCount ?? 0) > 1) || p.part.name;
   }
 
@@ -692,7 +696,7 @@ export class AssemblyEditController {
     const a = this.assembly();
     const ids = [...this.selectedIds()];
     if (!a || ids.length === 0) return;
-    const names = ids.map((id) => this.partName(this.instances().find((x) => x.instanceId === id)?.partID ?? -1));
+    const names = ids.map((id) => this.instName(id));
     const msg = ids.length === 1
       ? `Delete component "${names[0]}"?`
       : `Delete ${ids.length} components?\n\n${names.join(', ')}`;
@@ -853,7 +857,7 @@ export class AssemblyEditController {
       const branch = inst.ref?.branch;
       out.push(node({
         key: `component:${inst.instanceId}`, kind: 'feature',
-        label: this.partName(inst.partID) + (branch && branch !== 'main' ? ` · ${branch}` : ''),
+        label: this.partName(inst.partID, branch) + (branch && branch !== 'main' ? ` · ${branch}` : ''),
         iconName: 'memory', iconClass: 'part', depth: 0,
         expandable: true, expanded: exp, selectable: true, selected: sel.has(inst.instanceId),
         visibilityToggleable: true, visible: inst.visible !== false,
@@ -912,15 +916,15 @@ export class AssemblyEditController {
 
   mateLabel(m: Mate): string {
     if (m.type === 'origin') {
-      return `origin: ${this.partName(this.instanceOf(m.a.instanceId)?.partID ?? 0)} → Assembly origin`;
+      return `origin: ${this.instName(m.a.instanceId)} → Assembly origin`;
     }
     return `${m.type}: ${this.refName(m.a.instanceId)} ↔ ${this.refName(m.b.instanceId)}`;
   }
   private refName(instanceId: string): string {
-    return instanceId === ASSEMBLY_REF_ID ? 'Assembly' : this.partName(this.instanceOf(instanceId)?.partID ?? 0);
+    return instanceId === ASSEMBLY_REF_ID ? 'Assembly' : this.instName(instanceId);
   }
   private instanceOf(instanceId: string) { return this.instances().find((i) => i.instanceId === instanceId); }
-  patternSeedName(p: AssemblyPattern): string { return this.partName(this.instanceOf(p.seedInstanceId)?.partID ?? 0); }
+  patternSeedName(p: AssemblyPattern): string { return this.instName(p.seedInstanceId); }
 
   // ── visualization ───────────────────────────────────────────────────────────
   saveDisplayState() {
@@ -978,7 +982,7 @@ export class AssemblyEditController {
     });
   }
   interferenceCount(): number { return (this.interferencePairs() || []).filter((p) => p.interfering !== false).length; }
-  instName(id: string): string { return this.partName(this.instanceOf(id)?.partID ?? 0); }
+  instName(id: string): string { const inst = this.instanceOf(id); return this.partName(inst?.partID ?? 0, inst?.ref?.branch); }
 
   exportStep() {
     const a = this.assembly();
