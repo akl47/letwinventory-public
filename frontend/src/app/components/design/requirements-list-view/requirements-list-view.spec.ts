@@ -1,15 +1,16 @@
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ComponentFixture, DeferBlockBehavior, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
 import { provideRouter, ActivatedRoute, Router } from '@angular/router';
-import { of } from 'rxjs';
+import { of, Subject, throwError } from 'rxjs';
 import { vi } from 'vitest';
 
 import { RequirementsListView } from './requirements-list-view';
 import { DesignRequirementService } from '../../../services/design-requirement.service';
 import { ProjectService } from '../../../services/project.service';
 import { AuthService } from '../../../services/auth.service';
+import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { DesignRequirement } from '../../../models/design-requirement.model';
 import { Project } from '../../../models/project.model';
 
@@ -51,6 +52,7 @@ describe('RequirementsListView', () => {
 
     beforeEach(async () => {
         await TestBed.configureTestingModule({
+            deferBlockBehavior: DeferBlockBehavior.Manual,
             imports: [RequirementsListView],
             providers: [
                 provideHttpClient(),
@@ -154,6 +156,78 @@ describe('RequirementsListView', () => {
         expect(router.navigate).toHaveBeenCalledWith(['/requirements', 1, 'edit'], expect.objectContaining({ queryParams: {} }));
     });
 
+    // REQ 1056
+    it('should ignore a superseded load', () => {
+        const first = new Subject<DesignRequirement[]>();
+        const second = new Subject<DesignRequirement[]>();
+        vi.mocked(requirementService.getAll).mockReturnValueOnce(first).mockReturnValueOnce(second);
+        component.loadRequirements();
+        component.onProjectFilterChange(2);
+        second.next([mockRequirements[2]]);
+        first.next(mockRequirements);
+        expect(component.allRequirements().map(r => r.id)).toEqual([3]);
+    });
+
+    // REQ 1053
+    it('should list only unapproved requirements flat in pending mode', () => {
+        component.togglePendingMode();
+        component.toggleStatus('unapproved'); // status filter is ignored in pending mode
+        expect(component.pendingRows().map(r => r.id)).toEqual([2, 3]);
+        component.onSearchChange('OAuth');
+        expect(component.pendingRows().map(r => r.id)).toEqual([2]);
+    });
+
+    // REQ 1054
+    it('should approve a pending requirement, keep it listed as approved, and unapprove it again', () => {
+        vi.spyOn(requirementService, 'approve').mockReturnValue(of({ ...mockRequirements[1], approvalStatus: 'approved' as const }));
+        vi.spyOn(requirementService, 'unapprove').mockReturnValue(of({ ...mockRequirements[1], approvalStatus: 'unapproved' as const }));
+        component.togglePendingMode();
+        component.setApproval(mockRequirements[1], true);
+        expect(requirementService.approve).toHaveBeenCalledWith(2);
+        expect(component.pendingRows().map(r => [r.id, r.approvalStatus])).toEqual([[2, 'approved'], [3, 'unapproved']]);
+        expect(component.pendingCount()).toBe(1);
+
+        component.setApproval(mockRequirements[1], false);
+        expect(requirementService.unapprove).toHaveBeenCalledWith(2);
+        expect(component.pendingRows().map(r => r.approvalStatus)).toEqual(['unapproved', 'unapproved']);
+        expect(component.pendingCount()).toBe(2);
+    });
+
+    it('should drop approved requirements from the pending list on reload', () => {
+        vi.spyOn(requirementService, 'approve').mockReturnValue(of({ ...mockRequirements[1], approvalStatus: 'approved' as const }));
+        component.setApproval(mockRequirements[1], true);
+        vi.mocked(requirementService.getAll).mockReturnValue(of([
+            mockRequirements[0], { ...mockRequirements[1], approvalStatus: 'approved' as const }, mockRequirements[2],
+        ]));
+        component.loadRequirements();
+        expect(component.pendingRows().map(r => r.id)).toEqual([3]);
+    });
+
+    it('should keep a pending requirement unapproved when approval fails', () => {
+        vi.spyOn(requirementService, 'approve').mockReturnValue(throwError(() => ({ error: { error: 'nope' } })));
+        const errors = TestBed.inject(ErrorNotificationService);
+        vi.spyOn(errors, 'showHttpError').mockImplementation(() => {});
+        component.setApproval(mockRequirements[1], true);
+        expect(component.pendingRows().map(r => r.approvalStatus)).toEqual(['unapproved', 'unapproved']);
+        expect(errors.showHttpError).toHaveBeenCalled();
+    });
+
+    it('should not allow approval without the requirements.approve permission', () => {
+        vi.mocked(authService.hasPermission).mockImplementation((_resource, action) => action !== 'approve');
+        const fix = TestBed.createComponent(RequirementsListView);
+        expect(fix.componentInstance.canApprove()).toBe(false);
+    });
+
+    // REQ 1055
+    it('should count unapproved requirements and persist pending mode in the URL', () => {
+        expect(component.pendingCount()).toBe(2);
+        component.togglePendingMode();
+        expect(component.pendingMode()).toBe(true);
+        expect(router.navigate).toHaveBeenCalledWith([], expect.objectContaining({
+            queryParams: expect.objectContaining({ mode: 'pending' }),
+        }));
+    });
+
     it('should return correct indent pixels', () => {
         expect(component.getIndentPx(0)).toBe('0px');
         expect(component.getIndentPx(2)).toBe('48px');
@@ -177,13 +251,14 @@ describe('RequirementsListView', () => {
         // Re-create with query params
         TestBed.resetTestingModule();
         await TestBed.configureTestingModule({
+            deferBlockBehavior: DeferBlockBehavior.Manual,
             imports: [RequirementsListView],
             providers: [
                 provideHttpClient(),
                 provideHttpClientTesting(),
                 provideAnimationsAsync(),
                 provideRouter([]),
-                { provide: ActivatedRoute, useValue: { snapshot: { queryParams: { search: 'test', statuses: 'approved,implemented' } } } },
+                { provide: ActivatedRoute, useValue: { snapshot: { queryParams: { search: 'test', statuses: 'approved,implemented', mode: 'pending' } } } },
             ],
         }).compileComponents();
 
@@ -201,5 +276,6 @@ describe('RequirementsListView', () => {
         expect(comp.selectedStatuses().has('approved')).toBe(true);
         expect(comp.selectedStatuses().has('implemented')).toBe(true);
         expect(comp.selectedStatuses().size).toBe(2);
+        expect(comp.pendingMode()).toBe(true);
     });
 });
