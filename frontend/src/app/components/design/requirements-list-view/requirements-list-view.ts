@@ -1,4 +1,5 @@
 import { Component, OnInit, inject, signal, computed } from '@angular/core';
+import { Subscription } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
@@ -16,6 +17,7 @@ import { MatDividerModule } from '@angular/material/divider';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { DesignRequirementService } from '../../../services/design-requirement.service';
 import { AuthService } from '../../../services/auth.service';
+import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { matchesSearch } from '../../../utils/search';
 import { ProjectService } from '../../../services/project.service';
 import { DesignRequirement } from '../../../models/design-requirement.model';
@@ -63,7 +65,9 @@ export class RequirementsListView implements OnInit {
     private requirementService = inject(DesignRequirementService);
     private authService = inject(AuthService);
     private projectService = inject(ProjectService);
+    private errorNotification = inject(ErrorNotificationService);
     canWrite = computed(() => this.authService.hasPermission('requirements', 'write'));
+    canApprove = computed(() => this.authService.hasPermission('requirements', 'approve'));
 
     allRequirements = signal<DesignRequirement[]>([]);
     treeRows = signal<TreeRow[]>([]);
@@ -74,6 +78,20 @@ export class RequirementsListView implements OnInit {
     selectedProjectID = signal<number | null>(null);
     selectedStatuses = signal<Set<string>>(new Set(['unapproved', 'approved', 'not_implemented', 'implemented', 'validated']));
     hideChildren = signal(false);
+
+    // Pending-review mode: flat list of unapproved requirements (ignores the status filter and tree)
+    pendingMode = signal(false);
+    approvingIds = signal<Set<number>>(new Set());
+    pendingExpandedIds = signal<Set<number>>(new Set()); // cards showing verification/validation
+    pendingCount = computed(() => this.allRequirements().filter(r => r.approvalStatus === 'unapproved').length);
+    // Requirements approved from the pending list stay listed (collapsed) until the next load
+    private approvedInPending = signal<Set<number>>(new Set());
+    pendingRows = computed(() => {
+        const search = this.searchText();
+        const kept = this.approvedInPending();
+        return this.allRequirements().filter(r => (r.approvalStatus === 'unapproved' || kept.has(r.id))
+            && (!search || matchesSearch(r, search, ['description', 'category.name', 'owner.displayName'])));
+    });
 
     statusOptions = [
         { value: 'draft', label: 'Draft', icon: 'edit_note', cssClass: 'status-icon-draft' },
@@ -90,6 +108,7 @@ export class RequirementsListView implements OnInit {
     private expandedFromQuery = new Set<number>();
     private initializedFromQuery = false;
     private lastSearch = '';
+    private loadSub?: Subscription;
 
     ngOnInit() {
         this.applyQueryParams();
@@ -107,6 +126,7 @@ export class RequirementsListView implements OnInit {
             this.selectedStatuses.set(new Set(params['statuses'].split(',')));
         }
         if (params['hideChildren'] === 'true') this.hideChildren.set(true);
+        if (params['mode'] === 'pending') this.pendingMode.set(true);
         if (params['expanded']) {
             for (const id of params['expanded'].split(',')) {
                 const num = parseInt(id, 10);
@@ -125,6 +145,7 @@ export class RequirementsListView implements OnInit {
             params['statuses'] = Array.from(this.selectedStatuses()).join(',');
         }
         if (this.hideChildren()) params['hideChildren'] = 'true';
+        if (this.pendingMode()) params['mode'] = 'pending';
         const expandedIds = this.treeRows()
             .filter(r => r.expanded && r.hasChildren)
             .map(r => r.requirement.id);
@@ -135,8 +156,14 @@ export class RequirementsListView implements OnInit {
     loadRequirements() {
         this.isLoading.set(true);
         const projectID = this.selectedProjectID() ?? undefined;
-        this.requirementService.getAll(projectID).subscribe({
+        // Always refetch (the service cache goes stale when requirements change
+        // outside this tab) and drop any in-flight load so a slow earlier
+        // response can't overwrite a newer filter's result.
+        this.loadSub?.unsubscribe();
+        this.requirementService.clearCache();
+        this.loadSub = this.requirementService.getAll(projectID).subscribe({
             next: (requirements) => {
+                this.approvedInPending.set(new Set());
                 this.allRequirements.set(requirements);
                 this.buildTree();
                 this.isLoading.set(false);
@@ -182,10 +209,11 @@ export class RequirementsListView implements OnInit {
         // When searching, pre-compute which nodes have a matching descendant (or match themselves)
         const hasMatchingDescendant = new Set<number>();
         if (search) {
+            const byId = new Map(all.map(r => [r.id, r]));
             const markAncestors = (id: number | null) => {
                 if (id == null || hasMatchingDescendant.has(id)) return;
                 hasMatchingDescendant.add(id);
-                const req = all.find(r => r.id === id);
+                const req = byId.get(id);
                 if (req?.parentRequirementID != null) markAncestors(req.parentRequirementID);
             };
             for (const req of all) {
@@ -279,7 +307,6 @@ export class RequirementsListView implements OnInit {
 
     onProjectFilterChange(projectID: number | null) {
         this.selectedProjectID.set(projectID);
-        this.requirementService.clearCache();
         this.loadRequirements();
         this.updateQueryParams();
     }
@@ -326,6 +353,40 @@ export class RequirementsListView implements OnInit {
         this.treeRows.set([]); // Clear expand state so new default applies
         this.buildTree();
         this.updateQueryParams();
+    }
+
+    togglePendingMode() {
+        this.pendingMode.set(!this.pendingMode());
+        this.updateQueryParams();
+    }
+
+    togglePendingDetails(id: number) {
+        const next = new Set(this.pendingExpandedIds());
+        if (next.has(id)) next.delete(id); else next.add(id);
+        this.pendingExpandedIds.set(next);
+    }
+
+    /** Approve (or undo an approval) from the pending list. */
+    setApproval(req: DesignRequirement, approved: boolean) {
+        const setApproving = (on: boolean) => this.approvingIds.update(ids => {
+            const next = new Set(ids);
+            if (on) next.add(req.id); else next.delete(req.id);
+            return next;
+        });
+        setApproving(true);
+        const call = approved ? this.requirementService.approve(req.id) : this.requirementService.unapprove(req.id);
+        call.subscribe({
+            next: (updated) => {
+                if (approved) this.approvedInPending.update(ids => new Set(ids).add(req.id));
+                this.allRequirements.update(list => list.map(r => r.id === req.id ? { ...r, ...updated } : r));
+                this.buildTree();
+                setApproving(false);
+            },
+            error: (err) => {
+                setApproving(false);
+                this.errorNotification.showHttpError(err);
+            }
+        });
     }
 
     createNew() {

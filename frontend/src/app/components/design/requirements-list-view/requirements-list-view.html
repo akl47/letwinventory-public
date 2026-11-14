@@ -20,7 +20,15 @@
                     }
                 </mat-select>
             </mat-form-field>
-            <button mat-button class="filter-btn" [matMenuTriggerFor]="statusMenu"
+            <button mat-button class="filter-btn" [class.has-filter]="pendingMode()" (click)="togglePendingMode()"
+                matTooltip="Review requirements awaiting approval">
+                <mat-icon>pending_actions</mat-icon>
+                <span>Pending</span>
+                @if (pendingCount() > 0) {
+                <span class="filter-badge">{{ pendingCount() }}</span>
+                }
+            </button>
+            <button mat-button class="filter-btn" [matMenuTriggerFor]="statusMenu" [disabled]="pendingMode()"
                 [class.has-filter]="activeStatusFilterCount() > 0">
                 <mat-icon>filter_list</mat-icon>
                 <span>Status</span>
@@ -48,7 +56,8 @@
                 </div>
                 }
             </mat-menu>
-            <mat-slide-toggle [checked]="hideChildren()" (change)="toggleHideChildren()" color="primary">
+            <mat-slide-toggle [checked]="hideChildren()" (change)="toggleHideChildren()" color="primary"
+                [disabled]="pendingMode()">
                 Hide Children
             </mat-slide-toggle>
             <span [matTooltip]="canWrite() ? '' : 'You do not have permission'">
@@ -65,6 +74,102 @@
         <mat-spinner diameter="48"></mat-spinner>
         <p>Loading requirements...</p>
     </div>
+    } @else if (pendingMode()) {
+    @if (pendingRows().length === 0) {
+    <div class="no-data">
+        <mat-icon>task_alt</mat-icon>
+        <p>No requirements awaiting approval</p>
+    </div>
+    } @else {
+    <div class="cards-wrapper">
+        @for (req of pendingRows(); track req.id) {
+        <div class="pending-card" [class.pending-card-approved]="req.approvalStatus === 'approved'">
+            <div class="pending-header">
+                <span class="pending-id">REQ {{ req.id }}</span>
+                @if (req.approvalStatus === 'approved') {
+                <span class="card-description">{{ req.description }}</span>
+                } @else {
+                <app-tts-play-button [reqId]="req.id" field="all" />
+                <span class="pending-spacer"></span>
+                }
+                @if (req.category) {
+                <app-category-badge [label]="req.category.name" subtle />
+                }
+                @if (req.project) {
+                <span class="project-tag" [style.background-color]="'#' + req.project.tagColorHex">
+                    {{ req.project.shortName }}
+                </span>
+                }
+                @if (req.approvalStatus === 'approved') {
+                <span [matTooltip]="canApprove() ? 'Approved — click to unapprove' : 'Approved'">
+                    <button mat-icon-button class="edit-btn pending-unapprove-btn" (click)="setApproval(req, false)"
+                        [disabled]="!canApprove() || approvingIds().has(req.id)">
+                        <mat-icon class="status-icon-approved">check_circle</mat-icon>
+                    </button>
+                </span>
+                } @else {
+                <mat-icon class="status-icon-unapproved" matTooltip="Awaiting Approval">pending</mat-icon>
+                <span [matTooltip]="canWrite() ? 'Edit' : 'You do not have permission'">
+                    <button mat-icon-button class="edit-btn" (click)="openRequirement(req)" [disabled]="!canWrite()">
+                        <mat-icon>edit</mat-icon>
+                    </button>
+                </span>
+                <span [matTooltip]="canApprove() ? '' : 'You do not have permission'">
+                    <button mat-flat-button color="primary" class="pending-approve-btn" (click)="setApproval(req, true)"
+                        [disabled]="!canApprove() || approvingIds().has(req.id)">
+                        <mat-icon>check</mat-icon>
+                        Approve
+                    </button>
+                </span>
+                }
+            </div>
+            @if (req.approvalStatus !== 'approved') {
+            <div class="pending-title">{{ req.description }}</div>
+            <div class="pending-fields">
+                @if (req.parentRequirement) {
+                <span class="pending-label">Parent</span>
+                <span class="pending-value pending-parent" [matTooltip]="req.parentRequirement.description">
+                    REQ {{ req.parentRequirement.id }} — {{ req.parentRequirement.description }}
+                </span>
+                }
+                @if (req.rationale) {
+                <span class="pending-label">Rationale</span>
+                <span class="pending-value">{{ req.rationale }}</span>
+                }
+                @if (req.parameter) {
+                <span class="pending-label">Parameters</span>
+                <span class="pending-value">{{ req.parameter }}</span>
+                }
+                @if (pendingExpandedIds().has(req.id)) {
+                @if (req.verification) {
+                <span class="pending-label">Verification</span>
+                <span class="pending-value">{{ req.verification }}</span>
+                }
+                @if (req.validation) {
+                <span class="pending-label">Validation</span>
+                <span class="pending-value">{{ req.validation }}</span>
+                }
+                }
+            </div>
+            <div class="card-footer pending-footer">
+                @if (req.owner) {
+                <span class="footer-item">
+                    <span class="footer-label">Owner:</span>
+                    {{ req.owner.displayName }}
+                </span>
+                }
+                @if (req.verification || req.validation) {
+                <span class="pending-more" (click)="togglePendingDetails(req.id)">
+                    <mat-icon>{{ pendingExpandedIds().has(req.id) ? 'expand_less' : 'expand_more' }}</mat-icon>
+                    {{ pendingExpandedIds().has(req.id) ? 'Less' : 'More' }}
+                </span>
+                }
+            </div>
+            }
+        </div>
+        }
+    </div>
+    }
     } @else if (displayedRows().length === 0) {
     <div class="no-data">
         @if (searchText()) {
@@ -86,6 +191,7 @@
     <div class="cards-wrapper">
         @for (row of displayedRows(); track row.requirement.id) {
         <div class="card-row" [style.margin-left]="getIndentPx(row.level)">
+            @defer (on viewport) {
             <mat-accordion>
                 <mat-expansion-panel>
                     <mat-expansion-panel-header>
@@ -142,6 +248,7 @@
                         </mat-panel-description>
                     </mat-expansion-panel-header>
 
+                    <ng-template matExpansionPanelContent>
                     <div class="detail-grid">
                         <div class="detail-field full-width">
                             <span class="detail-label">
@@ -214,8 +321,12 @@
                         }
 
                     </div>
+                    </ng-template>
                 </mat-expansion-panel>
             </mat-accordion>
+            } @placeholder {
+            <div class="card-placeholder"></div>
+            }
         </div>
         }
     </div>

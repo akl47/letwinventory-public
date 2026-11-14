@@ -137,6 +137,134 @@
     display: block;
 }
 
+/* Stand-in for an off-screen row; matches the collapsed panel header height */
+.card-placeholder {
+    height: 48px;
+    border: 1px solid #404040;
+    border-radius: 6px;
+    background: #2d2d2d;
+    box-sizing: border-box;
+}
+
+/* Pending-review cards — same look as the tree panels, always open */
+
+.pending-card {
+    border: 1px solid #404040;
+    border-radius: 6px;
+    background: #2d2d2d;
+    padding: 0 16px 10px;
+}
+
+.pending-card-approved {
+    padding-bottom: 0;
+}
+
+.pending-unapprove-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.pending-unapprove-btn mat-icon {
+    cursor: pointer;
+}
+
+.pending-card:hover {
+    border-color: #555;
+}
+
+.pending-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+}
+
+.pending-id {
+    font-size: 14px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.pending-spacer {
+    flex: 1;
+}
+
+.pending-title {
+    font-size: 14px;
+    color: #e0e0e0;
+    white-space: pre-wrap;
+    padding-bottom: 10px;
+}
+
+.pending-approve-btn {
+    height: 32px;
+    padding: 0 14px;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.pending-fields {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 16px;
+    padding-top: 10px;
+    border-top: 1px solid #404040;
+}
+
+.pending-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: rgba(255, 255, 255, 0.4);
+    padding-top: 6px;
+}
+
+.pending-value {
+    font-size: 13px;
+    color: #e0e0e0;
+    white-space: pre-wrap;
+    line-height: 1.45;
+    min-width: 0;
+    padding: 4px 8px;
+    background-color: #242424;
+    border-radius: 4px;
+    border-left: 2px solid #555;
+}
+
+.pending-parent {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pending-footer {
+    margin-top: 10px;
+    padding-top: 8px;
+}
+
+.pending-more {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+    color: rgba(255, 255, 255, 0.5);
+    cursor: pointer;
+    user-select: none;
+}
+
+.pending-more:hover {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.pending-more mat-icon {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+}
+
 /* Panel appearance — match harness-property-panel flat style */
 
 ::ng-deep .card-row .mat-expansion-panel {
