@@ -95,6 +95,16 @@ describe('findProjectedBySource (REQ 939)', () => {
     expect(findProjectedBySource(s, localVertexRef('f1/v0'))).toBe('P1');
   });
 
+  it('does not treat a point riding an edge as a projection of that edge', () => {
+    // Part 1692: a point-on-edge relation blocked converting the same edge.
+    const riding = state([point('P1')], [onEdge('c1', 'P1', localRef('f1/e3'))]);
+    expect(findProjectedBySource(riding, localRef('f1/e3'))).toBeNull();
+    const both = state([point('P1'), line('L1')], [onEdge('c1', 'P1', localRef('f1/e3')), onEdge('c2', 'L1', localRef('f1/e3'))]);
+    expect(findProjectedBySource(both, localRef('f1/e3'))).toBe('L1');
+    const xp = state([point('P1')], [onEdge('c1', 'P1', xpRef({ edgeId: 'cpe:i2:a|b' }))]);
+    expect(findProjectedBySource(xp, xpRef({ edgeId: 'cpe:i2:a|b' }))).toBeNull();
+  });
+
   it('returns null for a source that is not projected yet', () => {
     expect(findProjectedBySource(s, localRef('f1/e9'))).toBeNull();
     expect(findProjectedBySource(s, localRef('f1/e3', 'center'))).toBeNull();
