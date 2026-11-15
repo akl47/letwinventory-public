@@ -10,6 +10,8 @@ import { catchError } from 'rxjs/operators';
 import { InventoryService } from '../../../services/inventory.service';
 import { AuthService } from '../../../services/auth.service';
 import { Part, PartCategory } from '../../../models';
+import { Project } from '../../../models/project.model';
+import { ProjectService } from '../../../services/project.service';
 import { AuthImgDirective } from '../../../directives/auth-img.directive';
 import { CategoryBadge } from '../../common/category-badge/category-badge';
 import { DataTable, DataTableColumnDef, ColumnDef, FilterSection } from '../../common/data-table/data-table';
@@ -33,6 +35,7 @@ import { DataTable, DataTableColumnDef, ColumnDef, FilterSection } from '../../c
 })
 export class PartsTableView implements OnInit {
   private inventoryService = inject(InventoryService);
+  private projectService = inject(ProjectService);
   private authService = inject(AuthService);
   private router = inject(Router);
 
@@ -41,6 +44,7 @@ export class PartsTableView implements OnInit {
   allParts = signal<Part[]>([]);
   stockLevels = signal<Record<number, number>>({});
   categories = signal<PartCategory[]>([]);
+  private projects = signal<Project[]>([]);
   // REQ 937 — drives the spinner. Starts true so the table (and its "No data"
   // empty state) never renders before the first response lands.
   isLoading = signal<boolean>(true);
@@ -52,6 +56,8 @@ export class PartsTableView implements OnInit {
     { key: 'revision', header: 'Rev', sortable: true },
     { key: 'description', header: 'Description', sortable: true },
     { key: 'category', header: 'Category', sortable: true, sortValue: p => p.PartCategory?.name?.toLowerCase() ?? null },
+    // Common parts first, then by project name; parts with no project last.
+    { key: 'projects', header: 'Projects', sortable: true, sortValue: p => p.commonPart ? ' common' : ((p.projects ?? []).map(pr => pr.name.toLowerCase()).sort().join(',') || '\uffff') },
     { key: 'vendor', header: 'Vendor', sortable: true },
     { key: 'sku', header: 'SKU', sortable: true },
     { key: 'minimumOrderQuantity', header: 'Min Order Qty', sortable: true },
@@ -59,7 +65,41 @@ export class PartsTableView implements OnInit {
     { key: 'minimumStockQuantity', header: 'Min Stock Qty', sortable: true, sortValue: p => p.minimumStockQuantity ?? null },
     { key: 'internalPart', header: 'Type', sortable: true },
     { key: 'createdAt', header: 'Created', sortable: true, sortValue: p => p.createdAt ? new Date(p.createdAt).getTime() : null },
+    { key: 'design', header: '' },
   ];
+
+  /** Every active project, plus any project a part in the catalog belongs to
+   * (REQ 1069) — so the list is still useful to a user who cannot list projects. */
+  private projectOptions = computed(() => {
+    const byId = new Map<number, { id: number; label: string; colorHex: string }>();
+    for (const pr of this.projects()) {
+      byId.set(pr.id, { id: pr.id, label: pr.name, colorHex: pr.tagColorHex ? `#${pr.tagColorHex}` : '#808080' });
+    }
+    for (const part of this.allParts()) {
+      for (const pr of part.projects ?? []) {
+        byId.set(pr.id, { id: pr.id, label: pr.name, colorHex: pr.tagColorHex ? `#${pr.tagColorHex}` : '#808080' });
+      }
+    }
+    return [...byId.values()].sort((a, b) => a.label.localeCompare(b.label));
+  });
+
+  // REQ 1072 — quick link to the part's CAD model, assembly or harness.
+  readonly designLinks: Record<string, { icon: string; tooltip: string }> = {
+    cad: { icon: 'view_in_ar', tooltip: 'Open the CAD model' },
+    assembly: { icon: 'account_tree', tooltip: 'Open the assembly' },
+    harness: { icon: 'cable', tooltip: 'Open the harness design' },
+  };
+
+  openDesign(part: Part, event: Event): void {
+    // The row itself opens the part — keep the click to the button.
+    event.stopPropagation();
+    event.preventDefault();
+    const design = part.design;
+    if (!design) return;
+    if (design.kind === 'harness') this.router.navigate(['/parts', part.id, 'harness', 'editor'], { queryParams: { revisionID: design.id } });
+    else if (design.kind === 'assembly') this.router.navigate(['/parts', part.id, 'assembly', 'editor']);
+    else this.router.navigate(['/parts', part.id, 'cad', 'editor'], { queryParams: { revisionID: design.id } });
+  }
 
   filterSections = computed<FilterSection<Part>[]>(() => [
     {
@@ -84,6 +124,14 @@ export class PartsTableView implements OnInit {
       accessor: (p: Part) => (p.internalPart ? 'internal' : 'vendor'),
     },
     {
+      type: 'multiSelect',
+      key: 'projects',
+      label: 'Projects',
+      options: this.projectOptions(),
+      // A common part belongs to every project.
+      accessor: (p: Part) => p.commonPart ? this.projectOptions().map(o => o.id) : (p.projects ?? []).map(pr => pr.id),
+    },
+    {
       type: 'toggle',
       key: 'inactive',
       label: 'Show Inactive',
@@ -105,6 +153,12 @@ export class PartsTableView implements OnInit {
 
   ngOnInit() {
     this.loadData();
+    // Project filter options. A user without project access falls back to the
+    // projects the listed parts carry.
+    this.projectService.getProjects().subscribe({
+      next: projects => this.projects.set(projects.filter(p => p.activeFlag)),
+      error: () => this.projects.set([]),
+    });
   }
 
   loadData() {

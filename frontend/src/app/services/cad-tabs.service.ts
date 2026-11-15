@@ -14,10 +14,10 @@ export class CadTabsService {
 
   move(from: number, to: number) { this.set(moveTab(this.tabs(), from, to)); }
 
-  close(partID: number, activePartID: number | null) {
-    const r = closeTab(this.tabs(), partID, activePartID);
+  close(key: string, activeKey: string | null) {
+    const r = closeTab(this.tabs(), key, activeKey);
     this.set(r.tabs);
-    if (partID !== activePartID) return;
+    if (key !== activeKey) return;
     if (r.next) this.switchTo(r.next);
     else this.router.navigate(['/design/cad']);
   }

@@ -931,3 +931,25 @@ mat-checkbox {
         align-self: center;
     }
 }
+
+/* REQ 1070 — project membership row */
+.part-projects {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 12px;
+}
+
+.part-projects-select {
+    flex: 1;
+}
+
+.part-projects-view {
+    margin-top: 12px;
+}
+
+.part-projects-view .info-value {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}

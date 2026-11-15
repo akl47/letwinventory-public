@@ -1,24 +1,11 @@
 import { test, expect } from '@playwright/test';
 
+// REQ 1068 — harnesses are opened from the CAD landing page.
 test.describe('Harness List', () => {
-  test.beforeEach(async ({ page }) => {
+  test('the old harness list address leads to the CAD landing page', async ({ page }) => {
     await page.goto('/#/harness');
-  });
-
-  test('displays harness list view', async ({ page }) => {
-    const table = page.locator('table, mat-table');
-    await expect(table.first()).toBeVisible({ timeout: 10000 });
-  });
-
-  test('has search input', async ({ page }) => {
-    const search = page.locator('input[placeholder*="Search"], input[matInput]').first();
-    await expect(search).toBeVisible();
-  });
-
-  test('shows status chips', async ({ page }) => {
-    // Status chips may or may not exist depending on data
-    const table = page.locator('table, mat-table');
-    await expect(table.first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="cad-landing"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="cad-new-harness"]')).toBeVisible();
   });
 });
 
@@ -60,28 +47,38 @@ test.describe('Harness Editor', () => {
     }
   });
 
+  // REQ 1067 — the harness opens in the CAD editor shell, in harness mode.
   test('opens harness editor', async ({ page }) => {
     test.skip(!harnessId, 'No harness created');
     await page.goto(`/#/harness/editor/${harnessId}`);
-    // Wait for canvas to render
-    const canvas = page.locator('canvas');
-    await expect(canvas).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="cad-editor"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('app-harness-canvas canvas').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="tab-harness"]')).toBeVisible();
+    await expect(page.locator('[data-testid="harness-rail"]')).toBeVisible();
+    await expect(page.locator(`[data-testid="cad-harness-tab-${harnessId}"]`)).toBeVisible();
+    await expect(page.locator('[data-testid="revision-badge"]')).toContainText('Rev 01*');
+    // Read-only until checked out
+    await expect(page.locator('[data-testid="tool-wire"]')).toBeDisabled();
+    await page.locator('[data-testid="tab-file"]').click();
+    await page.locator('[data-testid="action-checkout"]').click();
+    await page.locator('[data-testid="tab-harness"]').click();
+    await expect(page.locator('[data-testid="tool-wire"]')).toBeEnabled({ timeout: 10000 });
   });
 
   test('exported JSON does not contain image data', async ({ page }) => {
     test.skip(!harnessId, 'No harness created');
     await page.goto(`/#/harness/editor/${harnessId}`);
 
-    const canvas = page.locator('canvas');
+    const canvas = page.locator('app-harness-canvas canvas').first();
     await expect(canvas).toBeVisible({ timeout: 10000 });
 
-    // Click export menu trigger (download icon)
-    const exportButton = page.locator('button:has(mat-icon:text("download"))');
-    await expect(exportButton).toBeVisible({ timeout: 5000 });
-    await exportButton.click();
+    // Export lives on the ribbon's File tab
+    const fileTab = page.locator('[data-testid="tab-file"]');
+    await expect(fileTab).toBeVisible({ timeout: 5000 });
+    await fileTab.click();
 
-    // Click "Export JSON" menu item
-    const jsonOption = page.locator('button:has-text("Export JSON")');
+    // Click the "Export JSON" ribbon button
+    const jsonOption = page.locator('[data-testid="action-export-json"]');
     await expect(jsonOption).toBeVisible({ timeout: 5000 });
 
     // Listen for download event before clicking

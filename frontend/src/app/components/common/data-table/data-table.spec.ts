@@ -6,6 +6,8 @@ import { of } from 'rxjs';
 import { vi } from 'vitest';
 
 import { DataTable, ColumnDef, FilterSection, DataTableColumnDef } from './data-table';
+import { FilterMenu } from '../filter-menu/filter-menu';
+import { By } from '@angular/platform-browser';
 
 interface Row {
   id: number;
@@ -60,7 +62,7 @@ const filterSections: FilterSection<Row>[] = [
       [data]="data()"
       [columns]="columns"
       [searchKeys]="['name','description','category.name']"
-      [filterSections]="filters"
+      [filterSections]="filters()"
       [defaultSort]="{ key: 'name', dir: 'asc' }"
       [rowHref]="rowHref"
       (rowClick)="onRowClick($event)"
@@ -80,7 +82,7 @@ const filterSections: FilterSection<Row>[] = [
 class HostComponent {
   data = signal(rows);
   columns = columns;
-  filters = filterSections;
+  filters = signal(filterSections);
   rowHref = (r: Row) => `/items/${r.id}/edit`;
   clicked: Row | null = null;
   onRowClick(r: Row) { this.clicked = r; }
@@ -272,14 +274,34 @@ describe('DataTable', () => {
       expect(dataTable.displayedRows().length).toBe(0);
     });
 
-    it('multiSelect helpers: allSelected / someSelected / hiddenCount', () => {
-      const { dataTable } = setup();
-      expect(dataTable.isAllSelected('categories')).toBe(true);
-      expect(dataTable.isSomeSelected('categories')).toBe(false);
-      dataTable.setFilterValue('categories', new Set([1]));
-      expect(dataTable.isAllSelected('categories')).toBe(false);
-      expect(dataTable.isSomeSelected('categories')).toBe(true);
-      expect(dataTable.hiddenOptionCount('categories')).toBe(2);
+    it('hands the filter menu its sections, values and active count, and applies what it reports', () => {
+      const { fixture, dataTable } = setup();
+      const menu = fixture.debugElement.query(By.directive(FilterMenu)).componentInstance as FilterMenu<Row>;
+      expect(menu.sections).toBe(dataTable.filterSections);
+      expect(menu.values).toBe(dataTable.filterValues());
+      menu.valueChange.emit({ key: 'categories', value: new Set([1]) });
+      fixture.detectChanges();
+      expect(Array.from(dataTable.filterValues()['categories'] as Set<number>)).toEqual([1]);
+      expect(menu.activeCount).toBe(2);
+    });
+
+    it('keeps "everything selected" when a multi-select gains options after the table is shown', () => {
+      const { fixture, host, dataTable } = setup();
+      const more = filterSections.map(s => s.type === 'multiSelect'
+        ? { ...s, options: [...s.options, { id: 4, label: 'Cat-D' }] } : s);
+      host.filters.set(more);
+      fixture.detectChanges();
+      expect((dataTable.filterValues()['categories'] as Set<number>).size).toBe(4);
+      expect(dataTable.activeFilterCount()).toBe(0);
+    });
+
+    it('keeps a narrowed selection when a multi-select gains options', () => {
+      const { fixture, host, dataTable } = setup();
+      dataTable.setFilterValue('categories', new Set([2]));
+      host.filters.set(filterSections.map(s => s.type === 'multiSelect'
+        ? { ...s, options: [...s.options, { id: 4, label: 'Cat-D' }] } : s));
+      fixture.detectChanges();
+      expect(Array.from(dataTable.filterValues()['categories'] as Set<number>)).toEqual([2]);
     });
 
     it('activeFilterCount counts non-default filter values', () => {

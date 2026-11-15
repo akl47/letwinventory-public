@@ -9,8 +9,8 @@ import { MatInputModule } from '@angular/material/input';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatSelectModule } from '@angular/material/select';
 import { CommonModule, DatePipe, KeyValuePipe, Location, TitleCasePipe } from '@angular/common';
-import { forkJoin, of, combineLatest } from 'rxjs';
-import { catchError, take } from 'rxjs/operators';
+import { forkJoin, of, combineLatest, Observable } from 'rxjs';
+import { catchError, map, switchMap, take } from 'rxjs/operators';
 import { InventoryService, PartLocationsResult } from '../../../services/inventory.service';
 import { ToolsService } from '../../../services/tools.service';
 import { Tool, ToolCategory, ToolSubcategory } from '../../../models/tool.model';
@@ -18,6 +18,8 @@ import { AuthService } from '../../../services/auth.service';
 import { HarnessPartsService } from '../../../services/harness-parts.service';
 import { HarnessService } from '../../../services/harness.service';
 import { Part, PartCategory, UnitOfMeasure } from '../../../models';
+import { Project } from '../../../models/project.model';
+import { ProjectService } from '../../../services/project.service';
 import { DbHarnessConnector, DbHarnessWire, DbHarnessCable, DbElectricalComponent, ElectricalPinType, ComponentPinGroup, createEmptyHarnessData } from '../../../models/harness.model';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
 import { environment } from '../../../../environments/environment';
@@ -69,6 +71,12 @@ export class PartEditPage implements OnInit {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private inventoryService = inject(InventoryService);
+  private projectService = inject(ProjectService);
+  // REQ 1070 — project membership. Edited alongside the form (edit mode only)
+  // and saved with it.
+  allProjects = signal<Project[]>([]);
+  partProjectIDs = signal<number[]>([]);
+  partCommon = signal(false);
   private toolsService = inject(ToolsService);
   private authService = inject(AuthService);
   private harnessPartsService = inject(HarnessPartsService);
@@ -291,6 +299,11 @@ export class PartEditPage implements OnInit {
   });
 
   ngOnInit() {
+    // A user without project access simply gets no projects to choose from.
+    this.projectService.getProjects().subscribe({
+      next: projects => this.allProjects.set(projects.filter(p => p.activeFlag)),
+      error: () => this.allProjects.set([]),
+    });
     // Check for locked category from query params
     this.route.queryParams.subscribe(params => {
       if (params['category']) {
@@ -486,6 +499,8 @@ export class PartEditPage implements OnInit {
     this.inventoryService.getPartById(partId).subscribe({
       next: (part) => {
         this.currentPart = part;
+        this.partProjectIDs.set((part.projects ?? []).map(p => p.id));
+        this.partCommon.set(!!part.commonPart);
         // Set flag to prevent valueChanges handlers from clearing data during load
         this.isLoadingPart = true;
         this.form.patchValue({
@@ -1284,6 +1299,8 @@ export class PartEditPage implements OnInit {
         manufacturer: this.currentPart.manufacturer || '',
         manufacturerPN: this.currentPart.manufacturerPN || ''
       });
+      this.partProjectIDs.set((this.currentPart.projects ?? []).map(p => p.id));
+      this.partCommon.set(!!this.currentPart.commonPart);
       // Restore part image state
       this.partImage.set(null);
       this.partImageFile.set(null);
@@ -1291,6 +1308,30 @@ export class PartEditPage implements OnInit {
     }
     this.isFormEditMode.set(false);
     this.pendingRevisionAction.set(null);
+  }
+
+  onPartProjectsChange(projectIDs: number[]) {
+    this.partProjectIDs.set(projectIDs);
+  }
+
+  onPartCommonChange(commonPart: boolean) {
+    this.partCommon.set(commonPart);
+  }
+
+  /** The projects selected for the part, for the read-only view. */
+  partProjects = computed(() => {
+    const ids = new Set(this.partProjectIDs());
+    const known = this.allProjects().filter(p => ids.has(p.id));
+    // Fall back to the part's own list for projects this user cannot list (or inactive ones).
+    const extra = (this.currentPart?.projects ?? []).filter(p => ids.has(p.id) && !known.some(k => k.id === p.id));
+    return [...known, ...extra];
+  });
+
+  /** True when the project selection or common mark differs from the saved part. */
+  private partProjectsChanged(): boolean {
+    const saved = (this.currentPart?.projects ?? []).map(p => p.id).sort();
+    const now = [...this.partProjectIDs()].sort();
+    return saved.join(',') !== now.join(',') || !!this.currentPart?.commonPart !== this.partCommon();
   }
 
   save() {
@@ -1334,7 +1375,14 @@ export class PartEditPage implements OnInit {
 
       const savePart = () => {
         if (this.isEditMode && this.currentPart?.id) {
-          this.inventoryService.updatePart(this.currentPart.id, partData).subscribe({
+          // Project membership is saved with the part (REQ 1070).
+          const partID = this.currentPart.id;
+          const projects$: Observable<unknown> = this.partProjectsChanged()
+            ? this.inventoryService.setPartProjects(partID, { projectIDs: this.partProjectIDs(), commonPart: this.partCommon() })
+            : of(null);
+          this.inventoryService.updatePart(partID, partData).pipe(
+            switchMap((response: any) => projects$.pipe(map(() => response)))
+          ).subscribe({
             next: (response: any) => {
               const partId = response.id || this.currentPart!.id;
               this.saveHarnessData(partId);
@@ -1370,6 +1418,11 @@ export class PartEditPage implements OnInit {
                 this.saveBomData(response.id);
               }
               this.saveToolForPart(response.id);
+              if (this.partProjectIDs().length || this.partCommon()) {
+                this.inventoryService.setPartProjects(response.id, { projectIDs: this.partProjectIDs(), commonPart: this.partCommon() }).subscribe({
+                  error: (err) => this.errorNotification.showHttpError(err, 'Part created, but its projects could not be saved'),
+                });
+              }
               this.errorNotification.showSuccess('Part created successfully');
               this.router.navigate(['/parts']);
             },

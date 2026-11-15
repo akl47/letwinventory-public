@@ -232,6 +232,11 @@ export class InventoryService {
         return this.http.put(`${this.apiUrl}/part/${partId}`, data);
     }
 
+    /** REQ 1069 — set the projects a part belongs to and/or its common mark. */
+    setPartProjects(partId: number, change: { projectIDs?: number[]; commonPart?: boolean }): Observable<Pick<Part, 'id' | 'commonPart' | 'projects'>> {
+        return this.http.put<Pick<Part, 'id' | 'commonPart' | 'projects'>>(`${this.apiUrl}/part/${partId}/projects`, change);
+    }
+
     deletePart(partId: number): Observable<any> {
         return this.http.delete(`${this.apiUrl}/part/${partId}`);
     }

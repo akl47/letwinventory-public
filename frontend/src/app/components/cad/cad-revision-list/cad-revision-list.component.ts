@@ -9,6 +9,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { CadModelService } from '../../../services/cad-model.service';
+import { AssemblyService } from '../../../services/assembly.service';
 import { CadModel, CadVersionGraph, CadVersionNode, CadCommitDiff, CadDiffEntry, FaceStatus, CadCommitGeometry } from '../../../models/cad-model.model';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
@@ -391,6 +392,7 @@ export class CadRevisionListComponent implements OnInit {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private cadApi = inject(CadModelService);
+  private assemblyApi = inject(AssemblyService);
   private auth = inject(AuthService);
   private errors = inject(ErrorNotificationService);
 
@@ -781,7 +783,19 @@ export class CadRevisionListComponent implements OnInit {
     this.creating.set(true);
     this.cadApi.checkoutCreated(this.cadApi.createForPart(this.partID())).subscribe({
       next: created => { this.creating.set(false); this.router.navigate(['editor'], { relativeTo: this.route, queryParams: { revisionID: created.id, branch: created.branchName || 'main' } }); },
-      error: err => { this.creating.set(false); this.errors.showError(err?.error?.error || 'Failed to create CAD model'); },
+      error: err => {
+        // An Assembly-category part gets an assembly, not a part model.
+        if (err?.error?.code === 'USE_ASSEMBLY') { this.createAssembly(); return; }
+        this.creating.set(false);
+        this.errors.showError(err?.error?.error || 'Failed to create CAD model');
+      },
+    });
+  }
+
+  private createAssembly() {
+    this.cadApi.checkoutCreated(this.assemblyApi.createForPart(this.partID())).subscribe({
+      next: () => { this.creating.set(false); this.router.navigate(['/parts', this.partID(), 'assembly', 'editor']); },
+      error: err => { this.creating.set(false); this.errors.showError(err?.error?.error || 'Failed to create assembly'); },
     });
   }
 }

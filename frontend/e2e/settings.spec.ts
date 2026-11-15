@@ -24,10 +24,11 @@ test.describe('Bulk Upload', () => {
   });
 });
 
+// REQ 1068 — a new harness is started from the CAD landing page.
 test.describe('Harness Editor - New', () => {
-  test('displays harness editor for new harness', async ({ page }) => {
+  test('the old new-harness address leads to the CAD landing page', async ({ page }) => {
     await page.goto('/#/harness/editor');
-    const editorPage = page.locator('app-harness-page');
-    await expect(editorPage).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="cad-landing"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="cad-new-harness"]')).toBeVisible();
   });
 });

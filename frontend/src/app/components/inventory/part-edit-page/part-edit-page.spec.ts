@@ -454,6 +454,87 @@ describe('PartEditPage', () => {
     });
   });
 
+  // REQ 1070
+  describe('project membership', () => {
+    const part = () => ({
+      ...mockParts[0],
+      commonPart: true,
+      projects: [{ id: 3, name: 'Alpha', shortName: 'ALP', tagColorHex: 'FF0000' }],
+    }) as any;
+
+    it('shows the part\'s projects and common mark when it is opened', () => {
+      vi.spyOn(inventoryService, 'getPartById').mockReturnValue(of(part()));
+      (component as any).loadPart(1);
+      expect(component.partProjectIDs()).toEqual([3]);
+      expect(component.partCommon()).toBe(true);
+    });
+
+    it('offers the controls only in edit mode and shows the selection read-only otherwise', () => {
+      vi.spyOn(inventoryService, 'getPartById').mockReturnValue(of(part()));
+      component.isEditMode = true;
+      (component as any).loadPart(1);
+      component.isFormEditMode.set(false);
+      fixture.detectChanges();
+      const el: HTMLElement = fixture.nativeElement;
+      expect(el.querySelector('[data-testid="part-projects-select"]')).toBeNull();
+      expect(el.querySelector('[data-testid="part-common-toggle"]')).toBeNull();
+      expect(el.querySelector('[data-testid="part-projects"]')!.textContent).toContain('Alpha');
+      expect(el.querySelector('[data-testid="part-projects"]')!.textContent).toContain('Common');
+
+      component.isFormEditMode.set(true);
+      fixture.detectChanges();
+      expect(el.querySelector('[data-testid="part-projects-select"]')).toBeTruthy();
+      expect(el.querySelector('[data-testid="part-common-toggle"]')).toBeTruthy();
+    });
+
+    it('holds a change until the part is saved, then saves it with the part', () => {
+      const setProjects = vi.spyOn(inventoryService, 'setPartProjects').mockReturnValue(of({ id: 1, commonPart: false, projects: [] }));
+      vi.spyOn(inventoryService, 'updatePart').mockReturnValue(of({ id: 1 }));
+      vi.spyOn(inventoryService, 'getPartById').mockReturnValue(of(part()));
+      component.isEditMode = true;
+      component.currentPart = part();
+      component.form.patchValue({ ...part(), partCategoryID: part().partCategoryID });
+      component.onPartProjectsChange([3, 4]);
+      component.onPartCommonChange(false);
+      expect(setProjects).not.toHaveBeenCalled();
+      component.save();
+      expect(setProjects).toHaveBeenCalledWith(1, { projectIDs: [3, 4], commonPart: false });
+    });
+
+    it('does not touch the projects on save when they were not changed', () => {
+      const setProjects = vi.spyOn(inventoryService, 'setPartProjects');
+      vi.spyOn(inventoryService, 'updatePart').mockReturnValue(of({ id: 1 }));
+      vi.spyOn(inventoryService, 'getPartById').mockReturnValue(of(part()));
+      component.isEditMode = true;
+      component.currentPart = part();
+      component.partProjectIDs.set([3]);
+      component.partCommon.set(true);
+      component.form.patchValue({ ...part() });
+      component.save();
+      expect(setProjects).not.toHaveBeenCalled();
+    });
+
+    it('cancelling the edit restores the saved selection', () => {
+      component.currentPart = { ...part(), PartCategory: mockCategories[0] };
+      component.isFormEditMode.set(true);
+      component.onPartProjectsChange([9]);
+      component.onPartCommonChange(false);
+      component.cancelEdit();
+      expect(component.partProjectIDs()).toEqual([3]);
+      expect(component.partCommon()).toBe(true);
+    });
+
+    it('keeps the selection for a new part to save when it is created', () => {
+      const setProjects = vi.spyOn(inventoryService, 'setPartProjects');
+      component.isEditMode = false;
+      component.onPartProjectsChange([3]);
+      component.onPartCommonChange(true);
+      expect(setProjects).not.toHaveBeenCalled();
+      expect(component.partProjectIDs()).toEqual([3]);
+      expect(component.partCommon()).toBe(true);
+    });
+  });
+
   describe('edit mode controls', () => {
     it('enableEdit should set isFormEditMode to true', () => {
       component.isFormEditMode.set(false);

@@ -42,6 +42,16 @@
         }
       </ng-template>
 
+      <ng-template appColumn="design" let-part>
+        @if (part.design; as design) {
+          <button mat-icon-button class="design-link" [attr.data-testid]="'design-link-' + part.id"
+            [matTooltip]="designLinks[design.kind].tooltip" [attr.aria-label]="designLinks[design.kind].tooltip"
+            (click)="openDesign(part, $event)" (mousedown)="$event.stopPropagation()">
+            <mat-icon>{{ designLinks[design.kind].icon }}</mat-icon>
+          </button>
+        }
+      </ng-template>
+
       <ng-template appColumn="name" let-part>
         <strong>{{ part.name }}</strong>
       </ng-template>
@@ -52,6 +62,18 @@
         <app-category-badge
           [label]="part.PartCategory?.name || 'Unknown'"
           [colorHex]="part.PartCategory?.tagColorHex" />
+      </ng-template>
+
+      <ng-template appColumn="projects" let-part>
+        <div class="project-tags">
+          @if (part.commonPart) {
+            <app-category-badge label="Common" matTooltip="Common part — available to every project" />
+          }
+          @for (project of part.projects ?? []; track project.id) {
+            <app-category-badge [label]="project.shortName || project.name" [colorHex]="project.tagColorHex" [matTooltip]="project.name" />
+          }
+          @if (!part.commonPart && !(part.projects?.length)) { - }
+        </div>
       </ng-template>
 
       <ng-template appColumn="sku" let-part>

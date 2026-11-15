@@ -31,8 +31,13 @@ const CAD_WORKFLOW = {
     { action: 'reopen', from: 'approved', to: 'draft', permission: 'cad.write' },
   ],
 };
+// Harnesses run the same review workflow under their own `harness` resource.
+const HARNESS_WORKFLOW = {
+  ...CAD_WORKFLOW,
+  transitions: CAD_WORKFLOW.transitions.map((t) => ({ ...t, permission: t.permission.replace(/^cad\./, 'harness.') })),
+};
 // Assemblies share the same review workflow + the `cad` permission resource.
-const WORKFLOWS = { cad: CAD_WORKFLOW, assembly: CAD_WORKFLOW };
+const WORKFLOWS = { cad: CAD_WORKFLOW, assembly: CAD_WORKFLOW, harness: HARNESS_WORKFLOW };
 
 function dbOf(db) { return db || global.db; }
 
@@ -86,10 +91,10 @@ async function availableActions(repo, userId, db, perms) {
     .map(t => ({ action: t.action, to: t.to }));
 }
 
-// Active users holding cad.approve (directly or via an active group).
-async function reviewerIds(db) {
+// Active users holding the approve permission (directly or via an active group).
+async function reviewerIds(db, resource = 'cad') {
   const D = dbOf(db);
-  const perm = await D.Permission.findOne({ where: { resource: 'cad', action: 'approve' } });
+  const perm = await D.Permission.findOne({ where: { resource, action: 'approve' } });
   if (!perm) return [];
   const ids = new Set();
   for (const up of await D.UserPermission.findAll({ where: { permissionID: perm.id } })) ids.add(up.userID);
@@ -116,7 +121,7 @@ const _defaultNotifier = async (repo, t, actorUserID, ctx, db) => {
   }
   if (t.notify === 'reviewers') {
     const name = (ctx && ctx.modelName) || 'A CAD model';
-    for (const id of await reviewerIds(db)) {
+    for (const id of await reviewerIds(db, repo.repoType === 'harness' ? 'harness' : 'cad')) {
       if (id === actorUserID) continue;
       try {
         await notificationService.sendPushToUser(id, { title: 'CAD review requested', body: `${name} was submitted for review.` });

@@ -467,7 +467,7 @@ function drawCableBlock(
       ctx.fillStyle = COLORS.text;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const labelX = flipped ? -(width / 2) : (width / 2);
+      const labelX = flipped ? -(left + width / 2) : (left + width / 2);
       ctx.fillText(truncatedLabel, labelX, wireY);
       ctx.restore();
     }

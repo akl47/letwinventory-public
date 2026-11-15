@@ -133,7 +133,9 @@ export function drawElementHeader(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const truncatedLabel = truncateText(ctx, label, width);
-  const textX = flipped ? -(width / 2) : (width / 2);
+  // Centre on the element body, which starts at `left` (not always 0: a
+  // component's body lies to the left of its anchor).
+  const textX = flipped ? -(left + width / 2) : (left + width / 2);
   ctx.fillText(truncatedLabel, textX, top + HEADER_HEIGHT / 2);
   ctx.restore();
 }
@@ -172,7 +174,9 @@ export function drawPartNameRow(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const truncatedPartName = truncateText(ctx, partName, width);
-  const textX = flipped ? -(width / 2) : (width / 2);
+  // Centre on the element body, which starts at `left` (not always 0: a
+  // component's body lies to the left of its anchor).
+  const textX = flipped ? -(left + width / 2) : (left + width / 2);
   ctx.fillText(truncatedPartName, textX, rowCenter);
   ctx.restore();
 }

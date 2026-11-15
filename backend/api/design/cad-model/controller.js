@@ -322,7 +322,11 @@ module.exports = {
       const rows = await db.DesignCADModel.findAll({
         where: { activeFlag: true },
         order: [['updatedAt', 'DESC']],
-        include: [{ model: db.Part, as: 'part', attributes: ['id', 'name', 'revision', 'description', 'imageFileID'] }],
+        include: [{
+          model: db.Part, as: 'part', attributes: ['id', 'name', 'revision', 'description', 'imageFileID', 'commonPart'],
+          // REQ 1071 — the landing page filters by project.
+          include: [{ model: db.Project, as: 'projects', attributes: ['id'], through: { attributes: [] } }],
+        }],
       });
       const out = [];
       for (const m of rows) {
@@ -344,6 +348,8 @@ module.exports = {
         out.push({
           partID: m.partID,
           part: m.part ? { id: m.part.id, name: m.part.name, revision: m.part.revision, description: m.part.description, imageFileID: m.part.imageFileID } : null,
+          commonPart: !!(m.part && m.part.commonPart),
+          projectIDs: m.part ? (m.part.projects || []).map((p) => p.id) : [],
           displayRevision,
           // Revs an assembly instance tracking a specific branch shows.
           branchName: m.branchName || 'main',
@@ -413,7 +419,7 @@ module.exports = {
     if (part.partCategoryID) {
       const category = await db.PartCategory.findByPk(part.partCategoryID);
       if (category && category.name === 'Assembly') {
-        return res.status(422).json({ error: 'This part is in the Assembly category — create an assembly instead (POST /api/design/assembly/by-part/:partID)' });
+        return res.status(422).json({ error: `Part "${part.name}" is in the Assembly category — create an assembly instead of a CAD model`, code: 'USE_ASSEMBLY' });
       }
     }
 

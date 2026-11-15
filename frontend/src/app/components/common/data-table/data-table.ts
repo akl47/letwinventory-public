@@ -24,10 +24,8 @@ import { MatInputModule } from '@angular/material/input';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
-import { MatMenuModule } from '@angular/material/menu';
-import { MatCheckboxModule } from '@angular/material/checkbox';
-import { MatDividerModule } from '@angular/material/divider';
 import { filterBySearch } from '../../../utils/search';
+import { FilterMenu, type FilterSection } from '../filter-menu/filter-menu';
 
 export interface ColumnDef<T> {
   key: string;
@@ -36,32 +34,9 @@ export interface ColumnDef<T> {
   sortValue?: (row: T) => string | number | null | undefined;
 }
 
-export interface FilterOption {
-  id: number | string;
-  label: string;
-  colorHex?: string;
-}
-
-export type FilterSection<T> =
-  | {
-      type: 'toggle';
-      key: string;
-      label: string;
-      default?: boolean;
-      predicate?: (row: T, value: boolean) => boolean;
-    }
-  | {
-      type: 'multiSelect';
-      key: string;
-      label: string;
-      options: FilterOption[];
-      /**
-       * Returns the row's value(s) compared against the selected option ids.
-       * Returning an array (e.g. for M:N relationships) matches if any element
-       * is in the selected set.
-       */
-      accessor: (row: T) => number | string | Array<number | string> | null | undefined;
-    };
+// The filter drop-down is its own component; its section types are re-exported
+// here so table hosts keep importing them from the table.
+export type { FilterOption, FilterSection } from '../filter-menu/filter-menu';
 
 @Directive({
   selector: 'ng-template[appColumn]',
@@ -85,9 +60,7 @@ export class DataTableColumnDef {
     MatFormFieldModule,
     MatButtonModule,
     MatIconModule,
-    MatMenuModule,
-    MatCheckboxModule,
-    MatDividerModule,
+    FilterMenu,
   ],
   templateUrl: './data-table.html',
   styleUrl: './data-table.css',
@@ -173,6 +146,35 @@ export class DataTable<T = unknown> implements OnInit, OnChanges {
     if (changes['data'] && this.initialized) {
       this.dataSig.set(this.data || []);
     }
+    if (changes['filterSections'] && this.initialized) {
+      this.adoptNewFilterOptions(changes['filterSections'].previousValue as FilterSection<T>[] | undefined);
+    }
+  }
+
+  /**
+   * Filter options can arrive after the table is shown (e.g. a project list
+   * loaded separately). A multi-select that had everything selected stays
+   * "everything" for the new options — otherwise the old, shorter selection
+   * would silently hide every row that only matches a new option.
+   */
+  private adoptNewFilterOptions(previous: FilterSection<T>[] | undefined): void {
+    if (!this.filterSections) return;
+    const values: Record<string, unknown> = { ...this.filterValues() };
+    let changed = false;
+    for (const section of this.filterSections) {
+      if (section.type !== 'multiSelect') {
+        if (!(section.key in values)) { values[section.key] = section.default ?? false; changed = true; }
+        continue;
+      }
+      const before = previous?.find(s => s.key === section.key);
+      const sel = values[section.key] as Set<number | string> | undefined;
+      const hadAll = !sel || !before || before.type !== 'multiSelect' || sel.size === before.options.length;
+      if (hadAll && (!sel || sel.size !== section.options.length)) {
+        values[section.key] = new Set(section.options.map(o => o.id));
+        changed = true;
+      }
+    }
+    if (changed) this.filterValues.set(values);
   }
 
   onSearchChange(value: string): void {
@@ -209,50 +211,6 @@ export class DataTable<T = unknown> implements OnInit, OnChanges {
     this.filterChange.emit(this.filterValues());
   }
 
-  toggleFilterSelection(sectionKey: string, optionId: number | string): void {
-    const sel = this.filterValues()[sectionKey] as Set<number | string> | undefined;
-    const newSet = new Set(sel ?? []);
-    if (newSet.has(optionId)) newSet.delete(optionId);
-    else newSet.add(optionId);
-    this.setFilterValue(sectionKey, newSet);
-  }
-
-  toggleAll(sectionKey: string): void {
-    const section = this.findSection(sectionKey);
-    if (!section || section.type !== 'multiSelect') return;
-    if (this.isAllSelected(sectionKey)) {
-      this.setFilterValue(sectionKey, new Set());
-    } else {
-      this.setFilterValue(sectionKey, new Set(section.options.map(o => o.id)));
-    }
-  }
-
-  isAllSelected(sectionKey: string): boolean {
-    const section = this.findSection(sectionKey);
-    if (!section || section.type !== 'multiSelect') return false;
-    const sel = this.filterValues()[sectionKey] as Set<number | string> | undefined;
-    return !!sel && sel.size === section.options.length;
-  }
-
-  isSomeSelected(sectionKey: string): boolean {
-    const section = this.findSection(sectionKey);
-    if (!section || section.type !== 'multiSelect') return false;
-    const sel = this.filterValues()[sectionKey] as Set<number | string> | undefined;
-    return !!sel && sel.size > 0 && sel.size < section.options.length;
-  }
-
-  isSelected(sectionKey: string, optionId: number | string): boolean {
-    const sel = this.filterValues()[sectionKey] as Set<number | string> | undefined;
-    return !!sel && sel.has(optionId);
-  }
-
-  hiddenOptionCount(sectionKey: string): number {
-    const section = this.findSection(sectionKey);
-    if (!section || section.type !== 'multiSelect') return 0;
-    const sel = this.filterValues()[sectionKey] as Set<number | string> | undefined;
-    return section.options.length - (sel?.size ?? 0);
-  }
-
   onRowClick(row: T): void {
     this.rowClick.emit(row);
   }
@@ -281,18 +239,6 @@ export class DataTable<T = unknown> implements OnInit, OnChanges {
 
   get columnKeys(): string[] {
     return this.columns.map(c => c.key);
-  }
-
-  isToggleSection(s: FilterSection<T>): s is FilterSection<T> & { type: 'toggle' } {
-    return s.type === 'toggle';
-  }
-
-  isMultiSelectSection(s: FilterSection<T>): s is FilterSection<T> & { type: 'multiSelect' } {
-    return s.type === 'multiSelect';
-  }
-
-  private findSection(key: string): FilterSection<T> | undefined {
-    return this.filterSections?.find(s => s.key === key);
   }
 
   private initFilterDefaults(): void {

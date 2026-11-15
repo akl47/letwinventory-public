@@ -54,6 +54,12 @@ exports.searchPartsByCategory = async (req, res, next) => {
     // Build includes - always include Part's own imageFile
     const includes = [
       {
+        model: db.Project,
+        as: 'projects',
+        attributes: ['id', 'name', 'shortName', 'tagColorHex'],
+        through: { attributes: [] }
+      },
+      {
         model: db.PartCategory,
         attributes: ['id', 'name', 'tagColorHex']
       },
@@ -136,6 +142,22 @@ exports.searchPartsByCategory = async (req, res, next) => {
   }
 };
 
+// The design attached to each part: a CAD model or assembly (one active row per
+// part), else its wire harness — the most recently updated one when several
+// harness records share the part.
+async function designByPart() {
+  const designs = new Map();
+  const harnesses = await db.WireHarness.findAll({
+    where: { activeFlag: true, partID: { [Op.ne]: null } },
+    attributes: ['id', 'partID'],
+    order: [['updatedAt', 'ASC']]
+  });
+  for (const h of harnesses) designs.set(h.partID, { kind: 'harness', id: h.id });
+  const models = await db.DesignCADModel.findAll({ where: { activeFlag: true }, attributes: ['id', 'partID', 'isAssembly'] });
+  for (const m of models) designs.set(m.partID, { kind: m.isAssembly ? 'assembly' : 'cad', id: m.id });
+  return designs;
+}
+
 exports.getAllParts = (req, res, next) => {
   // Return all parts (active and inactive), let frontend filter
   db.Part.findAll({
@@ -149,6 +171,12 @@ exports.getAllParts = (req, res, next) => {
           activeFlag: true
         },
         required: false
+      },
+      {
+        model: db.Project,
+        as: 'projects',
+        attributes: ['id', 'name', 'shortName', 'tagColorHex'],
+        through: { attributes: [] }
       },
       {
         model: db.PartCategory,
@@ -165,8 +193,10 @@ exports.getAllParts = (req, res, next) => {
         attributes: ['id', 'name', 'allowDecimal']
       }
     ]
-  }).then(parts => {
-    res.json(parts)
+  }).then(async parts => {
+    // The design each part has, for the catalog's quick link.
+    const designs = await designByPart();
+    res.json(parts.map(part => ({ ...part.toJSON(), design: designs.get(part.id) || null })));
   }).catch(error => {
     next(humanizeError(error, 'Failed to get parts'))
   })
@@ -178,6 +208,12 @@ exports.getPartByID = (req, res, next) => {
       id: req.params.id
     },
     include: [
+      {
+        model: db.Project,
+        as: 'projects',
+        attributes: ['id', 'name', 'shortName', 'tagColorHex'],
+        through: { attributes: [] }
+      },
       {
         model: db.PartCategory,
         attributes: ['id', 'name', 'tagColorHex']
@@ -272,6 +308,71 @@ exports.updatePartByID = async (req, res, next) => {
     next(humanizeError(error, 'Failed to update part'));
   }
 }
+
+// REQ 1069 — set the projects a part belongs to and whether it is a common part
+// (usable in every project). This classifies the part rather than changing its
+// design, so it is allowed on a revision-locked part.
+exports.setPartProjects = async (req, res, next) => {
+  try {
+    const part = await db.Part.findByPk(req.params.id, {
+      include: [{ model: db.Project, as: 'projects', attributes: ['id', 'name'], through: { attributes: [] } }]
+    });
+    if (!part) return next(createError(404, 'Part not found'));
+
+    const { projectIDs, commonPart } = req.body || {};
+    if (projectIDs !== undefined && (!Array.isArray(projectIDs) || projectIDs.some(id => !Number.isInteger(id)))) {
+      return next(createError(400, 'projectIDs must be a list of project ids'));
+    }
+    if (commonPart !== undefined && typeof commonPart !== 'boolean') {
+      return next(createError(400, 'commonPart must be true or false'));
+    }
+
+    const changes = {};
+    let wanted = null;
+    if (projectIDs !== undefined) {
+      wanted = [...new Set(projectIDs)];
+      const found = await db.Project.findAll({ where: { id: wanted }, attributes: ['id', 'name'] });
+      const missing = wanted.filter(id => !found.some(p => p.id === id));
+      if (missing.length) {
+        return next(createError(400, missing.length > 1
+          ? `Projects ${missing.join(', ')} do not exist`
+          : `Project ${missing[0]} does not exist`));
+      }
+      const before = part.projects.map(p => p.name).sort();
+      const after = found.map(p => p.name).sort();
+      if (before.join('|') !== after.join('|')) changes.projects = { old: before, new: after };
+      else wanted = null;
+    }
+    if (commonPart !== undefined && commonPart !== part.commonPart) {
+      changes.commonPart = { old: part.commonPart, new: commonPart };
+    }
+
+    if (Object.keys(changes).length > 0) {
+      await db.sequelize.transaction(async (transaction) => {
+        if (wanted) {
+          await db.PartProject.destroy({ where: { partID: part.id }, transaction });
+          await db.PartProject.bulkCreate(wanted.map(projectID => ({ partID: part.id, projectID })), { transaction });
+        }
+        if (changes.commonPart) await part.update({ commonPart }, { transaction });
+        await db.PartRevisionHistory.create({
+          partID: part.id,
+          changedByUserID: req.user?.id || null,
+          changeType: 'updated',
+          changes,
+          createdAt: new Date()
+        }, { transaction });
+      });
+    }
+
+    const updated = await db.Part.findByPk(part.id, {
+      attributes: ['id', 'commonPart'],
+      include: [{ model: db.Project, as: 'projects', attributes: ['id', 'name', 'shortName', 'tagColorHex'], through: { attributes: [] } }]
+    });
+    res.json(updated);
+  } catch (error) {
+    next(humanizeError(error, 'Failed to update part projects'));
+  }
+};
 
 exports.deletePartByID = (req, res, next) => {
   db.Part.findOne({

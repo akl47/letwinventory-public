@@ -28,9 +28,10 @@ test.describe('Navigation', () => {
     await expect(page).toHaveURL(/.*#\/equipment/);
   });
 
-  test('navigates to harness page', async ({ page }) => {
+  // REQ 1068 — harnesses are listed on the CAD landing page.
+  test('harness page leads to the CAD landing page', async ({ page }) => {
     await page.goto('/#/harness');
-    await expect(page).toHaveURL(/.*#\/harness/);
+    await expect(page).toHaveURL(/.*#\/design\/cad/);
   });
 
   test('navigates to inventory page', async ({ page }) => {

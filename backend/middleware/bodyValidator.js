@@ -233,7 +233,9 @@ exports.trace = (req,res,next) => {
 
 exports.part = (req,res,next) => {
     const model = db.Part.tableAttributes
-    let ignore = [...ignore_all, 'revision', 'revisionLocked', 'previousRevisionID']
+    let ignore = [...ignore_all, 'revision', 'revisionLocked', 'previousRevisionID',
+        // Set through PUT /part/:id/projects, not the part body (REQ 1069).
+        'commonPart']
     return_body = {}
     let error_message = ''
     Object.keys(model).forEach(attribute=>{

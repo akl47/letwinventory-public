@@ -1,10 +1,10 @@
-import { Component, inject, input } from '@angular/core';
+import { Component, computed, inject, input } from '@angular/core';
 import { Router } from '@angular/router';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { CdkDrag, CdkDragDrop, CdkDropList } from '@angular/cdk/drag-drop';
 import { CadTabsService } from '../../../services/cad-tabs.service';
-import { tabLabel } from '../../../cad/lib/cadTabs';
+import { tabKey, tabLabel } from '../../../cad/lib/cadTabs';
 
 /** REQ 1002 — open parts/assemblies; click to switch, x / middle-click to
  * close, + opens the CAD landing page to create or find another part. */
@@ -15,19 +15,19 @@ import { tabLabel } from '../../../cad/lib/cadTabs';
   template: `
     <div class="part-tabs" data-testid="cad-part-tabs">
       <div class="part-tab-list" cdkDropList cdkDropListOrientation="horizontal" (cdkDropListDropped)="onDrop($event)">
-      @for (t of cadTabs.tabs(); track t.partID) {
-        <div class="part-tab" cdkDrag cdkDragLockAxis="x" (cdkDragEnded)="suppressClick()" [class.active]="t.partID === activePartID()" [attr.data-testid]="'cad-part-tab-' + t.partID"
+      @for (t of cadTabs.tabs(); track tabKey(t)) {
+        <div class="part-tab" cdkDrag cdkDragLockAxis="x" (cdkDragEnded)="suppressClick()" [class.active]="tabKey(t) === activeKey()" [attr.data-testid]="t.harnessID ? 'cad-harness-tab-' + t.harnessID : 'cad-part-tab-' + t.partID"
              [matTooltip]="tabLabel(t)" matTooltipShowDelay="600"
-             (click)="!justDragged && t.partID !== activePartID() && cadTabs.switchTo(t)"
-             (auxclick)="$event.button === 1 && cadTabs.close(t.partID, activePartID())">
-          <mat-icon>{{ t.assembly ? 'account_tree' : 'view_in_ar' }}</mat-icon>
+             (click)="!justDragged && tabKey(t) !== activeKey() && cadTabs.switchTo(t)"
+             (auxclick)="$event.button === 1 && cadTabs.close(tabKey(t), activeKey())">
+          <mat-icon>{{ t.harnessID ? 'cable' : t.assembly ? 'account_tree' : 'view_in_ar' }}</mat-icon>
           <span class="part-tab-name">{{ tabLabel(t) }}</span>
           <button class="part-tab-close" aria-label="Close tab"
-                  (click)="$event.stopPropagation(); cadTabs.close(t.partID, activePartID())"><mat-icon>close</mat-icon></button>
+                  (click)="$event.stopPropagation(); cadTabs.close(tabKey(t), activeKey())"><mat-icon>close</mat-icon></button>
         </div>
       }
       </div>
-      <button class="part-tab-add" [class.active]="activePartID() === null" data-testid="cad-part-tab-add"
+      <button class="part-tab-add" [class.active]="activeKey() === null" data-testid="cad-part-tab-add"
               matTooltip="Open or create a part" (click)="openLanding()"><mat-icon>add</mat-icon></button>
     </div>
   `,
@@ -58,7 +58,16 @@ export class CadPartTabsComponent {
   private router = inject(Router);
   /** The part shown in the editor; null on the landing page (the + tab is active). */
   activePartID = input<number | null>(null);
+  /** The harness shown in the editor, when it is in harness mode. */
+  activeHarnessID = input<number | null>(null);
+  readonly activeKey = computed(() => {
+    const h = this.activeHarnessID();
+    if (h !== null) return tabKey({ partID: 0, harnessID: h });
+    const p = this.activePartID();
+    return p === null ? null : tabKey({ partID: p });
+  });
   readonly tabLabel = tabLabel;
+  readonly tabKey = tabKey;
 
   /** The mouseup ending a drag also fires a click — don't switch tabs on it. */
   justDragged = false;
@@ -68,6 +77,6 @@ export class CadPartTabsComponent {
   onDrop(e: CdkDragDrop<unknown>) { this.cadTabs.move(e.previousIndex, e.currentIndex); }
 
   openLanding() {
-    if (this.activePartID() !== null) this.router.navigate(['/design/cad']);
+    if (this.activeKey() !== null) this.router.navigate(['/design/cad']);
   }
 }

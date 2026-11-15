@@ -137,7 +137,7 @@ export const routes: Routes = [
         loadComponent: () =>
             import('./components/cad/cad-landing/cad-landing.component').then((m) => m.CadLandingComponent),
         canActivate: [authGuard, permissionGuard],
-        data: { resource: 'cad' },
+        data: { resource: ['cad', 'harness'] },
     },
     {
         path: 'parts/:id/cad',
@@ -197,29 +197,28 @@ export const routes: Routes = [
         canActivate: [authGuard, permissionGuard],
         data: { resource: 'orders' },
     },
+    // REQ 1068 — harnesses live in the CAD app: listed on the CAD landing page
+    // and edited in the CAD editor's harness mode.
+    { path: 'harness', redirectTo: 'design/cad', pathMatch: 'full' },
+    { path: 'harness/editor', redirectTo: 'design/cad', pathMatch: 'full' },
     {
-        path: 'harness',
-        title: 'Wire Harnesses',
-        loadComponent: () =>
-            import('./components/harness/harness-list-view/harness-list-view').then((m) => m.HarnessListView),
-        canActivate: [authGuard, permissionGuard],
-        data: { resource: 'harness' },
-    },
-    {
-        path: 'harness/editor',
+        // Same shape as the CAD editor address: the part in the path, the
+        // harness as ?revisionID= and the working branch as ?branch=.
+        path: 'parts/:id/harness/editor',
         title: 'Harness Editor',
-        loadComponent: () =>
-            import('./components/harness/harness-page/harness-page').then((m) => m.HarnessPage),
+        loadComponent: lazyRetry(() =>
+            import('./components/cad/cad-editor/cad-editor.component').then((m) => m.CadEditorComponent)),
         canActivate: [authGuard, permissionGuard],
-        data: { resource: 'harness' },
+        data: { resource: 'harness', harnessMode: true, harnessByPart: true },
     },
     {
+        // A harness with no part, and older links.
         path: 'harness/editor/:id',
         title: 'Harness Editor',
-        loadComponent: () =>
-            import('./components/harness/harness-page/harness-page').then((m) => m.HarnessPage),
+        loadComponent: lazyRetry(() =>
+            import('./components/cad/cad-editor/cad-editor.component').then((m) => m.CadEditorComponent)),
         canActivate: [authGuard, permissionGuard],
-        data: { resource: 'harness' },
+        data: { resource: 'harness', harnessMode: true },
     },
     {
         path: 'design/masters',

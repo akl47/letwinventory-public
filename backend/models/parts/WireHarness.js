@@ -18,6 +18,7 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'previousRevisionID',
         as: 'NextRevisions'
       });
+      WireHarness.belongsTo(models.User, { as: 'lockedBy', foreignKey: 'lockedByUserID' });
       // History association
       WireHarness.hasMany(models.HarnessRevisionHistory, {
         foreignKey: 'harnessID',
@@ -93,6 +94,18 @@ module.exports = (sequelize, DataTypes) => {
         key: 'id'
       }
     },
+    // Version-control working-copy state (REQ 1062) — same meaning as the
+    // matching DesignCADModels columns; the repository itself lives in the
+    // shared VcsObjects/VcsRefs store under repoType 'harness'.
+    branchName: { type: DataTypes.STRING(255), allowNull: false, defaultValue: 'main' },
+    baseCommitHash: { type: DataTypes.STRING(64), allowNull: true },
+    dirty: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    lastContentSavedAt: { type: DataTypes.DATE, allowNull: true },
+    lockedByUserID: { type: DataTypes.INTEGER, allowNull: true },
+    lockedAt: { type: DataTypes.DATE, allowNull: true },
+    lockExpiresAt: { type: DataTypes.DATE, allowNull: true },
+    releaseLocked: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    createdByUserID: { type: DataTypes.INTEGER, allowNull: true },
     createdAt: {
       allowNull: false,
       type: DataTypes.DATE

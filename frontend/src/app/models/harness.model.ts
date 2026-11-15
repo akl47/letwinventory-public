@@ -181,6 +181,9 @@ export interface ElementGroup {
  */
 export type ReleaseState = 'draft' | 'review' | 'released';
 
+/** Editing tool active on the harness canvas. */
+export type HarnessTool = 'select' | 'pan' | 'wire' | 'connector' | 'nodeEdit';
+
 /**
  * Main harness data structure containing all design elements
  */
@@ -220,9 +223,27 @@ export interface WireHarness {
   releasedAt?: string | null;
   releasedBy?: string | null;
   previousRevisionID?: number | null;
+  // Version-control working copy (REQ 1062) — same meaning as on CadModel.
+  branchName?: string;
+  baseCommitHash?: string | null;
+  dirty?: boolean;
+  lastContentSavedAt?: string | null;
+  lockedByUserID?: number | null;
+  lockedAt?: string | null;
+  lockExpiresAt?: string | null;
+  releaseLocked?: boolean;
+  /** True when on main with at least one released revision. */
+  released?: boolean;
+  displayRevision?: string | null;
+  draftRevision?: string | null;
+  behindMain?: boolean;
 }
 
 export interface WireHarnessSummary {
+  partID?: number | null;
+  /** From the linked part: common mark and project links (REQ 1069). */
+  commonPart?: boolean;
+  projectIDs?: number[];
   id: number;
   name: string;
   partNumber: string | null;

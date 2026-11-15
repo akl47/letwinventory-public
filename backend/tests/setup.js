@@ -146,6 +146,7 @@ async function seedReferenceData() {
   permRows.push({ id: permId++, resource: 'admin', action: 'manage_tool_categories' });
   permRows.push({ id: permId++, resource: 'features', action: 'approve' });
   permRows.push({ id: permId++, resource: 'cad', action: 'approve' });
+  permRows.push({ id: permId++, resource: 'harness', action: 'approve' });
   await db.Permission.bulkCreate(permRows);
 
   // Tool Categories (5 broad groupings — must match migration seed)
@@ -226,6 +227,7 @@ afterEach(async () => {
     'HarnessRevisionHistory', 'WireHarness', 'WireEnd',
     'ElectricalComponent', 'Cable', 'Wire', 'ElectricalConnector',
     'TaskTimeTracking', 'TaskHistory', 'Task', 'ScheduledTask',
+    'PartProject',
     'TaskList', 'Project',
     'BillOfMaterialItem',
     'Tool',

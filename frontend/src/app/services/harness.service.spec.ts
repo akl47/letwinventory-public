@@ -148,23 +148,78 @@ describe('HarnessService', () => {
     });
   });
 
-  describe('submitForReview', () => {
-    it('should POST submit-review', () => {
-      service.submitForReview(4).subscribe();
-      const req = httpMock.expectOne(`${API_BASE}/4/submit-review`);
+  // REQ 1062–1065 — the version-control verbs mirror CadModelService
+  describe('version control', () => {
+    const post = (path: string, body: unknown, reply: object = {}) => {
+      const req = httpMock.expectOne(`${API_BASE}/4/${path}`);
       expect(req.request.method).toBe('POST');
-      expect(req.request.body).toEqual({});
-      req.flush({ id: 4, releaseState: 'review' });
-    });
-  });
+      expect(req.request.body).toEqual(body);
+      req.flush(reply);
+    };
+    const get = (path: string, reply: object = []) => {
+      const req = httpMock.expectOne(`${API_BASE}/4/${path}`);
+      expect(req.request.method).toBe('GET');
+      req.flush(reply);
+    };
 
-  describe('reject', () => {
-    it('should POST reject with notes', () => {
-      service.reject(4, 'Needs fixes').subscribe();
-      const req = httpMock.expectOne(`${API_BASE}/4/reject`);
-      expect(req.request.method).toBe('POST');
-      expect(req.request.body).toEqual({ notes: 'Needs fixes' });
-      req.flush({ id: 4, releaseState: 'draft' });
+    it('checks out, with and without takeover', () => {
+      service.checkout(4).subscribe();
+      post('checkout', {});
+      service.checkout(4, { takeover: true }).subscribe();
+      post('checkout', { takeover: true });
+    });
+
+    it('checks in with a message and the keep-checked-out flag', () => {
+      service.checkin(4, 'add J1', null, true).subscribe();
+      post('checkin', { message: 'add J1', keepCheckedOut: true }, { commitHash: 'abc', model: {} });
+    });
+
+    it('undoes a checkout and renews the lock', () => {
+      service.undoCheckout(4).subscribe();
+      post('undo-checkout', {});
+      service.renewLock(4).subscribe();
+      post('renew-lock', {}, { lockExpiresAt: '' });
+    });
+
+    it('reads commits, the working diff and a commit diff', () => {
+      service.getCommits(4).subscribe();
+      get('commits');
+      service.workingDiff(4).subscribe();
+      get('working-diff', { baseCommitHash: null, entries: [] });
+      service.commitDiff(4, 'aaa', 'bbb').subscribe();
+      get('commits/aaa/diff/bbb', { entries: [] });
+    });
+
+    it('lists, creates, switches and archives branches', () => {
+      service.listBranches(4).subscribe();
+      get('branches');
+      service.createBranch(4, 'draft/02').subscribe();
+      post('branches', { name: 'draft/02', fromCommit: undefined });
+      service.switchBranch(4, 'draft/02').subscribe();
+      post('switch-branch', { name: 'draft/02' });
+      service.archiveBranch(4, 'draft/02').subscribe();
+      const req = httpMock.expectOne(`${API_BASE}/4/branches/draft%2F02`);
+      expect(req.request.method).toBe('DELETE');
+      req.flush({ archived: 'draft/02' });
+    });
+
+    it('reads and transitions the review workflow', () => {
+      service.getWorkflow(4).subscribe();
+      get('workflow', { state: 'draft', actions: [] });
+      service.transitionWorkflow(4, 'submit').subscribe();
+      post('workflow', { action: 'submit' }, { state: 'in_review', actions: [] });
+    });
+
+    it('promotes a released revision to production', () => {
+      service.productionRelease(4).subscribe();
+      post('production-release', {}, { revision: 'A', model: {} });
+    });
+
+    it('opens the harness of a part', () => {
+      service.getActiveByPart(9).subscribe();
+      const req = httpMock.expectOne(`${API_BASE}/by-part/9/active`);
+      expect(req.request.method).toBe('GET');
+      req.flush({ id: 4 });
     });
   });
 
@@ -193,16 +248,6 @@ describe('HarnessService', () => {
       const req = httpMock.expectOne(`${API_BASE}/4/revisions`);
       expect(req.request.method).toBe('GET');
       req.flush([]);
-    });
-  });
-
-  describe('revertToSnapshot', () => {
-    it('should POST revert with history id', () => {
-      service.revertToSnapshot(4, 12).subscribe();
-      const req = httpMock.expectOne(`${API_BASE}/4/revert/12`);
-      expect(req.request.method).toBe('POST');
-      expect(req.request.body).toEqual({});
-      req.flush({ id: 4 });
     });
   });
 });

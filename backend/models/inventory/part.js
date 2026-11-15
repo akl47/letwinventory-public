@@ -13,6 +13,13 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'partCategoryID',
         onDelete: 'CASCADE'
       });
+      // REQ 1069 — the projects this part belongs to.
+      Part.belongsToMany(models.Project, {
+        through: models.PartProject,
+        foreignKey: 'partID',
+        otherKey: 'projectID',
+        as: 'projects'
+      });
       Part.belongsTo(models.UnitOfMeasure, {
         foreignKey: 'defaultUnitOfMeasureID',
         as: 'UnitOfMeasure'
@@ -133,6 +140,12 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: '00'
     },
     revisionLocked: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
+    // REQ 1069 — a common part may be used in every project.
+    commonPart: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
       defaultValue: false

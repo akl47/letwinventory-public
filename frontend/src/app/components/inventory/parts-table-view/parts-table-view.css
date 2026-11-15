@@ -135,3 +135,9 @@
   justify-content: center;
   padding: 48px 0;
 }
+
+.project-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}

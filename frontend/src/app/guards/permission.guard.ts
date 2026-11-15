@@ -5,9 +5,10 @@ import { AuthService } from '../services/auth.service';
 export const permissionGuard: CanActivateFn = (route) => {
     const authService = inject(AuthService);
     const router = inject(Router);
-    const resource = route.data?.['resource'] as string;
+    // A single resource, or several when any one of them grants access.
+    const resource = route.data?.['resource'] as string | string[] | undefined;
 
-    if (!resource || authService.hasAnyPermission(resource)) {
+    if (!resource || [resource].flat().some(r => authService.hasAnyPermission(r))) {
         return true;
     }
     return router.createUrlTree(['/home']);
