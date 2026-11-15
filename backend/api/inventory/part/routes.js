@@ -19,6 +19,7 @@ router.post('/',[checkToken,checkPermission('parts','write'),bodyValidator.part]
 router.post('/:id/new-revision',checkToken,checkPermission('parts','write'),controller.createNewRevision);
 router.post('/:id/release',checkToken,checkPermission('parts','write'),controller.releaseToProduction);
 router.put('/:id',[checkToken,checkPermission('parts','write'),bodyValidator.part],controller.updatePartByID);
+router.put('/:id/projects',checkToken,checkPermission('parts','write'),controller.setPartProjects);
 router.put('/:id/lock',checkToken,checkPermission('parts','write'),controller.lockRevision);
 router.put('/:id/unlock',checkToken,checkPermission('parts','write'),controller.unlockRevision);
 router.delete('/:id',checkToken,checkPermission('parts','delete'),controller.deletePartByID);

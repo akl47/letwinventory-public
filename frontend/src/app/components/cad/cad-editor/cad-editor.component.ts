@@ -82,6 +82,12 @@ import { CadEquationsPanelComponent } from '../cad-equations-panel/cad-equations
 import { CadConfigurationsPanelComponent } from '../cad-configurations-panel/cad-configurations-panel.component';
 import { CadFeatureDeleteDialogComponent, type FeatureDeleteResult } from '../cad-feature-delete-dialog/cad-feature-delete-dialog.component';
 import { AssemblyEditController } from '../assembly-editor/assembly-edit.controller';
+import { CadPartInfoPanelComponent } from '../cad-part-info-panel/cad-part-info-panel.component';
+import { HarnessEditController } from '../../harness/harness-edit.controller';
+import { HarnessCanvas } from '../../harness/harness-canvas/harness-canvas';
+import { HarnessPropertyPanel } from '../../harness/harness-property-panel/harness-property-panel';
+import { HarnessService } from '../../../services/harness.service';
+import type { WireHarness } from '../../../models/harness.model';
 import { AssemblyService } from '../../../services/assembly.service';
 import { assemblyTreeRefs, creationOrderTree, reorderBlocker, withRollbackBar } from '../../../cad/lib/assemblyTreeOrder';
 import { assemblyOriginDatums, computeSkeletonDatums, meshCylinderAxis, meshFacePlane, meshIsFlat, placedOriginDatums, ORIGIN_DATUM_DESCRIPTORS, type PlacedDatum } from '../../../cad/lib/assemblyDatums';
@@ -139,14 +145,15 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     CadViewerComponent, CadFeatureTreePanelComponent, CadSketchEditorComponent, CadConstraintListComponent,
     CadDimensionPropertiesComponent,
     CategoryBadge, DimInputComponent, CadSelectionListComponent, CadPartTabsComponent,
+    HarnessCanvas, HarnessPropertyPanel, CadPartInfoPanelComponent,
   ],
-  // Assembly mode state is scoped per editor instance.
-  providers: [AssemblyEditController],
+  // Assembly / harness mode state is scoped per editor instance.
+  providers: [AssemblyEditController, HarnessEditController],
   // REQ 1040 — read-only parts still open feature panels for inspection; the
   // class makes every panel control inert (styles below).
   host: { '[class.cad-view-only]': 'readonly()' },
   template: `
-    <div class="cad-editor" [class.fullscreen]="fullscreen()" [attr.data-testid]="'cad-editor'">
+    <div class="cad-editor" [class.fullscreen]="fullscreen()" [class.harness-mode]="harnessMode()" [attr.data-testid]="'cad-editor'">
       <!-- Mobile: the CAD editor needs landscape. We best-effort lock the
            orientation (Android/Chrome fullscreen only) and show this prompt on
            touch devices held in portrait as the universal fallback. -->
@@ -155,7 +162,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
         <p>Rotate your device to landscape to use the CAD editor.</p>
       </div>
       <!-- REQ 1002 — open parts/assemblies tab strip. -->
-      <app-cad-part-tabs [activePartID]="partID()" />
+      <app-cad-part-tabs [activePartID]="partID()" [activeHarnessID]="harnessMode() ? hx.currentHarnessId() : null" />
       <!-- REQ 616 — tabbed ribbon. Toolbar content swaps with the active tab.
            Active tab follows the editor context (auto-switches to Sketch when a
            sketch is active) but the user can manually click tabs to override.
@@ -166,11 +173,11 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   [class.active]="activeTab() === 'file'"
                   (click)="setActiveTab('file')">File</button>
           <button class="tab" data-testid="tab-features"
-                  *ngIf="!assemblyMode() && activeSketchId() === null"
+                  *ngIf="partMode() && activeSketchId() === null"
                   [class.active]="activeTab() === 'features'"
                   (click)="setActiveTab('features')">Features</button>
           <button class="tab" data-testid="tab-tools"
-                  *ngIf="!assemblyMode() && activeSketchId() === null"
+                  *ngIf="partMode() && activeSketchId() === null"
                   [class.active]="activeTab() === 'tools'"
                   (click)="setActiveTab('tools')">Tools</button>
           <!-- REQ 911: the Sketch tab also appears in assembly mode while a
@@ -183,6 +190,11 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   *ngIf="assemblyMode()"
                   [class.active]="activeTab() === 'assembly'"
                   (click)="setActiveTab('assembly')">Assembly</button>
+          <!-- REQ 1067 — harness mode: the drawing tools live on their own tab. -->
+          <button class="tab" data-testid="tab-harness"
+                  *ngIf="harnessMode()"
+                  [class.active]="activeTab() === 'harness'"
+                  (click)="setActiveTab('harness')">Harness</button>
           <button class="tab" data-testid="tab-visualize"
                   [class.active]="activeTab() === 'visualize'"
                   (click)="setActiveTab('visualize')">Visualize</button>
@@ -223,10 +235,21 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               <div class="ribbon-group-label">Working copy</div>
             </div>
             <div class="ribbon-divider"></div>
+            <!-- REQ 1073 — the part record behind this document. -->
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="action-part-info" [class.active]="showPartInfo()"
+                        matTooltip="Show the part's number, description and projects" (click)="showPartInfo.set(!showPartInfo())">
+                  <mat-icon>info</mat-icon><span class="ribbon-label">Part info</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Part</div>
+            </div>
+            <div class="ribbon-divider"></div>
             <div class="ribbon-group">
               <div class="ribbon-group-row">
                 <button class="ribbon-button" data-testid="action-history"
-                        *ngIf="!assemblyMode()" [disabled]="!model()"
+                        *ngIf="partMode()" [disabled]="!model()"
                         [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || 'Open the full version history of this part'" (click)="openVersionHistory()">
                   <mat-icon svgIcon="cad-history"></mat-icon><span class="ribbon-label">History</span>
                 </button>
@@ -241,7 +264,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <div class="ribbon-divider"></div>
             <!-- REQ 1012 — copy the whole part (works read-only); paste it as a
                  new part on the CAD landing page, in any environment. -->
-            <div class="ribbon-group" *ngIf="!assemblyMode()">
+            <div class="ribbon-group" *ngIf="partMode()">
               <div class="ribbon-group-row">
                 <button class="ribbon-button" data-testid="action-copy-part" [disabled]="!model()"
                         [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || 'Copy this part — paste it with Ctrl+V on the CAD landing page (any environment) to create a new part'"
@@ -256,7 +279,27 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               </div>
               <div class="ribbon-group-label">Copy</div>
             </div>
-            <div class="ribbon-divider" *ngIf="!assemblyMode()"></div>
+            <div class="ribbon-divider" *ngIf="partMode()"></div>
+            <!-- REQ 1067 — harness documents exchange as JSON and export as PNG. -->
+            <div class="ribbon-group" *ngIf="harnessMode()">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="action-import-json" [disabled]="readonly()"
+                        [matTooltip]="readonly() ? readonlyHint() : 'Replace this harness with a design from a JSON file'"
+                        (click)="hx.onImportJSON()">
+                  <mat-icon>upload</mat-icon><span class="ribbon-label">Import JSON</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-export-json" [disabled]="!hx.harnessData()"
+                        matTooltip="Download this harness as JSON" (click)="hx.onExportJSON()">
+                  <mat-icon>code</mat-icon><span class="ribbon-label">Export JSON</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-export-png" [disabled]="!hx.harnessData()"
+                        matTooltip="Download the diagram as an image" (click)="hx.onExportPNG()">
+                  <mat-icon>image</mat-icon><span class="ribbon-label">Export PNG</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Import / export</div>
+            </div>
+            <div class="ribbon-divider" *ngIf="harnessMode()"></div>
             <div class="ribbon-group">
               <div class="ribbon-group-row">
                 <!-- Production review workflow (submit / approve) — only on main,
@@ -726,7 +769,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           </div>
 
           <!-- Visualize ribbon (part) — REQ 869: section view for single parts. -->
-          <div class="ribbon-pane" [hidden]="activeTab() !== 'visualize'" *ngIf="!assemblyMode()">
+          <div class="ribbon-pane" [hidden]="activeTab() !== 'visualize'" *ngIf="partMode()">
             <div class="ribbon-group">
               <div class="ribbon-group-row">
                 <button class="ribbon-button" data-testid="part-section-toggle"
@@ -746,6 +789,117 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 }
               </div>
               <div class="ribbon-group-label">Visualize</div>
+            </div>
+          </div>
+
+          <!-- Harness ribbon (REQ 1067) — drawing tools, insert, arrange, undo/redo. -->
+          <div class="ribbon-pane" [hidden]="activeTab() !== 'harness'" *ngIf="harnessMode()">
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="tool-select" [class.active]="hx.activeTool() === 'select'"
+                        matTooltip="Select (V)" (click)="hx.onToolChanged('select')">
+                  <mat-icon>near_me</mat-icon><span class="ribbon-label">Select</span>
+                </button>
+                <button class="ribbon-button" data-testid="tool-wire" [class.active]="hx.activeTool() === 'wire'"
+                        [disabled]="readonly()" [matTooltip]="readonly() ? readonlyHint() : 'Draw wire (W)'" (click)="hx.onToolChanged('wire')">
+                  <mat-icon>cable</mat-icon><span class="ribbon-label">Wire</span>
+                </button>
+                <button class="ribbon-button" data-testid="tool-nodeEdit" [class.active]="hx.activeTool() === 'nodeEdit'"
+                        [disabled]="readonly()" [matTooltip]="readonly() ? readonlyHint() : 'Edit wire nodes (N) — drag to move, double-click to add or remove'" (click)="hx.onToolChanged('nodeEdit')">
+                  <mat-icon>linear_scale</mat-icon><span class="ribbon-label">Nodes</span>
+                </button>
+                <button class="ribbon-button" data-testid="tool-pan" [class.active]="hx.activeTool() === 'pan'"
+                        matTooltip="Pan (H)" (click)="hx.onToolChanged('pan')">
+                  <mat-icon>pan_tool</mat-icon><span class="ribbon-label">Pan</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Tools</div>
+            </div>
+            <div class="ribbon-divider"></div>
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="action-add-connector" [disabled]="readonly()"
+                        [matTooltip]="readonly() ? readonlyHint() : 'Add a connector'" (click)="hx.onAddConnector()">
+                  <mat-icon>power</mat-icon><span class="ribbon-label">Connector</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-add-cable" [disabled]="readonly()"
+                        [matTooltip]="readonly() ? readonlyHint() : 'Add a cable'" (click)="hx.onAddCable()">
+                  <mat-icon>settings_input_svideo</mat-icon><span class="ribbon-label">Cable</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-add-component" [disabled]="readonly()"
+                        [matTooltip]="readonly() ? readonlyHint() : 'Add a component'" (click)="hx.onAddComponent()">
+                  <mat-icon>memory</mat-icon><span class="ribbon-label">Component</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-add-subharness" [disabled]="readonly()"
+                        [matTooltip]="readonly() ? readonlyHint() : 'Add another harness as a sub-harness'" (click)="hx.onAddSubHarness()">
+                  <mat-icon>electrical_services</mat-icon><span class="ribbon-label">Harness</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Insert</div>
+            </div>
+            <div class="ribbon-divider"></div>
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="action-rotate" [disabled]="readonly() || !harnessElementSelected()"
+                        matTooltip="Rotate 90° (R)" (click)="hx.rotateSelected(90)">
+                  <mat-icon>rotate_right</mat-icon><span class="ribbon-label">Rotate</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-mirror" [disabled]="readonly() || !harnessElementSelected()"
+                        matTooltip="Mirror (F)" (click)="hx.flipSelected()">
+                  <mat-icon>flip</mat-icon><span class="ribbon-label">Mirror</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-delete" [disabled]="readonly() || !hx.currentSelection()"
+                        matTooltip="Delete selected (Del)" (click)="hx.onDeleteSelected()">
+                  <mat-icon>delete</mat-icon><span class="ribbon-label">Delete</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Arrange</div>
+            </div>
+            <div class="ribbon-divider"></div>
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="action-undo" [disabled]="readonly() || !hx.canUndo()"
+                        matTooltip="Undo (Ctrl+Z)" (click)="hx.onUndo()">
+                  <mat-icon>undo</mat-icon><span class="ribbon-label">Undo</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-redo" [disabled]="readonly() || !hx.canRedo()"
+                        matTooltip="Redo (Ctrl+Y)" (click)="hx.onRedo()">
+                  <mat-icon>redo</mat-icon><span class="ribbon-label">Redo</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">History</div>
+            </div>
+          </div>
+
+          <!-- Visualize ribbon (harness) — zoom and canvas display toggles. -->
+          <div class="ribbon-pane" [hidden]="activeTab() !== 'visualize'" *ngIf="harnessMode()">
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="action-zoom-in" matTooltip="Zoom in" (click)="hx.onZoomIn()">
+                  <mat-icon>zoom_in</mat-icon><span class="ribbon-label">Zoom in</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-zoom-out" matTooltip="Zoom out" (click)="hx.onZoomOut()">
+                  <mat-icon>zoom_out</mat-icon><span class="ribbon-label">Zoom out</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-zoom-reset" matTooltip="Reset zoom" (click)="hx.onResetZoom()">
+                  <mat-icon>fit_screen</mat-icon><span class="ribbon-label">Reset</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Zoom</div>
+            </div>
+            <div class="ribbon-divider"></div>
+            <div class="ribbon-group">
+              <div class="ribbon-group-row">
+                <button class="ribbon-button" data-testid="toggle-grid" [class.active]="hx.gridEnabled()"
+                        matTooltip="Show the grid" (click)="hx.gridEnabled.set(!hx.gridEnabled())">
+                  <mat-icon>grid_on</mat-icon><span class="ribbon-label">Grid</span>
+                </button>
+                <button class="ribbon-button" data-testid="toggle-bounds" [class.active]="hx.showSubHarnessBounds()"
+                        matTooltip="Outline sub-harnesses" (click)="hx.showSubHarnessBounds.set(!hx.showSubHarnessBounds())">
+                  <mat-icon>select_all</mat-icon><span class="ribbon-label">Bounds</span>
+                </button>
+              </div>
+              <div class="ribbon-group-label">Show</div>
             </div>
           </div>
 
@@ -907,9 +1061,31 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           }
         </div>
 
+        <!-- Harness properties rail (replaces the feature tree in harness mode) -->
+        <div class="feature-tree harness-rail" *ngIf="harnessMode()" data-testid="harness-rail"
+             [class.collapsed]="sidebarMode() !== 'full'" [style.width.px]="harnessRailWidth()">
+          <app-harness-property-panel
+            [harnessData]="hx.harnessData()"
+            [selection]="hx.currentSelection()"
+            [isLocked]="readonly()"
+            [isViewOnly]="!canWrite()"
+            (connectorChanged)="hx.onConnectorPropertyChanged($event)"
+            (connectionChanged)="hx.onConnectionPropertyChanged($event)"
+            (bulkWiresChanged)="hx.onBulkWiresChanged($event)"
+            (pinLabelChanged)="hx.onPinLabelChanged($event)"
+            (deleteConnector)="hx.onDeleteSelected()"
+            (deleteCable)="hx.onDeleteSelected()"
+            (deleteComponent)="hx.onDeleteSelected()"
+            (componentChanged)="hx.onComponentPropertyChanged($event)"
+            (connectorEdited)="hx.onConnectorEdited($event)"
+            (cableEdited)="hx.onCableEdited($event)"
+            (deleteConnection)="hx.onDeleteSelected()">
+          </app-harness-property-panel>
+        </div>
+
         <app-cad-feature-tree-panel
           #partTree
-          *ngIf="!assemblyMode()"
+          *ngIf="partMode()"
           [features]="featureTree().features"
           [contextNodes]="contextNodes()"
           (contextMenu)="onContextRowMenu($event)"
@@ -3994,6 +4170,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           </div>
           <ng-container *ngIf="!loading(); else loadingTpl">
             <app-cad-viewer
+              *ngIf="!harnessMode()"
               #viewer
               [geometry]="displayedGeometry()"
               [faceColors]="faceColors()"
@@ -4087,6 +4264,41 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               (constraintIconClicked)="onConstraintIconClicked($event)">
             </app-cad-viewer>
 
+            <!-- REQ 1067 — in harness mode the viewport is the 2D harness canvas. -->
+            <app-harness-canvas
+              *ngIf="harnessMode()"
+              #harnessCanvas
+              [harnessData]="hx.harnessData()"
+              [activeTool]="hx.activeTool()"
+              [gridEnabled]="hx.gridEnabled()"
+              [gridSize]="20"
+              [isLocked]="readonly()"
+              [showSubHarnessBounds]="hx.showSubHarnessBounds()"
+              (selectionChanged)="hx.onSelectionChanged($event)"
+              (dataChanged)="hx.onDataChanged($event)"
+              (connectorMoved)="hx.onConnectorMoved($event)"
+              (cableMoved)="hx.onCableMoved($event)"
+              (componentMoved)="hx.onComponentMoved($event)"
+              (editConnector)="hx.onEditConnector($event)"
+              (editCable)="hx.onEditCable($event)"
+              (editComponent)="hx.onEditComponent($event)"
+              (editChildConnector)="hx.onEditChildConnector($event)"
+              (editChildCable)="hx.onEditChildCable($event)"
+              (editChildComponent)="hx.onEditChildComponent($event)"
+              (bringToFront)="hx.onBringToFront()"
+              (moveForward)="hx.onMoveForward()"
+              (moveBackward)="hx.onMoveBackward()"
+              (sendToBack)="hx.onSendToBack()"
+              (rotateSelected)="hx.rotateSelected(90)"
+              (flipSelected)="hx.flipSelected()"
+              (requestDelete)="hx.onDeleteSelected()"
+              (requestToolChange)="hx.onCanvasToolChangeRequest($event)"
+              (subHarnessDataChanged)="hx.onSubHarnessDataChanged($event)"
+              (subHarnessEditModeChanged)="hx.onSubHarnessEditModeChanged($event)"
+              (dragStart)="hx.onDragStart()"
+              (dragEnd)="hx.onDragEnd()">
+            </app-harness-canvas>
+
             <!-- REQ 623 — feature context menu, anchored at the cursor. -->
             <div class="ctx-anchor" #ctxAnchor
                  [style.left.px]="ctxMenuX()"
@@ -4168,7 +4380,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             </div>
 
 
-            <div class="quick-start" data-testid="quick-start" *ngIf="!quickStartDismissed() && !assemblyMode() && mode() === 'idle' && activeSketchId() === null && featureTree().features.length === 1 && sketchCount() === 0">
+            <div class="quick-start" data-testid="quick-start" *ngIf="!quickStartDismissed() && partMode() && mode() === 'idle' && activeSketchId() === null && featureTree().features.length === 1 && sketchCount() === 0">
               <!-- REQ 988 — dismiss for this editor session. -->
               <button class="quick-start-close" data-testid="quick-start-close" aria-label="Close" matTooltip="Close" (click)="quickStartDismissed.set(true)">
                 <mat-icon>close</mat-icon>
@@ -4230,6 +4442,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <!-- VCS status (actions live in the File ribbon tab) -->
                 <span class="vcs-dirty" data-testid="vcs-dirty" *ngIf="isDirty()"
                       matTooltip="Uncommitted changes since the last check-in">● unsaved</span>
+                <span class="footer-mode" data-testid="harness-saving" *ngIf="harnessMode() && hx.isSaving()">Saving…</span>
                 <div class="vcs-commits-panel" data-testid="vcs-branches-panel" *ngIf="showBranches()">
                   <div class="vcs-commits-head">
                     <span>Branches</span>
@@ -4245,7 +4458,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   </ul>
                   <div class="vcs-branch-actions">
                     <button class="btn" (click)="onCreateBranch()">+ New branch</button>
-                    <button class="btn" *ngIf="!assemblyMode()" (click)="onCherryPick()">Cherry-pick…</button>
+                    <button class="btn" *ngIf="partMode()" (click)="onCherryPick()">Cherry-pick…</button>
                   </div>
                 </div>
                 <div class="vcs-commits-panel" data-testid="vcs-compare-panel" *ngIf="showCompare()">
@@ -4305,6 +4518,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               </button>
 
               <div class="footer-group footer-group-right">
+                <span class="footer-mode" data-testid="harness-footer-tool" *ngIf="harnessMode()">{{ harnessToolLabel() }} · {{ hx.zoomLevel() }}%</span>
+                <ng-container *ngIf="!harnessMode()">
                 <button class="icon-btn footer-icon-btn"
                         data-testid="debug-toggle"
                         [class.active-pick]="debugVisible()"
@@ -4333,13 +4548,14 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                         (click)="toggleSelectionFilter('vertex')">
                   <mat-icon>fiber_manual_record</mat-icon>
                 </button>
+                </ng-container>
                 <button class="icon-btn footer-icon-btn"
                         data-testid="fullscreen-toggle"
                         matTooltip="{{ fullscreen() ? 'Exit full screen' : 'Full screen' }}"
                         (click)="toggleFullscreen()">
                   <mat-icon>{{ fullscreen() ? 'fullscreen_exit' : 'fullscreen' }}</mat-icon>
                 </button>
-                <mat-form-field appearance="outline" class="unit-field" subscriptSizing="dynamic">
+                <mat-form-field *ngIf="!harnessMode()" appearance="outline" class="unit-field" subscriptSizing="dynamic">
                   <mat-select
                       data-testid="unit-select"
                       [value]="defaultUnit()"
@@ -4362,6 +4578,11 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             </div>
           </ng-template>
         </div>
+
+        <!-- REQ 1073 — Part info sidebar, to the right of the viewport (all modes). -->
+        @if (showPartInfo()) {
+          <app-cad-part-info-panel [partID]="infoPartID()" (closed)="showPartInfo.set(false)" (partSaved)="onPartInfoSaved($event)" />
+        }
       </div>
     </div>
   `,
@@ -4539,6 +4760,10 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
     .editor-body { display: flex; flex: 1; min-height: 0; }
     .feature-tree { width: 240px; background: #25253a; border-right: 1px solid #444; flex: 0 0 auto; overflow: hidden; }
     .feature-tree.collapsed { width: 0 !important; border-right: none; }
+    /* REQ 1067 — harness mode: properties in the rail, the 2D canvas in the viewport. */
+    .harness-rail { display: flex; }
+    .harness-rail app-harness-property-panel { flex: 1; min-width: 0; height: 100%; overflow: hidden; }
+    .viewport-wrap app-harness-canvas { position: absolute; inset: 0; display: block; }
     /* REQ 995 — minimized assembly panel: only the tree panels, as icons. */
     .asm-panel.mini { width: 44px; overflow-x: hidden; }
     .asm-panel.mini > :not(app-cad-feature-tree-panel) { display: none; }
@@ -4974,6 +5199,60 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private assemblyApi = inject(AssemblyService);
   assemblyMode = signal<boolean>(false);
   private _asmVcsLoaded = false;
+
+  // ── HARNESS MODE (REQ 1067) ────────────────────────────────────────────────
+  // A wire harness opens in this same editor: the viewport hosts the 2D harness
+  // canvas, the left rail the harness properties, and a Harness ribbon tab the
+  // drawing tools. Harness state/ops live in the injected controller; the
+  // harness backend is separate, so the shared File tab talks to it through
+  // `vcsApi` (HarnessService mirrors the CadModelService verbs).
+  hx = inject(HarnessEditController);
+  private harnessApi = inject(HarnessService);
+  harnessMode = signal<boolean>(false);
+  private _harnessVcsLoaded = false;
+  private harnessCanvasRef = viewChild<HarnessCanvas>('harnessCanvas');
+  // REQ 1073 — Part info sidebar.
+  showPartInfo = signal(false);
+  /** The part of the open document (a harness may have none). */
+  infoPartID = computed(() => this.harnessMode() ? (this.hx.harness()?.partID ?? null) : this.partID());
+  onPartInfoSaved(part: Part) {
+    if (!this.harnessMode() && part.id === this.partID()) this.part.set(part);
+  }
+  /** Plain part-CAD mode — neither an assembly nor a harness. */
+  partMode = computed(() => !this.assemblyMode() && !this.harnessMode());
+  harnessRailWidth = computed(() => this.sidebarMode() === 'full' ? Math.max(300, this.sidebarWidth()) : 0);
+  harnessElementSelected = computed(() => {
+    const type = this.hx.currentSelection()?.type;
+    return type === 'connector' || type === 'cable' || type === 'component' || type === 'subHarness';
+  });
+  harnessToolLabel = computed(() => ({
+    select: 'Select', pan: 'Pan', wire: 'Draw wire', connector: 'Connector', nodeEdit: 'Edit nodes',
+  })[this.hx.activeTool()]);
+  /** Keep the address in the CAD form and in step with the working copy:
+   * `/parts/<part>/harness/editor?revisionID=<harness>&branch=<branch>`.
+   * A harness opened through its own address moves to its part's address. */
+  private syncHarnessUrl(h: WireHarness) {
+    const branch = h.branchName || 'main';
+    if (h.partID && !this.route.snapshot.data['harnessByPart']) {
+      this.router.navigate(['/parts', h.partID, 'harness', 'editor'], { queryParams: { revisionID: h.id, branch }, replaceUrl: true });
+      return;
+    }
+    const qp = this.route.snapshot.queryParamMap;
+    const wantsRevision = !!h.partID && Number(qp.get('revisionID')) !== h.id;
+    if (!wantsRevision && (qp.get('branch') || '') === branch) return;
+    this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: wantsRevision ? { revisionID: h.id, branch } : { branch },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
+  }
+  /** Version-control API for the open document: the harness backend in
+   * harness mode, the CAD model backend otherwise. */
+  private get vcsApi(): Pick<CadModelService, 'getById' | 'checkout' | 'renewLock' | 'checkin' | 'undoCheckout' | 'getCommits'
+    | 'listBranches' | 'createBranch' | 'switchBranch' | 'archiveBranch' | 'commitDiff' | 'getWorkflow' | 'transitionWorkflow' | 'release'> {
+    return this.harnessMode() ? this.harnessApi : this.cadApi;
+  }
   /** REQ 911 — last adopted skeleton source (id:branch:baseCommit); see the
    * mirror effect in the constructor. */
   private _skeletonSyncKey: string | null = null;
@@ -4984,6 +5263,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // In part-CAD mode, `bootstrap` reloads the whole editor doc (branch switch,
   // undo checkout, release) while `set` just refreshes the model row.
   private applyModelUpdate(m: CadModel, mode: 'set' | 'bootstrap' = 'set'): void {
+    if (this.harnessMode()) {
+      // The harness controller is the source of truth; `model()` mirrors it.
+      this.hx.adopt(m as unknown as WireHarness, mode === 'bootstrap');
+      if (mode === 'bootstrap') { this.loadCommits(); this.loadBranches(); this.loadWorkflow(); }
+      return;
+    }
     if (this.assemblyMode()) {
       this.asm.assembly.set(m as unknown as Assembly);
       this.asm.regenerate();
@@ -5512,6 +5797,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   /** REQ 1013 — a copied PART pasted in the editor offers a new part. */
   @HostListener('document:paste', ['$event'])
   onDocumentPaste(e: ClipboardEvent): void {
+    if (this.harnessMode()) return;
     if (this.cadClipboard.isFieldPaste(e) || this.dialog.openDialogs.length) return;
     const r = this.cadClipboard.parse(e.clipboardData?.getData('text/plain') ?? '');
     if (!r) return;
@@ -5729,7 +6015,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   pendingExtrude = signal<boolean>(false);
   // REQ 616 — ribbon tab. Auto-switches to 'sketch' when activeSketchId becomes
   // non-null and back to 'features' when it clears; user can manually override.
-  activeTab = signal<'file' | 'features' | 'tools' | 'sketch' | 'assembly' | 'visualize' | 'analyze'>('features');
+  activeTab = signal<'file' | 'features' | 'tools' | 'sketch' | 'assembly' | 'harness' | 'visualize' | 'analyze'>('features');
   // REQ 619 — display mode for the 3D viewer (session state, not persisted).
   displayMode = signal<DisplayMode>('visible-edges');
   /** REQ 872 — display modes exposed in the viewport context menu. */
@@ -8203,8 +8489,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     return '';
   });
 
-  canWrite() { return this.auth.hasPermission('cad', 'write'); }
-  canApprove() { return this.auth.hasPermission('cad', 'approve'); }
+  // The harness backend is separate and governed by its own permission resource.
+  canWrite() { return this.auth.hasPermission(this.harnessMode() ? 'harness' : 'cad', 'write'); }
+  canApprove() { return this.auth.hasPermission(this.harnessMode() ? 'harness' : 'cad', 'approve'); }
 
   private regenGeneration = 0;
   // The revisionID currently loaded (guards against reloading on fullscreen/branch
@@ -8251,6 +8538,27 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         this.loadCommits(); this.loadBranches(); this.loadWorkflow();
       }
     });
+    // REQ 1067 — harness mode: mirror the harness row into `model()` for the
+    // shared File tab, keep the controller's read-only state in step with the
+    // editor's, and hand it the canvas once rendered.
+    effect(() => {
+      if (!this.harnessMode()) return;
+      const h = this.hx.harness();
+      if (!h) return;
+      this.model.set(h as unknown as CadModel);
+      if (!this._harnessVcsLoaded) {
+        this._harnessVcsLoaded = true;
+        this.loadCommits(); this.loadBranches(); this.loadWorkflow();
+      }
+      // REQ 1068 — the open harness joins the part/assembly tab strip.
+      const rev = h.revision ? h.revision + (h.released ? '' : '*') : '';
+      untracked(() => {
+        this.cadTabs.open({ partID: h.partID ?? 0, assembly: false, harnessID: h.id, name: h.partNumber || h.name, rev });
+        this.syncHarnessUrl(h);
+      });
+    });
+    effect(() => { if (this.harnessMode()) this.hx.readonly.set(this.readonly()); });
+    effect(() => { this.hx.harnessCanvas = this.harnessCanvasRef(); });
     // REQ 1002 — register the open part/assembly in the tab strip.
     let tabKey = '';
     effect(() => {
@@ -8360,7 +8668,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // a user-initiated tab choice.
     effect(() => {
       const next = this.activeSketchId();
-      if (this.assemblyMode()) return; // assembly mode owns the tab
+      if (this.assemblyMode() || this.harnessMode()) return; // those modes own the tab
       if (next !== this.prevActiveSketchId) {
         this.activeTab.set(next ? 'sketch' : 'features');
         this.prevActiveSketchId = next;
@@ -8531,6 +8839,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   @HostListener('document:keydown.escape')
   onEscape() {
+    if (this.harnessMode()) return;  // the harness controller owns the keyboard
     // A FEATURE sidebar (3D, not in a sketch) → Esc = its Cancel button. (In a
     // sketch, the sketch editor owns Esc: cancel the tool, or exit when idle.)
     if (this.activeSketchId() === null) {
@@ -8577,6 +8886,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    */
   @HostListener('document:keydown', ['$event'])
   onDocumentKeydown(ev: KeyboardEvent) {
+    if (this.harnessMode()) return;  // the harness controller owns the keyboard
     const target = ev.target as HTMLElement | null;
     // Enter = press the visible feature/tool sidebar's OK/Add button (when
     // valid). Runs BEFORE the INPUT early-return so it works while a number
@@ -8748,6 +9058,37 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // REQ 877 — advance the stale-work clock each minute so the banner appears
     // while a dirty editor sits idle.
     this.staleCheckTimer = window.setInterval(() => this.nowTick.set(Date.now()), 60_000);
+    // Harness mode (REQ 1067) — the document is a wire harness from the harness
+    // backend. No kernel, no feature tree: the harness controller loads and
+    // drives it. (Route data flag set on /harness/editor/:id.)
+    if (this.route.snapshot.data['harnessMode']) {
+      this.harnessMode.set(true);
+      this.activeTab.set('harness');
+      this.loading.set(false);
+      // The address has the CAD form: /parts/:id/harness/editor?revisionID=<harness>&branch=<branch>.
+      // (A harness with no part keeps /harness/editor/:id.) Only a change of
+      // harness reloads — the branch is applied once on load and then kept in
+      // step with the working copy (syncHarnessUrl), exactly like the CAD URL.
+      const byPart = !!this.route.snapshot.data['harnessByPart'];
+      let loadedHarnessKey = '';
+      const open = () => {
+        const routeId = Number(this.route.snapshot.paramMap.get('id'));
+        const qp = this.route.snapshot.queryParamMap;
+        const harnessId = byPart ? Number(qp.get('revisionID')) : routeId;
+        const key = harnessId ? `h${harnessId}` : `p${routeId}`;
+        if (!routeId || key === loadedHarnessKey) return;
+        // The address was just completed with the harness it already shows.
+        if (harnessId && harnessId === this.hx.currentHarnessId()) { loadedHarnessKey = key; return; }
+        loadedHarnessKey = key;
+        this._harnessVcsLoaded = false;
+        const branch = qp.get('branch') || null;
+        if (harnessId) this.hx.load(harnessId, branch);
+        else this.hx.loadByPart(routeId, branch);
+      };
+      this.route.paramMap.subscribe(open);
+      this.route.queryParamMap.subscribe(open);
+      return;
+    }
     // Assembly mode — this part is an assembly. Skip the single-part CAD load
     // flow entirely; the controller drives the assembly. (Route data flag set on
     // the /parts/:id/assembly/editor route.)
@@ -8875,7 +9216,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   // REQ 616 — manual tab switch from the ribbon. Independent of activeSketchId.
-  setActiveTab(t: 'file' | 'features' | 'tools' | 'sketch' | 'assembly' | 'visualize' | 'analyze') { this.activeTab.set(t); }
+  setActiveTab(t: 'file' | 'features' | 'tools' | 'sketch' | 'assembly' | 'harness' | 'visualize' | 'analyze') { this.activeTab.set(t); }
 
   /** File-data URL for an insert-picker part's image, or null when it has none.
    * Shown as a hover preview in the assembly insert sidebar. */
@@ -15707,7 +16048,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         // a per-branch URL actually land on that branch (and lets two windows
         // open distinct branches of the same part by their distinct URLs).
         if (wantBranch && (m.branchName || 'main') !== wantBranch) {
-          this.cadApi.switchBranch(m.id, wantBranch).subscribe({
+          this.vcsApi.switchBranch(m.id, wantBranch).subscribe({
             next: sm => this.bootstrap(sm),
             error: () => this.bootstrap(m),  // branch gone / dirty — fall back to current
           });
@@ -16385,6 +16726,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   /** Whether closing the tab now would lose work: a save is scheduled in the
    * debounce window or currently on the wire. */
   hasUnsavedWork(): boolean {
+    if (this.harnessMode()) return this.hx.hasUnsavedChanges() && !this.hx.isLocked();
     return this.debouncedSave !== null || this.saveInFlight || this.saveQueued;
   }
 
@@ -16392,6 +16734,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * is on the wire. Called before check-in (so the commit can't miss the last
    * edit) and on editor teardown. */
   flushPendingSave(): Promise<void> {
+    if (this.harnessMode()) return this.hx.flushSave();
     if (this.debouncedSave) {
       clearTimeout(this.debouncedSave);
       this.debouncedSave = null;
@@ -16456,7 +16799,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           const queued = this.saveQueued;
           this.saveQueued = false;
           if (err?.status === 423) {
-            this.cadApi.renewLock(m.id).subscribe({
+            this.vcsApi.renewLock(m.id).subscribe({
               next: () => this.save(opts),
               error: e2 => {
                 if (e2?.status === 423) this.trySilentReacquire(m.id);
@@ -16506,7 +16849,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           // the TTL), renew REVIVES the lock and the save retries invisibly.
           // Only a genuinely moved/cleared lock reaches the lost banner.
           if (err?.status === 423) {
-            this.cadApi.renewLock(m.id).subscribe({
+            this.vcsApi.renewLock(m.id).subscribe({
               next: () => this.save(opts),
               error: e2 => {
                 if (e2?.status === 423) this.trySilentReacquire(m.id);
@@ -16542,7 +16885,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const m = this.model();
     if (!m || document.visibilityState !== 'visible') return;
     if (!this.isLockedByMe() || this.viewingCommit() || this.checkoutLost()) return;
-    this.cadApi.renewLock(m.id).subscribe({
+    this.vcsApi.renewLock(m.id).subscribe({
       next: r => {
         const cur = this.model();
         if (cur && cur.id === m.id) this.model.set({ ...cur, lockExpiresAt: r.lockExpiresAt });
@@ -16557,7 +16900,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * branch head hasn't moved. Anything else falls back to the lost banner. */
   private trySilentReacquire(modelId: number) {
     const local = this.model();
-    this.cadApi.getById(modelId).subscribe({
+    this.vcsApi.getById(modelId).subscribe({
       next: fresh => {
         const meId = this.auth.currentUser()?.id;
         const patchLock = (row: CadModel) => {
@@ -16575,7 +16918,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           // Sweep collected a clean expired copy and the branch head hasn't
           // moved: the lock is free and nothing was lost. Re-acquire without
           // ceremony; local edits (if any) remain the authoritative doc.
-          this.cadApi.checkout(modelId).subscribe({
+          this.vcsApi.checkout(modelId).subscribe({
             next: taken => patchLock(taken),
             error: () => this.handleCheckoutLost(modelId),
           });
@@ -16592,12 +16935,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private handleCheckoutLost(modelId: number) {
     if (this.checkoutLost()) return;
     this.checkoutLost.set('Your checkout expired — check out again to continue');
-    this.cadApi.getById(modelId).subscribe({
+    this.vcsApi.getById(modelId).subscribe({
       next: fresh => {
-        this.model.set(fresh);
+        this.applyModelUpdate(fresh);
         const meId = this.auth.currentUser()?.id;
         if (fresh.lockedByUserID != null && fresh.lockedByUserID !== meId) {
-          this.cadApi.listBranches(modelId).subscribe({
+          this.vcsApi.listBranches(modelId).subscribe({
             next: branches => {
               const stash = branches.filter(b => b.name.startsWith(`stash/${fresh.branchName || 'main'}/`)).pop();
               this.checkoutLost.set(
@@ -16617,6 +16960,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // in-flight regens are dropped by `regenGeneration` so a stale response
   // can't overwrite a newer one.
   private regenerate(reason = '?') {
+    if (this.harnessMode()) return;  // a harness has no kernel geometry
     // Assemblies compose through the assembly endpoints; `model()` only
     // mirrors the assembly row (undo/redo and kernel-recovery land here too).
     if (this.assemblyMode()) { this.asm.regenerate(); return; }
@@ -17262,7 +17606,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // Release the working copy as the Part's revision (commit + freeze + tag).
   onRelease() {
     const m = this.model(); if (!m) return;
-    this.cadApi.release(m.id).subscribe({
+    this.vcsApi.release(m.id).subscribe({
       next: res => { this.model.set(res.model); this.loadCommits(); this.loadWorkflow(); },
       error: err => this.errors.showError(err?.error?.error || 'Release failed'),
     });
@@ -17274,6 +17618,17 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!window.confirm(
       'Promote to a production release?\n\nThis creates a letter revision with the '
       + 'same geometry, locks the source, and requires approval.')) return;
+    if (this.harnessMode()) {
+      // A harness production release re-labels the same row — no new model to open.
+      this.harnessApi.productionRelease(m.id).subscribe({
+        next: res => {
+          this.applyModelUpdate(res.model, 'bootstrap');
+          this.errors.showSuccess(`Promoted to production revision ${res.revision}`);
+        },
+        error: err => this.errors.showError(err?.error?.error || 'Production release failed'),
+      });
+      return;
+    }
     this.cadApi.productionRelease(m.id).subscribe({
       next: res => {
         if (this.assemblyMode()) this.router.navigate(['/parts', res.model.partID, 'assembly', 'editor']);
@@ -17313,7 +17668,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // branching a new draft off main, which onCreateBranch does (create + switch
     // + checkout + open).
     if (this.onMainBranch()) { this.onCreateBranch(); return; }
-    this.cadApi.checkout(m.id, takeover ? { takeover: true } : undefined).subscribe({
+    this.vcsApi.checkout(m.id, takeover ? { takeover: true } : undefined).subscribe({
       next: updated => {
         this.checkoutLost.set(null);
         if (updated.stashedTo) {
@@ -17350,14 +17705,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     await this.flushPendingSave();
     // Dialog shows the uncommitted changes (working copy vs last check-in) and
     // collects a message; returns null on cancel.
-    this.dialog.open(CadCheckinDialogComponent, { data: { modelId: m.id }, width: '460px' })
+    this.dialog.open(CadCheckinDialogComponent, { data: { modelId: m.id, harness: this.harnessMode() }, width: '460px' })
       .afterClosed().subscribe((result: CadCheckinResult | null) => {
         if (!result) return;
         // Capture a low-res image of the model from its default view so the
         // version history can show this commit instantly (REQ 710). Best-effort.
         // (The backend ignores thumbnails for assemblies.)
         const thumbnail = this.viewerRef()?.captureThumbnail() ?? null;
-        this.cadApi.checkin(m.id, result.message, thumbnail, result.keepCheckedOut).subscribe({
+        this.vcsApi.checkin(m.id, result.message, thumbnail, result.keepCheckedOut).subscribe({
           next: res => { this.applyModelUpdate(res.model); this.loadCommits(); },
           error: err => this.errors.showError(err?.error?.error || 'Check-in failed'),
         });
@@ -17386,7 +17741,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       );
       if (!ok) return;
     }
-    this.cadApi.undoCheckout(m.id).subscribe({
+    this.vcsApi.undoCheckout(m.id).subscribe({
       next: updated => { this.applyModelUpdate(updated, 'bootstrap'); this.loadCommits(); this.loadWorkflow(); },
       error: err => this.errors.showError(err?.error?.error || 'Undo checkout failed'),
     });
@@ -17394,7 +17749,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   loadCommits() {
     const m = this.model(); if (!m) return;
-    this.cadApi.getCommits(m.id).subscribe({
+    this.vcsApi.getCommits(m.id).subscribe({
       next: list => this.commits.set(list),
       error: () => this.commits.set([]),
     });
@@ -17424,7 +17779,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   loadBranches() {
     const m = this.model(); if (!m) return;
-    this.cadApi.listBranches(m.id).subscribe({
+    this.vcsApi.listBranches(m.id).subscribe({
       next: list => this.branches.set(list),
       error: () => this.branches.set([]),
     });
@@ -17439,9 +17794,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!name) return;
     // Create the branch, switch the working copy onto it, then check it out so
     // the user can start editing immediately.
-    this.cadApi.createBranch(m.id, name).subscribe({
-      next: () => this.cadApi.switchBranch(m.id, name).subscribe({
-        next: switched => this.cadApi.checkout(m.id).subscribe({
+    this.vcsApi.createBranch(m.id, name).subscribe({
+      next: () => this.vcsApi.switchBranch(m.id, name).subscribe({
+        next: switched => this.vcsApi.checkout(m.id).subscribe({
           next: updated => {
             this.applyModelUpdate(updated, 'bootstrap');
             this.loadCommits(); this.loadWorkflow();
@@ -17460,7 +17815,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onSwitchBranch(name: string) {
     const m = this.model(); if (!m || name === this.currentBranch()) return;
-    this.cadApi.switchBranch(m.id, name).subscribe({
+    this.vcsApi.switchBranch(m.id, name).subscribe({
       next: updated => { this.applyModelUpdate(updated, 'bootstrap'); this.showBranches.set(false); },
       error: err => this.errors.showError(err?.error?.error || 'Switch branch failed'),
     });
@@ -17468,7 +17823,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onArchiveBranch(name: string) {
     const m = this.model(); if (!m) return;
-    this.cadApi.archiveBranch(m.id, name).subscribe({
+    this.vcsApi.archiveBranch(m.id, name).subscribe({
       next: () => this.loadBranches(),
       error: err => this.errors.showError(err?.error?.error || 'Archive branch failed'),
     });
@@ -17493,7 +17848,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   runDiff() {
     const m = this.model(); const a = this.diffA(); const b = this.diffB();
     if (!m || !a || !b) return;
-    this.cadApi.commitDiff(m.id, a, b).subscribe({
+    this.vcsApi.commitDiff(m.id, a, b).subscribe({
       next: r => this.diffResult.set(r),
       error: err => this.errors.showError(err?.error?.error || 'Diff failed'),
     });
@@ -17514,7 +17869,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   loadWorkflow() {
     const m = this.model(); if (!m) return;
-    this.cadApi.getWorkflow(m.id).subscribe({
+    this.vcsApi.getWorkflow(m.id).subscribe({
       next: w => this.workflow.set(w),
       error: () => this.workflow.set(null),
     });
@@ -17522,7 +17877,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   onWorkflowAction(action: string) {
     const m = this.model(); if (!m) return;
-    this.cadApi.transitionWorkflow(m.id, action).subscribe({
+    this.vcsApi.transitionWorkflow(m.id, action).subscribe({
       next: (w: any) => {
         this.workflow.set({ state: w.state, actions: w.actions });
         if (w.model) this.applyModelUpdate(w.model);
@@ -17535,7 +17890,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // branch). The model flips to the protected main line.
   onReleaseToMain() {
     const m = this.model(); if (!m) return;
-    this.cadApi.release(m.id).subscribe({
+    this.vcsApi.release(m.id).subscribe({
       next: (r: any) => {
         if (r.model) { this.applyModelUpdate(r.model, 'bootstrap'); this.loadCommits(); this.loadBranches(); }
         this.loadWorkflow();
@@ -17569,7 +17924,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       });
       // REQ 954 — merging needs the caller's checkout; take it first if free.
       if (this.asm.isLockedByMe()) merge();
-      else this.cadApi.checkout(m.id).subscribe({ next: () => merge(), error: e => this.errors.showError(e?.error?.error || 'Checkout failed') });
+      else this.vcsApi.checkout(m.id).subscribe({ next: () => merge(), error: e => this.errors.showError(e?.error?.error || 'Checkout failed') });
       return;
     }
     this.openVersionHistory();

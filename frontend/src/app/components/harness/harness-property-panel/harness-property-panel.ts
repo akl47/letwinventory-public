@@ -16,6 +16,7 @@ import {
   HarnessData,
   HarnessCable,
   HarnessComponent,
+  HarnessComponentPinGroup,
   HarnessPin,
   HarnessWire,
   WireEnd,
@@ -50,13 +51,10 @@ export class HarnessPropertyPanel implements OnInit {
   // Inputs
   harnessData = input<HarnessData | null>(null);
   selection = input<CanvasSelection | null>(null);
-  isReleased = input<boolean>(false);
-  isInReview = input<boolean>(false);
   isLocked = input<boolean>(false);
   isViewOnly = input<boolean>(false);
 
   // Outputs
-  metadataChanged = output<{ field: string; value: string }>();
   connectorChanged = output<{ field: string; value: any }>();
   connectionChanged = output<{ field: string; value: any }>();
   bulkWiresChanged = output<{ connectionIds: string[]; field: string; value: any }>();
@@ -65,10 +63,11 @@ export class HarnessPropertyPanel implements OnInit {
   deleteCable = output<void>();
   deleteComponent = output<void>();
   deleteConnection = output<void>();
-  deleteHarness = output<void>();
-  releaseHarness = output<void>();
-  returnToDraft = output<void>();
-  newRevision = output<void>();
+  /** The selected component with an edit applied (REQ 1067). */
+  componentChanged = output<HarnessComponent>();
+  /** The selected connector / cable with an edit applied (REQ 1067). */
+  connectorEdited = output<HarnessConnector>();
+  cableEdited = output<HarnessCable>();
 
   // Constants
   connectorTypes = CONNECTOR_TYPES;
@@ -137,11 +136,6 @@ export class HarnessPropertyPanel implements OnInit {
       toTermination: wires.every(w => w.toTermination === firstWire.toTermination) ? firstWire.toTermination : undefined,
     };
   });
-
-  updateMetadata(field: string, event: Event) {
-    const value = (event.target as HTMLInputElement).value;
-    this.metadataChanged.emit({ field, value });
-  }
 
   updateConnector(field: string, event: Event) {
     const input = event.target as HTMLInputElement;
@@ -396,5 +390,118 @@ export class HarnessPropertyPanel implements OnInit {
       value = value ? parseInt(value) : undefined;
     }
     this.updateBulkWires(field, value);
+  }
+
+  // ── Component properties (REQ 1067) ────────────────────────────────────────
+  // Each edit emits a new component object; nothing in the harness document is
+  // mutated in place.
+  selectedComponent = computed(() => {
+    const selection = this.selection();
+    return selection?.type === 'component' ? selection.component ?? null : null;
+  });
+
+  componentPinTotal = computed(() =>
+    (this.selectedComponent()?.pinGroups ?? []).reduce((total, group) => total + group.pins.length, 0));
+
+  updateComponentLabel(event: Event) {
+    const component = this.selectedComponent();
+    const label = (event.target as HTMLInputElement).value;
+    // A component always carries a label; wait for the user to type one.
+    if (!component || !label.trim()) return;
+    this.componentChanged.emit({ ...component, label });
+  }
+
+  toggleComponentGroupHidden(groupId: string) {
+    this.emitComponentGroups(group => group.id === groupId ? { ...group, hidden: !group.hidden } : group);
+  }
+
+  toggleComponentPinHidden(groupId: string, pinId: string) {
+    this.emitComponentGroups(group => group.id !== groupId ? group : {
+      ...group,
+      pins: group.pins.map(pin => pin.id === pinId ? { ...pin, hidden: !pin.hidden } : pin),
+    });
+  }
+
+  updateComponentPinLabel(groupId: string, pinId: string, event: Event) {
+    const label = (event.target as HTMLInputElement).value;
+    this.emitComponentGroups(group => group.id !== groupId ? group : {
+      ...group,
+      pins: group.pins.map(pin => pin.id === pinId ? { ...pin, label } : pin),
+    });
+  }
+
+  private emitComponentGroups(change: (group: HarnessComponentPinGroup) => HarnessComponentPinGroup) {
+    const component = this.selectedComponent();
+    if (!component) return;
+    this.componentChanged.emit({ ...component, pinGroups: component.pinGroups.map(change) });
+  }
+
+  // ── Connector properties (REQ 1067) ────────────────────────────────────────
+  selectedConnector = computed(() => {
+    const selection = this.selection();
+    return selection?.type === 'connector' ? selection.connector ?? null : null;
+  });
+
+  connectorTypeLabel(type: string): string {
+    return this.connectorTypes.find(t => t.value === type)?.label ?? type;
+  }
+
+  connectorColorHex(code: string | undefined): string {
+    return this.connectorColors.find(c => c.code === (code || 'GY'))?.hex || '#808080';
+  }
+
+  connectorColorName(code: string | undefined): string {
+    return this.connectorColors.find(c => c.code === (code || 'GY'))?.name || code || '';
+  }
+
+  updateConnectorLabel(event: Event) {
+    const connector = this.selectedConnector();
+    const label = (event.target as HTMLInputElement).value;
+    if (!connector || !label.trim()) return;
+    this.connectorEdited.emit({ ...connector, label });
+  }
+
+  updateConnectorPinLabel(pinId: string, event: Event) {
+    const connector = this.selectedConnector();
+    if (!connector) return;
+    const label = (event.target as HTMLInputElement).value;
+    this.connectorEdited.emit({ ...connector, pins: connector.pins.map(pin => pin.id === pinId ? { ...pin, label } : pin) });
+  }
+
+  // ── Cable properties (REQ 1067) ────────────────────────────────────────────
+  selectedCable = computed(() => {
+    const selection = this.selection();
+    return selection?.type === 'cable' ? selection.cable ?? null : null;
+  });
+
+  updateCableLabel(event: Event) {
+    const cable = this.selectedCable();
+    const label = (event.target as HTMLInputElement).value;
+    if (!cable || !label.trim()) return;
+    this.cableEdited.emit({ ...cable, label });
+  }
+
+  updateCableWireLabel(wireId: string, event: Event) {
+    const cable = this.selectedCable();
+    if (!cable) return;
+    const label = (event.target as HTMLInputElement).value;
+    this.cableEdited.emit({ ...cable, wires: cable.wires.map(wire => wire.id === wireId ? { ...wire, label } : wire) });
+  }
+
+  /** Move a wire one place up (-1) or down (+1) in the cable. */
+  moveCableWire(index: number, step: -1 | 1) {
+    const cable = this.selectedCable();
+    const target = index + step;
+    if (!cable || target < 0 || target >= cable.wires.length) return;
+    const wires = [...cable.wires];
+    [wires[index], wires[target]] = [wires[target], wires[index]];
+    this.cableEdited.emit({ ...cable, wires });
+  }
+
+  updateCableLength(event: Event) {
+    const cable = this.selectedCable();
+    if (!cable) return;
+    const value = Number((event.target as HTMLInputElement).value);
+    this.cableEdited.emit({ ...cable, lengthMm: value > 0 ? value : undefined });
   }
 }

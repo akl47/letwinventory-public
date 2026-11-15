@@ -169,6 +169,10 @@ export interface PartWithCadSummary {
   releasedRevision: string | null;
   isAssembly?: boolean;
   instanceCount?: number;
+  /** The part is common — usable in every project (REQ 1069). */
+  commonPart?: boolean;
+  /** Projects the part belongs to (REQ 1069). */
+  projectIDs?: number[];
 }
 
 export interface CadModelHistoryEntry {

@@ -8,6 +8,7 @@ import { MatInputModule } from '@angular/material/input';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { CadModelService } from '../../../services/cad-model.service';
+import { HarnessService } from '../../../services/harness.service';
 import { formatDiffEntry, FormattedDiff } from '../../../cad/lib/diffFormat';
 
 export interface CadCheckinResult { message: string; keepCheckedOut: boolean; }
@@ -65,9 +66,11 @@ export interface CadCheckinResult { message: string; keepCheckedOut: boolean; }
   `],
 })
 export class CadCheckinDialogComponent {
-  private data = inject<{ modelId: number }>(MAT_DIALOG_DATA);
+  /** `harness` — the document is a wire harness (its own backend). */
+  private data = inject<{ modelId: number; harness?: boolean }>(MAT_DIALOG_DATA);
   private ref = inject(MatDialogRef<CadCheckinDialogComponent, CadCheckinResult | null>);
   private cadApi = inject(CadModelService);
+  private harnessApi = inject(HarnessService);
 
   message = '';
   keepCheckedOut = false;
@@ -76,7 +79,7 @@ export class CadCheckinDialogComponent {
   error = signal<string | null>(null);
 
   constructor() {
-    this.cadApi.workingDiff(this.data.modelId).subscribe({
+    (this.data.harness ? this.harnessApi : this.cadApi).workingDiff(this.data.modelId).subscribe({
       next: d => {
         this.entries.set((d.entries ?? []).filter(e => e.status !== 'unchanged').map(formatDiffEntry));
         this.loading.set(false);

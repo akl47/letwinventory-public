@@ -1,0 +1,56 @@
+<button
+  mat-button
+  type="button"
+  class="filter-btn"
+  data-testid="filter-menu-button"
+  [matMenuTriggerFor]="filterMenu"
+  [class.has-filter]="activeCount > 0">
+  <mat-icon>filter_list</mat-icon>
+  <span>Filter</span>
+  @if (activeCount > 0) {
+    <span class="filter-badge">{{ activeCount }}</span>
+  }
+</button>
+<mat-menu #filterMenu="matMenu" class="data-table-filter-menu">
+  @for (section of sections; track section.key; let isLast = $last) {
+    @if (isMultiSelectSection(section)) {
+      <div class="filter-group" [attr.data-testid]="'filter-group-' + section.key" (click)="$event.stopPropagation()">
+        <div class="filter-group-head">
+          <mat-checkbox
+            [checked]="isAllSelected(section)"
+            [indeterminate]="isSomeSelected(section)"
+            (change)="toggleAll(section)">
+            {{ section.label }}
+          </mat-checkbox>
+        </div>
+        <div class="filter-group-options">
+          @for (opt of section.options; track opt.id) {
+            <div class="filter-option">
+              <mat-checkbox
+                [checked]="isSelected(section.key, opt.id)"
+                (change)="toggleOption(section.key, opt.id)">
+                @if (opt.colorHex) {
+                  <span class="option-color" [style.background-color]="opt.colorHex"></span>
+                }
+                {{ opt.label }}
+              </mat-checkbox>
+            </div>
+          }
+        </div>
+      </div>
+    } @else if (isToggleSection(section)) {
+      <div class="filter-group" [attr.data-testid]="'filter-group-' + section.key" (click)="$event.stopPropagation()">
+        <div class="filter-group-head">
+          <mat-checkbox
+            [checked]="$any(values[section.key])"
+            (change)="setToggle(section.key, $event.checked)">
+            {{ section.label }}
+          </mat-checkbox>
+        </div>
+      </div>
+    }
+    @if (!isLast) {
+      <mat-divider></mat-divider>
+    }
+  }
+</mat-menu>

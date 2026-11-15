@@ -34,6 +34,7 @@ describe('Assembly CRUD (REQ 750)', () => {
     const res = await auth.post(`/api/design/cad-model/by-part/${part.id}`).send({});
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/create an assembly instead/i);
+    expect(res.body.code).toBe('USE_ASSEMBLY'); // the editor falls back to creating an assembly
   });
 
   it('rejects creating an assembly for a part that already has a CAD model (409)', async () => {

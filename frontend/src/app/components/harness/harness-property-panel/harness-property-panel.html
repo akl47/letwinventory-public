@@ -1,87 +1,8 @@
 <div class="property-panel">
-  <!-- Metadata section - always visible -->
-  <mat-expansion-panel [expanded]="true" class="metadata-panel">
-    <mat-expansion-panel-header>
-      <mat-panel-title>Harness Info</mat-panel-title>
-    </mat-expansion-panel-header>
-
-    <div class="property-group">
-      <mat-form-field appearance="outline" class="full-width">
-        <mat-label>Name</mat-label>
-        <input matInput [value]="harnessData()?.name || ''" (input)="updateMetadata('name', $event)" [disabled]="isLocked()">
-      </mat-form-field>
-
-      <mat-form-field appearance="outline" class="full-width">
-        <mat-label>Part Number</mat-label>
-        <input matInput [value]="harnessData()?.partNumber || ''" disabled>
-      </mat-form-field>
-
-      <mat-form-field appearance="outline" class="half-width">
-        <mat-label>Revision</mat-label>
-        <input matInput [value]="harnessData()?.revision || 'A'" disabled>
-      </mat-form-field>
-
-      <mat-form-field appearance="outline" class="full-width">
-        <mat-label>Description</mat-label>
-        <textarea matInput rows="2" [value]="harnessData()?.description || ''"
-          (input)="updateMetadata('description', $event)" [disabled]="isLocked()"></textarea>
-      </mat-form-field>
-
-      <div class="harness-actions">
-        <button mat-stroked-button color="warn" (click)="deleteHarness.emit()" [disabled]="isLocked()">
-          <mat-icon>delete</mat-icon>
-          Delete Harness
-        </button>
-      </div>
-    </div>
-  </mat-expansion-panel>
-
-  <!-- Release Status Panel -->
-  <mat-expansion-panel [expanded]="true" class="release-panel">
-    <mat-expansion-panel-header>
-      <mat-panel-title>Release Status</mat-panel-title>
-      <mat-panel-description>
-        @if (isReleased()) {
-          <span class="status-chip released">Released</span>
-        } @else if (isInReview()) {
-          <span class="status-chip review">In Review</span>
-        } @else {
-          <span class="status-chip draft">Draft</span>
-        }
-      </mat-panel-description>
-    </mat-expansion-panel-header>
-
-    <div class="release-actions">
-      @if (isReleased()) {
-        <span [matTooltip]="isViewOnly() ? 'You do not have permission' : ''">
-          <button mat-flat-button color="primary" (click)="newRevision.emit()" [disabled]="isViewOnly()">
-            <mat-icon>add_circle</mat-icon>
-            New Revision
-          </button>
-        </span>
-      } @else if (isInReview()) {
-        <span [matTooltip]="isViewOnly() ? 'You do not have permission' : ''">
-          <button mat-flat-button color="primary" (click)="releaseHarness.emit()" [disabled]="isViewOnly()">
-            <mat-icon>publish</mat-icon>
-            Release
-          </button>
-        </span>
-        <span [matTooltip]="isViewOnly() ? 'You do not have permission' : ''">
-          <button mat-stroked-button (click)="returnToDraft.emit()" [disabled]="isViewOnly()">
-            <mat-icon>undo</mat-icon>
-            Return to Draft
-          </button>
-        </span>
-      } @else {
-        <span [matTooltip]="isViewOnly() ? 'You do not have permission' : ''">
-          <button mat-flat-button color="primary" (click)="releaseHarness.emit()" [disabled]="isViewOnly()">
-            <mat-icon>send</mat-icon>
-            To Review
-          </button>
-        </span>
-      }
-    </div>
-  </mat-expansion-panel>
+  <!-- Nothing selected: the rail only holds the selected element's properties -->
+  @if (!selection() || selection()?.type === 'none') {
+  <p class="panel-empty" data-testid="harness-rail-empty">Select a connector, cable, component or wire to see its properties.</p>
+  }
 
   <!-- Bulk Wire Edit Panel - shows when multiple wires selected (not in locked mode) -->
   @if (hasMultipleWiresSelected() && !isLocked()) {
@@ -255,6 +176,167 @@
           </mat-select>
         </mat-form-field>
       </div>
+    </div>
+  </mat-expansion-panel>
+  }
+
+  <!-- Component Properties (REQ 1067) — edited here, in place of the edit dialog -->
+  @else if (selectedComponent(); as component) {
+  <mat-expansion-panel [expanded]="true" class="component-panel" data-testid="component-properties">
+    <mat-expansion-panel-header>
+      <mat-panel-title>Component Properties</mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="property-group">
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Label</mat-label>
+        <input matInput data-testid="component-label" [value]="component.label" (input)="updateComponentLabel($event)"
+          placeholder="e.g., U1, IC1, REL1" [disabled]="isLocked()">
+      </mat-form-field>
+
+      <div class="component-info">
+        @if (component.partName) {
+        <div class="info-row"><span class="info-label">Part</span><span class="info-value">{{ component.partName }}</span></div>
+        }
+        <div class="info-row"><span class="info-label">Total pins</span><span class="info-value">{{ componentPinTotal() }}</span></div>
+        <div class="info-row"><span class="info-label">Pin groups</span><span class="info-value">{{ component.pinGroups.length }}</span></div>
+      </div>
+
+      <div class="pin-groups-list">
+        @for (group of component.pinGroups; track group.id) {
+        <div class="pin-group" [class.hidden]="group.hidden">
+          <div class="pin-group-header">
+            <span class="group-name">{{ group.name }}</span>
+            @if (group.pinTypeName) {
+            <span class="group-type">{{ group.pinTypeName }}</span>
+            }
+            <span class="group-count">{{ group.pins.length }} pins</span>
+            @if (!isLocked()) {
+            <button mat-icon-button class="hide-toggle" (click)="toggleComponentGroupHidden(group.id)"
+              [matTooltip]="group.hidden ? 'Show group on canvas' : 'Hide group on canvas'">
+              <mat-icon>{{ group.hidden ? 'visibility_off' : 'visibility' }}</mat-icon>
+            </button>
+            }
+          </div>
+          <div class="pin-list">
+            @for (pin of group.pins; track pin.id) {
+            <div class="pin-row" [class.hidden]="pin.hidden">
+              <span class="pin-number">{{ pin.number }}</span>
+              <input class="pin-label-input" [value]="pin.label || ''" (input)="updateComponentPinLabel(group.id, pin.id, $event)"
+                placeholder="Label" [disabled]="isLocked()">
+              @if (!isLocked()) {
+              <button mat-icon-button class="pin-hide-toggle" (click)="toggleComponentPinHidden(group.id, pin.id)"
+                [matTooltip]="pin.hidden ? 'Show pin on canvas' : 'Hide pin on canvas'">
+                <mat-icon>{{ pin.hidden ? 'visibility_off' : 'visibility' }}</mat-icon>
+              </button>
+              }
+            </div>
+            }
+          </div>
+        </div>
+        } @empty {
+        <div class="no-pins">No pin groups configured</div>
+        }
+      </div>
+    </div>
+  </mat-expansion-panel>
+  }
+
+  <!-- Connector Properties (REQ 1067) — edited here, in place of the edit dialog -->
+  @else if (selectedConnector(); as connector) {
+  <mat-expansion-panel [expanded]="true" class="connector-panel" data-testid="connector-properties">
+    <mat-expansion-panel-header>
+      <mat-panel-title>Connector Properties</mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="property-group">
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Label</mat-label>
+        <input matInput data-testid="connector-label" [value]="connector.label" (input)="updateConnectorLabel($event)"
+          placeholder="e.g., J1, P2, CN1" [disabled]="isLocked()">
+      </mat-form-field>
+
+      <div class="component-info">
+        @if (connector.partName) {
+        <div class="info-row"><span class="info-label">Part</span><span class="info-value">{{ connector.partName }}</span></div>
+        }
+        <div class="info-row"><span class="info-label">Type</span><span class="info-value">{{ connectorTypeLabel(connector.type) }}</span></div>
+        <div class="info-row"><span class="info-label">Pin count</span><span class="info-value">{{ connector.pins.length }}</span></div>
+        <div class="info-row">
+          <span class="info-label">Color</span>
+          <span class="info-value swatch-value">
+            <span class="color-swatch" [style.backgroundColor]="connectorColorHex(connector.color)"></span>
+            {{ connectorColorName(connector.color) }}
+          </span>
+        </div>
+      </div>
+
+      <div class="pin-group">
+        <div class="pin-group-header"><span class="group-name">Pins</span></div>
+        <div class="pin-list">
+          @for (pin of connector.pins; track pin.id) {
+          <div class="pin-row">
+            <span class="pin-number">{{ pin.number }}</span>
+            <input class="pin-label-input" [value]="pin.label || ''" (input)="updateConnectorPinLabel(pin.id, $event)"
+              placeholder="Label" [disabled]="isLocked()">
+          </div>
+          }
+        </div>
+      </div>
+    </div>
+  </mat-expansion-panel>
+  }
+
+  <!-- Cable Properties (REQ 1067) — edited here, in place of the edit dialog -->
+  @else if (selectedCable(); as cable) {
+  <mat-expansion-panel [expanded]="true" class="cable-panel" data-testid="cable-properties">
+    <mat-expansion-panel-header>
+      <mat-panel-title>Cable Properties</mat-panel-title>
+    </mat-expansion-panel-header>
+
+    <div class="property-group">
+      <mat-form-field appearance="outline" class="full-width">
+        <mat-label>Label</mat-label>
+        <input matInput data-testid="cable-label" [value]="cable.label" (input)="updateCableLabel($event)"
+          placeholder="e.g., W1, CABLE-A" [disabled]="isLocked()">
+      </mat-form-field>
+
+      <div class="component-info">
+        @if (cable.partName) {
+        <div class="info-row"><span class="info-label">Part</span><span class="info-value">{{ cable.partName }}</span></div>
+        }
+        <div class="info-row"><span class="info-label">Wire count</span><span class="info-value">{{ cable.wires.length }}</span></div>
+        <div class="info-row"><span class="info-label">Gauge</span><span class="info-value">{{ cable.gaugeAWG ? cable.gaugeAWG + ' AWG' : 'Not specified' }}</span></div>
+      </div>
+
+      <div class="pin-group">
+        <div class="pin-group-header"><span class="group-name">Wires</span></div>
+        <div class="pin-list">
+          @for (wire of cable.wires; track wire.id; let i = $index; let first = $first; let last = $last) {
+          <div class="pin-row wire-row">
+            <span class="pin-number">{{ i + 1 }}</span>
+            <span class="color-swatch" [style.backgroundColor]="getWireHex(wire.colorCode || wire.color || '')"
+              [matTooltip]="(wire.color || '') + (wire.colorCode ? ' (' + wire.colorCode + ')' : '')"></span>
+            <input class="pin-label-input" [value]="wire.label || ''" (input)="updateCableWireLabel(wire.id, $event)"
+              [placeholder]="wire.color || 'Label'" [disabled]="isLocked()">
+            @if (!isLocked()) {
+            <button mat-icon-button class="pin-hide-toggle" [disabled]="first" matTooltip="Move up" (click)="moveCableWire(i, -1)">
+              <mat-icon>arrow_upward</mat-icon>
+            </button>
+            <button mat-icon-button class="pin-hide-toggle" [disabled]="last" matTooltip="Move down" (click)="moveCableWire(i, 1)">
+              <mat-icon>arrow_downward</mat-icon>
+            </button>
+            }
+          </div>
+          }
+        </div>
+      </div>
+
+      <mat-form-field appearance="outline" class="full-width cable-length">
+        <mat-label>Cable Length (mm)</mat-label>
+        <input matInput type="number" min="1" data-testid="cable-length" [value]="cable.lengthMm ?? ''"
+          (input)="updateCableLength($event)" [disabled]="isLocked()">
+      </mat-form-field>
     </div>
   </mat-expansion-panel>
   }

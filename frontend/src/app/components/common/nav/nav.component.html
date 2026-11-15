@@ -140,19 +140,13 @@
                         <span matListItemTitle>Features</span>
                     </a>
                     }
-                    @if (hasHarnessAccess()) {
-                    <a mat-list-item routerLink="/harness" routerLinkActive="active-link" (click)="closePanel()">
-                        <mat-icon matListItemIcon>cable</mat-icon>
-                        <span matListItemTitle>Harness Design</span>
-                    </a>
-                    }
                     @if (hasMfgPlanningAccess()) {
                     <a mat-list-item routerLink="/design/masters" routerLinkActive="active-link" (click)="closePanel()">
                         <mat-icon matListItemIcon>description</mat-icon>
                         <span matListItemTitle>Engineering Masters</span>
                     </a>
                     }
-                    @if (hasCadAccess()) {
+                    @if (hasCadAccess() || hasHarnessAccess()) {
                     <a mat-list-item routerLink="/design/cad" routerLinkActive="active-link" (click)="closePanel()">
                         <mat-icon matListItemIcon>view_in_ar</mat-icon>
                         <span matListItemTitle>CAD</span>

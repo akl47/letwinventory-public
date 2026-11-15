@@ -94,7 +94,7 @@ import {
   getSubHarnessPinPositions,
   getSubHarnessDimensions,
 } from '../../../utils/harness/elements/sub-harness';
-import { HarnessTool } from '../harness-toolbar/harness-toolbar';
+import { HarnessTool } from '../../../models/harness.model';
 
 export interface CanvasSelection {
   type: 'connector' | 'wire' | 'cable' | 'component' | 'subHarness' | 'multiple' | 'none';

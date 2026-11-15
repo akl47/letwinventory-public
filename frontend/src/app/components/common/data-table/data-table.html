@@ -1,6 +1,6 @@
 <div class="data-table-container">
   <div class="data-table-toolbar">
-    <mat-form-field appearance="outline" class="search-field">
+    <mat-form-field appearance="outline" class="search-field" subscriptSizing="dynamic">
       <mat-label>{{ searchPlaceholder }}</mat-label>
       <input
         matInput
@@ -11,56 +11,11 @@
     </mat-form-field>
 
     @if (filterSections && filterSections.length > 0) {
-      <button
-        mat-button
-        type="button"
-        class="filter-btn"
-        [matMenuTriggerFor]="filterMenu"
-        [class.has-filter]="activeFilterCount() > 0">
-        <mat-icon>filter_list</mat-icon>
-        <span>Filter</span>
-        @if (activeFilterCount() > 0) {
-          <span class="filter-badge">{{ activeFilterCount() }}</span>
-        }
-      </button>
-      <mat-menu #filterMenu="matMenu" class="data-table-filter-menu">
-        @for (section of filterSections; track section.key; let isLast = $last) {
-          <div class="menu-section-header">{{ section.label }}</div>
-          @if (isMultiSelectSection(section)) {
-            <div class="menu-header" (click)="$event.stopPropagation()">
-              <mat-checkbox
-                [checked]="isAllSelected(section.key)"
-                [indeterminate]="isSomeSelected(section.key)"
-                (change)="toggleAll(section.key)">
-                All {{ section.label }}
-              </mat-checkbox>
-            </div>
-            @for (opt of section.options; track opt.id) {
-              <div class="menu-item" (click)="$event.stopPropagation()">
-                <mat-checkbox
-                  [checked]="isSelected(section.key, opt.id)"
-                  (change)="toggleFilterSelection(section.key, opt.id)">
-                  @if (opt.colorHex) {
-                    <span class="option-color" [style.background-color]="opt.colorHex"></span>
-                  }
-                  {{ opt.label }}
-                </mat-checkbox>
-              </div>
-            }
-          } @else if (isToggleSection(section)) {
-            <div class="menu-item" (click)="$event.stopPropagation()">
-              <mat-checkbox
-                [checked]="$any(filterValues()[section.key])"
-                (change)="setFilterValue(section.key, $event.checked)">
-                {{ section.label }}
-              </mat-checkbox>
-            </div>
-          }
-          @if (!isLast) {
-            <mat-divider></mat-divider>
-          }
-        }
-      </mat-menu>
+      <app-filter-menu
+        [sections]="filterSections"
+        [values]="filterValues()"
+        [activeCount]="activeFilterCount()"
+        (valueChange)="setFilterValue($event.key, $event.value)" />
     }
 
     <div class="toolbar-extra">

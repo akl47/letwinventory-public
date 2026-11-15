@@ -75,7 +75,16 @@ function partFieldsFrom(pd) {
     lotNumberRequired: pd.lotNumberRequired, defaultUnitOfMeasureID: pd.defaultUnitOfMeasureID,
     manufacturer: pd.manufacturer, manufacturerPN: pd.manufacturerPN,
     minimumStockQuantity: pd.minimumStockQuantity, imageFileID: pd.imageFileID,
+    commonPart: !!pd.commonPart,
   };
+}
+
+// A new revision belongs to the same projects as the one it was cut from (REQ 1069).
+async function copyProjects(sourcePartID, newPartID, { transaction } = {}) {
+  const links = await db.PartProject.findAll({ where: { partID: sourcePartID }, transaction });
+  if (links.length) {
+    await db.PartProject.bulkCreate(links.map((l) => ({ partID: newPartID, projectID: l.projectID })), { transaction });
+  }
 }
 
 async function copyBom(sourcePartID, newPartID, { transaction } = {}) {
@@ -99,6 +108,7 @@ async function createNewRevision(part, userId, { transaction } = {}) {
     { transaction },
   );
   await copyBom(part.id, newPart.id, { transaction });
+  await copyProjects(part.id, newPart.id, { transaction });
   await db.PartRevisionHistory.create({
     partID: newPart.id, changedByUserID: userId || null, changeType: 'new_revision',
     changes: { previousRevision: { old: null, new: part.revision }, previousPartID: { old: null, new: part.id } },
@@ -116,6 +126,7 @@ async function releaseToProduction(part, userId, { transaction } = {}) {
     { transaction },
   );
   await copyBom(part.id, newPart.id, { transaction });
+  await copyProjects(part.id, newPart.id, { transaction });
   await part.update({ revisionLocked: true }, { transaction });
   await db.PartRevisionHistory.create({
     partID: newPart.id, changedByUserID: userId || null, changeType: 'production_release',

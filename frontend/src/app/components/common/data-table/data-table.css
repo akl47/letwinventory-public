@@ -18,77 +18,21 @@
   gap: 12px;
   align-items: center;
   flex-wrap: wrap;
-}
-
-.filter-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 12px;
-  height: 36px;
-  background-color: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 4px;
-  color: rgba(255, 255, 255, 0.7);
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.filter-btn:hover {
-  background-color: rgba(255, 255, 255, 0.1);
-}
-
-.filter-btn.has-filter {
-  color: var(--mat-sys-primary);
-  background-color: rgba(var(--mat-sys-primary-rgb), 0.15);
-  border-color: var(--mat-sys-primary);
-}
-
-.filter-badge {
-  background-color: var(--mat-sys-primary);
-  color: white;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 10px;
-  margin-left: 4px;
-}
-
-.menu-section-header {
-  padding: 8px 16px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: rgba(255, 255, 255, 0.5);
-}
-
-.menu-header,
-.menu-item {
-  padding: 8px 16px;
-}
-
-.menu-header {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.option-color {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-  margin-right: 8px;
-  vertical-align: middle;
+  /* The search box reserves no hint/error line (subscriptSizing="dynamic"), so
+     everything in the row centres on the same line; this is the gap that line
+     used to leave above the table. */
+  margin-bottom: 16px;
 }
 
 .search-field {
   min-width: 280px;
   max-width: 500px;
   flex: 0 1 500px;
-  margin-right: auto;
 }
 
+/* The Filter button follows the search box; page actions sit at the far end. */
 .toolbar-extra {
+  margin-left: auto;
   display: flex;
   gap: 12px;
   align-items: center;

@@ -138,6 +138,8 @@ if (require.main === module) {
         setInterval(() => {
             require('./services/vcs/cadVcsService').sweepExpiredLocks()
                 .catch((err) => console.error('[CadLockSweep] failed:', err));
+            require('./services/vcs/harnessVcsService').sweepExpiredLocks()
+                .catch((err) => console.error('[HarnessLockSweep] failed:', err));
         }, 10 * 60 * 1000);
     });
 }

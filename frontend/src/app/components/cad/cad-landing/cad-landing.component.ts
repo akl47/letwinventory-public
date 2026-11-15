@@ -12,14 +12,24 @@ import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { CadNewPartDialogComponent } from '../cad-new-part-dialog/cad-new-part-dialog.component';
 import { CadPartTabsComponent } from '../cad-part-tabs/cad-part-tabs.component';
 import { CadTabsService } from '../../../services/cad-tabs.service';
+import { harnessLink } from '../../../cad/lib/cadTabs';
 import { CadClipboardService } from '../../../services/cad-clipboard.service';
 import { CadModelService } from '../../../services/cad-model.service';
 import { AssemblyService } from '../../../services/assembly.service';
+import { HarnessService } from '../../../services/harness.service';
+import { PartEditDialog } from '../../inventory/part-edit-dialog/part-edit-dialog';
+import { Part } from '../../../models';
+import { createEmptyHarnessData } from '../../../models/harness.model';
 import { PartWithCadSummary } from '../../../models/cad-model.model';
 import { EligiblePart } from '../../../cad/lib/assembly.types';
 import { AuthService } from '../../../services/auth.service';
 import { ErrorNotificationService } from '../../../services/error-notification.service';
-import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-table/data-table';
+import { DataTable, DataTableColumnDef, ColumnDef, FilterSection } from '../../common/data-table/data-table';
+import { ProjectService } from '../../../services/project.service';
+import { Project } from '../../../models/project.model';
+
+/** A landing row: a part / assembly CAD model, or (REQ 1068) a wire harness. */
+type LandingRow = PartWithCadSummary & { harnessID?: number };
 
 @Component({
   selector: 'app-cad-landing',
@@ -67,6 +77,7 @@ import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-tabl
       <app-data-table *ngIf="!loading()"
         [data]="rows()"
         [columns]="columns"
+        [filterSections]="filterSections()"
         [searchKeys]="searchKeys"
         [defaultSort]="{ key: 'updated', dir: 'desc' }"
         searchPlaceholder="Filter by part name, description, or revision"
@@ -81,6 +92,13 @@ import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-tabl
             <mat-icon>upload_file</mat-icon>
             Import part
           </button>
+          @if (canHarness) {
+          <button mat-stroked-button (click)="newHarness()" data-testid="cad-new-harness"
+                  matTooltip="Create a new wire harness and open it.">
+            <mat-icon>cable</mat-icon>
+            New harness
+          </button>
+          }
           <button mat-stroked-button (click)="newPart('assembly')"
                   matTooltip="Create a new assembly part and open it.">
             <mat-icon>account_tree</mat-icon>
@@ -94,7 +112,8 @@ import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-tabl
         </div>
 
         <ng-template appColumn="part" let-r>
-          <a [routerLink]="['/parts', r.partID, 'cad']" class="part-link" (click)="$event.stopPropagation()">
+          <a [routerLink]="r.harnessID ? harnessLink(r.harnessID, r.partID).commands : ['/parts', r.partID, 'cad']"
+             [queryParams]="r.harnessID ? harnessLink(r.harnessID, r.partID).queryParams : null" class="part-link" (click)="$event.stopPropagation()">
             <strong>{{ r.part?.name || '(unnamed)' }}</strong>
             <span class="part-rev">·  Rev {{ r.part?.revision }}</span>
           </a>
@@ -102,9 +121,9 @@ import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-tabl
         </ng-template>
 
         <ng-template appColumn="type" let-r>
-          <span class="type-chip" [class.assembly]="r.isAssembly">
-            <mat-icon>{{ r.isAssembly ? 'account_tree' : 'view_in_ar' }}</mat-icon>
-            {{ r.isAssembly ? 'Assembly' : 'Part' }}
+          <span class="type-chip" [class.assembly]="r.isAssembly" [class.harness]="!!r.harnessID">
+            <mat-icon>{{ r.harnessID ? 'cable' : r.isAssembly ? 'account_tree' : 'view_in_ar' }}</mat-icon>
+            {{ r.harnessID ? 'Harness' : r.isAssembly ? 'Assembly' : 'Part' }}
           </span>
         </ng-template>
 
@@ -118,29 +137,28 @@ import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-tabl
           </span>
         </ng-template>
 
-        <ng-template appColumn="released" let-r>
-          <span *ngIf="r.hasReleased" class="released-pill">
-            <mat-icon>verified</mat-icon> Rev {{ r.releasedRevision }}
-          </span>
-          <span *ngIf="!r.hasReleased" class="muted">—</span>
+        <ng-template appColumn="projects" let-r>
+          @if (r.commonPart) { <span class="project-chip common" matTooltip="Common part — available to every project">Common</span> }
+          @for (p of rowProjects(r); track p.id) {
+            <span class="project-chip" [style.border-color]="'#' + p.tagColorHex" [matTooltip]="p.name">{{ p.shortName || p.name }}</span>
+          }
+          @if (!r.commonPart && rowProjects(r).length === 0) { <span class="muted">—</span> }
         </ng-template>
-
-        <ng-template appColumn="count" let-r>{{ r.revisionCount }}</ng-template>
 
         <ng-template appColumn="updated" let-r>{{ r.latestUpdatedAt | date:'short' }}</ng-template>
 
         <ng-template appColumn="actions" let-r>
           <div class="row-actions" (click)="$event.stopPropagation()">
-            <a mat-icon-button
+            <a mat-icon-button *ngIf="!r.harnessID"
                [routerLink]="['/parts', r.partID, 'cad']"
                aria-label="Show history"
                matTooltip="View the version history — graph, branches, diffs">
               <mat-icon>history</mat-icon>
             </a>
             <a mat-stroked-button
-               [routerLink]="r.isAssembly ? ['/parts', r.partID, 'assembly', 'editor'] : ['/parts', r.partID, 'cad', 'editor']"
-               [queryParams]="r.isAssembly ? null : { revisionID: r.latestRevisionID }"
-               [matTooltip]="r.isAssembly ? 'Open in the assembly editor' : 'Open the latest revision in the CAD editor'">
+               [routerLink]="r.harnessID ? harnessLink(r.harnessID, r.partID).commands : r.isAssembly ? ['/parts', r.partID, 'assembly', 'editor'] : ['/parts', r.partID, 'cad', 'editor']"
+               [queryParams]="r.harnessID ? harnessLink(r.harnessID, r.partID).queryParams : r.isAssembly ? null : { revisionID: r.latestRevisionID }"
+               [matTooltip]="r.harnessID ? 'Open in the harness editor' : r.isAssembly ? 'Open in the assembly editor' : 'Open the latest revision in the CAD editor'">
               <mat-icon>open_in_new</mat-icon> Open
             </a>
           </div>
@@ -167,12 +185,13 @@ import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-tabl
     .state-badge.draft { background: #fff3e0; color: #e65100; }
     .state-badge.review { background: #e3f2fd; color: #1565c0; }
     .state-badge.released { background: #e8f5e9; color: #2e7d32; }
-    .released-pill { display: inline-flex; align-items: center; gap: 4px; color: #2e7d32; font-weight: 500; }
-    .released-pill mat-icon { font-size: 16px; width: 16px; height: 16px; }
     .muted { opacity: 0.4; }
     .type-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; background: #e8eaf0; color: #2a2a3a; }
     .type-chip mat-icon { font-size: 16px; width: 16px; height: 16px; }
     .type-chip.assembly { background: #e3f2fd; color: #1565c0; }
+    .type-chip.harness { background: #fff3e0; color: #e65100; }
+    .project-chip { display: inline-block; margin-right: 4px; padding: 1px 8px; border: 1px solid #9e9e9e; border-left-width: 4px; border-radius: 4px; font-size: 12px; white-space: nowrap; }
+    .project-chip.common { border-color: #1565c0; font-weight: 500; }
     .picker { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin-bottom: 16px; }
     .picker .hint { margin: 0 0 .5rem; }
     .picker-search { width: 320px; max-width: 100%; }
@@ -186,7 +205,12 @@ import { DataTable, DataTableColumnDef, ColumnDef } from '../../common/data-tabl
 export class CadLandingComponent implements OnInit {
   private cadApi = inject(CadModelService);
   private assemblyApi = inject(AssemblyService);
+  private harnessApi = inject(HarnessService);
+  private projectApi = inject(ProjectService);
   private auth = inject(AuthService);
+  // REQ 1068 — the harness backend is separate, with its own permissions.
+  readonly canCad = this.auth.hasAnyPermission('cad');
+  readonly canHarness = this.auth.hasAnyPermission('harness');
   private errors = inject(ErrorNotificationService);
   private router = inject(Router);
   private dialog = inject(MatDialog);
@@ -222,21 +246,90 @@ export class CadLandingComponent implements OnInit {
     this.dialog.open(CadNewPartDialogComponent, { data: { mode }, autoFocus: false });
   }
 
-  rows = signal<PartWithCadSummary[]>([]);
+  /** REQ 1068 — create a Harness-category part, then its harness, and open it. */
+  newHarness() {
+    this.dialog.open(PartEditDialog, { width: '500px', data: { lockedCategory: 'Harness' } })
+      .afterClosed().subscribe((part: boolean | Part | undefined) => {
+        if (!part || typeof part !== 'object') return;
+        const harnessData = createEmptyHarnessData(part.name);
+        harnessData.description = part.description || '';
+        this.harnessApi.createHarness({ name: part.name, description: part.description || '', harnessData, partID: part.id }).subscribe({
+          next: h => this.openHarness(h.id, part.id),
+          error: e => this.errors.showError(e?.error?.error || 'Failed to create harness'),
+        });
+      });
+  }
+
+  readonly harnessLink = harnessLink;
+  private openHarness(harnessID: number, partID?: number | null) {
+    const { commands, queryParams } = harnessLink(harnessID, partID);
+    this.router.navigate(commands, { queryParams });
+  }
+
+  private cadRows = signal<LandingRow[]>([]);
+  private harnessRows = signal<LandingRow[]>([]);
+  rows = computed<LandingRow[]>(() => [...this.cadRows(), ...this.harnessRows()]);
   loading = signal<boolean>(true);
 
-  columns: ColumnDef<PartWithCadSummary>[] = [
+  columns: ColumnDef<LandingRow>[] = [
     // String sortValues are lowercased — DataTable's default comparator only
     // lowercases on its fallback path, so raw values would sort 'Zebra' < 'anchor'.
     { key: 'part', header: 'Part', sortable: true, sortValue: r => (r.part?.name ?? '').toLowerCase() },
-    { key: 'type', header: 'Type', sortable: true, sortValue: r => r.isAssembly ? 'assembly' : 'part' },
+    { key: 'type', header: 'Type', sortable: true, sortValue: r => r.harnessID ? 'harness' : r.isAssembly ? 'assembly' : 'part' },
     { key: 'latest', header: 'Latest CAD Revision', sortable: true, sortValue: r => (r.latestRevision ?? '').toLowerCase() },
-    { key: 'released', header: 'Released', sortable: true, sortValue: r => (r.releasedRevision ?? '').toLowerCase() },
-    { key: 'count', header: 'Revisions', sortable: true, sortValue: r => r.revisionCount ?? 0 },
+    { key: 'projects', header: 'Projects', sortable: true, sortValue: r => this.projectSortValue(r) },
     { key: 'updated', header: 'Updated', sortable: true, sortValue: r => r.latestUpdatedAt ?? '' },
     { key: 'actions', header: '', sortable: false },
   ];
   searchKeys = ['part.name', 'part.description', 'part.revision'];
+
+  // REQ 1071 — narrow the list by kind of document, release state and project.
+  private projects = signal<Project[]>([]);
+  private projectsById = computed(() => new Map(this.projects().map(p => [p.id, p])));
+
+  /** The projects a row's part belongs to, by name. */
+  rowProjects(row: LandingRow): Project[] {
+    const byId = this.projectsById();
+    return (row.projectIDs ?? []).map(id => byId.get(id)).filter((p): p is Project => !!p)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Common parts first, then by project name; rows with no project last. */
+  private projectSortValue(row: LandingRow): string {
+    if (row.commonPart) return ' common';
+    return this.rowProjects(row).map(p => p.name.toLowerCase()).join(',') || '\uffff';
+  }
+  filterSections = computed<FilterSection<LandingRow>[]>(() => [
+    {
+      type: 'multiSelect',
+      key: 'type',
+      label: 'Type',
+      options: [
+        { id: 'part', label: 'Part' },
+        { id: 'assembly', label: 'Assembly' },
+        { id: 'harness', label: 'Harness' },
+      ],
+      accessor: (r: LandingRow) => r.harnessID ? 'harness' : r.isAssembly ? 'assembly' : 'part',
+    },
+    {
+      type: 'multiSelect',
+      key: 'state',
+      label: 'State',
+      options: [
+        { id: 'draft', label: 'Draft' },
+        { id: 'released', label: 'Released' },
+      ],
+      accessor: (r: LandingRow) => r.latestReleaseState === 'released' ? 'released' : 'draft',
+    },
+    {
+      type: 'multiSelect',
+      key: 'projects',
+      label: 'Projects',
+      options: this.projects().map(p => ({ id: p.id, label: p.name, colorHex: p.tagColorHex ? `#${p.tagColorHex}` : '#808080' })),
+      // A common part belongs to every project.
+      accessor: (r: LandingRow) => r.commonPart ? this.projects().map(p => p.id) : (r.projectIDs ?? []),
+    },
+  ]);
 
   // "New assembly" picker — Assembly-category parts eligible to start one.
   showPicker = signal(false);
@@ -250,17 +343,54 @@ export class CadLandingComponent implements OnInit {
   });
 
   ngOnInit() {
-    this.cadApi.listPartsWithCad().subscribe({
-      next: rs => { this.rows.set(rs); this.loading.set(false); },
-      error: err => { this.errors.showError(err?.error?.error || 'Failed to load CAD landing'); this.loading.set(false); },
+    // A user without project access gets no project options.
+    this.projectApi.getProjects().subscribe({
+      next: ps => this.projects.set(ps.filter(p => p.activeFlag)),
+      error: () => this.projects.set([]),
     });
-    this.assemblyApi.eligibleParts().subscribe({
-      next: rows => this.eligibleParts.set(rows),
-      error: () => {},
-    });
+    if (this.canCad) {
+      this.cadApi.listPartsWithCad().subscribe({
+        next: rs => { this.cadRows.set(rs); this.loading.set(false); },
+        error: err => { this.errors.showError(err?.error?.error || 'Failed to load CAD landing'); this.loading.set(false); },
+      });
+      this.assemblyApi.eligibleParts().subscribe({
+        next: rows => this.eligibleParts.set(rows),
+        error: () => {},
+      });
+    } else {
+      this.loading.set(false);
+    }
+    // REQ 1068 — harnesses are listed alongside parts and assemblies.
+    if (this.canHarness) {
+      this.harnessApi.getAllHarnesses(1, 1000).subscribe({
+        next: res => this.harnessRows.set(res.harnesses.map(h => {
+          const released = h.releaseState === 'released';
+          return {
+            harnessID: h.id,
+            commonPart: h.commonPart,
+            projectIDs: h.projectIDs,
+            partID: h.partID ?? 0,
+            part: { id: 0, name: h.partNumber || h.name, revision: h.revision, description: h.partNumber ? h.name : h.description },
+            revisionCount: 1,
+            latestRevisionID: null,
+            latestRevision: h.revision,
+            latestReleaseState: released ? 'released' : 'draft',
+            latestUpdatedAt: h.updatedAt,
+            hasReleased: released,
+            releasedRevisionID: null,
+            releasedRevision: released ? h.revision : null,
+          };
+        })),
+        error: err => this.errors.showError(err?.error?.error || 'Failed to load harnesses'),
+      });
+    }
   }
 
-  openLatest(row: PartWithCadSummary) {
+  openLatest(row: LandingRow) {
+    if (row.harnessID) {
+      this.openHarness(row.harnessID, row.partID);
+      return;
+    }
     if (row.isAssembly) {
       this.router.navigate(['/parts', row.partID, 'assembly', 'editor']);
       return;

@@ -2,6 +2,49 @@ const db = require('../../../models');
 const createError = require('http-errors');
 const { Op } = require('sequelize');
 const humanizeError = require('../../../util/humanizeError');
+const harnessVcs = require('../../../services/vcs/harnessVcsService');
+const { harnessSerialize, harnessDeserialize } = require('../../../services/vcs/harnessSerializer');
+const vcsService = require('../../../services/vcs/vcsService');
+const workflowEngine = require('../../../services/vcs/workflowEngine');
+const cadDiffService = require('../../../services/vcs/cadDiffService');
+const cadGraphService = require('../../../services/vcs/cadGraphService');
+const { sendCadError } = require('../../../services/cadErrors');
+
+const PART_INCLUDE = [{ model: db.Part, as: 'Part', attributes: ['id', 'name'] }];
+
+// Harness JSON plus the version-control flags the editor reads — the same
+// fields the CAD model endpoints return (released / displayRevision /
+// draftRevision / behindMain).
+async function present(harness) {
+  const json = harness.toJSON();
+  json.partNumber = json.Part ? json.Part.name : null;
+  const onMain = (harness.branchName || 'main') === 'main';
+  const tags = await vcsService.listRefs(await harnessVcs.repoFor(harness), 'tag');
+  json.released = onMain && tags.length > 0;
+  json.displayRevision = harness.revision;
+  json.draftRevision = onMain ? null : harness.revision;
+  json.behindMain = await harnessVcs.behindMain(harness);
+  if (harness.lockedByUserID) {
+    const holder = await db.User.findByPk(harness.lockedByUserID, { attributes: ['id', 'displayName'] });
+    json.lockedBy = holder ? { id: holder.id, displayName: holder.displayName } : null;
+  }
+  return json;
+}
+
+// Load a harness and make sure it has a repository (adopting harnesses from
+// before version control on first access — REQ 1066).
+async function fetchHarness(req) {
+  const harness = await db.WireHarness.findOne({ where: { id: req.params.id, activeFlag: true }, include: PART_INCLUDE });
+  if (!harness) return null;
+  await harnessVcs.ensureRepo(harness, req.user.id);
+  return harness;
+}
+
+// Review workflow state is tracked per branch, as for CAD models.
+async function workflowRepo(harness) {
+  const repo = await harnessVcs.repoFor(harness);
+  return { repoType: repo.repoType, repoId: `${repo.repoId}:${harness.branchName || 'main'}` };
+}
 
 // Helper: Check if adding childId as sub-harness of parentId would create a cycle
 async function wouldCreateCycle(parentId, childId, visited = new Set()) {
@@ -37,48 +80,6 @@ async function findParentHarnesses(harnessId) {
   });
 }
 
-// Helper: Cascade release state to all sub-harnesses
-async function cascadeReleaseState(harness, newState, changedBy) {
-  const subHarnesses = harness.harnessData?.subHarnesses || [];
-  if (subHarnesses.length === 0) return [];
-
-  const updatedSubHarnesses = [];
-
-  for (const subRef of subHarnesses) {
-    const subHarness = await db.WireHarness.findByPk(subRef.harnessId);
-    if (!subHarness) continue;
-
-    // Only update if not already at or past the target state
-    const stateOrder = { draft: 0, review: 1, released: 2 };
-    if (stateOrder[subHarness.releaseState] >= stateOrder[newState]) continue;
-
-    const updateData = { releaseState: newState };
-    if (newState === 'released') {
-      updateData.releasedAt = new Date();
-      updateData.releasedBy = changedBy;
-    }
-
-    await subHarness.update(updateData);
-
-    // Log history for the sub-harness
-    const changeType = newState === 'review' ? 'submitted_review' : 'released';
-    await logHistory(subHarness.id, changeType, changedBy, `Cascaded from parent harness: ${harness.name}`);
-
-    updatedSubHarnesses.push({
-      id: subHarness.id,
-      name: subHarness.name,
-      previousState: subHarness.releaseState,
-      newState: newState
-    });
-
-    // Recursively cascade to nested sub-harnesses
-    const nestedUpdates = await cascadeReleaseState(subHarness, newState, changedBy);
-    updatedSubHarnesses.push(...nestedUpdates);
-  }
-
-  return updatedSubHarnesses;
-}
-
 // Get all harnesses (paginated, with basic info)
 exports.getAllHarnesses = async (req, res, next) => {
   try {
@@ -89,11 +90,13 @@ exports.getAllHarnesses = async (req, res, next) => {
 
     const { count, rows } = await db.WireHarness.findAndCountAll({
       where: whereClause,
-      attributes: ['id', 'name', 'partID', 'revision', 'description', 'thumbnailBase64', 'activeFlag', 'createdBy', 'releaseState', 'releasedAt', 'releasedBy', 'createdAt', 'updatedAt'],
+      attributes: ['id', 'name', 'partID', 'revision', 'description', 'thumbnailBase64', 'activeFlag', 'createdBy', 'releaseState', 'releasedAt', 'releasedBy', 'branchName', 'lockedByUserID', 'createdAt', 'updatedAt'],
       include: [{
         model: db.Part,
         as: 'Part',
-        attributes: ['id', 'name']
+        attributes: ['id', 'name', 'commonPart'],
+        // REQ 1071 — the CAD landing page filters by project.
+        include: [{ model: db.Project, as: 'projects', attributes: ['id'], through: { attributes: [] } }]
       }],
       order: [['updatedAt', 'DESC']],
       limit: parseInt(limit),
@@ -104,6 +107,8 @@ exports.getAllHarnesses = async (req, res, next) => {
     const harnesses = rows.map(h => {
       const harness = h.toJSON();
       harness.partNumber = harness.Part ? harness.Part.name : null;
+      harness.commonPart = !!(harness.Part && harness.Part.commonPart);
+      harness.projectIDs = harness.Part ? (harness.Part.projects || []).map(p => p.id) : [];
       return harness;
     });
 
@@ -124,26 +129,29 @@ exports.getAllHarnesses = async (req, res, next) => {
 // Get single harness with full data
 exports.getHarnessById = async (req, res, next) => {
   try {
-    const harness = await db.WireHarness.findOne({
-      where: {
-        id: req.params.id
-      },
-      include: [{
-        model: db.Part,
-        as: 'Part',
-        attributes: ['id', 'name']
-      }]
-    });
-
+    const harness = await fetchHarness(req);
     if (!harness) {
       return next(createError(404, 'Harness not found'));
     }
+    res.json(await present(harness));
+  } catch (error) {
+    next(humanizeError(error, 'Error Getting Harness'));
+  }
+};
 
-    // Add partNumber from Part
-    const result = harness.toJSON();
-    result.partNumber = result.Part ? result.Part.name : null;
-
-    res.json(result);
+// The harness to open for a part: the most recently updated one when several
+// harness records share the part (the editor URL is keyed by part, like CAD).
+exports.getActiveByPart = async (req, res, next) => {
+  try {
+    const latest = await db.WireHarness.findOne({
+      where: { partID: req.params.partID, activeFlag: true },
+      attributes: ['id'],
+      order: [['updatedAt', 'DESC']]
+    });
+    if (!latest) return next(createError(404, 'This part has no harness'));
+    req.params.id = latest.id;
+    const harness = await fetchHarness(req);
+    res.json(await present(harness));
   } catch (error) {
     next(humanizeError(error, 'Error Getting Harness'));
   }
@@ -212,9 +220,12 @@ exports.createHarness = async (req, res, next) => {
       harnessData: harnessData || {},
       thumbnailBase64: thumbnailBase64 || null,
       createdBy: req.user ? req.user.displayName : null,
+      createdByUserID: req.user ? req.user.id : null,
       partID: linkedPartId,
       releaseState: 'draft'
     });
+    // Seed the repository: an empty `main` plus the first draft branch.
+    await harnessVcs.ensureRepo(harness, req.user.id);
 
     // Log creation in history
     await db.HarnessRevisionHistory.create({
@@ -226,113 +237,63 @@ exports.createHarness = async (req, res, next) => {
       createdAt: new Date()
     });
 
-    // Return with computed partNumber from Part name
-    const result = harness.toJSON();
-    if (linkedPartId) {
-      const linkedPart = createdPart || await db.Part.findByPk(linkedPartId);
-      result.partNumber = linkedPart ? linkedPart.name : null;
-    } else {
-      result.partNumber = null;
-    }
-
-    res.status(201).json(result);
+    const created = await db.WireHarness.findByPk(harness.id, { include: PART_INCLUDE });
+    res.status(201).json(await present(created));
   } catch (error) {
     next(humanizeError(error, 'Error Creating Harness'));
   }
 };
 
-// Update harness
-exports.updateHarness = async (req, res, next) => {
+// Save the working copy. Content (name / description / harnessData) may only
+// be saved by the user holding an unexpired checkout on a draft branch; the
+// list thumbnail is a view artifact and needs no checkout.
+exports.updateHarness = async (req, res) => {
   try {
-    const { name, revision, description, harnessData, thumbnailBase64, forceNewRevision } = req.body;
+    const { name, description, harnessData, thumbnailBase64, clientSavedAt } = req.body || {};
+    const harness = await fetchHarness(req);
+    if (!harness) return res.status(404).json({ error: 'Harness not found' });
 
-    const harness = await db.WireHarness.findOne({
-      where: { id: req.params.id },
-      include: [{
-        model: db.Part,
-        as: 'Part',
-        attributes: ['id', 'name']
-      }]
-    });
-
-    if (!harness) {
-      return next(createError(404, 'Harness not found'));
+    const patch = {};
+    if (thumbnailBase64 !== undefined) patch.thumbnailBase64 = thumbnailBase64;
+    const hasContent = name !== undefined || description !== undefined || harnessData !== undefined;
+    if (hasContent) {
+      if ((harness.branchName || 'main') === 'main') {
+        return res.status(423).json({ error: 'The main branch is protected — create or switch to a draft branch to make changes' });
+      }
+      if (harness.lockedByUserID !== req.user.id) {
+        if (harness.lockedByUserID) {
+          const holder = await db.User.findByPk(harness.lockedByUserID);
+          return res.status(423).json({ error: `Harness "${harness.name}" is checked out by ${holder ? holder.displayName : 'another user'}` });
+        }
+        return res.status(423).json({ error: `Check out harness "${harness.name}" before editing it` });
+      }
+      if (harness.lockExpiresAt && new Date() > new Date(harness.lockExpiresAt)) {
+        return res.status(423).json({ error: `Your checkout of harness "${harness.name}" has expired — check out again to continue`, code: 'LOCK_EXPIRED' });
+      }
+      // Two sessions of the same user both hold the lock; the save token stops
+      // one silently overwriting the other.
+      if (clientSavedAt !== undefined) {
+        const serverTok = harness.lastContentSavedAt ? new Date(harness.lastContentSavedAt).getTime() : null;
+        const clientTok = clientSavedAt ? new Date(clientSavedAt).getTime() : null;
+        if (serverTok !== clientTok) {
+          return res.status(409).json({
+            error: 'This harness was changed by another session since this window last saved — reload to continue from the latest state.',
+            code: 'DOC_CONFLICT',
+          });
+        }
+      }
+      if (name !== undefined) patch.name = name;
+      if (description !== undefined) patch.description = description;
+      if (harnessData !== undefined) patch.harnessData = harnessData;
+      patch.dirty = true;
+      patch.lastContentSavedAt = new Date();
+      // A successful save slides the lock expiry forward.
+      patch.lockExpiresAt = new Date(Date.now() + harnessVcs.DEFAULT_LOCK_TTL_MS);
     }
-
-    const changedBy = req.user ? req.user.displayName : null;
-
-    // If harness is released, create a new revision instead of modifying
-    if (harness.releaseState === 'released' || forceNewRevision) {
-      const nextRev = getNextRevision(harness.revision);
-
-      const newHarness = await db.WireHarness.create({
-        name: name !== undefined ? name : harness.name,
-        revision: nextRev,
-        description: description !== undefined ? description : harness.description,
-        harnessData: harnessData !== undefined ? harnessData : harness.harnessData,
-        thumbnailBase64: thumbnailBase64 !== undefined ? thumbnailBase64 : harness.thumbnailBase64,
-        createdBy: changedBy,
-        partID: harness.partID,
-        releaseState: 'draft',
-        previousRevisionID: harness.id
-      });
-
-      // Log new revision creation
-      await db.HarnessRevisionHistory.create({
-        harnessID: newHarness.id,
-        revision: newHarness.revision,
-        releaseState: newHarness.releaseState,
-        changedBy,
-        changeType: 'new_revision',
-        changeNotes: `Created from revision ${harness.revision}`,
-        createdAt: new Date()
-      });
-
-      const result = newHarness.toJSON();
-      result.partNumber = harness.Part ? harness.Part.name : null;
-      result.isNewRevision = true;
-
-      return res.json(result);
-    }
-
-    // Normal update for draft/review harnesses
-    const updateData = {};
-    if (name !== undefined) updateData.name = name;
-    if (revision !== undefined) updateData.revision = revision;
-    if (description !== undefined) updateData.description = description;
-    if (harnessData !== undefined) updateData.harnessData = harnessData;
-    if (thumbnailBase64 !== undefined) updateData.thumbnailBase64 = thumbnailBase64;
-
-    await db.WireHarness.update(updateData, {
-      where: { id: req.params.id }
-    });
-
-    // Log update
-    await db.HarnessRevisionHistory.create({
-      harnessID: harness.id,
-      revision: harness.revision,
-      releaseState: harness.releaseState,
-      changedBy,
-      changeType: 'updated',
-      snapshotData: harnessData || null,
-      createdAt: new Date()
-    });
-
-    const updatedHarness = await db.WireHarness.findByPk(req.params.id, {
-      include: [{
-        model: db.Part,
-        as: 'Part',
-        attributes: ['id', 'name']
-      }]
-    });
-
-    // Return with computed partNumber
-    const result = updatedHarness.toJSON();
-    result.partNumber = result.Part ? result.Part.name : null;
-
-    res.json(result);
-  } catch (error) {
-    next(humanizeError(error, 'Error Updating Harness'));
+    await harness.update(patch);
+    return res.json(await present(harness));
+  } catch (err) {
+    return sendCadError(res, err, 'Failed to save harness');
   }
 };
 
@@ -588,261 +549,188 @@ exports.getParentHarnesses = async (req, res, next) => {
   }
 };
 
-// ========== Revision Control Endpoints ==========
-
-// Helper to check if a revision is numeric (00, 01, 02, etc.)
-function isNumericRevision(revision) {
-  return /^\d+$/.test(revision);
-}
-
-// Helper to check if a revision is alphabetic (A, B, C, etc.)
-function isLetterRevision(revision) {
-  return /^[A-Z]+$/.test(revision);
-}
-
-// Helper to get next numeric revision (00 -> 01 -> 02 -> ... -> 99 -> 100)
-function getNextNumericRevision(current) {
-  if (!current || !isNumericRevision(current)) return '01';
-  const num = parseInt(current, 10) + 1;
-  return num.toString().padStart(2, '0');
-}
-
-// Helper to get next letter revision (A -> B -> C -> ... -> Z -> AA -> AB)
-function getNextLetterRevision(current) {
-  if (!current || !isLetterRevision(current)) return 'A';
-  const chars = current.toUpperCase().split('');
-  let i = chars.length - 1;
-
-  while (i >= 0) {
-    if (chars[i] === 'Z') {
-      chars[i] = 'A';
-      i--;
-    } else {
-      chars[i] = String.fromCharCode(chars[i].charCodeAt(0) + 1);
-      return chars.join('');
-    }
-  }
-  // All were Z, need to add a new character
-  return 'A' + chars.join('');
-}
-
-// Helper to find the latest revision of a given type for a harness family
-async function getLatestRevisionOfType(partID, type) {
-  const where = { partID, activeFlag: true };
-  const harnesses = await db.WireHarness.findAll({
-    where,
-    attributes: ['revision'],
-    order: [['createdAt', 'DESC']]
-  });
-
-  for (const h of harnesses) {
-    if (type === 'numeric' && isNumericRevision(h.revision)) {
-      return h.revision;
-    }
-    if (type === 'letter' && isLetterRevision(h.revision)) {
-      return h.revision;
-    }
-  }
-  return null;
-}
-
-// Legacy helper for backward compatibility
-function getNextRevision(current) {
-  return getNextNumericRevision(current);
-}
+// ========== Version control (REQ 1062–1066) ==========
+// The CAD workflow, in the harness backend: exclusive checkout, check-in,
+// draft branches off a protected main, release to a numeric revision, and an
+// approval-gated production (letter) release.
 
 // Helper to log history entry
-async function logHistory(harnessId, changeType, changedBy, notes = null, snapshotData = null) {
-  const harness = await db.WireHarness.findByPk(harnessId);
-  if (!harness) return;
-
-  // Don't log history for released harnesses (except for the 'released' event itself)
-  if (harness.releaseState === 'released' && changeType !== 'released') return;
-
+async function logHistory(harness, changeType, changedBy, notes = null) {
   await db.HarnessRevisionHistory.create({
-    harnessID: harnessId,
+    harnessID: harness.id,
     revision: harness.revision,
     releaseState: harness.releaseState,
     changedBy,
     changeType,
     changeNotes: notes,
-    snapshotData,
     createdAt: new Date()
   });
 }
 
-// Submit harness for review (draft -> review)
-exports.submitForReview = async (req, res, next) => {
+// Wrap a handler: load + adopt the harness, 404 when missing, uniform errors.
+const withHarness = (fallback, fn) => async (req, res) => {
   try {
-    const harnessId = parseInt(req.params.id);
-    const harness = await db.WireHarness.findByPk(harnessId, {
-      include: [{ model: db.Part, as: 'Part', attributes: ['id', 'name'] }]
-    });
-
-    if (!harness) {
-      return next(createError(404, 'Harness not found'));
-    }
-
-    if (harness.releaseState !== 'draft') {
-      return next(createError(400, 'Harness must be in draft state to submit for review'));
-    }
-
-    const changedBy = req.user ? req.user.displayName : null;
-
-    // Cascade to sub-harnesses first
-    const updatedSubHarnesses = await cascadeReleaseState(harness, 'review', changedBy);
-
-    await harness.update({ releaseState: 'review' });
-    await logHistory(harnessId, 'submitted_review', changedBy);
-
-    const result = harness.toJSON();
-    result.partNumber = result.Part ? result.Part.name : null;
-    result.updatedSubHarnesses = updatedSubHarnesses;
-
-    res.json(result);
-  } catch (error) {
-    next(humanizeError(error, 'Error submitting for review'));
+    const harness = await fetchHarness(req);
+    if (!harness) return res.status(404).json({ error: 'Harness not found' });
+    return await fn(harness, req, res);
+  } catch (err) {
+    return sendCadError(res, err, fallback);
   }
 };
 
-// Reject harness back to draft (review -> draft)
-exports.rejectHarness = async (req, res, next) => {
-  try {
-    const harnessId = parseInt(req.params.id);
-    const { notes } = req.body;
-
-    const harness = await db.WireHarness.findByPk(harnessId, {
-      include: [{ model: db.Part, as: 'Part', attributes: ['id', 'name'] }]
-    });
-
-    if (!harness) {
-      return next(createError(404, 'Harness not found'));
-    }
-
-    if (harness.releaseState !== 'review') {
-      return next(createError(400, 'Harness must be in review state to reject'));
-    }
-
-    await harness.update({ releaseState: 'draft' });
-
-    const changedBy = req.user ? req.user.displayName : null;
-    await logHistory(harnessId, 'rejected', changedBy, notes);
-
-    const result = harness.toJSON();
-    result.partNumber = result.Part ? result.Part.name : null;
-
-    res.json(result);
-  } catch (error) {
-    next(humanizeError(error, 'Error rejecting harness'));
+exports.checkout = withHarness('Failed to check out harness', async (harness, req, res) => {
+  if ((harness.branchName || 'main') === 'main') {
+    return res.status(423).json({ error: 'The main branch is protected — create or switch to a draft branch to make changes' });
   }
-};
+  const { stashedTo } = await harnessVcs.checkout(harness, req.user.id, { takeover: !!(req.body && req.body.takeover === true) });
+  const json = await present(harness);
+  return res.json(stashedTo ? { ...json, stashedTo } : json);
+});
 
-// Release harness (review -> released) - keeps the same revision number
-exports.releaseHarness = async (req, res, next) => {
-  try {
-    const harnessId = parseInt(req.params.id);
+exports.renewLock = withHarness('Failed to renew the harness checkout', async (harness, req, res) => {
+  await harnessVcs.renewLock(harness, req.user.id, {});
+  return res.json({ lockExpiresAt: harness.lockExpiresAt });
+});
 
-    const harness = await db.WireHarness.findByPk(harnessId, {
-      include: [{ model: db.Part, as: 'Part', attributes: ['id', 'name'] }]
-    });
-
-    if (!harness) {
-      return next(createError(404, 'Harness not found'));
-    }
-
-    if (harness.releaseState !== 'review') {
-      return next(createError(400, 'Harness must be in review state to release'));
-    }
-
-    const changedBy = req.user ? req.user.displayName : null;
-    const now = new Date();
-
-    // Cascade to sub-harnesses first
-    const updatedSubHarnesses = await cascadeReleaseState(harness, 'released', changedBy);
-
-    await harness.update({
-      releaseState: 'released',
-      releasedAt: now,
-      releasedBy: changedBy
-    });
-
-    // Log with snapshot
-    await logHistory(harnessId, 'released', changedBy, `Released as revision ${harness.revision}`, harness.harnessData);
-
-    const result = harness.toJSON();
-    result.partNumber = result.Part ? result.Part.name : null;
-    result.updatedSubHarnesses = updatedSubHarnesses;
-
-    res.json(result);
-  } catch (error) {
-    next(humanizeError(error, 'Error releasing harness'));
+exports.checkin = withHarness('Failed to check in harness', async (harness, req, res) => {
+  const message = (req.body && req.body.message) || '';
+  const keepCheckedOut = !!(req.body && req.body.keepCheckedOut);
+  const { commitHash } = await harnessVcs.checkin(harness, req.user.id, message);
+  if (keepCheckedOut) {
+    try { await harnessVcs.renewLock(harness, req.user.id, {}); }
+    catch { await harnessVcs.releaseLock(harness, req.user.id); }
+  } else {
+    await harnessVcs.releaseLock(harness, req.user.id);
   }
-};
+  return res.json({ commitHash, model: await present(harness) });
+});
 
-// Release production revision (creates a letter revision from a released numeric revision)
-exports.releaseProduction = async (req, res, next) => {
-  try {
-    const harnessId = parseInt(req.params.id);
+exports.undoCheckout = withHarness('Failed to undo the harness checkout', async (harness, req, res) => {
+  await harnessVcs.undoCheckout(harness, req.user.id);
+  return res.json(await present(harness));
+});
 
-    const harness = await db.WireHarness.findByPk(harnessId, {
-      include: [{ model: db.Part, as: 'Part', attributes: ['id', 'name'] }]
-    });
+exports.forceUnlock = withHarness('Failed to unlock harness', async (harness, req, res) => {
+  await harnessVcs.releaseLock(harness, req.user.id, { force: true });
+  return res.json(await present(harness));
+});
 
-    if (!harness) {
-      return next(createError(404, 'Harness not found'));
-    }
+exports.getCommits = withHarness('Failed to fetch harness commit log', async (harness, req, res) =>
+  res.json(await harnessVcs.history(harness)));
 
-    if (harness.releaseState !== 'released') {
-      return next(createError(400, 'Harness must be released before creating a production revision'));
-    }
+exports.getGraph = withHarness('Failed to build harness version graph', async (harness, req, res) =>
+  res.json(await cadGraphService.buildGraphForRepo(await harnessVcs.repoFor(harness), harness.baseCommitHash, db)));
 
-    if (!isNumericRevision(harness.revision)) {
-      return next(createError(400, 'Harness must have a numeric revision to create a production release'));
-    }
+exports.getWorkingDiff = withHarness('Failed to diff harness', async (harness, req, res) =>
+  res.json(await cadDiffService.workingDiff(harness, undefined, {
+    repoFor: harnessVcs.repoFor, serialize: harnessSerialize, docOf: harnessVcs.docOf,
+  })));
 
-    const changedBy = req.user ? req.user.displayName : null;
-    const now = new Date();
+exports.getCommitDiff = withHarness('Failed to diff harness commits', async (harness, req, res) =>
+  res.json(await cadDiffService.commitDiff(await harnessVcs.repoFor(harness), req.params.a, req.params.b)));
 
-    // Calculate the next letter revision
-    const latestLetter = await getLatestRevisionOfType(harness.partID, 'letter');
-    const nextRevision = getNextLetterRevision(latestLetter);
+exports.getCommitDoc = withHarness('Failed to load harness commit', async (harness, req, res) => {
+  const repo = await harnessVcs.repoFor(harness);
+  const commit = await vcsService.getCommit(repo, req.params.hash, db);
+  if (!commit) return res.status(404).json({ error: `Commit ${req.params.hash} not found` });
+  const doc = await harnessDeserialize(repo, commit.treeHash, db);
+  return res.json({ ...doc, hash: req.params.hash, message: commit.message || null });
+});
 
-    // Create a new harness record with the production revision
-    const newHarness = await db.WireHarness.create({
-      name: harness.name,
-      revision: nextRevision,
-      description: harness.description,
-      harnessData: harness.harnessData,
-      thumbnailBase64: harness.thumbnailBase64,
-      createdBy: changedBy,
-      partID: harness.partID,
-      releaseState: 'released',
-      releasedAt: now,
-      releasedBy: changedBy,
-      previousRevisionID: harness.id
-    });
+exports.listBranches = withHarness('Failed to list harness branches', async (harness, req, res) =>
+  res.json(await harnessVcs.listBranches(harness)));
 
-    // Log history for the new production revision
-    await db.HarnessRevisionHistory.create({
-      harnessID: newHarness.id,
-      revision: newHarness.revision,
-      releaseState: newHarness.releaseState,
-      changedBy,
-      changeType: 'production_release',
-      changeNotes: `Production release created from revision ${harness.revision}`,
-      snapshotData: newHarness.harnessData,
-      createdAt: now
-    });
+exports.createBranch = withHarness('Failed to create harness branch', async (harness, req, res) => {
+  const { name, fromCommit } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Branch name is required' });
+  return res.json(await harnessVcs.createBranch(harness, name, { fromCommit }, req.user.id));
+});
 
-    const result = newHarness.toJSON();
-    result.partNumber = harness.Part ? harness.Part.name : null;
-    result.sourceRevision = harness.revision;
-
-    res.json(result);
-  } catch (error) {
-    next(humanizeError(error, 'Error creating production release'));
+exports.switchBranch = withHarness('Failed to switch harness branch', async (harness, req, res) => {
+  const { name } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Branch name is required' });
+  if (harness.lockedByUserID && harness.lockedByUserID !== req.user.id) {
+    return res.status(423).json({ error: 'This harness is checked out by another user' });
   }
-};
+  await harnessVcs.switchBranch(harness, name, req.user.id);
+  return res.json(await present(harness));
+});
+
+exports.archiveBranch = withHarness('Failed to archive harness branch', async (harness, req, res) =>
+  res.json(await harnessVcs.archiveBranch(harness, req.params.name)));
+
+exports.getWorkflow = withHarness('Failed to load harness workflow', async (harness, req, res) => {
+  const repo = await workflowRepo(harness);
+  return res.json({
+    state: await workflowEngine.getState(repo),
+    actions: await workflowEngine.availableActions(repo, req.user.id, undefined, req._effectivePermissions),
+  });
+});
+
+// The route is read-gated; the engine enforces each transition's own permission.
+exports.transitionWorkflow = withHarness('Failed to update harness workflow', async (harness, req, res) => {
+  const { action } = req.body || {};
+  if (!action) return res.status(400).json({ error: 'action is required' });
+  const repo = await workflowRepo(harness);
+  const r = await workflowEngine.transition(repo, action, req.user.id, {
+    authorUserID: harness.createdByUserID,
+    permissions: req._effectivePermissions,
+    commitHash: harness.baseCommitHash || null,
+    modelName: harness.name,
+  });
+  return res.json({
+    state: r.state,
+    actions: await workflowEngine.availableActions(repo, req.user.id, undefined, req._effectivePermissions),
+    model: await present(harness),
+  });
+});
+
+// Release the checked-in draft branch onto main as the next numeric revision.
+exports.releaseHarness = withHarness('Failed to release harness', async (harness, req, res) => {
+  if ((harness.branchName || 'main') === 'main') {
+    return res.status(409).json({ error: 'This revision is already released — create a draft branch to make changes, then release it' });
+  }
+  // A released harness must not depend on unreleased sub-harness content.
+  const unreleased = [];
+  for (const ref of harness.harnessData?.subHarnesses || []) {
+    const sub = await db.WireHarness.findByPk(ref.harnessId, { attributes: ['id', 'name', 'releaseState'] });
+    if (sub && sub.releaseState !== 'released') unreleased.push(sub.name);
+  }
+  if (unreleased.length) {
+    return res.status(409).json({ error: `Release the sub-harnesses first: ${[...new Set(unreleased)].join(', ')}` });
+  }
+  const draftWorkflow = await workflowRepo(harness);
+  const released = await harnessVcs.releaseBranchToMain(harness, req.user);
+  await workflowEngine.setState(draftWorkflow, 'draft', req.user.id);
+  await workflowEngine.setState(await workflowRepo(harness), 'draft', req.user.id);
+  await logHistory(harness, 'released', req.user.displayName, `Released as revision ${released.tag}`);
+  return res.json({ commitHash: released.commitHash, revision: released.tag, model: await present(harness) });
+});
+
+// Production release: tag the released commit with the next letter revision.
+// Requires a workflow approval of that exact commit.
+exports.productionRelease = withHarness('Failed to create production release', async (harness, req, res) => {
+  if ((harness.branchName || 'main') !== 'main' || !harness.releaseLocked) {
+    return res.status(409).json({ error: 'Release the harness before promoting it to production' });
+  }
+  if (!/^\d+$/.test(harness.revision)) {
+    return res.status(409).json({ error: `Revision ${harness.revision} is already a production release` });
+  }
+  const repo = await harnessVcs.repoFor(harness);
+  const releaseRef = await vcsService.getRef(repo, String(harness.revision));
+  if (!releaseRef) return res.status(409).json({ error: 'Release tag not found for this revision' });
+  const wf = await workflowRepo(harness);
+  if (!(await workflowEngine.canRelease(wf, undefined, releaseRef.targetHash))) {
+    return res.status(409).json({ error: `Production release requires a workflow approval of revision ${harness.revision}` });
+  }
+  const sourceRevision = harness.revision;
+  const revision = await harnessVcs.nextProductionRevision(harness);
+  await vcsService.createTag(repo, revision, releaseRef.targetHash, req.user.id);
+  await harness.update({ revision, releasedAt: new Date(), releasedBy: req.user.displayName || null });
+  await workflowEngine.setState(wf, 'draft', req.user.id);
+  await logHistory(harness, 'production_release', req.user.displayName, `Production release created from revision ${sourceRevision}`);
+  return res.json({ revision, sourceRevision, model: await present(harness) });
+});
 
 // Get revision history for a harness
 exports.getHistory = async (req, res, next) => {
@@ -904,49 +792,5 @@ exports.getAllRevisions = async (req, res, next) => {
     res.json(revisions);
   } catch (error) {
     next(humanizeError(error, 'Error fetching revisions'));
-  }
-};
-
-// Revert to a history snapshot
-exports.revertToSnapshot = async (req, res, next) => {
-  try {
-    const harnessId = parseInt(req.params.id);
-    const historyId = parseInt(req.params.historyId);
-
-    const harness = await db.WireHarness.findByPk(harnessId, {
-      include: [{ model: db.Part, as: 'Part', attributes: ['id', 'name'] }]
-    });
-
-    if (!harness) {
-      return next(createError(404, 'Harness not found'));
-    }
-
-    if (harness.releaseState === 'released') {
-      return next(createError(400, 'Cannot revert a released harness. Create a new revision first.'));
-    }
-
-    const historyEntry = await db.HarnessRevisionHistory.findOne({
-      where: { id: historyId, harnessID: harnessId }
-    });
-
-    if (!historyEntry) {
-      return next(createError(404, 'History entry not found'));
-    }
-
-    if (!historyEntry.snapshotData) {
-      return next(createError(400, 'This history entry does not have snapshot data'));
-    }
-
-    await harness.update({ harnessData: historyEntry.snapshotData });
-
-    const changedBy = req.user ? req.user.displayName : null;
-    await logHistory(harnessId, 'updated', changedBy, `Reverted to snapshot from ${historyEntry.createdAt}`);
-
-    const result = harness.toJSON();
-    result.partNumber = result.Part ? result.Part.name : null;
-
-    res.json(result);
-  } catch (error) {
-    next(humanizeError(error, 'Error reverting to snapshot'));
   }
 };

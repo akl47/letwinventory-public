@@ -100,6 +100,8 @@ function friendlyFeatureType(type) {
  * sub-diff / feature+equations paramDiff) to each entry, in place. The display
  * name is read from the present side's blob (B for added/modified, A for
  * removed): the feature/sketch's own `name` if set, else the type label. */
+const HARNESS_ENTRY_KINDS = { connector: 'Connector', cable: 'Cable', component: 'Component', connection: 'Wire', subharness: 'Sub-harness' };
+
 async function attachEntryDetail(repo, entries, db) {
   for (const e of entries) {
     const isFeature = e.name.startsWith('feature:');
@@ -107,12 +109,15 @@ async function attachEntryDetail(repo, entries, db) {
     const isEqs = e.name === 'equations';
     const isInstance = e.name.startsWith('instance:'); // assembly component
     const isMate = e.name.startsWith('mate:');         // assembly mate
-    if (!isFeature && !isSketch && !isEqs && !isInstance && !isMate) continue;
+    // Wire-harness elements (harnessSerializer blob names).
+    const harnessKind = HARNESS_ENTRY_KINDS[e.name.split(':')[0]];
+    if (!isFeature && !isSketch && !isEqs && !isInstance && !isMate && !harnessKind) continue;
     const oa = e.aHash ? await vcs.getObject(repo, e.aHash, db) : null;
     const ob = e.bHash ? await vcs.getObject(repo, e.bHash, db) : null;
     const c = (ob && ob.content) || (oa && oa.content) || null;
     const named = c && c.name && String(c.name).trim();
-    if (isEqs) e.displayName = 'Equations';
+    if (harnessKind) e.displayName = `${harnessKind} ${(c && (c.label || c.name)) || e.name.slice(e.name.indexOf(':') + 1)}`;
+    else if (isEqs) e.displayName = 'Equations';
     else if (isSketch) e.displayName = named ? c.name : `Sketch ${e.name.slice('sketch:'.length)}`;
     else if (isInstance) e.displayName = `Component ${(c && c.partID) || e.name.slice('instance:'.length)}`;
     else if (isMate) e.displayName = c && c.type ? `${c.type} mate` : `Mate ${e.name.slice('mate:'.length)}`;

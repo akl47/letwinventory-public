@@ -152,6 +152,44 @@
                         </div>
                     </div>
                     }
+                    <!-- REQ 1070 — project membership: editable in edit mode, saved with the part. -->
+                    @if (isFormEditMode() || !isEditMode) {
+                    <div class="part-projects" data-testid="part-projects">
+                        <mat-form-field appearance="outline" class="part-projects-select" subscriptSizing="dynamic">
+                            <mat-label>Projects</mat-label>
+                            <mat-select multiple data-testid="part-projects-select"
+                                [ngModel]="partProjectIDs()" (ngModelChange)="onPartProjectsChange($event)"
+                                [ngModelOptions]="{ standalone: true }">
+                                @for (project of allProjects(); track project.id) {
+                                <mat-option [value]="project.id">{{ project.name }}</mat-option>
+                                }
+                            </mat-select>
+                            @if (partCommon()) {
+                            <mat-hint>Common part — available to every project</mat-hint>
+                            }
+                        </mat-form-field>
+                        <mat-slide-toggle hideIcon data-testid="part-common-toggle"
+                            [checked]="partCommon()" (change)="onPartCommonChange($event.checked)"
+                            matTooltip="A common part can be used in every project">
+                            Common
+                        </mat-slide-toggle>
+                    </div>
+                    } @else {
+                    <div class="view-info part-projects-view" data-testid="part-projects">
+                        <div class="info-item">
+                            <div class="info-label">Projects</div>
+                            <div class="info-value">
+                                @if (partCommon()) {
+                                <app-category-badge label="Common" matTooltip="Available to every project" />
+                                }
+                                @for (project of partProjects(); track project.id) {
+                                <app-category-badge [label]="project.name" [colorHex]="project.tagColorHex" />
+                                }
+                                @if (!partCommon() && partProjects().length === 0) { - }
+                            </div>
+                        </div>
+                    </div>
+                    }
                 </mat-card-content>
             </mat-card>
 

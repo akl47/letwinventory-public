@@ -128,8 +128,13 @@ describe('HarnessPropertyPanel', () => {
       expect(component.selection()).toBeNull();
     });
 
-    it('should have isReleased false by default', () => {
-      expect(component.isReleased()).toBe(false);
+    // REQ 1067
+    it('should not show revision or release status in the rail', () => {
+      fixture.componentRef.setInput('harnessData', mockHarnessData);
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('.release-panel')).toBeNull();
+      expect(fixture.nativeElement.textContent).not.toContain('Revision');
+      expect(fixture.nativeElement.textContent).not.toContain('Release');
     });
 
     it('should have isLocked false by default', () => {
@@ -236,12 +241,161 @@ describe('HarnessPropertyPanel', () => {
     });
   });
 
-  describe('updateMetadata', () => {
-    it('should emit metadataChanged with field and value', () => {
-      const emitSpy = vi.spyOn(component.metadataChanged, 'emit');
-      const event = { target: { value: 'New Name' } } as unknown as Event;
-      component.updateMetadata('name', event);
-      expect(emitSpy).toHaveBeenCalledWith({ field: 'name', value: 'New Name' });
+  // REQ 1067 — harness identity lives in Part info, not the properties rail
+  it('shows only a hint, and no harness info form, when nothing is selected', () => {
+    fixture.componentRef.setInput('harnessData', mockHarnessData);
+    fixture.componentRef.setInput('selection', null);
+    fixture.detectChanges();
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('.metadata-panel')).toBeNull();
+    expect(el.querySelector('[data-testid="harness-rail-empty"]')).toBeTruthy();
+    expect(el.textContent).not.toContain('Harness Info');
+  });
+
+  // REQ 1067 — a component is edited in the rail, not in a dialog
+  describe('component properties', () => {
+    const component = () => ({
+      id: 'comp-1', label: 'U1', pinCount: 3, partName: 'Relay', position: { x: 0, y: 0 },
+      pinGroups: [
+        { id: 'g1', name: 'Coil', pinTypeID: null, pins: [{ id: 'p1', number: '1', label: 'A1' }, { id: 'p2', number: '2', label: 'A2' }] },
+        { id: 'g2', name: 'Contact', pinTypeID: null, pins: [{ id: 'p3', number: '3', label: '' }] },
+      ],
+    }) as any;
+    const select = (locked = false) => {
+      fixture.componentRef.setInput('selection', { type: 'component', component: component() });
+      fixture.componentRef.setInput('isLocked', locked);
+      fixture.detectChanges();
+    };
+    const input = (value: string) => ({ target: { value } }) as unknown as Event;
+
+    it('shows the component label, totals and pin groups when a component is selected', () => {
+      select();
+      const panel: HTMLElement = fixture.nativeElement.querySelector('[data-testid="component-properties"]');
+      expect(panel).toBeTruthy();
+      expect((panel.querySelector('[data-testid="component-label"]') as HTMLInputElement).value).toBe('U1');
+      expect(fixture.componentInstance.componentPinTotal()).toBe(3);
+      expect(panel.querySelectorAll('.pin-group').length).toBe(2);
+      expect(panel.querySelectorAll('.pin-row').length).toBe(3);
+      expect(panel.textContent).toContain('Relay');
+    });
+
+    it('is not shown for other selections', () => {
+      fixture.componentRef.setInput('selection', { type: 'none' });
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('[data-testid="component-properties"]')).toBeNull();
+    });
+
+    it('emits the component with a new label, ignoring an empty one', () => {
+      select();
+      const emit = vi.spyOn(fixture.componentInstance.componentChanged, 'emit');
+      fixture.componentInstance.updateComponentLabel(input('  '));
+      expect(emit).not.toHaveBeenCalled();
+      fixture.componentInstance.updateComponentLabel(input('K1'));
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({ id: 'comp-1', label: 'K1' }));
+    });
+
+    it('emits pin label and visibility changes without mutating the selected component', () => {
+      select();
+      const original = fixture.componentInstance.selectedComponent()!;
+      const emit = vi.spyOn(fixture.componentInstance.componentChanged, 'emit');
+      fixture.componentInstance.updateComponentPinLabel('g2', 'p3', input('NO'));
+      fixture.componentInstance.toggleComponentPinHidden('g1', 'p2');
+      fixture.componentInstance.toggleComponentGroupHidden('g2');
+      const [labelled, pinHidden, groupHidden] = emit.mock.calls.map(call => call[0]);
+      expect(labelled.pinGroups[1].pins[0].label).toBe('NO');
+      expect(pinHidden.pinGroups[0].pins[1].hidden).toBe(true);
+      expect(groupHidden.pinGroups[1].hidden).toBe(true);
+      expect(original.pinGroups[1].pins[0].label).toBe('');
+      expect(original.pinGroups[0].pins[1].hidden).toBeUndefined();
+    });
+
+    it('is read-only when the harness is locked', () => {
+      select(true);
+      const panel: HTMLElement = fixture.nativeElement.querySelector('[data-testid="component-properties"]');
+      expect((panel.querySelector('[data-testid="component-label"]') as HTMLInputElement).disabled).toBe(true);
+      expect(panel.querySelector('.hide-toggle')).toBeNull();
+    });
+  });
+
+  // REQ 1067 — connectors and cables are edited in the rail too
+  describe('connector and cable properties', () => {
+    const panel = () => fixture.componentInstance;
+    const input = (value: string) => ({ target: { value } }) as unknown as Event;
+    const connector = () => ({
+      id: 'conn-1', label: 'J1', type: 'male', pinCount: 2, color: 'GY', partName: 'Molex 2P', position: { x: 0, y: 0 },
+      pins: [{ id: 'p1', number: '1', label: 'PWR' }, { id: 'p2', number: '2', label: '' }],
+    }) as any;
+    const cable = () => ({
+      id: 'cable-1', label: 'W1', wireCount: 3, gaugeAWG: '22', lengthMm: 500, position: { x: 0, y: 0 },
+      wires: [
+        { id: 'w1', color: 'Red', colorCode: 'RD' },
+        { id: 'w2', color: 'Black', colorCode: 'BK' },
+        { id: 'w3', color: 'Green', colorCode: 'GN' },
+      ],
+    }) as any;
+    const select = (selection: any, locked = false) => {
+      fixture.componentRef.setInput('selection', selection);
+      fixture.componentRef.setInput('isLocked', locked);
+      fixture.detectChanges();
+    };
+    const el = (testId: string): HTMLElement => fixture.nativeElement.querySelector(`[data-testid="${testId}"]`);
+
+    it('shows the connector panel with its label, info and pins', () => {
+      select({ type: 'connector', connector: connector() });
+      expect((el('connector-label') as HTMLInputElement).value).toBe('J1');
+      expect(el('connector-properties').textContent).toContain('Molex 2P');
+      expect(el('connector-properties').textContent).toContain('Male Connector');
+      expect(el('connector-properties').querySelectorAll('.pin-row').length).toBe(2);
+      expect(el('cable-properties')).toBeNull();
+    });
+
+    it('emits the connector with a new label or pin label, without mutating it', () => {
+      select({ type: 'connector', connector: connector() });
+      const original = panel().selectedConnector()!;
+      const emit = vi.spyOn(panel().connectorEdited, 'emit');
+      panel().updateConnectorLabel(input(''));
+      expect(emit).not.toHaveBeenCalled();
+      panel().updateConnectorLabel(input('P7'));
+      panel().updateConnectorPinLabel('p2', input('GND'));
+      expect(emit.mock.calls[0][0].label).toBe('P7');
+      expect(emit.mock.calls[1][0].pins[1].label).toBe('GND');
+      expect(original.label).toBe('J1');
+      expect(original.pins[1].label).toBe('');
+    });
+
+    it('shows the cable panel with its label, gauge, wires and length', () => {
+      select({ type: 'cable', cable: cable() });
+      expect((el('cable-label') as HTMLInputElement).value).toBe('W1');
+      expect(el('cable-properties').textContent).toContain('22 AWG');
+      expect(el('cable-properties').querySelectorAll('.wire-row').length).toBe(3);
+      expect((el('cable-length') as HTMLInputElement).value).toBe('500');
+      expect(el('connector-properties')).toBeNull();
+    });
+
+    it('emits the cable with a new label, wire label, wire order or length', () => {
+      select({ type: 'cable', cable: cable() });
+      const emit = vi.spyOn(panel().cableEdited, 'emit');
+      panel().updateCableLabel(input('W9'));
+      panel().updateCableWireLabel('w2', input('RTN'));
+      panel().moveCableWire(0, 1);
+      panel().moveCableWire(0, -1); // already first — nothing to do
+      panel().updateCableLength(input('750'));
+      panel().updateCableLength(input(''));
+      const emitted = emit.mock.calls.map(call => call[0]);
+      expect(emitted.length).toBe(5);
+      expect(emitted[0].label).toBe('W9');
+      expect(emitted[1].wires[1].label).toBe('RTN');
+      expect(emitted[2].wires.map((w: { id: string }) => w.id)).toEqual(['w2', 'w1', 'w3']);
+      expect(emitted[3].lengthMm).toBe(750);
+      expect(emitted[4].lengthMm).toBeUndefined();
+    });
+
+    it('is read-only when the harness is locked', () => {
+      select({ type: 'cable', cable: cable() }, true);
+      expect((el('cable-label') as HTMLInputElement).disabled).toBe(true);
+      expect(el('cable-properties').querySelector('button')).toBeNull();
+      select({ type: 'connector', connector: connector() }, true);
+      expect((el('connector-label') as HTMLInputElement).disabled).toBe(true);
     });
   });
 
