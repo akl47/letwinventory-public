@@ -146,7 +146,7 @@ exports.getActiveByPart = async (req, res, next) => {
     const latest = await db.WireHarness.findOne({
       where: { partID: req.params.partID, activeFlag: true },
       attributes: ['id'],
-      order: [['updatedAt', 'DESC']]
+      order: [['updatedAt', 'DESC'], ['id', 'DESC']]
     });
     if (!latest) return next(createError(404, 'This part has no harness'));
     req.params.id = latest.id;
