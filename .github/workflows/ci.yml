@@ -1,7 +1,14 @@
 name: CI
 
-# REQ 904: tests gate PRs, pushes to master, AND release tags — previously
-# only PRs ran tests, so merges and v* releases shipped unverified.
+# REQ 904: tests gate PRs AND release tags — previously only PRs ran tests, so
+# v* releases shipped unverified.
+#
+# On the PUBLIC repo a plain push to master is not tested (every job skips it,
+# see the job conditions): a merge is followed by the version-bump commit and
+# its v* tag, which point at the final merged commit, so the tag run covers it —
+# testing the merge commit and the bump commit as well ran the same suite three
+# times per merge. The private repo receives no tags (sync-to-private pushes
+# straight to its master), so there the master push remains the test run.
 on:
   pull_request:
     branches: [master]
@@ -10,10 +17,11 @@ on:
     tags: ['v*']
 
 jobs:
-  # PRs only: no tests run until the branch merges cleanly into master AND has
-  # a version label (same rule as require-version-label.yml). Labels are read
+  # PRs only: no tests run until the branch merges cleanly into master AND (on
+  # the public repo) has a version label — same rule as
+  # require-version-label.yml. Labels are read
   # from the API, not the event payload, so a re-run after labeling (triggered
-  # by require-version-label.yml) sees the new label. Skipped on pushes/tags.
+  # by require-version-label.yml) sees the new label. Skipped on tags.
   pr-gate:
     name: PR Gate (mergeable + version label)
     if: github.event_name == 'pull_request'
@@ -22,7 +30,10 @@ jobs:
       contents: read
       pull-requests: read
     steps:
+      # Public repo only: the label drives version-bump.yml, which the private
+      # repo does not have — there the rule only blocked the sync PRs.
       - name: Require a version label
+        if: github.repository == 'akl47/letwinventory-public'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -54,7 +65,7 @@ jobs:
   backend-tests:
     name: Backend Tests
     needs: pr-gate
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && !(github.event_name == 'push' && github.ref_type == 'branch' && github.repository == 'akl47/letwinventory-public') }}
     runs-on: ubuntu-latest
     steps:
       # A failed PR gate fails this job instead of skipping it: GitHub counts
@@ -87,7 +98,7 @@ jobs:
   frontend-tests:
     name: Frontend Tests
     needs: pr-gate
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && !(github.event_name == 'push' && github.ref_type == 'branch' && github.repository == 'akl47/letwinventory-public') }}
     runs-on: ubuntu-latest
     steps:
       # A failed PR gate fails this job instead of skipping it: GitHub counts
@@ -119,7 +130,7 @@ jobs:
   occt-base:
     name: OCCT base image
     needs: pr-gate
-    if: ${{ !cancelled() && needs.pr-gate.result != 'failure' }}
+    if: ${{ !cancelled() && needs.pr-gate.result != 'failure' && !(github.event_name == 'push' && github.ref_type == 'branch' && github.repository == 'akl47/letwinventory-public') }}
     permissions:
       contents: read
       packages: write
@@ -129,7 +140,7 @@ jobs:
     name: E2E Tests
     needs: [pr-gate, occt-base]
     # Skipped (private mirror) is fine; only a failed OCCT build blocks.
-    if: ${{ !cancelled() && needs.occt-base.result != 'failure' }}
+    if: ${{ !cancelled() && needs.occt-base.result != 'failure' && !(github.event_name == 'push' && github.ref_type == 'branch' && github.repository == 'akl47/letwinventory-public') }}
     # Pinned: ubuntu-latest moved to 26.04, which Playwright 1.59 can't install
     # chromium deps for.
     runs-on: ubuntu-24.04
@@ -306,7 +317,7 @@ jobs:
   cad-kernel-e2e:
     name: CAD Kernel E2E (3D features)
     needs: [pr-gate, occt-base]
-    if: ${{ !cancelled() && needs.occt-base.result != 'failure' }}
+    if: ${{ !cancelled() && needs.occt-base.result != 'failure' && !(github.event_name == 'push' && github.ref_type == 'branch' && github.repository == 'akl47/letwinventory-public') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
