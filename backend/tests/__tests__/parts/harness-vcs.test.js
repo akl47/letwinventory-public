@@ -260,12 +260,13 @@ describe('Harness version control', () => {
     it('returns the most recently updated harness of the part, adopted', async () => {
       const auth = await authenticatedRequest();
       const part = await createTestPart();
-      const older = await createTestHarness({ name: 'Older', partID: part.id });
-      const newer = await createTestHarness({ name: 'Newer', partID: part.id });
-      await db.WireHarness.update({ updatedAt: new Date(Date.now() - 60000) }, { where: { id: older.id }, silent: true });
+      const first = await createTestHarness({ name: 'First', partID: part.id });
+      await createTestHarness({ name: 'Second', partID: part.id });
+      await new Promise(resolve => setTimeout(resolve, 10));
+      await first.update({ name: 'First, edited' });
       const res = await auth.get(`/api/parts/harness/by-part/${part.id}/active`);
       expect(res.status).toBe(200);
-      expect(res.body.id).toBe(newer.id);
+      expect(res.body.id).toBe(first.id);
       expect(res.body.branchName).toBe('draft/01');
     });
 
