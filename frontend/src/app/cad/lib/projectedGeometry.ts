@@ -63,7 +63,9 @@ function onEdgeRefConstraints(state: SketchState): SketchConstraint[] {
 
 /**
  * The entity id already projected from `ref`, or null. Covers ALL entity kinds
- * (including points) so a vertex projection can't be duplicated either.
+ * (including points) so a vertex projection can't be duplicated either. A POINT
+ * tied to an EDGE is a point-on-edge relation, not a projection of that edge,
+ * so it never blocks converting the edge itself.
  *
  * Call this against the IN-FLIGHT state when projecting a face or a chain —
  * those loops accumulate many entities before a single commit, so checking the
@@ -72,10 +74,12 @@ function onEdgeRefConstraints(state: SketchState): SketchConstraint[] {
 export function findProjectedBySource(state: SketchState, ref: ExternalRef | undefined | null): string | null {
   const key = externalRefKey(ref);
   if (!key) return null;
+  const isEdgeRef = !!(ref!.scope === 'cross-part' ? ref!.sourceGeomRef?.edgeId : ref!.edgeId);
   for (const c of onEdgeRefConstraints(state)) {
     if (externalRefKey(c.externalRef) !== key) continue;
-    const entityId = c.targets[0]?.entityId;
-    if (entityId && state.entities.some((e) => e.id === entityId)) return entityId;
+    const entity = state.entities.find((e) => e.id === c.targets[0]?.entityId);
+    if (!entity || (isEdgeRef && entity.kind === 'point')) continue;
+    return entity.id;
   }
   return null;
 }

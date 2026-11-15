@@ -3925,7 +3925,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     //     come out as chord polylines (the original behavior). This avoids
     //     drawing a single straight chord across a curve when we can't tell
     //     where the curve actually goes.
-    const hasPolylineData = !!g.topology?.edges?.some(e => e.polyline && e.polyline.length >= 2);
+    // A body with only straight edges ships no polylines at all (part 1692) and
+    // still takes the topology path: each edge is drawn from its endpoints, and
+    // only topology edges carry the ids that edge picking needs.
+    const topoEdges = g.topology?.edges ?? [];
+    const hasPolylineData = topoEdges.length > 0
+      && topoEdges.every(e => e.isStraight || (e.polyline && e.polyline.length >= 2));
 
     for (const f of g.faces) {
       const geom = new THREE.BufferGeometry();
