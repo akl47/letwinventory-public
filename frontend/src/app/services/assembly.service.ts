@@ -6,6 +6,7 @@ import {
   Assembly, AssemblyDoc, AssemblyInstance, AssemblyRegenResponse, BomLine, Placement, Mate, MateType, MateRef, EligiblePart,
   AssemblyPattern, PatternKind, DisplayState, MassProperties, InterferencePair, MateFrame,
 } from '../cad/lib/assembly.types';
+import type { ClipboardBundle } from '../cad/lib/clipboard';
 
 @Injectable({ providedIn: 'root' })
 export class AssemblyService {
@@ -155,5 +156,24 @@ export class AssemblyService {
 
   exportStl(id: number): Observable<Blob> {
     return this.http.get(`${this.apiUrl}/${id}/export/stl`, { responseType: 'blob' });
+  }
+
+  /** REQ 1082 — a part's face meshes (own frame) for the insert preview. */
+  componentPreview(partID: number, branch: string): Observable<{ faces: Array<{ positions: number[]; normals: number[]; indices: number[] }> }> {
+    return this.http.get<{ faces: Array<{ positions: number[]; normals: number[]; indices: number[] }> }>(
+      `${this.apiUrl}/component-preview`, { params: { partID, branch } });
+  }
+
+  /** REQ 1077 — the assembly and every component design, for copy / export. */
+  getBundle(id: number): Observable<ClipboardBundle> {
+    return this.http.get<ClipboardBundle>(`${this.apiUrl}/${id}/bundle`);
+  }
+
+  /** REQ 1079 — create an independent copy of a copied assembly. */
+  importBundle(bundle: ClipboardBundle, name: string, description: string | null): Observable<{
+    assembly: { id: number; partID: number; name: string };
+    components: Array<{ sourcePartID: number; partID: number; name: string; isAssembly: boolean }>;
+  }> {
+    return this.http.post<any>(`${this.apiUrl}/import-bundle`, { bundle, name, description });
   }
 }

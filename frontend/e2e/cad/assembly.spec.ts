@@ -2,6 +2,7 @@
 // instances, mate faces, skeleton sketch, variables push, interference,
 // exploded view, BOM sync. Serial — every test builds on the previous.
 import { test, expect, Page, APIRequestContext } from '@playwright/test';
+import { readFileSync } from 'fs';
 import {
   createFixturePart, openEditor, openFileTab, enterSketchOnXY,
   drawClosedRectangle, extrudeSketch,
@@ -234,4 +235,90 @@ test('BOM sync writes assembly components into inventory', async ({ page }) => {
     const rows = await res.json();
     return rows?.bomItems?.length ?? -1;
   }, { timeout: 15_000 }).toBeGreaterThan(0);
+});
+
+// REQ 1074 — the File tab offers the same commands as on a part.
+test('File tab matches the part editor', async ({ page }) => {
+  await page.goto(`/#/parts/${ASM_PART_ID}/assembly/editor`);
+  await page.locator('[data-testid="cad-hud-ready"]').waitFor({ timeout: 30_000 });
+  await openFileTab(page);
+  for (const id of ['action-history', 'action-compare', 'action-copy-part', 'action-export-part',
+    'action-dl-step', 'action-dl-stl', 'action-dl-3mf']) {
+    await expect(page.locator(`[data-testid="${id}"]`)).toBeVisible();
+  }
+  // REQ 1076 — 3MF of the composed assembly.
+  await expect.poll(() => page.evaluate(() =>
+    ((window as any).__cadAsm?.faceIds ?? []).length), { timeout: 30_000 }).toBeGreaterThan(0);
+  const dl = page.waitForEvent('download', { timeout: 30_000 });
+  await page.locator('[data-testid="action-dl-3mf"]').click();
+  expect((await dl).suggestedFilename()).toMatch(/\.3mf$/);
+  // REQ 1075 — History opens the version-history page, which returns here.
+  await page.locator('[data-testid="action-history"]').click();
+  await page.waitForURL(new RegExp(`/parts/${ASM_PART_ID}/cad$`));
+  await page.locator('[data-testid="open-editor"]').click();
+  await page.waitForURL(new RegExp(`/parts/${ASM_PART_ID}/assembly/editor`));
+});
+
+// REQ 1077–1079 — export the assembly with its components, import it as new parts.
+test('Export .lwcad and import it as a new assembly', async ({ page }, info) => {
+  test.setTimeout(120_000);
+  await page.goto(`/#/parts/${ASM_PART_ID}/assembly/editor`);
+  await page.locator('[data-testid="cad-hud-ready"]').waitFor({ timeout: 30_000 });
+  await openFileTab(page);
+  const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+  await page.locator('[data-testid="action-export-part"]').click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^E2E CAD asm .*\.lwcad$/);
+  const path = info.outputPath('assembly.lwcad');
+  await download.saveAs(path);
+  const bundle = JSON.parse(readFileSync(path, 'utf8'));
+  expect(bundle).toMatchObject({ kind: 'letwinventory-cad', schema: 1, scope: 'assembly' });
+  expect(bundle.components.map((c: any) => c.partID)).toEqual([CHILD_ID]);
+
+  await page.goto('/#/design/cad');
+  await page.locator('[data-testid="cad-import-part"]').waitFor();
+  await page.locator('[data-testid="cad-import-file"]').setInputFiles(path);
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('Paste assembly')).toBeVisible();
+  await expect(dialog.locator('[data-testid="npd-components"]')).toContainText('1 component part');
+  await dialog.locator('[data-testid="npd-create"]').click();
+  await page.waitForURL(/\/parts\/\d+\/assembly\/editor/, { timeout: 30_000 });
+  expect(page.url()).not.toContain(`/parts/${ASM_PART_ID}/`);
+  await page.locator('[data-testid="cad-hud-ready"]').waitFor({ timeout: 30_000 });
+  // Every instance came across, pointing at the NEW child part, and composes.
+  await expect.poll(() => page.evaluate((child) => {
+    const a = (window as any).__cadAsm;
+    const insts = a?.instances ?? [];
+    return insts.length > 0 && insts.every((i: any) => i.partID !== child) && (a?.faceIds ?? []).length > 0;
+  }, CHILD_ID), { timeout: 30_000 }).toBe(true);
+});
+
+// REQ 1081 — the picked part previews at the cursor; a viewport click places it.
+test('insert preview places a component where the view is clicked', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.goto(`/#/parts/${ASM_PART_ID}/assembly/editor`);
+  await page.locator('[data-testid="cad-hud-ready"]').waitFor({ timeout: 30_000 });
+  await page.locator('[data-testid="tab-assembly"]').click();
+  const instances = () => page.evaluate(() => (window as any).__cadAsm?.instances ?? []);
+  const before = (await instances()).length;
+
+  await page.locator('[data-testid="asm-action-insert"]').click();
+  const sidebar = page.locator('[data-testid="asm-insert-sidebar"]');
+  await sidebar.locator('input.panel-input').first().fill('E2E CAD asm-child');
+  await sidebar.locator('.asm-row').first().click();
+  // REQ 1080 — a never-released part defaults to its working branch.
+  await expect(sidebar.locator('select.panel-input')).toHaveValue('draft/01');
+  await expect.poll(() => page.evaluate(() => (window as any).__cadAsm?.insertGhostFaces ?? 0), { timeout: 30_000 }).toBeGreaterThan(0);
+  await expect(sidebar.locator('[data-testid="asm-insert-preview-hint"]')).toContainText('Click in the view');
+
+  const box = (await page.locator('app-cad-viewer canvas').first().boundingBox())!;
+  const x = box.x + box.width * 0.2, y = box.y + box.height * 0.25;
+  await page.mouse.move(x - 20, y - 20);
+  await page.mouse.move(x, y);
+  await page.mouse.click(x, y);
+  await expect.poll(async () => (await instances()).length, { timeout: 15_000 }).toBe(before + 1);
+  const placed = (await instances()).at(-1);
+  expect(placed.placement.translate.some((v: number) => Math.abs(v) > 1e-6)).toBe(true);
+  await expect(sidebar).toBeHidden();
+  expect(await page.evaluate(() => (window as any).__cadAsm?.insertGhostFaces)).toBe(0);
 });

@@ -15,6 +15,12 @@ const kernelLimit = rateLimit('cad-kernel-op', { max: 10, windowMs: 60_000 });
 router.get('/eligible-parts', checkToken, checkPermission('cad', 'read'), controller.listEligibleParts);
 router.get('/by-part/:partID/active', checkToken, checkPermission('cad', 'read'), controller.getActiveByPart);
 router.post('/by-part/:partID', checkToken, checkPermission('cad', 'write'), controller.createForPart);
+// Copy / paste a whole assembly with its components (REQ 1077/1079). Pasting
+// creates Parts, so it needs parts write as well.
+// Insert preview (REQ 1082) — drives the kernel, so it shares the regenerate budget.
+router.get('/component-preview', checkToken, checkPermission('cad', 'read'), regenLimit, controller.componentPreview);
+router.post('/import-bundle', checkToken, checkPermission('cad', 'write'), checkPermission('parts', 'write'), controller.importBundle);
+router.get('/:id/bundle', checkToken, checkPermission('cad', 'read'), controller.exportBundle);
 
 router.get('/:id', checkToken, checkPermission('cad', 'read'), controller.getById);
 router.put('/:id', checkToken, checkPermission('cad', 'write'), controller.update);

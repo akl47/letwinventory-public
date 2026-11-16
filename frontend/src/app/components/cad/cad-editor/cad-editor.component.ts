@@ -109,6 +109,7 @@ import { extractRegions, tessellateProfileLoop, topLevelRegionIndices } from '..
 import { makeVarResolver, type TextResolver } from '../../../cad/lib/textGlyphs';
 import { buildBinaryStl } from '../../../cad/lib/stlExport';
 import { build3mf, groupObjects, type ThreeMfBody } from '../../../cad/lib/threeMf';
+import { assemblyThreeMfObjects } from '../../../cad/lib/assemblyThreeMf';
 import { applyFolders, canFolder, foldersAdd, foldersAddTo, foldersDelete, foldersRemove, foldersRename } from '../../../cad/lib/treeFolders';
 import { CadExportDialogComponent, DEFAULT_EXPORT_NAME_TEMPLATE, resolveExportName, type ExportDialogResult } from '../cad-export-dialog/cad-export-dialog.component';
 import { CadNewPartDialogComponent, type CadNewPartDialogData } from '../cad-new-part-dialog/cad-new-part-dialog.component';
@@ -249,8 +250,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             <div class="ribbon-group">
               <div class="ribbon-group-row">
                 <button class="ribbon-button" data-testid="action-history"
-                        *ngIf="partMode()" [disabled]="!model()"
-                        [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || 'Open the full version history of this part'" (click)="openVersionHistory()">
+                        *ngIf="!harnessMode()" [disabled]="!model()"
+                        [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || (assemblyMode() ? 'Open the full version history of this assembly' : 'Open the full version history of this part')" (click)="openVersionHistory()">
                   <mat-icon svgIcon="cad-history"></mat-icon><span class="ribbon-label">History</span>
                 </button>
                 <button class="ribbon-button" data-testid="action-compare"
@@ -263,23 +264,24 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             </div>
             <div class="ribbon-divider"></div>
             <!-- REQ 1012 — copy the whole part (works read-only); paste it as a
-                 new part on the CAD landing page, in any environment. -->
-            <div class="ribbon-group" *ngIf="partMode()">
+                 new part on the CAD landing page, in any environment.
+                 REQ 1078 — an assembly copies with all of its components. -->
+            <div class="ribbon-group" *ngIf="!harnessMode()">
               <div class="ribbon-group-row">
-                <button class="ribbon-button" data-testid="action-copy-part" [disabled]="!model()"
-                        [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || 'Copy this part — paste it with Ctrl+V on the CAD landing page (any environment) to create a new part'"
+                <button class="ribbon-button" data-testid="action-copy-part" [disabled]="!model() || bundleBusy()"
+                        [matTooltip]="(!model() ? DISABLED_REASON.loading : bundleBusy() ? DISABLED_REASON.busy : null) || (assemblyMode() ? 'Copy this assembly and all of its components — paste it with Ctrl+V on the CAD landing page (any environment) to create new copies' : 'Copy this part — paste it with Ctrl+V on the CAD landing page (any environment) to create a new part')"
                         (click)="onCopyPart()">
-                  <mat-icon>content_copy</mat-icon><span class="ribbon-label">Copy part</span>
+                  <mat-icon>content_copy</mat-icon><span class="ribbon-label">{{ assemblyMode() ? 'Copy assembly' : 'Copy part' }}</span>
                 </button>
-                <button class="ribbon-button" data-testid="action-export-part" [disabled]="!model()"
-                        [matTooltip]="(!model() ? DISABLED_REASON.loading : null) || 'Download this part as a .lwcad file — import it on the CAD landing page'"
+                <button class="ribbon-button" data-testid="action-export-part" [disabled]="!model() || bundleBusy()"
+                        [matTooltip]="(!model() ? DISABLED_REASON.loading : bundleBusy() ? DISABLED_REASON.busy : null) || (assemblyMode() ? 'Download this assembly and its components as a .lwcad file — import it on the CAD landing page' : 'Download this part as a .lwcad file — import it on the CAD landing page')"
                         (click)="onExportPart()">
                   <mat-icon>download</mat-icon><span class="ribbon-label">Export .lwcad</span>
                 </button>
               </div>
               <div class="ribbon-group-label">Copy</div>
             </div>
-            <div class="ribbon-divider" *ngIf="partMode()"></div>
+            <div class="ribbon-divider" *ngIf="!harnessMode()"></div>
             <!-- REQ 1067 — harness documents exchange as JSON and export as PNG. -->
             <div class="ribbon-group" *ngIf="harnessMode()">
               <div class="ribbon-group-row">
@@ -356,6 +358,20 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 <button class="ribbon-button" data-testid="action-dl-3mf" *ngIf="bodies().length > 0"
                         [disabled]="threeMfExporting()"
                         matTooltip="Export 3MF for slicers — touching bodies stay together, body colors become filaments" (click)="export3mf()">
+                  <mat-icon>{{ threeMfExporting() ? 'hourglass_empty' : 'print' }}</mat-icon><span class="ribbon-label">3MF</span>
+                </button>
+                <!-- Assemblies export the whole composed assembly. -->
+                <button class="ribbon-button" data-testid="action-dl-step" *ngIf="assemblyMode()"
+                        matTooltip="Export STEP" (click)="asm.exportStep()">
+                  <mat-icon>category</mat-icon><span class="ribbon-label">STEP</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-dl-stl" *ngIf="assemblyMode()"
+                        matTooltip="Export STL" (click)="asm.exportStl()">
+                  <mat-icon>view_in_ar</mat-icon><span class="ribbon-label">STL</span>
+                </button>
+                <button class="ribbon-button" data-testid="action-dl-3mf" *ngIf="assemblyMode()"
+                        [disabled]="threeMfExporting()"
+                        matTooltip="Export 3MF for slicers — one object per shown component" (click)="exportAssembly3mf()">
                   <mat-icon>{{ threeMfExporting() ? 'hourglass_empty' : 'print' }}</mat-icon><span class="ribbon-label">3MF</span>
                 </button>
               </div>
@@ -739,14 +755,6 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                 </button>
               </div>
               <div class="ribbon-group-label">Skeleton</div>
-            </div>
-            <div class="ribbon-divider"></div>
-            <div class="ribbon-group">
-              <div class="ribbon-group-row">
-                <button class="ribbon-button" (click)="asm.exportStep()" matTooltip="Export STEP"><mat-icon>category</mat-icon><span class="ribbon-label">STEP</span></button>
-                <button class="ribbon-button" (click)="asm.exportStl()" matTooltip="Export STL"><mat-icon>view_in_ar</mat-icon><span class="ribbon-label">STL</span></button>
-              </div>
-              <div class="ribbon-group-label">Export</div>
             </div>
           </div>
 
@@ -1426,10 +1434,16 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
             @if (asm.pendingInsertPart(); as pending) {
               <div class="panel-field active">
                 <div class="field-header"><mat-icon class="field-icon" svgIcon="cad-branch"></mat-icon><span class="field-label">Track branch</span></div>
-                <select class="panel-input" [ngModel]="asm.insertBranch()" (ngModelChange)="asm.insertBranch.set($event)">
+                <select class="panel-input" [ngModel]="asm.insertBranch()" (ngModelChange)="asm.setInsertBranch($event)">
                   @for (b of asm.insertBranches(); track b) { <option [value]="b">{{ b }}</option> }
                 </select>
                 <div class="sub-label">Uses the latest of this branch.</div>
+                <!-- REQ 1081 — the preview follows the cursor in the viewport. -->
+                <div class="sub-label" data-testid="asm-insert-preview-hint">
+                  {{ !asm.insertGhost() ? (asm.insertGhostNote() || 'Loading preview…')
+                     : asm.insertOriginMate() ? 'Shown mated to the origin — click in the view or Insert to add it.'
+                     : 'Click in the view to place it, or Insert to put it at the origin.' }}
+                </div>
               </div>
             }
             <div class="panel-actions">
@@ -4218,7 +4232,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               [textVariables]="textVariables()"
               [profileFillsSelected]="extrudeSelectedRegions()"
               [profileFillsHovered]="extrudeHoveredRegion()"
-              [vertexPickMode]="vertexPickMode() || mode() === 'pick-child-origin'"
+              [vertexPickMode]="vertexPickMode() || mode() === 'pick-child-origin' || (assemblyMode() && asm.insertGhost() !== null && !asm.insertOriginMate())"
               [extraPickableVertices]="sketchPickableVertices()"
               [facePickMode]="assemblyMode() ? (asm.facePickActive() || asm.patternPick() !== null || mode() === 'pick-child-origin' || datumPlaneSidebar() !== null || datumPointSidebar() !== null) : facePickActive()"
               [planePickMode]="sketchPlanePickActive()"
@@ -4240,6 +4254,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               (vertexPickedAt)="onVertexPickedAt($event)"
               (facePicked)="onFacePicked($event)"
               (facePickedAt)="onFacePickedAt($event)"
+              [placementGhost]="assemblyMode() ? asm.insertGhostView() : null"
+              (placementGhostPlaced)="asm.placeInsertAt($event.point)"
               (axisPicked)="onAxisPicked($event)"
               (edgePicked)="onEdgePicked($event)"
               (crossPartEdgePicked)="onCrossPartEdgePicked($event)"
@@ -5005,6 +5021,18 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
       gap: 8px;
       margin-top: 12px;
     }
+    /* OK / Cancel stay pinned to the bottom of the tool panel; the fields
+       above scroll under them. Extends over the panel's padding so nothing
+       shows through below the buttons. */
+    .tool-panel > .panel-actions {
+      position: sticky;
+      bottom: -12px;
+      z-index: 1;
+      margin: 12px -12px -12px;
+      padding: 8px 12px 12px;
+      background: #25253a;
+      border-top: 1px solid #3a3a52;
+    }
     .panel-actions button { flex: 1; }
     .kernel-offline-overlay { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; background: rgba(10, 10, 20, 0.82); color: #ef9a9a; text-align: center; pointer-events: none; }
     .kernel-offline-overlay mat-icon { font-size: 48px; width: 48px; height: 48px; }
@@ -5641,6 +5669,23 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     });
   }
 
+  /** REQ 1076 — the composed assembly as 3MF: one object per shown component. */
+  exportAssembly3mf(): void {
+    if (this.threeMfExporting()) return;
+    const { groups, names } = assemblyThreeMfObjects({
+      bodies: this.asm.regen()?.bodies ?? [],
+      hiddenInstanceIds: new Set(this.asm.instances().filter(i => i.visible === false).map(i => i.instanceId)),
+      hiddenBodyIds: this.asm.hiddenComponentBodies(),
+      nameOf: b => this.asm.instName(b.instanceId.split('#')[0]),
+    });
+    if (groups.length === 0) { this.errors.showError('Nothing to export.'); return; }
+    this.threeMfExporting.set(true);
+    void build3mf(groups, names).then(blob => {
+      this.threeMfExporting.set(false);
+      this._downloadBlob(blob, `${this.asm.assembly()?.part?.name || 'assembly'}.3mf`);
+    });
+  }
+
   /** REQ 1041 — face id → body color for the viewer (colored bodies only). */
   faceColors = computed(() => {
     const colors = this.featureTree().bodyColors ?? {};
@@ -5782,7 +5827,32 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     );
   }
 
+  /** REQ 1078 — an assembly's bundle is built by the server (it carries every
+   * component's design); the page origin and the shown revision are ours. */
+  bundleBusy = signal(false);
+  private _assemblyBundle(then: (b: ClipboardBundle) => void): void {
+    const a = this.asm.assembly();
+    if (!a || this.bundleBusy()) return;
+    this.bundleBusy.set(true);
+    this.assemblyApi.getBundle(a.id).subscribe({
+      next: (b) => {
+        this.bundleBusy.set(false);
+        b.source.origin = location.origin;
+        b.source.partRev = a.displayRevision ?? b.source.partRev;
+        then(b);
+      },
+      error: (e) => { this.bundleBusy.set(false); this.errors.showError(e?.error?.error || 'Failed to copy the assembly'); },
+    });
+  }
+
   onCopyPart(): void {
+    if (this.assemblyMode()) {
+      this._assemblyBundle(b => void this.cadClipboard.copyAsync(b).then(ok => {
+        if (ok) this.errors.showSuccess(`Copied ${partFileName(b).replace(/\.lwcad$/, '')} and its ${b.components?.length ?? 0} component part(s) — press Ctrl+V on the CAD landing page to paste them as new parts`);
+        else this.errors.showError('The browser blocked clipboard access — use Export .lwcad instead');
+      }));
+      return;
+    }
     const b = this._partBundle();
     if (!b) return;
     if (this.cadClipboard.copy(b)) this.errors.showSuccess(`Copied ${partFileName(b).replace(/\.lwcad$/, '')} — press Ctrl+V on the CAD landing page to paste it as a new part`);
@@ -5790,6 +5860,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   onExportPart(): void {
+    if (this.assemblyMode()) {
+      this._assemblyBundle(b => this._downloadBlob(new Blob([serializeBundle(b)], { type: 'application/json' }), partFileName(b)));
+      return;
+    }
     const b = this._partBundle();
     if (b) this._downloadBlob(new Blob([serializeBundle(b)], { type: 'application/json' }), partFileName(b));
   }
@@ -5803,7 +5877,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     if (!r) return;
     e.preventDefault();
     const name = partFileName(r.bundle).replace(/\.lwcad$/, '');
-    if (confirm(`The clipboard holds a copied part (${name}). Create a new part from it?`)) void this.cadClipboard.openPasteDialog(r.bundle);
+    const what = r.bundle.scope === 'assembly' ? 'assembly' : 'part';
+    if (confirm(`The clipboard holds a copied ${what} (${name}). Create a new ${what} from it?`)) void this.cadClipboard.openPasteDialog(r.bundle);
   }
 
   private _downloadBlob(blob: Blob, filename: string): void {
@@ -8819,6 +8894,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         // Assembly-mode state for e2e assertions (REQ 931).
         w.__cadAsm = this.assemblyMode() ? {
           instances: this.asm.instances(),
+          insertGhostFaces: this.asm.insertGhost()?.faces.length ?? 0,
           mates: this.asm.mates(),
           equations: this.equations(),
           faceIds: this.asm.geometry()?.faces?.map(f => f.faceId) ?? [],
@@ -17758,7 +17834,11 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   // The "History" ribbon button leaves the editor for the part's full version
   // history page (cad-revision-list at /parts/:id/cad — the Graph/Diff/Log
   // views). From there, Checkout / Open editor navigates back here.
-  openVersionHistory() { this.router.navigate(['../'], { relativeTo: this.route }); }
+  openVersionHistory() {
+    // The assembly editor is not nested under the history page's route.
+    if (this.assemblyMode()) this.router.navigate(['/parts', this.asm.partID(), 'cad']);
+    else this.router.navigate(['../'], { relativeTo: this.route });
+  }
 
   // Leave the read-only historical view (REQ 743) and return to the live
   // working copy by dropping the ?commit= param.
