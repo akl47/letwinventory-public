@@ -54,6 +54,7 @@ import { findPoint, isProjectedEntity } from '../../../cad/lib/types';
 import { tessellateCircle, tessellateArc, tessellateEllipse, tessellateSpline, tessellateEntity } from '../../../cad/lib/tessellator';
 import { dimensionRenders, type DimensionRender } from '../../../cad/lib/dimensions';
 import { externalEdgeLinesFromCandidates } from '../../../cad/lib/externalSnap';
+import { rayPlanePoint } from '../../../cad/lib/insertPlacement';
 import { formatNumber, fromMm, unitSymbol, type Unit } from '../../../cad/lib/units';
 import { constraintIconsForEntity, type ConstraintIcon, type ConstraintIconGroup } from '../../../cad/lib/constraintIcons';
 import { tryGlyphLoopsForText, onFontReady, applyTextTransform, textStyleOf } from '../../../cad/lib/textGlyphs';
@@ -184,6 +185,13 @@ const DIM_ARROW_WIDTH_FRAC = 1 / 180;      // dimension arrowhead half-width
 const DIM_EXT_GAP_FRAC = 1.2 / 180;        // witness-line gap off the measured point
 const DIM_EXT_OVERSHOOT_FRAC = 1.4 / 180;  // witness-line overshoot past the dim line
 const DIM_SHOULDER_FRAC = 5 / 180;         // radius-leader horizontal landing length
+
+/** REQ 1081 — the component being placed in an assembly. */
+export interface PlacementGhost {
+  faces: Array<{ positions: ArrayLike<number>; normals?: ArrayLike<number>; indices: ArrayLike<number> }>;
+  /** Hold the preview here instead of following the cursor. */
+  fixedAt?: [number, number, number];
+}
 
 @Component({
   selector: 'app-cad-viewer',
@@ -716,6 +724,13 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   crossPartFacePicked = output<OverlayFace>();
   crossPartVertexPicked = output<OverlayVertex>();
 
+  /** REQ 1081 — component being placed in an assembly: its face meshes (own
+   * frame) drawn translucent at the cursor, or held at `fixedAt` (an origin-
+   * mated insert). Null = not placing. */
+  placementGhost = input<PlacementGhost | null>(null);
+  /** A viewport click while placing: where the ghost sat (world frame). */
+  placementGhostPlaced = output<{ point: [number, number, number] }>();
+
   // Live "ghost" preview of an in-progress Extrude / Cut Extrude / Revolve
   // before the user commits. `kind` controls the tint (additive = green,
   // subtractive = red); mesh data comes pre-built from cad/lib/preview.ts.
@@ -782,6 +797,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   // CAD-790 — ghost reference geometry of the other components when editing
   // a part in the context of an assembly.
   private referenceGroup!: THREE.Group;
+  private placementGroup!: THREE.Group;
   private referenceMeshes: THREE.Object3D[] = [];
   /** In-context overlay edge lines by hover key (`ref:<instanceId>/<edgeId>`). */
   private overlayEdgeLines = new Map<string, THREE.Line>();
@@ -961,6 +977,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const ref = this.referenceGeometry();
       if (this.scene) this.syncReference(ref);
+    });
+    // REQ 1081 — component placement ghost.
+    effect(() => {
+      const ghost = this.placementGhost();
+      if (this.scene) this.syncPlacementGhost(ghost);
     });
     // A ghost edge that a sketch entity is linked to (Convert Entities) hides,
     // so it can't show through the gaps of a dashed construction line.
@@ -1510,6 +1531,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.referenceGroup = new THREE.Group();
     this.scene.add(this.referenceGroup);
     this.syncReference(this.referenceGeometry());
+    this.placementGroup = new THREE.Group();
+    this.scene.add(this.placementGroup);
+    this.syncPlacementGhost(this.placementGhost());
 
     // Input handlers.
     const canvas = this.renderer.domElement;
@@ -2556,6 +2580,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     } else {
       this.updatePointer(ev);
       this.updateHover();
+      if (this.placementGhost() && !this.placementGhost()!.fixedAt) this.movePlacementGhost();
     }
   };
 
@@ -2955,6 +2980,12 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       return;
     }
     this.updatePointer(ev);
+    // REQ 1081 — while placing a component, a click drops it where the ghost is.
+    if (this.placementGhost()) {
+      const point = this.placementGhostPoint();
+      if (point) this.zone.run(() => this.placementGhostPlaced.emit({ point }));
+      return;
+    }
     // Vertex picker runs first when armed. Originally vertex-pick was
     // exclusive (return on miss), but the Measure tool arms vertex +
     // edge + face simultaneously and expects misses to fall through to
@@ -3828,6 +3859,67 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       h.index != null && (!best || (h.distanceToRay ?? 0) < (best.distanceToRay ?? 0)) ? h : best, null);
     if (!hit) return null;
     return (cloud.userData as { overlayVertices: OverlayVertex[] }).overlayVertices[hit.index!] ?? null;
+  }
+
+  /** REQ 1081 — rebuild the placement ghost; hidden until the cursor moves
+   * over the viewport. */
+  private syncPlacementGhost(ghost: PlacementGhost | null) {
+    if (!this.placementGroup) return;
+    for (const o of [...this.placementGroup.children]) {
+      this.placementGroup.remove(o);
+      const mesh = o as THREE.Mesh;
+      mesh.geometry?.dispose();
+      (mesh.material as THREE.Material | undefined)?.dispose();
+    }
+    this.placementGroup.visible = false;
+    if (!ghost) return;
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x4fc3f7, metalness: 0.05, roughness: 0.8,
+      transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false,
+    });
+    for (const f of ghost.faces) {
+      if (!f.positions || !f.indices || f.indices.length < 3) continue;
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(Float32Array.from(f.positions), 3));
+      if (f.normals && f.normals.length === f.positions.length) geom.setAttribute('normal', new THREE.BufferAttribute(Float32Array.from(f.normals), 3));
+      else geom.computeVertexNormals();
+      geom.setIndex(Array.from(f.indices));
+      this.placementGroup.add(new THREE.Mesh(geom, mat.clone()));
+    }
+    mat.dispose();
+    if (ghost.fixedAt) {
+      this.placementGroup.position.set(ghost.fixedAt[0], ghost.fixedAt[1], ghost.fixedAt[2]);
+      this.placementGroup.visible = true;
+    }
+  }
+
+  /** REQ 1081 — where the component would land for the current cursor: a
+   * pickable vertex, else the nearest model face / datum under the cursor,
+   * else the camera-facing plane through the view target. */
+  private placementGhostPoint(): [number, number, number] | null {
+    const fixed = this.placementGhost()?.fixedAt;
+    if (fixed) return fixed;
+    const vid = this.pickVertex();
+    const vMesh = vid !== null ? this.vertexPickMeshes.get(vid) : undefined;
+    if (vMesh) return [vMesh.position.x, vMesh.position.y, vMesh.position.z];
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const targets: THREE.Object3D[] = [...this.faceGroup.children];
+    const hits = this.raycaster.intersectObjects(targets, false);
+    const datumHits = this.datumGroup ? this.raycaster.intersectObjects(this.datumGroup.children, true) : [];
+    const hit = [hits[0], datumHits[0]].filter(Boolean).sort((a, b) => a.distance - b.distance)[0];
+    if (hit) return [hit.point.x, hit.point.y, hit.point.z];
+    const ray = this.raycaster.ray;
+    const normal = this.camera.getWorldDirection(new THREE.Vector3()).negate();
+    return rayPlanePoint(
+      [ray.origin.x, ray.origin.y, ray.origin.z], [ray.direction.x, ray.direction.y, ray.direction.z],
+      [this.orbitTarget.x, this.orbitTarget.y, this.orbitTarget.z], [normal.x, normal.y, normal.z],
+    );
+  }
+
+  private movePlacementGhost(): void {
+    const p = this.placementGhostPoint();
+    this.placementGroup.visible = !!p;
+    if (p) this.placementGroup.position.set(p[0], p[1], p[2]);
   }
 
   private syncReference(ref: InContextOverlay | null) {

@@ -12,11 +12,12 @@ import type { TreeNode } from '../cad-feature-tree-panel/cad-feature-tree-panel.
 import type { SelectionRow } from '../cad-selection-list/cad-selection-list.component';
 import {
   Assembly, AssemblyInstance, AssemblyRegenResponse, BomLine, Mate, MateType, ConstraintState, AssemblyPattern, PatternKind,
-  DisplayState, MassProperties, InterferencePair,
+  DisplayState, MassProperties, InterferencePair, Placement,
   ASSEMBLY_REF_ID, FrameAxis, MateFrame, frameYOptions, isOriginRef,
   MATE_TYPES, availableMateTypes, mateAllows, datumRowMateRef, csysDatumOf,
 } from '../../../cad/lib/assembly.types';
 import { canDragInstance, translatedPlacement } from '../../../cad/lib/assemblyDrag';
+import { placementAt } from '../../../cad/lib/insertPlacement';
 import { migrateMateRefs } from '../../../cad/lib/idMigration';
 import { concatMap, from } from 'rxjs';
 
@@ -465,8 +466,46 @@ export class AssemblyEditController {
   pendingInsertPart = signal<PartWithCadSummary | null>(null);
   insertBranches = signal<string[]>([]);
   insertBranch = signal('main');
+  /** REQ 1081 — preview of the part being inserted: its meshes follow the
+   * cursor in the viewer, and a viewport click places it there. */
+  insertGhost = signal<{ faces: Array<{ positions: number[]; normals: number[]; indices: number[] }> } | null>(null);
+  insertGhostNote = signal<string | null>(null);
+  private insertGhostSeq = 0;
+  private clearInsertGhost() { this.insertGhostSeq++; this.insertGhost.set(null); this.insertGhostNote.set(null); }
+  private loadInsertGhost() {
+    const p = this.pendingInsertPart();
+    const seq = ++this.insertGhostSeq;
+    this.insertGhost.set(null);
+    this.insertGhostNote.set(null);
+    if (!p) return;
+    this.assemblyApi.componentPreview(p.partID, this.insertBranch() || 'main').subscribe({
+      next: (g) => {
+        if (seq !== this.insertGhostSeq) return;
+        if (g.faces.length) this.insertGhost.set(g);
+        else this.insertGhostNote.set('This branch has no geometry to preview.');
+      },
+      error: (e) => { if (seq === this.insertGhostSeq) this.insertGhostNote.set(e?.error?.error || 'The preview could not be loaded.'); },
+    });
+  }
+  setInsertBranch(branch: string) { this.insertBranch.set(branch); this.loadInsertGhost(); }
+  /** What the viewer draws: with the origin mate ticked the preview sits on
+   * the assembly origin (where the mate will hold it), else it follows the cursor. */
+  insertGhostView = computed(() => {
+    const g = this.insertGhost();
+    if (!g) return null;
+    return this.insertOriginMate() ? { ...g, fixedAt: [0, 0, 0] as [number, number, number] } : g;
+  });
+  /** A viewport click while the preview is showing: origin-mated when that
+   * box is ticked, otherwise dropped free at the clicked point. */
+  placeInsertAt(point: [number, number, number]) {
+    const p = this.pendingInsertPart();
+    if (!p || !this.insertGhost()) return;
+    this.insert(p.partID, this.insertBranch() || 'main', this.insertOriginMate() ? undefined : placementAt(point));
+  }
+
   togglePicker() {
     this.replaceTargetId.set(null);
+    this.clearInsertGhost();
     const opening = !this.showPicker();
     if (opening) {
       this.insertOriginMate.set(this.instances().length === 0);
@@ -476,14 +515,17 @@ export class AssemblyEditController {
     }
     this.showPicker.set(opening);
   }
-  startReplace(inst: AssemblyInstance) { this.replaceTargetId.set(inst.instanceId); this.showPicker.set(true); this.pendingInsertPart.set(null); }
+  startReplace(inst: AssemblyInstance) { this.replaceTargetId.set(inst.instanceId); this.showPicker.set(true); this.pendingInsertPart.set(null); this.clearInsertGhost(); }
   /** Select a part in the picker; replace mode commits immediately (branch
    * tracking is an insert concern), insert mode loads branches for the picker. */
   selectInsertPart(p: PartWithCadSummary) {
     if (this.replaceTargetId()) { this.insert(p.partID); return; }
     this.pendingInsertPart.set(p);
-    this.insertBranch.set('main');
-    this.insertBranches.set(['main']);
+    // REQ 1080 — main holds nothing until the part's first release, so an
+    // unreleased part defaults to its working branch (else it inserts empty).
+    this.insertBranch.set(insertBranchDefault(p));
+    this.insertBranches.set([...new Set(['main', insertBranchDefault(p)])]);
+    this.loadInsertGhost();
     if (p.latestRevisionID != null) {
       this.cadApi.listBranches(p.latestRevisionID).subscribe({
         next: (bs) => {
@@ -500,15 +542,19 @@ export class AssemblyEditController {
     if (p) this.insert(p.partID, this.insertBranch() || 'main');
   }
 
-  insert(partID: number, branch?: string) {
+  /** `placement` (REQ 1081) = dropped in the viewport: placed there, free of
+   * the origin mate. Without it the component goes to the assembly origin. */
+  insert(partID: number, branch?: string, placement?: Placement) {
     const a = this.assembly();
     if (!a) return;
     const replacing = this.replaceTargetId();
     const obs = replacing
       ? this.assemblyApi.replaceInstance(a.id, replacing, partID)
-      : this.assemblyApi.insertInstance(a.id, { partID, originMate: this.insertOriginMate(), branch: branch || 'main' });
+      : this.assemblyApi.insertInstance(a.id, placement
+        ? { partID, placement, originMate: false, branch: branch || 'main' }
+        : { partID, originMate: this.insertOriginMate(), branch: branch || 'main' });
     obs.subscribe({
-      next: (res: { assembly: Assembly }) => { this.assembly.set(res.assembly); this.showPicker.set(false); this.replaceTargetId.set(null); this.pendingInsertPart.set(null); this.regenerate(); },
+      next: (res: { assembly: Assembly }) => { this.assembly.set(res.assembly); this.showPicker.set(false); this.replaceTargetId.set(null); this.pendingInsertPart.set(null); this.clearInsertGhost(); this.regenerate(); },
       error: (e) => this.errors.showError(e?.error?.error || (replacing ? 'Failed to replace component' : 'Failed to insert component')),
     });
   }
@@ -1000,6 +1046,11 @@ export class AssemblyEditController {
       error: (e) => this.errors.showError(e?.status === 503 ? 'CAD kernel is offline.' : (e?.error?.error || 'Export failed')),
     });
   }
+}
+
+/** REQ 1080 — the branch a newly inserted instance tracks by default. */
+export function insertBranchDefault(p: Pick<PartWithCadSummary, 'hasReleased' | 'branchName'>): string {
+  return p.hasReleased ? 'main' : (p.branchName || 'main');
 }
 
 function splitScoped(id: string): { instanceId: string; faceId: string } {

@@ -99,14 +99,14 @@ import { formatDiffEntry } from '../../../cad/lib/diffFormat';
                 </div>
                 <div class="row gap6 noshrink">
                   <ng-container *ngIf="v.state==='released'; else draftActions">
-                    <button mat-stroked-button (click)="openVersion(v)" matTooltip="Open this version in the CAD editor (read-only)"><mat-icon>visibility</mat-icon> Open version</button>
+                    <button mat-stroked-button *ngIf="!model()?.isAssembly" (click)="openVersion(v)" matTooltip="Open this version in the CAD editor (read-only)"><mat-icon>visibility</mat-icon> Open version</button>
                     <button mat-stroked-button [disabled]="!canWrite()" (click)="branchFrom(v)" matTooltip="Create a new draft branch from this released version"><mat-icon>call_split</mat-icon> Branch</button>
                     <button mat-raised-button color="primary" (click)="exportStep()"><mat-icon>download</mat-icon> Download</button>
                   </ng-container>
                   <ng-template #draftActions>
                     <button mat-stroked-button [disabled]="!canWrite()" (click)="branchFrom(v)"><mat-icon>call_split</mat-icon> Branch</button>
                     <button mat-stroked-button [disabled]="!canWrite()" (click)="releaseModel()"><mat-icon>publish</mat-icon> Release</button>
-                    <button mat-stroked-button (click)="openVersion(v)" matTooltip="Open this version in the CAD editor (read-only)"><mat-icon>visibility</mat-icon> Open version</button>
+                    <button mat-stroked-button *ngIf="!model()?.isAssembly" (click)="openVersion(v)" matTooltip="Open this version in the CAD editor (read-only)"><mat-icon>visibility</mat-icon> Open version</button>
                     <button mat-raised-button color="primary" [disabled]="!canWrite()" (click)="openEditor()"><mat-icon>edit</mat-icon> Checkout</button>
                   </ng-template>
                 </div>
@@ -588,9 +588,16 @@ export class CadRevisionListComponent implements OnInit {
   }
   openPickedDiff() { const p = this.picked(); if (p.length !== 2) return; this.cmpA.set(p[0]); this.cmpB.set(p[1]); this.view.set('compare'); this.runCmpDiff(); }
 
+  /** REQ 1075 — an assembly opens in the assembly editor, which always shows
+   * the working copy (no revision/branch params). */
+  private goToEditor(m: CadModel, branch: string) {
+    if (m.isAssembly) this.router.navigate(['/parts', this.partID(), 'assembly', 'editor']);
+    else this.router.navigate(['/parts', this.partID(), 'cad', 'editor'], { queryParams: { revisionID: m.id, branch } });
+  }
+
   openEditor() {
     const m = this.model(); if (!m) return;
-    this.router.navigate(['/parts', this.partID(), 'cad', 'editor'], { queryParams: { revisionID: m.id, branch: m.branchName || 'main' } });
+    this.goToEditor(m, m.branchName || 'main');
   }
 
   // Open a specific commit/version in the CAD editor, read-only (REQ 743).
@@ -637,7 +644,7 @@ export class CadRevisionListComponent implements OnInit {
     const m = this.model(); if (!m) return;
     this.cadApi.switchBranch(m.id, name).subscribe({
       next: () => this.cadApi.checkout(m.id).subscribe({
-        next: () => this.router.navigate(['/parts', this.partID(), 'cad', 'editor'], { queryParams: { revisionID: m.id, branch: name } }),
+        next: () => this.goToEditor(m, name),
         error: err => this.errors.showError(err?.error?.error || 'Checkout failed'),
       }),
       error: err => this.errors.showError(err?.error?.error || 'Switch branch failed'),
@@ -650,7 +657,7 @@ export class CadRevisionListComponent implements OnInit {
     const m = this.model(); if (!m) return;
     if (name === this.currentBranch()) { this.openEditor(); return; }
     this.cadApi.switchBranch(m.id, name).subscribe({
-      next: () => this.router.navigate(['/parts', this.partID(), 'cad', 'editor'], { queryParams: { revisionID: m.id, branch: name } }),
+      next: () => this.goToEditor(m, name),
       error: err => this.errors.showError(err?.error?.error || 'Switch branch failed'),
     });
   }

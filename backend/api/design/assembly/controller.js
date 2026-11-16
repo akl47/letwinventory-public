@@ -11,6 +11,7 @@ const RestError = require('../../../util/RestError');
 const { cadError, sendCadError } = require('../../../services/cadErrors');
 const assemblyRegenService = require('../../../services/assemblyRegenService');
 const assemblyAnalysisService = require('../../../services/assemblyAnalysisService');
+const assemblyBundleService = require('../../../services/assemblyBundleService');
 const assemblyVcsService = require('../../../services/vcs/assemblyVcsService');
 const assemblyBranchService = require('../../../services/vcs/assemblyBranchService');
 const cadVcsService = require('../../../services/vcs/cadVcsService');
@@ -550,8 +551,12 @@ module.exports = {
       const before = (doc.instances || []).length;
       doc.instances = (doc.instances || []).filter((i) => i.instanceId !== req.params.instanceId);
       if (doc.instances.length === before) return res.status(404).json({ error: `Instance ${req.params.instanceId} not found` });
+      // REQ 1083 — its mates go with it (pattern copies are `<id>#<pattern>N`).
+      const gone = (ref) => !!ref && (ref.instanceId === req.params.instanceId || String(ref.instanceId).startsWith(`${req.params.instanceId}#`));
+      const mates = doc.mates || [];
+      doc.mates = mates.filter((m) => !gone(m.a) && !gone(m.b));
       await assembly.update(contentPatch({ assemblyDoc: doc, dirty: true }));
-      await recordHistory(assembly.id, req.user.id, 'instance_removed', null, { instanceId: req.params.instanceId });
+      await recordHistory(assembly.id, req.user.id, 'instance_removed', null, { instanceId: req.params.instanceId, matesRemoved: mates.length - doc.mates.length });
       return res.json(await fetchActive(assembly.id));
     } catch (err) {
       return sendCadError(res, err, 'Failed to remove instance');
@@ -1055,6 +1060,45 @@ module.exports = {
   // GET /:id/export/step  |  /:id/export/stl
   async exportStep(req, res) { return exportAssembly(req, res, 'step'); },
   async exportStl(req, res) { return exportAssembly(req, res, 'stl'); },
+
+  // GET /component-preview?partID=&branch= — REQ 1082: one component's face
+  // meshes in its own frame, resolved as an instance tracking `branch` would.
+  async componentPreview(req, res) {
+    try {
+      const partID = Number(req.query.partID);
+      if (!Number.isInteger(partID) || partID <= 0) return res.status(400).json({ error: 'partID is required' });
+      const branch = req.query.branch ? String(req.query.branch) : null;
+      const resolve = assemblyRegenService.defaultResolveChild({ db, kernelClient: getDefaultClient() });
+      const geo = await resolve({ instanceId: '__preview__', partID, ...(branch ? { ref: { kind: 'cad', branch } } : {}) }, null);
+      return res.json({
+        faces: (geo.faces || []).map((f) => ({ positions: f.positions, normals: f.normals, indices: f.indices })),
+      });
+    } catch (err) {
+      return sendCadError(res, err, 'Failed to build the component preview');
+    }
+  },
+
+  // GET /:id/bundle — REQ 1077: the assembly plus every component design.
+  async exportBundle(req, res) {
+    try {
+      const assembly = await fetchActive(Number(req.params.id));
+      if (!assembly) return res.status(404).json({ error: `Assembly ${req.params.id} not found` });
+      return res.json(await assemblyBundleService.exportBundle(assembly));
+    } catch (err) {
+      return sendCadError(res, err, 'Failed to copy the assembly');
+    }
+  },
+
+  // POST /import-bundle — REQ 1079: create an independent copy of a bundle.
+  async importBundle(req, res) {
+    try {
+      const { bundle, name, description } = req.body || {};
+      const out = await assemblyBundleService.importBundle(bundle, { name, description }, req.user.id);
+      return res.status(201).json(out);
+    } catch (err) {
+      return sendCadError(res, err, 'Failed to paste the assembly');
+    }
+  },
 
   // GET /:id/history
   async getHistory(req, res) {

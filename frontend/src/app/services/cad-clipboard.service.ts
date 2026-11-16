@@ -34,6 +34,15 @@ export class CadClipboardService {
     try { return document.execCommand('copy'); } catch { return false; } finally { document.removeEventListener('copy', onCopy); }
   }
 
+  /** REQ 1078 — copy once a request has returned (the click gesture may be
+   * spent): the async clipboard API on secure origins, else the copy event. */
+  async copyAsync(bundle: ClipboardBundle): Promise<boolean> {
+    try {
+      if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(serializeBundle(bundle)); return true; }
+    } catch { /* fall through */ }
+    return this.copy(bundle);
+  }
+
   /** Paste events from inputs/textareas belong to the field, not the CAD clipboard. */
   isFieldPaste(e: ClipboardEvent): boolean {
     const t = e.target as HTMLElement | null;
@@ -53,7 +62,7 @@ export class CadClipboardService {
   async openPasteDialog(bundle: ClipboardBundle): Promise<void> {
     const r = parseBundle(serializeBundle(bundle), await this.loadNamingVersion());
     if (r && 'warning' in r && r.warning) this.errors.showInfo(r.warning, 8000);
-    this.dialog.open(CadNewPartDialogComponent, { data: { mode: 'part', seed: bundle }, autoFocus: false });
+    this.dialog.open(CadNewPartDialogComponent, { data: { mode: bundle.scope === 'assembly' ? 'assembly' : 'part', seed: bundle }, autoFocus: false });
   }
 
   /** Landing page: pasted/imported text → Paste part dialog. False when the

@@ -69,6 +69,28 @@ describe('Assembly component instances (REQ 751)', () => {
     expect(res.body.assemblyDoc.instances).toHaveLength(0);
   });
 
+  it('removing an instance removes its mates and keeps the others (REQ 1083)', async () => {
+    const auth = await authenticatedRequest();
+    const asmPart = await createTestPart({ partCategoryID: 4 });
+    const comp = await partWithCad(auth);
+    const asm = await auth.post(`/api/design/assembly/by-part/${asmPart.id}`).send({});
+    const id = asm.body.id;
+    await auth.post(`/api/design/cad-model/${id}/checkout`).send({});
+    for (let i = 0; i < 3; i++) await auth.post(`/api/design/assembly/${id}/instances`).send({ partID: comp.id, originMate: false });
+    const lock = (a, b) => auth.post(`/api/design/assembly/${id}/mates`)
+      .send({ type: 'lock', a: { instanceId: a, faceId: '' }, b: { instanceId: b, faceId: '' } });
+    expect((await lock('i1', 'i2')).status).toBe(201);
+    expect((await lock('i3', 'i2')).status).toBe(201);
+    expect((await lock('i1', 'i3')).status).toBe(201);
+
+    const res = await auth.delete(`/api/design/assembly/${id}/instances/i2`);
+    expect(res.status).toBe(200);
+    expect(res.body.assemblyDoc.instances.map((i) => i.instanceId)).toEqual(['i1', 'i3']);
+    const mates = res.body.assemblyDoc.mates;
+    expect(mates).toHaveLength(1);
+    expect([mates[0].a.instanceId, mates[0].b.instanceId]).toEqual(['i1', 'i3']);
+  });
+
   it('rejects inserting a non-existent part', async () => {
     const auth = await authenticatedRequest();
     const asmPart = await createTestPart({ partCategoryID: 4 });

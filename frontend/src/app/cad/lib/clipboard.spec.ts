@@ -48,9 +48,22 @@ describe('CAD clipboard bundle (REQ 1011–1013, 1016)', () => {
     expect(parseBundle(t, 48)).toEqual({ error: expect.stringMatching(/newer version/) });
   });
 
-  it('refuses assemblies', () => {
+  it('accepts an assembly bundle (REQ 1078/1079) and refuses an incomplete one', () => {
+    const asm = {
+      kind: 'letwinventory-cad', schema: 1, scope: 'assembly', namingVersion: 48,
+      source: { origin: 'http://prod.lan', modelId: 9, partID: 4, partName: '000200', partRev: '01', description: 'Top' },
+      assembly: { assemblyDoc: { instances: [{ instanceId: 'i1', partID: 3 }] } },
+      components: [{ partID: 3, partName: '000123', partRev: '02', description: 'Bracket', isAssembly: false, model: { featureTree, sketchDoc } }],
+    };
+    const r = parseBundle(JSON.stringify(asm), 48) as { bundle: ClipboardBundle };
+    expect(r.bundle.scope).toBe('assembly');
+    expect(r.bundle.components).toHaveLength(1);
+    expect(partFileName(r.bundle)).toBe('000200-01.lwcad');
+    expect(parseBundle(JSON.stringify({ ...asm, components: undefined }), 48)).toEqual({ error: 'The copied CAD data is incomplete' });
+    expect(parseBundle(JSON.stringify({ ...asm, assembly: {} }), 48)).toEqual({ error: 'The copied CAD data is incomplete' });
+    // A part bundle relabelled as an assembly has no assembly document.
     const t = JSON.stringify({ ...bundle(), scope: 'assembly' });
-    expect(parseBundle(t, 48)).toEqual({ error: 'Assemblies cannot be copied yet' });
+    expect(parseBundle(t, 48)).toEqual({ error: 'The copied CAD data is incomplete' });
   });
 
   it('a naming-version mismatch warns but does not block', () => {

@@ -6,18 +6,35 @@ import type { EquationDoc } from './equations';
 export interface ClipboardBundle {
   kind: 'letwinventory-cad';
   schema: 1;
-  scope: 'part';
+  scope: 'part' | 'assembly';
   /** Server NAMING_VERSION at copy time; null if not yet known. */
   namingVersion: number | null;
   source: {
     origin: string;
     modelId: number;
+    /** Assembly bundles only: the source assembly's part id. */
+    partID?: number;
     partName: string;
     partRev: string;
     description: string | null;
   };
   /** scope 'part': the whole current model (no history). */
   model?: { featureTree: FeatureTree; sketchDoc: SketchDocument; equations: EquationDoc | null };
+  /** scope 'assembly' (REQ 1077): the assembly document + skeleton, built by
+   * the server, and the design of every component part it uses. */
+  assembly?: { assemblyDoc: unknown; sketchDoc?: unknown; featureTree?: unknown; equations?: unknown };
+  components?: BundleComponent[];
+}
+
+export interface BundleComponent {
+  /** Source part id — what the copied instances point at. */
+  partID: number;
+  partName: string;
+  partRev: string;
+  description: string | null;
+  isAssembly: boolean;
+  model?: unknown;
+  assembly?: unknown;
 }
 
 export type ParsedBundle = { bundle: ClipboardBundle; warning?: string } | { error: string };
@@ -57,8 +74,10 @@ export function parseBundle(text: string, localNamingVersion: number | null): Pa
   try { o = JSON.parse(text); } catch { return null; }
   if (!o || typeof o !== 'object' || o.kind !== KIND) return null;
   if (o.schema !== SCHEMA) return { error: 'This copy was made by a newer version of the CAD editor — update this environment first' };
-  if (o.scope === 'assembly') return { error: 'Assemblies cannot be copied yet' };
-  if (o.scope !== 'part' || !o.model?.featureTree || !o.model?.sketchDoc || !o.source) {
+  const complete = o.scope === 'assembly'
+    ? !!o.assembly?.assemblyDoc && Array.isArray(o.components)
+    : o.scope === 'part' && !!o.model?.featureTree && !!o.model?.sketchDoc;
+  if (!complete || !o.source) {
     return { error: 'The copied CAD data is incomplete' };
   }
   const bundle = o as ClipboardBundle;

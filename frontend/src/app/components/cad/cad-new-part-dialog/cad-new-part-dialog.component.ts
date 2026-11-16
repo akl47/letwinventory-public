@@ -65,7 +65,7 @@ export interface CadNewPartDialogData {
     MatSelectModule, MatCheckboxModule, MatButtonModule, MatIconModule, MatProgressSpinnerModule,
   ],
   template: `
-    <h2 mat-dialog-title>{{ data.seed ? 'Paste part' : data.mode === 'assembly' ? 'New assembly' : 'New CAD part' }}</h2>
+    <h2 mat-dialog-title>{{ asmSeed ? 'Paste assembly' : data.seed ? 'Paste part' : data.mode === 'assembly' ? 'New assembly' : 'New CAD part' }}</h2>
     <mat-dialog-content class="npd">
       <mat-form-field appearance="outline" class="full">
         <mat-label>Part number</mat-label>
@@ -84,7 +84,19 @@ export interface CadNewPartDialogData {
         </mat-select>
       </mat-form-field>
 
-      <mat-checkbox [ngModel]="internalPart()" (ngModelChange)="internalPart.set($event)" data-testid="npd-internal">Internal part</mat-checkbox>
+      @if (!asmSeed) {
+        <mat-checkbox [ngModel]="internalPart()" (ngModelChange)="internalPart.set($event)" data-testid="npd-internal">Internal part</mat-checkbox>
+      } @else {
+        <!-- REQ 1079 — every component is copied as a new part. -->
+        <div class="npd-components" data-testid="npd-components">
+          <div class="npd-orient-head">{{ asmSeed.length }} component {{ asmSeed.length === 1 ? 'part' : 'parts' }} will be created with the next free part numbers</div>
+          <ul>
+            @for (c of asmSeed; track c.partID) {
+              <li>{{ c.partName }}{{ c.description ? ' — ' + c.description : '' }}{{ c.isAssembly ? ' (assembly)' : '' }}</li>
+            }
+          </ul>
+        </div>
+      }
 
       @if (data.insertInto) {
         <div class="npd-orient" data-testid="npd-orient">
@@ -116,6 +128,8 @@ export interface CadNewPartDialogData {
     .npd .full { width: 100%; }
     .npd-err { color: #e57373; font-size: 12px; margin: 4px 0 0; }
     mat-dialog-actions button mat-spinner { display: inline-block; }
+    .npd-components { font-size: 12px; }
+    .npd-components ul { margin: 4px 0 0; padding-left: 18px; max-height: 160px; overflow: auto; }
     .npd-orient { border: 1px solid rgba(0,0,0,0.12); border-radius: 6px; padding: 8px; margin-top: 4px; }
     .npd-orient-head { font-size: 12px; font-weight: 600; opacity: 0.75; margin-bottom: 6px; }
     .npd-orient-btns { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -146,10 +160,14 @@ export class CadNewPartDialogComponent {
   alignFace() { const n = this.data.insertInto?.orientNormal; if (n) this.orientQuat.set(alignZToNormal(n)); }
   resetOrient() { this.orientQuat.set(IDENTITY_QUAT); }
 
+  /** REQ 1079 — the components of a pasted assembly (null otherwise). */
+  asmSeed = this.data.seed?.scope === 'assembly' ? (this.data.seed.components ?? []) : null;
+
   /** Only the two relevant categories are offered; child-of-assembly mode
-   * (REQ 920) creates plain parts only. */
+   * (REQ 920) creates plain parts only, and a pasted design keeps its kind. */
   pickableCategories = computed(() =>
-    this.categories().filter((c) => this.data.insertInto || this.data.seed
+    this.categories().filter((c) => this.asmSeed ? c.name === 'Assembly'
+      : this.data.insertInto || this.data.seed
       ? c.name === 'Part'
       : (c.name === 'Part' || c.name === 'Assembly')));
   private isAssembly = computed(() =>
@@ -180,6 +198,14 @@ export class CadNewPartDialogComponent {
     if (!nm || !cid) return;
     this.busy.set(true);
     this.error.set('');
+    // REQ 1079 — the server creates the assembly and all its components at once.
+    if (this.asmSeed) {
+      this.asmApi.importBundle(this.data.seed!, nm, this.description().trim() || null).subscribe({
+        next: (r) => this.openEditor(true, r.assembly.partID, r.assembly.id),
+        error: (e) => { this.busy.set(false); this.error.set(this.msg(e, 'Failed to paste the assembly')); },
+      });
+      return;
+    }
     const payload = {
       name: nm,
       description: this.description().trim() || null,
