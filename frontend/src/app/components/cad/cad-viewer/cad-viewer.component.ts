@@ -51,6 +51,7 @@ import type {
   CircleEntity, ArcEntity, ReferenceCandidate,
 } from '../../../cad/lib/types';
 import { findPoint, isProjectedEntity } from '../../../cad/lib/types';
+import { usesTopologyEdges } from '../../../cad/lib/modelEdges';
 import { tessellateCircle, tessellateArc, tessellateEllipse, tessellateSpline, tessellateEntity } from '../../../cad/lib/tessellator';
 import { dimensionRenders, type DimensionRender } from '../../../cad/lib/dimensions';
 import { externalEdgeLinesFromCandidates } from '../../../cad/lib/externalSnap';
@@ -2658,6 +2659,50 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * cursor near — or just past — the face silhouette still grabs the edge
    * rather than dropping the highlight entirely. */
   private readonly SKETCH_EDGE_HOVER_PX = 14;
+  /** REQ 1088 — edge zone in the 3D view when edges are the ONLY armed pick
+   * kind (Fillet / Chamfer, the edge filter). Nothing else competes for the
+   * click, so the zone can be generous. */
+  private readonly EDGE_ONLY_PICK_PX = 12;
+
+  /** True in the 3D view when edges are the only armed pick kind. */
+  private edgeOnlyPick(): boolean {
+    return this.edgePickMode() && !this.facePickMode() && !this.vertexPickMode() && !this.axisPickMode()
+      && this.activeSketchId() === null;
+  }
+
+  /** The edge hit closest to the cursor ray. Raycaster sorts by depth, which
+   * picks the wrong edge when several fall inside a wide zone. In the 3D view
+   * an edge hidden behind a face is skipped unless the display mode draws
+   * hidden edges — what cannot be seen cannot be picked. */
+  private nearestToCursor(hits: THREE.Intersection[]): THREE.Intersection | null {
+    const spec = DISPLAY_MODES[this.displayMode()];
+    const visibleOnly = this.activeSketchId() === null
+      && spec.facesDepth && !spec.showHiddenSolid && !spec.showHiddenDashed;
+    let best: THREE.Intersection | null = null;
+    let bestD = Infinity;
+    for (const h of hits) {
+      const d = this.raycaster.ray.distanceSqToPoint(h.point);
+      if (d >= bestD) continue;
+      if (visibleOnly && this.occluded(h.point)) continue;
+      best = h; bestD = d;
+    }
+    return best;
+  }
+
+  private readonly occlusionRay = new THREE.Raycaster();
+
+  /** True when a face lies between the camera and `point` (orthographic: the
+   * sight line runs along the view direction). */
+  private occluded(point: THREE.Vector3): boolean {
+    const dir = this.raycaster.ray.direction;
+    const depth = point.clone().sub(this.raycaster.ray.origin).dot(dir);
+    this.occlusionRay.ray.origin.copy(point).addScaledVector(dir, -depth);
+    this.occlusionRay.ray.direction.copy(dir);
+    // The edge lies ON its own faces; the margin keeps their meshes (and the
+    // chord sag of a curved neighbour) from counting as cover.
+    this.occlusionRay.far = depth - Math.max(0.05, this.orbitDistance * 0.002);
+    return this.occlusionRay.intersectObjects(this.faceGroup.children, false).length > 0;
+  }
 
   private toSketchCoords(ev: MouseEvent): { x: number; y: number } | null {
     const sketchId = this.activeSketchId();
@@ -3025,15 +3070,15 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     if (this.edgePickMode()) {
       const prevThreshold = this.raycaster.params.Line?.threshold ?? 1;
       this.raycaster.setFromCamera(this.pointer, this.camera);
-      this.raycaster.params.Line = { threshold: this.pixelsToSketchUnits(this.PICK_PX) };  // zoom-adaptive: constant on-screen edge-pick zone
+      this.raycaster.params.Line = { threshold: this.pixelsToSketchUnits(this.edgeOnlyPick() ? this.EDGE_ONLY_PICK_PX : this.PICK_PX) };  // zoom-adaptive: constant on-screen edge-pick zone
       const candidates: THREE.Object3D[] = [];
       for (const set of this.faceEdges.values()) {
         if ((set.front.userData as { edgeId?: string }).edgeId) candidates.push(set.front);
       }
-      const hits = this.raycaster.intersectObjects(candidates, false);
+      const hit = this.nearestToCursor(this.raycaster.intersectObjects(candidates, false));
       this.raycaster.params.Line = { threshold: prevThreshold };
-      if (hits.length > 0) {
-        const ud = hits[0].object.userData as { edgeRecord?: { edgeId: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]]; polylineLength: number } };
+      if (hit) {
+        const ud = hit.object.userData as { edgeRecord?: { edgeId: string; isStraight: boolean; endpoints: [[number, number, number], [number, number, number]]; polylineLength: number } };
         if (ud.edgeRecord) this.zone.run(() => this.edgePicked.emit(ud.edgeRecord!));
         return;
       }
@@ -3213,11 +3258,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     }
     // In-context: other components' edges are Convert targets too.
     if (this.activeSketchId() !== null) candidates.push(...this.overlayEdgeLines.values());
-    const hits = this.raycaster.intersectObjects(candidates, false);
+    const hit = this.nearestToCursor(this.raycaster.intersectObjects(candidates, false));
     this.raycaster.params.Line = { threshold: prevThreshold };
-    const next = hits.length > 0
-      ? ((hits[0].object.userData as { edgeId?: string; overlayKey?: string }).edgeId
-        ?? (hits[0].object.userData as { overlayKey?: string }).overlayKey ?? null)
+    const next = hit
+      ? ((hit.object.userData as { edgeId?: string; overlayKey?: string }).edgeId
+        ?? (hit.object.userData as { overlayKey?: string }).overlayKey ?? null)
       : null;
     if (this.hoveredEdgeId() !== next) this.hoveredEdgeId.set(next);
   }
@@ -3477,7 +3522,10 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     // qualify as "in front" (line/sphere distance includes off-axis
     // distance, so a line drawn right at the silhouette can score
     // slightly larger than the face it sits on).
-    const depthCap = frontFaceDist === Infinity ? Infinity : frontFaceDist + Math.max(0.5, this.orbitDistance * 0.01);
+    // Edges only: the zone is wide, so an edge beside the cursor on a surface
+    // sloping away sits deeper than the face under the cursor — allow for it.
+    const depthCap = frontFaceDist === Infinity ? Infinity : frontFaceDist + Math.max(0.5, this.orbitDistance * 0.01)
+      + (this.edgeOnlyPick() ? this.pixelsToSketchUnits(this.EDGE_ONLY_PICK_PX) : 0);
     const prevFar = this.raycaster.far;
     this.raycaster.far = depthCap;
     try {
@@ -3507,8 +3555,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       // edge zone so the boundary edge near the cursor is preferred over the
       // face's whole-boundary highlight (buffer requested by users).
       if (this.edgePickMode()) {
-        this._updateEdgeHover(this.activeSketchId() !== null ? this.SKETCH_EDGE_HOVER_PX : this.PICK_PX);
-        if (this.hoveredEdgeId() !== null) {
+        const edgeOnly = this.edgeOnlyPick();
+        this._updateEdgeHover(this.activeSketchId() !== null ? this.SKETCH_EDGE_HOVER_PX
+          : edgeOnly ? this.EDGE_ONLY_PICK_PX : this.PICK_PX);
+        // Edges only: a face is not a pick target, so it never highlights.
+        if (this.hoveredEdgeId() !== null || edgeOnly) {
           if (this.hovered() !== null) this.hovered.set(null);
           this._clearHoveredFaceEdges();  // a specific edge wins over the face's edges
           return;
@@ -4009,20 +4060,11 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
     this.faceEdges.clear();
 
     // Edge rendering strategy is picked once per regen:
-    //   - NEW kernel (any topology edge ships a `polyline`): render each
-    //     BRep edge as a single Line from the kernel's analytic sampling.
-    //     Curves are smooth, every edge is drawn exactly once.
-    //   - OLD kernel (no polyline data, every edge marked is_straight):
-    //     fall back to per-face THREE.EdgesGeometry. Curved face boundaries
-    //     come out as chord polylines (the original behavior). This avoids
-    //     drawing a single straight chord across a curve when we can't tell
-    //     where the curve actually goes.
-    // A body with only straight edges ships no polylines at all (part 1692) and
-    // still takes the topology path: each edge is drawn from its endpoints, and
-    // only topology edges carry the ids that edge picking needs.
-    const topoEdges = g.topology?.edges ?? [];
-    const hasPolylineData = topoEdges.length > 0
-      && topoEdges.every(e => e.isStraight || (e.polyline && e.polyline.length >= 2));
+    //   - Topology edges present: render each BRep edge as a single Line —
+    //     the kernel's polyline for a curve, the endpoints otherwise. Only
+    //     these lines carry the ids that edge picking needs.
+    //   - No topology edges: fall back to per-face THREE.EdgesGeometry.
+    const hasPolylineData = usesTopologyEdges(g.topology);
 
     for (const f of g.faces) {
       const geom = new THREE.BufferGeometry();

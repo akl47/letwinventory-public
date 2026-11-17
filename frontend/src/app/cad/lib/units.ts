@@ -75,6 +75,7 @@ export interface ParsedValue {
  *   - mm:               "10mm", "10 mm"
  *   - micrometers:      "200um", "200 µm"
  *   - inches:           "0.5in", "0.5 in", "0.5\""
+ *   - fractions:        "1/8in", "1 1/2 in", "3/4" (REQ 1085)
  *
  * Returns null on garbage input. Whitespace + case-insensitive on the
  * unit suffix.
@@ -112,13 +113,15 @@ export function resolveFieldEntry(typed: string, pristine: string, unit: Unit | 
 }
 
 export function parseUserValue(raw: string, defaultUnit: Unit): ParsedValue | null {
-  const m = raw.trim().match(/^([+-]?\d*\.?\d+)\s*(mm|um|µm|in|")?$/i);
+  // number | fraction "1/8" | mixed number "1 1/2" (REQ 1085), then the unit.
+  const m = raw.trim().match(/^([+-]?)(?:(\d+)\s+(?=\d+\s*\/))?(\d*\.?\d+)(?:\s*\/\s*(\d*\.?\d+))?\s*(mm|um|µm|in|")?$/i);
   if (!m) return null;
-  const n = parseFloat(m[1]);
+  const magnitude = (m[2] ? parseFloat(m[2]) : 0) + parseFloat(m[3]) / (m[4] ? parseFloat(m[4]) : 1);
+  const n = m[1] === '-' ? -magnitude : magnitude;
   if (!isFinite(n)) return null;
   let unit: Unit | null = null;
-  if (m[2]) {
-    const u = m[2].toLowerCase();
+  if (m[5]) {
+    const u = m[5].toLowerCase();
     if (u === 'mm') unit = 'mm';
     else if (u === 'um' || u === 'µm') unit = 'um';
     else if (u === 'in' || u === '"') unit = 'in';

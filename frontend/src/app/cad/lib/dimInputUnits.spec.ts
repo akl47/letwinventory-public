@@ -48,6 +48,13 @@ describe('length field entry (REQ 940)', () => {
     expect(commit('200µm', 'mm')).toBeCloseTo(0.2);
   });
 
+  it('accepts a fraction and shows it as a decimal (REQ 1085)', () => {
+    expect(commit('1/8in', 'mm')).toBeCloseTo(3.175);
+    expect(display(commit('1/8in', 'mm')!, 'in')).toBe('0.125 in');
+    expect(overrideAfter('1/8in', 'mm')).toBe('in');
+    expect(commit('1 1/2', 'in')).toBeCloseTo(38.1);
+  });
+
   it('does NOT silently drop the suffix the way parseFloat did', () => {
     // Regression guard for the original bug.
     expect(parseFloat('0.5in')).toBe(0.5);        // what used to be stored (mm)
