@@ -35,6 +35,20 @@ describe('parseUserValue', () => {
     expect(parseUserValue('500um', 'mm')).toEqual({ valueMm: 0.5, unit: 'um' });
     expect(parseUserValue('500µm', 'mm')).toEqual({ valueMm: 0.5, unit: 'um' });
   });
+  it('reads fractions and mixed numbers (REQ 1085)', () => {
+    expect(parseUserValue('1/8in', 'mm')).toEqual({ valueMm: 3.175, unit: 'in' });
+    expect(parseUserValue('1 / 8 in', 'mm')).toEqual({ valueMm: 3.175, unit: 'in' });
+    expect(parseUserValue('3/4', 'in')?.valueMm).toBeCloseTo(19.05);
+    expect(parseUserValue('3/4', 'mm')).toEqual({ valueMm: 0.75, unit: null });
+    expect(parseUserValue('1 1/2in', 'mm')?.valueMm).toBeCloseTo(38.1);
+    expect(parseUserValue('-1 1/2"', 'mm')?.valueMm).toBeCloseTo(-38.1);
+    expect(parseUserValue('1.5/2mm', 'in')).toEqual({ valueMm: 0.75, unit: 'mm' });
+  });
+  it('rejects malformed fractions', () => {
+    for (const bad of ['1/0', '1/', '/8', '1/2/3', '1 2', '1.5 1/2', '1 /']) {
+      expect(parseUserValue(bad, 'mm')).toBeNull();
+    }
+  });
   it('returns null on unparseable input', () => {
     expect(parseUserValue('abc', 'mm')).toBeNull();
     expect(parseUserValue('10 furlongs', 'mm')).toBeNull();

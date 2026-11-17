@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  emptyFeatureTree, addFeature, removeFeature, updateFeatureParam,
+  emptyFeatureTree, addFeature, removeFeature, updateFeatureParam, setExtrudeKind,
   removeFeaturesReferencingSketch, featureReferencesSketch,
   upgradeFeatureTree, setBodyVisibility, setBodyName, setBodyColor, setRollbackIndex,
   addBodyGroup, renameBodyGroup, ungroupBodies, removeBodyFromGroup, addBodiesToGroup,
@@ -74,6 +74,42 @@ describe('Feature tree (CAD-034, CAD-035, CAD-037)', () => {
       const t0 = emptyFeatureTree();
       const t1 = removeFeature(t0, 'no-such-id');
       expect(t1.features.length).toBe(1);
+    });
+  });
+
+  describe('setExtrudeKind (REQ 1086)', () => {
+    const tree = () => {
+      let t = addFeature(emptyFeatureTree(), { type: 'extrude', sketchId: 's1', distance: 10 });
+      t = addFeature(t, { type: 'cutExtrude', sketchId: 's2', distance: 5 });
+      return addFeature(t, { type: 'extrude', sketchId: 's3', distance: 7, merge: false });
+    };
+
+    it('turns a boss into a cut in place, renaming a default name and dropping merge', () => {
+      const t = tree();
+      const before = t.features[3];
+      const out = setExtrudeKind(t, before.id, 'cutExtrude');
+      expect(out.features.map(f => f.id)).toEqual(t.features.map(f => f.id));
+      expect(out.features[3]).toMatchObject({ type: 'cutExtrude', sketchId: 's3', distance: 7, name: 'Cut-Extrude 2', createdAt: before.createdAt });
+      expect('merge' in out.features[3]).toBe(false);
+      expect(t.features[3].type).toBe('extrude');
+    });
+
+    it('turns a cut into a boss', () => {
+      const t = tree();
+      expect(setExtrudeKind(t, t.features[2].id, 'extrude').features[2]).toMatchObject({ type: 'extrude', name: 'Extrude 3' });
+    });
+
+    it('keeps a user-given name', () => {
+      const t = tree();
+      const id = t.features[1].id;
+      const named = updateFeatureParam(t, id, { name: 'Pocket' });
+      expect(setExtrudeKind(named, id, 'cutExtrude').features[1]).toMatchObject({ type: 'cutExtrude', name: 'Pocket' });
+    });
+
+    it('leaves the tree alone for the same kind or another feature type', () => {
+      const t = tree();
+      expect(setExtrudeKind(t, t.features[1].id, 'extrude')).toBe(t);
+      expect(setExtrudeKind(t, 'f1', 'cutExtrude')).toBe(t);
     });
   });
 

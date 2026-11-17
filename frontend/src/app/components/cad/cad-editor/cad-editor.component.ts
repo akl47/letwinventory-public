@@ -51,7 +51,7 @@ import { cacheCoversRollback } from '../../../cad/lib/rollbackCoverage';
 import type { FeatureTree, Feature, OriginFeature, SketchDocument, SketchId, ModelGeometry, ModelTopology, SketchState, SketchConstraint, ExtrudeFeature, ExtrudeEndCondition, LineEntity, CircleEntity, PointEntity, ChamferFeature, DatumPlaneFeature, PlaneRef, VertexRef, EdgeRef3D, Plane3, ReferenceCandidate, AxisRef, AxisSnapshot } from '../../../cad/lib/types';
 import {
   emptyFeatureTree, addFeature, defaultDatumVisibility,
-  removeFeature, updateFeatureParam, removeFeaturesReferencingSketch,
+  removeFeature, updateFeatureParam, setExtrudeKind, removeFeaturesReferencingSketch,
   featureReferencesSketch, setBodyVisibility, setBodyName, setBodyColor, setRollbackIndex,
   addBodyGroup, renameBodyGroup, ungroupBodies, removeBodyFromGroup, addBodiesToGroup,
 } from '../../../cad/lib/featureTree';
@@ -14550,10 +14550,6 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   facePickActive = computed<boolean>(() => {
     if (this.facePickMode()) return true;
-    // Fillet / Chamfer sidebar accepts face picks too — click a face,
-    // expand to its boundary edges. onFacePicked routes to the blend
-    // handler when the sidebar is open.
-    if (this.edgeBlendSidebar() !== null && this.edgePickMode()) return true;
     // Measure sidebar accepts every entity kind simultaneously.
     if (this.measureSidebar()) return true;
     if (!this.activeSketchId()) return false;
@@ -15231,8 +15227,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
         startCondition, direction2, bodyIds,
       };
       if (ctx.mode !== 'cutExtrude') patch.merge = merge;
-      this.featureTree.set(updateFeatureParam<ExtrudeFeature>(
-        this.featureTree(), ctx.editingFeatureId, patch,
+      this.featureTree.set(setExtrudeKind(
+        updateFeatureParam<ExtrudeFeature>(this.featureTree(), ctx.editingFeatureId, patch),
+        ctx.editingFeatureId, ctx.mode,
       ));
       this._writeExtrudeEquations(ctx.editingFeatureId, !!direction2, startCondition.kind === 'offset');
       this.save();

@@ -103,6 +103,20 @@ export function updateFeatureParam<T extends Feature>(
   };
 }
 
+/** REQ 1086 — switch an extrude between boss and cut in place. A feature still
+ * carrying its default name takes the default for the new kind; a cut has no
+ * merge option. */
+export function setExtrudeKind(tree: FeatureTree, id: string, type: 'extrude' | 'cutExtrude'): FeatureTree {
+  const cur = tree.features.find(f => f.id === id);
+  if (!cur || cur.type === type || (cur.type !== 'extrude' && cur.type !== 'cutExtrude')) return tree;
+  const { merge: _merge, ...rest } = cur as ExtrudeFeature;
+  const next = { ...(type === 'cutExtrude' ? rest : cur), type } as Feature;
+  if (new RegExp(`^${featureKindLabel(cur.type)} \\d+$`).test(cur.name ?? '')) {
+    (next as { name?: string }).name = defaultFeatureName(tree, next);
+  }
+  return { ...tree, features: tree.features.map(f => f.id === id ? next : f) };
+}
+
 // REQ 608: single source of truth for "does this feature consume this
 // sketch?" — used by both the deletion cascade below and the editor's
 // pre-delete dependent scan so the two can never disagree on a kind.
