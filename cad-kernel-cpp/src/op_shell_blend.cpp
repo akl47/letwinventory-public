@@ -20,6 +20,7 @@
 #include "geom_io.hpp"
 #include "blend_corner_refit.hpp"
 #include "shell_hole_fallback.hpp"
+#include "shell_rebuild.hpp"
 
 #include <TopoDS.hxx>
 #include <TopoDS_Shape.hxx>
@@ -71,6 +72,12 @@ double dist3(const std::array<double, 3>& a, const gp_Pnt& b) {
 }
 
 // Centroid of a face via surface mass properties (matches Rust center_of_mass()).
+double shape_volume(const TopoDS_Shape& s) {
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(s, props);
+  return props.Mass();
+}
+
 gp_Pnt face_centroid(const TopoDS_Face& f) {
   GProp_GProps props;
   BRepGProp::SurfaceProperties(f, props);
@@ -289,10 +296,25 @@ json op_buildShell(const json& params) {
     mts.MakeThickSolidByJoin(body, closing_faces, thickness, tolerance);
     mts.Build();
     if (mts.IsDone()) shape = mts.Shape();
-    // Holes whose shell tubes run close to other walls make ByJoin fail or
-    // return an inside-out solid (rendered see-through). Rebuild from the
-    // hole-filled body instead.
-    if (shape.IsNull() || !BRepCheck_Analyzer(shape).IsValid()) {
+    // A sound shell is a valid solid that is actually hollow: ByJoin can also
+    // hand the body back untouched.
+    const double solid_volume = shape_volume(body);
+    auto sound = [&](const TopoDS_Shape& s) {
+      if (s.IsNull() || !BRepCheck_Analyzer(s).IsValid()) return false;
+      const double v = shape_volume(s);
+      return v > 0.0 && (thickness > 0.0 || v < solid_volume * (1.0 - 1.0e-9));
+    };
+    // ByJoin only re-intersects faces that were already neighbours, so it
+    // fails or returns an inside-out solid whenever hollowing changes the
+    // topology (a hole tube or boss running into another wall, a fillet
+    // tighter than the wall). Rebuild the walls patch by patch (REQ 1084).
+    if (!sound(shape)) {
+      TopoDS_Shape alt = shell_by_patches(body, closing_faces, thickness, tolerance);
+      if (!alt.IsNull()) shape = alt;
+    }
+    // Last resort for bodies with holes: shell the hole-filled body and
+    // re-cut the holes as tubes (REQ 1020).
+    if (!sound(shape)) {
       TopoDS_Shape alt = shell_with_hole_tubes(body, closing_faces, thickness, tolerance);
       if (!alt.IsNull()) shape = alt;
     }
@@ -301,13 +323,14 @@ json op_buildShell(const json& params) {
     }
     // An invalid result is a corrupt solid (walls missing or self-crossing),
     // not a shell — report it instead of handing it downstream as success.
-    if (!BRepCheck_Analyzer(shape).IsValid()) {
+    if (!sound(shape)) {
       throw std::runtime_error(
-          "buildShell: OCCT could not hollow this body at " +
+          "buildShell: could not hollow this body at " +
           std::to_string(std::fabs(thickness)) +
-          " mm — the result is not a valid solid. Blended corners are the usual "
-          "cause (a fillet larger than the corner beneath it): shell before "
-          "filleting, reduce the fillet radius, or try a different thickness.");
+          " mm — the walls cannot be rebuilt into a valid solid. Try a different "
+          "thickness, or shell before adding the features nearest the failure "
+          "(a boss or pin narrower than twice the wall, or a blend that only "
+          "partly fits inside the wall).");
     }
   } catch (const Standard_Failure& f) {
     throw std::runtime_error(

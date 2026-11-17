@@ -15,6 +15,7 @@
 // between them (plain, counterbore, countersink, blind or through).
 #pragma once
 
+#include <BRepAlgoAPI_Defeaturing.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopTools_ListOfShape.hxx>
 
@@ -24,3 +25,10 @@
 TopoDS_Shape shell_with_hole_tubes(const TopoDS_Shape& body,
                                    const TopTools_ListOfShape& closing_faces,
                                    double thickness, double tolerance);
+
+/// The faces of `filled` (the result of `defeat`) that stand in for
+/// `closing_faces`, appended to `out`. False when one has no counterpart.
+bool closing_faces_after(BRepAlgoAPI_Defeaturing& defeat,
+                         const TopTools_ListOfShape& closing_faces,
+                         const TopoDS_Shape& filled, double tol,
+                         TopTools_ListOfShape& out);

@@ -20,6 +20,7 @@ set(KERNEL_OP_SOURCES
   src/op_shell_blend.cpp
   src/blend_corner_refit.cpp
   src/shell_hole_fallback.cpp
+  src/shell_rebuild.cpp
   src/op_pattern.cpp
   src/server_limits.cpp
 )

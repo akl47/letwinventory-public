@@ -209,6 +209,39 @@ bool valid_solid(const TopoDS_Shape& s) {
 
 }  // namespace
 
+bool closing_faces_after(BRepAlgoAPI_Defeaturing& defeat,
+                         const TopTools_ListOfShape& closing_faces,
+                         const TopoDS_Shape& filled, double tol,
+                         TopTools_ListOfShape& out) {
+  for (const auto& f : closing_faces) {
+    if (defeat.IsDeleted(f)) {
+      // Removing faces can rebuild a face they bordered (REQ 1050): take
+      // the new body's faces on the same plane, facing the same way.
+      BRepAdaptor_Surface os(TopoDS::Face(f));
+      if (os.GetType() != GeomAbs_Plane) return false;
+      const gp_Pln op = os.Plane();
+      gp_Dir on = op.Axis().Direction();
+      if (f.Orientation() == TopAbs_REVERSED) on.Reverse();
+      const int before = out.Extent();
+      for (TopExp_Explorer fx(filled, TopAbs_FACE); fx.More(); fx.Next()) {
+        const TopoDS_Face g = TopoDS::Face(fx.Current());
+        BRepAdaptor_Surface gs(g);
+        if (gs.GetType() != GeomAbs_Plane) continue;
+        gp_Dir gn = gs.Plane().Axis().Direction();
+        if (g.Orientation() == TopAbs_REVERSED) gn.Reverse();
+        if (gn.Dot(on) < 1.0 - 1e-9 || op.Distance(gs.Plane().Location()) > tol) continue;
+        out.Append(g);
+      }
+      if (out.Extent() == before) return false;
+      continue;
+    }
+    const TopTools_ListOfShape& mod = defeat.Modified(f);
+    if (mod.IsEmpty()) out.Append(f);
+    else for (const auto& m : mod) out.Append(m);
+  }
+  return true;
+}
+
 TopoDS_Shape shell_with_hole_tubes(const TopoDS_Shape& body,
                                    const TopTools_ListOfShape& closing_faces,
                                    double thickness, double tolerance) {
@@ -276,32 +309,7 @@ TopoDS_Shape shell_with_hole_tubes(const TopoDS_Shape& body,
     const TopoDS_Shape filled = defeat.Shape();
     if (!valid_solid(filled)) return {};
     TopTools_ListOfShape closing_filled;
-    for (const auto& f : closing_faces) {
-      if (defeat.IsDeleted(f)) {
-        // Filling the holes can rebuild a face they pierced (REQ 1050): take
-        // the filled body's faces on the same plane, facing the same way.
-        BRepAdaptor_Surface os(TopoDS::Face(f));
-        if (os.GetType() != GeomAbs_Plane) return {};
-        const gp_Pln op = os.Plane();
-        gp_Dir on = op.Axis().Direction();
-        if (f.Orientation() == TopAbs_REVERSED) on.Reverse();
-        const int before = closing_filled.Extent();
-        for (TopExp_Explorer fx(filled, TopAbs_FACE); fx.More(); fx.Next()) {
-          const TopoDS_Face g = TopoDS::Face(fx.Current());
-          BRepAdaptor_Surface gs(g);
-          if (gs.GetType() != GeomAbs_Plane) continue;
-          gp_Dir gn = gs.Plane().Axis().Direction();
-          if (g.Orientation() == TopAbs_REVERSED) gn.Reverse();
-          if (gn.Dot(on) < 1.0 - 1e-9 || op.Distance(gs.Plane().Location()) > tol) continue;
-          closing_filled.Append(g);
-        }
-        if (closing_filled.Extent() == before) return {};
-        continue;
-      }
-      const TopTools_ListOfShape& mod = defeat.Modified(f);
-      if (mod.IsEmpty()) closing_filled.Append(f);
-      else for (const auto& m : mod) closing_filled.Append(m);
-    }
+    if (!closing_faces_after(defeat, closing_faces, filled, tol, closing_filled)) return {};
     BRepOffsetAPI_MakeThickSolid mts;
     mts.MakeThickSolidByJoin(filled, closing_filled, thickness, tolerance);
     mts.Build();
