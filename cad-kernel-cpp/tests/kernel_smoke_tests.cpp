@@ -33,6 +33,7 @@
 #include "../src/server_limits.hpp"
 #include "../src/blend_corner_refit.hpp"
 #include "../src/shell_hole_fallback.hpp"
+#include "../src/shell_rebuild.hpp"
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -473,6 +474,113 @@ int main() {
     }
   }
 
+  // 13. REQ 1084 — shell that rebuilds topology. 40x40x20 boxes hollowed 2mm
+  //     with the bottom removed, in shapes where the offset walls merge or a
+  //     face vanishes. Volumes are analytic (sharp inner corners) or pinned
+  //     against the hole-tube fallback, which agrees on the hole cases.
+  {
+    auto vol = [](const TopoDS_Shape& s) { GProp_GProps g; BRepGProp::VolumeProperties(s, g); return g.Mass(); };
+    auto bottom_of = [](const TopoDS_Shape& body) {
+      TopTools_ListOfShape bottom;
+      for (TopExp_Explorer e(body, TopAbs_FACE); e.More(); e.Next()) {
+        BRepAdaptor_Surface a(TopoDS::Face(e.Current()));
+        if (a.GetType() == GeomAbs_Plane && std::fabs(a.Plane().Location().Z()) < 1e-9 &&
+            std::fabs(a.Plane().Axis().Direction().Z()) > 0.99) bottom.Append(e.Current());
+      }
+      return bottom;
+    };
+    // Fillet the box's straight edges chosen by midpoint and direction.
+    auto fillet = [](const TopoDS_Shape& s, double r, bool vertical, bool top) {
+      BRepFilletAPI_MakeFillet mf(s);
+      for (TopExp_Explorer e(s, TopAbs_EDGE); e.More(); e.Next()) {
+        BRepAdaptor_Curve c(TopoDS::Edge(e.Current()));
+        if (c.GetType() != GeomAbs_Line) continue;
+        const bool is_vertical = std::fabs(c.Line().Direction().Z()) > 0.99;
+        const bool is_top = !is_vertical && c.Value((c.FirstParameter() + c.LastParameter()) / 2).Z() > 19.9;
+        if ((vertical && is_vertical) || (top && is_top)) mf.Add(r, TopoDS::Edge(e.Current()));
+      }
+      return mf.Shape();
+    };
+    auto cyl = [](double x, double y, double z0, double r, double h) {
+      return BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(x, y, z0), gp_Dir(0, 0, 1)), r, h).Shape();
+    };
+    auto expect = [&](const char* name, const TopoDS_Shape& body, double t, double want) {
+      TopoDS_Shape r = shell_by_patches(body, bottom_of(body), t, 1e-3);
+      CHECK(!r.IsNull(), "rebuilt shell (%s) returned null", name);
+      if (r.IsNull()) return;
+      CHECK(BRepCheck_Analyzer(r).IsValid(), "rebuilt shell (%s) is invalid", name);
+      CHECK(std::fabs(vol(r) - want) < 1.0, "rebuilt shell (%s): want ~%.2f, got %.4f", name, want, vol(r));
+    };
+    const TopoDS_Shape box = BRepPrimAPI_MakeBox(40, 40, 20).Shape();
+    const double inner = 36.0 * 36.0 * 18.0;
+
+    // Walls that were never neighbours merge: a Ø6 hole 3mm from a wall
+    // (tube r5 reaches into the 2mm wall), a slot 3mm from a wall, a Ø12
+    // boss 1mm from two walls.
+    expect("hole near wall", BRepAlgoAPI_Cut(box, cyl(6, 20, -1, 3, 30)).Shape(), -2.0, 9446.65);
+    expect("slot near wall", BRepAlgoAPI_Cut(box, BRepPrimAPI_MakeBox(gp_Pnt(3, 10, -1), 4, 20, 30).Shape()).Shape(),
+           -2.0, 10096.0);
+    expect("boss near edge", BRepAlgoAPI_Fuse(box, cyl(7, 7, 19, 6, 11)).Shape(), -2.0, 9300.32);
+
+    // Faces that vanish: fillets tighter than, and equal to, the wall leave
+    // the sharp 36x36x18 hollow.
+    const TopoDS_Shape vert1 = fillet(box, 1.0, true, false);
+    expect("r1 vertical fillets", vert1, -2.0, vol(vert1) - inner);
+    const TopoDS_Shape vert2 = fillet(box, 2.0, true, false);
+    expect("r2 vertical fillets", vert2, -2.0, vol(vert2) - inner);
+    const TopoDS_Shape all1 = fillet(box, 1.0, true, true);
+    expect("r1 fillets all round", all1, -2.0, vol(all1) - inner);
+    expect("r1 fillets all round + hole", BRepAlgoAPI_Cut(all1, cyl(6, 6, -1, 3, 30)).Shape(), -2.0, 9322.24);
+
+    // Outward, the inside corner of a step filleted r1 vanishes instead.
+    {
+      const TopoDS_Shape step = BRepAlgoAPI_Cut(box, BRepPrimAPI_MakeBox(gp_Pnt(-1, -1, 10), 21, 50, 20).Shape());
+      BRepFilletAPI_MakeFillet mf(step);
+      for (TopExp_Explorer e(step, TopAbs_EDGE); e.More(); e.Next()) {
+        BRepAdaptor_Curve c(TopoDS::Edge(e.Current()));
+        const gp_Pnt m = c.Value((c.FirstParameter() + c.LastParameter()) / 2);
+        if (c.GetType() == GeomAbs_Line && std::fabs(c.Line().Direction().Y()) > 0.99 &&
+            std::fabs(m.X() - 20) < 0.01 && std::fabs(m.Z() - 10) < 0.01) mf.Add(1.0, TopoDS::Edge(e.Current()));
+      }
+      expect("outward, r1 inside fillet", mf.Shape(), 2.0, 9783.42);
+    }
+
+    // Where the direct shell works the rebuilt one matches it.
+    {
+      const TopoDS_Shape all5 = fillet(box, 5.0, true, true);
+      BRepOffsetAPI_MakeThickSolid mts;
+      mts.MakeThickSolidByJoin(all5, bottom_of(all5), -2.0, 1e-3);
+      mts.Build();
+      CHECK(mts.IsDone() && BRepCheck_Analyzer(mts.Shape()).IsValid(), "r5 filleted box: direct shell should be valid");
+      if (mts.IsDone()) expect("r5 fillets all round", all5, -2.0, vol(mts.Shape()));
+    }
+
+    // A Ø3 boss is narrower than twice the wall: refused, not hollowed wrongly.
+    {
+      const TopoDS_Shape thin = BRepAlgoAPI_Fuse(box, cyl(20, 20, 19, 1.5, 11)).Shape();
+      CHECK(shell_by_patches(thin, bottom_of(thin), -2.0, 1e-3).IsNull(), "thin boss: rebuilt shell should refuse");
+    }
+
+    // Through buildShell: a pocket 1mm from a wall, which the direct shell
+    // hands back unhollowed (30720), and the slot, which it cannot build.
+    auto shell_op = [&](const TopoDS_Shape& body) {
+      json res = kernel::op_buildShell(json{
+          {"featureId", "t13"},
+          {"aBrep", kernel::brep_to_base64(body)},
+          {"faces", json::array({json{{"centroid", {20, 20, 0}}, {"normal", {0, 0, -1}}}})},
+          {"thickness", -2.0},
+          {"tolerance", 1.0e-3},
+      });
+      return volume_of(res.at("brepBytes").get<std::string>());
+    };
+    const double v_pocket =
+        shell_op(BRepAlgoAPI_Cut(box, BRepPrimAPI_MakeBox(gp_Pnt(3, 10, 12), 8, 20, 20).Shape()).Shape());
+    CHECK(std::fabs(v_pocket - 9504.0) < 1.0, "buildShell pocket near wall: want ~9504, got %.4f", v_pocket);
+    const double v_slot =
+        shell_op(BRepAlgoAPI_Cut(box, BRepPrimAPI_MakeBox(gp_Pnt(3, 10, -1), 4, 20, 30).Shape()).Shape());
+    CHECK(std::fabs(v_slot - 10096.0) < 1.0, "buildShell slot near wall: want ~10096, got %.4f", v_slot);
+  }
+
   // 7. REQ 963 — limit defaults and env overrides.
   CHECK(kernel::max_request_bytes() == 512ull * 1024 * 1024, "default request cap should be 512 MiB");
   setenv("CAD_KERNEL_MAX_REQUEST_BYTES", "1024", 1);
@@ -487,6 +595,6 @@ int main() {
     std::fprintf(stderr, "kernel smoke tests: %d FAILURE(S)\n", g_failures);
     return 1;
   }
-  std::printf("kernel smoke tests OK (extrude, boolean, pinched sweep, pinched shell, hole-tube shell, fillet corner refit, naming, body contacts, limits)\n");
+  std::printf("kernel smoke tests OK (extrude, boolean, pinched sweep, pinched shell, hole-tube shell, fillet corner refit, naming, body contacts, rebuilt shell, limits)\n");
   return 0;
 }
