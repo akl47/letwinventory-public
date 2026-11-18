@@ -75,6 +75,39 @@ describe('measuredDimValue (REQ 922)', () => {
   });
 });
 
+describe('point-to-line dimensions (REQ 1091)', () => {
+  /** rect623 with the left side's length dim swapped for the height as a
+   * point-to-line distance (top-left corner to the bottom line). */
+  function rectPointLine(height: number): SketchState {
+    const st = rect623(109, 158);
+    return {
+      ...st,
+      constraints: st.constraints.map(x => x.id === 'dimL' ? c('dimH', 'point-line-distance', ['p4', 'l5'], height) : x),
+    };
+  }
+
+  it('measures the perpendicular distance from the point to the line', () => {
+    const st = rectPointLine(50);
+    expect(measuredDimValue(st, st.constraints.find(x => x.id === 'dimH')!)).toBeCloseTo(109, 6);
+  });
+
+  it('does not measure a distance to a model edge', () => {
+    const edgeDim: SketchConstraint = { ...c('e', 'point-line-distance', ['p4'], 5), externalRef: { scope: 'local', edgeId: 'datum:y_axis', featureId: 'datum:y_axis' } };
+    expect(measuredDimValue(rect623(109, 158), edgeDim)).toBeNull();
+  });
+
+  it('recovers when only a point-to-line dim jumps', async () => {
+    const jumped = rectPointLine(1168.4);
+    const cold = await solveSketch(jumped);
+    expect(collapsedLines(jumped, cold.state)).toContain('l5');
+    const { result, recovered, collapsed } = await solveWithRecovery(jumped);
+    expect(collapsed).toBe(false);
+    expect(recovered).toBe(true);
+    expect(dist(result.state, 'p4', 'p1')).toBeCloseTo(1168.4, 3);
+    expect(dist(result.state, 'p1', 'p2')).toBeCloseTo(158, 3);
+  });
+});
+
 describe('collapsedLines (REQ 922)', () => {
   it('flags a line that flattened to zero and ignores ones that kept length', () => {
     const before = rect623(109, 158);

@@ -921,3 +921,23 @@ describe('horizontal / vertical between two points', () => {
     expect(findPoint(r.state, 'b')!.y).toBeCloseTo(0, 6);
   });
 });
+
+// REQ 1089 — rotating a text box must survive the re-solve at the angle asked.
+describe('text box rotation holds through a solve', () => {
+  for (const deg of [90, 45, 270]) {
+    it(`stays at ${deg}°`, async () => {
+      const { addTextBoxByCorners, rotateTextBox, emptySketchState } = await import('./store');
+      const t = addTextBoxByCorners(emptySketchState(), 2, 3, 12, 8, 'hi');
+      const res = await solveSketch(rotateTextBox(t.state, t.id, deg));
+      expect(res.status).toBe('ok');
+      const p = (id: string) => findPoint(res.state!, id)!;
+      const [bl, br, , tl] = t.cornerIds.map(p);
+      const angle = (Math.atan2(br.y - bl.y, br.x - bl.x) * 180 / Math.PI + 360) % 360;
+      expect(angle).toBeCloseTo(deg, 4);
+      expect(bl.x).toBeCloseTo(2, 6);
+      expect(bl.y).toBeCloseTo(3, 6);
+      expect(Math.hypot(br.x - bl.x, br.y - bl.y)).toBeCloseTo(10, 6);
+      expect(Math.hypot(tl.x - bl.x, tl.y - bl.y)).toBeCloseTo(5, 6);
+    });
+  }
+});

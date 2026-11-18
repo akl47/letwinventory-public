@@ -53,13 +53,23 @@ export function collapsedLines(before: SketchState, after: SketchState): string[
 }
 
 /** A dim's value measured from CURRENT geometry, or null when the type isn't
- * measurable this way (angle, point-line). Seeds the continuation retry at a
- * value the geometry already satisfies. */
+ * measurable this way (angle, a distance to a model edge). Seeds the
+ * continuation retry at a value the geometry already satisfies. */
 export function measuredDimValue(state: SketchState, c: SketchConstraint): number | null {
   if (c.type === 'radius' || c.type === 'diameter') {
     const e = state.entities.find(en => en.id === c.targets[0]?.entityId);
     if (!e || (e.kind !== 'circle' && e.kind !== 'arc')) return null;
     return c.type === 'diameter' ? e.radius * 2 : e.radius;
+  }
+  if (c.type === 'point-line-distance') {
+    if (c.externalRef || c.targets.length !== 2) return null;
+    const p = findPoint(state, c.targets[0].entityId);
+    const l = state.entities.find(en => en.id === c.targets[1].entityId);
+    if (!p || l?.kind !== 'line') return null;
+    const s = findPoint(state, l.startId), e = findPoint(state, l.endId);
+    const len = s && e ? Math.hypot(e.x - s.x, e.y - s.y) : 0;
+    if (!s || !e || len <= COLLAPSE_TOL) return null;
+    return Math.abs((e.x - s.x) * (p.y - s.y) - (e.y - s.y) * (p.x - s.x)) / len;
   }
   if (c.type !== 'distance' && c.type !== 'horizontal-distance' && c.type !== 'vertical-distance') return null;
   if (c.targets.length !== 2) return null;

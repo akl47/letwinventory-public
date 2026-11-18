@@ -21,11 +21,12 @@ import {
   addRectangleCorners, addRectangleCenter, addRectangle3PtCorner, addRectangle3PtCenter, addParallelogram,
   addPolygon, addSlotStraight, addSlotTab, addSlotStraightCenterpoint, addSlotArc3Pt, addSlotArcCenterpoint,
   addCircle3Points, addArc3Points, addEllipse, addEllipticalArc, addSpline,
-  addParabolaByPoints, addEquationCurve, addText, addTextBoxByCorners, addPartNumberText, textBoxParts, addPicture,
+  addParabolaByPoints, addEquationCurve, addText, addTextBoxByCorners, addPartNumberText, addPicture,
   setConstructionFlag, setConstraintDriven, mergePoints, ORIGIN_POINT_ID,
 } from '../../../cad/lib/store';
 import { solveSketch } from '../../../cad/lib/solver';
 import { solveWithRecovery, collapsedLines } from '../../../cad/lib/solveRecovery';
+import { solveDrag } from '../../../cad/lib/sketchDrag';
 import { extractClosedLoops } from '../../../cad/lib/profile';
 import { pickEntity, distanceToEntity, entityTouchesRect } from '../../../cad/lib/picking';
 import { inferLineEnd, inferAlignment, type InferenceResult, type PendingConstraint, type AlignmentRef } from '../../../cad/lib/inference';
@@ -2339,7 +2340,7 @@ export class CadSketchEditorComponent implements OnDestroy {
       // movable so the solver can't slide them around to satisfy a
       // coincident-with-projected constraint while the user is
       // dragging a free entity tied to them.
-      result = await this._dragSolve(state, dragged);
+      result = await this._dragSolve(state, dragged, this.state());
     } else {
       result = await solveSketch(state, { externalEdges: this._externalEdgeLines() });
     }
@@ -2354,41 +2355,16 @@ export class CadSketchEditorComponent implements OnDestroy {
     if (result.status === 'ok' && !this._solveCollapsed(state, result.state)) this.sketchChanged.emit(result.state);
   }
 
-  /** Solve a drag with the dragged points pinned and curve radii pinned (the
-   * user is translating the anchor; resizing needs an explicit dimension).
-   * First try also holding the OTHER arc/circle centers and construction-line
-   * endpoints — the defining points of slots, tabs, rounded shapes — so
-   * dragging one slot center leaves the other where it is (SW behavior),
-   * except the center of an arc the dragged point ends.
-   * Only when that can't be satisfied are those points freed too.
-   * Projected-entity anchors are never movable: their coords come from the
-   * body's source edge each regen. */
-  private async _dragSolve(state: SketchState, dragged: Set<string>) {
-    const projectedAnchors = this._projectedAnchorPoints(state);
-    const held = new Set<string>();
-    for (const e of state.entities) {
-      if (e.kind === 'arc' || e.kind === 'circle') held.add(e.centerId);
-      else if (e.kind === 'line' && e.construction) { held.add(e.startId); held.add(e.endId); }
-    }
-    // An arc's endpoint can only move with its center (the radius is pinned),
-    // so dragging a slot's rail end carries that cap along.
-    for (const e of state.entities) {
-      if (e.kind === 'arc' && (dragged.has(e.startId) || dragged.has(e.endId))) held.delete(e.centerId);
-    }
-    // A text box is one rigid unit: its corners and centerline must follow the
-    // dragged point. Holding them left nothing free, so PlaneGCS dropped the
-    // box constraints and reported success with the box broken.
-    for (const e of state.entities) {
-      if (e.kind === 'text') for (const id of textBoxParts(state, e.id).points) held.delete(id);
-    }
-    const movable = new Set<string>();
-    for (const e of state.entities) {
-      if (e.kind === 'point' && !dragged.has(e.id) && !projectedAnchors.has(e.id)) movable.add(e.id);
-    }
-    const opts = { pinAllRadii: true, externalEdges: this._externalEdgeLines() };
-    const first = await solveSketch(state, { ...opts, movablePoints: new Set([...movable].filter(id => !held.has(id))) });
-    if (first.status === 'ok') return first;
-    return solveSketch(state, { ...opts, movablePoints: movable });
+  /** Solve a drag — see `solveDrag` (cad/lib/sketchDrag.ts). Projected-entity
+   * anchors are never movable: their coords come from the body's source edge
+   * each regen. */
+  private _dragSolve(state: SketchState, dragged: Set<string>, before: SketchState) {
+    return solveDrag(state, dragged, {
+      determined: this.determinedEntities(),
+      anchors: this._projectedAnchorPoints(state),
+      externalEdges: this._externalEdgeLines(),
+      before,
+    });
   }
 
   /** Apply a rubber-band rectangle as a selection (REQ 863, SW convention):
@@ -5655,7 +5631,7 @@ export class CadSketchEditorComponent implements OnDestroy {
     // keep the last frame the live drag accepted: an unconstrained full solve
     // here is what teleported centers, flipped tangents and resized caps.
     if (dragged?.size) {
-      const r = await this._dragSolve(next, dragged);
+      const r = await this._dragSolve(next, dragged, prev);
       if (id !== this.latestCommitId) return;
       if (r.status === 'ok' && !this._solveCollapsed(next, r.state)) {
         this._recordSolve(r);

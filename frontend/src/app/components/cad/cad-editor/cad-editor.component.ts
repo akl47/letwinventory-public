@@ -1869,7 +1869,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                      type="number" min="0.01" step="0.5"
                      data-testid="fillet-radius-input"
                      [value]="sketchEditor.filletRadius() ?? 5"
-                     (input)="sketchEditor.filletRadius.set(+($any($event.target).value))" />
+                     (input)="setSketchToolNumber(sketchEditor.filletRadius, $any($event.target).value)" />
             </div>
 
             <cad-selection-list
@@ -1945,7 +1945,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                      type="number" min="0.01" step="0.5"
                      data-testid="chamfer-distance-input"
                      [value]="sketchEditor.chamferDistance() ?? 5"
-                     (input)="sketchEditor.chamferDistance.set(+($any($event.target).value))" />
+                     (input)="setSketchToolNumber(sketchEditor.chamferDistance, $any($event.target).value)" />
             </div>
 
             <div class="panel-field active" *ngIf="sketchEditor.chamferModeKind() === 'dist-dist'">
@@ -1957,7 +1957,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                      type="number" min="0.01" step="0.5"
                      data-testid="chamfer-distance2-input"
                      [value]="sketchEditor.chamferDistance2() ?? 5"
-                     (input)="sketchEditor.chamferDistance2.set(+($any($event.target).value))" />
+                     (input)="setSketchToolNumber(sketchEditor.chamferDistance2, $any($event.target).value)" />
             </div>
 
             <div class="panel-field active" *ngIf="sketchEditor.chamferModeKind() === 'dist-angle'">
@@ -1969,7 +1969,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                      type="number" min="1" max="179" step="1"
                      data-testid="chamfer-angle-input"
                      [value]="sketchEditor.chamferAngleDeg() ?? 45"
-                     (input)="sketchEditor.chamferAngleDeg.set(+($any($event.target).value))" />
+                     (input)="setSketchToolNumber(sketchEditor.chamferAngleDeg, $any($event.target).value)" />
               <button class="btn panel-flip"
                       data-testid="chamfer-flip"
                       (click)="sketchEditor.chamferPrimaryLine.set(sketchEditor.chamferPrimaryLine() === 1 ? 2 : 1)">
@@ -2033,7 +2033,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                      type="number" min="0.01" step="0.5"
                      data-testid="offset-distance-input"
                      [value]="sketchEditor.offsetDistance()"
-                     (input)="sketchEditor.offsetDistance.set(+($any($event.target).value))" />
+                     (input)="setSketchToolNumber(sketchEditor.offsetDistance, $any($event.target).value)" />
             </div>
 
             <label class="panel-toggle" data-testid="offset-chain-mode">
@@ -17629,6 +17629,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const next = updateTextEntity(sketch.state, entityId, patch);
     this.doc.set(updateSketchState(this.doc(), sid, next));
     this.save();
+  }
+
+  /** REQ 1090 — a sketch tool-panel number field. A number input reports ''
+   * while the entry is incomplete (a lone "."); storing that as 0 would
+   * re-render the field and wipe what was typed. */
+  setSketchToolNumber(target: { set(v: number): void }, raw: string): void {
+    if (raw !== '') target.set(+raw);
   }
 
   /** Rotate a text box's real geometry to an absolute angle, then re-solve so
