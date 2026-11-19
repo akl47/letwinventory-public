@@ -9,6 +9,12 @@ on:
     branches: [master]
     tags: ['v*']
 
+# REQ 1094: the private mirror skips every test job for the commits a public
+# release produces there — the sync merge ("chore: sync public repo …") and the
+# version bump ("chore: bump private version …", also the head of its tag).
+# That code already ran these tests, so re-running only burns hosted minutes.
+# The condition is repeated on each job: `if` can't read workflow-level env.
+
 jobs:
   # PRs only: no tests run until the branch merges cleanly into master AND has
   # a version label (same rule as require-version-label.yml). Labels are read
@@ -54,7 +60,7 @@ jobs:
   backend-tests:
     name: Backend Tests
     needs: pr-gate
-    if: ${{ !cancelled() }}
+    if: "${{ !cancelled() && (github.repository == 'akl47/letwinventory-public' || github.event_name == 'pull_request' || !(startsWith(github.event.head_commit.message, 'chore: sync public repo') || startsWith(github.event.head_commit.message, 'chore: bump private version'))) }}"
     runs-on: ubuntu-latest
     steps:
       # A failed PR gate fails this job instead of skipping it: GitHub counts
@@ -87,7 +93,7 @@ jobs:
   frontend-tests:
     name: Frontend Tests
     needs: pr-gate
-    if: ${{ !cancelled() }}
+    if: "${{ !cancelled() && (github.repository == 'akl47/letwinventory-public' || github.event_name == 'pull_request' || !(startsWith(github.event.head_commit.message, 'chore: sync public repo') || startsWith(github.event.head_commit.message, 'chore: bump private version'))) }}"
     runs-on: ubuntu-latest
     steps:
       # A failed PR gate fails this job instead of skipping it: GitHub counts
@@ -119,7 +125,7 @@ jobs:
   occt-base:
     name: OCCT base image
     needs: pr-gate
-    if: ${{ !cancelled() && needs.pr-gate.result != 'failure' }}
+    if: "${{ !cancelled() && needs.pr-gate.result != 'failure' && (github.repository == 'akl47/letwinventory-public' || github.event_name == 'pull_request' || !(startsWith(github.event.head_commit.message, 'chore: sync public repo') || startsWith(github.event.head_commit.message, 'chore: bump private version'))) }}"
     permissions:
       contents: read
       packages: write
@@ -129,7 +135,7 @@ jobs:
     name: E2E Tests
     needs: [pr-gate, occt-base]
     # Skipped (private mirror) is fine; only a failed OCCT build blocks.
-    if: ${{ !cancelled() && needs.occt-base.result != 'failure' }}
+    if: "${{ !cancelled() && needs.occt-base.result != 'failure' && (github.repository == 'akl47/letwinventory-public' || github.event_name == 'pull_request' || !(startsWith(github.event.head_commit.message, 'chore: sync public repo') || startsWith(github.event.head_commit.message, 'chore: bump private version'))) }}"
     # Pinned: ubuntu-latest moved to 26.04, which Playwright 1.59 can't install
     # chromium deps for.
     runs-on: ubuntu-24.04
@@ -306,7 +312,7 @@ jobs:
   cad-kernel-e2e:
     name: CAD Kernel E2E (3D features)
     needs: [pr-gate, occt-base]
-    if: ${{ !cancelled() && needs.occt-base.result != 'failure' }}
+    if: "${{ !cancelled() && needs.occt-base.result != 'failure' && (github.repository == 'akl47/letwinventory-public' || github.event_name == 'pull_request' || !(startsWith(github.event.head_commit.message, 'chore: sync public repo') || startsWith(github.event.head_commit.message, 'chore: bump private version'))) }}"
     runs-on: ubuntu-latest
     permissions:
       contents: read
