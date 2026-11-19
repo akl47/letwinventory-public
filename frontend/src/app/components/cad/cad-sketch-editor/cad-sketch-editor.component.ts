@@ -5652,7 +5652,7 @@ export class CadSketchEditorComponent implements OnDestroy {
       // with unmoved geometry — that mismatch corrupts the doc (stored
       // dim ≠ actual distance) and reads as "the edit did nothing".
       // Draw commits keep the current keep-as-drawn behavior.
-      this.errors.showError('That value would collapse part of the sketch to a zero-length line. Dimension or constrain the affected line, then try again.');
+      this.errors.showError('That value would collapse a line to zero length or flip geometry across a dimensioned line. Dimension or constrain the affected geometry, then try again.');
       this.sketchChanged.emit(prev);
     }
   }

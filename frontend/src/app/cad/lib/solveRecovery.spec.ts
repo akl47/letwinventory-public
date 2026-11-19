@@ -7,7 +7,7 @@
 // (zero vectors are parallel to anything). solveWithRecovery must detect
 // that and land the true rectangle instead.
 import { describe, it, expect } from 'vitest';
-import { solveWithRecovery, collapsedLines, measuredDimValue } from './solveRecovery';
+import { solveWithRecovery, collapsedLines, flippedPointLineDims, measuredDimValue } from './solveRecovery';
 import { solveSketch } from './solver';
 import type { SketchState, SketchEntity, SketchConstraint } from './types';
 import { findPoint } from './types';
@@ -105,6 +105,33 @@ describe('point-to-line dimensions (REQ 1091)', () => {
     expect(recovered).toBe(true);
     expect(dist(result.state, 'p4', 'p1')).toBeCloseTo(1168.4, 3);
     expect(dist(result.state, 'p1', 'p2')).toBeCloseTo(158, 3);
+  });
+});
+
+describe('flippedPointLineDims (REQ 1095)', () => {
+  /** A fixed baseline with a point dimensioned 2.5 above it. */
+  function offset(y: number, extra: Partial<SketchConstraint> = {}): SketchState {
+    return {
+      entities: [pt('a', 0, 0), pt('b', 100, 0), ln('base', 'a', 'b'), pt('p', 40, y)],
+      constraints: [{ ...c('off', 'point-line-distance', ['p', 'base'], 2.5), ...extra }],
+    };
+  }
+
+  it('flags a point that crossed to the other side of its line', () => {
+    expect(flippedPointLineDims(offset(2.5), offset(-2.5))).toEqual(['off']);
+  });
+
+  it('ignores a point that stayed on its side', () => {
+    expect(flippedPointLineDims(offset(2.5), offset(40))).toEqual([]);
+  });
+
+  it('ignores a point that starts or ends on the line', () => {
+    expect(flippedPointLineDims(offset(0), offset(-2.5))).toEqual([]);
+    expect(flippedPointLineDims(offset(2.5), offset(0))).toEqual([]);
+  });
+
+  it('ignores driven dims', () => {
+    expect(flippedPointLineDims(offset(2.5, { driven: true }), offset(-2.5, { driven: true }))).toEqual([]);
   });
 });
 

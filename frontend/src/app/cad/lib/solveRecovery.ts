@@ -52,6 +52,39 @@ export function collapsedLines(before: SketchState, after: SketchState): string[
   return out;
 }
 
+/** Signed perpendicular offset of a point-to-line dim's point from its line,
+ * or null when it can't be measured (model-edge dim, zero-length line). */
+function pointLineOffset(state: SketchState, c: SketchConstraint): number | null {
+  if (c.type !== 'point-line-distance' || c.externalRef || c.targets.length !== 2) return null;
+  const p = findPoint(state, c.targets[0].entityId);
+  const l = state.entities.find(en => en.id === c.targets[1].entityId);
+  if (!p || l?.kind !== 'line') return null;
+  const s = findPoint(state, l.startId), e = findPoint(state, l.endId);
+  const len = s && e ? Math.hypot(e.x - s.x, e.y - s.y) : 0;
+  if (!s || !e || len <= COLLAPSE_TOL) return null;
+  return ((e.x - s.x) * (p.y - s.y) - (e.y - s.y) * (p.x - s.x)) / len;
+}
+
+/** Ids of driving point-to-line dims whose point ended up on the OTHER side
+ * of its line (REQ 1095). The solver's distance is unsigned, so a big jump
+ * can satisfy one by mirroring geometry across the line. */
+export function flippedPointLineDims(before: SketchState, after: SketchState): string[] {
+  const out: string[] = [];
+  for (const c of before.constraints) {
+    if (c.driven) continue;
+    const b = pointLineOffset(before, c), a = pointLineOffset(after, c);
+    if (b === null || a === null) continue;
+    if (Math.abs(b) > COLLAPSE_TOL && Math.abs(a) > COLLAPSE_TOL && b * a < 0) out.push(c.id);
+  }
+  return out;
+}
+
+/** A solve that satisfied its constraints the wrong way: a line collapsed or
+ * a point-to-line dim changed side. */
+function degenerate(before: SketchState, after: SketchState): boolean {
+  return collapsedLines(before, after).length > 0 || flippedPointLineDims(before, after).length > 0;
+}
+
 /** A dim's value measured from CURRENT geometry, or null when the type isn't
  * measurable this way (angle, a distance to a model edge). Seeds the
  * continuation retry at a value the geometry already satisfies. */
@@ -62,14 +95,8 @@ export function measuredDimValue(state: SketchState, c: SketchConstraint): numbe
     return c.type === 'diameter' ? e.radius * 2 : e.radius;
   }
   if (c.type === 'point-line-distance') {
-    if (c.externalRef || c.targets.length !== 2) return null;
-    const p = findPoint(state, c.targets[0].entityId);
-    const l = state.entities.find(en => en.id === c.targets[1].entityId);
-    if (!p || l?.kind !== 'line') return null;
-    const s = findPoint(state, l.startId), e = findPoint(state, l.endId);
-    const len = s && e ? Math.hypot(e.x - s.x, e.y - s.y) : 0;
-    if (!s || !e || len <= COLLAPSE_TOL) return null;
-    return Math.abs((e.x - s.x) * (p.y - s.y) - (e.y - s.y) * (p.x - s.x)) / len;
+    const d = pointLineOffset(state, c);
+    return d === null ? null : Math.abs(d);
   }
   if (c.type !== 'distance' && c.type !== 'horizontal-distance' && c.type !== 'vertical-distance') return null;
   if (c.targets.length !== 2) return null;
@@ -99,7 +126,7 @@ export async function solveWithRecovery(
   state: SketchState, opts?: SolveOptions, stepCounts: number[] = [4, 12],
 ): Promise<RecoveredSolve> {
   const result = await solveSketch(state, opts);
-  if (result.status !== 'ok' || collapsedLines(state, result.state).length === 0) {
+  if (result.status !== 'ok' || !degenerate(state, result.state)) {
     return { result, recovered: false, collapsed: false };
   }
   const retry = await solveByContinuation(state, opts, stepCounts);
@@ -135,7 +162,7 @@ export async function solveByContinuation(
         }),
       };
       const r = await solveSketch(stepState, opts);
-      if (r.status !== 'ok' || collapsedLines(stepState, r.state).length > 0) continue outer;
+      if (r.status !== 'ok' || degenerate(next, r.state)) continue outer;
       cur = r.state;
       last = r;
     }

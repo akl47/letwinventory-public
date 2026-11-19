@@ -440,6 +440,23 @@ function translateConstraint(state: SketchState, c: SketchConstraint): SketchPri
       if (c.externalRef) return [];
       const p = at(0), l = at(1);
       if (!p || !l || l.kind !== 'line') return [];
+      // REQ 1095: p2l_distance is unsigned, so a big jump can land the point
+      // on the other side of the line. When the line is constrained
+      // horizontal/vertical the distance is a coordinate difference — drive
+      // that instead, signed to the point's current side.
+      const axis = state.constraints.find(k => !k.driven && k.targets.length === 1 && k.targets[0].entityId === l.id
+        && (k.type === 'horizontal' || k.type === 'vertical'))?.type;
+      const ls = findPoint(state, l.startId);
+      if (axis && ls && p.kind === 'point') {
+        const prop = axis === 'horizontal' ? 'y' : 'x';
+        const mag = Math.abs(c.value ?? 0);
+        return [{
+          id: c.id, type: 'difference',
+          param1: { o_id: ls.id, prop },
+          param2: { o_id: p.id, prop },
+          difference: p[prop] >= ls[prop] ? mag : -mag,
+        }];
+      }
       return [{ id: c.id, type: 'p2l_distance', p_id: p.id, l_id: l.id, distance: c.value ?? 0 }];
     }
     case 'arc-length': {

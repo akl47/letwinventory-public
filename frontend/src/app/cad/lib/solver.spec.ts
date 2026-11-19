@@ -675,6 +675,27 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
     expect(Math.abs(Math.abs(p.y) - 7)).toBeLessThan(1e-2);
   });
 
+  // REQ 1095 — on a horizontal/vertical line the distance is signed to the
+  // point's current side, so a jump past the line can't mirror the point.
+  it.each([
+    ['horizontal', 'y', 1, 7], ['horizontal', 'y', -1, -7],
+    ['vertical', 'x', 1, 7], ['vertical', 'x', -1, -7],
+  ] as const)('point-line-distance on a %s line keeps the point on its side (%s start %d)', async (axis, prop, start, expected) => {
+    const end = axis === 'horizontal' ? pt('b', 10, 0) : pt('b', 0, 10);
+    const state: SketchState = {
+      entities: [
+        pt('a', 0, 0, true), end,
+        ln('l', 'a', 'b'),
+        axis === 'horizontal' ? pt('p', 5, start) : pt('p', start, 5),
+      ],
+      constraints: [c('h', axis, ['l']), c('cpld', 'point-line-distance', ['p', 'l'], 7)],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const p = pointsOf(res.state).find(q => q.id === 'p')!;
+    expect(p[prop]).toBeCloseTo(expected, 2);
+  });
+
   it('chord-distance drives the straight-line distance between an arc’s endpoints', async () => {
     // Center at origin, start at (5, 0), end somewhere on the radius
     // circle. The chord-distance constraint pulls the chord length to
