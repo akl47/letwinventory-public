@@ -16740,6 +16740,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private saveInFlight = false;
   /** A debounced save fired while another was in flight; sent once it settles. */
   private saveQueued = false;
+  /** REQ 1096 — bumped when the checkout is given up; a save started under an
+   * older value is stale and its response is ignored. */
+  private saveEpoch = 0;
+
+  /** REQ 1096 — drop every scheduled, queued or in-flight save: the edits
+   * they carry were discarded with the checkout. */
+  private _abandonSaves() {
+    this.saveEpoch++;
+    if (this.debouncedSave) clearTimeout(this.debouncedSave);
+    this.debouncedSave = null;
+    this.pendingSaveOpts = null;
+    this.saveInFlight = false;
+    this.saveQueued = false;
+    this.regenOwed = false;
+  }
 
   /** REQ 991 — a save got no response, so whether it landed is unknown. Re-read
    * the model: server holds exactly what we sent → it landed, adopt its token;
@@ -16835,6 +16850,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const m = this.model();
     if (!m) return;
     this.debouncedSave = null;
+    // REQ 1096 — nothing to save into once the checkout is gone.
+    if (this.readonly()) return;
     // One save on the wire at a time: a second PUT would carry the token from
     // BEFORE the first's response and trip DOC_CONFLICT against ourselves.
     // It runs when the in-flight one settles, reading the then-current doc.
@@ -16848,12 +16865,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // their responses refresh asm.assembly (not model), so read it there.
     const sentToken = ((this.assemblyMode() ? this.asm.assembly()?.lastContentSavedAt : undefined) ?? m.lastContentSavedAt) ?? null;
     this.saveInFlight = true;
+    const epoch = this.saveEpoch;
     // REQ 911 — assembly SKELETON saves go to the assembly endpoint (the
     // part update endpoint rejects assemblies). Same lock/conflict error
     // handling as the part path below.
     if (this.assemblyMode()) {
       this.assemblyApi.updateSkeleton(m.id, { ...sent, clientSavedAt: sentToken }).subscribe({
         next: updated => {
+          if (epoch !== this.saveEpoch) return;
           // Keep the sync key current so the mirror effect doesn't re-adopt
           // (branch/baseCommit unchanged by a content save).
           this.asm.assembly.set(updated);
@@ -16864,6 +16883,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           if (regenOwed || (!skipRegen && this.activeSketchId() === null)) this.asm.regenerate();
         },
         error: err => {
+          if (epoch !== this.saveEpoch) return;
           if (regenOwed) this.regenOwed = true;
           // REQ 991 — no response: the server may have applied it. Resolve
           // that before anything else; the save stays "in flight" meanwhile.
@@ -16898,6 +16918,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // which passes the lock check) saved content since we last synced.
     this.cadApi.update(m.id, { ...sent, clientSavedAt: sentToken }).subscribe({
         next: updated => {
+          if (epoch !== this.saveEpoch) return;
           this.model.set(updated);
           this._saveSettled();
           // Regen is skipped while the user is inside a sketch — the
@@ -16909,6 +16930,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           if (regenOwed || (!skipRegen && this.activeSketchId() === null)) this.regenerate('save');
         },
         error: err => {
+          if (epoch !== this.saveEpoch) return;
           if (regenOwed) this.regenOwed = true;
           // REQ 991 — no response: the server may have applied it. Resolve
           // that before anything else; the save stays "in flight" meanwhile.
@@ -17821,6 +17843,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       );
       if (!ok) return;
     }
+    this._abandonSaves();
     this.vcsApi.undoCheckout(m.id).subscribe({
       next: updated => { this.applyModelUpdate(updated, 'bootstrap'); this.loadCommits(); this.loadWorkflow(); },
       error: err => this.errors.showError(err?.error?.error || 'Undo checkout failed'),
