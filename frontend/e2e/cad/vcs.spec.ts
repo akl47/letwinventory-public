@@ -84,6 +84,26 @@ test('undo checkout reverts uncommitted edits', async ({ page }) => {
   await expect.poll(async () => (await apiModel()).lockedByUserID, { timeout: 10_000 }).toBeFalsy();
 });
 
+// REQ 1096 — the save scheduled by the last edit must not outlive the
+// checkout: it used to arrive after the lock was released and make the
+// editor check the model out again on its own.
+test('undo checkout right after an edit does not check out again', async ({ page }) => {
+  await openEditor(page, PART_ID);
+  await ensureCheckedOut(page);
+  await enterSketchOnXY(page);
+  await drawOneLine(page);
+  await exitSketch(page);
+
+  await openFileTab(page);
+  page.once('dialog', (d) => d.accept());
+  await page.locator('[data-testid="action-undo-checkout"]').click();
+  await expect.poll(async () => (await apiModel()).lockedByUserID, { timeout: 10_000 }).toBeFalsy();
+  // Well past the 500ms save debounce plus a lock-recovery round trip.
+  await page.waitForTimeout(3000);
+  expect((await apiModel()).lockedByUserID).toBeFalsy();
+  await expect(page.locator('[data-testid="action-checkin"]')).toBeDisabled();
+});
+
 test('release to main mints the revision, locks the model, and protects main', async ({ page }) => {
   await openEditor(page, PART_ID);
   // Must be clean + checked in before release (previous tests left it so).

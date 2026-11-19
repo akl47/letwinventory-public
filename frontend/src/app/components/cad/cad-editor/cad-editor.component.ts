@@ -1869,7 +1869,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                      type="number" min="0.01" step="0.5"
                      data-testid="fillet-radius-input"
                      [value]="sketchEditor.filletRadius() ?? 5"
-                     (input)="sketchEditor.filletRadius.set(+($any($event.target).value))" />
+                     (input)="setSketchToolNumber(sketchEditor.filletRadius, $any($event.target).value)" />
             </div>
 
             <cad-selection-list
@@ -1945,7 +1945,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                      type="number" min="0.01" step="0.5"
                      data-testid="chamfer-distance-input"
                      [value]="sketchEditor.chamferDistance() ?? 5"
-                     (input)="sketchEditor.chamferDistance.set(+($any($event.target).value))" />
+                     (input)="setSketchToolNumber(sketchEditor.chamferDistance, $any($event.target).value)" />
             </div>
 
             <div class="panel-field active" *ngIf="sketchEditor.chamferModeKind() === 'dist-dist'">
@@ -1957,7 +1957,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                      type="number" min="0.01" step="0.5"
                      data-testid="chamfer-distance2-input"
                      [value]="sketchEditor.chamferDistance2() ?? 5"
-                     (input)="sketchEditor.chamferDistance2.set(+($any($event.target).value))" />
+                     (input)="setSketchToolNumber(sketchEditor.chamferDistance2, $any($event.target).value)" />
             </div>
 
             <div class="panel-field active" *ngIf="sketchEditor.chamferModeKind() === 'dist-angle'">
@@ -1969,7 +1969,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                      type="number" min="1" max="179" step="1"
                      data-testid="chamfer-angle-input"
                      [value]="sketchEditor.chamferAngleDeg() ?? 45"
-                     (input)="sketchEditor.chamferAngleDeg.set(+($any($event.target).value))" />
+                     (input)="setSketchToolNumber(sketchEditor.chamferAngleDeg, $any($event.target).value)" />
               <button class="btn panel-flip"
                       data-testid="chamfer-flip"
                       (click)="sketchEditor.chamferPrimaryLine.set(sketchEditor.chamferPrimaryLine() === 1 ? 2 : 1)">
@@ -2033,7 +2033,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                      type="number" min="0.01" step="0.5"
                      data-testid="offset-distance-input"
                      [value]="sketchEditor.offsetDistance()"
-                     (input)="sketchEditor.offsetDistance.set(+($any($event.target).value))" />
+                     (input)="setSketchToolNumber(sketchEditor.offsetDistance, $any($event.target).value)" />
             </div>
 
             <label class="panel-toggle" data-testid="offset-chain-mode">
@@ -16740,6 +16740,21 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   private saveInFlight = false;
   /** A debounced save fired while another was in flight; sent once it settles. */
   private saveQueued = false;
+  /** REQ 1096 — bumped when the checkout is given up; a save started under an
+   * older value is stale and its response is ignored. */
+  private saveEpoch = 0;
+
+  /** REQ 1096 — drop every scheduled, queued or in-flight save: the edits
+   * they carry were discarded with the checkout. */
+  private _abandonSaves() {
+    this.saveEpoch++;
+    if (this.debouncedSave) clearTimeout(this.debouncedSave);
+    this.debouncedSave = null;
+    this.pendingSaveOpts = null;
+    this.saveInFlight = false;
+    this.saveQueued = false;
+    this.regenOwed = false;
+  }
 
   /** REQ 991 — a save got no response, so whether it landed is unknown. Re-read
    * the model: server holds exactly what we sent → it landed, adopt its token;
@@ -16835,6 +16850,8 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const m = this.model();
     if (!m) return;
     this.debouncedSave = null;
+    // REQ 1096 — nothing to save into once the checkout is gone.
+    if (this.readonly()) return;
     // One save on the wire at a time: a second PUT would carry the token from
     // BEFORE the first's response and trip DOC_CONFLICT against ourselves.
     // It runs when the in-flight one settles, reading the then-current doc.
@@ -16848,12 +16865,14 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // their responses refresh asm.assembly (not model), so read it there.
     const sentToken = ((this.assemblyMode() ? this.asm.assembly()?.lastContentSavedAt : undefined) ?? m.lastContentSavedAt) ?? null;
     this.saveInFlight = true;
+    const epoch = this.saveEpoch;
     // REQ 911 — assembly SKELETON saves go to the assembly endpoint (the
     // part update endpoint rejects assemblies). Same lock/conflict error
     // handling as the part path below.
     if (this.assemblyMode()) {
       this.assemblyApi.updateSkeleton(m.id, { ...sent, clientSavedAt: sentToken }).subscribe({
         next: updated => {
+          if (epoch !== this.saveEpoch) return;
           // Keep the sync key current so the mirror effect doesn't re-adopt
           // (branch/baseCommit unchanged by a content save).
           this.asm.assembly.set(updated);
@@ -16864,6 +16883,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           if (regenOwed || (!skipRegen && this.activeSketchId() === null)) this.asm.regenerate();
         },
         error: err => {
+          if (epoch !== this.saveEpoch) return;
           if (regenOwed) this.regenOwed = true;
           // REQ 991 — no response: the server may have applied it. Resolve
           // that before anything else; the save stays "in flight" meanwhile.
@@ -16898,6 +16918,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // which passes the lock check) saved content since we last synced.
     this.cadApi.update(m.id, { ...sent, clientSavedAt: sentToken }).subscribe({
         next: updated => {
+          if (epoch !== this.saveEpoch) return;
           this.model.set(updated);
           this._saveSettled();
           // Regen is skipped while the user is inside a sketch — the
@@ -16909,6 +16930,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
           if (regenOwed || (!skipRegen && this.activeSketchId() === null)) this.regenerate('save');
         },
         error: err => {
+          if (epoch !== this.saveEpoch) return;
           if (regenOwed) this.regenOwed = true;
           // REQ 991 — no response: the server may have applied it. Resolve
           // that before anything else; the save stays "in flight" meanwhile.
@@ -17631,6 +17653,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     this.save();
   }
 
+  /** REQ 1090 — a sketch tool-panel number field. A number input reports ''
+   * while the entry is incomplete (a lone "."); storing that as 0 would
+   * re-render the field and wipe what was typed. */
+  setSketchToolNumber(target: { set(v: number): void }, raw: string): void {
+    if (raw !== '') target.set(+raw);
+  }
+
   /** Rotate a text box's real geometry to an absolute angle, then re-solve so
    * the centerline midpoints re-pin and everything stays a rigid rectangle. */
   private async _rotateTextBox(sid: string, entityId: string, deg: number): Promise<void> {
@@ -17814,6 +17843,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
       );
       if (!ok) return;
     }
+    this._abandonSaves();
     this.vcsApi.undoCheckout(m.id).subscribe({
       next: updated => { this.applyModelUpdate(updated, 'bootstrap'); this.loadCommits(); this.loadWorkflow(); },
       error: err => this.errors.showError(err?.error?.error || 'Undo checkout failed'),

@@ -272,9 +272,11 @@ export function rotateTextBox(state: SketchState, textId: string, rotationDeg: n
     x: bl.x + (p.x - bl.x) * c - (p.y - bl.y) * sn,
     y: bl.y + (p.x - bl.x) * sn + (p.y - bl.y) * c,
   });
-  // Rotate the three non-anchor corners; the centerline midpoints follow via
-  // their midpoint constraints when the caller re-solves.
-  const rotateIds = new Set([brId, trId, tlId]);
+  // Rotate everything but the anchor — the centerline's midpoints included.
+  // Left behind, they pull the box part-way back when the caller re-solves and
+  // the text lands at an arbitrary angle (REQ 1089).
+  const rotateIds = new Set(textBoxParts(state, textId).points);
+  rotateIds.delete(blId);
   const entities = state.entities.map(en => {
     if (en.kind === 'point' && rotateIds.has(en.id)) {
       const r = rot(en);
@@ -289,7 +291,8 @@ export function rotateTextBox(state: SketchState, textId: string, rotationDeg: n
   // rigid rectangle's own perpendicular/parallel constraints keep the box
   // rectangular at the new angle, which becomes a free DOF — stable because
   // nothing drives it), and restore horizontal when rotation returns to level
-  // (0° or 180°, where the baseline genuinely is horizontal).
+  // (0° or 180°, where the baseline genuinely is horizontal). Upright (90° or
+  // 270°) pins it `vertical` the same way.
   const baseId = state.entities.find(e =>
     e.kind === 'line'
     && ((e.startId === blId && e.endId === brId) || (e.startId === brId && e.endId === blId)))?.id;
@@ -298,7 +301,7 @@ export function rotateTextBox(state: SketchState, textId: string, rotationDeg: n
     next = {
       ...next,
       constraints: next.constraints.filter(c =>
-        !(c.type === 'horizontal' && c.targets.length === 1 && c.targets[0].entityId === baseId)),
+        !((c.type === 'horizontal' || c.type === 'vertical') && c.targets.length === 1 && c.targets[0].entityId === baseId)),
     };
     // Folded distance to the nearest multiple of 180° (review B15–22): the
     // plain `norm % 180 < 0.5` test missed angles just BELOW the fold —
@@ -306,6 +309,7 @@ export function rotateTextBox(state: SketchState, textId: string, rotationDeg: n
     const m = norm % 180;
     const level = Math.min(m, 180 - m) < 0.5;
     if (level) next = addConstraint(next, 'horizontal', [baseId]).state;
+    else if (Math.abs(m - 90) < 0.5) next = addConstraint(next, 'vertical', [baseId]).state;
   }
   return next;
 }

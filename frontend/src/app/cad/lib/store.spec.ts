@@ -920,6 +920,38 @@ describe('Sketch store (CAD-010, CAD-011, CAD-018, CAD-033, REQ 559–561)', () 
     });
   });
 
+  describe('rotateTextBox rigid rotation (REQ 1089)', () => {
+    const pos = (s: SketchState, id: string) => {
+      const p = s.entities.find(e => e.id === id) as { x: number; y: number };
+      return [+p.x.toFixed(9), +p.y.toFixed(9)];
+    };
+
+    it('turns corners AND centerline ends 90° about the bottom-left corner', () => {
+      const t = addTextBoxByCorners(emptySketchState(), 2, 3, 12, 8, 'hi');
+      const [bl, br, tr, tl] = t.cornerIds;
+      const mids = textBoxParts(t.state, t.id).points.filter(id => !t.cornerIds.includes(id));
+      const r = rotateTextBox(t.state, t.id, 90);
+      expect(pos(r, bl)).toEqual([2, 3]);
+      expect(pos(r, br)).toEqual([2, 13]);
+      expect(pos(r, tr)).toEqual([-3, 13]);
+      expect(pos(r, tl)).toEqual([-3, 3]);
+      expect(mids.map(id => pos(r, id)).sort()).toEqual([[-3, 8], [2, 8]]);
+      expect((r.entities.find(e => e.id === t.id) as { rotation?: number }).rotation).toBe(90);
+    });
+
+    it('pins the baseline vertical when upright and drops the pin when tilted', () => {
+      const t = addTextBoxByCorners(emptySketchState(), 0, 0, 10, 5, 'hi');
+      const pins = (s: SketchState) => s.constraints
+        .filter(c => (c.type === 'horizontal' || c.type === 'vertical') && c.targets[0].entityId === t.lineIds[0])
+        .map(c => c.type);
+      const up = rotateTextBox(t.state, t.id, 90);
+      expect(pins(up)).toEqual(['vertical']);
+      expect(pins(rotateTextBox(up, t.id, 270))).toEqual(['vertical']);
+      expect(pins(rotateTextBox(up, t.id, 45))).toEqual([]);
+      expect(pins(rotateTextBox(up, t.id, 0))).toEqual(['horizontal']);
+    });
+  });
+
   describe('rotateTextBox level detection (review B15–22)', () => {
     // The baseline's `horizontal` pin must come back whenever the box lands
     // level — including angles just BELOW 180°/360°, which the old

@@ -675,6 +675,27 @@ describe('Sketch solver: B.2 geometric constraints (REQs 582–589)', () => {
     expect(Math.abs(Math.abs(p.y) - 7)).toBeLessThan(1e-2);
   });
 
+  // REQ 1095 — on a horizontal/vertical line the distance is signed to the
+  // point's current side, so a jump past the line can't mirror the point.
+  it.each([
+    ['horizontal', 'y', 1, 7], ['horizontal', 'y', -1, -7],
+    ['vertical', 'x', 1, 7], ['vertical', 'x', -1, -7],
+  ] as const)('point-line-distance on a %s line keeps the point on its side (%s start %d)', async (axis, prop, start, expected) => {
+    const end = axis === 'horizontal' ? pt('b', 10, 0) : pt('b', 0, 10);
+    const state: SketchState = {
+      entities: [
+        pt('a', 0, 0, true), end,
+        ln('l', 'a', 'b'),
+        axis === 'horizontal' ? pt('p', 5, start) : pt('p', start, 5),
+      ],
+      constraints: [c('h', axis, ['l']), c('cpld', 'point-line-distance', ['p', 'l'], 7)],
+    };
+    const res = await solveSketch(pinned(state));
+    expect(res.status).toBe('ok');
+    const p = pointsOf(res.state).find(q => q.id === 'p')!;
+    expect(p[prop]).toBeCloseTo(expected, 2);
+  });
+
   it('chord-distance drives the straight-line distance between an arc’s endpoints', async () => {
     // Center at origin, start at (5, 0), end somewhere on the radius
     // circle. The chord-distance constraint pulls the chord length to
@@ -920,4 +941,24 @@ describe('horizontal / vertical between two points', () => {
     expect(r.status).toBe('ok');
     expect(findPoint(r.state, 'b')!.y).toBeCloseTo(0, 6);
   });
+});
+
+// REQ 1089 — rotating a text box must survive the re-solve at the angle asked.
+describe('text box rotation holds through a solve', () => {
+  for (const deg of [90, 45, 270]) {
+    it(`stays at ${deg}°`, async () => {
+      const { addTextBoxByCorners, rotateTextBox, emptySketchState } = await import('./store');
+      const t = addTextBoxByCorners(emptySketchState(), 2, 3, 12, 8, 'hi');
+      const res = await solveSketch(rotateTextBox(t.state, t.id, deg));
+      expect(res.status).toBe('ok');
+      const p = (id: string) => findPoint(res.state!, id)!;
+      const [bl, br, , tl] = t.cornerIds.map(p);
+      const angle = (Math.atan2(br.y - bl.y, br.x - bl.x) * 180 / Math.PI + 360) % 360;
+      expect(angle).toBeCloseTo(deg, 4);
+      expect(bl.x).toBeCloseTo(2, 6);
+      expect(bl.y).toBeCloseTo(3, 6);
+      expect(Math.hypot(br.x - bl.x, br.y - bl.y)).toBeCloseTo(10, 6);
+      expect(Math.hypot(tl.x - bl.x, tl.y - bl.y)).toBeCloseTo(5, 6);
+    });
+  }
 });
