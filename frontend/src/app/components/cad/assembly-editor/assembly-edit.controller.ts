@@ -117,6 +117,20 @@ export class AssemblyEditController {
     if (next.has(scopedBodyId)) next.delete(scopedBodyId); else next.add(scopedBodyId);
     this.hiddenComponentBodies.set(next);
   }
+  /** REQ 1098 — see-through component bodies (scoped ids), render-only. */
+  transparentComponentBodies = signal<Set<string>>(new Set<string>());
+  setBodiesTransparent(scopedBodyIds: string[], transparent: boolean) {
+    const next = new Set(this.transparentComponentBodies());
+    for (const id of scopedBodyIds) { if (transparent) next.add(id); else next.delete(id); }
+    this.transparentComponentBodies.set(next);
+  }
+  instanceBodyIds(instanceId: string): string[] {
+    return (this.regen()?.bodies ?? []).filter((b) => b.instanceId.split('#')[0] === instanceId).map((b) => b.id);
+  }
+  instanceTransparent(instanceId: string): boolean {
+    const ids = this.instanceBodyIds(instanceId);
+    return ids.length > 0 && ids.every((id) => this.transparentComponentBodies().has(id));
+  }
   /** Per-component "Origin" group expansion (nested under the component row). */
   expandedComponentOrigins = signal<Set<string>>(new Set<string>());
   componentOriginExpanded = (instanceId: string) => this.expandedComponentOrigins().has(instanceId);

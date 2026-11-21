@@ -34,14 +34,17 @@ function makeRelease(binding) {
     // Freeze OUTSIDE the transaction: it drives a full kernel regeneration
     // (seconds), and its objects are content-addressed — an aborted release
     // leaves only unreachable objects for GC, never inconsistency.
+    const t0 = Date.now();
     const treeHash = await binding.serialize(repo, binding.docOf(model), db);
+    const t1 = Date.now();
     const frozen = await binding.freeze.freezeGeometry(repo, model, { kernelClient }, db);
+    const t2 = Date.now();
 
     // Atomic + compare-and-swap (REQ 901): commit, write-once tag, ref
     // advance, and model row land together; the ref only advances from the
     // head this release chained on, and a raced duplicate tag rolls the
     // whole release back (unique ref index turns the race into an error).
-    return vcs.inTransaction(db, async () => {
+    const out = await vcs.inTransaction(db, async () => {
       const head = await vcs.getRef(repo, branch, db);
       // `parents` override lets a branch→main release chain off the BRANCH head so
       // the branch's commits become ancestors of main (git-style merge).
@@ -65,6 +68,8 @@ function makeRelease(binding) {
       await model.update({ baseCommitHash: commitHash, dirty: false });
       return { commitHash, tag };
     });
+    console.log(`[vcsRelease] model=${model.id} serialize=${t1 - t0}ms freeze=${t2 - t1}ms commit=${Date.now() - t2}ms`);
+    return out;
   }
 
   return { release };

@@ -31,6 +31,13 @@ test('build the cube fixture and release it (downloads serve the frozen release)
   await page.locator('[data-testid="ctx-body-color"]').click();
   await page.locator('[data-testid="body-swatch-e53935"]').click();
   await expect(bodyRow.locator('mat-icon.kind-icon')).toHaveCSS('color', 'rgb(229, 57, 53)');
+  // REQ 1098 — make the body transparent, then opaque again.
+  await bodyRow.click({ button: 'right' });
+  await expect(page.locator('[data-testid="ctx-body-transparent"]')).toContainText('Make transparent');
+  await page.locator('[data-testid="ctx-body-transparent"]').click();
+  await bodyRow.click({ button: 'right' });
+  await expect(page.locator('[data-testid="ctx-body-transparent"]')).toContainText('Make opaque');
+  await page.locator('[data-testid="ctx-body-transparent"]').click();
   await page.waitForTimeout(1_000);  // past the 500 ms save debounce
 
   // Check in + release: the STL/STEP buttons only exist on a released model.

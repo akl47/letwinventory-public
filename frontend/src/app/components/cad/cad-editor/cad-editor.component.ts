@@ -40,6 +40,7 @@ import { disabledReason, DISABLED_REASON } from '../../../cad/lib/disabledReason
 import { sameSavedContent, type SavedContent } from '../../../cad/lib/savedContent';
 import { hasMigrations, migrateReferences, migrateSketchDoc, type IdMigration } from '../../../cad/lib/idMigration';
 import type { Observable } from 'rxjs';
+import { finalize } from 'rxjs';
 import { closestPointOnSegment, crossPartEdgeRef, crossPartVertexRef } from '../../../cad/lib/externalSnap';
 import { findProjectedBySource, listProjectedCurves } from '../../../cad/lib/projectedGeometry';
 import { extrudePreview, revolvePreview, sweepPreview } from '../../../cad/lib/preview';
@@ -52,7 +53,7 @@ import type { FeatureTree, Feature, OriginFeature, SketchDocument, SketchId, Mod
 import {
   emptyFeatureTree, addFeature, defaultDatumVisibility,
   removeFeature, updateFeatureParam, setExtrudeKind, removeFeaturesReferencingSketch,
-  featureReferencesSketch, setBodyVisibility, setBodyName, setBodyColor, setRollbackIndex,
+  featureReferencesSketch, setBodyVisibility, setBodyName, setBodyColor, setBodyTransparent, setRollbackIndex,
   addBodyGroup, renameBodyGroup, ungroupBodies, removeBodyFromGroup, addBodiesToGroup,
 } from '../../../cad/lib/featureTree';
 import { adoptHostPlanes } from '../../../cad/lib/hostPlanes';
@@ -316,10 +317,14 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                      self-service (no approval); locks the released revision. -->
                 <button class="ribbon-button" data-testid="action-release-main"
                         *ngIf="canWrite() && !onMainBranch()"
-                        [disabled]="model()?.behindMain || model()?.dirty || !model()?.baseCommitHash"
-                        [matTooltip]="model()?.behindMain ? 'Behind main — merge main in before releasing' : (model()?.dirty || !model()?.baseCommitHash) ? 'Check in the branch first' : 'Release this branch onto main and lock it as the next revision'"
+                        [disabled]="releasing() || model()?.behindMain || model()?.dirty || !model()?.baseCommitHash"
+                        [matTooltip]="releasing() ? 'Releasing — freezing the geometry…' : model()?.behindMain ? 'Behind main — merge main in before releasing' : (model()?.dirty || !model()?.baseCommitHash) ? 'Check in the branch first' : 'Release this branch onto main and lock it as the next revision'"
                         (click)="onReleaseToMain()">
-                  <mat-icon svgIcon="cad-release"></mat-icon><span class="ribbon-label">Release</span>
+                  @if (releasing()) {
+                    <mat-icon>hourglass_empty</mat-icon><span class="ribbon-label">Releasing…</span>
+                  } @else {
+                    <mat-icon svgIcon="cad-release"></mat-icon><span class="ribbon-label">Release</span>
+                  }
                 </button>
                 <!-- Behind main → merge main's latest in (pick which branch changes to keep). -->
                 <button class="ribbon-button" data-testid="action-merge"
@@ -1004,11 +1009,18 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
                   <button mat-menu-item (click)="asm.startReplace(item.inst)"><mat-icon>swap_horiz</mat-icon> Replace…</button>
                   <button mat-menu-item (click)="asm.openTrackBranch(item.inst)"><mat-icon svgIcon="cad-branch"></mat-icon> Track branch…</button>
                   <button mat-menu-item (click)="asm.openInstanceConfig(item.inst)"><mat-icon>tune</mat-icon> Configuration…</button>
+                  <button mat-menu-item data-testid="asm-ctx-transparent" (click)="asm.setBodiesTransparent(asm.instanceBodyIds(item.inst.instanceId), !asm.instanceTransparent(item.inst.instanceId))">
+                    <mat-icon>opacity</mat-icon> {{ asm.instanceTransparent(item.inst.instanceId) ? 'Make opaque' : 'Make transparent' }}
+                  </button>
                   <button mat-menu-item (click)="asm.toggleSuppressed(item.inst)">
                     <mat-icon>{{ item.inst.suppressed ? 'play_arrow' : 'block' }}</mat-icon>
                     {{ item.inst.suppressed ? 'Unsuppress' : 'Suppress' }}
                   </button>
                   <button mat-menu-item (click)="asm.remove(item.inst)"><mat-icon>delete</mat-icon> Delete</button>
+                } @else if (item.kind === 'component-body') {
+                  <button mat-menu-item data-testid="asm-ctx-body-transparent" (click)="asm.setBodiesTransparent([item.bodyId], !asm.transparentComponentBodies().has(item.bodyId))">
+                    <mat-icon>opacity</mat-icon> {{ asm.transparentComponentBodies().has(item.bodyId) ? 'Make opaque' : 'Make transparent' }}
+                  </button>
                 } @else if (item.kind === 'mate') {
                   @if (asm.mateEditable(item.mate)) {
                     <button mat-menu-item (click)="asm.startEditMate(item.mate)"><mat-icon>edit</mat-icon> Edit…</button>
@@ -1108,6 +1120,8 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
           [bodyList]="bodiesForTree()"
           (bodyClicked)="onTreeBodyClicked($event)"
           [hiddenBodyIds]="hiddenBodies()"
+          [transparentBodyIds]="transparentBodies()"
+          (bodiesTransparencySet)="setBodiesTransparent($event.bodyIds, $event.transparent)"
           [rollbackBeforeIndex]="rollbackBeforeIndex()"
           [rollbackBeforeCreatedAt]="rollbackBeforeCreatedAt()"
           [cosmeticThreadsCount]="cosmeticThreadsTotalCount()"
@@ -4188,6 +4202,7 @@ const EMPTY_GEOMETRY: ModelGeometry = { datums: [], faces: [], topology: { verti
               #viewer
               [geometry]="displayedGeometry()"
               [faceColors]="faceColors()"
+              [transparentFaces]="transparentFaces()"
               [referenceGeometry]="contextVisible() ? referenceOverlay() : null"
               [selected]="selected()"
               [normalToPlane]="normalToPlane()"
@@ -5696,6 +5711,37 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     }
     return out;
   });
+
+  /** REQ 1098 — see-through bodies (part) / component bodies (assembly). */
+  transparentBodies = signal<Set<string>>(new Set());
+  transparentFaces = computed(() => {
+    const out = new Set<string>();
+    if (this.assemblyMode()) {
+      const t = this.asm.transparentComponentBodies();
+      for (const b of this.asm.regen()?.bodies ?? []) {
+        if (t.has(b.id)) for (const f of b.faces) out.add(f.faceId || f.persistentName);
+      }
+      return out;
+    }
+    const t = this.transparentBodies();
+    for (const [bodyId, slot] of this.perBodyGeometry()) {
+      if (t.has(bodyId)) for (const f of slot.faces) out.add(f.faceId);
+    }
+    return out;
+  });
+
+  /** Persisted with the working copy when it is checked out; otherwise a
+   * transient view setting, like body visibility. */
+  setBodiesTransparent(bodyIds: string[], transparent: boolean): void {
+    const next = new Set(this.transparentBodies());
+    for (const id of bodyIds) { if (transparent) next.add(id); else next.delete(id); }
+    this.transparentBodies.set(next);
+    if (this.readonly()) return;
+    let tree = this.featureTree();
+    for (const id of bodyIds) tree = setBodyTransparent(tree, id, transparent);
+    this.featureTree.set(tree);
+    this.save({ skipRegen: true });
+  }
 
   onBodyColor(bodyIds: string[], color: string | null): void {
     if (this.readonly()) return;
@@ -7740,6 +7786,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   asmCtxMenuY = signal(0);
   asmCtxItem = signal<
     | { kind: 'component'; inst: AssemblyInstance }
+    | { kind: 'component-body'; bodyId: string }
     | { kind: 'mate'; mate: Mate }
     | { kind: 'pattern'; pattern: AssemblyPattern }
     | { kind: 'displayState'; state: DisplayState }
@@ -7800,9 +7847,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // Component body eye: key = component-body:<instanceId>:<scopedBodyId>
     // (the scoped id itself contains '::', so slice instead of split).
     if (kind === 'component-body') {
-      if (e.type === 'visibility') {
-        const rest = e.node.key.slice('component-body:'.length);
-        this.asm.toggleComponentBody(rest.slice(rest.indexOf(':') + 1));
+      const rest = e.node.key.slice('component-body:'.length);
+      const bodyId = rest.slice(rest.indexOf(':') + 1);
+      if (e.type === 'visibility') this.asm.toggleComponentBody(bodyId);
+      else if (e.type === 'context' && e.ev) {
+        this.asmCtxItem.set({ kind: 'component-body', bodyId });
+        this.openAsmCtxMenu(e.ev);
       }
       return;
     }
@@ -14550,6 +14600,10 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   facePickActive = computed<boolean>(() => {
     if (this.facePickMode()) return true;
+    // Fillet / Chamfer sidebar accepts face picks too — click a face,
+    // expand to its boundary edges. onFacePicked routes to the blend
+    // handler when the sidebar is open.
+    if (this.edgeBlendSidebar() !== null && this.edgePickMode()) return true;
     // Measure sidebar accepts every entity kind simultaneously.
     if (this.measureSidebar()) return true;
     if (!this.activeSketchId()) return false;
@@ -16303,6 +16357,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // REQ 745: restore persisted per-body visibility into the live hidden set.
     const bodyVis = this.featureTree().bodyVisibility ?? {};
     this.hiddenBodies.set(new Set(Object.keys(bodyVis).filter(id => bodyVis[id] === false)));
+    this.transparentBodies.set(new Set(Object.keys(this.featureTree().bodyTransparency ?? {})));
     // Seed history with the loaded state so undo can return to "as
     // opened" without going past it. Reset to a fresh stack so models
     // loaded into the same component instance don't inherit each other's
@@ -16665,6 +16720,7 @@ export class CadEditorComponent implements OnInit, OnDestroy {
    * all features after it in the tree — that mirrors how the backend
    * builds bodies in regen order. Drastic; survives undo. */
   onDeleteBody(bodyId: string): void {
+    if (this.readonly()) return;
     const ok = window.confirm(
       'Delete this body? This removes the root feature and every feature ' +
       'after it that contributed to it. Cannot be undone without redo.',
@@ -17995,9 +18051,12 @@ export class CadEditorComponent implements OnInit, OnDestroy {
 
   // Release an approved draft branch onto main (mint the next rev + archive the
   // branch). The model flips to the protected main line.
+  /** A release is in flight (the server freezes the geometry — seconds). */
+  releasing = signal(false);
   onReleaseToMain() {
-    const m = this.model(); if (!m) return;
-    this.vcsApi.release(m.id).subscribe({
+    const m = this.model(); if (!m || this.releasing()) return;
+    this.releasing.set(true);
+    this.vcsApi.release(m.id).pipe(finalize(() => this.releasing.set(false))).subscribe({
       next: (r: any) => {
         if (r.model) { this.applyModelUpdate(r.model, 'bootstrap'); this.loadCommits(); this.loadBranches(); }
         this.loadWorkflow();

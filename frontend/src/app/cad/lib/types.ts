@@ -1362,6 +1362,9 @@ export interface FeatureTree {
   /** REQ 1041 — user-assigned body colors ('rrggbb', no '#'), keyed by body
    * id. Missing key = the default viewer color. Never affects regen. */
   bodyColors?: Record<string, string>;
+  /** REQ 1098 — bodies rendered see-through, keyed by body id (true only).
+   * View-only: never affects regen. */
+  bodyTransparency?: Record<string, boolean>;
   /** REQ 1045 — named parent rows grouping bodies in the tree; a body is in at
    * most one group. 3MF export writes a group as one object. Never affects
    * regen; ids of bodies that no longer exist are ignored. */

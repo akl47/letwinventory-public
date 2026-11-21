@@ -114,3 +114,22 @@ describe('assemblyRegenService.assemblyBom (REQ 753)', () => {
     expect(svc.assemblyBom(assembly)).toEqual([{ partID: 2, quantity: 1, configurationId: null }]);
   });
 });
+
+describe('assemblyRegenService.flattenChildGeometry body names (REQ 1097)', () => {
+  const regen = {
+    features: [
+      { featureId: 'e1', bodyId: 'e1', faces: [{ persistentName: 'f0', positions: [], normals: [], indices: [] }] },
+      { featureId: 'e2', bodyId: 'e2', faces: [{ persistentName: 'f1', positions: [], normals: [], indices: [] }] },
+    ],
+    bodies: [{ id: 'e1', name: null }, { id: 'e2', name: null }],
+  };
+
+  it("names bodies from the child part's bodyNames map", () => {
+    const flat = svc.flattenChildGeometry(regen, { e1: 'Lid' });
+    expect(flat.bodies.map((b) => b.name)).toEqual(['Lid', null]);
+  });
+
+  it('leaves bodies unnamed when the part has no names', () => {
+    expect(svc.flattenChildGeometry(regen).bodies.map((b) => b.name)).toEqual([null, null]);
+  });
+});

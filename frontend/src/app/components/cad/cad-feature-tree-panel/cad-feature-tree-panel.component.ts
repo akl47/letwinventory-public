@@ -314,6 +314,10 @@ export function folderNode(f: TreeFolder, memberCount: number, expanded: boolean
                   (click)="bodyIsolated.emit(contextBodyIds())">
             <mat-icon>filter_center_focus</mat-icon> Isolate {{ contextNoun() }}
           </button>
+          <button mat-menu-item data-testid="ctx-body-transparent"
+                  (click)="bodiesTransparencySet.emit({ bodyIds: contextBodyIds(), transparent: !contextAllTransparent() })">
+            <mat-icon>opacity</mat-icon> {{ contextAllTransparent() ? 'Make opaque' : 'Make transparent' }}
+          </button>
           <button mat-menu-item data-testid="ctx-body-color" [matMenuTriggerFor]="bodyColorMenu" [disabled]="readonly()">
             <mat-icon>palette</mat-icon> Color
           </button>
@@ -335,11 +339,11 @@ export function folderNode(f: TreeFolder, memberCount: number, expanded: boolean
                     (click)="bodyGroupAction.emit({ action: 'remove', bodyIds: [b.id] })">
               <mat-icon>drive_file_move_rtl</mat-icon> Remove from group
             </button>
-            <button mat-menu-item data-testid="ctx-body-rename"
+            <button mat-menu-item data-testid="ctx-body-rename" [disabled]="readonly()"
                     (click)="bodyRenamed.emit(b.id)">
               <mat-icon>drive_file_rename_outline</mat-icon> Rename body
             </button>
-            <button mat-menu-item data-testid="ctx-body-delete"
+            <button mat-menu-item data-testid="ctx-body-delete" [disabled]="readonly()"
                     (click)="bodyDeleted.emit(b.id)">
               <mat-icon>delete</mat-icon> Delete body
             </button>
@@ -780,6 +784,9 @@ export class CadFeatureTreePanelComponent {
   bodyDeleted = output<string>();
   /** REQ 1041 — a color was picked ('rrggbb') for bodies, or null for the default. */
   bodyColorChanged = output<{ bodyIds: string[]; color: string | null }>();
+  /** REQ 1098 — bodies rendered see-through. */
+  transparentBodyIds = input<Set<string>>(new Set());
+  bodiesTransparencySet = output<{ bodyIds: string[]; transparent: boolean }>();
   /** REQ 1045 — group the given bodies, or rename / dissolve a group, or take
    * a body out of its group. */
   bodyGroupAction = output<BodyGroupAction>();
@@ -958,6 +965,10 @@ export class CadFeatureTreePanelComponent {
   contextAnyVisible(): boolean {
     const ids = new Set(this.contextBodyIds());
     return this.bodiesView().some(b => ids.has(b.id) && b.visible);
+  }
+  contextAllTransparent(): boolean {
+    const t = this.transparentBodyIds();
+    return this.contextBodyIds().every(id => t.has(id));
   }
   contextNoun(): string {
     return this.contextGroup() ? 'group' : this.contextBodyIds().length > 1 ? `${this.contextBodyIds().length} bodies` : 'body';
