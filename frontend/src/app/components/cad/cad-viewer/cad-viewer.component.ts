@@ -389,6 +389,8 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
   geometry = input<ModelGeometry | null>(null);
   /** REQ 1041 — face id → body color ('rrggbb'); other faces use the default. */
   faceColors = input<Map<string, string>>(new Map());
+  /** REQ 1098 — ids of faces on see-through bodies. */
+  transparentFaces = input<Set<string>>(new Set());
   /** CAD-790 in-context editing: ghost geometry of the OTHER assembly components
    * (read-only reference), drawn in the edited part's local frame. */
   referenceGeometry = input<InContextOverlay | null>(null);
@@ -1019,6 +1021,7 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       const features = this.selectedFeatures();
       const picked = this.pickedFaceIds();
       this.faceColors();  // body colors also repaint (read by recolor)
+      this.transparentFaces();
       if (this.scene) this.recolor(sel, hov, features, picked);
     });
     effect(() => {
@@ -2659,14 +2662,14 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
    * cursor near — or just past — the face silhouette still grabs the edge
    * rather than dropping the highlight entirely. */
   private readonly SKETCH_EDGE_HOVER_PX = 14;
-  /** REQ 1088 — edge zone in the 3D view when edges are the ONLY armed pick
-   * kind (Fillet / Chamfer, the edge filter). Nothing else competes for the
-   * click, so the zone can be generous. */
+  /** REQ 1088 — edge zone in the 3D view when no vertex or axis competes for
+   * the click (Fillet / Chamfer, the edge filter), so the zone can be
+   * generous. Faces, when armed too, are picked outside it. */
   private readonly EDGE_ONLY_PICK_PX = 12;
 
-  /** True in the 3D view when edges are the only armed pick kind. */
+  /** True in the 3D view when edges are picked with the wide zone. */
   private edgeOnlyPick(): boolean {
-    return this.edgePickMode() && !this.facePickMode() && !this.vertexPickMode() && !this.axisPickMode()
+    return this.edgePickMode() && !this.vertexPickMode() && !this.axisPickMode()
       && this.activeSketchId() === null;
   }
 
@@ -3558,8 +3561,9 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
         const edgeOnly = this.edgeOnlyPick();
         this._updateEdgeHover(this.activeSketchId() !== null ? this.SKETCH_EDGE_HOVER_PX
           : edgeOnly ? this.EDGE_ONLY_PICK_PX : this.PICK_PX);
-        // Edges only: a face is not a pick target, so it never highlights.
-        if (this.hoveredEdgeId() !== null || edgeOnly) {
+        // Faces highlight only when they are a pick target too (Fillet /
+        // Chamfer: a face adds its boundary edges).
+        if (this.hoveredEdgeId() !== null || (edgeOnly && !this.facePickMode())) {
           if (this.hovered() !== null) this.hovered.set(null);
           this._clearHoveredFaceEdges();  // a specific edge wins over the face's edges
           return;
@@ -6462,6 +6466,14 @@ export class CadViewerComponent implements AfterViewInit, OnDestroy {
       else if (pickedFaces.has(id)) mat.color.setHex(0x1976d2);
       else if (ownFeatureSelected) mat.color.setHex(0xffb74d);
       else mat.color.setHex(parseInt(this.faceColors().get(id) ?? '8aa0c4', 16));
+      // REQ 1098 — see-through bodies. No depth write, so what is behind shows.
+      const seeThrough = this.transparentFaces().has(id);
+      if (mat.transparent !== seeThrough) {
+        mat.transparent = seeThrough;
+        mat.opacity = seeThrough ? 0.3 : 1;
+        mat.depthWrite = !seeThrough;
+        mat.needsUpdate = true;
+      }
     }
     // Datum coloring (selection + hover) is owned by recolorDatums(), driven by
     // its own effect on selectedDatums/hovered/selected.

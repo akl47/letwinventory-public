@@ -202,6 +202,17 @@ export function setBodyColor(tree: FeatureTree, bodyId: string, color: string | 
   return next;
 }
 
+/** REQ 1098: per-body see-through rendering. Only transparent bodies are stored. */
+export function setBodyTransparent(tree: FeatureTree, bodyId: string, transparent: boolean): FeatureTree {
+  const map = { ...(tree.bodyTransparency ?? {}) };
+  if (transparent) map[bodyId] = true;
+  else delete map[bodyId];
+  const next = { ...tree };
+  if (Object.keys(map).length) next.bodyTransparency = map;
+  else delete next.bodyTransparency;
+  return next;
+}
+
 /** REQ 1045 — store `groups` (empty ones dropped; none left = field removed). */
 function withBodyGroups(tree: FeatureTree, groups: BodyGroup[]): FeatureTree {
   const kept = groups.filter(g => g.bodyIds.length > 0);

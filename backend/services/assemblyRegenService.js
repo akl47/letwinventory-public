@@ -125,7 +125,10 @@ function scopeFace(instanceId, face) {
 // Collapse a raw regen result (per-feature cumulative state) to the FINAL
 // renderable geometry per body — same last-write-wins the editor/controller use.
 // Returns { faces, vertices, edges, bodies:[{id,name,brep?,faces,vertices,edges}] }.
-function flattenChildGeometry(regen) {
+// `bodyNames` is the child part's featureTree.bodyNames (REQ 1097) — the regen
+// itself never names bodies.
+function flattenChildGeometry(regen, bodyNames) {
+  const names = bodyNames || {};
   const perBody = new Map();
   for (const f of regen.features || []) {
     if (f.error) continue;
@@ -159,7 +162,7 @@ function flattenChildGeometry(regen) {
     }
     faces.push(...bFaces); vertices.push(...bVerts); edges.push(...bEdges);
     bodies.push({
-      id: b.id, name: b.name || null, brep: b.brep, faces: bFaces, vertices: bVerts, edges: bEdges,
+      id: b.id, name: names[b.id] || b.name || null, brep: b.brep, faces: bFaces, vertices: bVerts, edges: bEdges,
       // Mass data for assembly mass properties (REQ 768), if the kernel reported it.
       volume: typeof b.volume === 'number' ? b.volume : (typeof f.volume === 'number' ? f.volume : undefined),
       centroid: b.centroid || f.centroid || undefined,
@@ -298,7 +301,7 @@ function defaultResolveChild({ db, kernelClient }) {
         __partRevision: partRevision,
       };
       const regen = await cadRegenService.regenerateModel(modelLike, { kernelClient, db, includeBodyBreps: true, configurationId });
-      const flat = flattenChildGeometry(regen);
+      const flat = flattenChildGeometry(regen, src.doc.featureTree && src.doc.featureTree.bodyNames);
       childGeoCachePut(cacheKey, flat);
       return flat;
     }
@@ -311,7 +314,7 @@ function defaultResolveChild({ db, kernelClient }) {
       kernelClient, db, includeBodyBreps: true, configurationId,
       externalRefResolver: resolveOpts.externalRefResolver, // live cross-part edges (Phase B.5)
     });
-    const flat = flattenChildGeometry(regen);
+    const flat = flattenChildGeometry(regen, row.featureTree && row.featureTree.bodyNames);
     if (cacheable) childGeoCachePut(cacheKey, flat);
     return flat;
   };

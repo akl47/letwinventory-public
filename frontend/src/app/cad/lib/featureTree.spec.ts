@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   emptyFeatureTree, addFeature, removeFeature, updateFeatureParam, setExtrudeKind,
   removeFeaturesReferencingSketch, featureReferencesSketch,
-  upgradeFeatureTree, setBodyVisibility, setBodyName, setBodyColor, setRollbackIndex,
+  upgradeFeatureTree, setBodyVisibility, setBodyName, setBodyColor, setBodyTransparent, setRollbackIndex,
   addBodyGroup, renameBodyGroup, ungroupBodies, removeBodyFromGroup, addBodiesToGroup,
   isOriginFeature, isExtrudeFeature,
 } from './featureTree';
@@ -269,6 +269,16 @@ describe('Feature tree (CAD-034, CAD-035, CAD-037)', () => {
       const t0 = emptyFeatureTree();
       setBodyVisibility(t0, 'b1', false);
       expect(t0.bodyVisibility).toBeUndefined();
+    });
+  });
+
+  describe('setBodyTransparent (REQ 1098)', () => {
+    it('records transparent bodies and clears them back to opaque', () => {
+      const t0 = emptyFeatureTree();
+      const t1 = setBodyTransparent(t0, 'b1', true);
+      expect(t1.bodyTransparency).toEqual({ b1: true });
+      expect(t0.bodyTransparency).toBeUndefined();
+      expect(setBodyTransparent(t1, 'b1', false).bodyTransparency).toBeUndefined();
     });
   });
 

@@ -597,14 +597,18 @@ module.exports = {
       // the numeric rev, advance main, freeze + tag, lock the Part, archive the
       // branch. (The approval gate lives on the production-letter release, not here.)
       if ((model.branchName || 'main') !== 'main') {
+        const t0 = Date.now();
         const released = await releaseBranchToMain(model, req.user.id);
+        const t1 = Date.now();
         await workflowEngine.setState(wf, 'draft', req.user.id);
         // REQ 948 — main now carries a new, unreviewed revision: reset main's
         // workflow key too (model.branchName is 'main' after the release).
         await workflowEngine.setState(await workflowRepo(model), 'draft', req.user.id);
         await recordHistory(model.id, req.user.id, 'released_to_main', null, released);
         const refreshed = await fetchActiveModel(model.id);
-        return res.json({ commitHash: released.commitHash, revision: released.tag, model: await withReleaseFlag(refreshed) });
+        const body = { commitHash: released.commitHash, revision: released.tag, model: await withReleaseFlag(refreshed) };
+        console.log(`[cadRelease] model=${model.id} release=${t1 - t0}ms respond=${Date.now() - t1}ms`);
+        return res.json(body);
       }
       // Legacy in-place release on main still requires workflow approval.
       // REQ 947 — the approval must be for the commit being released.
