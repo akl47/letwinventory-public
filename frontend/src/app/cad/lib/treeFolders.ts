@@ -21,7 +21,10 @@ export function applyFolders<T extends Row>(
 ): T[] {
   const folderOf = new Map<string, TreeFolder>();
   for (const f of folders) for (const k of f.memberKeys) folderOf.set(k, f);
-  if (folderOf.size === 0) return rows;
+  // REQ 1104 — a folder made empty on purpose has no run: it lists at the end.
+  const empty = folders.filter(f => f.memberKeys.length === 0)
+    .map(f => folderRow(f, 0, !collapsed.has(f.id)));
+  if (folderOf.size === 0) return empty.length ? [...rows, ...empty] : rows;
   // Top-level blocks: a row plus the nested rows that follow it.
   const blocks: T[][] = [];
   for (const row of rows) {
@@ -40,6 +43,7 @@ export function applyFolders<T extends Row>(
     out.push(folderRow(f, run.length, expanded));
     if (expanded) for (const b of run) for (const row of b) out.push({ ...row, depth: row.depth + 1 });
   }
+  out.push(...empty);
   return out;
 }
 
@@ -52,12 +56,16 @@ export function canFolder(rows: Row[], keys: string[]): boolean {
   return Math.max(...at) - Math.min(...at) === new Set(at).size - 1;
 }
 
-const keep = (folders: TreeFolder[]) => folders.filter(f => f.memberKeys.length > 0);
+/** Drop folders an edit emptied; one that was already empty (REQ 1104) stays. */
+function keep(next: TreeFolder[], before: TreeFolder[]): TreeFolder[] {
+  const had = new Map(before.map(f => [f.id, f.memberKeys.length]));
+  return next.filter(f => f.memberKeys.length > 0 || !had.get(f.id));
+}
 
 /** Add a folder; its rows leave any other folder (emptied folders go). */
 export function foldersAdd(folders: TreeFolder[], folder: TreeFolder): TreeFolder[] {
   const taken = new Set(folder.memberKeys);
-  return keep([...folders.map(f => ({ ...f, memberKeys: f.memberKeys.filter(k => !taken.has(k)) })), { ...folder }]);
+  return keep([...folders.map(f => ({ ...f, memberKeys: f.memberKeys.filter(k => !taken.has(k)) })), { ...folder }], folders);
 }
 
 /** Add rows to an existing folder (they leave any other folder). */
@@ -65,12 +73,12 @@ export function foldersAddTo(folders: TreeFolder[], folderId: string, keys: stri
   const taken = new Set(keys);
   return keep(folders.map(f => f.id === folderId
     ? { ...f, memberKeys: [...f.memberKeys.filter(k => !taken.has(k)), ...keys] }
-    : { ...f, memberKeys: f.memberKeys.filter(k => !taken.has(k)) }));
+    : { ...f, memberKeys: f.memberKeys.filter(k => !taken.has(k)) }), folders);
 }
 
 export function foldersRemove(folders: TreeFolder[], keys: string[]): TreeFolder[] {
   const drop = new Set(keys);
-  return keep(folders.map(f => ({ ...f, memberKeys: f.memberKeys.filter(k => !drop.has(k)) })));
+  return keep(folders.map(f => ({ ...f, memberKeys: f.memberKeys.filter(k => !drop.has(k)) })), folders);
 }
 
 /** Rename; a blank name returns `folders` unchanged. */

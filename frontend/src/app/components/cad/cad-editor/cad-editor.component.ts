@@ -19,7 +19,9 @@ import { CadModelService } from '../../../services/cad-model.service';
 import { InventoryService } from '../../../services/inventory.service';
 import { CadTabsService } from '../../../services/cad-tabs.service';
 import { CadClipboardService } from '../../../services/cad-clipboard.service';
-import { buildPartBundle, partFileName, serializeBundle, type ClipboardBundle } from '../../../cad/lib/clipboard';
+import { buildPartBundle, partFileName, sameModel, serializeBundle, type ClipboardBundle } from '../../../cad/lib/clipboard';
+import { applyPasteChoices, buildItemsBundle, pasteBundle, type PasteTarget } from '../../../cad/lib/clipboardItems';
+import { CadPasteConfirmDialogComponent, type PasteConfirmData, type PasteConfirmResult } from '../cad-paste-confirm-dialog/cad-paste-confirm-dialog.component';
 import { CadPartTabsComponent } from '../cad-part-tabs/cad-part-tabs.component';
 import { Part } from '../../../models/part.model';
 import { CadModel, CadCommit, CadBranch, CadCommitDiff, CadWorkflow, CadDefaultView, CadCommitGeometry, PartWithCadSummary } from '../../../models/cad-model.model';
@@ -5922,9 +5924,121 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     const r = this.cadClipboard.parse(e.clipboardData?.getData('text/plain') ?? '');
     if (!r) return;
     e.preventDefault();
+    if (r.bundle.scope === 'items') { this.pasteItems(r.bundle, r.warning); return; }
     const name = partFileName(r.bundle).replace(/\.lwcad$/, '');
     const what = r.bundle.scope === 'assembly' ? 'assembly' : 'part';
     if (confirm(`The clipboard holds a copied ${what} (${name}). Create a new ${what} from it?`)) void this.cadClipboard.openPasteDialog(r.bundle);
+  }
+
+  // ── REQ 1100–1103 — copy / paste of sketches and features ────────────────
+
+  /** Bundle of the given tree items (features pull in their sketches). */
+  private _itemsBundle(sketchIds: string[], featureIds: string[]): ClipboardBundle | null {
+    const m = this.model();
+    if (!m) return null;
+    return buildItemsBundle(this.doc(), this.featureTree(), this.equations(), { sketchIds, featureIds }, {
+      origin: location.origin, modelId: m.id, partName: m.part?.name ?? '',
+      partRev: m.displayRevision ?? m.part?.revision ?? '', description: m.part?.description ?? null,
+    }, this.cadClipboard.namingVersion);
+  }
+
+  /** Tree items a copy acts on: the whole selection when the clicked row is
+   * part of it, otherwise just that row. */
+  private copyTreeItems(a: { featureId?: string; sketchId?: string }): void {
+    const inSel = (a.featureId && this.selectedFeatures().has(a.featureId)) || (a.sketchId && this.selectedSketches().has(a.sketchId));
+    const b = inSel
+      ? this._itemsBundle([...this.selectedSketches()], [...this.selectedFeatures()])
+      : this._itemsBundle(a.sketchId ? [a.sketchId] : [], a.featureId ? [a.featureId] : []);
+    if (!b) return;
+    if (this.cadClipboard.copy(b)) this.errors.showSuccess(`${this._itemsSummary(b)} copied`);
+    else this.errors.showError('The browser blocked clipboard access');
+  }
+
+  private _itemsSummary(b: ClipboardBundle): string {
+    const f = b.features?.length ?? 0, s = b.sketches?.length ?? 0;
+    const parts = [f ? `${f} feature${f === 1 ? '' : 's'}` : '', s ? `${s} sketch${s === 1 ? '' : 'es'}` : ''].filter(Boolean);
+    return parts.join(' and ');
+  }
+
+  /** Ctrl+C with tree items selected (outside sketch mode and text fields). */
+  @HostListener('document:copy', ['$event'])
+  onDocumentCopy(e: ClipboardEvent): void {
+    if (this.cadClipboard.copying || this.harnessMode() || this.assemblyMode() || this.activeSketchId()) return;
+    if (this.cadClipboard.isFieldPaste(e) || this.dialog.openDialogs.length || window.getSelection()?.toString()) return;
+    const b = this._itemsBundle([...this.selectedSketches()], [...this.selectedFeatures()]);
+    if (!b) return;
+    e.clipboardData?.setData('text/plain', serializeBundle(b));
+    e.preventDefault();
+    this.errors.showSuccess(`${this._itemsSummary(b)} copied`);
+  }
+
+  /** Context-menu Paste: a menu click carries no paste event, so the clipboard
+   * can only be read where the browser allows it (secure origins). */
+  private pasteFromMenu(): void {
+    const read = navigator.clipboard?.readText?.bind(navigator.clipboard);
+    if (!read) { this.errors.showInfo('Press Ctrl+V to paste'); return; }
+    read().then(text => {
+      const r = this.cadClipboard.parse(text);
+      if (!r || r.bundle.scope !== 'items') { this.errors.showError('Nothing copied'); return; }
+      this.pasteItems(r.bundle, r.warning);
+    }, () => this.errors.showInfo('Press Ctrl+V to paste'));
+  }
+
+  /** The selected datum plane or flat face to paste onto. `undefined` = a
+   * selection that is not a plane. */
+  private _pasteTarget(): PasteTarget | null | undefined {
+    const sel = this.selected();
+    const datums = this.selectedDatums();
+    const id = sel ?? (datums.size === 1 ? `datum:${[...datums][0]}` : null);
+    if (id === null) return null;
+    if (id.startsWith('datum:')) {
+      const plane = this._resolveDatumPlane(id);
+      return plane ? { hostId: id, plane } : undefined;
+    }
+    const plane = this.faceToPlane(id);
+    return plane ? { hostId: `face:${id}`, plane } : undefined;
+  }
+
+  private pasteItems(bundle: ClipboardBundle, warning?: string): void {
+    const m = this.model();
+    if (!m) return;
+    if (this.assemblyMode()) { this.errors.showError('Open a part to paste sketches and features'); return; }
+    if (this.readonly()) { this.errors.showError('Check out the part first'); return; }
+    if (this.activeSketchId()) { this.errors.showError('Exit the sketch to paste'); return; }
+    const same = sameModel(bundle, location.origin, m.id);
+    const target = this._pasteTarget();
+    const first = bundle.sketches?.[0];
+    const onOriginPlane = !!first && /^datum:(xy|yz|xz)_plane$/.test(first.hostId);
+    if (target === undefined || (first && !target && !same && !onOriginPlane)) {
+      this.errors.showError('Select a plane or flat face to paste onto');
+      return;
+    }
+    if (warning) this.errors.showInfo(warning, 8000);
+    const pasted = pasteBundle(this.doc(), this.featureTree(), this.equations(), bundle, { target, sameModel: same });
+    if (!pasted.unresolved.length && !pasted.clashes.length) { this._commitPaste(pasted); return; }
+    this.dialog.open<CadPasteConfirmDialogComponent, PasteConfirmData, PasteConfirmResult>(CadPasteConfirmDialogComponent, {
+      data: { unresolved: pasted.unresolved, clashes: pasted.clashes }, autoFocus: false, width: '640px',
+    }).afterClosed().subscribe(choice => {
+      if (choice) this._commitPaste(applyPasteChoices(pasted, bundle, choice));
+    });
+  }
+
+  /** One edit: the pasted sketches (with snapping candidates for their new
+   * plane), features and equations, then the normal save + regenerate. */
+  private _commitPaste(r: ReturnType<typeof pasteBundle>): void {
+    const topology = this.geometry()?.topology ?? null;
+    const sketches = { ...r.doc.sketches };
+    for (const id of r.newSketchIds) sketches[id] = { ...sketches[id], candidates: projectTopologyToCandidates(sketches[id].plane, topology) };
+    this.doc.set({ ...r.doc, sketches });
+    this.featureTree.set(r.tree);
+    this.equations.set(r.equations);
+    this.selected.set(null);
+    this.selectedDatums.set(new Set());
+    this.selectedSketches.set(new Set(r.newFeatureIds.length ? [] : r.newSketchIds));
+    this.selectedFeatures.set(new Set(r.newFeatureIds));
+    this.save();
+    const n = r.newFeatureIds.length + r.newSketchIds.length;
+    this.errors.showSuccess(`Pasted ${n} item${n === 1 ? '' : 's'}`);
   }
 
   private _downloadBlob(blob: Blob, filename: string): void {
@@ -9125,6 +9239,13 @@ export class CadEditorComponent implements OnInit, OnDestroy {
   }
 
   undo() {
+    // An edit made within the capture debounce is not a snapshot yet — record
+    // it now, or this undo would step back past the edit before it.
+    if (this.historyTimer !== null) {
+      clearTimeout(this.historyTimer);
+      this.historyTimer = null;
+      this.pushSnapshot({ featureTree: this.featureTree(), doc: this.doc(), equations: this.equations() });
+    }
     if (!this.canUndo()) return;
     this.history.update(h => ({ ...h, index: h.index - 1 }));
     this.applySnapshot(this.history().snapshots[this.history().index]);
@@ -15425,6 +15546,9 @@ export class CadEditorComponent implements OnInit, OnDestroy {
     // REQ 1040 — a read-only part can still open a sketch or feature to view
     // it: the sketch editor disables its tools, feature panels go inert
     // (cad-view-only host class), and save() refuses to persist.
+    // REQ 1100 — copying never changes the model, so it needs no checkout.
+    if (action.action === 'copy-items') return this.copyTreeItems(action);
+    if (action.action === 'paste-items') return this.pasteFromMenu();
     if (this.readonly()) {
       if (action.action === 'edit-sketch') this.editSketch(action.sketchId);
       if (action.action === 'edit-feature') {

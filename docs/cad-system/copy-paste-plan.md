@@ -1,7 +1,20 @@
 # Copy / paste of sketches, features and parts — plan
 
-Status: plan (2026-11-03, extended 2026-11-06 for parts + prod↔dev). No
-requirements or code yet.
+Status: phases 1–4 implemented (2026-11-21, REQs 1011–1013 part copy, 1100–1103
+items copy/paste). Code: `cad/lib/clipboard.ts` (bundle + part scope),
+`cad/lib/clipboardItems.ts` (items bundle, reference walkers, paste),
+`cad-paste-confirm-dialog`. Differences from the plan below:
+- Sketch entity and constraint ids are **kept** on paste (they are scoped to
+  their sketch); only sketch and feature ids are regenerated.
+- A pasted sketch whose host is outside the bundle and no longer applies
+  (moved onto a target plane, or another part) gets `hostId: 'copied'` and
+  keeps its plane, so regen does not snap it back to an unrelated face.
+- Paste is offered on the tree context menu and Ctrl+V; there is no viewer
+  context-menu entry. The menu item can only read the clipboard on secure
+  origins — elsewhere it asks for Ctrl+V.
+- Topology references into pasted features are remapped by replacing the
+  feature id inside the face/edge/vertex/body id; whether they still resolve
+  after regen depends on the kernel naming the pasted feature's faces the same way.
 
 ## Goal
 

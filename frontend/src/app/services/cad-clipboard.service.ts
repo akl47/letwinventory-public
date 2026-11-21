@@ -31,8 +31,11 @@ export class CadClipboardService {
     const text = serializeBundle(bundle);
     const onCopy = (e: ClipboardEvent) => { e.clipboardData?.setData('text/plain', text); e.preventDefault(); };
     document.addEventListener('copy', onCopy);
-    try { return document.execCommand('copy'); } catch { return false; } finally { document.removeEventListener('copy', onCopy); }
+    this.copying = true;
+    try { return document.execCommand('copy'); } catch { return false; } finally { this.copying = false; document.removeEventListener('copy', onCopy); }
   }
+  /** True while `copy()` is firing its own copy event — other copy listeners stand down. */
+  copying = false;
 
   /** REQ 1078 — copy once a request has returned (the click gesture may be
    * spent): the async clipboard API on secure origins, else the copy event. */
@@ -71,6 +74,8 @@ export class CadClipboardService {
     const r = parseBundle(text, null);
     if (!r) return false;
     if ('error' in r) { this.errors.showError(r.error); return true; }
+    // REQ 1101 — copied sketches/features only paste into an open part.
+    if (r.bundle.scope === 'items') { this.errors.showError('Open a part to paste sketches and features'); return true; }
     void this.openPasteDialog(r.bundle);
     return true;
   }

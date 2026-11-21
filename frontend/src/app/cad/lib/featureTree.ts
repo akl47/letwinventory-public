@@ -54,7 +54,7 @@ export function addFeature(tree: FeatureTree, feature: FeatureInput): FeatureTre
  * "Revolve 1", etc. Indexing counts existing features of the same kind
  * already in the tree (renames don't shift later indices because the
  * count includes renamed entries too — we're just looking at type). */
-function defaultFeatureName(tree: FeatureTree, feature: Feature): string | undefined {
+export function defaultFeatureName(tree: FeatureTree, feature: Feature): string | undefined {
   const label = featureKindLabel(feature.type);
   if (!label) return undefined;
   const existing = tree.features.filter(f => f.type === feature.type).length;

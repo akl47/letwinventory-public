@@ -58,6 +58,19 @@ describe('folder edits', () => {
     expect(foldersAdd(base, { id: 'b', name: 'B', memberKeys: ['f1', 'f2'] }).map(f => f.id)).toEqual(['b']);
   });
 
+  it('an empty new folder is kept and lists at the end (REQ 1104)', () => {
+    const withEmpty = foldersAdd(base, { id: 'e', name: 'Empty', memberKeys: [] });
+    expect(withEmpty.map(f => f.id)).toEqual(['a', 'e']);
+    expect(foldersRemove(withEmpty, ['f1']).map(f => f.id)).toEqual(['a', 'e']);  // survives other edits
+    expect(foldersRemove(withEmpty, ['f1', 'f2']).map(f => f.id)).toEqual(['e']);  // an emptied one still goes
+    expect(foldersAddTo(withEmpty, 'e', ['f9']).find(f => f.id === 'e')!.memberKeys).toEqual(['f9']);
+    const rows = [{ key: 'f1', depth: 0 }, { key: 'f2', depth: 0 }, { key: 'f3', depth: 0 }];
+    const out = applyFolders(rows, withEmpty, new Set(), (f, n) => ({ key: `folder:${f.id}:${n}`, depth: 0 }));
+    expect(out.map(r => r.key)).toEqual(['folder:a:2', 'f1', 'f2', 'f3', 'folder:e:0']);
+    const only = applyFolders(rows, [{ id: 'e', name: 'Empty', memberKeys: [] }], new Set(), (f, n) => ({ key: `folder:${f.id}:${n}`, depth: 0 }));
+    expect(only.map(r => r.key)).toEqual(['f1', 'f2', 'f3', 'folder:e:0']);
+  });
+
   it('adds to, removes from, renames and deletes', () => {
     const two = foldersAdd(base, { id: 'b', name: 'B', memberKeys: ['f4'] });
     expect(foldersAddTo(two, 'a', ['f3', 'f4'])).toEqual([{ id: 'a', name: 'A', memberKeys: ['f1', 'f2', 'f3', 'f4'] }]);

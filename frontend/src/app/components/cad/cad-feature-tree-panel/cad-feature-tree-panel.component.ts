@@ -22,6 +22,8 @@ export type FeatureTreeAction =
   | { action: 'toggle-sketch-visibility'; sketchId: string }
   | { action: 'rename-sketch'; sketchId: string }
   | { action: 'change-sketch-host'; sketchId: string }
+  | { action: 'copy-items'; featureId?: string; sketchId?: string }
+  | { action: 'paste-items' }
   | { action: 'toggle-cosmetic-threads-visibility' };
 
 /** Generic row event emitted when the panel renders externally-supplied nodes
@@ -134,7 +136,7 @@ export function folderNode(f: TreeFolder, memberCount: number, expanded: boolean
           <mat-icon>{{ headerIcon() }}</mat-icon>
           <span *ngIf="!compact()">{{ headerTitle() }}</span>
         </header>
-        <ul class="tree" #treeList *ngIf="!featuresCollapsed()">
+        <ul class="tree" #treeList *ngIf="!featuresCollapsed()" (contextmenu)="onBlankContextMenu($event)">
         <li *ngFor="let n of nodes(); trackBy: trackNode"
             [attr.data-testid]="rowTestId(n)"
             [attr.data-feature-index]="n.featureIndex"
@@ -277,6 +279,20 @@ export function folderNode(f: TreeFolder, memberCount: number, expanded: boolean
         </ul>
       </div>
 
+      <!-- REQ 1104 — menu for an empty area of the tree. -->
+      <div #blankMenuTriggerEl class="menu-anchor" [style.left.px]="menuX()" [style.top.px]="menuY()"
+           [matMenuTriggerFor]="blankMenu"></div>
+      <mat-menu #blankMenu="matMenu">
+        <button mat-menu-item data-testid="ctx-blank-new-folder" [disabled]="readonly()"
+                (click)="folderAction.emit({ action: 'create', keys: [] })">
+          <mat-icon>create_new_folder</mat-icon> New folder
+        </button>
+        <button mat-menu-item data-testid="ctx-blank-paste" [disabled]="readonly()"
+                (click)="actionRequested.emit({ action: 'paste-items' })">
+          <mat-icon>content_paste</mat-icon> Paste
+        </button>
+      </mat-menu>
+
       <!-- Floating trigger for the context menu, positioned at the cursor on right-click. -->
       <div #menuTriggerEl
            class="menu-anchor"
@@ -410,6 +426,15 @@ export function folderNode(f: TreeFolder, memberCount: number, expanded: boolean
                 <mat-icon>{{ scope.anySuppressed ? 'play_arrow' : 'block' }}</mat-icon>
                 {{ scope.anySuppressed ? 'Unsuppress' : 'Suppress' }}{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
               </button>
+              <!-- REQ 1100/1101 — copy / paste of tree items. -->
+              <button mat-menu-item data-testid="ctx-copy-items"
+                      (click)="emitAction({ action: 'copy-items', featureId: n.feature.id })">
+                <mat-icon>content_copy</mat-icon> Copy{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
+              </button>
+              <button mat-menu-item data-testid="ctx-paste-items" [disabled]="readonly()"
+                      (click)="emitAction({ action: 'paste-items' })">
+                <mat-icon>content_paste</mat-icon> Paste
+              </button>
               <button mat-menu-item data-testid="ctx-delete-feature"
                       (click)="emitAction({ action: 'delete-feature', featureId: n.feature.id })">
                 <mat-icon>delete</mat-icon> Delete{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
@@ -444,6 +469,14 @@ export function folderNode(f: TreeFolder, memberCount: number, expanded: boolean
                       mat-menu-item data-testid="ctx-edit-sketch"
                       (click)="emitAction({ action: 'edit-sketch', sketchId: n.sketchId })">
                 <mat-icon>{{ readonly() ? 'visibility' : 'edit' }}</mat-icon> {{ readonly() ? 'View sketch' : 'Edit sketch' }}
+              </button>
+              <button mat-menu-item data-testid="ctx-copy-items"
+                      (click)="emitAction({ action: 'copy-items', sketchId: n.sketchId })">
+                <mat-icon>content_copy</mat-icon> Copy{{ scope.count > 1 ? ' (' + scope.count + ')' : '' }}
+              </button>
+              <button mat-menu-item data-testid="ctx-paste-items" [disabled]="readonly()"
+                      (click)="emitAction({ action: 'paste-items' })">
+                <mat-icon>content_paste</mat-icon> Paste
               </button>
               <button *ngIf="scope.count === 1"
                       mat-menu-item data-testid="ctx-rename-sketch"
@@ -864,6 +897,15 @@ export class CadFeatureTreePanelComponent {
   private _bodyAnchor: string | null = null;
   collapsedGroups = signal<Set<string>>(new Set());
   @ViewChild('menuTriggerEl', { read: MatMenuTrigger }) private menuTrigger?: MatMenuTrigger;
+  @ViewChild('blankMenuTriggerEl', { read: MatMenuTrigger }) private blankMenuTrigger?: MatMenuTrigger;
+  /** REQ 1104 — right-click on the tree's empty area (part tree only). */
+  onBlankContextMenu(ev: MouseEvent) {
+    if (ev.target !== ev.currentTarget || this.externalNodes() || this.compact()) return;
+    ev.preventDefault();
+    this.menuX.set(ev.clientX);
+    this.menuY.set(ev.clientY);
+    queueMicrotask(() => this.blankMenuTrigger?.openMenu());
+  }
   @ViewChild('bodyMenuTriggerEl', { read: MatMenuTrigger }) private bodyMenuTrigger?: MatMenuTrigger;
   @ViewChild('treeList') private treeList?: ElementRef<HTMLUListElement>;
 

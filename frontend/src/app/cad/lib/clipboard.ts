@@ -1,12 +1,12 @@
-import type { FeatureTree, SketchDocument } from './types';
-import type { EquationDoc } from './equations';
+import type { Feature, FeatureTree, Plane3, Sketch, SketchDocument } from './types';
+import type { EquationDoc, EquationEntry } from './equations';
 
 /** REQ 1011 — copy/paste bundle. Travels as JSON text on the OS clipboard
  * (or in a .lwcad file) so it can move between deployments (prod ↔ dev). */
 export interface ClipboardBundle {
   kind: 'letwinventory-cad';
   schema: 1;
-  scope: 'part' | 'assembly';
+  scope: 'part' | 'assembly' | 'items';
   /** Server NAMING_VERSION at copy time; null if not yet known. */
   namingVersion: number | null;
   source: {
@@ -24,6 +24,13 @@ export interface ClipboardBundle {
    * the server, and the design of every component part it uses. */
   assembly?: { assemblyDoc: unknown; sketchDoc?: unknown; featureTree?: unknown; equations?: unknown };
   components?: BundleComponent[];
+  /** scope 'items' (REQ 1100): copied sketches and features (tree order), the
+   * equation entries that drive them with the globals those reference, and
+   * the plane of the first sketch (the paste placement reference). */
+  sketches?: Sketch[];
+  features?: Feature[];
+  variables?: Record<string, EquationEntry>;
+  primaryPlane?: Plane3 | null;
 }
 
 export interface BundleComponent {
@@ -76,7 +83,9 @@ export function parseBundle(text: string, localNamingVersion: number | null): Pa
   if (o.schema !== SCHEMA) return { error: 'This copy was made by a newer version of the CAD editor — update this environment first' };
   const complete = o.scope === 'assembly'
     ? !!o.assembly?.assemblyDoc && Array.isArray(o.components)
-    : o.scope === 'part' && !!o.model?.featureTree && !!o.model?.sketchDoc;
+    : o.scope === 'items'
+      ? Array.isArray(o.sketches) && Array.isArray(o.features)
+      : o.scope === 'part' && !!o.model?.featureTree && !!o.model?.sketchDoc;
   if (!complete || !o.source) {
     return { error: 'The copied CAD data is incomplete' };
   }
